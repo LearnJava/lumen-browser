@@ -468,6 +468,29 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       sync-geometry sites (DOM mutation → geometry read, focus, form input, resize,
       `content-visibility` expansion, rAF DOM-dirty) still need per-site analysis and
       stay synchronous. No new deps, no `unsafe`.
+    - **M2.2b-7 — off-thread layout for async-safe `:focus` restyles.** ✅ (branch
+      `p1-mt-m2-2b-7-focus`, merged into `zcode`, 2026-07-11). Extends the async-safe
+      restyle batch (M2.2b-5's `:hover`/`:active`) to the two focus-change sites that
+      re-evaluate `:focus`/`:focus-within`: the JS focus request drained from
+      `showModal()`/`close()` (`take_focus_requests` → `focused_node` flip) and the
+      mouse-click focus set in the form/link click handler (`hit_result.node` →
+      `focused_node` flip). In both, `self.focused_node` is assigned **synchronously**
+      *before* the relayout, and it feeds `set_interactive_state` at the top of every
+      layout pass, so any later relayout (sync or off-thread) re-evaluates the focus
+      pseudo-classes correctly — deferring the focus-specific restyle never loses the
+      state. Neither site reads page geometry after the relayout: the JS-request path
+      only notifies `platform_bridge.focused_node_changed`; the click path dispatches
+      the follow-up JS click against the pre-`:focus` `hit_result` (the geometry the
+      user actually clicked — correct, mirroring M2.2b-5's `:active`-press), and any
+      DOM mutation from those handlers takes its own generation-guarded relayout (rAF
+      DOM-dirty), superseding the stale focus job. Both now call the existing
+      `Lumen::relayout_chrome()` helper — flag off (default) → byte-identical
+      synchronous `relayout()`; under `LUMEN_ENGINE_THREAD=1` the focus highlight lands
+      a few frames later via `poll_engine_commit`. The helper's doc comment now lists
+      the `:focus`/`:focus-within` case. 2 sites converted (26 → 24 sync callers).
+      Remaining sync-geometry sites (DOM mutation → geometry read, form input, resize,
+      `content-visibility` expansion, rAF DOM-dirty) still need per-site analysis and
+      stay synchronous. No new deps, no `unsafe`.
 - **M2.3 — synchronous readback + acceptance.** `--screenshot`, `run.py --ipc`,
   CDP `Page.captureScreenshot` become `Request::Readback { reply }` messages
   (audit all `screenshot_*` sites first — most are already CPU per the M1.1

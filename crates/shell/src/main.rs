@@ -6899,7 +6899,8 @@ impl Lumen {
     /// visibility, the AI / accessibility side panels (M2.2b-3), or a mouse-click
     /// *close* of the AI / sidebar / accessibility panels (M2.2b-6) — or triggered a
     /// whole-page *restyle* with no geometry read of its own (an OS/settings theme
-    /// flip, M2.2b-4; an interactive `:hover`/`:active` pseudo-class flip, M2.2b-5),
+    /// flip, M2.2b-4; an interactive `:hover`/`:active` pseudo-class flip, M2.2b-5;
+    /// a `:focus`/`:focus-within` change from a JS focus request or a click, M2.2b-7),
     /// and is in either case **not** followed by a synchronous read
     /// of page layout geometry. The reflowed content may
     /// therefore land a few frames later via [`Self::poll_engine_commit`], the
@@ -9224,7 +9225,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let new_nid = last_req.map(|n| lumen_dom::NodeId::from_index(n as usize));
                     if new_nid != self.focused_node {
                         self.focused_node = new_nid;
-                        self.relayout();
+                        // ADR-016 M2.2b-7: `focused_node` is set synchronously above,
+                        // so `:focus`/`:focus-within` re-evaluates correctly on any
+                        // later relayout (it feeds `set_interactive_state` at the top
+                        // of every pass). This is a pure restyle with no synchronous
+                        // page-geometry read afterwards (the follow-up only notifies
+                        // the accessibility bridge), so route it off-thread.
+                        self.relayout_chrome();
                         self.platform_bridge.focused_node_changed(new_nid);
                     }
                 }
@@ -12923,7 +12930,13 @@ impl Lumen {
         self.focused_node = new_focused;
         // Trigger relayout if :focus state changed so :focus / :focus-within rules update.
         if focus_changed {
-            self.relayout();
+            // ADR-016 M2.2b-7: `focused_node` is set synchronously above, so
+            // `:focus`/`:focus-within` re-evaluates on any later relayout. The
+            // subsequent JS click dispatch reads the pre-`:focus` `hit_result`
+            // (the geometry the user clicked on — correct), and any DOM mutation
+            // from those handlers takes its own generation-guarded relayout, so
+            // this pure restyle has no synchronous geometry read and goes off-thread.
+            self.relayout_chrome();
             // Notify platform accessibility bridge so screen readers can track focus.
             self.platform_bridge.focused_node_changed(new_focused);
             // Keep JS _lumen_last_focused_nid in sync so showModal() can save/restore it.
