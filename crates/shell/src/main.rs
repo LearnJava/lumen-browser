@@ -821,6 +821,7 @@ fn run_window_mode(
             lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
         ),
         js_ctx: None,
+        js_present: false,
         no_scrollbar,
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
@@ -6303,6 +6304,16 @@ struct Lumen {
     /// (`EngineJsState`) на время миграции UI→JS вызовов на него. UI-сторонний
     /// клон уходит в M2.2c-2d, когда все call-site'ы маршрутизируются в поток.
     js_ctx: Option<Arc<dyn PersistentJs>>,
+    /// ADR-016 M2.2d: UI-сторонний флаг «активная вкладка имеет JS-рантайм»,
+    /// сопровождающий каждое присваивание [`Self::js_ctx`] (через
+    /// [`Self::set_js_ctx`] и snapshot save/restore). Отделяет решение «есть ли
+    /// JS?» от факта владения `Arc`-хэндлом: гейты (`if self.js_present`) читают
+    /// его вместо `self.js_ctx.is_some()`, поэтому остаются верны, когда
+    /// следующий срез 2d перенесёт сам `Arc` на движковый поток (`state.js`) и
+    /// оставит `self.js_ctx == None` под флагом. Пока `Arc` ещё на UI-стороне
+    /// значение тождественно `self.js_ctx.is_some()` в обоих режимах флага —
+    /// перевод гейтов байт-идентичен.
+    js_present: bool,
     /// When true the vertical scrollbar overlay is suppressed entirely.
     /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to
     /// avoid scrollbar pixels contaminating the diff against Edge headless.
@@ -6904,7 +6915,7 @@ impl Lumen {
             return;
         }
         #[cfg(feature = "quickjs")]
-        if self.js_ctx.is_some() {
+        if self.js_present {
             // Register each path with an opaque token before delivering to JS.
             // JS never receives raw filesystem paths — only tokens.
             let tokens: Vec<u64> = entries
@@ -7201,11 +7212,11 @@ impl Lumen {
             // `lazy_reqs`, so under the flag it runs atomically **in order** on the
             // engine thread (the value read after the void pushes keeps its
             // read-after-write ordering) and blocks only for that one result. The
-            // `self.js_ctx.is_some()` gate mirrors the old `if let Some(js)` — the
+            // `self.js_present` gate mirrors the old `if let Some(js)` — the
             // (side-effect-free) geometry collection runs only when a JS context
             // exists, byte-identical with the flag off. All captured data is owned
             // (`HashMap`/`Vec`) → the closure is `Send + 'static`.
-            if self.js_ctx.is_some()
+            if self.js_present
                 && let Some(lb_ref) = self.layout_box.as_ref()
             {
                 let rects = collect_layout_rects(lb_ref);
@@ -7344,6 +7355,19 @@ impl Lumen {
     /// рантайм всё равно живёт на своём `lumen-js`-потоке (ADR-014) — так что это
     /// разделение хэндла, а не мутабельного состояния (инвариант 1). UI-сторонний
     /// клон `Lumen::js_ctx` уходит в M2.2c-2d.
+    /// ADR-016 M2.2d: назначить JS-хэндл активной вкладки, держа
+    /// [`Self::js_present`] в связке с [`Self::js_ctx`].
+    ///
+    /// Пока это парное присваивание — байт-идентично прежнему голому
+    /// `self.js_ctx = handle` (значение флага тождественно `handle.is_some()`).
+    /// Следующий срез 2d превратит его в перенос `Arc` на движковый поток под
+    /// флагом, оставив `self.js_ctx == None`, тогда как `js_present` останется
+    /// UI-сторонним сигналом наличия JS для гейтов.
+    fn set_js_ctx(&mut self, handle: Option<Arc<dyn PersistentJs>>) {
+        self.js_present = handle.is_some();
+        self.js_ctx = handle;
+    }
+
     fn sync_engine_js_state(&self) {
         let Some(engine) = self.engine_thread.as_ref() else { return };
         let js = self.js_ctx.clone();
@@ -7637,7 +7661,7 @@ impl Lumen {
         // (dispatch → navigate сохранён); без флага (по умолчанию) — синхронные
         // вызовы по UI-хэндлу, **байт-идентично** прежним `js.eval_js`. `escaped`
         // строится до маршрутизации; борроу `engine_thread`/`js_ctx` — раздельный.
-        if self.js_ctx.is_some() {
+        if self.js_present {
             let escaped = new_url.replace('\\', "\\\\").replace('\'', "\\'");
             route_eval_js(
                 self.engine_thread.as_ref(),
@@ -7766,9 +7790,9 @@ impl Lumen {
             Ok((page, new_layout_source, new_js_ctx)) => {
                 // Drop JS closures before layout_source to release Arc<Mutex<Document>>
                 // clones held inside QuickJS closures before LayoutSource's Arc drops.
-                self.js_ctx = None;
+                self.set_js_ctx(None);
                 self.layout_source = new_layout_source;
-                self.js_ctx = new_js_ctx;
+                self.set_js_ctx(new_js_ctx);
                 // ADR-016 M2.2c-2b: зеркалим новый хэндл + DOM в движковый поток.
                 self.sync_engine_js_state();
                 // The new runtime starts empty; re-seed it with the current Navigation state.
@@ -7795,10 +7819,10 @@ impl Lumen {
                 // immediately after page load (before the first relayout).
                 // ADR-016 M2.2c-2d: routed off-thread like the relayout push above —
                 // the three owned-arg void calls go through `route_task_js`; the
-                // `self.js_ctx.is_some()` gate keeps the geometry collection JS-gated
+                // `self.js_present` gate keeps the geometry collection JS-gated
                 // (byte-identical with the flag off).
                 #[cfg(feature = "quickjs")]
-                if self.js_ctx.is_some()
+                if self.js_present
                     && let Some(lb_ref) = self.layout_box.as_ref()
                 {
                     let viewport = self.renderer.as_ref().map_or_else(
@@ -8183,9 +8207,9 @@ impl Lumen {
     /// в будущем для других путей загрузки.
     fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Arc<dyn PersistentJs>>) {
         // Drop JS closures before layout_source to release Arc clones in QuickJS.
-        self.js_ctx = None;
+        self.set_js_ctx(None);
         self.layout_source = new_layout_source;
-        self.js_ctx = new_js_ctx;
+        self.set_js_ctx(new_js_ctx);
         // ADR-016 M2.2c-2b: зеркалим новый хэндл + DOM в состояние движкового
         // потока (no-op при выключенном `LUMEN_ENGINE_THREAD`).
         self.sync_engine_js_state();
@@ -8399,11 +8423,11 @@ impl Lumen {
         // движковом потоке (value-read `take_lazy_image_requests` после void-push
         // сохраняет read-after-write), блокируя лишь ради одного результата. Owned-данные
         // (`owned_pairs`/`geom`) собираются на UI-потоке до маршрутизации (замыкание
-        // `Send + 'static`); гейт `self.js_ctx.is_some()` держит сбор геометрии
+        // `Send + 'static`); гейт `self.js_present` держит сбор геометрии
         // JS-гейтнутым — байт-идентично флаг-офф (`route_query_js(…, Some(js), …)` =
         // синхронный вызов по UI-хэндлу).
         #[cfg(feature = "quickjs")]
-        let initial_lazy_reqs: Vec<(u32, String)> = if self.js_ctx.is_some() {
+        let initial_lazy_reqs: Vec<(u32, String)> = if self.js_present {
             let owned_pairs: Vec<(u32, String)> =
                 page.lazy_pairs.iter().map(|(n, u)| (*n, u.clone())).collect();
             let geom: Option<(HashMap<u32, [f32; 4]>, f32, f32)> = if !owned_pairs.is_empty() {
@@ -12095,7 +12119,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // the former `if let Some(js)`); the actual paint-timing calls are
                 // fire-and-forget void, routed off-UI-thread under the flag.
                 #[cfg(feature = "quickjs")]
-                if self.js_ctx.is_some() {
+                if self.js_present {
                     let has_content = !self.display_list.is_empty();
                     if has_content && !self.first_paint_delivered {
                         self.first_paint_delivered = true;
@@ -14114,7 +14138,7 @@ impl Lumen {
             // с `if let Some(js)` на `is_some()`, чтобы editing-host detection и eval
             // выполнялись только при наличии JS-контекста (как прежде).
             #[cfg(feature = "quickjs")]
-            if self.js_ctx.is_some() {
+            if self.js_present {
                 // Check contenteditable by reading the DOM directly (eval_js returns ()).
                 let editing_host = src
                     .document
@@ -14771,17 +14795,17 @@ impl Lumen {
                     ) {
                         eprintln!("bfcache thaw: JS DOM init failed: {e}");
                     }
-                    self.js_ctx = Some(Arc::new(QuickPersistentJs { rt }) as Arc<dyn PersistentJs>);
+                    self.set_js_ctx(Some(Arc::new(QuickPersistentJs { rt }) as Arc<dyn PersistentJs>));
                 }
                 Err(e) => {
                     eprintln!("bfcache thaw: QuickJS init failed: {e}");
-                    self.js_ctx = None;
+                    self.set_js_ctx(None);
                 }
             }
         }
         #[cfg(not(feature = "quickjs"))]
         {
-            self.js_ctx = None;
+            self.set_js_ctx(None);
         }
         // ADR-016 M2.2c-2b: зеркалим восстановленный (или сброшенный) хэндл + DOM
         // в движковый поток после bfcache-thaw.
@@ -18035,7 +18059,7 @@ impl Lumen {
         // serialised, so the page's inline <script> blocks are re-run against
         // the restored DOM. The runtime shares the returned Arc<Mutex<Document>>
         // with the layout tree so both observe the same document.
-        self.js_ctx = None;
+        self.set_js_ctx(None);
         let event_sink = self.event_sink.clone();
         let cookie_banner_dismiss = self.cookie_banner_dismiss;
         let deterministic = self.deterministic;
@@ -18084,7 +18108,7 @@ impl Lumen {
         self.cv_events.clear();
         self.cv_skipped.clear();
         self.refresh_cv_state();
-        self.js_ctx = js_ctx;
+        self.set_js_ctx(js_ctx);
         // ADR-016 M2.2c-2b: зеркалим восстановленный хэндл + DOM в движковый поток.
         self.sync_engine_js_state();
         self.scroll_x = data.scroll_x;
@@ -18095,9 +18119,9 @@ impl Lumen {
         // Seed the restored runtime with layout geometry + viewport so JS can
         // query bounding rects immediately (mirrors the fresh-load path).
         // ADR-016 M2.2c-2d: routed off-thread through `route_task_js`, same as the
-        // fresh-load seed above (`self.js_ctx.is_some()` gate → byte-identical off).
+        // fresh-load seed above (`self.js_present` gate → byte-identical off).
         #[cfg(feature = "quickjs")]
-        if self.js_ctx.is_some()
+        if self.js_present
             && let Some(lb_ref) = self.layout_box.as_ref()
         {
             let rects = collect_layout_rects(lb_ref);
@@ -18236,7 +18260,7 @@ impl Lumen {
     /// Called before switching to a different tab so the current page state can
     /// be frozen while the new tab becomes active.
     fn save_page_snapshot(&mut self) -> PageSnapshot {
-        PageSnapshot {
+        let snap = PageSnapshot {
             display_list: std::mem::take(&mut self.display_list),
             title: self.title.take(),
             pending_images: std::mem::take(&mut self.pending_images),
@@ -18314,7 +18338,11 @@ impl Lumen {
             ),
             reader_original_source: self.reader_original_source.take(),
             cert_info: self.cert_info.take(),
-        }
+        };
+        // ADR-016 M2.2d: активная вкладка отдала свой JS-хэндл в снапшот
+        // (`js_ctx.take()` выше) → `js_present` сбрасывается вместе с ним.
+        self.js_present = false;
+        snap
     }
 
     /// Restore per-page fields from a `PageSnapshot` into `self`.
@@ -18365,7 +18393,7 @@ impl Lumen {
         self.ls_storage = snap.ls_storage;
         self.idb_dir = snap.idb_dir;
         self.sw_backend = snap.sw_backend;
-        self.js_ctx = snap.js_ctx;
+        self.set_js_ctx(snap.js_ctx);
         self.first_paint_delivered = snap.first_paint_delivered;
         self.first_contentful_paint_delivered = snap.first_contentful_paint_delivered;
         self.nav_start = snap.nav_start;
@@ -18456,7 +18484,7 @@ impl Lumen {
         self.sw_backend = Arc::new(std::sync::Mutex::new(
             lumen_storage::store::InMemoryStorage::new(),
         ));
-        self.js_ctx = None;
+        self.set_js_ctx(None);
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
         self.nav_start = None;
