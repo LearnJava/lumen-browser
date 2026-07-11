@@ -790,6 +790,23 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         покрыт существующими route/engine_thread тестами. Остаются pointer-lock
         mouse-motion, PiP-close eval и sync event-dispatch — следующие под-срезы 2d
         перед снятием самого поля.
+        ✅ **Восьмой под-срез готов** (branch `p1-mt-m22d-8`, merged into `main`,
+        2026-07-11): pointer-lock / PiP fire-and-forget void-eval сайты переведены с
+        прямых `if let Some(js) = &self.js_ctx { js.eval_js(…) }` на `route_eval_js`.
+        3 сайта: (1) **pointer-lock raw mouse-motion** (`device_event`, `main.rs`
+        ~:9722) — `_lumen_dispatch_locked_mousemove(...)` (guard упрощён с
+        `(Some(ctx), Some(nid))` до одного `Some(nid)`; `script` строится до
+        маршрутизации, борроу `js_ctx`/`engine_thread` — раздельный); (2) **PiP
+        close-button** (`window_event`, `main.rs` ~:9770) — `exitPictureInPicture()`
+        mirror после `close_pip_os`; (3) **pointerlockchange** на Escape
+        (`main.rs` ~:9832) — `document.dispatchEvent(new Event('pointerlockchange'))`.
+        Все три — чистый void без чтения результата следом; под флагом
+        (`LUMEN_ENGINE_THREAD=1`) уходят off-UI-thread одним `task`, без флага (по
+        умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично. No new deps, no
+        `unsafe`. Механизм не менялся — покрыт существующими route/engine_thread
+        тестами. Остаётся только категория **sync event-dispatch** (mouse/key/wheel/
+        input-обработчики, ~30 прямых `self.js_ctx`-сайтов) — следующие под-срезы 2d
+        перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
