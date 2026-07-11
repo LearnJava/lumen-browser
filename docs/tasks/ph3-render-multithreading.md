@@ -1074,6 +1074,31 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         сможет под флагом перенести сам `Arc` в `EngineJsState.js` (сеттер — в
         `engine.task`, save/restore снапшота — через `query.take()`/`task`), оставив
         `self.js_ctx == None`, а `js_present` останется верным сигналом для гейтов.
+        ✅ **Двадцатый под-срез готов** (branch `p1-mt-m22d-20`, 2026-07-11):
+        сняты **последние прямые Arc-читы** `self.js_ctx` на UI-потоке (кроме самих
+        lifecycle-операций поля — `set_js_ctx`-присваивание, `sync_engine_js_state`-
+        клон, snapshot `take`) — пролог к физическому снятию поля под флагом. 5 сайтов:
+        (1)+(2) **nav-timing delivery** (reload-путь `main.rs` ~:7896 и streaming-load
+        `main.rs` ~:8817) — прямой `if let (Some(js), …) { js.deliver_nav_timing(…) }`
+        переведён на `self.js_present`-гейт + `route_task_js` (fire-and-forget void);
+        `self.nav_start.take()` по-прежнему выполняется безусловно (как прежний кортеж),
+        `url` овнится (`str::to_owned`) для `Send + 'static`-замыкания. (3) **MEM_REPORT
+        heap-проба** (`debug_js_heap`, `main.rs` ~:8864) — value-read через
+        `route_query_js(...).unwrap_or((-1, -1))` = прежний `map_or((-1, -1), …)`.
+        (4) **per-tick pump-батч гейт** (`main.rs` ~:8951) — внешний
+        `if let Some(js) = &self.js_ctx` заменён на `if self.js_present`, внутренние
+        routed-вызовы получают `self.js_ctx.as_ref()`. (5) **DOM-GC tick гейт**
+        (`main.rs` ~:9762) — `if let (Some(ls), Some(_js)) = …` заменён на let-chain
+        `if self.js_present && let Some(ls) = self.layout_source.as_ref()`. `js_present`
+        держится сеттером `set_js_ctx` в связке с `self.js_ctx`, поэтому пока `Arc` ещё
+        на UI-стороне срез **байт-идентичен** в обоих режимах флага (flag-on routed-
+        вызовы уже игнорировали переданный клон; nav-timing/heap под флагом теперь
+        уходят off-UI-thread / блокирующим `query`). 1 новый тест
+        (`route_nav_timing_and_js_heap_without_handle_default_to_no_op`). No new deps,
+        no `unsafe`. **Прямых Arc-читов `self.js_ctx` вне lifecycle больше нет** —
+        следующий срез 2d переносит сам `Arc` в `EngineJsState.js` под флагом
+        (`set_js_ctx` → `engine.task`, snapshot save/restore → `query.take()`/`task`),
+        оставляя `self.js_ctx == None`, а `js_present` — сигналом для гейтов.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
