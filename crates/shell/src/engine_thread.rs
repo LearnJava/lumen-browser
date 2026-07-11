@@ -214,10 +214,11 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
     /// [`Self::task`], не коалесцируется и исполняется по порядку в пачке.
     ///
     /// Возвращает `None`, если поток уже завершён или получил `Shutdown` раньше,
-    /// чем исполнил задание (канал ответа дропнут) — откат на синхронный путь.
+    /// чем исполнил задание (канал ответа дропнут) — вызывающая сторона тогда
+    /// подставляет значение-по-умолчанию своей ветки «без JS».
     ///
-    /// Пока вызывается только из тестов: живые call-site'ы — M2.2c-2b+.
-    #[allow(dead_code, reason = "механизм M2.2c-2a; вызывающие — M2.2c-2b+")]
+    /// Живой с M2.2c-2c: `route_query_js` маршрутизирует через него value-returning
+    /// UI→JS чтения (`take_dom_dirty`, `take_raf_pending`, `eval_js_value`).
     pub fn query<R: Send + 'static>(
         &self,
         job: impl FnOnce(&mut S) -> R + Send + 'static,
