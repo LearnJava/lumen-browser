@@ -8391,16 +8391,23 @@ impl Lumen {
         // sites like lenta.ru) never load on first paint — `relayout()` is the
         // only other path that delivers observers, and it only runs on
         // scroll/resize/zoom, not on the initial load. (BUG-163)
+        // ADR-016 M2.2c-2d: lazy-image регистрация + immediate proximity check через
+        // `route_query_js` — снимаем прямое `self.js_ctx`-обращение. Вся упорядоченная
+        // последовательность (register → push rects/viewport → deliver observers →
+        // deliver lazy → drain requests) обёрнута в **один** `route_query_js`, чтобы под
+        // флагом (`LUMEN_ENGINE_THREAD=1`) она исполнилась атомарно **в порядке** на
+        // движковом потоке (value-read `take_lazy_image_requests` после void-push
+        // сохраняет read-after-write), блокируя лишь ради одного результата. Owned-данные
+        // (`owned_pairs`/`geom`) собираются на UI-потоке до маршрутизации (замыкание
+        // `Send + 'static`); гейт `self.js_ctx.is_some()` держит сбор геометрии
+        // JS-гейтнутым — байт-идентично флаг-офф (`route_query_js(…, Some(js), …)` =
+        // синхронный вызов по UI-хэндлу).
         #[cfg(feature = "quickjs")]
-        let initial_lazy_reqs: Vec<(u32, String)> = {
-            let mut reqs = Vec::new();
-            if let Some(js) = &self.js_ctx {
-                let pairs: Vec<(u32, &str)> =
-                    page.lazy_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
-                js.register_lazy_images(&pairs);
-                if !pairs.is_empty()
-                    && let Some(lb_ref) = self.layout_box.as_ref()
-                {
+        let initial_lazy_reqs: Vec<(u32, String)> = if self.js_ctx.is_some() {
+            let owned_pairs: Vec<(u32, String)> =
+                page.lazy_pairs.iter().map(|(n, u)| (*n, u.clone())).collect();
+            let geom: Option<(HashMap<u32, [f32; 4]>, f32, f32)> = if !owned_pairs.is_empty() {
+                self.layout_box.as_ref().map(|lb_ref| {
                     let viewport = self.renderer.as_ref().map_or_else(
                         || Size::new(1024.0, 720.0),
                         |r| {
@@ -8408,14 +8415,27 @@ impl Lumen {
                             Size::new(s.width, s.height)
                         },
                     );
-                    js.update_layout_rects(collect_layout_rects(lb_ref));
-                    js.update_viewport_size(viewport.width, viewport.height);
+                    (collect_layout_rects(lb_ref), viewport.width, viewport.height)
+                })
+            } else {
+                None
+            };
+            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                let pairs: Vec<(u32, &str)> =
+                    owned_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
+                js.register_lazy_images(&pairs);
+                if let Some((rects, vw, vh)) = geom {
+                    js.update_layout_rects(rects);
+                    js.update_viewport_size(vw, vh);
                     js.deliver_layout_observers();
                     js.deliver_lazy_images();
-                    reqs = js.take_lazy_image_requests();
+                    return js.take_lazy_image_requests();
                 }
-            }
-            reqs
+                Vec::new()
+            })
+            .unwrap_or_default()
+        } else {
+            Vec::new()
         };
         #[cfg(feature = "quickjs")]
         if !initial_lazy_reqs.is_empty() {
@@ -8433,11 +8453,16 @@ impl Lumen {
         // only when this page was restored from bfcache (set by navigate_back/
         // navigate_forward); a fresh load fires `persisted=false`.
         let pageshow_persisted = std::mem::take(&mut self.pending_pageshow_persisted);
+        // ADR-016 M2.2c-2d: pageshow-lifecycle void-вызовы через `route_task_js` —
+        // снимаем прямое `self.js_ctx`-обращение. Оба чистый fire-and-forget без
+        // синхронного чтения результата следом; под флагом (`LUMEN_ENGINE_THREAD=1`)
+        // уходят off-UI-thread одним `task` (порядок сохранён), без флага (по
+        // умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично прежнему.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
             js.notify_window_loaded();
             js.fire_page_lifecycle("pageshow", pageshow_persisted);
-        }
+        });
         #[cfg(not(feature = "quickjs"))]
         let _ = pageshow_persisted;
 
@@ -10236,13 +10261,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let delta_x = x_css - start_x;
                     let delta_y = y_css - start_y;
                     let nid_u32 = node_id.index() as u32;
+                    // ADR-016 M2.2c-2d: resize-eval через `route_eval_js` — снимаем прямое
+                    // `self.js_ctx`-обращение. Чистый fire-and-forget void без чтения
+                    // результата следом; под флагом (`LUMEN_ENGINE_THREAD=1`) уходит
+                    // off-UI-thread одним `task`, без флага (по умолчанию) — синхронный
+                    // вызов по UI-хэндлу, байт-идентично прежнему `js.eval_js`.
                     #[cfg(feature = "quickjs")]
-                    if let Some(js) = self.js_ctx.as_ref() {
-                        js.eval_js(&format!(
-                            "_lumen_apply_resize({}, {}, {});",
-                            nid_u32, delta_x, delta_y
-                        ));
-                    }
+                    route_eval_js(
+                        self.engine_thread.as_ref(),
+                        self.js_ctx.as_ref(),
+                        format!("_lumen_apply_resize({}, {}, {});", nid_u32, delta_x, delta_y),
+                    );
                     self.request_redraw();
                 }
             }
@@ -19557,6 +19586,31 @@ mod tests {
         let lazy: Vec<(u32, String)> =
             route_query_js(None, None, |j| j.take_lazy_image_requests()).unwrap_or_default();
         assert!(lazy.is_empty());
+    }
+
+    #[test]
+    fn route_lazy_pageshow_resize_without_handle_default_to_no_op() {
+        // ADR-016 M2.2c-2d (17): lazy-image setup + pageshow lifecycle + resize-eval.
+        // The lazy setup wraps register→push→deliver→drain in one `route_query_js`
+        // returning the requests; pageshow (`notify_window_loaded` +
+        // `fire_page_lifecycle`) and resize-eval (`_lumen_apply_resize`) are routed
+        // fire-and-forget. Без хэндла (`engine = None`, `js = None`) все три — no-op:
+        // `unwrap_or_default` даёт пустой `Vec`, void-действия не исполняются — та же
+        // ветка «без JS», что и прежние прямые `if let Some(js) = &self.js_ctx { … }`.
+        let lazy: Vec<(u32, String)> = route_query_js(None, None, |j| {
+            j.register_lazy_images(&[]);
+            j.take_lazy_image_requests()
+        })
+        .unwrap_or_default();
+        assert!(lazy.is_empty());
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran2 = Arc::clone(&ran);
+        route_task_js(None, None, move |j| {
+            j.notify_window_loaded();
+            ran2.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        route_eval_js(None, None, "_lumen_apply_resize(0, 0, 0);".to_string());
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     // ── ADR-016 M2.2c-2d: generic void-action router (pump/tick batch) ──────
