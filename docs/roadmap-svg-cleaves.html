@@ -613,9 +613,9 @@
       {
        "id": "P3-mt-m23",
        "title": "MT M2.3: sync readback + приёмка",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "M2.3: синхронный readback + приёмка — --screenshot, run.py --ipc; критерий = mt_stall_bench обязан побить baseline 2.4fps/404мс gap (M2.2c-0)"
+       "note": "M2.3 ЗАКРЫТ 2026-07-12 (branch p1-mt-m23): screenshot-readback аудит (весь путь уже CPU — M1.1), + async rAF/JS-pump под флагом (lock-free raf_pending/dom_dirty клоны, raf_task_inflight guard, drain_query_js + raf_drain_gate). Приёмка mt_stall_bench (LUMEN_ENGINE_THREAD+RENDER=1): 25.8fps / gap p50 34.6мс / scroll 46200px vs baseline 2.4fps/404мс/4200px — побил. Флаг off байт-идентичен (2.3fps). Детали — docs/tasks/ph3-render-multithreading.md"
       },
       {
        "id": "P3-mt-m3",
