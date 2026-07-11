@@ -11665,10 +11665,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         } else {
                             if dx_css != 0.0 { self.scroll_x_by(dx_css); }
                             self.scroll_by_smooth(dy_css);
+                            // ADR-016 M2.2c-2d: fire-and-forget window 'scroll'
+                            // event via route_task_js — off-UI-thread under
+                            // LUMEN_ENGINE_THREAD=1, byte-identical sync call when off.
                             #[cfg(feature = "quickjs")]
-                            if let Some(js) = &self.js_ctx {
-                                js.fire_window_scroll();
-                            }
+                            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                                j.fire_window_scroll();
+                            });
                         }
                     }
                     MouseScrollDelta::PixelDelta(p) => {
@@ -11787,9 +11790,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.request_redraw();
                 }
                 // Sync window.scrollY to current scroll_y so JS reads are accurate.
+                // ADR-016 M2.2c-2d: fire-and-forget push via route_task_js
+                // (off-UI-thread under LUMEN_ENGINE_THREAD=1, byte-identical sync
+                // call when off); scroll_y is read into a local before routing so
+                // the closure does not re-borrow `self`.
                 #[cfg(feature = "quickjs")]
-                if let Some(js) = &self.js_ctx {
-                    js.set_page_scroll_y(self.scroll_y);
+                {
+                    let scroll_y = self.scroll_y;
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                        j.set_page_scroll_y(scroll_y);
+                    });
                 }
                 // ADR-008 §10E.4: after scroll, evict CPU-decoded images beyond gate zone.
                 self.try_discard_offscreen_images();
@@ -11821,9 +11831,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     } else {
                         (0.0_f32, 0.0_f32)
                     };
-                    if let Some(js) = &self.js_ctx {
-                        js.deliver_scroll_progress(p_y, p_x);
-                    }
+                    // ADR-016 M2.2c-2d: fire-and-forget scroll-progress delivery via
+                    // route_task_js (off-UI-thread under LUMEN_ENGINE_THREAD=1,
+                    // byte-identical sync call when off).
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                        j.deliver_scroll_progress(p_y, p_x);
+                    });
                 }
 
                 // Step 2: CSS Animations + Transitions tick (spec order: before rAF).
@@ -11958,16 +11971,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // first-contentful-paint = first frame with text, image, canvas, etc.
                 // Phase 0: both fire on the first non-empty display list since
                 // a page load. A page load resets both flags in apply_loaded_page.
+                // ADR-016 M2.2c-2d: the `is_some()` gate is preserved (the delivered
+                // flags must only latch when a JS context exists — byte-identical to
+                // the former `if let Some(js)`); the actual paint-timing calls are
+                // fire-and-forget void, routed off-UI-thread under the flag.
                 #[cfg(feature = "quickjs")]
-                if let Some(js) = &self.js_ctx {
+                if self.js_ctx.is_some() {
                     let has_content = !self.display_list.is_empty();
                     if has_content && !self.first_paint_delivered {
                         self.first_paint_delivered = true;
-                        js.deliver_paint_timing("first-paint", timestamp_ms);
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                            j.deliver_paint_timing("first-paint", timestamp_ms);
+                        });
                     }
                     if has_content && !self.first_contentful_paint_delivered {
                         self.first_contentful_paint_delivered = true;
-                        js.deliver_paint_timing("first-contentful-paint", timestamp_ms);
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                            j.deliver_paint_timing("first-contentful-paint", timestamp_ms);
+                        });
                     }
                 }
 
