@@ -6899,8 +6899,10 @@ impl Lumen {
     /// visibility, the AI / accessibility side panels (M2.2b-3), or a mouse-click
     /// *close* of the AI / sidebar / accessibility panels (M2.2b-6) — or triggered a
     /// whole-page *restyle* with no geometry read of its own (an OS/settings theme
-    /// flip, M2.2b-4; an interactive `:hover`/`:active` pseudo-class flip, M2.2b-5;
-    /// a `:focus`/`:focus-within` change from a JS focus request or a click, M2.2b-7),
+    /// flip, M2.2b-4; an interactive `:hover`/`:active` pseudo-class flip, M2.2b-5,
+    /// including the `:hover` clear on cursor-leave, M2.2b-8; a `:focus`/`:focus-within`
+    /// change from a JS focus request or a click, M2.2b-7; a web-font FOUT→FOIT swap,
+    /// M2.2b-8) — or opened the web sidebar's error-placeholder panel (M2.2b-8) —
     /// and is in either case **not** followed by a synchronous read
     /// of page layout geometry. The reflowed content may
     /// therefore land a few frames later via [`Self::poll_engine_commit`], the
@@ -8437,7 +8439,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 self.web_fonts.push(LoadedWebFont { family, weight, style, unicode_range, bytes });
                 // Relayout with the now-registered web font (FOUT → FOIT swap).
-                self.relayout();
+                // ADR-016 M2.2b-8: the swap is a whole-page restyle (font metrics
+                // change) with no synchronous geometry read of its own — the same
+                // async-safe shape as the theme flip (M2.2b-4). The just-pushed
+                // font is captured by `submit_relayout_job`'s `web_fonts` snapshot,
+                // so the off-thread reflow sees it. Route it off-thread when the
+                // engine thread is enabled.
+                self.relayout_chrome();
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
@@ -9893,7 +9901,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.js_mouse_event(nid,   "mouseleave",   0.0, 0.0, 0, 0);
                     }
                     self.hovered_nid = None;
-                    self.relayout();
+                    // ADR-016 M2.2b-8: clearing `:hover` on cursor-leave is the
+                    // same async-safe restyle as the in-window hover flip
+                    // (M2.2b-5) — no synchronous geometry read; the leave events
+                    // above target the old node, not this reflow. Route off-thread.
+                    self.relayout_chrome();
                     self.request_redraw();
                 }
                 self.gesture.cancel();
@@ -14921,7 +14933,11 @@ impl Lumen {
                         eprintln!("sidebar: не удалось загрузить {sidebar_url}: {err}");
                         // Open panel with placeholder so user sees feedback.
                         self.sidebar.open(sidebar_url);
-                        self.relayout();
+                        // ADR-016 M2.2b-8: the sidebar becoming visible narrows the
+                        // main page's content viewport — the same async-safe
+                        // chrome-inset relayout the success path already routes off
+                        // the UI thread (`open_sidebar_page`, M2.2b-3).
+                        self.relayout_chrome();
                         self.request_redraw();
                     }
                 }
