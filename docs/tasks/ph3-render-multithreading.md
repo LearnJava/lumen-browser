@@ -1099,6 +1099,34 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         следующий срез 2d переносит сам `Arc` в `EngineJsState.js` под флагом
         (`set_js_ctx` → `engine.task`, snapshot save/restore → `query.take()`/`task`),
         оставляя `self.js_ctx == None`, а `js_present` — сигналом для гейтов.
+        ✅ **Двадцать первый под-срез готов** (branch `p1-mt-m22d-21`, 2026-07-11):
+        сам `Arc`-хэндл физически перенесён на движковый поток под флагом — три
+        lifecycle-операции поля `js_ctx` (последний остаток UI-владения) переведены
+        так, что при `LUMEN_ENGINE_THREAD=1` `self.js_ctx == None`, а `Arc` живёт в
+        `EngineJsState::js`. (1) **`set_js_ctx`** — теперь единственная точка
+        владения: под флагом кладёт хэндл в `state.js` через `engine.task`, оставляя
+        `self.js_ctx = None` (маршрутизаторы под флагом и так игнорировали переданный
+        UI-клон и читают `state.js`, поэтому все ~90 routed-сайтов остаются корректны);
+        без флага — прежнее `self.js_ctx = handle`, байт-идентично. (2)
+        **`sync_engine_js_state`** — больше **не** трогает `state.js` (иначе занулило
+        бы депонированный `set_js_ctx`-ом хэндл клоном `self.js_ctx == None`); зеркалит
+        только `document`. (3) **`save_page_snapshot`** — `self.js_ctx.take()` заменён
+        новым `take_js_ctx()`: под флагом вынимает `Arc` из `state.js` блокирующим
+        `query(|s| s.js.take())` (встаёт в очередь после park-`task` слайса 18 →
+        `pause_event_loop` уже применён к тому же хэндлу), без флага — прежний
+        `self.js_ctx.take()`. Снапшот держит **реальный** `Arc` даже под флагом, так
+        что bg-tab GC (`run_gc_pass(1/2)`, читает `bg_tabs[id].js_ctx`) и
+        `restore_page_snapshot` (→ `set_js_ctx(snap.js_ctx)`, ре-депонирует) работают
+        без изменений. Также починены перепутанные doc-комменты (doc `sync_engine_js_state`
+        был осиротевшим над `set_js_ctx`). Инвариант владения: `self.js_ctx.is_some()`
+        ⟺ `engine_thread.is_none() && js_present`; `state.js.is_some()` ⟺
+        `engine_thread.is_some() && js_present`. Без флага (по умолчанию) — всё
+        байт-идентично. 1 новый тест
+        (`engine_thread_query_take_extracts_and_clears_state` — `query`-take извлекает
+        депонированное поле и очищает состояние, механизм `take_js_ctx`). No new deps,
+        no `unsafe`. **M2.2c-2d закрыт: поле `js_ctx` под флагом на UI-потоке пусто.**
+        Следующий срез — M2.2c-3 (форм-инпут/DOM-mutation relayout'ы off-thread через
+        readback M2.2c-1).
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
