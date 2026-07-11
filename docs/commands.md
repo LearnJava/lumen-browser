@@ -1,5 +1,7 @@
 # Commands reference
 
+> Build-speed tuning (profiles, sccache, linker, planned optimizations and their benchmarks) — see [build-speed.md](build-speed.md).
+
 ## Core commands
 
 ```bash
