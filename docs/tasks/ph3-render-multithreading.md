@@ -1003,6 +1003,34 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         `route_task_js_without_handle_is_noop`). Остаются прямые `self.js_ctx`-чтения
         (lazy-images/pageshow setup, tab park/unpark — зависит от bg-tab snapshot) —
         следующие под-срезы 2d перед снятием самого поля.
+        ✅ **Семнадцатый под-срез готов** (branch `p1-mt-m22d-17`, 2026-07-11):
+        класс **lazy-images/pageshow setup + resize-eval** — 3 сайта переведены с
+        прямых `if let Some(js) = &self.js_ctx { … }` на маршрутизаторы. (1)
+        **lazy-image регистрация + immediate proximity check** (`apply_loaded_page`,
+        `main.rs` ~:8395, BUG-163) — смешанный read+write: вся упорядоченная
+        последовательность (`register_lazy_images` → `update_layout_rects`/
+        `update_viewport_size` push → `deliver_layout_observers` + `deliver_lazy_images`
+        → `take_lazy_image_requests` read) обёрнута в **один** `route_query_js`,
+        возвращающий `Vec<(u32,String)>`, так что под флагом (`LUMEN_ENGINE_THREAD=1`)
+        она исполняется атомарно **в порядке** на движковом потоке (value-read после
+        void-push сохраняет read-after-write), блокируя лишь ради одного результата;
+        owned-данные (`owned_pairs: Vec<(u32,String)>`, `geom: Option<(HashMap<u32,
+        [f32;4]>, f32, f32)>`) собираются на UI-потоке до маршрутизации (замыкание
+        `Send + 'static`), гейт `if let Some(js)` заменён на `if self.js_ctx.is_some()`
+        (сбор геометрии JS-гейтнут — байт-идентично флаг-офф). (2) **pageshow
+        lifecycle** (`main.rs` ~:8437) — `notify_window_loaded()` +
+        `fire_page_lifecycle("pageshow", persisted)` одним `route_task_js` (void, guard
+        снят — helper сам обрабатывает `None`). (3) **resize-eval** (element resize
+        handle drag `CursorMoved`, `main.rs` ~:10240) — `_lumen_apply_resize(...)`
+        через `route_eval_js` (fire-and-forget void; `self.resize_active` — Copy,
+        borrow не удерживается). Под флагом все три уходят off-UI-thread; без флага
+        (по умолчанию) — синхронные вызовы по UI-хэндлу, **байт-идентично** прежним
+        `js.<method>()`/`js.eval_js`. 1 новый тест
+        (`route_lazy_pageshow_resize_without_handle_default_to_no_op`). No new deps, no
+        `unsafe`. Остаются прямые `self.js_ctx`-чтения только в **tab park/unpark**
+        (`switch_tab`: `pause_event_loop`/`unpause_event_loop`, `main.rs` ~:18909/18941
+        — завязаны на bg-tab snapshot save/restore) — следующий под-срез 2d, затем
+        снятие самого поля `js_ctx` с UI-потока.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
