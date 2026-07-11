@@ -1162,9 +1162,23 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
       job'а. No new deps, no `unsafe`. Как и `relayout_chrome` в M2.2b, хелпер —
       чистая делегация в уже покрытые тестами `submit_relayout_job`/`relayout`
       (executor-тесты submit/take_committed/generation-guard), собственного
-      unit-теста не требует (нет тест-харнесса `Lumen`). Остаток M2.2c-3:
-      `activate_node`/`exec_spell_menu_action` form-тогглы (Bucket A, слайс 2), затем
-      rAF DOM-dirty flush + paint-timing readback (Bucket B-сайт 12175).
+      unit-теста не требует (нет тест-харнесса `Lumen`).
+      ✅ **Второй под-срез готов** (branch `p1-mt-m22c3-2`, 2026-07-11):
+      маршрутизировал через тот же `Lumen::relayout_form()` последние 4 Bucket-A
+      form-toggle сайта из аудита — **keyboard/hint-activated** тогглы в
+      `activate_node` (checkbox toggle, radio toggle, `<details>` open toggle) и
+      **spellcheck-replace** в `exec_spell_menu_action` (`SpellMenuAction::Use`:
+      input value / textarea text / contenteditable range replace). Все четыре уже
+      применили мутацию к разделяемому `Arc<Mutex<Document>>` на UI-потоке (виден
+      снимку off-thread job'а, инвариант 1) и **не** читают геометрию следом
+      (arm/функция сразу завершаются). `<details>`-тоггл шлёт `toggle`-событие через
+      `route_eval_js` до relayout'а — оно независимо от layout job'а, как в срезе 1.
+      Под флагом (`LUMEN_ENGINE_THREAD=1`) reflow уходит off-thread через
+      `poll_engine_commit`; без флага (по умолчанию) — синхронный `relayout()`,
+      **байт-идентично**. 11/11 form-input `relayout()` сайтов теперь через
+      `relayout_form()`. No new deps, no `unsafe`, собственного unit-теста не требует
+      (чистая делегация, как срез 1). **Bucket A form-input исчерпан.** Остаток
+      M2.2c-3: rAF DOM-dirty flush + paint-timing readback (Bucket B-сайт 12175).
     - **M2.2c-4 — content-visibility as a visible-range message.** Replace
       `maybe_expand_cv_relevant`'s direct `relayout()` with a visible-range message to
       the engine (never a render-thread → layout call, per the brief gotcha); make

@@ -16293,13 +16293,17 @@ impl Lumen {
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_checkbox(&mut src.document.lock().unwrap(), id);
                 }
-                self.relayout();
+                // ADR-016 M2.2c-3 (2): async-safe form-control DOM mutation (Bucket
+                // A) — no synchronous geometry read after, route off-thread when
+                // `LUMEN_ENGINE_THREAD=1`, byte-identical otherwise.
+                self.relayout_form();
             }
             forms::FormClickAction::ToggleRadio { clicked, .. } => {
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_checkbox(&mut src.document.lock().unwrap(), clicked);
                 }
-                self.relayout();
+                // ADR-016 M2.2c-3 (2): async-safe form-control DOM mutation (Bucket A).
+                self.relayout_form();
             }
             forms::FormClickAction::OpenColorPicker(id) => {
                 self.color_picker_node = Some(id);
@@ -16346,7 +16350,9 @@ impl Lumen {
                         id.index()
                     ),
                 );
-                self.relayout();
+                // ADR-016 M2.2c-3 (2): async-safe `<details>` open toggle (Bucket A);
+                // the `toggle` event above is independent of the layout job.
+                self.relayout_form();
             }
             // Range slide via keyboard activation: no-op (no position known).
             forms::FormClickAction::SlideRange(_) => {}
@@ -17839,7 +17845,11 @@ impl Lumen {
                         }
                     }
                 }
-                self.relayout();
+                // ADR-016 M2.2c-3 (2): spellcheck-replace mutates the shared DOM
+                // (input value / textarea text / contenteditable range) with no
+                // synchronous geometry read after — Bucket A, route off-thread when
+                // `LUMEN_ENGINE_THREAD=1`, byte-identical otherwise.
+                self.relayout_form();
             }
             SpellMenuAction::AddToDict => {
                 let word = target.word().to_lowercase();
