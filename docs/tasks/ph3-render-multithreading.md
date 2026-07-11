@@ -721,6 +721,25 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         пропущен). No new deps, no `unsafe`. **Все value-returning UI→JS чтения
         зашимлены** — следующий под-срез 2d снимает само поле `js_ctx` с UI-потока
         под флагом.
+        ✅ **Четвёртый под-срез готов** (branch `p1-mt-m22d`, merged into `zcode`,
+        2026-07-11): пост-рендер блок дренажей JS-очередей в `RedrawRequested`
+        (`main.rs` ~:9370) переведён с прямых `if let Some(js) = &self.js_ctx { …
+        js.take_*() … }` на `route_query_js`. 8 value-drain сайтов: Web Notifications
+        (`take_notification_requests`), `window.open` (`take_window_open_requests`),
+        Fullscreen (`take_fullscreen_requests`), Print (`take_print_requests`), dialog
+        focus (`take_focus_requests`), View Transitions (`take_view_transition_events`),
+        DevTools console (`take_console_messages`), page-scroll
+        (`take_page_scroll_requests`). Каждый — чистый drain-`Vec` с последующим
+        `&mut self`-действием; `route_query_js` собирает owned-`Vec` и сразу
+        отпускает borrow полей `engine_thread`/`js_ctx`, поэтому `&mut self`-вызовы
+        (`navigate_to`/`handle_print_request`/…) не конфликтуют. Под флагом
+        (`LUMEN_ENGINE_THREAD=1`) дренажи идут off-UI-thread блокирующим `query`;
+        без флага (по умолчанию) — `js.map(read)`, байт-идентично прежнему
+        `js.take_*()`; `None` → `unwrap_or_default` = пустой дренаж (как ветка
+        `js_ctx == None`). No new deps, no `unsafe`. Остаются прямые `self.js_ctx`
+        write-back-сайты в том же блоке (element-scroll `update_scroll_states`/
+        `fire_element_scroll`, GC `gc_collect`) и синхронные fire-and-forget
+        event-dispatch сайты — следующие под-срезы 2d перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
