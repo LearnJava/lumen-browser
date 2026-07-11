@@ -608,10 +608,35 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         Run, end-to-end task+query, default-state). No behavior change with the flag
         off, no new deps.
       - **M2.2c-2b — move `js_ctx` into engine-side `S` behind `LUMEN_ENGINE_THREAD`.**
-        Define the concrete engine state (`Document` + `Box<dyn PersistentJs>`),
-        `spawn_with_state` it when the flag is on, and shim the **simplest** UI→JS
-        call class (fire-and-forget void calls: `eval_js`/`tick_timers`) to `task()`.
-        Keep the UI-thread `js_ctx` as the flag-off path unchanged.
+        ✅ (branch `p1-mt-m2-2c-2b`, merged into `zcode`, 2026-07-11). Сделал
+        JS-хэндл **разделяемым** и посадил его на движковый поток. `PersistentJs`
+        теперь `Send + Sync` (`QuickJsRuntime` уже `Send+Sync` по ADR-014 — все
+        вызовы туннелируются на `lumen-js`-поток через `SyncSender`), а поле `js_ctx`
+        (в `Lumen`, `LoadedPage`, `PageSnapshot`) и все сигнатуры — `Arc<dyn
+        PersistentJs>` вместо `Box`, поэтому UI-поток и движковый поток могут держать
+        один хэндл (регресс-защита: новый `_assert_sync::<Arc<dyn PersistentJs>>()`).
+        Новая конкретная `EngineJsState { document: Option<Arc<Mutex<Document>>>,
+        js: Option<Arc<dyn PersistentJs>> }` — состояние `S` движкового потока;
+        поток поднимается через `EngineThread::<EngineCommit, EngineJsState>::spawn()`
+        (`EngineJsState: Default`, внутри — `spawn_with_state`). `Lumen::sync_engine_js_state`
+        зеркалит текущий хэндл + разделяемый DOM в состояние `task`-сообщением при
+        **каждой** смене страницы (fresh load, `RenderDone`, bfcache-thaw,
+        snapshot-restore, tab-switch, blank-tab) — no-op при выключенном флаге, так
+        что поведение shell **байт-идентично** (по умолчанию `LUMEN_ENGINE_THREAD`
+        выкл). Шим (`route_eval_js` — свободная функция ради disjoint-borrow полей
+        `engine_thread`/`js_ctx`): изолированный fire-and-forget void `eval_js`
+        (`_lumen_run_navigate_handler()` на deferred-start пути Navigation API) при
+        включённом потоке уходит off-UI-thread через `EngineThread::task`, иначе —
+        прежний синхронный `js.eval_js`. Известное ограничение под флагом (паттерн
+        M2.2a): маршрутизированный `eval_js` асинхронен, поэтому read-after-eval-
+        цепочки (`tick_timers` + `take_navigate_request`/`take_timer_wakeup`,
+        `take_dom_dirty`) **намеренно оставлены синхронными** — они уходят на
+        `query`-путь в M2.2c-2c, где ordering восстанавливается. Снял
+        `#[allow(dead_code)]` с `EngineThread::task`/`spawn_with_state`/`EngineMsg::Task`
+        (появились живые вызывающие); `query`/`readback` пока `dead_code` (2c/2c-3).
+        3 новых теста (`EngineJsState::default` пуст; `EngineThread<_, EngineJsState>`
+        несёт и мутирует реальный тип состояния через `task`/`query`;
+        `route_eval_js(None, None)` — no-op) + `_assert_sync`. No new deps, no `unsafe`.
       - **M2.2c-2c — shim value-returning UI→JS calls to `query()`** (`take_dom_dirty`,
         `take_raf_pending`, `eval_js_value`, timer wakeup / nav-update drains), one
         call class at a time, each byte-identical with the flag off.

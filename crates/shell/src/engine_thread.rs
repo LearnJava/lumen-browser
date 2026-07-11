@@ -94,9 +94,10 @@ enum EngineMsg<C, S> {
     /// (`take_dom_dirty`, `eval_js_value`) реализуются через `Task`, замыкание
     /// которого само отвечает по захваченному каналу — см. [`EngineThread::query`].
     ///
-    /// Пока не конструируется вне тестов: механизм приземлён в M2.2c-2a, а перенос
-    /// `js_ctx` в `S` и шимминг живых call-site'ов — M2.2c-2b+.
-    #[allow(dead_code, reason = "механизм M2.2c-2a; перенос js_ctx в S — M2.2c-2b+")]
+    /// Живой с M2.2c-2b: `EngineJsState` хранит хэндл `js_ctx`, а
+    /// `Lumen::sync_engine_js_state` (обновление состояния) и `route_eval_js` (шим
+    /// fire-and-forget `eval_js`) ставят `Task`. Value-returning `query`-путь
+    /// (`take_dom_dirty`, `eval_js_value`) подключается в M2.2c-2c.
     Task(Box<dyn FnOnce(&mut S) + Send>),
     /// Завершение потока.
     Shutdown,
@@ -131,11 +132,13 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
     /// Поток немедленно паркуется на блокирующем `recv()` (инвариант 6) и ждёт
     /// первое задание — до появления консьюмеров он не потребляет CPU.
     ///
-    /// Пока вызывается только из тестов: перенос `js_ctx` в `S` — M2.2c-2b.
+    /// Живой с M2.2c-2b: `spawn_engine_thread_if_enabled` поднимает поток c
+    /// `EngineJsState` (через [`Self::spawn`], т.к. `EngineJsState: Default`),
+    /// когда задан `LUMEN_ENGINE_THREAD=1`. Прямой вызов с явным `initial` —
+    /// для непустого стартового состояния (пока — из тестов).
     ///
     /// # Errors
     /// Возвращает [`std::io::Error`], если ОС не смогла создать поток.
-    #[allow(dead_code, reason = "механизм M2.2c-2a; вызывающие — M2.2c-2b")]
     pub fn spawn_with_state(initial: S) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel::<EngineMsg<C, S>>();
         let latest: CommitSlot<C> = Arc::new(Mutex::new(None));
@@ -195,9 +198,8 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
     /// `run_animation_frame`, доставка observer'ов), которые обязаны выполниться
     /// все и в порядке постановки. Молча игнорирует, если поток уже завершён.
     ///
-    /// Пока вызывается только из тестов: перенос `js_ctx` в `S` и шимминг живых
-    /// call-site'ов — M2.2c-2b+.
-    #[allow(dead_code, reason = "механизм M2.2c-2a; вызывающие — M2.2c-2b+")]
+    /// Живой с M2.2c-2b: `Lumen::sync_engine_js_state` кладёт хэндл `js_ctx` + DOM
+    /// в состояние, а `route_eval_js` шлёт fire-and-forget `eval_js`.
     pub fn task(&self, job: impl FnOnce(&mut S) + Send + 'static) {
         let _ = self.tx.send(EngineMsg::Task(Box::new(job)));
     }
