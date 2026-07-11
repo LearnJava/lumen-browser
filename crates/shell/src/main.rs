@@ -4905,9 +4905,11 @@ fn route_eval_js(
 /// ADR-016 M2.2c-2c: маршрутизатор **value-returning** UI→JS чтения.
 ///
 /// Дополняет [`route_eval_js`] (fire-and-forget) для вызовов, чей результат нужен
-/// UI-стороне **сейчас** (`take_dom_dirty` → `bool`, `take_raf_pending` → `bool`,
-/// `eval_js_value` → `Result<String, String>`). Как и `route_eval_js` — свободная
-/// функция ради disjoint-borrow полей `engine_thread`/`js_ctx`.
+/// UI-стороне **сейчас**: `take_dom_dirty` → `bool`, `take_raf_pending` → `bool`,
+/// `eval_js_value` → `Result<String, String>`, а также (остаток 2c) nav/timer-чтения
+/// `take_navigate_request` → `Option<JsNavigateRequest>`, `take_timer_wakeup` →
+/// `Option<f64>` и nav-update drain `take_nav_updates` → `Vec<_>`. Как и `route_eval_js`
+/// — свободная функция ради disjoint-borrow полей `engine_thread`/`js_ctx`.
 ///
 /// - движковый поток есть (`LUMEN_ENGINE_THREAD=1`) → чтение идёт через
 ///   [`engine_thread::EngineThread::query`] (блокирующий request/reply). Это
@@ -8803,10 +8805,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             js.pump_workers();
             js.pump_broadcast_channels();
             js.pump_shared_workers();
-            if let Some(nav) = js.take_navigate_request() {
+            // ADR-016 M2.2c-2c (остаток): value-returning nav/timer чтения через
+            // `route_query_js` (тот же паттерн, что `take_dom_dirty`/`take_raf_pending`
+            // выше). Под флагом (`LUMEN_ENGINE_THREAD=1`) читаются блокирующим `query`
+            // — в очереди после уже отправленных `task`, восстанавливая read-after-eval
+            // порядок, оставленный синхронным в 2b; без флага (по умолчанию) — `js.map`,
+            // байт-идентично прежнему прямому `js.<read>()`. `flatten` схлопывает
+            // `Option<Option<_>>` (внешний = «есть ли JS-контекст», внутренний = сам
+            // результат чтения) в `Option<_>`.
+            if let Some(nav) =
+                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_navigate_request())
+                    .flatten()
+            {
                 self.pending_js_navigate = Some(nav);
             }
-            if let Some(wakeup_epoch_ms) = js.take_timer_wakeup() {
+            if let Some(wakeup_epoch_ms) =
+                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_timer_wakeup())
+                    .flatten()
+            {
                 let now_epoch_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs_f64() * 1000.0)
@@ -9032,11 +9048,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // `forward()` / `traverseTo()`. Each entry is `(action_code, url, key, data)`.
         #[cfg(feature = "quickjs")]
         {
-            let navs = self
-                .js_ctx
-                .as_ref()
-                .map(|js| js.take_nav_updates())
-                .unwrap_or_default();
+            // ADR-016 M2.2c-2c (остаток): nav-update drain через `route_query_js`
+            // (тот же паттерн, что nav/timer в `about_to_wait`). Под флагом —
+            // блокирующий `query` после уже отправленных `task`; без флага —
+            // байт-идентично прежнему `js_ctx.map(take_nav_updates)`. `None`
+            // (нет UI-хэндла / состояние не зеркалировано / поток завершён) →
+            // `unwrap_or_default` даёт пустой дренаж, как и прежняя ветка `None`.
+            let navs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_nav_updates()
+            })
+            .unwrap_or_default();
             for (action_code, url, key, data) in navs {
                 match action_code {
                     0 if !url.is_empty() => self.navigate_to(PageSource::Url(url)),
@@ -19057,6 +19078,24 @@ mod tests {
         let r: Option<bool> =
             route_query_js(Some(&engine), None, |j| j.take_dom_dirty());
         assert_eq!(r, None);
+    }
+
+    #[test]
+    fn route_query_js_nav_reads_without_handle_default_to_no_op() {
+        // ADR-016 M2.2c-2c (остаток): nav/timer/nav-update чтения используют тот же
+        // `route_query_js`, но с более богатыми типами возврата (`Option<_>` и `Vec<_>`).
+        // Без хэндла (`engine = None`, `js = None`) внешний `Option` = `None`, поэтому
+        // `flatten`/`unwrap_or_default` в вызывающих сайтах дают ту же ветку «без JS»,
+        // что и прежние прямые вызовы: нет навигации, нет wakeup, пустой дренаж.
+        let nav: Option<Option<JsNavigateRequest>> =
+            route_query_js(None, None, |j| j.take_navigate_request());
+        assert!(nav.flatten().is_none());
+        let wakeup: Option<Option<f64>> =
+            route_query_js(None, None, |j| j.take_timer_wakeup());
+        assert!(wakeup.flatten().is_none());
+        let navs: Option<Vec<(u8, String, String, String)>> =
+            route_query_js(None, None, |j| j.take_nav_updates());
+        assert!(navs.unwrap_or_default().is_empty());
     }
 
     // ── Fullscreen viewport reconciliation (BUG-167) ────────────────────────

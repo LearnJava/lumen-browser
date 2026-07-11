@@ -657,10 +657,18 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         вызывающие). 3 новых теста (`route_query_js(None, None)` → `None`;
         `route_query_js(Some(engine), None)` под флагом без зеркалированного хэндла
         → `None`, `read` не исполняется). No new deps, no `unsafe`.
-        **Остаток 2c** (следующий под-срез): timer wakeup (`take_timer_wakeup`) и
-        nav-update drains (`take_navigate_request` / `take_nav_updates`) — те самые
-        read-after-eval цепочки, оставленные синхронными в 2b, но с более сложными
-        типами возврата и потоком управления.
+        ✅ **Остаток 2c готов** (branch `p1-mt-m2-2c-2c-rest`, 2026-07-11): те же
+        read-after-eval цепочки, оставленные синхронными в 2b, переведены на
+        `route_query_js` — nav-request/timer-wakeup чтения в `about_to_wait`
+        (`take_navigate_request` → `Option<JsNavigateRequest>`, `take_timer_wakeup` →
+        `Option<f64>`, оба схлопываются `flatten`) и nav-update drain в
+        `RedrawRequested` (`take_nav_updates` → `Vec<_>`, `unwrap_or_default` на `None`).
+        Под флагом читаются блокирующим `query` (в очереди после уже отправленных
+        `task`); без флага — `js.map(read)`, байт-идентично прежним прямым вызовам.
+        1 новый тест (nav/timer/nav-update без хэндла → ветка «без JS»). No new deps,
+        no `unsafe`. Оставшиеся синхронные UI→JS чтения (`tick_timers`,
+        `pump_*`, `take_nav_intercept_result`, canvas/worker drains) — намеренно
+        синхронны, их перенос — M2.2c-2d/-3.
       - **M2.2c-2d — retire the UI-thread `js_ctx` field under the flag.** Once every
         call site routes through `task`/`query`, the UI thread stops holding the JS
         handle entirely (flag on); the flag-off legacy field is removed last.
