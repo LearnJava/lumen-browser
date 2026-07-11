@@ -12819,6 +12819,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn marker_ignores_non_applicable_properties() {
+        // CSS Pseudo-Elements L4 §5.5 — only font/color/text-flow/content/animation
+        // properties apply to ::marker. A `letter-spacing` declaration must be
+        // dropped (marker keeps the inherited default of 0), while `color` — which
+        // is in the allowed set — must still take effect.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse(
+                "li::marker { letter-spacing: 15px; color: #00ff00; }",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "expected marker");
+        // color (allowed) applied → green.
+        assert!(
+            markers[0].style.color.g > 200 && markers[0].style.color.r < 50,
+            "::marker color should apply, got {:?}", markers[0].style.color,
+        );
+        // letter-spacing (not allowed) ignored → still the inherited default 0,
+        // not the 15px the ::marker rule tried to set.
+        assert!(
+            markers[0].style.letter_spacing.abs() < 0.5,
+            "::marker letter-spacing must be ignored, got {}",
+            markers[0].style.letter_spacing,
+        );
+    }
+
     // ── BUG-136 — float / clear / margin interaction (TEST-105) ───────────────
 
     /// Collect every box whose background color matches `hex` (0xRRGGBB).

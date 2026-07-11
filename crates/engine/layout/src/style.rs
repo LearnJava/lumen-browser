@@ -6983,6 +6983,34 @@ pub fn compute_style_from_declarations(decls: &[Declaration], viewport: Size) ->
     style
 }
 
+/// CSS Pseudo-Elements L4 §5.5 — true when property `prop` is one of the limited
+/// set that applies to the `::marker` pseudo-element: all font properties, the
+/// `white-space` property, `color`, the `direction` / `unicode-bidi` /
+/// `text-combine-upright` writing-mode properties, `content`, and all animation
+/// and transition properties. Custom properties (`--*`) are kept so `var()` inside
+/// `content` still resolves. Any other declaration on `::marker` is ignored.
+fn marker_property_applies(prop: &str) -> bool {
+    let p = prop.trim().to_ascii_lowercase();
+    // Custom properties stay available for `var()` substitution inside `content`.
+    if p.starts_with("--") {
+        return true;
+    }
+    // `font`, `font-*`, `animation*` and `transition*` families are allowed wholesale.
+    p.starts_with("font")
+        || p.starts_with("animation")
+        || p.starts_with("transition")
+        || matches!(
+            p.as_str(),
+            "color"
+                | "content"
+                | "white-space"
+                | "white-space-collapse"
+                | "direction"
+                | "unicode-bidi"
+                | "text-combine-upright"
+        )
+}
+
 /// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
 ///
 /// `pseudo` — "before" или "after" (без "::"). `dark_mode` forwarded to
@@ -7166,7 +7194,15 @@ pub fn compute_pseudo_element_style(
     }
     let em_basis = style.font_size;
     let parent_weight = parent.font_weight;
+    // CSS Pseudo-Elements L4 §5.5 — only a restricted set of properties applies to
+    // `::marker`. Declarations outside that set (e.g. `line-height`, `margin`,
+    // `background`) are dropped so a `::marker` rule cannot perturb marker layout
+    // or paint beyond the spec-permitted font/color/text-flow styling.
+    let is_marker = pseudo.eq_ignore_ascii_case("marker");
     for (_, _, _, _, decl) in &matched {
+        if is_marker && !marker_property_applies(&decl.property) {
+            continue;
+        }
         let attr_buf;
         let effective_decl: &Declaration = if decl.value.contains("attr(") {
             let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
