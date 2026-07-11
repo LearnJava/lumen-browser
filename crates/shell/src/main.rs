@@ -7892,14 +7892,24 @@ impl Lumen {
                 self.pending_js_navigate = page.js_navigate;
                 let title = self.title.as_deref().unwrap_or("");
                 // Deliver W3C Navigation Timing L2 entry (§4.2) to JS PerformanceObservers.
+                // ADR-016 M2.2c-2d (20): last direct `self.js_ctx` read on the reload
+                // nav-timing path → `self.js_present` gate + `route_task_js`. `nav_start`
+                // is still taken unconditionally (as the old tuple did), so on the «no JS»
+                // / «no start» / «no url» branch it is cleared exactly as before. Delivery
+                // is a fire-and-forget void: under the flag (`LUMEN_ENGINE_THREAD=1`) it
+                // goes off-UI-thread; flag-off (default) stays byte-identical to the old
+                // direct `js.deliver_nav_timing(...)`.
                 #[cfg(feature = "quickjs")]
-                if let (Some(js), Some(start), Some(url)) =
-                    (&self.js_ctx, self.nav_start.take(), self.source.url_str())
                 {
-                    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-                    js.deliver_nav_timing(url, duration_ms);
-                } else {
-                    self.nav_start = None;
+                    let nav_start = self.nav_start.take();
+                    if let (true, Some(start), Some(url)) =
+                        (self.js_present, nav_start, self.source.url_str().map(str::to_owned))
+                    {
+                        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                            j.deliver_nav_timing(&url, duration_ms);
+                        });
+                    }
                 }
                 click_log::log_load_ok(&self.source.describe(), title);
                 click_log::log_page_ready(&self.source.describe(), self.scroll_y);
@@ -8806,14 +8816,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         click_log::log_load_ok(&self.source.describe(), page.title.as_deref().unwrap_or(""));
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
                         // Deliver W3C Navigation Timing L2 entry after streaming load completes.
+                        // ADR-016 M2.2c-2d (20): same conversion as the reload path above —
+                        // `self.js_present` gate + `route_task_js`, `nav_start` still taken
+                        // unconditionally. Flag-off byte-identical; flag-on off-UI-thread.
                         #[cfg(feature = "quickjs")]
-                        if let (Some(js), Some(start), Some(url)) =
-                            (&self.js_ctx, self.nav_start.take(), self.source.url_str())
                         {
-                            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-                            js.deliver_nav_timing(url, duration_ms);
-                        } else {
-                            self.nav_start = None;
+                            let nav_start = self.nav_start.take();
+                            if let (true, Some(start), Some(url)) =
+                                (self.js_present, nav_start, self.source.url_str().map(str::to_owned))
+                            {
+                                let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+                                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                                    j.deliver_nav_timing(&url, duration_ms);
+                                });
+                            }
                         }
                         click_log::log_page_ready(&self.source.describe(), self.scroll_y);
                     }
@@ -8861,7 +8877,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     .sum();
                 let (img_n, img_b) = image_cache::IMAGE_CACHE.debug_stats();
                 let (pf_n, pf_b) = prefetch::PREFETCH_CACHE.debug_stats();
-                let js_heap = self.js_ctx.as_ref().map_or((-1, -1), |j| j.debug_js_heap());
+                // ADR-016 M2.2c-2d (20): direct `self.js_ctx` read → `route_query_js`.
+                // Flag-off (default) `js.map(...).unwrap_or((-1,-1))` = the old
+                // `map_or((-1,-1), ...)`; under the flag it is a blocking `query`.
+                let js_heap = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.debug_js_heap()
+                })
+                .unwrap_or((-1, -1));
                 eprintln!(
                     "MEM_REPORT dl_cmds={} prev_styles={} dl_cache={:.1}MB img_cache={}/{:.1}MB prefetch={}/{:.1}MB web_fonts={}/{:.1}MB gifs={}/{:.1}MB js_malloc={:.1}MB js_used={:.1}MB {}",
                     self.display_list.len(),
@@ -8926,14 +8948,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // deadline and the rAF-pump deadline (set below), so neither wakeup
         // source can starve the other.
         let mut next_wakeup: Option<std::time::Instant> = None;
-        if let Some(js) = &self.js_ctx {
+        // ADR-016 M2.2c-2d (20): gate on `self.js_present` instead of borrowing the
+        // `Arc` directly (`if let Some(js) = &self.js_ctx`), so the block stays live
+        // when the handle later moves engine-side under the flag. `js_present` is kept
+        // in lockstep with `self.js_ctx` by `set_js_ctx`, so this is byte-identical to
+        // the old gate in both modes; the routed calls below already ignored the passed
+        // clone under the flag.
+        if self.js_present {
             // ADR-016 M2.2c-2d: per-tick pump-батч (fire-and-forget void) через
             // `route_task_js`. Под флагом (`LUMEN_ENGINE_THREAD=1`) уходит off-UI-thread
             // одним `task` (порядок вызовов внутри сохранён), а последующие
             // `route_query_js`-чтения nav/timer встают в очередь **после** него —
             // read-after-write порядок восстановлен, как для routed `eval_js` в 2b/2c.
             // Без флага (по умолчанию) — синхронные прямые вызовы, байт-идентично.
-            route_task_js(self.engine_thread.as_ref(), Some(js), |j| {
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                 j.tick_timers();
                 j.pump_websockets();
                 j.pump_sse();
@@ -8950,13 +8978,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             // `Option<Option<_>>` (внешний = «есть ли JS-контекст», внутренний = сам
             // результат чтения) в `Option<_>`.
             if let Some(nav) =
-                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_navigate_request())
+                route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| j.take_navigate_request())
                     .flatten()
             {
                 self.pending_js_navigate = Some(nav);
             }
             if let Some(wakeup_epoch_ms) =
-                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_timer_wakeup())
+                route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| j.take_timer_wakeup())
                     .flatten()
             {
                 let now_epoch_ms = std::time::SystemTime::now()
@@ -9759,7 +9787,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // `layout_source`-документ + `&mut gc_tick`), а сам `gc_collect` — чистый void —
         // уходит через `route_task_js`. Гейт `Some(_js)` сохранён, чтобы `gc_tick.poll`
         // тикал только при наличии JS-контекста, как прежде (байт-идентично флаг-офф).
-        if let (Some(ls), Some(_js)) = (self.layout_source.as_ref(), self.js_ctx.as_ref()) {
+        // ADR-016 M2.2c-2d (20): JS-presence gate reads `self.js_present` instead of
+        // borrowing the `Arc` — kept in lockstep by `set_js_ctx`, so byte-identical.
+        if self.js_present
+            && let Some(ls) = self.layout_source.as_ref()
+        {
             let dead = {
                 let doc = ls.document.lock().unwrap();
                 self.gc_tick.poll(&doc)
@@ -19677,6 +19709,26 @@ mod tests {
             unpark.store(true, std::sync::atomic::Ordering::SeqCst);
         });
         assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn route_nav_timing_and_js_heap_without_handle_default_to_no_op() {
+        // ADR-016 M2.2c-2d (20): the last direct `self.js_ctx` reads on the UI thread
+        // were decoupled from `Arc` ownership: nav-timing delivery (`deliver_nav_timing`,
+        // fire-and-forget void) now routes through `route_task_js`, and the MEM_REPORT
+        // heap probe (`debug_js_heap`, value read) through `route_query_js`. Без хэндла
+        // (`engine = None`, `js = None`) delivery — no-op, а heap-чтение возвращает
+        // `None` → `unwrap_or((-1, -1))` = прежний `map_or((-1, -1), …)`; та же ветка
+        // «без JS», что и прежние прямые обращения к полю.
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran2 = Arc::clone(&ran);
+        route_task_js(None, None, move |j| {
+            j.deliver_nav_timing("https://example.test/", 1.0);
+            ran2.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+        let js_heap = route_query_js(None, None, |j| j.debug_js_heap()).unwrap_or((-1, -1));
+        assert_eq!(js_heap, (-1, -1));
     }
 
     // ── ADR-016 M2.2c-2d: generic void-action router (pump/tick batch) ──────
