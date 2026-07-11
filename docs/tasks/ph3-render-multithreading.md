@@ -536,10 +536,29 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
     forwarding + chrome. Proposed sub-slices (each independently shippable into
     `zcode`, mirroring M0/M1/M2.2a-b; **measure first**, then move one site class at a
     time behind `LUMEN_ENGINE_THREAD`):
-    - **M2.2c-0 — acceptance baseline (measure).** Prerequisite like M2.0/M0.1: a
-      test page running a 200 ms JS busy-loop per rAF + a documented `LUMEN_FRAME_LOG`
-      recipe; record that today input/scroll *does* freeze during the busy-loop
-      (JS is a blocking round-trip on the UI thread) — the number M2.2c must beat.
+    - **M2.2c-0 — acceptance baseline (measure). ✅ (branch `p1-mt-m2-2c-0`,
+      merged into `zcode`, 2026-07-11).** Prerequisite like M2.0/M0.1. Deliverables:
+      - `samples/mt-busy-loop.html` — a tall page whose rAF loop burns `BUSY_MS`
+        (200) ms of CPU *synchronously* per animation frame on the UI/winit thread.
+        `BUSY_MS = 0` (edit in place) is the non-stalled control on the identical
+        page. (URL query/fragment can't reach a local `file://` load and the `eval`
+        MCP tool isn't wired to the live JS context, so the burn is a plain constant.)
+      - `scripts/mt_stall_bench.py` — drives wheel scroll for a fixed wall-clock
+        window over `--mcp-live-port` with `LUMEN_FRAME_LOG=1` and **timestamps each
+        `[frame]` line as it arrives** (via a stderr drain thread — a bare `PIPE`
+        left unread dead-locks the child at ~4 KB). Reports the *delivered* cadence
+        (p50/p95/max inter-frame gap, delivered FPS, `scroll_y` travel), which
+        `scroll_perf.py`'s paint-bound FPS *ceiling* cannot see: paint stays cheap,
+        the frames just never get scheduled.
+      - **Recorded baseline (Windows, dev-release, 6 s window, 30 wheel ticks/s):**
+        with the 200 ms burn, presentation freezes to **~2.4 fps** (inter-frame gap
+        **p50/p95/max ≈ 404 ms**, all gaps a stall) and scroll only lurches **4200 px**
+        over the window. Control (`BUSY_MS = 0`, same page): **~28 fps**, gap
+        **p50 ≈ 36 ms**, zero stalls, scroll tracks fully (**~49 500 px**). So today
+        input/scroll *does* freeze during the busy-loop (JS is a blocking round-trip
+        on the UI thread) — the **~404 ms gap / ~2.4 fps** is the number M2.2c must beat
+        (target: ~16 ms / 60 fps, scroll unaffected by the burn). No Rust changes, no
+        new deps.
     - **M2.2c-1 — request/reply geometry readback.** Add `Request::Readback { reply:
       SyncSender }` so a UI-thread caller that needs fresh geometry right after a
       relayout (hit-test, caret, scrollIntoView) can block for exactly that one
