@@ -14656,9 +14656,11 @@ impl Lumen {
         // `persisted = true` signals it was retained in bfcache (restorable on
         // back-navigation), so listeners can skip teardown they will redo on
         // `pageshow`.
-        if let Some(js) = &self.js_ctx {
-            js.fire_page_lifecycle("pagehide", persisted);
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.fire_page_lifecycle("pagehide", persisted);
+        });
         // Push current page to back stack (full-doc entry: no same_doc_state_json).
         self.nav_back.push(NavEntry {
             source: self.source.clone(),
@@ -14776,9 +14778,11 @@ impl Lumen {
             });
             let url = prev.display_url.unwrap_or_default();
             self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
-            if let Some(js) = &self.js_ctx {
-                js.fire_popstate(&state_json, &url);
-            }
+            // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+            // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.fire_popstate(&state_json, &url);
+            });
             self.fire_current_entry_change();
             self.request_redraw();
             self.current_nav_key = prev.nav_key;
@@ -14789,9 +14793,11 @@ impl Lumen {
 
         // Full-document navigation: restore page and reload.
         // HTML LS §8.6: fire `pagehide` on the current page before it unloads.
-        if let Some(js) = &self.js_ctx {
-            js.fire_page_lifecycle("pagehide", false);
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.fire_page_lifecycle("pagehide", false);
+        });
         // Push current page to forward stack.
         let cur_display = self.display_url.take();
         let cur_state = std::mem::replace(
@@ -14901,9 +14907,11 @@ impl Lumen {
             });
             let url = next.display_url.unwrap_or_default();
             self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
-            if let Some(js) = &self.js_ctx {
-                js.fire_popstate(&state_json, &url);
-            }
+            // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+            // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.fire_popstate(&state_json, &url);
+            });
             self.fire_current_entry_change();
             self.request_redraw();
             self.current_nav_key = next.nav_key;
@@ -14914,9 +14922,11 @@ impl Lumen {
 
         // Full-document forward navigation.
         // HTML LS §8.6: fire `pagehide` on the current page before it unloads.
-        if let Some(js) = &self.js_ctx {
-            js.fire_page_lifecycle("pagehide", false);
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.fire_page_lifecycle("pagehide", false);
+        });
         let cur_display = self.display_url.take();
         let cur_state = std::mem::replace(
             &mut self.current_history_state_json,

@@ -754,6 +754,22 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         вынесена перед маршрутизацией (ранние `return` на ошибке сериализации
         сохранены). No new deps, no `unsafe`. Механизм не менялся — покрыт
         существующими route/engine_thread тестами.
+        ✅ **Шестой под-срез готов** (branch `p1-mt-m22d-final`, merged into `zcode`,
+        2026-07-11): navigation-history pagehide/popstate fire-and-forget void-сайты
+        переведены с прямых `if let Some(js) = &self.js_ctx { … }` на `route_task_js`.
+        5 сайтов в `navigate_to`/`navigate_back`/`navigate_forward`:
+        `fire_page_lifecycle("pagehide", …)` ×3 (full-doc unload перед `reload`,
+        HTML LS §8.6) и `fire_popstate(&state_json, &url)` ×2 (same-doc back/forward).
+        Все — чистый void без чтения результата следом; owned `state_json`/`url`
+        (и Copy-`persisted`) переезжают в `move`-замыкание. Под флагом
+        (`LUMEN_ENGINE_THREAD=1`) уходят off-UI-thread одним `task` (для popstate —
+        перед уже маршрутизированными `fire_current_entry_change`/`commit_nav_state`,
+        порядок сохранён); без флага (по умолчанию) — синхронный вызов по UI-хэндлу,
+        байт-идентично. No new deps, no `unsafe`. Механизм не менялся — покрыт
+        существующими route/engine_thread тестами. Остаются смешанные сайты
+        (element-scroll write-back `take_scroll_requests`, GC `gc_tick`, pointer-lock
+        mouse-motion, PiP-close eval) и sync event-dispatch — следующие под-срезы 2d
+        перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
