@@ -754,7 +754,7 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         вынесена перед маршрутизацией (ранние `return` на ошибке сериализации
         сохранены). No new deps, no `unsafe`. Механизм не менялся — покрыт
         существующими route/engine_thread тестами.
-        ✅ **Шестой под-срез готов** (branch `p1-mt-m22d-final`, merged into `zcode`,
+        ✅ **Шестой под-срез готов** (branch `p1-mt-m22d-final`, merged into `main`,
         2026-07-11): navigation-history pagehide/popstate fire-and-forget void-сайты
         переведены с прямых `if let Some(js) = &self.js_ctx { … }` на `route_task_js`.
         5 сайтов в `navigate_to`/`navigate_back`/`navigate_forward`:
