@@ -8962,11 +8962,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // JS Canvas 2D draws into per-node CPU buffers (lumen_canvas::Context2D).
         // Each frame we drain the dirty buffers and register them under the same
         // `canvas:{nid}` key the display list emits, then request a repaint.
-        let canvas_updates = self
-            .js_ctx
-            .as_ref()
-            .map(|js| js.flush_canvas_updates())
-            .unwrap_or_default();
+        // ADR-016 M2.2c-2d: canvas drain (value-returning) через `route_query_js`
+        // (тот же паттерн, что nav/timer/nav-update выше). Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) — блокирующий `query`, встающий в очередь
+        // **после** уже отправленного pump-`task` (read-after-write сохранён);
+        // без флага (по умолчанию) — `js.map(read)`, байт-идентично прежнему
+        // `js_ctx.map(flush_canvas_updates)`. `unwrap_or_default` на `None` (нет
+        // хэндла / состояние не зеркалировано / поток завершён) даёт пустой дренаж.
+        let canvas_updates = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.flush_canvas_updates()
+        })
+        .unwrap_or_default();
         if !canvas_updates.is_empty() {
             if let Some(r) = self.renderer.as_mut() {
                 for (nid, w, h, rgba) in &canvas_updates {
@@ -8991,9 +8997,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Drain URL-update notifications from history.pushState/replaceState.
         // pushState adds a same-document back-stack entry; replaceState updates
         // the displayed URL only.  Neither triggers a page load.
+        // ADR-016 M2.2c-2d: history pushState/replaceState drain через
+        // `route_query_js` — собираем `updates` до `&mut self`-мутаций стека
+        // навигации. Под флагом — `query` после pump-`task`; без флага —
+        // байт-идентично прежнему `js.take_history_url_updates()`; `None` →
+        // `unwrap_or_default` = пустой дренаж (как ветка `js_ctx == None`).
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let updates = js.take_history_url_updates();
+        {
+            let updates = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_history_url_updates()
+            })
+            .unwrap_or_default();
             for (is_push, url, new_state_json) in updates {
                 if is_push {
                     // pushState: save current state to nav_back as same-doc entry.
@@ -9025,13 +9039,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Drain JS-initiated traversal deltas and apply them to the real
         // nav_back/nav_fwd stacks (single authority). Collect first so the
         // immutable `js_ctx` borrow is released before the `&mut self` calls.
+        // ADR-016 M2.2c-2d: history.go/back/forward traversal drain через
+        // `route_query_js` — те же гарантии (query после pump-`task` под флагом;
+        // байт-идентично `js_ctx.map(take_history_traversals)` без него), `None` →
+        // пустой дренаж. Собираем до `&mut self`-мутаций (`navigate_by`).
         #[cfg(feature = "quickjs")]
         {
-            let traversals = self
-                .js_ctx
-                .as_ref()
-                .map(|js| js.take_history_traversals())
-                .unwrap_or_default();
+            let traversals = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_history_traversals()
+            })
+            .unwrap_or_default();
             for delta in traversals {
                 self.navigate_by(delta);
             }
@@ -19129,6 +19146,24 @@ mod tests {
         let navs: Option<Vec<(u8, String, String, String)>> =
             route_query_js(None, None, |j| j.take_nav_updates());
         assert!(navs.unwrap_or_default().is_empty());
+    }
+
+    #[test]
+    fn route_query_js_canvas_history_drains_without_handle_default_to_empty() {
+        // ADR-016 M2.2c-2d: canvas/history per-tick дренажи в `about_to_wait`
+        // маршрутизируются тем же `route_query_js`. Без хэндла (`engine = None`,
+        // `js = None`) внешний `Option` = `None`, поэтому `unwrap_or_default` в
+        // вызывающих сайтах даёт пустой `Vec` — та же ветка «без JS», что и прежние
+        // прямые `js_ctx.map(<drain>).unwrap_or_default()`.
+        // Тип `R` выводится из возвращаемого значения замыкания — явную аннотацию
+        // не пишем (сложный кортеж `flush_canvas_updates` иначе триггерит
+        // clippy::type_complexity); цепляем `unwrap_or_default` сразу.
+        let canvas = route_query_js(None, None, |j| j.flush_canvas_updates()).unwrap_or_default();
+        assert!(canvas.is_empty());
+        let hist_url = route_query_js(None, None, |j| j.take_history_url_updates()).unwrap_or_default();
+        assert!(hist_url.is_empty());
+        let hist_go = route_query_js(None, None, |j| j.take_history_traversals()).unwrap_or_default();
+        assert!(hist_go.is_empty());
     }
 
     // ── ADR-016 M2.2c-2d: generic void-action router (pump/tick batch) ──────
