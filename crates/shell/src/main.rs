@@ -8883,23 +8883,36 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // with `RedrawRequested` step 3.1 so the combined rate stays ≤60 Hz.
         // If a callback mutates the DOM we relayout and request a real paint,
         // so rAF-driven animations keep their 60 fps repaint cadence.
-        let raf_dom_dirty = if let Some(js) = &self.js_ctx {
-            let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
-            if js.has_raf_pending() && now_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS {
-                // ADR-016 M2.2c-2c: value-returning UI→JS чтения через `route_query_js`.
-                // `take_raf_pending` здесь очищает флаг (результат отбрасывается), но
-                // обязано завершиться **до** синхронного `run_animation_frame` (иначе
-                // очистка обгонит перевзвод флага из вложенного rAF) — блокирующий
-                // `query` сохраняет этот порядок под флагом; без флага — прежний вызов.
-                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_raf_pending());
-                self.last_raf_batch_ms = now_ms;
-                let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
-                js.run_animation_frame(raf_ts);
-                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_dom_dirty())
-                    .unwrap_or(false)
-            } else {
-                false
-            }
+        // ADR-016 M2.2c-2d: снимаем последние прямые `self.js_ctx`-обращения rAF-пампа
+        // (`has_raf_pending` read → `route_query_js`, `run_animation_frame` void →
+        // `route_task_js`). Под флагом (`LUMEN_ENGINE_THREAD=1`) чтения — блокирующий
+        // `query`, батч rAF — `task` в очередь **между** ними, так что порядок
+        // has_raf_pending → take_raf_pending → run_animation_frame → take_dom_dirty
+        // сохранён; без флага (по умолчанию) — прежние синхронные вызовы, байт-идентично
+        // (при отсутствующем хэндле `route_query_js` → `None` → `unwrap_or(false)`,
+        // как прежняя ветка `js_ctx == None`).
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        let raf_due =
+            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.has_raf_pending()
+            })
+            .unwrap_or(false);
+        let raf_dom_dirty = if raf_due && now_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS {
+            // `take_raf_pending` очищает флаг (результат отбрасывается), но обязано
+            // завершиться **до** `run_animation_frame` (иначе очистка обгонит перевзвод
+            // флага из вложенного rAF) — блокирующий `query` держит этот порядок под флагом.
+            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_raf_pending()
+            });
+            self.last_raf_batch_ms = now_ms;
+            let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.run_animation_frame(raf_ts);
+            });
+            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_dom_dirty()
+            })
+            .unwrap_or(false)
         } else {
             false
         };
@@ -8908,8 +8921,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             self.relayout();
             self.request_redraw();
         }
-        if let Some(js) = &self.js_ctx
-            && js.has_raf_pending()
+        if route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.has_raf_pending()
+        })
+        .unwrap_or(false)
         {
             let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
             let due_in_ms = (self.last_raf_batch_ms + RAF_MIN_INTERVAL_MS - now_ms).max(0.0);
@@ -11927,28 +11942,38 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // "pending" signal so it fires on the next eligible frame.
                 // Pass -1.0 → JS captures performance.now() at batch start (DOMHighResTimeStamp).
                 // Pass 0.0 in deterministic mode → frozen timestamp per HTML §8.1.5.1.
-                if let Some(js) = &self.js_ctx {
-                    let raf_due = timestamp_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
-                    if raf_due && js.has_raf_pending() {
-                        // Consume the flag and fire the batch. ADR-016 M2.2c-2c:
-                        // `take_raf_pending` через `route_query_js` (результат
-                        // отбрасывается) — блокирующий `query` под флагом держит
-                        // очистку **перед** синхронным `run_animation_frame`; без
-                        // флага — прежний прямой вызов.
-                        route_query_js(self.engine_thread.as_ref(), Some(js), |j| {
-                            j.take_raf_pending()
-                        });
-                        self.last_raf_batch_ms = timestamp_ms;
-                        let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
-                        js.run_animation_frame(raf_ts);
-                    }
-                    // BUG-271: callbacks that remain queued (animation loop or
-                    // deferred batch) are fired by the `about_to_wait` rAF pump
-                    // on a WaitUntil timer — NOT by an unconditional
-                    // `request_redraw` here. A pure rAF loop that never mutates
-                    // the DOM must not force a 60 fps repaint cycle; loops that
-                    // do mutate get a relayout + real paint from the pump.
+                // ADR-016 M2.2c-2d: снимаем прямые `self.js_ctx`-обращения rAF-батча
+                // (`has_raf_pending` read → `route_query_js`, `run_animation_frame` void
+                // → `route_task_js`). Под флагом (`LUMEN_ENGINE_THREAD=1`) чтения —
+                // блокирующий `query`, батч — `task` в очередь между ними (порядок
+                // has_raf_pending → take_raf_pending → run_animation_frame сохранён, а
+                // последующий Step 4 `take_dom_dirty`-query встаёт после батч-`task`);
+                // без флага (по умолчанию) — прежние синхронные вызовы, байт-идентично.
+                let raf_due = timestamp_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
+                if raf_due
+                    && route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                        j.has_raf_pending()
+                    })
+                    .unwrap_or(false)
+                {
+                    // Consume the flag and fire the batch. `take_raf_pending` via the
+                    // blocking `query` keeps the clear ordered **before**
+                    // `run_animation_frame` under the flag; off the flag it is the
+                    // former direct call.
+                    route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                        j.take_raf_pending()
+                    });
+                    self.last_raf_batch_ms = timestamp_ms;
+                    let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                        j.run_animation_frame(raf_ts);
+                    });
                 }
+                // BUG-271: callbacks that remain queued (animation loop or deferred
+                // batch) are fired by the `about_to_wait` rAF pump on a WaitUntil timer
+                // — NOT by an unconditional `request_redraw` here. A pure rAF loop that
+                // never mutates the DOM must not force a 60 fps repaint cycle; loops that
+                // do mutate get a relayout + real paint from the pump.
 
                 // Step 4: layout invalidation — если rAF-callback изменил DOM
                 // (setAttribute/textContent/appendChild/etc.), делаем relayout
@@ -13917,10 +13942,16 @@ impl Lumen {
                 self.arm_fullscreen_resize(prev);
             }
             // Notify JS so fullscreenchange fires and document.fullscreenElement clears.
+            // ADR-016 M2.2c-2d: fire-and-forget void eval через маршрутизатор — под
+            // флагом off-UI-thread, без флага (по умолчанию) байт-идентично прежнему
+            // `js.eval_js(…)` (при отсутствующем хэндле — no-op, как прежний `if let`).
             #[cfg(feature = "quickjs")]
-            if let Some(js) = &self.js_ctx {
-                js.eval_js("if(typeof _lumen_notify_fullscreen_exit==='function')_lumen_notify_fullscreen_exit()");
-            }
+            route_eval_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                "if(typeof _lumen_notify_fullscreen_exit==='function')_lumen_notify_fullscreen_exit()"
+                    .to_string(),
+            );
             return;
         }
 
@@ -13966,8 +13997,17 @@ impl Lumen {
         if (self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
             && let (Some(nid), Some(src)) = (self.focused_node, self.layout_source.as_ref())
         {
+            // ADR-016 M2.2c-2d: contenteditable-key void-eval через `route_eval_js` —
+            // снимаем прямые `self.js_ctx`-обращения. DOM-read (`find_editing_host`)
+            // остаётся на UI-потоке (читает разделяемый `src.document`, не JS-хэндл);
+            // сами `_lumen_handle_contenteditable_key`-вызовы — чистый fire-and-forget
+            // void без синхронного чтения результата следом, поэтому под флагом
+            // (`LUMEN_ENGINE_THREAD=1`) уходят off-UI-thread одним `task`, без флага (по
+            // умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично. Гейт заменён
+            // с `if let Some(js)` на `is_some()`, чтобы editing-host detection и eval
+            // выполнялись только при наличии JS-контекста (как прежде).
             #[cfg(feature = "quickjs")]
-            if let Some(js) = &self.js_ctx {
+            if self.js_ctx.is_some() {
                 // Check contenteditable by reading the DOM directly (eval_js returns ()).
                 let editing_host = src
                     .document
@@ -13978,17 +14018,25 @@ impl Lumen {
                     let host_nid = host.index();
                     let handled = match code {
                         KeyCode::Backspace => {
-                            js.eval_js(&format!(
-                                "_lumen_handle_contenteditable_key('deleteContentBackward',null,{})",
-                                host_nid
-                            ));
+                            route_eval_js(
+                                self.engine_thread.as_ref(),
+                                self.js_ctx.as_ref(),
+                                format!(
+                                    "_lumen_handle_contenteditable_key('deleteContentBackward',null,{})",
+                                    host_nid
+                                ),
+                            );
                             true
                         }
                         KeyCode::Delete => {
-                            js.eval_js(&format!(
-                                "_lumen_handle_contenteditable_key('deleteContentForward',null,{})",
-                                host_nid
-                            ));
+                            route_eval_js(
+                                self.engine_thread.as_ref(),
+                                self.js_ctx.as_ref(),
+                                format!(
+                                    "_lumen_handle_contenteditable_key('deleteContentForward',null,{})",
+                                    host_nid
+                                ),
+                            );
                             true
                         }
                         KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -13997,10 +14045,14 @@ impl Lumen {
                             } else {
                                 "insertParagraph"
                             };
-                            js.eval_js(&format!(
-                                "_lumen_handle_contenteditable_key('{}',null,{})",
-                                input_type, host_nid
-                            ));
+                            route_eval_js(
+                                self.engine_thread.as_ref(),
+                                self.js_ctx.as_ref(),
+                                format!(
+                                    "_lumen_handle_contenteditable_key('{}',null,{})",
+                                    input_type, host_nid
+                                ),
+                            );
                             true
                         }
                         _ => {
@@ -14011,10 +14063,14 @@ impl Lumen {
                             {
                                 let escaped =
                                     text.replace('\\', "\\\\").replace('\'', "\\'");
-                                js.eval_js(&format!(
-                                    "_lumen_handle_contenteditable_key('insertText','{}',{})",
-                                    escaped, host_nid
-                                ));
+                                route_eval_js(
+                                    self.engine_thread.as_ref(),
+                                    self.js_ctx.as_ref(),
+                                    format!(
+                                        "_lumen_handle_contenteditable_key('insertText','{}',{})",
+                                        escaped, host_nid
+                                    ),
+                                );
                                 self.request_redraw();
                                 return;
                             }
