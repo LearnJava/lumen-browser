@@ -9564,9 +9564,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // tree (no CSS re-computation needed — scroll only affects paint offsets), the
         // display list is rebuilt cheaply, and JS scroll-state cache is updated so
         // subsequent scrollTop/scrollLeft reads return the new values.
+        // ADR-016 M2.2d: value-drain (`take_scroll_requests`) через `route_query_js`,
+        // write-back (`update_scroll_states` + `fire_element_scroll`) через
+        // `route_task_js` — снимаем прямые `self.js_ctx`-обращения. Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) дренаж идёт блокирующим `query`, а последующая
+        // write-back-`task` встаёт в очередь **после** него (read-after-write порядок
+        // сохранён); без флага (по умолчанию) — прежние синхронные `js.<method>()`,
+        // байт-идентично.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let scroll_reqs = js.take_scroll_requests();
+        {
+            let scroll_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_scroll_requests()
+            })
+            .unwrap_or_default();
             if !scroll_reqs.is_empty()
                 && let Some(lb) = self.layout_box.as_mut()
             {
@@ -9587,16 +9597,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let dl_hash = lumen_paint::hash_commands(&new_dl);
                     self.display_list_cache.insert(root_id, new_dl.clone(), dl_hash, None);
                     self.display_list = new_dl;
-                    // Sync JS cache so scrollTop/scrollLeft reads are accurate.
-                    let states = collect_scroll_containers(lb)
+                    // Sync JS cache so scrollTop/scrollLeft reads are accurate, then fire
+                    // non-bubbling scroll events on each scrolled container.
+                    let states: HashMap<u32, [f32; 4]> = collect_scroll_containers(lb)
                         .iter()
                         .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                         .collect();
-                    js.update_scroll_states(states);
-                    // Fire non-bubbling scroll events on each scrolled container.
-                    for nid in scrolled_nids {
-                        js.fire_element_scroll(nid);
-                    }
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                        j.update_scroll_states(states);
+                        for nid in scrolled_nids {
+                            j.fire_element_scroll(nid);
+                        }
+                    });
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
                     }
@@ -9625,7 +9637,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // DOM GC idle tick: drain dead node IDs and purge JS-side per-node caches.
         // Runs every 30 s to free _lumen_listeners / _input_values entries for
         // nodes that were detached from the tree and have no live JS references.
-        if let (Some(ls), Some(js)) = (self.layout_source.as_ref(), self.js_ctx.as_ref()) {
+        // ADR-016 M2.2d: dead-node computation остаётся на UI-потоке (нужны
+        // `layout_source`-документ + `&mut gc_tick`), а сам `gc_collect` — чистый void —
+        // уходит через `route_task_js`. Гейт `Some(_js)` сохранён, чтобы `gc_tick.poll`
+        // тикал только при наличии JS-контекста, как прежде (байт-идентично флаг-офф).
+        if let (Some(ls), Some(_js)) = (self.layout_source.as_ref(), self.js_ctx.as_ref()) {
             let dead = {
                 let doc = ls.document.lock().unwrap();
                 self.gc_tick.poll(&doc)
@@ -9635,7 +9651,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     .iter()
                     .map(|n| n.index() as u32)
                     .collect();
-                js.gc_collect(&ids);
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    j.gc_collect(&ids);
+                });
             }
         }
 
