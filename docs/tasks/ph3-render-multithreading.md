@@ -926,10 +926,36 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         No new deps, no `unsafe`. Механизм не менялся — покрыт существующими
         route/engine_thread тестами (`route_eval_js_without_handle_is_noop`,
         `route_task_js_without_handle_is_noop`, `route_query_js_without_handle_is_none`).
-        **Все категории event-dispatch зашимлены** — единственное оставшееся прямое
-        `self.js_ctx`-чтение — `WaitCondition::JsIdle` (`has_raf_pending`) в
-        automation/IPC wait-poll (`main.rs` ~:18606, не event-dispatch); следующий
-        под-срез 2d снимает его и само поле `js_ctx` с UI-потока под флагом.
+        **Все категории event-dispatch зашимлены.** Остаток прямых `self.js_ctx`-чтений
+        (не event-dispatch) — под-срезы дальше: pointer-capture pre-dispatch reads,
+        `WaitCondition::JsIdle` wait-poll, layout-geometry push (`update_layout_rects`
+        и Co.), lazy-images/pageshow setup, focus/scroll-states/hashchange, tab
+        park/unpark (`pause_event_loop`/`unpause_event_loop`, зависит от bg-tab
+        snapshot). Само поле `js_ctx` снимается с UI-потока последним под-срезом,
+        когда ни одного прямого чтения не останется.
+        ✅ **Четырнадцатый под-срез готов** (branch `p1-mt-m22d-14`, 2026-07-11):
+        оставшиеся синхронные **value-returning** UI→JS чтения переведены с прямых
+        `self.js_ctx.as_ref().and_then(...)` / `is_none_or(...)` на `route_query_js`.
+        4 сайта в двух классах: (1) **pre-dispatch pointer-capture** ×3 —
+        `pointer_capture_nid()` в mouseup (`main.rs` ~:11431) и pointermove
+        (`dispatch_mouse_move`, ~:13026, явно оставлен непереведённым в срезе 9) +
+        `take_pointer_capture()` (implicit-release на mouseup, ~:11437). Каждое
+        `route_query_js(...)` возвращает `Option<Option<u32>>`; `.flatten()` схлопывает
+        «без JS» (внешний `None`) и «нет capture» (внутренний `None`) в ту же ветку —
+        `unwrap_or(hit_nid)` / пропуск `lostpointercapture`, байт-идентично прежнему
+        `and_then(...)`. Под флагом (`LUMEN_ENGINE_THREAD=1`) capture-read — блокирующий
+        `query`; `take_pointer_capture` встаёт в очередь **после** уже
+        маршрутизированных pointerup/mouseup eval-`task` — read-after-eval порядок
+        сохранён. (2) **wait-poll `has_raf_pending`** (`WaitCondition::JsIdle`,
+        `check_wait_condition`, ~:18662) — `!route_query_js(...).unwrap_or(false)`;
+        «без JS» (`None`) → `unwrap_or(false)` → `!false` = `true` (idle), как прежний
+        `is_none_or`. Без флага (по умолчанию) — синхронный вызов по UI-хэндлу,
+        байт-идентично. 1 новый тест
+        (`route_query_js_pointer_capture_and_raf_reads_without_handle_default_to_no_op`).
+        No new deps, no `unsafe`. Остаются прямые `self.js_ctx`-чтения вне
+        event-dispatch/value-read категории (layout-geometry push, lazy-images/pageshow
+        setup, focus/scroll-states/hashchange void-eval, tab park/unpark) — следующие
+        под-срезы 2d перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any

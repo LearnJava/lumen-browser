@@ -11428,13 +11428,28 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let yu = (pos.y as f32) / dpr;
                         let hit_nid = hov.index() as u32;
                         // Pointer Events L3 §4.1: route pointerup to capture target if active.
-                        let ptr_nid = self.js_ctx.as_ref()
-                            .and_then(|c| c.pointer_capture_nid())
-                            .unwrap_or(hit_nid);
+                        // ADR-016 M2.2c-2d: pre-dispatch capture-read через `route_query_js`
+                        // (под флагом — блокирующий `query`; внешний `None` = ветка «без JS»
+                        // → `hit_nid`, как прежний `and_then(...).unwrap_or(hit_nid)`).
+                        let ptr_nid = route_query_js(
+                            self.engine_thread.as_ref(),
+                            self.js_ctx.as_ref(),
+                            |c| c.pointer_capture_nid(),
+                        )
+                        .flatten()
+                        .unwrap_or(hit_nid);
                         self.js_pointer_event(ptr_nid, "pointerup", xu, yu, 0, 0);
                         self.js_mouse_event(hit_nid, "mouseup", xu, yu, 0, 0);
                         // Pointer Events L3 §4.1: implicit release on pointerup.
-                        if let Some(cap_nid) = self.js_ctx.as_ref().and_then(|c| c.take_pointer_capture()) {
+                        // Читается **после** уже маршрутизированных pointerup/mouseup
+                        // eval-`task` — read-after-eval порядок сохранён.
+                        if let Some(cap_nid) = route_query_js(
+                            self.engine_thread.as_ref(),
+                            self.js_ctx.as_ref(),
+                            |c| c.take_pointer_capture(),
+                        )
+                        .flatten()
+                        {
                             self.js_capture_event(cap_nid, "lostpointercapture");
                         }
                     }
@@ -13023,9 +13038,15 @@ impl Lumen {
             // Pointer Events L3 §4.1: if a pointer capture is active, redirect
             // pointermove (and all pointer events) to the captured element.
             let hit_nid = result.node.index() as u32;
-            let ptr_nid = self.js_ctx.as_ref()
-                .and_then(|c| c.pointer_capture_nid())
-                .unwrap_or(hit_nid);
+            // ADR-016 M2.2c-2d: pre-dispatch capture-read через `route_query_js`
+            // (под флагом — блокирующий `query`; `None` = «без JS» → `hit_nid`).
+            let ptr_nid = route_query_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                |c| c.pointer_capture_nid(),
+            )
+            .flatten()
+            .unwrap_or(hit_nid);
             self.js_pointer_event(ptr_nid, "pointermove", x_css, y_css, 0, 0);
             self.js_mouse_event(hit_nid, "mousemove", x_css, y_css, 0, 0);
         }
@@ -18659,7 +18680,15 @@ impl Lumen {
                     let Ok(doc) = source.document.lock() else { return false };
                     !lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector).is_empty()
                 }
-                WaitCondition::JsIdle => self.js_ctx.as_ref().is_none_or(|c| !c.has_raf_pending()),
+                // ADR-016 M2.2c-2d: последнее прямое `self.js_ctx`-чтение в wait-poll —
+                // `has_raf_pending` через `route_query_js` (под флагом — блокирующий
+                // `query`; внешний `None` = «без JS» → idle, как прежний `is_none_or`).
+                WaitCondition::JsIdle => {
+                    !route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |c| {
+                        c.has_raf_pending()
+                    })
+                    .unwrap_or(false)
+                }
             }
         }
 
@@ -19422,6 +19451,26 @@ mod tests {
         let intercept: Option<Vec<(bool, bool)>> =
             route_query_js(None, None, |j| j.take_nav_intercept_result());
         assert!(intercept.is_none());
+    }
+
+    #[test]
+    fn route_query_js_pointer_capture_and_raf_reads_without_handle_default_to_no_op() {
+        // ADR-016 M2.2c-2d: последние синхронные value-returning UI→JS чтения —
+        // pre-dispatch pointer-capture (`pointer_capture_nid`/`take_pointer_capture`
+        // в mouseup/pointermove) и wait-poll `has_raf_pending` (`WaitCondition::JsIdle`)
+        // — маршрутизируются тем же `route_query_js`. Без хэндла (`engine = None`,
+        // `js = None`) внешний `Option` = `None`, поэтому `flatten` в capture-сайтах
+        // даёт `hit_nid`/пропуск lostpointercapture, а `unwrap_or(false)` + отрицание
+        // в JsIdle даёт `idle = true` — та же ветка «без JS», что и прежние прямые
+        // `self.js_ctx.as_ref().and_then(...)` / `is_none_or(...)`.
+        let cap_nid: Option<Option<u32>> =
+            route_query_js(None, None, |j| j.pointer_capture_nid());
+        assert!(cap_nid.flatten().is_none());
+        let taken: Option<Option<u32>> =
+            route_query_js(None, None, |j| j.take_pointer_capture());
+        assert!(taken.flatten().is_none());
+        let raf: Option<bool> = route_query_js(None, None, |j| j.has_raf_pending());
+        assert!(!raf.unwrap_or(false));
     }
 
     // ── ADR-016 M2.2c-2d: generic void-action router (pump/tick batch) ──────
