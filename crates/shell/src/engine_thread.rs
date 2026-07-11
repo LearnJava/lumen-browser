@@ -73,11 +73,10 @@ enum EngineMsg<C, S> {
     /// scrollIntoView), поэтому задание обязано исполниться. Результат идёт в
     /// `reply`, а не в latest-wins слот, и `applied_generation` он не двигает.
     ///
-    /// Пока не конструируется вне тестов: механизм приземлён в M2.2c-1, а живые
-    /// вызывающие (hit-test/caret/scrollIntoView) подключаются в M2.2c-3 — после
-    /// того как M2.2c-2 переносит `js_ctx` на движковый поток. Тесты `run_batch_*`
-    /// и `readback_*` покрывают путь целиком.
-    #[allow(dead_code, reason = "механизм M2.2c-1; живые вызывающие — M2.2c-3")]
+    /// Живой с M2.2c-3: `Lumen::readback_relayout_job` синхронно пересчитывает
+    /// layout движковым потоком, когда UI-стороне нужен свежий display-list в тот же
+    /// тик (rAF DOM-dirty flush → PerformancePaintTiming). Тесты `run_batch_*` и
+    /// `readback_*` покрывают путь целиком.
     Readback {
         /// Работа, считающая коммит off-thread.
         job: Box<dyn FnOnce() -> C + Send>,
@@ -180,7 +179,10 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
     /// Возвращает `None`, если поток уже завершён или получил `Shutdown` раньше,
     /// чем исполнил задание (канал ответа дропнут) — вызывающая сторона тогда
     /// откатывается на синхронный путь.
-    #[allow(dead_code, reason = "механизм M2.2c-1; живые вызывающие — M2.2c-3")]
+    ///
+    /// Живой с M2.2c-3: `Lumen::readback_relayout_job` вызывает его для rAF
+    /// DOM-dirty flush в `RedrawRequested`, где следующий шаг читает
+    /// `display_list.is_empty()` (PerformancePaintTiming) синхронно.
     pub fn readback(&self, job: impl FnOnce() -> C + Send + 'static) -> Option<C> {
         // Queue depth 1: ровно один ответ на одно задание.
         let (reply_tx, reply_rx) = mpsc::sync_channel::<C>(1);

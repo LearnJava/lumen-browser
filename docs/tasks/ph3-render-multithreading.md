@@ -1179,6 +1179,42 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
       `relayout_form()`. No new deps, no `unsafe`, собственного unit-теста не требует
       (чистая делегация, как срез 1). **Bucket A form-input исчерпан.** Остаток
       M2.2c-3: rAF DOM-dirty flush + paint-timing readback (Bucket B-сайт 12175).
+      ✅ **Третий под-срез готов — M2.2c-3 ЗАКРЫТ** (branch `p1-mt-m22c3-3`,
+      2026-07-12): маршрутизировал оба rAF DOM-dirty flush сайта off the UI thread.
+      Аудит различил их по тому, читается ли layout-продукт синхронно следом:
+      - **`about_to_wait` rAF pump** (`main.rs` ~:9212, `if raf_dom_dirty`) — после
+        relayout только `request_redraw()`, геометрия синхронно не читается → Bucket A,
+        новый хелпер `Lumen::relayout_raf_dirty()` (сиблинг `relayout_form`,
+        `if !submit_relayout_job() { relayout() }`): под флагом reflow уходит async
+        через `poll_engine_commit`, redraw красит текущий display-list, reflow садится
+        кадром позже — тот же контракт, что зум M2.2a и form-toggle'ы срезов 1-2.
+      - **`RedrawRequested` Step 4** (`main.rs` ~:12304, `take_dom_dirty` → relayout) —
+        следующий Step 5 читает `self.display_list.is_empty()` синхронно для
+        PerformancePaintTiming (W3C Paint Timing §2), поэтому reflow **нельзя**
+        отложить → Bucket B. Новый хелпер `Lumen::relayout_raf_dirty_readback()`
+        (`if !readback_relayout_job() { relayout() }`) считает layout **на движковом
+        потоке**, но **блокируется** за ровно этот коммит через
+        [`EngineThread::readback`] (механизм M2.2c-1 — первый живой вызывающий) и
+        применяет его синхронно, так что Step 5 видит свежий display-list. Порядок:
+        Step 3.1 `run_animation_frame` (`task`) и Step 4 `take_dom_dirty` (блокирующий
+        `query`) уже гарантируют, что DOM-мутация легла в разделяемый
+        `Arc<Mutex<Document>>` до постановки readback, а readback идёт в очереди FIFO
+        после них. Как sync `relayout()`, readback авторитетен: `engine_applied_generation`
+        продвигается к только что взбитому `engine_job_generation`, роняя устаревший
+        async-коммит в гварде `poll_engine_commit`.
+
+      Построение job'а вынесено в общий `Lumen::make_relayout_job()` (взбивает
+      generation + возвращает `(gen, FnOnce() -> EngineCommit)`), которым теперь
+      пользуются и `submit_relayout_job` (fire-and-forget, latest-wins), и
+      `readback_relayout_job` (blocking) — оба строят **байт-идентичный** коммит для
+      одного DOM-состояния. Снял `#[allow(dead_code)]` с `EngineMsg::Readback` и
+      `EngineThread::readback` (появился живой вызывающий). Под флагом (по умолчанию
+      off) `submit`/`readback` возвращают `false` → синхронный `relayout()`,
+      **байт-идентично**. No new deps, no `unsafe`, собственных unit-тестов хелперы не
+      требуют (чистая делегация в покрытые тестами `submit`/`readback`/`relayout`;
+      readback-путь целиком покрыт `readback_*`/`run_batch_*` executor-тестами).
+      **Bucket B rAF исчерпан → M2.2c-3 закрыт.** Осталось в M2.2c: только M2.2c-4
+      (content-visibility как visible-range message) ниже.
     - **M2.2c-4 — content-visibility as a visible-range message.** Replace
       `maybe_expand_cv_relevant`'s direct `relayout()` with a visible-range message to
       the engine (never a render-thread → layout call, per the brief gotcha); make
