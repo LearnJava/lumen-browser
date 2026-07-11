@@ -956,6 +956,29 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         event-dispatch/value-read категории (layout-geometry push, lazy-images/pageshow
         setup, focus/scroll-states/hashchange void-eval, tab park/unpark) — следующие
         под-срезы 2d перед снятием самого поля.
+        ✅ **Пятнадцатый под-срез готов** (branch `p1-mt-m22d-15`, 2026-07-11):
+        класс **layout-geometry push** (`update_layout_rects` и Co.) — 3 сайта
+        `if let (Some(js), Some(lb_ref)) = (&self.js_ctx, self.layout_box.as_ref())`
+        переведены на маршрутизаторы. (1) **relayout observer-delivery** (`relayout`,
+        `main.rs` ~:7196) — смешанный read+write: вся упорядоченная последовательность
+        (rects/styles/viewport push → `deliver_layout_observers` + `deliver_media_query_changes`
+        + `deliver_lazy_images` → `take_lazy_image_requests` read → `update_scroll_states`
+        push) обёрнута в **один** `route_query_js`, возвращающий `lazy_reqs`, так что под
+        флагом (`LUMEN_ENGINE_THREAD=1`) она исполняется атомарно **в порядке** на
+        движковом потоке (value-read после void-push сохраняет read-after-write порядок),
+        блокируя лишь ради одного результата. (2) **fresh-load seed** (`main.rs` ~:7758)
+        и (3) **bfcache-thaw seed** (`main.rs` ~:18006) — по 3 owned-arg void-вызова
+        (`update_layout_rects`/`update_computed_styles`/`update_viewport_size`) через
+        `route_task_js`. Все captured-данные owned (`HashMap`/`Vec`) → замыкания
+        `Send + 'static`; сбор геометрии (`collect_layout_rects`/`_computed_styles`/
+        `_scroll_containers`, без побочных эффектов) идёт на UI-потоке до маршрутизации.
+        Гейт `if let Some(js)` заменён на `if self.js_ctx.is_some() && let Some(lb_ref)`,
+        чтобы сбор геометрии происходил только при наличии JS-контекста — байт-идентично
+        флаг-офф (`route_*(…, None, …)` = синхронный вызов по UI-хэндлу / no-op без него).
+        1 новый тест (`route_query_js_layout_geometry_push_without_handle_defaults_to_empty`).
+        No new deps, no `unsafe`. Остаются прямые `self.js_ctx`-чтения (lazy-images/pageshow
+        setup, focus/scroll-states/hashchange void-eval, tab park/unpark) — следующие
+        под-срезы 2d перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
