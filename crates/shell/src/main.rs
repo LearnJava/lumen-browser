@@ -12903,16 +12903,14 @@ impl Lumen {
     /// Coordinates are CSS viewport pixels.
     #[cfg(feature = "quickjs")]
     fn js_mouse_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32, button: u8, buttons: u8) {
-        if let Some(ctx) = &self.js_ctx {
-            let script = format!(
-                "_lumen_dispatch_mouse_event({}, '{}', {}, {}, {}, {}, {})",
-                nid, event_type,
-                x_css as i32, y_css as i32,
-                button, buttons,
-                self.mod_flags(),
-            );
-            ctx.eval_js(&script);
-        }
+        let script = format!(
+            "_lumen_dispatch_mouse_event({}, '{}', {}, {}, {}, {}, {})",
+            nid, event_type,
+            x_css as i32, y_css as i32,
+            button, buttons,
+            self.mod_flags(),
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
     /// Dispatch a `PointerEvent` of the given `event_type` to DOM node `nid`.
@@ -12921,16 +12919,14 @@ impl Lumen {
     /// Non-bubbling types (`pointerenter`/`pointerleave`) have `bubbles:false` per spec.
     #[cfg(feature = "quickjs")]
     fn js_pointer_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32, button: u8, buttons: u8) {
-        if let Some(ctx) = &self.js_ctx {
-            let script = format!(
-                "_lumen_dispatch_pointer_event({}, '{}', {}, {}, {}, {}, {})",
-                nid, event_type,
-                x_css as i32, y_css as i32,
-                button, buttons,
-                self.mod_flags(),
-            );
-            ctx.eval_js(&script);
-        }
+        let script = format!(
+            "_lumen_dispatch_pointer_event({}, '{}', {}, {}, {}, {}, {})",
+            nid, event_type,
+            x_css as i32, y_css as i32,
+            button, buttons,
+            self.mod_flags(),
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
     /// Dispatch a `DragEvent` of the given `event_type` to DOM node `nid`.
@@ -12940,14 +12936,12 @@ impl Lumen {
     /// no JS context.
     #[cfg(feature = "quickjs")]
     fn js_drag_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32) {
-        if let Some(ctx) = &self.js_ctx {
-            let script = format!(
-                "_lumen_dispatch_drag_event({}, '{}', {}, {}, '{{}}')",
-                nid, event_type,
-                x_css as i32, y_css as i32,
-            );
-            ctx.eval_js(&script);
-        }
+        let script = format!(
+            "_lumen_dispatch_drag_event({}, '{}', {}, {}, '{{}}')",
+            nid, event_type,
+            x_css as i32, y_css as i32,
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
     /// Dispatch a `gotpointercapture` or `lostpointercapture` event to DOM node `nid`.
@@ -12956,10 +12950,8 @@ impl Lumen {
     /// These events do not bubble per spec.  No-op when there is no JS context.
     #[cfg(feature = "quickjs")]
     fn js_capture_event(&self, nid: u32, event_type: &str) {
-        if let Some(ctx) = &self.js_ctx {
-            let script = format!("_lumen_dispatch_capture_event({}, '{}')", nid, event_type);
-            ctx.eval_js(&script);
-        }
+        let script = format!("_lumen_dispatch_capture_event({}, '{}')", nid, event_type);
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
     /// Dispatch a synthetic `mousemove` event at CSS-pixel viewport coordinates.

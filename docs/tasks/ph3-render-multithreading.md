@@ -807,6 +807,28 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         тестами. Остаётся только категория **sync event-dispatch** (mouse/key/wheel/
         input-обработчики, ~30 прямых `self.js_ctx`-сайтов) — следующие под-срезы 2d
         перед снятием самого поля.
+        ✅ **Девятый под-срез готов** (branch `p1-mt-m22d-9`, merged into `main`,
+        2026-07-11): ядро **mouse/pointer/drag/capture event-dispatch** переведено с
+        прямых `if let Some(ctx) = &self.js_ctx { ctx.eval_js(…) }` на `route_eval_js`.
+        4 helper-метода `Lumen`, через которые текут все mouse/pointer/drag/capture
+        DOM-события: `js_mouse_event` (`_lumen_dispatch_mouse_event` — mousedown/up/
+        over/out/enter/leave/move), `js_pointer_event` (`_lumen_dispatch_pointer_event`),
+        `js_drag_event` (`_lumen_dispatch_drag_event` — dragstart/drag/enter/leave/over/
+        drop/end) и `js_capture_event` (`_lumen_dispatch_capture_event` — got/lost
+        pointercapture). Все четыре — чистый fire-and-forget void `eval_js`, результат
+        диспатча нигде синхронно не читается (в `main.rs` нет чтения preventDefault —
+        Lumen не гейтит default-действия на JS), поэтому маршрутизация безопасна: под
+        флагом (`LUMEN_ENGINE_THREAD=1`) диспатч уходит off-UI-thread одним `task` (в
+        порядке среди прочих `Task`, так что последующие `route_query_js`-чтения встают
+        в очередь после него — read-after-write порядок сохранён), без флага (по
+        умолчанию) — синхронный вызов по UI-хэндлу, **байт-идентично** прежнему
+        `ctx.eval_js(&script)`. `script` строится до маршрутизации; методы `&self`, борроу
+        `engine_thread`/`js_ctx` — раздельный. Синхронный pre-dispatch read
+        `pointer_capture_nid()` в `dispatch_mouse_move` не тронут (читает **до** диспатча).
+        No new deps, no `unsafe`. Механизм не менялся — покрыт существующими route/
+        engine_thread тестами. Остаток категории sync event-dispatch (keyboard/input-
+        обработчики, click-диспатч, ~20 прямых `self.js_ctx`-сайтов) — следующие под-срезы
+        2d перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
