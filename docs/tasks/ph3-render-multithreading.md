@@ -770,6 +770,26 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         (element-scroll write-back `take_scroll_requests`, GC `gc_tick`, pointer-lock
         mouse-motion, PiP-close eval) и sync event-dispatch — следующие под-срезы 2d
         перед снятием самого поля.
+        ✅ **Седьмой под-срез готов** (branch `p1-mt-m22d-7`, merged into `main`,
+        2026-07-11): смешанные read+write-back сайты пост-рендер блока
+        `RedrawRequested` переведены с прямых `if let Some(js) = &self.js_ctx { … }` на
+        маршрутизаторы. 2 сайта: (1) **element-scroll** (`main.rs` ~:9567) — дренаж
+        `take_scroll_requests` → `route_query_js`, а write-back после layout-работы
+        (`update_scroll_states` + `fire_element_scroll` ×N) собран в один
+        `route_task_js` (owned `HashMap<u32,[f32;4]>` + `Vec<u32>` scrolled_nids
+        переезжают в `move`-замыкание); (2) **GC** (`main.rs` ~:9628) — сам
+        `gc_collect(&ids)` → `route_task_js`, тогда как dead-node computation
+        (`layout_source`-документ + `&mut gc_tick.poll`) осталась на UI-потоке; гейт
+        `Some(_js)` сохранён, чтобы `gc_tick` тикал только при наличии JS-контекста
+        (байт-идентично флаг-офф). Под флагом (`LUMEN_ENGINE_THREAD=1`) дренаж скролла —
+        блокирующий `query`, write-back и `gc_collect` — `task` в очередь **после** него
+        (read-after-write порядок сохранён); без флага (по умолчанию) — прежние
+        синхронные `js.<method>()`, байт-идентично. Disjoint-borrow полей
+        `layout_box`/`display_list`/`engine_thread`/`js_ctx` (прямой доступ к полям
+        `self`) уживается с `&mut lb`. No new deps, no `unsafe`. Механизм не менялся —
+        покрыт существующими route/engine_thread тестами. Остаются pointer-lock
+        mouse-motion, PiP-close eval и sync event-dispatch — следующие под-срезы 2d
+        перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
