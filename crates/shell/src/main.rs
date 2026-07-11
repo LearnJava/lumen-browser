@@ -7193,27 +7193,50 @@ impl Lumen {
             // Lazy-load requests drained while `self` is borrowed immutably;
             // fetched after the borrow ends (fetch needs `&mut self`).
             let mut lazy_reqs: Vec<(u32, String)> = Vec::new();
-            if let (Some(js), Some(lb_ref)) = (&self.js_ctx, self.layout_box.as_ref()) {
-                js.update_layout_rects(collect_layout_rects(lb_ref));
-                js.update_computed_styles(collect_computed_styles(lb_ref));
-                js.update_viewport_size(viewport.width, viewport.height);
-                js.deliver_layout_observers();
-                // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
-                // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
-                // read from winit at window creation / refreshed on ThemeChanged.
-                js.deliver_media_query_changes(viewport.width, viewport.height, self.dark_mode, self.a11y_store.reduced_motion());
-                // After fresh rects are in JS: fire lazy-load proximity check.
-                // Images that entered the viewport+margin are queued by JS via
-                // _lumen_request_lazy_image_load; we drain and fetch them below.
-                js.deliver_lazy_images();
-                lazy_reqs = js.take_lazy_image_requests();
+            // ADR-016 M2.2c-2d: layout-geometry push (`update_layout_rects` и Co.)
+            // is the last mixed read+write UI→JS site in the relayout path. The
+            // whole ordered sequence — rects/styles/viewport push → observer &
+            // matchMedia & lazy-image delivery → `take_lazy_image_requests` read →
+            // scroll-state push — moves into ONE `route_query_js` closure returning
+            // `lazy_reqs`, so under the flag it runs atomically **in order** on the
+            // engine thread (the value read after the void pushes keeps its
+            // read-after-write ordering) and blocks only for that one result. The
+            // `self.js_ctx.is_some()` gate mirrors the old `if let Some(js)` — the
+            // (side-effect-free) geometry collection runs only when a JS context
+            // exists, byte-identical with the flag off. All captured data is owned
+            // (`HashMap`/`Vec`) → the closure is `Send + 'static`.
+            if self.js_ctx.is_some()
+                && let Some(lb_ref) = self.layout_box.as_ref()
+            {
+                let rects = collect_layout_rects(lb_ref);
+                let styles = collect_computed_styles(lb_ref);
+                let (vw, vh) = (viewport.width, viewport.height);
+                let dark_mode = self.dark_mode;
+                let reduced_motion = self.a11y_store.reduced_motion();
                 // Keep JS scroll-state cache in sync so scrollTop/scrollLeft reads
                 // immediately after relayout return the correct clamped values.
-                let scroll_states = collect_scroll_containers(lb_ref)
+                let scroll_states: HashMap<u32, [f32; 4]> = collect_scroll_containers(lb_ref)
                     .iter()
                     .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                     .collect();
-                js.update_scroll_states(scroll_states);
+                lazy_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                    js.update_layout_rects(rects);
+                    js.update_computed_styles(styles);
+                    js.update_viewport_size(vw, vh);
+                    js.deliver_layout_observers();
+                    // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
+                    // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
+                    // read from winit at window creation / refreshed on ThemeChanged.
+                    js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion);
+                    // After fresh rects are in JS: fire lazy-load proximity check.
+                    // Images that entered the viewport+margin are queued by JS via
+                    // _lumen_request_lazy_image_load; we drain and fetch them below.
+                    js.deliver_lazy_images();
+                    let reqs = js.take_lazy_image_requests();
+                    js.update_scroll_states(scroll_states);
+                    reqs
+                })
+                .unwrap_or_default();
             }
             if !lazy_reqs.is_empty() {
                 self.fetch_and_register_lazy_images(lazy_reqs);
@@ -7754,8 +7777,14 @@ impl Lumen {
         self.update_scroll_containers();
                 // Push initial layout geometry so JS can query bounding rects
                 // immediately after page load (before the first relayout).
+                // ADR-016 M2.2c-2d: routed off-thread like the relayout push above —
+                // the three owned-arg void calls go through `route_task_js`; the
+                // `self.js_ctx.is_some()` gate keeps the geometry collection JS-gated
+                // (byte-identical with the flag off).
                 #[cfg(feature = "quickjs")]
-                if let (Some(js), Some(lb_ref)) = (&self.js_ctx, self.layout_box.as_ref()) {
+                if self.js_ctx.is_some()
+                    && let Some(lb_ref) = self.layout_box.as_ref()
+                {
                     let viewport = self.renderer.as_ref().map_or_else(
                         || Size::new(1024.0, 720.0),
                         |r| {
@@ -7763,9 +7792,14 @@ impl Lumen {
                             Size::new(s.width, s.height)
                         },
                     );
-                    js.update_layout_rects(collect_layout_rects(lb_ref));
-                    js.update_computed_styles(collect_computed_styles(lb_ref));
-                    js.update_viewport_size(viewport.width, viewport.height);
+                    let rects = collect_layout_rects(lb_ref);
+                    let styles = collect_computed_styles(lb_ref);
+                    let (vw, vh) = (viewport.width, viewport.height);
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                        js.update_layout_rects(rects);
+                        js.update_computed_styles(styles);
+                        js.update_viewport_size(vw, vh);
+                    });
                 }
                 self.title = page.title;
                 if let Some(t) = &self.title {
@@ -18002,11 +18036,20 @@ impl Lumen {
 
         // Seed the restored runtime with layout geometry + viewport so JS can
         // query bounding rects immediately (mirrors the fresh-load path).
+        // ADR-016 M2.2c-2d: routed off-thread through `route_task_js`, same as the
+        // fresh-load seed above (`self.js_ctx.is_some()` gate → byte-identical off).
         #[cfg(feature = "quickjs")]
-        if let (Some(js), Some(lb_ref)) = (&self.js_ctx, self.layout_box.as_ref()) {
-            js.update_layout_rects(collect_layout_rects(lb_ref));
-            js.update_computed_styles(collect_computed_styles(lb_ref));
-            js.update_viewport_size(viewport.width, viewport.height);
+        if self.js_ctx.is_some()
+            && let Some(lb_ref) = self.layout_box.as_ref()
+        {
+            let rects = collect_layout_rects(lb_ref);
+            let styles = collect_computed_styles(lb_ref);
+            let (vw, vh) = (viewport.width, viewport.height);
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                js.update_layout_rects(rects);
+                js.update_computed_styles(styles);
+                js.update_viewport_size(vw, vh);
+            });
         }
 
         // Remove the SQLite entry — it is no longer needed.
@@ -19471,6 +19514,20 @@ mod tests {
         assert!(taken.flatten().is_none());
         let raf: Option<bool> = route_query_js(None, None, |j| j.has_raf_pending());
         assert!(!raf.unwrap_or(false));
+    }
+
+    #[test]
+    fn route_query_js_layout_geometry_push_without_handle_defaults_to_empty() {
+        // ADR-016 M2.2c-2d: layout-geometry push (`update_layout_rects` и Co.). The
+        // relayout observer-delivery site wraps its whole ordered void+read sequence
+        // in one `route_query_js` returning the drained lazy-image requests. Без хэндла
+        // (`engine = None`, `js = None`) внешний `Option` = `None`, поэтому
+        // `unwrap_or_default` даёт пустой `Vec` — та же ветка «без JS», что и прежний
+        // `if let Some(js) = &self.js_ctx { … }` (оставлявший `lazy_reqs` пустым, а
+        // seed-сайты — не диспатчившими push).
+        let lazy: Vec<(u32, String)> =
+            route_query_js(None, None, |j| j.take_lazy_image_requests()).unwrap_or_default();
+        assert!(lazy.is_empty());
     }
 
     // ── ADR-016 M2.2c-2d: generic void-action router (pump/tick batch) ──────
