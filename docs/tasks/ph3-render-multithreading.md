@@ -754,6 +754,104 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         вынесена перед маршрутизацией (ранние `return` на ошибке сериализации
         сохранены). No new deps, no `unsafe`. Механизм не менялся — покрыт
         существующими route/engine_thread тестами.
+        ✅ **Шестой под-срез готов** (branch `p1-mt-m22d-final`, merged into `main`,
+        2026-07-11): navigation-history pagehide/popstate fire-and-forget void-сайты
+        переведены с прямых `if let Some(js) = &self.js_ctx { … }` на `route_task_js`.
+        5 сайтов в `navigate_to`/`navigate_back`/`navigate_forward`:
+        `fire_page_lifecycle("pagehide", …)` ×3 (full-doc unload перед `reload`,
+        HTML LS §8.6) и `fire_popstate(&state_json, &url)` ×2 (same-doc back/forward).
+        Все — чистый void без чтения результата следом; owned `state_json`/`url`
+        (и Copy-`persisted`) переезжают в `move`-замыкание. Под флагом
+        (`LUMEN_ENGINE_THREAD=1`) уходят off-UI-thread одним `task` (для popstate —
+        перед уже маршрутизированными `fire_current_entry_change`/`commit_nav_state`,
+        порядок сохранён); без флага (по умолчанию) — синхронный вызов по UI-хэндлу,
+        байт-идентично. No new deps, no `unsafe`. Механизм не менялся — покрыт
+        существующими route/engine_thread тестами. Остаются смешанные сайты
+        (element-scroll write-back `take_scroll_requests`, GC `gc_tick`, pointer-lock
+        mouse-motion, PiP-close eval) и sync event-dispatch — следующие под-срезы 2d
+        перед снятием самого поля.
+        ✅ **Седьмой под-срез готов** (branch `p1-mt-m22d-7`, merged into `main`,
+        2026-07-11): смешанные read+write-back сайты пост-рендер блока
+        `RedrawRequested` переведены с прямых `if let Some(js) = &self.js_ctx { … }` на
+        маршрутизаторы. 2 сайта: (1) **element-scroll** (`main.rs` ~:9567) — дренаж
+        `take_scroll_requests` → `route_query_js`, а write-back после layout-работы
+        (`update_scroll_states` + `fire_element_scroll` ×N) собран в один
+        `route_task_js` (owned `HashMap<u32,[f32;4]>` + `Vec<u32>` scrolled_nids
+        переезжают в `move`-замыкание); (2) **GC** (`main.rs` ~:9628) — сам
+        `gc_collect(&ids)` → `route_task_js`, тогда как dead-node computation
+        (`layout_source`-документ + `&mut gc_tick.poll`) осталась на UI-потоке; гейт
+        `Some(_js)` сохранён, чтобы `gc_tick` тикал только при наличии JS-контекста
+        (байт-идентично флаг-офф). Под флагом (`LUMEN_ENGINE_THREAD=1`) дренаж скролла —
+        блокирующий `query`, write-back и `gc_collect` — `task` в очередь **после** него
+        (read-after-write порядок сохранён); без флага (по умолчанию) — прежние
+        синхронные `js.<method>()`, байт-идентично. Disjoint-borrow полей
+        `layout_box`/`display_list`/`engine_thread`/`js_ctx` (прямой доступ к полям
+        `self`) уживается с `&mut lb`. No new deps, no `unsafe`. Механизм не менялся —
+        покрыт существующими route/engine_thread тестами. Остаются pointer-lock
+        mouse-motion, PiP-close eval и sync event-dispatch — следующие под-срезы 2d
+        перед снятием самого поля.
+        ✅ **Восьмой под-срез готов** (branch `p1-mt-m22d-8`, merged into `main`,
+        2026-07-11): pointer-lock / PiP fire-and-forget void-eval сайты переведены с
+        прямых `if let Some(js) = &self.js_ctx { js.eval_js(…) }` на `route_eval_js`.
+        3 сайта: (1) **pointer-lock raw mouse-motion** (`device_event`, `main.rs`
+        ~:9722) — `_lumen_dispatch_locked_mousemove(...)` (guard упрощён с
+        `(Some(ctx), Some(nid))` до одного `Some(nid)`; `script` строится до
+        маршрутизации, борроу `js_ctx`/`engine_thread` — раздельный); (2) **PiP
+        close-button** (`window_event`, `main.rs` ~:9770) — `exitPictureInPicture()`
+        mirror после `close_pip_os`; (3) **pointerlockchange** на Escape
+        (`main.rs` ~:9832) — `document.dispatchEvent(new Event('pointerlockchange'))`.
+        Все три — чистый void без чтения результата следом; под флагом
+        (`LUMEN_ENGINE_THREAD=1`) уходят off-UI-thread одним `task`, без флага (по
+        умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично. No new deps, no
+        `unsafe`. Механизм не менялся — покрыт существующими route/engine_thread
+        тестами. Остаётся только категория **sync event-dispatch** (mouse/key/wheel/
+        input-обработчики, ~30 прямых `self.js_ctx`-сайтов) — следующие под-срезы 2d
+        перед снятием самого поля.
+        ✅ **Девятый под-срез готов** (branch `p1-mt-m22d-9`, merged into `main`,
+        2026-07-11): ядро **mouse/pointer/drag/capture event-dispatch** переведено с
+        прямых `if let Some(ctx) = &self.js_ctx { ctx.eval_js(…) }` на `route_eval_js`.
+        4 helper-метода `Lumen`, через которые текут все mouse/pointer/drag/capture
+        DOM-события: `js_mouse_event` (`_lumen_dispatch_mouse_event` — mousedown/up/
+        over/out/enter/leave/move), `js_pointer_event` (`_lumen_dispatch_pointer_event`),
+        `js_drag_event` (`_lumen_dispatch_drag_event` — dragstart/drag/enter/leave/over/
+        drop/end) и `js_capture_event` (`_lumen_dispatch_capture_event` — got/lost
+        pointercapture). Все четыре — чистый fire-and-forget void `eval_js`, результат
+        диспатча нигде синхронно не читается (в `main.rs` нет чтения preventDefault —
+        Lumen не гейтит default-действия на JS), поэтому маршрутизация безопасна: под
+        флагом (`LUMEN_ENGINE_THREAD=1`) диспатч уходит off-UI-thread одним `task` (в
+        порядке среди прочих `Task`, так что последующие `route_query_js`-чтения встают
+        в очередь после него — read-after-write порядок сохранён), без флага (по
+        умолчанию) — синхронный вызов по UI-хэндлу, **байт-идентично** прежнему
+        `ctx.eval_js(&script)`. `script` строится до маршрутизации; методы `&self`, борроу
+        `engine_thread`/`js_ctx` — раздельный. Синхронный pre-dispatch read
+        `pointer_capture_nid()` в `dispatch_mouse_move` не тронут (читает **до** диспатча).
+        No new deps, no `unsafe`. Механизм не менялся — покрыт существующими route/
+        engine_thread тестами. Остаток категории sync event-dispatch (keyboard/input-
+        обработчики, click-диспатч, ~20 прямых `self.js_ctx`-сайтов) — следующие под-срезы
+        2d перед снятием самого поля.
+        ✅ **Десятый под-срез готов** (branch `p1-mt-m22d-10`, merged into `main`,
+        2026-07-11): **read-after-eval click + keyboard event-dispatch** — 4 сайта с
+        идентичным паттерном «`_lumen_dispatch_*` void-eval, затем
+        `take_navigate_request`» — переведены с прямых `if let Some(ctx) = &self.js_ctx {
+        … ctx.eval_js(…); ctx.take_navigate_request() … }` на `route_eval_js` +
+        `route_query_js`. Сайты: (1) **mouse click** (`handle_mouse_input`, `main.rs`
+        ~:13259) — `_lumen_dispatch_mouse_event('click', …)`; (2) **inject_special_key**
+        (`main.rs` ~:13616) — `_lumen_dispatch_key_event` keydown→keyup; (3) **inject_char**
+        (`main.rs` ~:13634) — keydown→input→keyup; (4) **activate_node** (hint-mode click,
+        `main.rs` ~:15936) — тот же click-eval. В каждом: сам `_lumen_dispatch_*` уходит
+        fire-and-forget через `route_eval_js`, а последующий `take_navigate_request`
+        (навигация, что handler мог поставить) — через `route_query_js` (`Option<Option<
+        JsNavigateRequest>>`; внешний `None` = ветка «без JS», как прежний early-`return`/
+        несматчившийся `Some(ctx)`). Под флагом (`LUMEN_ENGINE_THREAD=1`) dispatch уходит
+        off-UI-thread одним `task`, блокирующий `query` встаёт в очередь **после** него —
+        read-after-eval порядок сохранён; без флага (по умолчанию) — прежние синхронные
+        вызовы по UI-хэндлу, байт-идентично. `script` строится до маршрутизации, борроу
+        `engine_thread`/`js_ctx` — раздельный. Прямых `self.js_ctx` read-after-eval
+        event-dispatch сайтов не осталось. No new deps, no `unsafe`. Механизм не менялся —
+        покрыт существующими route/engine_thread тестами (`route_eval_js_without_handle_is_noop`,
+        `route_query_js_nav_reads_without_handle_default_to_no_op`). Остаток категории sync
+        event-dispatch (чистые fire-and-forget void-eval формо-действий: `toggle`/dialog-close,
+        ~15 сайтов) — следующие под-срезы 2d перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any

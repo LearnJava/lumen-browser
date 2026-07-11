@@ -9564,9 +9564,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // tree (no CSS re-computation needed — scroll only affects paint offsets), the
         // display list is rebuilt cheaply, and JS scroll-state cache is updated so
         // subsequent scrollTop/scrollLeft reads return the new values.
+        // ADR-016 M2.2d: value-drain (`take_scroll_requests`) через `route_query_js`,
+        // write-back (`update_scroll_states` + `fire_element_scroll`) через
+        // `route_task_js` — снимаем прямые `self.js_ctx`-обращения. Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) дренаж идёт блокирующим `query`, а последующая
+        // write-back-`task` встаёт в очередь **после** него (read-after-write порядок
+        // сохранён); без флага (по умолчанию) — прежние синхронные `js.<method>()`,
+        // байт-идентично.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let scroll_reqs = js.take_scroll_requests();
+        {
+            let scroll_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_scroll_requests()
+            })
+            .unwrap_or_default();
             if !scroll_reqs.is_empty()
                 && let Some(lb) = self.layout_box.as_mut()
             {
@@ -9587,16 +9597,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let dl_hash = lumen_paint::hash_commands(&new_dl);
                     self.display_list_cache.insert(root_id, new_dl.clone(), dl_hash, None);
                     self.display_list = new_dl;
-                    // Sync JS cache so scrollTop/scrollLeft reads are accurate.
-                    let states = collect_scroll_containers(lb)
+                    // Sync JS cache so scrollTop/scrollLeft reads are accurate, then fire
+                    // non-bubbling scroll events on each scrolled container.
+                    let states: HashMap<u32, [f32; 4]> = collect_scroll_containers(lb)
                         .iter()
                         .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                         .collect();
-                    js.update_scroll_states(states);
-                    // Fire non-bubbling scroll events on each scrolled container.
-                    for nid in scrolled_nids {
-                        js.fire_element_scroll(nid);
-                    }
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                        j.update_scroll_states(states);
+                        for nid in scrolled_nids {
+                            j.fire_element_scroll(nid);
+                        }
+                    });
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
                     }
@@ -9625,7 +9637,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // DOM GC idle tick: drain dead node IDs and purge JS-side per-node caches.
         // Runs every 30 s to free _lumen_listeners / _input_values entries for
         // nodes that were detached from the tree and have no live JS references.
-        if let (Some(ls), Some(js)) = (self.layout_source.as_ref(), self.js_ctx.as_ref()) {
+        // ADR-016 M2.2d: dead-node computation остаётся на UI-потоке (нужны
+        // `layout_source`-документ + `&mut gc_tick`), а сам `gc_collect` — чистый void —
+        // уходит через `route_task_js`. Гейт `Some(_js)` сохранён, чтобы `gc_tick.poll`
+        // тикал только при наличии JS-контекста, как прежде (байт-идентично флаг-офф).
+        if let (Some(ls), Some(_js)) = (self.layout_source.as_ref(), self.js_ctx.as_ref()) {
             let dead = {
                 let doc = ls.document.lock().unwrap();
                 self.gc_tick.poll(&doc)
@@ -9635,7 +9651,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     .iter()
                     .map(|n| n.index() as u32)
                     .collect();
-                js.gc_collect(&ids);
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    j.gc_collect(&ids);
+                });
             }
         }
 
@@ -9703,10 +9721,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         #[cfg(feature = "quickjs")]
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event
             && lumen_js::pointer_lock::is_pointer_locked()
-            && let (Some(ctx), Some(nid)) = (
-                &self.js_ctx,
-                lumen_js::pointer_lock::get_locked_element_nid(),
-            )
+            && let Some(nid) = lumen_js::pointer_lock::get_locked_element_nid()
         {
             let (cx, cy) = self
                 .cursor_position
@@ -9728,7 +9743,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 dy as i32,
                 self.mod_flags(),
             );
-            ctx.eval_js(&script);
+            // ADR-016 M2.2c-2d: fire-and-forget void eval уходит через
+            // маршрутизатор — под флагом off-UI-thread, без флага байт-идентично
+            // прежнему `ctx.eval_js(&script)` (script построен до маршрутизации).
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
     }
 
@@ -9748,14 +9766,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.close_pip_os();
                     self.pip_controller.on_exit();
                     // Mirror the close into JS so `leavepictureinpicture` fires
-                    // and `document.pictureInPictureElement` clears.
+                    // and `document.pictureInPictureElement` clears. ADR-016
+                    // M2.2c-2d: fire-and-forget void eval через маршрутизатор —
+                    // под флагом off-UI-thread, без флага байт-идентично.
                     #[cfg(feature = "quickjs")]
-                    if let Some(js) = &self.js_ctx {
-                        js.eval_js(
-                            "if(typeof document!=='undefined'&&document.pictureInPictureElement)\
-                             {try{document.exitPictureInPicture();}catch(e){}}",
-                        );
-                    }
+                    route_eval_js(
+                        self.engine_thread.as_ref(),
+                        self.js_ctx.as_ref(),
+                        "if(typeof document!=='undefined'&&document.pictureInPictureElement)\
+                         {try{document.exitPictureInPicture();}catch(e){}}"
+                            .to_string(),
+                    );
                 }
                 WindowEvent::Resized(size) => {
                     if size.width == 0 || size.height == 0 {
@@ -12882,16 +12903,14 @@ impl Lumen {
     /// Coordinates are CSS viewport pixels.
     #[cfg(feature = "quickjs")]
     fn js_mouse_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32, button: u8, buttons: u8) {
-        if let Some(ctx) = &self.js_ctx {
-            let script = format!(
-                "_lumen_dispatch_mouse_event({}, '{}', {}, {}, {}, {}, {})",
-                nid, event_type,
-                x_css as i32, y_css as i32,
-                button, buttons,
-                self.mod_flags(),
-            );
-            ctx.eval_js(&script);
-        }
+        let script = format!(
+            "_lumen_dispatch_mouse_event({}, '{}', {}, {}, {}, {}, {})",
+            nid, event_type,
+            x_css as i32, y_css as i32,
+            button, buttons,
+            self.mod_flags(),
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
     /// Dispatch a `PointerEvent` of the given `event_type` to DOM node `nid`.
@@ -12900,16 +12919,14 @@ impl Lumen {
     /// Non-bubbling types (`pointerenter`/`pointerleave`) have `bubbles:false` per spec.
     #[cfg(feature = "quickjs")]
     fn js_pointer_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32, button: u8, buttons: u8) {
-        if let Some(ctx) = &self.js_ctx {
-            let script = format!(
-                "_lumen_dispatch_pointer_event({}, '{}', {}, {}, {}, {}, {})",
-                nid, event_type,
-                x_css as i32, y_css as i32,
-                button, buttons,
-                self.mod_flags(),
-            );
-            ctx.eval_js(&script);
-        }
+        let script = format!(
+            "_lumen_dispatch_pointer_event({}, '{}', {}, {}, {}, {}, {})",
+            nid, event_type,
+            x_css as i32, y_css as i32,
+            button, buttons,
+            self.mod_flags(),
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
     /// Dispatch a `DragEvent` of the given `event_type` to DOM node `nid`.
@@ -12919,14 +12936,12 @@ impl Lumen {
     /// no JS context.
     #[cfg(feature = "quickjs")]
     fn js_drag_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32) {
-        if let Some(ctx) = &self.js_ctx {
-            let script = format!(
-                "_lumen_dispatch_drag_event({}, '{}', {}, {}, '{{}}')",
-                nid, event_type,
-                x_css as i32, y_css as i32,
-            );
-            ctx.eval_js(&script);
-        }
+        let script = format!(
+            "_lumen_dispatch_drag_event({}, '{}', {}, {}, '{{}}')",
+            nid, event_type,
+            x_css as i32, y_css as i32,
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
     /// Dispatch a `gotpointercapture` or `lostpointercapture` event to DOM node `nid`.
@@ -12935,10 +12950,8 @@ impl Lumen {
     /// These events do not bubble per spec.  No-op when there is no JS context.
     #[cfg(feature = "quickjs")]
     fn js_capture_event(&self, nid: u32, event_type: &str) {
-        if let Some(ctx) = &self.js_ctx {
-            let script = format!("_lumen_dispatch_capture_event({}, '{}')", nid, event_type);
-            ctx.eval_js(&script);
-        }
+        let script = format!("_lumen_dispatch_capture_event({}, '{}')", nid, event_type);
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
     /// Dispatch a synthetic `mousemove` event at CSS-pixel viewport coordinates.
@@ -13243,9 +13256,7 @@ impl Lumen {
         // Dispatch JS click event (bubbles from hit node to document).
         // Passes viewport coordinates and modifier key state so
         // handlers can read event.clientX/clientY/ctrlKey/etc.
-        if let (Some(result), Some(ctx)) =
-            (hit_result.as_ref(), self.js_ctx.as_ref())
-        {
+        if let Some(result) = hit_result.as_ref() {
             let mod_flags: u8 =
                 (self.modifiers.control_key() as u8)
                 | ((self.modifiers.shift_key()  as u8) << 1)
@@ -13258,8 +13269,21 @@ impl Lumen {
                 y_css as i32,
                 mod_flags,
             );
-            ctx.eval_js(&script);
-            if let Some(nav) = ctx.take_navigate_request() {
+            // ADR-016 M2.2c-2d (10): read-after-eval click dispatch — сам
+            // `_lumen_dispatch_mouse_event('click', …)` уходит fire-and-forget через
+            // `route_eval_js`, а последующий `take_navigate_request` (навигация, что
+            // handler мог поставить) — через `route_query_js`. Под флагом
+            // (`LUMEN_ENGINE_THREAD=1`) блокирующий `query` встаёт в очередь **после**
+            // отправленного `task`, восстанавливая read-after-eval порядок; без флага
+            // (по умолчанию) — прежние синхронные вызовы по UI-хэндлу, байт-идентично
+            // (`js_ctx == None` → `None` → навигация не ставится, как прежняя
+            // ветка `Some(ctx)` не сматчилась).
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+            if let Some(Some(nav)) = route_query_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                |j| j.take_navigate_request(),
+            ) {
                 self.pending_js_navigate = Some(nav);
             }
         }
@@ -13601,17 +13625,27 @@ impl Lumen {
     /// (`"Space"` → `" "`, everything else passes through unchanged).
     /// Events have `isTrusted=true`; JS `dispatchEvent()` is never used.
     fn inject_special_key(&mut self, code: &str) {
-        let Some(ctx) = self.js_ctx.as_ref() else { return };
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         let key = input::native::code_to_key(code);
+        // ADR-016 M2.2c-2d (10): keyboard injection — `_lumen_dispatch_key_event`
+        // (keydown → keyup) уходит fire-and-forget через `route_eval_js`, а
+        // последующий `take_navigate_request` — через `route_query_js`. Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) блокирующий `query` встаёт в очередь после
+        // отправленных `task`, восстанавливая read-after-eval порядок; без флага
+        // (по умолчанию) — прежние синхронные вызовы, байт-идентично (`js_ctx == None`
+        // → `route_eval_js` no-op + `route_query_js` → `None`, как прежний early-`return`).
         for event_type in &["keydown", "keyup"] {
             let script = format!(
                 "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
                 node_id, event_type, key, code,
             );
-            ctx.eval_js(&script);
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
-        if let Some(nav) = ctx.take_navigate_request() {
+        if let Some(Some(nav)) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_navigate_request(),
+        ) {
             self.pending_js_navigate = Some(nav);
         }
     }
@@ -13619,17 +13653,24 @@ impl Lumen {
     /// Fires `keydown` → `input` → `keyup` JS events via `_lumen_dispatch_key_event`
     /// on the last-focused node so events have `isTrusted=true`.
     fn inject_char(&mut self, ch: char) {
-        let Some(ctx) = self.js_ctx.as_ref() else { return };
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         let key = escape_js_string_char(ch);
+        // ADR-016 M2.2c-2d (10): same read-after-eval routing as `inject_special_key`
+        // — keydown → input → keyup dispatch off-UI-thread under the flag, then the
+        // `take_navigate_request` read ordered after via `route_query_js`; byte-identical
+        // off-flag.
         for event_type in &["keydown", "input", "keyup"] {
             let script = format!(
                 "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
                 node_id, event_type, key, key,
             );
-            ctx.eval_js(&script);
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
-        if let Some(nav) = ctx.take_navigate_request() {
+        if let Some(Some(nav)) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_navigate_request(),
+        ) {
             self.pending_js_navigate = Some(nav);
         }
     }
@@ -13810,10 +13851,14 @@ impl Lumen {
                 let _ = window.set_cursor_grab(CursorGrabMode::None);
                 window.set_cursor_visible(true);
             }
-            // Dispatch pointerlockchange so document.pointerLockElement clears in JS.
-            if let Some(js) = &self.js_ctx {
-                js.eval_js("document.dispatchEvent(new Event('pointerlockchange'))");
-            }
+            // Dispatch pointerlockchange so document.pointerLockElement clears in
+            // JS. ADR-016 M2.2c-2d: fire-and-forget void eval через маршрутизатор —
+            // под флагом off-UI-thread, без флага байт-идентично.
+            route_eval_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                "document.dispatchEvent(new Event('pointerlockchange'))".to_string(),
+            );
             return;
         }
 
@@ -14656,9 +14701,11 @@ impl Lumen {
         // `persisted = true` signals it was retained in bfcache (restorable on
         // back-navigation), so listeners can skip teardown they will redo on
         // `pageshow`.
-        if let Some(js) = &self.js_ctx {
-            js.fire_page_lifecycle("pagehide", persisted);
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.fire_page_lifecycle("pagehide", persisted);
+        });
         // Push current page to back stack (full-doc entry: no same_doc_state_json).
         self.nav_back.push(NavEntry {
             source: self.source.clone(),
@@ -14776,9 +14823,11 @@ impl Lumen {
             });
             let url = prev.display_url.unwrap_or_default();
             self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
-            if let Some(js) = &self.js_ctx {
-                js.fire_popstate(&state_json, &url);
-            }
+            // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+            // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.fire_popstate(&state_json, &url);
+            });
             self.fire_current_entry_change();
             self.request_redraw();
             self.current_nav_key = prev.nav_key;
@@ -14789,9 +14838,11 @@ impl Lumen {
 
         // Full-document navigation: restore page and reload.
         // HTML LS §8.6: fire `pagehide` on the current page before it unloads.
-        if let Some(js) = &self.js_ctx {
-            js.fire_page_lifecycle("pagehide", false);
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.fire_page_lifecycle("pagehide", false);
+        });
         // Push current page to forward stack.
         let cur_display = self.display_url.take();
         let cur_state = std::mem::replace(
@@ -14901,9 +14952,11 @@ impl Lumen {
             });
             let url = next.display_url.unwrap_or_default();
             self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
-            if let Some(js) = &self.js_ctx {
-                js.fire_popstate(&state_json, &url);
-            }
+            // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+            // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.fire_popstate(&state_json, &url);
+            });
             self.fire_current_entry_change();
             self.request_redraw();
             self.current_nav_key = next.nav_key;
@@ -14914,9 +14967,11 @@ impl Lumen {
 
         // Full-document forward navigation.
         // HTML LS §8.6: fire `pagehide` on the current page before it unloads.
-        if let Some(js) = &self.js_ctx {
-            js.fire_page_lifecycle("pagehide", false);
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.fire_page_lifecycle("pagehide", false);
+        });
         let cur_display = self.display_url.take();
         let cur_state = std::mem::replace(
             &mut self.current_history_state_json,
@@ -15881,14 +15936,22 @@ impl Lumen {
     fn activate_node(&mut self, node_id: NodeId) {
         // JS click dispatch (bubbling от узла до document).
         // Hint-mode activations have no real mouse coordinates, so x/y are 0.
+        // ADR-016 M2.2c-2d (10): same read-after-eval routing as the mouse click
+        // dispatch — `_lumen_dispatch_mouse_event('click', …)` fire-and-forget via
+        // `route_eval_js`, then `take_navigate_request` ordered after via
+        // `route_query_js`; byte-identical off-flag.
         #[cfg(feature = "quickjs")]
-        if let Some(ctx) = self.js_ctx.as_ref() {
+        {
             let script = format!(
                 "_lumen_dispatch_mouse_event({}, 'click', 0, 0, 0, 1, 0)",
                 node_id.index()
             );
-            ctx.eval_js(&script);
-            if let Some(nav) = ctx.take_navigate_request() {
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+            if let Some(Some(nav)) = route_query_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                |j| j.take_navigate_request(),
+            ) {
                 self.pending_js_navigate = Some(nav);
             }
         }
