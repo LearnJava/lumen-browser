@@ -4888,15 +4888,40 @@ fn route_eval_js(
     js: Option<&Arc<dyn PersistentJs>>,
     script: String,
 ) {
+    route_task_js(engine, js, move |js| js.eval_js(&script));
+}
+
+/// ADR-016 M2.2c-2d: обобщённый маршрутизатор fire-and-forget void-*действия*
+/// над JS-хэндлом.
+///
+/// Обобщает [`route_eval_js`] (частный случай `|js| js.eval_js(&script)`) на
+/// любое void-действие над `&Arc<dyn PersistentJs>` — нужно для батча
+/// per-tick pump-вызовов (`tick_timers`/`pump_websockets`/`pump_sse`/
+/// `pump_workers`/`pump_broadcast_channels`/`pump_shared_workers`), которые не
+/// сводятся к одному `eval_js` (часть — прямые методы рантайма). Свободная
+/// функция (а не метод `Lumen`), чтобы на call-site'е заимствовать поля
+/// `engine_thread`/`js_ctx` **раздельно** (disjoint borrow).
+///
+/// - движковый поток есть (`LUMEN_ENGINE_THREAD=1`) → действие уходит
+///   **off-UI-thread** через [`engine_thread::EngineThread::task`] (не блокирует
+///   UI-поток; исполнится по порядку среди прочих `Task` — так что последующий
+///   `query` встаёт в очередь **после** него, сохраняя read-after-write порядок);
+/// - потока нет (флаг выключен, по умолчанию) → синхронный вызов по UI-хэндлу
+///   `js` — **байт-идентично** прежним прямым `js.<method>()`.
+fn route_task_js(
+    engine: Option<&engine_thread::EngineThread<EngineCommit, EngineJsState>>,
+    js: Option<&Arc<dyn PersistentJs>>,
+    action: impl FnOnce(&Arc<dyn PersistentJs>) + Send + 'static,
+) {
     match engine {
         Some(engine) => engine.task(move |state| {
             if let Some(js) = &state.js {
-                js.eval_js(&script);
+                action(js);
             }
         }),
         None => {
             if let Some(js) = js {
-                js.eval_js(&script);
+                action(js);
             }
         }
     }
@@ -8799,12 +8824,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // source can starve the other.
         let mut next_wakeup: Option<std::time::Instant> = None;
         if let Some(js) = &self.js_ctx {
-            js.tick_timers();
-            js.pump_websockets();
-            js.pump_sse();
-            js.pump_workers();
-            js.pump_broadcast_channels();
-            js.pump_shared_workers();
+            // ADR-016 M2.2c-2d: per-tick pump-батч (fire-and-forget void) через
+            // `route_task_js`. Под флагом (`LUMEN_ENGINE_THREAD=1`) уходит off-UI-thread
+            // одним `task` (порядок вызовов внутри сохранён), а последующие
+            // `route_query_js`-чтения nav/timer встают в очередь **после** него —
+            // read-after-write порядок восстановлен, как для routed `eval_js` в 2b/2c.
+            // Без флага (по умолчанию) — синхронные прямые вызовы, байт-идентично.
+            route_task_js(self.engine_thread.as_ref(), Some(js), |j| {
+                j.tick_timers();
+                j.pump_websockets();
+                j.pump_sse();
+                j.pump_workers();
+                j.pump_broadcast_channels();
+                j.pump_shared_workers();
+            });
             // ADR-016 M2.2c-2c (остаток): value-returning nav/timer чтения через
             // `route_query_js` (тот же паттерн, что `take_dom_dirty`/`take_raf_pending`
             // выше). Под флагом (`LUMEN_ENGINE_THREAD=1`) читаются блокирующим `query`
@@ -19096,6 +19129,37 @@ mod tests {
         let navs: Option<Vec<(u8, String, String, String)>> =
             route_query_js(None, None, |j| j.take_nav_updates());
         assert!(navs.unwrap_or_default().is_empty());
+    }
+
+    // ── ADR-016 M2.2c-2d: generic void-action router (pump/tick batch) ──────
+
+    #[test]
+    fn route_task_js_without_handle_is_noop() {
+        // Флаг выключен и хэндла нет: обобщённый void-маршрутизатор не паникует и
+        // действие не исполняется (байт-идентично прежнему `if let Some(js) = … {}`).
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran2 = Arc::clone(&ran);
+        route_task_js(None, None, move |_j| {
+            ran2.store(true, std::sync::atomic::Ordering::SeqCst)
+        });
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn route_task_js_flag_on_without_synced_handle_skips_action() {
+        // Флаг включён (движковый поток есть), но `EngineJsState.js` ещё не
+        // зеркалирован → задача исполняется на потоке, но `state.js == None`, поэтому
+        // само действие (pump-батч) пропускается. Барьер-`query` упорядочен после
+        // `task`, так что к моменту проверки задача гарантированно отработала.
+        let engine = engine_thread::EngineThread::<EngineCommit, EngineJsState>::spawn()
+            .expect("spawn engine thread");
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran2 = Arc::clone(&ran);
+        route_task_js(Some(&engine), None, move |_j| {
+            ran2.store(true, std::sync::atomic::Ordering::SeqCst)
+        });
+        let _ = engine.query(|_s| ());
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     // ── Fullscreen viewport reconciliation (BUG-167) ────────────────────────

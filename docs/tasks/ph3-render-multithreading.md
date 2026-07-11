@@ -672,6 +672,23 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       - **M2.2c-2d — retire the UI-thread `js_ctx` field under the flag.** Once every
         call site routes through `task`/`query`, the UI thread stops holding the JS
         handle entirely (flag on); the flag-off legacy field is removed last.
+        🟡 **Первый под-срез готов** (branch `p1-mt-m2-2c-2d-1`, merged into `zcode`,
+        2026-07-11): обобщил `route_eval_js` (частный случай `|js| js.eval_js(&script)`)
+        новой свободной функцией `route_task_js(engine, js, action)` — маршрутизатор
+        любого fire-and-forget void-действия над `&Arc<dyn PersistentJs>`; сам
+        `route_eval_js` теперь делегирует ей (байт-идентично, устранён дубль ветвления).
+        Перевёл per-tick pump-батч в `about_to_wait` (`tick_timers` + `pump_websockets`
+        + `pump_sse` + `pump_workers` + `pump_broadcast_channels` + `pump_shared_workers`,
+        `main.rs` ~:8801) с прямых `js.<method>()` на `route_task_js`. Под флагом
+        (`LUMEN_ENGINE_THREAD=1`) батч уходит off-UI-thread одним `task` (порядок
+        вызовов внутри сохранён), а последующие `route_query_js`-чтения nav/timer встают
+        в очередь **после** него — read-after-write порядок восстановлен, как для routed
+        `eval_js` в 2b/2c. Без флага (по умолчанию) — прежние синхронные вызовы,
+        байт-идентично. 2 новых теста (`route_task_js` без хэндла = no-op;
+        флаг-он без зеркалированного хэндла → действие пропущено, барьер-`query`
+        подтверждает исполнение task). No new deps, no `unsafe`. Оставшиеся синхронные
+        UI→JS чтения (`take_nav_intercept_result`, canvas/worker drains) — следующие
+        под-срезы 2d, затем снятие самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
