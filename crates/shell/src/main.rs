@@ -7629,10 +7629,26 @@ impl Lumen {
         // the fragment differs, updates `location`, queues a `HistoryUrlUpdate`
         // (drained into `nav_back` so back/forward works), and fires `hashchange`.
         let new_url = links::fragment_url(self.current_display_url(), &fragment);
-        if let Some(js) = &self.js_ctx {
+        // ADR-016 M2.2c-2d (16): hashchange fire-and-forget void-dispatch через
+        // `route_eval_js` — оба `_lumen_*`-вызова чистый void без синхронного чтения
+        // результата следом (`location`/`hashchange` фиксируются JS-стороной, а
+        // `HistoryUrlUpdate` дренится позже через `take_nav_updates`). Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) уходят off-UI-thread двумя `task` в FIFO-порядке
+        // (dispatch → navigate сохранён); без флага (по умолчанию) — синхронные
+        // вызовы по UI-хэндлу, **байт-идентично** прежним `js.eval_js`. `escaped`
+        // строится до маршрутизации; борроу `engine_thread`/`js_ctx` — раздельный.
+        if self.js_ctx.is_some() {
             let escaped = new_url.replace('\\', "\\\\").replace('\'', "\\'");
-            js.eval_js(&format!("_lumen_dispatch_navigate('fragment', '{escaped}', true, true)"));
-            js.eval_js(&format!("_lumen_navigate_or_fragment('{escaped}', false)"));
+            route_eval_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                format!("_lumen_dispatch_navigate('fragment', '{escaped}', true, true)"),
+            );
+            route_eval_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                format!("_lumen_navigate_or_fragment('{escaped}', false)"),
+            );
         }
         if let Some(src) = self.layout_source.as_mut() {
             let mut doc = src.document.lock().unwrap();
@@ -13354,9 +13370,16 @@ impl Lumen {
             // Notify platform accessibility bridge so screen readers can track focus.
             self.platform_bridge.focused_node_changed(new_focused);
             // Keep JS _lumen_last_focused_nid in sync so showModal() can save/restore it.
-            if let Some(js) = &self.js_ctx {
-                js.notify_focus_changed(new_focused.map(|n| n.index() as u32));
-            }
+            // ADR-016 M2.2c-2d (16): fire-and-forget void `notify_focus_changed` через
+            // `route_task_js`. `focus_idx` (owned `Option<u32>`) вычисляется до
+            // маршрутизации, замыкание `Send + 'static`. Под флагом
+            // (`LUMEN_ENGINE_THREAD=1`) уходит off-UI-thread одним `task`; без флага
+            // (по умолчанию) — синхронный вызов по UI-хэндлу, **байт-идентично**
+            // прежнему `js.notify_focus_changed`.
+            let focus_idx = new_focused.map(|n| n.index() as u32);
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                js.notify_focus_changed(focus_idx);
+            });
         }
         // Dispatch JS click event (bubbles from hit node to document).
         // Passes viewport coordinates and modifier key state so
@@ -17019,10 +17042,16 @@ impl Lumen {
             let states: std::collections::HashMap<_, _> = self.scroll_containers.iter()
                 .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                 .collect();
-            if let Some(js) = &self.js_ctx {
+            // ADR-016 M2.2c-2d (16): overflow-container scroll fire-and-forget void
+            // (`update_scroll_states` push → `fire_element_scroll`) через `route_task_js`.
+            // `states` (owned `HashMap`) и `target_nid` (`u32`, Copy) переезжают в
+            // `move`-замыкание `Send + 'static`; порядок push→dispatch сохранён внутри
+            // одного `task`. Под флагом (`LUMEN_ENGINE_THREAD=1`) уходит off-UI-thread;
+            // без флага (по умолчанию) — синхронные вызовы, **байт-идентично**.
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_scroll_states(states);
                 js.fire_element_scroll(target_nid);
-            }
+            });
             self.request_redraw();
             true
         } else {
