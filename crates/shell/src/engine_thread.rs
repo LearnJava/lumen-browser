@@ -14,15 +14,33 @@
 //! обобщён по типу коммита `C`, поэтому этот модуль не зависит от layout-типов —
 //! конкретный `EngineCommit` (с `LayoutBox`) и само задание живут в `main.rs`.
 //!
+//! # Персистентное состояние движка `S` (ADR-016 M2.2c-2)
+//!
+//! Помимо stateless-конвейера `Run`/`Readback` (задания по immutable-снимкам),
+//! поток может **владеть** долгоживущим состоянием `S` — местом для мутабельного
+//! `Document` и хэндла `lumen-js` (`js_ctx`), которые M2.2c переносит на движковый
+//! поток целиком. Задания [`EngineMsg::Task`] исполняются **по порядку** (не
+//! коалесцируются) и получают `&mut S`, поэтому DOM-мутация → style → layout →
+//! доставка observer'ов происходят на одном потоке, а UI-поток перестаёт держать
+//! JS-хэндл. `S` по умолчанию `()` — существующий stateless-путь (только
+//! layout-коммиты) им не пользуется и поведение shell не меняется. Само перенесение
+//! `js_ctx` в `S` и шимминг UI→JS вызовов в `Task` — следующие срезы (M2.2c-2b+);
+//! здесь приземлён только механизм (mirroring M2.1/M2.2c-1), поэтому
+//! [`EngineThread::task`]/[`EngineThread::query`]/[`EngineThread::spawn_with_state`]
+//! пока `#[allow(dead_code)]`.
+//!
 //! # Инварианты ADR-016
 //!
-//! - **Cross-thread data = immutable snapshots (инвариант 1).** Задание захватывает
-//!   `Arc`-снимки (документ, стили, шрифты); коммит `C` — владеющий результат.
+//! - **Cross-thread data = immutable snapshots (инвариант 1).** Задание `Run`/`Readback`
+//!   захватывает `Arc`-снимки (документ, стили, шрифты); коммит `C` — владеющий
+//!   результат. `Task` работает с состоянием `S`, которым владеет **только** движковый
+//!   поток (UI-сторона его не разделяет — общается сообщениями), так что инвариант
+//!   «no shared mutable state across threads» сохраняется.
 //! - **Latest-wins, queue depth 1, coalescing (инвариант 2).** Из дренированной
-//!   пачки исполняется только задание с наибольшим `generation` (старее —
+//!   пачки исполняется только задание `Run` с наибольшим `generation` (старее —
 //!   отменённые), результат кладётся в слот на один элемент; непрочитанный
-//!   перезаписывается новее пришедшим.
-//! - **Generation-guard.** Задание с `generation` старше уже исполненного —
+//!   перезаписывается новее пришедшим. `Task`/`Readback` не коалесцируются.
+//! - **Generation-guard.** Задание `Run` с `generation` старше уже исполненного —
 //!   устаревшая (отменённая) навигация/relayout; отбрасывается без исполнения
 //!   (тот же принцип, что `RenderDone`-гвард `generation != load_generation`).
 //! - **Idle = parked on condvar (инвариант 6).** Поток спит на блокирующем
@@ -33,10 +51,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 /// Задание/сигнал движковому потоку. Задания `Run` коалесцируются (latest-wins с
-/// generation-guard); `Readback` — request/reply, исполняется всегда и отвечает
-/// напрямую вызывающему; `Shutdown` завершает поток (шлётся из [`EngineThread`]'s
-/// `Drop`).
-enum EngineMsg<C> {
+/// generation-guard); `Readback` — request/reply по immutable-снимку, исполняется
+/// всегда и отвечает напрямую вызывающему; `Task` — упорядоченное задание с
+/// доступом к персистентному состоянию `S` движкового потока (M2.2c-2); `Shutdown`
+/// завершает поток (шлётся из [`EngineThread`]'s `Drop`).
+enum EngineMsg<C, S> {
     /// Считать коммит `C` (замыкание исполняется на движковом потоке).
     /// `generation` — монотонный номер relayout/навигации, под которым задание
     /// поставлено; используется для coalescing и generation-guard.
@@ -66,6 +85,19 @@ enum EngineMsg<C> {
         /// в shutdown-пачке) разблокирует вызывающего с `Err` → откат на sync.
         reply: SyncSender<C>,
     },
+    /// Упорядоченное задание над персистентным состоянием `S` движкового потока
+    /// (ADR-016 M2.2c-2). Получает `&mut S` — место для мутабельного `Document` и
+    /// хэндла `js_ctx`, которые переносятся на движковый поток. В отличие от `Run`
+    /// **не коалесцируется** и **не проходит generation-guard**: каждое задание
+    /// исполняется по своей позиции в пачке (UI→JS вызовы обязаны выполниться все и
+    /// по порядку — eval, tick_timers, доставка observer'ов). Request/reply-запросы
+    /// (`take_dom_dirty`, `eval_js_value`) реализуются через `Task`, замыкание
+    /// которого само отвечает по захваченному каналу — см. [`EngineThread::query`].
+    ///
+    /// Пока не конструируется вне тестов: механизм приземлён в M2.2c-2a, а перенос
+    /// `js_ctx` в `S` и шимминг живых call-site'ов — M2.2c-2b+.
+    #[allow(dead_code, reason = "механизм M2.2c-2a; перенос js_ctx в S — M2.2c-2b+")]
+    Task(Box<dyn FnOnce(&mut S) + Send>),
     /// Завершение потока.
     Shutdown,
 }
@@ -78,33 +110,39 @@ type CommitSlot<C> = Arc<Mutex<Option<C>>>;
 
 /// Хэндл долгоживущего движкового потока (ADR-016 M2.2).
 ///
-/// Обобщён по типу коммита `C` (в shell — `crate::EngineCommit`), поэтому модуль
-/// не зависит от layout-типов. Владеет управляющим каналом и слотом коммита; при
-/// `Drop` шлёт `Shutdown` и джойнит поток.
-pub struct EngineThread<C: Send + 'static> {
+/// Обобщён по типу коммита `C` (в shell — `crate::EngineCommit`) и по типу
+/// персистентного состояния движка `S` (по умолчанию `()` — stateless-путь), поэтому
+/// модуль не зависит от layout-/js-типов. Владеет управляющим каналом и слотом
+/// коммита; при `Drop` шлёт `Shutdown` и джойнит поток.
+pub struct EngineThread<C: Send + 'static, S: Send + 'static = ()> {
     /// Упорядоченный канал заданий движковому потоку.
-    tx: Sender<EngineMsg<C>>,
+    tx: Sender<EngineMsg<C, S>>,
     /// Latest-wins слот, куда поток кладёт новейший исполненный коммит.
     latest: CommitSlot<C>,
     /// Handle потока для join при shutdown.
     join: Option<JoinHandle<()>>,
 }
 
-impl<C: Send + 'static> EngineThread<C> {
-    /// Запускает именованный движковый поток и возвращает хэндл.
+impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
+    /// Запускает именованный движковый поток с состоянием `initial` и возвращает
+    /// хэндл (ADR-016 M2.2c-2). Состоянием `S` владеет **только** этот поток —
+    /// UI-сторона общается с ним сообщениями [`EngineMsg::Task`].
     ///
     /// Поток немедленно паркуется на блокирующем `recv()` (инвариант 6) и ждёт
     /// первое задание — до появления консьюмеров он не потребляет CPU.
     ///
+    /// Пока вызывается только из тестов: перенос `js_ctx` в `S` — M2.2c-2b.
+    ///
     /// # Errors
     /// Возвращает [`std::io::Error`], если ОС не смогла создать поток.
-    pub fn spawn() -> std::io::Result<Self> {
-        let (tx, rx) = mpsc::channel::<EngineMsg<C>>();
+    #[allow(dead_code, reason = "механизм M2.2c-2a; вызывающие — M2.2c-2b")]
+    pub fn spawn_with_state(initial: S) -> std::io::Result<Self> {
+        let (tx, rx) = mpsc::channel::<EngineMsg<C, S>>();
         let latest: CommitSlot<C> = Arc::new(Mutex::new(None));
         let slot = Arc::clone(&latest);
         let join = thread::Builder::new()
             .name("lumen-engine".to_owned())
-            .spawn(move || engine_thread_main(&rx, &slot))?;
+            .spawn(move || engine_thread_main(&rx, &slot, initial))?;
         Ok(Self { tx, latest, join: Some(join) })
     }
 
@@ -149,9 +187,70 @@ impl<C: Send + 'static> EngineThread<C> {
         // Блокируемся до ответа; `Err` (sender дропнут при shutdown) → None.
         reply_rx.recv().ok()
     }
+
+    /// Ставит упорядоченное задание над персистентным состоянием `S` движкового
+    /// потока (fire-and-forget, ADR-016 M2.2c-2). Задание получает `&mut S` и
+    /// исполняется **по порядку** (не коалесцируется, минует generation-guard) —
+    /// это путь для void UI→JS вызовов (`eval_js`, `tick_timers`,
+    /// `run_animation_frame`, доставка observer'ов), которые обязаны выполниться
+    /// все и в порядке постановки. Молча игнорирует, если поток уже завершён.
+    ///
+    /// Пока вызывается только из тестов: перенос `js_ctx` в `S` и шимминг живых
+    /// call-site'ов — M2.2c-2b+.
+    #[allow(dead_code, reason = "механизм M2.2c-2a; вызывающие — M2.2c-2b+")]
+    pub fn task(&self, job: impl FnOnce(&mut S) + Send + 'static) {
+        let _ = self.tx.send(EngineMsg::Task(Box::new(job)));
+    }
+
+    /// Request/reply над персистентным состоянием `S`: ставит упорядоченное
+    /// задание и **блокируется**, пока движковый поток не вернёт его результат
+    /// (ADR-016 M2.2c-2). Это путь для UI→JS вызовов, возвращающих значение
+    /// (`take_dom_dirty` → `bool`, `eval_js_value` → `Result<String, String>`,
+    /// `take_raf_pending`), которые UI-стороне нужны **сейчас**. Реализовано поверх
+    /// [`EngineMsg::Task`]: замыкание считает результат по `&mut S` и отвечает по
+    /// захваченному одноразовому каналу; вызывающий блокируется на нём. Как и
+    /// [`Self::task`], не коалесцируется и исполняется по порядку в пачке.
+    ///
+    /// Возвращает `None`, если поток уже завершён или получил `Shutdown` раньше,
+    /// чем исполнил задание (канал ответа дропнут) — откат на синхронный путь.
+    ///
+    /// Пока вызывается только из тестов: живые call-site'ы — M2.2c-2b+.
+    #[allow(dead_code, reason = "механизм M2.2c-2a; вызывающие — M2.2c-2b+")]
+    pub fn query<R: Send + 'static>(
+        &self,
+        job: impl FnOnce(&mut S) -> R + Send + 'static,
+    ) -> Option<R> {
+        // Queue depth 1: ровно один ответ на одно задание.
+        let (reply_tx, reply_rx) = mpsc::sync_channel::<R>(1);
+        self.tx
+            .send(EngineMsg::Task(Box::new(move |state| {
+                // `send` вернёт `Err`, только если вызывающий отказался ждать
+                // (queue depth 1, никогда не блокирует поток) — тогда роняем.
+                let _ = reply_tx.send(job(state));
+            })))
+            .ok()?;
+        // Блокируемся до ответа; `Err` (sender дропнут при shutdown) → None.
+        reply_rx.recv().ok()
+    }
 }
 
-impl<C: Send + 'static> Drop for EngineThread<C> {
+impl<C: Send + 'static, S: Send + 'static + Default> EngineThread<C, S> {
+    /// Запускает именованный движковый поток c состоянием по умолчанию
+    /// (`S::default()`) и возвращает хэндл. Для stateless-пути (`S = ()`) состояние
+    /// пустое — поведение shell неизменно (M2.1/M2.2). Перенос `js_ctx` в `S`
+    /// использует [`Self::spawn_with_state`] (M2.2c-2b).
+    ///
+    /// Поток немедленно паркуется на блокирующем `recv()` (инвариант 6) и ждёт
+    /// первое задание — до появления консьюмеров он не потребляет CPU.
+    ///
+    /// # Errors
+    /// Возвращает [`std::io::Error`], если ОС не смогла создать поток.
+    pub fn spawn() -> std::io::Result<Self> {
+        Self::spawn_with_state(S::default())
+    }
+}
+
+impl<C: Send + 'static, S: Send + 'static> Drop for EngineThread<C, S> {
     fn drop(&mut self) {
         let _ = self.tx.send(EngineMsg::Shutdown);
         if let Some(join) = self.join.take() {
@@ -162,8 +261,15 @@ impl<C: Send + 'static> Drop for EngineThread<C> {
 
 /// Тело движкового потока: паркуется на блокирующем `recv()` (инвариант 6),
 /// дренирует пришедшую пачку и исполняет её ([`run_batch`]) — latest-wins с
-/// generation-guard. Выходит при `Shutdown` или закрытии канала (хэндл дропнут).
-fn engine_thread_main<C: Send + 'static>(rx: &Receiver<EngineMsg<C>>, latest: &CommitSlot<C>) {
+/// generation-guard для `Run`, in-order для `Task`/`Readback` над состоянием
+/// `state`. Владеет персистентным состоянием `S` (M2.2c-2) — оно живёт ровно
+/// столько, сколько поток. Выходит при `Shutdown` или закрытии канала (хэндл
+/// дропнут).
+fn engine_thread_main<C: Send + 'static, S: Send + 'static>(
+    rx: &Receiver<EngineMsg<C, S>>,
+    latest: &CommitSlot<C>,
+    mut state: S,
+) {
     let mut applied_generation: u64 = 0;
     loop {
         // Idle-park до первого сообщения (без polling — инвариант 6).
@@ -178,7 +284,7 @@ fn engine_thread_main<C: Send + 'static>(rx: &Receiver<EngineMsg<C>>, latest: &C
         while let Ok(m) = rx.try_recv() {
             batch.push(m);
         }
-        if run_batch(batch, &mut applied_generation, latest) {
+        if run_batch(batch, &mut applied_generation, latest, &mut state) {
             return; // получен Shutdown
         }
     }
@@ -192,22 +298,26 @@ fn engine_thread_main<C: Send + 'static>(rx: &Receiver<EngineMsg<C>>, latest: &C
 ///   layout-работы), результат идёт в `latest`, `applied_generation` продвигается;
 /// - каждый `Readback` исполняется **всегда** и по своей позиции в пачке (не
 ///   коалесцируется, `applied_generation`/`latest` не трогает), результат уходит
-///   напрямую в его `reply` — вызывающий разблокируется ровно этим коммитом.
+///   напрямую в его `reply` — вызывающий разблокируется ровно этим коммитом;
+/// - каждый `Task` исполняется **всегда** и по своей позиции в пачке над
+///   персистентным состоянием `state` (`&mut S`) — UI→JS вызовы обязаны выполниться
+///   все и по порядку; `latest`/`applied_generation` он не трогает (M2.2c-2).
 ///
 /// Возвращает `true`, если в пачке был `Shutdown`.
 ///
-/// Вынесено из цикла ради модульного теста логики coalescing/gen-guard/readback
+/// Вынесено из цикла ради модульного теста логики coalescing/gen-guard/readback/task
 /// без поднятия потока.
-fn run_batch<C: Send + 'static>(
-    batch: Vec<EngineMsg<C>>,
+fn run_batch<C: Send + 'static, S: Send + 'static>(
+    batch: Vec<EngineMsg<C, S>>,
     applied_generation: &mut u64,
     latest: &CommitSlot<C>,
+    state: &mut S,
 ) -> bool {
     if batch.iter().any(|m| matches!(m, EngineMsg::Shutdown)) {
         return true;
     }
-    // Индекс новейшего валидного `Run` (latest-wins + gen-guard). `Readback` и
-    // прочие сообщения не участвуют в выборе — они не `Run`.
+    // Индекс новейшего валидного `Run` (latest-wins + gen-guard). `Readback`,
+    // `Task` и прочие сообщения не участвуют в выборе — они не `Run`.
     let gens: Vec<Option<u64>> = batch
         .iter()
         .map(|m| match m {
@@ -234,6 +344,11 @@ fn run_batch<C: Send + 'static>(
                 // молча роняем (queue depth 1, никогда не блокирует поток).
                 let commit = job();
                 let _ = reply.send(commit);
+            }
+            EngineMsg::Task(job) => {
+                // Task исполняется всегда и по порядку над персистентным состоянием
+                // (не коалесцируется). Ответ (если запрос) шлёт само замыкание.
+                job(state);
             }
             // `Shutdown` уже отсеян ранним `return true` выше.
             EngineMsg::Shutdown => {}
@@ -272,7 +387,8 @@ mod tests {
 
     /// Задание с указанным `generation`, возвращающее это же число коммитом.
     /// Тестовый тип коммита — `u64`, поэтому layout-типы здесь не нужны.
-    fn run(generation: u64) -> EngineMsg<u64> {
+    /// Тип состояния — `()` (stateless-путь), явно указан для вывода типов.
+    fn run(generation: u64) -> EngineMsg<u64, ()> {
         EngineMsg::Run { generation, job: Box::new(move || generation) }
     }
 
@@ -322,7 +438,7 @@ mod tests {
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
         // Пачка relayout 1 и 2 — исполняется gen 2, поколение продвигается.
-        let shutdown = run_batch(vec![run(1), run(2)], &mut applied, &latest);
+        let shutdown = run_batch(vec![run(1), run(2)], &mut applied, &latest, &mut ());
         assert!(!shutdown);
         assert_eq!(applied, 2);
         assert_eq!(latest.lock().unwrap().take(), Some(2));
@@ -333,7 +449,7 @@ mod tests {
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 5;
         // Единственное задание устарело (gen 3 < 5) — слот пуст, поколение не падает.
-        let shutdown = run_batch(vec![run(3)], &mut applied, &latest);
+        let shutdown = run_batch(vec![run(3)], &mut applied, &latest, &mut ());
         assert!(!shutdown);
         assert_eq!(applied, 5);
         assert!(latest.lock().unwrap().is_none());
@@ -344,8 +460,8 @@ mod tests {
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
         // Десять заданий подряд — исполняется ровно одно, новейшее (queue depth 1).
-        let batch: Vec<EngineMsg<u64>> = (1..=10).map(run).collect();
-        run_batch(batch, &mut applied, &latest);
+        let batch: Vec<EngineMsg<u64, ()>> = (1..=10).map(run).collect();
+        run_batch(batch, &mut applied, &latest, &mut ());
         assert_eq!(applied, 10);
         assert_eq!(latest.lock().unwrap().take(), Some(10));
     }
@@ -358,7 +474,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let mk = |generation: u64| {
             let c = Arc::clone(&calls);
-            EngineMsg::Run {
+            EngineMsg::<u64, ()>::Run {
                 generation,
                 job: Box::new(move || {
                     c.fetch_add(1, Ordering::SeqCst);
@@ -368,7 +484,7 @@ mod tests {
         };
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
-        run_batch(vec![mk(1), mk(2), mk(3)], &mut applied, &latest);
+        run_batch(vec![mk(1), mk(2), mk(3)], &mut applied, &latest, &mut ());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(latest.lock().unwrap().take(), Some(3));
     }
@@ -378,13 +494,15 @@ mod tests {
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
         // Shutdown в пачке — сигнал выхода; задание при этом не исполняется.
-        let shutdown = run_batch(vec![run(1), EngineMsg::Shutdown], &mut applied, &latest);
+        let shutdown =
+            run_batch(vec![run(1), EngineMsg::Shutdown], &mut applied, &latest, &mut ());
         assert!(shutdown);
         assert!(latest.lock().unwrap().is_none());
     }
 
-    /// Readback-сообщение с известным каналом ответа. Тип коммита — `u64`.
-    fn readback_msg(value: u64) -> (EngineMsg<u64>, mpsc::Receiver<u64>) {
+    /// Readback-сообщение с известным каналом ответа. Тип коммита — `u64`,
+    /// состояние — `()`.
+    fn readback_msg(value: u64) -> (EngineMsg<u64, ()>, mpsc::Receiver<u64>) {
         let (tx, rx) = mpsc::sync_channel::<u64>(1);
         (EngineMsg::Readback { job: Box::new(move || value), reply: tx }, rx)
     }
@@ -395,7 +513,7 @@ mod tests {
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
         let (msg, rx) = readback_msg(77);
-        let shutdown = run_batch(vec![msg], &mut applied, &latest);
+        let shutdown = run_batch(vec![msg], &mut applied, &latest, &mut ());
         assert!(!shutdown);
         assert_eq!(rx.recv().ok(), Some(77));
         assert_eq!(applied, 0, "readback не двигает applied_generation");
@@ -410,7 +528,7 @@ mod tests {
         let mut applied = 0;
         let (msg, rx) = readback_msg(500);
         let batch = vec![run(1), msg, run(2)];
-        run_batch(batch, &mut applied, &latest);
+        run_batch(batch, &mut applied, &latest, &mut ());
         assert_eq!(applied, 2);
         assert_eq!(latest.lock().unwrap().take(), Some(2));
         assert_eq!(rx.recv().ok(), Some(500));
@@ -425,7 +543,7 @@ mod tests {
         let (m1, rx1) = readback_msg(10);
         let (m2, rx2) = readback_msg(20);
         let (m3, rx3) = readback_msg(30);
-        run_batch(vec![m1, m2, m3], &mut applied, &latest);
+        run_batch(vec![m1, m2, m3], &mut applied, &latest, &mut ());
         assert_eq!(rx1.recv().ok(), Some(10));
         assert_eq!(rx2.recv().ok(), Some(20));
         assert_eq!(rx3.recv().ok(), Some(30));
@@ -438,9 +556,89 @@ mod tests {
         let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
         let (msg, rx) = readback_msg(9);
-        let shutdown = run_batch(vec![msg, EngineMsg::Shutdown], &mut applied, &latest);
+        let shutdown = run_batch(vec![msg, EngineMsg::Shutdown], &mut applied, &latest, &mut ());
         assert!(shutdown);
         assert!(rx.recv().is_err(), "reply-канал должен быть дропнут");
+    }
+
+    /// `Task`-сообщение, прибавляющее `delta` к состоянию `u64`. Тип коммита — `u64`.
+    fn add_task(delta: u64) -> EngineMsg<u64, u64> {
+        EngineMsg::Task(Box::new(move |s: &mut u64| *s += delta))
+    }
+
+    #[test]
+    fn run_batch_executes_task_against_state() {
+        // Task исполняется над персистентным состоянием; latest-wins слот и
+        // applied_generation не трогает.
+        let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
+        let mut applied = 0;
+        let mut state: u64 = 100;
+        let shutdown = run_batch(vec![add_task(5)], &mut applied, &latest, &mut state);
+        assert!(!shutdown);
+        assert_eq!(state, 105);
+        assert_eq!(applied, 0, "task не двигает applied_generation");
+        assert!(latest.lock().unwrap().is_none(), "task не пишет в слот");
+    }
+
+    #[test]
+    fn run_batch_runs_tasks_in_order_not_coalesced() {
+        // Несколько Task в пачке исполняются ВСЕ и по порядку (в отличие от Run,
+        // которые коалесцируются до одного новейшего). Порядок важен: state
+        // накапливает эффект каждого.
+        let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
+        let mut applied = 0;
+        let mut state: u64 = 0;
+        run_batch(
+            vec![add_task(1), add_task(2), add_task(3)],
+            &mut applied,
+            &latest,
+            &mut state,
+        );
+        assert_eq!(state, 6, "все три Task исполнены, ни один не коалесцирован");
+    }
+
+    #[test]
+    fn run_batch_task_order_is_positional() {
+        // Порядок исполнения — позиционный: строковое состояние фиксирует
+        // последовательность, а не только сумму.
+        let latest: CommitSlot<String> = Arc::new(Mutex::new(None));
+        let mut applied = 0;
+        let mut log = String::new();
+        let mk = |c: char| -> EngineMsg<String, String> {
+            EngineMsg::Task(Box::new(move |s: &mut String| s.push(c)))
+        };
+        run_batch(vec![mk('a'), mk('b'), mk('c')], &mut applied, &latest, &mut log);
+        assert_eq!(log, "abc");
+    }
+
+    #[test]
+    fn run_batch_shutdown_skips_task() {
+        // Shutdown в пачке роняет всё, включая Task: состояние не мутируется.
+        let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
+        let mut applied = 0;
+        let mut state: u64 = 42;
+        let shutdown =
+            run_batch(vec![add_task(1), EngineMsg::Shutdown], &mut applied, &latest, &mut state);
+        assert!(shutdown);
+        assert_eq!(state, 42, "shutdown отменяет исполнение Task");
+    }
+
+    #[test]
+    fn run_batch_runs_task_and_newest_run_together() {
+        // Пачка [Run(1), Task, Run(2)]: слот получает новейший Run (2), Task
+        // независимо мутирует состояние. Оба вида заданий уживаются в одной пачке.
+        let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
+        let mut applied = 0;
+        let mut state: u64 = 0;
+        let batch: Vec<EngineMsg<u64, u64>> = vec![
+            EngineMsg::Run { generation: 1, job: Box::new(|| 1) },
+            EngineMsg::Task(Box::new(|s: &mut u64| *s += 7)),
+            EngineMsg::Run { generation: 2, job: Box::new(|| 2) },
+        ];
+        run_batch(batch, &mut applied, &latest, &mut state);
+        assert_eq!(applied, 2);
+        assert_eq!(latest.lock().unwrap().take(), Some(2));
+        assert_eq!(state, 7);
     }
 
     #[test]
@@ -479,5 +677,37 @@ mod tests {
         engine.submit(1, || 1);
         engine.submit(2, || 2);
         assert_eq!(engine.readback(|| 99), Some(99));
+    }
+
+    #[test]
+    fn task_mutates_engine_owned_state() {
+        // End-to-end: движковый поток владеет состоянием `u64`; `task` мутирует
+        // его off-thread, `query` читает результат. Проверяет, что состояние
+        // персистентно между сообщениями и живёт на потоке.
+        let engine =
+            EngineThread::<u64, u64>::spawn_with_state(0).expect("spawn engine thread");
+        engine.task(|s| *s += 10);
+        engine.task(|s| *s *= 3);
+        // query исполняется после обоих task (упорядоченный канал) → 30.
+        assert_eq!(engine.query(|s| *s), Some(30));
+    }
+
+    #[test]
+    fn query_blocks_and_returns_state_value() {
+        // End-to-end request/reply над состоянием: `query` блокируется до ответа
+        // и возвращает значение, посчитанное по `&mut S` на движковом потоке.
+        let engine =
+            EngineThread::<u64, String>::spawn_with_state("hi".to_owned())
+                .expect("spawn engine thread");
+        assert_eq!(engine.query(|s| s.len()), Some(2));
+    }
+
+    #[test]
+    fn spawn_uses_default_state() {
+        // `spawn()` (без явного состояния) поднимает поток с `S::default()`.
+        // Для `u64` дефолт — 0; task прибавляет, query читает.
+        let engine = EngineThread::<u64, u64>::spawn().expect("spawn engine thread");
+        engine.task(|s| *s += 7);
+        assert_eq!(engine.query(|s| *s), Some(7));
     }
 }
