@@ -1491,6 +1491,33 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
       clip/transform state) and **z-order** (overlay on top of the band). +9 unit
       tests (7 overlay-partition, 2 display-list emit). No new deps, no `unsafe`.
 
+    - **M3.2.1c-3 — consume the partition: skip overlays in the band + replay on
+      top.** ✅ (branch `p1-mt-m3-2-1c-3`). The first *consumer* of
+      `overlay_ranges`. New pure classifier `plan_overlays(content) -> OverlayPlan`
+      (`overlay_partition.rs`): `None` (no overlays → plain blit), `Replay(ranges)`
+      (every overlay span sits at display-list nesting depth 0 — no ancestor
+      clip/transform/opacity/mask/filter/scroll layer wraps it, computed via a
+      `layer_delta` Push/Pop balance — so each span is replayable in isolation), or
+      `NestedFallback` (some span is nested → this slice cannot reconstruct the
+      ancestor stack, so the frame falls back to the direct un-blitted render,
+      byte-identical to pre-blit). The femtovg backend consumes it in `render()`:
+      `run_content_pass` gained a `skip: &[Range<usize>]` param (both loops omit
+      overlay indices — a whole span is a self-balanced bracket, so the canvas
+      stack stays balanced), applied only on the band path (`band_src.is_some()`);
+      after the band is presented, `replay_overlays` redraws the overlay spans
+      straight to the screen under the same `-scroll` + page-offset transform, so
+      fixed/sticky stay pinned at the current scroll and keep z-order **on top** of
+      the band. `NestedFallback` folds into `scroll_blit_active` (disables blit for
+      that frame). Still gated behind `LUMEN_SCROLL_BLIT` (default **off**);
+      flag-off and no-overlay pages are byte-identical (`OverlayPlan::None` → empty
+      skip, no replay). This makes the blit path *correct* for top-level
+      fixed/sticky — the last KNOWN LIMITATION that kept the flag off for such
+      pages. What remains before the flag can be the default: the nested-overlay
+      case (capture + restore the ancestor clip/transform stack in the replay) and
+      broader real-page acceptance. +7 unit tests (`plan_overlays`: none / replay
+      sticky / replay fixed / disjoint / nested-in-clip / nested-in-scroll-layer /
+      mixed fallback). No new deps, no `unsafe`.
+
 ### M4 — parallel style/layout (M, gated on incremental layout)
 
 - First wire `lay_out_incremental` + `DirtyBits` into the live shell path for

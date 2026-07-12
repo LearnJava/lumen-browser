@@ -331,7 +331,7 @@ pub use display_list::{
 pub use gap_decorations::{emit_gap_rules, GapDecorationContext, GapSegment};
 pub use tile_grid::{TileDirty, TileGrid, DEFAULT_TILE_SIZE};
 pub use scroll_cache::{ScrollCache, ScrollFramePlan, DEFAULT_OVERSCAN};
-pub use overlay_partition::{has_overlay, overlay_ranges};
+pub use overlay_partition::{has_overlay, overlay_ranges, plan_overlays, OverlayPlan};
 pub use fingerprint::GpuFingerprint;
 pub use hit_test::{hit_test, HitTestResult};
 pub use layer_cache::{LayerCache, LayerKey};
