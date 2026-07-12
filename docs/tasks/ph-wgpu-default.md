@@ -185,8 +185,23 @@ Phase 1 re-measure (BUG-274), Phase 3 flip + ADR + BUG-276.
   GPU), DX12=ok → probe correctly selects DX12.
 - Idle-CPU with Phase 2 + probe: femtovg ~219ms/10s, wgpu/DX12 ~2391ms/10s. Regression vs
   pre-Phase2 baseline (~1422ms) likely from scroll-compositor blit every frame even in idle
-  (skip-identical-frame prevents repaint but not blit). Remaining: P1-wgpu-bug276 (wgpu graphic
-  test baseline + BUG-276 root-cause) → P1-wgpu-flip (default flip + ADR).
+  (skip-identical-frame prevents repaint but not blit). Remaining: → P1-wgpu-flip (default flip + ADR).
+
+**P1-wgpu-bug276 DONE 2026-07-13** — BUG-276 root-caused and fixed; wgpu graphic test baseline established.
+
+*Root-cause:* `PushClipRect` in `renderer.rs` stored clip rects in `clip_stack` without applying
+the accumulated `transform_stack`. The shell's `PushTransform(translate(0, 36))` tab-bar offset
+shifted content down by 36px but the scissor remained at y=720 (device), clipping off the bottom
+~35 rows of content (visible as magenta band at y:684-718 in TEST-00). Fix: added
+`apply_transform_to_clip(rect, transform_stack.last())` in all three clip-push handlers.
+TEST-00: FAIL 4.85% → PASS 0.00%.
+
+*wgpu baseline (2026-07-13, commit e8bd5bd0 + fix):*
+`LUMEN_PROFILE=dev-release LUMEN_BACKEND=wgpu python graphic_tests/run.py --continue-on-fail`
+→ **65 PASS · 38 FAIL · 38 DEBTOR** (141 total). The 38 FAIL tests are wgpu-specific rendering
+differences from Edge (documented in BUG-277). They are not regressions — they reflect wgpu never
+having been run against this suite before. The Phase 3 final gate must bring all 38 to PASS or
+justified KNOWN_DEBTOR. Remaining: → P1-wgpu-flip.
 
 ## Notes
 

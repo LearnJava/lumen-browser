@@ -6090,17 +6090,20 @@ impl Renderer {
                 // sync_scissor_to_stack.
                 DisplayCommand::PushClipRect { rect } => {
                     let scrolled = translate_rect(*rect, dx, dy);
+                    // Apply accumulated transform so clip is in screen space (BUG-276).
+                    let in_screen = apply_transform_to_clip(scrolled, transform_stack.last());
                     let new = match clip_stack.last() {
-                        Some(prev) => intersect_rects(*prev, scrolled),
-                        None => scrolled,
+                        Some(prev) => intersect_rects(*prev, in_screen),
+                        None => in_screen,
                     };
                     clip_stack.push(new);
                 }
                 DisplayCommand::PushClipRoundedRect { rect, radii: _ } => {
                     let scrolled = translate_rect(*rect, dx, dy);
+                    let in_screen = apply_transform_to_clip(scrolled, transform_stack.last());
                     let new = match clip_stack.last() {
-                        Some(prev) => intersect_rects(*prev, scrolled),
-                        None => scrolled,
+                        Some(prev) => intersect_rects(*prev, in_screen),
+                        None => in_screen,
                     };
                     clip_stack.push(new);
                 }
@@ -6110,9 +6113,10 @@ impl Renderer {
                 // пар с общим PopClip.
                 DisplayCommand::PushClipPath { shape } => {
                     let scrolled = translate_rect(shape.bounding_rect(), dx, dy);
+                    let in_screen = apply_transform_to_clip(scrolled, transform_stack.last());
                     let new = match clip_stack.last() {
-                        Some(prev) => intersect_rects(*prev, scrolled),
-                        None => scrolled,
+                        Some(prev) => intersect_rects(*prev, in_screen),
+                        None => in_screen,
                     };
                     clip_stack.push(new);
                 }
@@ -8941,6 +8945,39 @@ fn sticky_offset_dx(
 /// `dy = 0`. Без mutation — Rect: Copy.
 fn translate_rect(rect: Rect, dx: f32, dy: f32) -> Rect {
     Rect::new(rect.x + dx, rect.y + dy, rect.width, rect.height)
+}
+
+/// Применяет аккумулированный 2D-аффинный трансформ к clip-rect-у и
+/// возвращает AABB трансформированных углов в screen-координатах.
+///
+/// Нужно для `PushClipRect*`: рект из display-list-а — в page-пространстве,
+/// а clip_stack должен хранить координаты в screen-пространстве (с учётом
+/// PushTransform-ов, в т.ч. shell-овского сдвига страницы под tab bar).
+/// При не-аффинном или отсутствующем трансформе — возвращает rect без
+/// изменений (conservative, BUG-140 policy).
+fn apply_transform_to_clip(rect: Rect, m: Option<&Mat4>) -> Rect {
+    let Some(m) = m.filter(|m| m.is_2d_affine()) else {
+        return rect;
+    };
+    let (x0, y0) = (rect.x, rect.y);
+    let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
+    let corners = [
+        m.transform_point_2d(x0, y0),
+        m.transform_point_2d(x1, y0),
+        m.transform_point_2d(x0, y1),
+        m.transform_point_2d(x1, y1),
+    ];
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for (sx, sy) in corners {
+        min_x = min_x.min(sx);
+        min_y = min_y.min(sy);
+        max_x = max_x.max(sx);
+        max_y = max_y.max(sy);
+    }
+    Rect::new(min_x, min_y, (max_x - min_x).max(0.0), (max_y - min_y).max(0.0))
 }
 
 /// ADR-016 M0.2: extra margin (CSS px) around the viewport before culling in
