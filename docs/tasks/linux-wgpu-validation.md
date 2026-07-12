@@ -169,3 +169,50 @@ Rust 1.97 stable.
   known candidate fix — porting it is the separate follow-up track (see "Out of
   scope"). Caveat: Chromium smooth-scrolls wheel events (animation frames), so
   per-event work is not perfectly identical; numbers are indicative, not a gate.
+
+### Scroll-bench matrix (2026-07-12/13, Linux)
+
+Harness ported from the experimental branch: `crates/shell/src/bench_frames.rs`
+(`LUMEN_BENCH=scroll:N:W:STEP:PACE`) + `LUMEN_PRESENT` in the wgpu renderer +
+Linux runner `scripts/bench_scroll.py` (drives full top-to-bottom-and-back
+passes, samples CPU/PSS from /proc, reports median/p95 frame + scroll speed).
+Two drivers: `--driver bench` (LUMEN_BENCH, **stalls on Wayland** — see below)
+and `--driver mcp` (default; scrolls via the MCP live window, paced to the
+renderer by the `[frame]` log — the interactive input path).
+
+Fixed on the way (all found by this validation):
+- **Shell never implemented the `RenderBackend` contract for `SurfaceLost`**
+  (backend.rs: "shell вызовет resize и повторит кадр") — one lost surface
+  permanently killed rendering. Now recovers via swapchain reconfigure.
+- **Windowed wgpu created its depth texture from the headless placeholder
+  size** — instant validation panic on X11 (no initial Resized there).
+- `LUMEN_PRESENT` requests are validated against surface capabilities
+  (Wayland has no `Immediate`) with Immediate → Mailbox → Fifo fallback.
+- `surface_error_to_render_error` now logs the concrete variant
+  (Lost/Outdated/Timeout) — they are indistinguishable downstream.
+
+Numbers (frame = median `[frame] total`; CPU = process average over the run;
+Chromium via CDP rAF loop, same pages, same step, isolated profile):
+
+| Page | Lumen wgpu | Lumen femtovg | Chromium (tree) |
+|---|---|---|---|
+| samples/page.html, step 120 | **0.88 ms**, 2780 px/s, 3.3 %, 98 MiB | 0.67 ms, 2740 px/s, 3.2 %, 135 MiB | vsync 16.7 ms, no scroll (page fits its window), 443 MiB |
+| 1000000-final, step 60 | 132 ms → **7.5 fps**, 435 px/s, 18 %, 339 MiB | 478 ms → 2 fps, 123 px/s, 63 %, 280 MiB | 60 fps, 3370 px/s, **93.5 %**, 537 MiB |
+| bench-static-scroll, step 200 | **wedged** (BUG-276): ~0.5 fps, SurfaceLost×21/run | 1049 ms → 1 fps, 190 px/s, 21 %, 143 MiB | 60 fps, 11763 px/s, 37 %, 454 MiB |
+
+Reading: wgpu beats femtovg 3.6× on the stress page (Windows exp measurement
+was 19×) and matches it on light pages sub-millisecond. Against Chromium the
+unoptimized main renderer loses the heavy-page scroll war (7.5 fps vs 60 fps)
+while using 5× less CPU and less RAM; the "faster than Chromium" result
+(3.9 ms vs 9.5 ms on bench-anim-scroll) belongs to the `p1-exp-wgpu-only`
+optimizations (band compositor + anim split) which are NOT in main. Porting
+those (bbox-scissor → viewport-cull → strip+blit) is what closes the gap;
+BUG-276 tracks the blur-page swapchain wedge they would fix.
+
+**Wayland harness caveat:** the `LUMEN_BENCH` about_to_wait redraw loop stalls
+swapchain acquire on KWin/Wayland (Timeout every ~4 frames = swapchain depth)
+even when paced and visible; occluded windows get no frame callbacks at all
+(the bench then measures nothing). The MCP driver paced to `[frame]` feedback
+is the reliable Linux path; `LUMEN_BENCH` remains correct on Windows and for
+`--dump`-style use. Root cause of the Wayland acquire starvation not yet
+diagnosed — candidate follow-up if the harness is needed there.
