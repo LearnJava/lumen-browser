@@ -50,7 +50,7 @@ pub mod vvar;
 pub use avar::{Avar, AxisValueMap, SegmentMap};
 pub use binary::BinaryReader;
 pub use cff::Cff;
-pub use cmap::Cmap;
+pub use cmap::{Cmap, OwnedCmap};
 pub use delta_set_index_map::{DeltaSetIndex, DeltaSetIndexMap};
 pub use face::{Font, FontError, OffsetTable, TableRecord};
 pub use fvar::{Fvar, NamedInstance, VariationAxis};

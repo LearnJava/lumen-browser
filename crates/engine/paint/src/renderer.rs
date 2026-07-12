@@ -29,8 +29,8 @@ use lumen_core::ColorSpace;
 use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{
-    Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex,
-    maybe_decode_font,
+    Bitmap, Font, Head, Hmtx, Outline, OwnedCmap, Rasterizer,
+    SystemFontIndex, maybe_decode_font,
 };
 use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
 use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
@@ -1371,26 +1371,105 @@ struct CachedGlyph {
     advance_native: u16,
 }
 
-/// Один загруженный face: TTF-байты (parsed on-demand через `Font::parse`).
+/// Один загруженный face: TTF-байты + owned-кэш метрик, построенный один
+/// раз при загрузке (образец — cosmic-text `FontSystem`: fontdb парсит
+/// метаданные однажды, дальше живут кэши).
 /// face_id 0 — default (bundled, передан в `Renderer::new`); остальные
 /// `face_id` назначаются по мере lazy-загрузки из путей `FaceRecord`.
 struct LoadedFace {
     bytes: Vec<u8>,
+    /// Метрики для горячего текстового пути (cmap-каскад, advance, baseline).
+    /// `None` — face не распарсился при загрузке; такие face пропускаются
+    /// в каскаде (эквивалент прежнего `Option<ParsedFace>` = None).
+    metrics: Option<FaceMetrics>,
 }
 
-/// Распарсенный face для одного `render()`-вызова: Font + ключевые таблицы.
-/// Borrow от `LoadedFace.bytes`.
+/// Owned-метрики face-а, независимые от лайфтайма `bytes`. Живут в
+/// `LoadedFace` весь срок жизни рендера — снимают необходимость звать
+/// `Font::parse` всех face-ов каждый кадр (тёплый кадр экономит 1.4–2.7 мс,
+/// холодный — до 200 мс на 1000000-final.html).
+struct FaceMetrics {
+    /// `head.units_per_em` — масштаб font units → px.
+    units_per_em: u16,
+    /// `hhea.ascent` — для baseline (ascent ratio).
+    ascent: i16,
+    /// `hhea.descent` — для baseline (ascent ratio).
+    descent: i16,
+    /// Owned-копия cmap subtable: codepoint → glyph id без парсинга шрифта.
+    cmap: OwnedCmap,
+    /// hmtx advance per glyph id (хвост longHorMetric расширен по спеке).
+    /// Индекс = glyph id; длина = num_glyphs.
+    advances: Box<[u16]>,
+}
+
+/// Строит [`FaceMetrics`] по байтам шрифта. Возвращает `None`, если любая
+/// из обязательных таблиц не парсится (head/hhea/cmap/hmtx/maxp).
+fn build_face_metrics(bytes: &[u8]) -> Option<FaceMetrics> {
+    let font = Font::parse(bytes).ok()?;
+    let head = font.head().ok()?;
+    let hhea = font.hhea().ok()?;
+    let cmap = font.cmap().ok()?;
+    let hmtx = font.hmtx().ok()?;
+    let num_glyphs = font.maxp().ok()?.num_glyphs;
+    let advances: Box<[u16]> = (0..num_glyphs)
+        .map(|gid| hmtx.advance_width(gid).unwrap_or(0))
+        .collect();
+    Some(FaceMetrics {
+        units_per_em: head.units_per_em,
+        ascent: hhea.ascent,
+        descent: hhea.descent,
+        cmap: cmap.to_owned_cmap(),
+        advances,
+    })
+}
+
+/// Распарсенный face: Font + таблицы для растеризации. Borrow от
+/// `LoadedFace.bytes`.
 ///
-/// Используется в codepoint-cascade: per-char проверяем `cmap.glyph_index`
-/// у каждого face-а и выбираем тот, где глиф найден. Rasterizer создаётся
-/// per-DrawText (см. `push_text_glyphs`) — size_bin зависит от font-size,
-/// который варьируется по командам, а не по face-ам.
+/// После введения `FaceMetrics` нужен только на «медленных» путях:
+/// растеризация глифа при промахе atlas-кэша и нормализация
+/// font-variation-осей (fvar/avar). Тёплый кадр (все глифы в атласе,
+/// без variation settings) не парсит ни одного face-а.
 struct ParsedFace<'a> {
     font: Font<'a>,
     head: Head,
-    hhea: Hhea,
-    cmap: Cmap<'a>,
     hmtx: Hmtx<'a>,
+}
+
+/// Ленивый per-frame кэш [`ParsedFace`]-ов: face парсится при первом
+/// обращении внутри одного `render()`-вызова (промах атласа / variation
+/// axes), повторные обращения бесплатны. На тёплом кадре не создаётся
+/// ни одного `ParsedFace`.
+struct LazyParsedFaces<'a> {
+    faces: &'a [LoadedFace],
+    /// Внешний `Option` — «ещё не пробовали», внутренний — результат парсинга.
+    parsed: Vec<Option<Option<ParsedFace<'a>>>>,
+}
+
+impl<'a> LazyParsedFaces<'a> {
+    fn new(faces: &'a [LoadedFace]) -> Self {
+        Self { faces, parsed: Vec::new() }
+    }
+
+    /// Парсит face `id` при первом обращении; дальше отдаёт кэш.
+    fn get(&mut self, id: usize) -> Option<&ParsedFace<'a>> {
+        if id >= self.faces.len() {
+            return None;
+        }
+        if self.parsed.len() < self.faces.len() {
+            self.parsed.resize_with(self.faces.len(), || None);
+        }
+        if self.parsed[id].is_none() {
+            let attempt = (|| {
+                let font = Font::parse(&self.faces[id].bytes).ok()?;
+                let head = font.head().ok()?;
+                let hmtx = font.hmtx().ok()?;
+                Some(ParsedFace { font, head, hmtx })
+            })();
+            self.parsed[id] = Some(attempt);
+        }
+        self.parsed[id].as_ref().and_then(|p| p.as_ref())
+    }
 }
 
 pub struct Renderer {
@@ -1535,6 +1614,14 @@ pub struct Renderer {
     faces: Vec<LoadedFace>,
     /// `face_id` по абсолютному пути TTF — чтобы не грузить файл повторно.
     face_id_by_path: HashMap<PathBuf, usize>,
+    /// Мемоизация `resolve_face_id`: хэш `(families, weight, style)` →
+    /// `face_id`. Без него каждый `DrawText` каждого кадра гонял
+    /// `to_lowercase` + `FontProvider::pick_face` (двe Vec-аллокации +
+    /// матчинг). Ключ — u64-хэш (SipHash); коллизия теоретически возможна,
+    /// но при десятках ключей пренебрежима (та же логика, что skip-frame
+    /// hash). Сбрасывается в `set_font_provider` — новый провайдер
+    /// (например, FontRegistry с @font-face) меняет ответы резолва.
+    resolve_cache: HashMap<u64, usize>,
     /// Источник лукапа face-ов по `(family, weight, style)`. По умолчанию —
     /// `SystemFontIndex`, который лениво сканирует системные font-директории.
     /// `None` означает «без resolver-а — всегда default face» (для тестов /
@@ -3175,8 +3262,9 @@ impl Renderer {
              target_color_space,
              canvas_bg: None,
              atlas,
-            faces: vec![LoadedFace { bytes: font_bytes }],
+            faces: vec![LoadedFace { metrics: build_face_metrics(&font_bytes), bytes: font_bytes }],
             face_id_by_path: HashMap::new(),
+            resolve_cache: HashMap::new(),
             font_provider: Some(Arc::new(SystemFontIndex::new())),
             cached_glyphs: HashMap::new(),
             pending_readback: None,
@@ -3200,6 +3288,9 @@ impl Renderer {
     pub fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>) {
         self.content_generation = self.content_generation.wrapping_add(1);
         self.font_provider = provider;
+        // Новый провайдер может отвечать иначе на те же (families, weight,
+        // style) — например, FontRegistry с загруженным @font-face.
+        self.resolve_cache.clear();
     }
 
     /// Эагерно загружает указанные family-имена через текущий `FontProvider`,
@@ -3260,6 +3351,40 @@ impl Renderer {
         let Some(provider) = self.font_provider.clone() else {
             return 0;
         };
+        // Мемоизация: горячий путь (каждый DrawText каждого кадра) — один
+        // hash-lookup без аллокаций вместо to_lowercase + pick_face.
+        let cache_key = {
+            use std::hash::Hasher;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            for fam in families {
+                h.write(fam.as_bytes());
+                h.write_u8(0xFF); // разделитель — ["ab","c"] ≠ ["a","bc"]
+            }
+            h.write_u16(weight.0);
+            h.write_u8(match style {
+                FontStyle::Normal => 0,
+                FontStyle::Italic => 1,
+                FontStyle::Oblique => 2,
+            });
+            h.finish()
+        };
+        if let Some(&id) = self.resolve_cache.get(&cache_key) {
+            return id;
+        }
+        let resolved = self.resolve_face_id_uncached(families, weight, style, &provider);
+        self.resolve_cache.insert(cache_key, resolved);
+        resolved
+    }
+
+    /// Полный (немемоизированный) резолв — вынесен из [`Self::resolve_face_id`],
+    /// который добавляет кэш поверх.
+    fn resolve_face_id_uncached(
+        &mut self,
+        families: &[String],
+        weight: FontWeight,
+        style: FontStyle,
+        provider: &Arc<dyn FontProvider>,
+    ) -> usize {
         for fam in families {
             let lc = fam.to_lowercase();
             if matches!(
@@ -3297,12 +3422,12 @@ impl Renderer {
                     continue;
                 }
             };
-            if let Err(e) = Font::parse(&bytes) {
-                eprintln!("[font] parse failed {}: {e}", rec.path.display());
+            let Some(metrics) = build_face_metrics(&bytes) else {
+                eprintln!("[font] parse failed {}", rec.path.display());
                 continue;
-            }
+            };
             let id = self.faces.len();
-            self.faces.push(LoadedFace { bytes });
+            self.faces.push(LoadedFace { bytes, metrics: Some(metrics) });
             self.face_id_by_path.insert(rec.path, id);
             return id;
         }
@@ -3356,7 +3481,7 @@ impl Renderer {
     }
 
     /// Вычисляет GPU-ключ без мутации — только `&self`. Используется внутри
-    /// render-цикла, где `parsed_faces` держит `&self.faces`.
+    /// render-цикла, где `lazy_faces` держит `&self.faces`.
     /// Предполагается, что нужная текстура уже создана через `ensure_image_gpu_key`.
     fn compute_image_gpu_key(&self, src: &str, box_rect: Rect, fit: ObjectFit, pos: ObjectPosition) -> String {
         self.raw_images.get(src).map(|raw| {
@@ -4082,7 +4207,7 @@ impl Renderer {
         let mut text_face_iter = text_face_ids.into_iter();
 
         // PRE-PASS: создаём CPU-ресайз текстуры для DrawImage до того, как
-        // parsed_faces займёт &self.faces. Scroll offset не влияет на SIZE
+        // lazy_faces займёт &self.faces. Scroll offset не влияет на SIZE
         // (только на position), поэтому используем rect напрямую.
         for cmd in content.iter().chain(overlay.iter()) {
             match cmd {
@@ -4094,22 +4219,12 @@ impl Renderer {
             }
         }
 
-        // Распарсиваем все loaded faces один раз за кадр. Это нужно для
-        // codepoint-cascade: per-char смотрим, есть ли глиф в primary
-        // face-е; если нет — пробуем остальные. ParsedFace borrow-ит
-        // от &self.faces[i].bytes; lifetime ограничен этим scope-ом.
-        let parsed_faces: Vec<Option<ParsedFace<'_>>> = self
-            .faces
-            .iter()
-            .map(|face| {
-                let font = Font::parse(&face.bytes).ok()?;
-                let head = font.head().ok()?;
-                let hhea = font.hhea().ok()?;
-                let cmap = font.cmap().ok()?;
-                let hmtx = font.hmtx().ok()?;
-                Some(ParsedFace { font, head, hhea, cmap, hmtx })
-            })
-            .collect();
+        // Codepoint-cascade и baseline берутся из owned `FaceMetrics`
+        // (построены один раз при загрузке face-а). `Font::parse` нужен
+        // только на медленных путях — промах глиф-атласа и variation axes —
+        // и выполняется лениво через per-frame memo. Тёплый кадр не парсит
+        // ни одного face-а (раньше: все face-ы каждый кадр, 1.4–2.7 мс).
+        let mut lazy_faces = LazyParsedFaces::new(&self.faces);
 
         // ── Сбор вершин ────────────────────────────────────────────────────
         let mut fill_vertices: Vec<FillVertex> = Vec::new();
@@ -4543,9 +4658,10 @@ impl Renderer {
                     text_orientation: _,
                 } => {
                     let primary_face_id = text_face_iter.next().unwrap_or(0);
-                    if parsed_faces
+                    if lazy_faces
+                        .faces
                         .get(primary_face_id)
-                        .and_then(|p| p.as_ref())
+                        .and_then(|f| f.metrics.as_ref())
                         .is_none()
                     {
                         continue;
@@ -4562,7 +4678,7 @@ impl Renderer {
                         *font_size,
                         apply_alpha_to_color(color_to_array(color), alpha),
                         primary_face_id,
-                        &parsed_faces,
+                        &mut lazy_faces,
                         &mut self.atlas,
                         &mut self.cached_glyphs,
                         font_variation_axes,
@@ -4725,7 +4841,7 @@ impl Renderer {
                         const BROKEN_PAD: f32 = 4.0;
                         if !alt.is_empty()
                             && scrolled.height >= BROKEN_FONT_SIZE + 2.0 * BROKEN_PAD
-                            && parsed_faces.first().and_then(|p| p.as_ref()).is_some()
+                            && lazy_faces.faces.first().and_then(|f| f.metrics.as_ref()).is_some()
                         {
                             let text_rect = Rect::new(
                                 scrolled.x + BROKEN_PAD,
@@ -4741,7 +4857,7 @@ impl Renderer {
                                 BROKEN_FONT_SIZE,
                                 apply_alpha_to_color([0.35, 0.35, 0.35, 1.0], alpha),
                                 0,
-                                &parsed_faces,
+                                &mut lazy_faces,
                                 &mut self.atlas,
                                 &mut self.cached_glyphs,
                                 &[],
@@ -7688,7 +7804,7 @@ fn push_text_glyphs(
     font_size: f32,
     color: [f32; 4],
     primary_face_id: usize,
-    parsed: &[Option<ParsedFace<'_>>],
+    lazy: &mut LazyParsedFaces<'_>,
     atlas: &mut GlyphAtlas,
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
     font_variation_axes: &[([u8; 4], f32)],
@@ -7703,18 +7819,21 @@ fn push_text_glyphs(
     // Baseline: ascent / (ascent − descent) primary face-а. Для Inter ≈ 0.80.
     // Используем primary для всех глифов в run-е — иначе при смешивании
     // face-ов символы прыгали бы по вертикали.
-    let primary = parsed[primary_face_id]
+    let primary = lazy.faces[primary_face_id]
+        .metrics
         .as_ref()
-        .expect("primary face must be parsed by caller");
-    let ascent_ratio = primary.hhea.ascent as f32
-        / (primary.hhea.ascent as f32 - primary.hhea.descent as f32);
+        .expect("primary face metrics must exist (checked by caller)");
+    let ascent_ratio = primary.ascent as f32
+        / (primary.ascent as f32 - primary.descent as f32);
     let baseline_y = rect.y + font_size * ascent_ratio;
 
     // Per-char cache на длительность одного DrawText: одни и те же символы
     // в строке («the the the») не нужно пробовать через все face-ы каждый раз.
     let mut char_face_cache: HashMap<char, (usize, u16)> = HashMap::new();
     // Normalized variation coords per face_id — лениво вычисляется при первом
-    // обращении к данному face. Нормализация требует fvar+avar из шрифта.
+    // обращении к данному face. Нормализация требует fvar+avar из шрифта
+    // (единственный потребитель `ParsedFace` на пути без промахов атласа;
+    // при пустых axes face не парсится вовсе).
     let mut norm_coords_cache: HashMap<usize, Vec<f32>> = HashMap::new();
 
     let mut cursor_x = rect.x;
@@ -7726,20 +7845,29 @@ fn push_text_glyphs(
         }
         let (face_id, glyph_id) = *char_face_cache
             .entry(ch)
-            .or_insert_with(|| pick_face_for_codepoint(ch as u32, primary_face_id, parsed));
-        let face = parsed[face_id]
+            .or_insert_with(|| pick_face_for_codepoint(ch as u32, primary_face_id, lazy.faces));
+        let metrics = lazy.faces[face_id]
+            .metrics
             .as_ref()
-            .expect("pick_face_for_codepoint вернул face_id с valid parsed face");
-        let advance_scale = font_size / face.head.units_per_em as f32;
-        let coords = norm_coords_cache
-            .entry(face_id)
-            .or_insert_with(|| normalize_variation_axes(face, font_variation_axes));
+            .expect("pick_face_for_codepoint вернул face_id с валидными metrics");
+        let advance_scale = font_size / metrics.units_per_em as f32;
+        let coords: &[f32] = match norm_coords_cache.entry(face_id) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(v) => {
+                let computed = if font_variation_axes.is_empty() {
+                    Vec::new()
+                } else if let Some(face) = lazy.get(face_id) {
+                    normalize_variation_axes(face, font_variation_axes)
+                } else {
+                    Vec::new()
+                };
+                v.insert(computed)
+            }
+        };
         let cached_glyph = ensure_glyph(
             cached,
             atlas,
-            &face.font,
-            &face.hmtx,
-            face.head.units_per_em,
+            lazy,
             face_id,
             glyph_id,
             size_bin,
@@ -7772,7 +7900,7 @@ fn push_text_glyphs(
         } else {
             // Глиф не отрисовался (composite-fallback, empty или нет места
             // в атласе). Двигаем cursor на advance из выбранного face-а.
-            if let Some(adv) = face.hmtx.advance_width(glyph_id) {
+            if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
                 cursor_x += adv as f32 * advance_scale;
             }
         }
@@ -7783,22 +7911,24 @@ fn push_text_glyphs(
 /// face; если `cmap.glyph_index` возвращает None или Some(0) (= .notdef) —
 /// обходим остальные loaded faces. Если ни у кого нет — возвращаем
 /// `(primary, 0)` (отрисовать .notdef из primary).
+///
+/// Работает на owned `FaceMetrics.cmap` — без парсинга шрифтов.
 fn pick_face_for_codepoint(
     cp: u32,
     primary_face_id: usize,
-    parsed: &[Option<ParsedFace<'_>>],
+    faces: &[LoadedFace],
 ) -> (usize, u16) {
-    if let Some(p) = parsed.get(primary_face_id).and_then(|x| x.as_ref())
-        && let Some(gid) = p.cmap.glyph_index(cp).filter(|&g| g != 0)
+    if let Some(m) = faces.get(primary_face_id).and_then(|f| f.metrics.as_ref())
+        && let Some(gid) = m.cmap.glyph_index(cp).filter(|&g| g != 0)
     {
         return (primary_face_id, gid);
     }
-    for (idx, opt) in parsed.iter().enumerate() {
+    for (idx, face) in faces.iter().enumerate() {
         if idx == primary_face_id {
             continue;
         }
-        if let Some(p) = opt.as_ref()
-            && let Some(gid) = p.cmap.glyph_index(cp).filter(|&g| g != 0)
+        if let Some(m) = face.metrics.as_ref()
+            && let Some(gid) = m.cmap.glyph_index(cp).filter(|&g| g != 0)
         {
             return (idx, gid);
         }
@@ -7810,9 +7940,7 @@ fn pick_face_for_codepoint(
 fn ensure_glyph(
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
     atlas: &mut GlyphAtlas,
-    font: &Font,
-    hmtx: &Hmtx,
-    units_per_em: u16,
+    lazy: &mut LazyParsedFaces<'_>,
     face_id: usize,
     glyph_id: u16,
     size_bin: u16,
@@ -7823,7 +7951,17 @@ fn ensure_glyph(
         return entry;
     }
 
-    let result = rasterize_and_insert(atlas, font, hmtx, units_per_em, key, coords);
+    // Промах atlas-кэша — единственный путь, где нужен распарсенный шрифт
+    // (outline + HVAR). Ленивый парс: на тёплом кадре сюда не заходим.
+    let face = lazy.get(face_id)?;
+    let result = rasterize_and_insert(
+        atlas,
+        &face.font,
+        &face.hmtx,
+        face.head.units_per_em,
+        key,
+        coords,
+    );
     cached.insert(key, result);
     result
 }
