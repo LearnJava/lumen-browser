@@ -1341,7 +1341,7 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
   cache is only driven under `LUMEN_FRAME_LOG`, so normal runs pay nothing and
   output is byte-identical. No new deps, no `unsafe`.
 
-- **M3.2.1 — GL content surface + blit (next).** The femtovg backend gains a
+- **M3.2.1 — GL content surface + blit.** The femtovg backend gains a
   retained band-sized content `ImageId` (reuse `layer_pool`/`acquire_layer`
   experience, but band-sized, not framebuffer-sized), renders the content
   display list into it translated by `−origin`, and on a `Blit` frame draws that
@@ -1349,7 +1349,38 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
   list. `BlitAndExpose` rasters only the `expose` strips into the new surface
   (ping-pong pool); `Repaint` re-rasters the whole band. Gated by a flag, off =
   today's direct-to-screen path (byte-identical). This is where the actual
-  scroll-blit win lands.
+  scroll-blit win lands. Sub-sliced because the GL correctness (present
+  orientation, band culling, `position:fixed`/`sticky` separation) is riskier
+  than the pure M3.0/M3.1 decision logic — each sub-slice ships behind
+  `LUMEN_SCROLL_BLIT`, off = byte-identical:
+
+  - **M3.2.1a — GL content-surface present plumbing.** ✅ (branch
+    `p1-mt-m3-2-1a`). `render()` gains a flag (`LUMEN_SCROLL_BLIT`, read once via
+    `scroll_blit_enabled()`): when set, the page-content pass is redirected into
+    a full-framebuffer FLIP_Y FBO from `layer_pool` (`acquire_layer`, cleared
+    transparent) instead of drawing straight to the screen, then
+    `present_content_surface` composites that surface 1:1 over the already
+    bg-cleared screen (mirrors the `composite_opacity_layer` idiom — reset
+    transform, fill the viewport with the image paint, FLIP_Y corrects the FBO
+    rows) and returns it to the pool. No band, no overscan, no blit yet: the
+    surface is re-rendered every frame and presented 1:1, so on-screen output is
+    identical — this slice only de-risks the render-target redirection + present
+    orientation that M3.2.1b builds on. Overlay (chrome) still draws directly to
+    the screen. Allocation failure falls back to the direct path for that frame.
+    Dead by default; no new deps, no `unsafe`.
+
+  - **M3.2.1b — band-sized surface + blit/expose fast path (next).** Grow the
+    surface to viewport + overscan (band-sized, not framebuffer-sized), render
+    content translated by `−origin`, widen culling to the band, and drive it
+    from a backend-owned `ScrollCache`: on `Blit` present the cached surface
+    shifted by `src` with **no** display-list re-execution; on `BlitAndExpose`
+    raster only the `expose` strips (ping-pong pool); on `Repaint` re-raster the
+    whole band. This is where the scroll-blit win lands.
+
+  - **M3.2.1c — `position:fixed`/`sticky` separation.** Fixed/sticky content
+    cannot live in a scrollable band (blitting would move it). Split it out of
+    the band and re-draw it per frame on top of the blitted surface. Required
+    before M3.2.1b can be the default on real pages.
 
 ### M4 — parallel style/layout (M, gated on incremental layout)
 
