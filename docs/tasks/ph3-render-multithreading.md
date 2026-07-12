@@ -1396,12 +1396,40 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
       degenerate viewport falls back to the direct path. Dead by default; no new
       deps, no `unsafe`. De-risks the band geometry the reuse path builds on.
 
-    - **M3.2.1b-2 — cross-frame reuse + blit/expose (next).** Retain the band
-      across frames (ping-pong pool), own a `ScrollCache`, and consume its
-      `ScrollFramePlan`: `Blit` re-presents the retained band shifted by `src`
-      with no display-list re-execution; `BlitAndExpose` blits the overlap and
-      rasters only the `expose` strips; `Repaint` re-rasters the whole band. This
-      is where the scroll-blit win actually lands.
+    - **M3.2.1b-2a — cross-frame `Blit` fast path.** ✅ (branch
+      `p1-mt-m3-2-1b-2a`). The femtovg backend now owns a `ScrollCache` +
+      `retained_band` (`Option<ImageId>`, held outside `content_band_pool` so a
+      repaint ping-pongs the other buffer) and classifies each scroll-blit frame:
+      on `Blit` it re-presents the retained band shifted by `src` (`= scroll −
+      origin`) with **no** display-list re-execution — the scroll win; on
+      `Repaint`/`BlitAndExpose` it draws the whole viewport-plus-overscan band into
+      a fresh surface, presents it, and retains it. The content hash is computed
+      backend-local from `content` (`hash_content`), so there is **no** trait or
+      shell change. The band convention is unified: band-local `(0, 0)` maps to
+      the cache's (clamped) document `origin`, the content pass gets a uniform
+      `+src` prepend, and `present_content_band` presents at `−src` — undoing it
+      exactly (when the band re-seats to the same origin, `src == overscan`, i.e.
+      identical to M3.2.1b-1). Invariant `scroll_cache.is_populated() ==
+      retained_band.is_some()`, maintained by pairing `record_repaint` with
+      retaining the surface and `invalidate_scroll_cache` with dropping it.
+      `invalidate_scroll_cache` is called from every mutator that changes pixels
+      without changing the content hash (`register_image`/`clear_images`,
+      `register_snapshot`/`clear_snapshots`, `set_font_provider`, `resize`,
+      `set_scale_factor`). Zoom-preview frames fall back to the direct path
+      (`src`-present assumes an un-scaled band), leaving the retained band intact.
+      Dead by default (`LUMEN_SCROLL_BLIT`); no new deps, no `unsafe`.
+      **`BlitAndExpose` is treated as a full `Repaint`** here — always correct,
+      just no strip reuse yet.
+      **Known limitation:** on a `Blit` frame the whole band shifts, so
+      `position:fixed`/`sticky` content baked into it moves with the scroll (fixed
+      by M3.2.1c). This is why the flag stays off by default.
+
+    - **M3.2.1b-2b — `BlitAndExpose` strip reuse (next).** On `BlitAndExpose`,
+      blit the `retained` overlap from the old band into the new one and raster
+      only the `expose` strips, instead of the full-band re-raster 2a does. Needs
+      an image→image region blit (GL `blit_framebuffer` or a textured-quad draw of
+      the old band into the new RT) honoring FLIP_Y. Wins the one-notch-out-of-band
+      case (the common wheel step past the overscan margin).
 
   - **M3.2.1c — `position:fixed`/`sticky` separation.** Fixed/sticky content
     cannot live in a scrollable band (blitting would move it). Split it out of

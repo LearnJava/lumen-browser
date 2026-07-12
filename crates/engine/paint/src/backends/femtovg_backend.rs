@@ -533,17 +533,16 @@ pub struct FemtovgBackend {
     /// Device-pixel size `layer_pool` textures were created for; a mismatch
     /// (window resize) retires pooled textures via the pending-delete queue.
     layer_pool_size: (u32, u32),
-    /// ADR-016 M3.2.1a/b: when set, `render()` draws page content into a retained
-    /// **band-sized** offscreen surface (viewport + overscan margin) translated by
-    /// a uniform overscan prepend, then presents it to the screen shifted back by
-    /// that margin. Foundation for the M3.2.1b-2 scroll-blit fast path (reuse the
-    /// band across frames, blitting the cached pixels shifted by the scroll delta
-    /// instead of re-executing the display list). Read once from `LUMEN_SCROLL_BLIT`
+    /// ADR-016 M3.2.1b: when set, `render()` routes page content through the
+    /// scroll-blit fast path — a backend-owned [`ScrollCache`] (see
+    /// [`Self::scroll_cache`]) decides per frame between re-presenting the retained
+    /// band-sized surface shifted by the scroll delta (`Blit`, no display-list
+    /// re-execution — the scroll win, M3.2.1b-2) and re-rastering the whole
+    /// viewport-plus-overscan band (`Repaint`). Read once from `LUMEN_SCROLL_BLIT`
     /// at construction; `false` (default) keeps the direct-to-screen path
-    /// byte-identical. While the band is re-rendered every frame (M3.2.1b-1) the
-    /// on-screen output is identical to the direct path at any scroll — including
-    /// sticky/fixed content, since the prepend is applied uniformly to the whole
-    /// content pass and undone at present.
+    /// byte-identical. When on, the on-screen output still equals the direct path
+    /// at any scroll — including sticky/fixed content — because the content pass
+    /// gets a uniform `+src` prepend that `present_content_band` undoes.
     scroll_blit: bool,
     /// ADR-016 M3.2.1b: pool of reusable band-sized content surfaces
     /// (`offscreen_layer_image_flags()`, device px). Sized to viewport + 2·overscan
@@ -555,6 +554,23 @@ pub struct FemtovgBackend {
     /// Device-pixel size the `content_band_pool` textures were created for; a
     /// mismatch (resize / DPI change) retires them via the pending-delete queue.
     content_band_size: (u32, u32),
+    /// ADR-016 M3.2.1b-2: blit-vs-repaint decision brain for the scroll-blit
+    /// path. Tracks which document-space band `retained_band` currently holds and
+    /// the content hash it was rastered for; `render()` consults it every
+    /// scroll-blit frame to choose between re-presenting the retained band shifted
+    /// by the scroll delta (`Blit` — no display-list re-execution) and re-rastering
+    /// the band (`Repaint`). Its coverage/origin is kept in lock-step with
+    /// `retained_band`: seated together (`record_repaint` + set the image) and
+    /// dropped together ([`Self::invalidate_scroll_cache`]).
+    scroll_cache: crate::ScrollCache,
+    /// ADR-016 M3.2.1b-2: the band-sized content surface retained *across* frames
+    /// for the scroll-blit fast path, or `None` when the cache is empty. Held
+    /// outside `content_band_pool` (which supplies the other ping-pong buffer on a
+    /// repaint) so a `Blit` frame can present it without re-rendering. Device size
+    /// is always `content_band_size`; a stale-sized surface is retired on resize
+    /// via [`Self::invalidate_scroll_cache`]. Invariant:
+    /// `scroll_cache.is_populated() == retained_band.is_some()`.
+    retained_band: Option<femtovg::ImageId>,
 }
 
 // SAFETY: FemtovgBackend используется только из одного потока одновременно
@@ -1347,6 +1363,8 @@ impl FemtovgBackend {
             scroll_blit: crate::scroll_blit_enabled(),
             content_band_pool: Vec::new(),
             content_band_size: (0, 0),
+            scroll_cache: crate::ScrollCache::new(crate::DEFAULT_OVERSCAN),
+            retained_band: None,
         })
     }
 
@@ -1498,8 +1516,8 @@ impl FemtovgBackend {
     /// to the pool for reuse by a later frame. A stale-sized surface (the pool has
     /// since re-seated to a new band size) is retired via the pending-delete queue.
     fn release_content_band(&mut self, id: femtovg::ImageId, dev_w: u32, dev_h: u32) {
-        /// One retained band is enough for the re-render path (M3.2.1b-1); the
-        /// blit path (M3.2.1b-2) will ping-pong two.
+        /// Two buffers: the blit path (M3.2.1b-2) ping-pongs the retained band and
+        /// the fresh repaint target between frames.
         const MAX_POOLED_BANDS: usize = 2;
         if self.content_band_size == (dev_w, dev_h)
             && self.content_band_pool.len() < MAX_POOLED_BANDS
@@ -1527,24 +1545,30 @@ impl FemtovgBackend {
     }
 
     /// ADR-016 M3.2.1b: composite the retained band-sized content surface onto
-    /// the screen.
+    /// the screen, shifted by the scroll delta `src`.
     ///
     /// The band is a FLIP_Y FBO covering `band_css_w × band_css_h` CSS px of the
-    /// content pass, translated by a uniform `+overscan` prepend so band-local
-    /// coordinate `(overscan, overscan)` holds what belongs at screen `(0, 0)`.
-    /// Presenting it means placing the image so that band-local `(overscan,
-    /// overscan)` lands at screen `(0, 0)`: draw the image with its top-left at
-    /// screen `(−overscan, −overscan)` and its full band CSS size, filling the
-    /// viewport rect (the overflow is clipped by the screen). This exactly undoes
-    /// the prepend, so the on-screen result equals the direct path. Mirrors the
-    /// offscreen-layer composite idiom
+    /// content pass, with band-local `(0, 0)` mapping to the document-space band
+    /// `origin` (the content pass gets a uniform `+src` prepend, where `src =
+    /// scroll − origin`). What belongs at screen `(0, 0)` is document point
+    /// `scroll`, i.e. band-local `src`. Presenting it means placing the image so
+    /// band-local `src` lands at screen `(0, 0)`: draw the image with its top-left
+    /// at screen `(−src.x, −src.y)` and its full band CSS size, filling the
+    /// viewport rect (the overflow is clipped by the screen).
+    ///
+    /// On a `Repaint`/`BlitAndExpose` frame `src` matches the freshly-rendered
+    /// band, so this reproduces the direct path exactly. On a `Blit` frame the
+    /// *retained* band (seated at an earlier scroll) is re-presented at the new
+    /// `src` with no re-rasterization — the scroll-blit win (M3.2.1b-2). Mirrors
+    /// the offscreen-layer composite idiom
     /// ([`composite_opacity_layer`](Self::composite_opacity_layer)): reset the
     /// transform and fill with the image paint — the FLIP_Y sampler flag corrects
     /// the FBO's bottom-up rows.
     fn present_content_band(
         &mut self,
         surface: femtovg::ImageId,
-        overscan_css: f32,
+        src_x: f32,
+        src_y: f32,
         band_css_w: f32,
         band_css_h: f32,
     ) {
@@ -1555,8 +1579,8 @@ impl FemtovgBackend {
         let css_h = (self.height as f64 / self.scale) as f32;
         let paint = femtovg::Paint::image(
             surface,
-            -overscan_css,
-            -overscan_css,
+            -src_x,
+            -src_y,
             band_css_w,
             band_css_h,
             0.0,
@@ -1566,6 +1590,23 @@ impl FemtovgBackend {
         path.rect(0.0, 0.0, css_w, css_h);
         self.canvas.fill_path(&path, &paint);
         self.canvas.restore();
+    }
+
+    /// ADR-016 M3.2.1b-2: drop the retained scroll-blit band and empty the
+    /// [`ScrollCache`], so the next scroll-blit frame re-rasters (`Repaint`)
+    /// instead of blitting stale pixels. Call whenever something changes the
+    /// on-screen result *without* changing the content hash the cache keys on:
+    /// an image or snapshot finishing load (same display list, new pixels), a
+    /// canvas-background/font-provider swap, a resize/DPI change, or navigation.
+    /// The retained surface returns to `content_band_pool` (or the pending-delete
+    /// queue if the pool is full / stale-sized) so its texture is reused. Cheap
+    /// and idempotent when the cache is already empty.
+    fn invalidate_scroll_cache(&mut self) {
+        self.scroll_cache.invalidate();
+        if let Some(id) = self.retained_band.take() {
+            let (dw, dh) = self.content_band_size;
+            self.release_content_band(id, dw, dh);
+        }
     }
 
     // ─── Drawing helpers ──────────────────────────────────────────────────────
@@ -3785,54 +3826,136 @@ impl RenderBackend for FemtovgBackend {
             .map_or(femtovg::Color::rgb(255, 255, 255), lumen_to_fvg);
         self.canvas.clear_rect(0, 0, self.width, self.height, clear);
 
-        // ADR-016 M3.2.1b: optionally redirect page content into a retained
-        // *band-sized* offscreen surface (viewport + overscan on every side),
-        // presented back to the screen after the content pass. This is the
-        // foundation for the M3.2.1b-2 scroll-blit fast path (on a scroll-only
-        // frame reuse the cached band shifted by the scroll delta instead of
-        // re-executing the display list). In this slice the band is re-rendered
-        // every frame and presented at the matching offset, so the on-screen
-        // result is identical to the direct path at any scroll — including
-        // sticky/fixed content, since the content pass gets a uniform `+overscan`
-        // prepend that `present_content_band` undoes.
-        //
+        // ADR-016 M3.2.1b-2: the scroll-blit fast path. A backend-owned
+        // [`ScrollCache`] classifies each frame (against a scroll-independent
+        // content hash) into `Blit` / `Repaint`:
+        //   • `Blit`  — the viewport is still inside the *retained* band and the
+        //     content is unchanged: re-present the retained band-sized surface
+        //     shifted by the scroll delta, with NO display-list re-execution. This
+        //     is the scroll win.
+        //   • `Repaint`/`BlitAndExpose` — draw the whole viewport-plus-overscan
+        //     band into a fresh surface (the latter's strip-blit optimization is
+        //     deferred to M3.2.1b-2b; a full re-raster is always correct), present
+        //     it, and retain it for future blits.
         // The band FBO (FLIP_Y, `content_band_pool`) is cleared transparent so
         // compositing it over the already-bg-cleared screen reproduces the direct
-        // clear+content order. On allocation failure (or a degenerate viewport) we
-        // silently fall back to the direct-to-screen path for this frame. `band`
-        // carries `(id, band_css_w, band_css_h, dev_w, dev_h)`.
+        // clear+content order. The content pass gets a uniform `+src` prepend
+        // (`src = scroll − origin`) that `present_content_band` undoes exactly, so
+        // on-screen output equals the direct path at any scroll — including
+        // sticky/fixed content, since the prepend is applied uniformly. On
+        // allocation failure (or a degenerate viewport / zoom-preview / flag off)
+        // we silently fall back to the direct-to-screen path for that frame.
+        //
+        // KNOWN LIMITATION (M3.2.1c): on a `Blit` frame the retained band is
+        // shifted wholesale, so `position:fixed`/`sticky` content baked into it
+        // moves with the scroll instead of staying pinned. This is why
+        // `LUMEN_SCROLL_BLIT` stays **off by default** — M3.2.1c splits fixed/sticky
+        // out of the band and redraws it per frame before this can be the default.
         let overscan_css = crate::DEFAULT_OVERSCAN;
-        let band = if self.scroll_blit && self.viewport_css_w > 0.0 && self.viewport_css_h > 0.0 {
-            let (band_css_w, band_css_h, dev_w, dev_h) = band_geometry(
-                self.viewport_css_w,
-                self.viewport_css_h,
-                overscan_css,
-                self.scale,
+        // ADR-016 M3.2.1b-2: the scroll-blit path is active only when the flag is
+        // on, the viewport is non-degenerate, and zoom-preview is off (`src`-based
+        // present assumes an un-scaled band; preview frames fall back to the direct
+        // path, leaving the retained band intact for when preview ends).
+        let scroll_blit_active = self.scroll_blit
+            && self.viewport_css_w > 0.0
+            && self.viewport_css_h > 0.0
+            && (self.preview_scale - 1.0).abs() <= f32::EPSILON;
+        let (band_css_w, band_css_h, dev_w, dev_h) =
+            band_geometry(self.viewport_css_w, self.viewport_css_h, overscan_css, self.scale);
+
+        // ADR-016 M3.2.1b-2: ask the ScrollCache what to do this frame. The
+        // content hash is over the page commands + surface size (scroll excluded),
+        // computed here so the whole decision stays backend-local — no trait or
+        // shell change. Cheaper than executing the display list, which is exactly
+        // what a `Blit` then skips.
+        let band_plan = scroll_blit_active.then(|| {
+            let content_hash = crate::hash_content(content, self.width, self.height);
+            let plan = self.scroll_cache.plan(
+                content_hash,
+                (scroll_x, scroll_y),
+                (self.viewport_css_w, self.viewport_css_h),
             );
-            self.acquire_content_band(dev_w, dev_h).map(|id| {
-                self.switch_render_target(femtovg::RenderTarget::Image(id));
-                self.canvas.clear_rect(0, 0, dev_w, dev_h, femtovg::Color::rgba(0, 0, 0, 0));
-                // Widen culling so the overscan margin is rastered, not culled.
-                self.cull_css_w = band_css_w;
-                self.cull_css_h = band_css_h;
-                (id, band_css_w, band_css_h, dev_w, dev_h)
-            })
-        } else {
-            None
+            (content_hash, plan)
+        });
+
+        // Fast path: the viewport is still inside the retained band and the content
+        // is unchanged → present the retained band shifted by the scroll delta with
+        // NO display-list re-execution. This is the scroll-blit win (M3.2.1b-2).
+        let did_blit = match band_plan {
+            Some((_, crate::ScrollFramePlan::Blit { src })) => match self.retained_band {
+                Some(surface) => {
+                    self.present_content_band(surface, src.0, src.1, band_css_w, band_css_h);
+                    true
+                }
+                // Invariant `is_populated() == retained_band.is_some()` should make
+                // this unreachable, but if it ever breaks, re-seat on the next
+                // frame rather than blitting a surface we do not hold.
+                None => {
+                    self.invalidate_scroll_cache();
+                    false
+                }
+            },
+            _ => false,
         };
 
-        // Контент — с учётом scroll.
+        // Repaint / BlitAndExpose (the latter treated as a full re-raster in this
+        // slice — always correct; the strip-blit optimization lands in M3.2.1b-2b):
+        // draw the whole band into a fresh surface. `band` carries `(id, src, hash,
+        // origin, size)`; `None` means the direct-to-screen path (flag off, preview
+        // on, or allocation failure). On alloc failure we also invalidate so a
+        // later frame cannot blit against a band we never seated.
+        let band = if did_blit {
+            None
+        } else {
+            match band_plan {
+                Some((
+                    content_hash,
+                    crate::ScrollFramePlan::Repaint { origin, size }
+                    | crate::ScrollFramePlan::BlitAndExpose { origin, size, .. },
+                )) => {
+                    let src = (scroll_x - origin.0, scroll_y - origin.1);
+                    match self.acquire_content_band(dev_w, dev_h) {
+                        Some(id) => {
+                            self.switch_render_target(femtovg::RenderTarget::Image(id));
+                            self.canvas.clear_rect(
+                                0,
+                                0,
+                                dev_w,
+                                dev_h,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            // Widen culling so the overscan margin is rastered.
+                            self.cull_css_w = band_css_w;
+                            self.cull_css_h = band_css_h;
+                            Some((id, src, content_hash, origin, size))
+                        }
+                        None => {
+                            self.invalidate_scroll_cache();
+                            None
+                        }
+                    }
+                }
+                // Blit with no retained surface (handled above → direct this frame),
+                // or scroll-blit inactive: the direct-to-screen path.
+                _ => None,
+            }
+        };
+
+        // Контент — с учётом scroll. Skipped entirely on a pure blit frame.
+        if !did_blit {
         self.canvas.save();
-        // ADR-016 M3.2.1b: when drawing into a band surface, prepend a uniform
-        // `+overscan` translate as the OUTERMOST transform of the content pass, so
-        // band-local `(overscan, overscan)` holds what belongs at screen `(0, 0)`
-        // and the off-viewport overscan margin fits inside the band. Applied
-        // before the zoom-preview scale, it is not scaled by preview, so
-        // `present_content_band` undoes it exactly (screen output == direct path).
-        // The whole content pass — including sticky/fixed layers — inherits it
-        // uniformly, so no per-command adjustment is needed.
-        if band.is_some() {
-            self.canvas.translate(overscan_css, overscan_css);
+        // ADR-016 M3.2.1b-2: when drawing into a band surface, prepend `+src`
+        // (`src = scroll − origin`) as the OUTERMOST transform of the content pass,
+        // so band-local `(0, 0)` maps to document `origin` and what belongs at
+        // screen `(0, 0)` (document `scroll`) lands at band-local `src`. Applied
+        // before the zoom-preview scale (identity here — preview forces the direct
+        // path), so `present_content_band` undoes it exactly (screen output ==
+        // direct path). The whole content pass — including sticky/fixed layers —
+        // inherits it uniformly, so no per-command adjustment is needed. When the
+        // band re-seats to the same origin as before, `src == overscan`, matching
+        // the M3.2.1b-1 present-at-offset behavior.
+        if let Some((_, src, _, _, _)) = band {
+            self.canvas.translate(src.0, src.1);
         }
         // ADR-016 M0.3: превью-масштаб зума применяется ДО scroll-трансляции,
         // поэтому точка документа p отображается в s·(p − scroll) — масштаб
@@ -3882,15 +4005,22 @@ impl RenderBackend for FemtovgBackend {
             }
         }
         self.canvas.restore();
-        // ADR-016 M3.2.1b: present the retained band to the screen (shifted back
-        // by the overscan prepend) and return it to the pool; restore culling to
-        // the viewport. No-op when the flag is off / allocation failed.
-        if let Some((surface, band_css_w, band_css_h, dev_w, dev_h)) = band {
-            self.present_content_band(surface, overscan_css, band_css_w, band_css_h);
-            self.release_content_band(surface, dev_w, dev_h);
+        // ADR-016 M3.2.1b-2: present the freshly-rendered band to the screen
+        // (shifted by `src`), retain it across frames for the blit fast path, and
+        // record the new band coverage in the ScrollCache so subsequent in-band
+        // scrolls resolve to `Blit`. The previously retained surface (if any) goes
+        // back to the pool as the other ping-pong buffer. Restore culling to the
+        // viewport. No-op when the flag is off / preview on / allocation failed.
+        if let Some((surface, src, content_hash, origin, size)) = band {
+            self.present_content_band(surface, src.0, src.1, band_css_w, band_css_h);
+            if let Some(old) = self.retained_band.replace(surface) {
+                self.release_content_band(old, dev_w, dev_h);
+            }
+            self.scroll_cache.record_repaint(content_hash, origin, size);
             self.cull_css_w = self.viewport_css_w;
             self.cull_css_h = self.viewport_css_h;
         }
+        } // end `if !did_blit`
         let t_content = frame_t0.map(|t0| t0.elapsed());
 
         // Overlay — без scroll (tab bar, панели).
@@ -3992,6 +4122,9 @@ impl RenderBackend for FemtovgBackend {
         use std::num::NonZeroU32;
         self.width = width;
         self.height = height;
+        // ADR-016 M3.2.1b-2: a new surface size changes the band geometry, so the
+        // retained band (and its cached coverage) is stale — drop it.
+        self.invalidate_scroll_cache();
         if let (Some(w), Some(h)) = (NonZeroU32::new(width), NonZeroU32::new(height)) {
             match self.current_ctx() {
                 Ok(ctx) => self.gl_surface.resize(ctx, w, h),
@@ -4002,6 +4135,9 @@ impl RenderBackend for FemtovgBackend {
 
     fn set_scale_factor(&mut self, scale: f64) {
         self.scale = scale;
+        // ADR-016 M3.2.1b-2: a DPI change resizes the band texture; drop the stale
+        // retained band.
+        self.invalidate_scroll_cache();
     }
 
     fn register_image(&mut self, src: String, image: &Image) -> Result<(), String> {
@@ -4018,6 +4154,10 @@ impl RenderBackend for FemtovgBackend {
         // Keep the decoded pixels for on-demand area-averaged downscale (BUG-077).
         self.raw_images.insert(src.clone(), image.clone());
         self.images.insert(src, id);
+        // ADR-016 M3.2.1b-2: a late-arriving image repaints the same display list
+        // with new pixels (the content hash — over commands, not pixel data — is
+        // unchanged), so the retained band would blit stale content. Drop it.
+        self.invalidate_scroll_cache();
         Ok(())
     }
 
@@ -4029,6 +4169,8 @@ impl RenderBackend for FemtovgBackend {
             self.canvas.delete_image(id);
         }
         self.raw_images.clear();
+        // ADR-016 M3.2.1b-2: navigation/cache clear — the retained band is meaningless.
+        self.invalidate_scroll_cache();
     }
 
     fn register_snapshot(&mut self, id: u64, image: &Image) -> Result<(), String> {
@@ -4048,6 +4190,9 @@ impl RenderBackend for FemtovgBackend {
         if let Some(old) = self.snapshots.insert(id, img_id) {
             self.canvas.delete_image(old);
         }
+        // ADR-016 M3.2.1b-2: a new snapshot changes `DrawLayerSnapshot` pixels
+        // without changing the content hash — drop the retained band.
+        self.invalidate_scroll_cache();
         Ok(())
     }
 
@@ -4055,6 +4200,8 @@ impl RenderBackend for FemtovgBackend {
         for (_, id) in self.snapshots.drain() {
             self.canvas.delete_image(id);
         }
+        // ADR-016 M3.2.1b-2: snapshot pixels the retained band may embed are gone.
+        self.invalidate_scroll_cache();
     }
 
     fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>) {
@@ -4075,6 +4222,9 @@ impl RenderBackend for FemtovgBackend {
                 }
             }
         }
+        // ADR-016 M3.2.1b-2: a font-provider swap re-rasters text with different
+        // glyphs while the display list (and its hash) is unchanged — drop the band.
+        self.invalidate_scroll_cache();
     }
 
     fn viewport_size(&self) -> Size {
