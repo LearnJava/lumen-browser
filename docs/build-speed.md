@@ -83,7 +83,9 @@ debug = true
 Риск: пошаговая отладка в отладчике требует `--profile debugging`. Backtrace при панике сохраняет файл:строку.
 Источники: [Cargo Book: build-performance](https://doc.rust-lang.org/cargo/guide/build-performance.html), [Kobzol: disable debuginfo](https://kobzol.github.io/rust/rustc/2025/05/20/disable-debuginfo-to-improve-rust-compile-times.html).
 
-### 3.2 🧪 Исключения Windows Defender (ожидание: −30–60% на инкременте)
+### 3.2 ✅ Исключения Windows Defender (применено 2026-07-12; замеренного выигрыша НЕТ)
+
+**Итог замера 2026-07-12:** S1/S2/S3/S4 без изменений против уровня после 3.1 (в пределах шума). Причина: `D:\RustProjects\lumen-browser` (а значит и все `target/` worktree) **уже был в Defender-исключениях до базовых замеров** — базовая линия изначально снималась без сканирования target. Команды ниже выполнены (elevated, через UAC-самоподнятие): добавлены `.cargo`, `.rustup`, `D:\RustProjects` целиком, `D:\sccache-cache` и процессы rustc/sccache. Покрытие полнее (реестр крейтов, sccache-кэш), вреда нет, но ожидание «−30–60%» не реализовалось — оно уже было учтено в базе.
 
 Крупнейший Windows-специфичный оверхед: `MsMpEng.exe` синхронно сканирует каждый файл, который создаёт rustc/линкер, а `target/` — это тысячи мелких файлов за сборку. Требует «прогона» пользователем (elevated PowerShell) — вне полномочий ассистента:
 
@@ -138,7 +140,9 @@ cargo hakari verify
 Альтернатива на nightly — `-Zfeature-unification=workspace` ([RFC 3692](https://rust-lang.github.io/rfcs/3692-feature-unification.html), ещё unstable).
 Источники: [cargo-hakari about](https://docs.rs/cargo-hakari/latest/cargo_hakari/about/index.html), [nickb.dev: feature unification pitfall](https://nickb.dev/blog/cargo-workspace-and-the-feature-unification-pitfall/).
 
-### 3.5 🧪 NTFS-тюнинг (дёшево, безопасно)
+### 3.5 ✅ NTFS-тюнинг (применено 2026-07-12; оба параметра уже были в нужном состоянии)
+
+**Итог 2026-07-12:** `disablelastaccess` уже был 2 (system managed, отключён) — закреплён в 1 (user managed, отключён); генерация 8dot3 на D: уже была отключена на уровне тома — закреплена глобально (реестр = 1). Фактическое поведение ФС не изменилось, замеры без изменений (см. журнал §7).
 
 ```bat
 :: elevated cmd; сначала посмотреть текущие значения
@@ -246,13 +250,12 @@ Cargo пайплайнит по `.rmeta`: правка **тела** функци
 
 ### Состояние и план следующей сессии (обновлено 2026-07-12)
 
-Сделано: **3.1 ✅** и **4.3 ✅** влиты в main (merge `aec62446`), **3.3 🚫** откачено (детали в §3.3). Замеры — в таблице ниже.
+Сделано: **3.1 ✅** и **4.3 ✅** влиты в main (merge `aec62446`), **3.3 🚫** откачено (детали в §3.3), **3.2 ✅ + 3.5 ✅** применены 2026-07-12 — замеренного выигрыша нет (ключевые пути уже были исключены/отключены до базовой линии; детали в §3.2/§3.5). Замеры — в таблице ниже.
 
 Следующая сессия, по порядку:
-1. **3.2 + 3.5 — попросить пользователя** выполнить elevated-команды из §3.2 (Defender-исключения) и §3.5 (fsutil). После прогона — замерить S1–S4 и записать строку в таблицу. Это крупнейший оставшийся выигрыш (ожидание −30–60% на инкременте), кода не требует.
-2. **3.4 cargo-hakari** — отдельная ветка `p1-hakari`; новый крейт `workspace-hack` через `/lumen-new-crate` + обоснование зависимости по §5-политике. A/B-замер: `-p lumen-driver` сразу после `-p lumen-shell` (фич-трэшинг paint-стека) до/после.
-3. **4.1 консолидация тест-бинарей** (паттерн BT-1): font — 5 файлов, js — 4, image — 4, paint — 3. Мерить `cargo test -p <crate> --no-run` по каждому.
-4. **4.2 фич-диета wgpu** (`default-features = false, features = ["dx12", "wgsl"]`) — сначала решить вопрос Vulkan-fallback; мерить S3.
+1. **3.4 cargo-hakari** — отдельная ветка `p1-hakari`; новый крейт `workspace-hack` через `/lumen-new-crate` + обоснование зависимости по §5-политике. A/B-замер: `-p lumen-driver` сразу после `-p lumen-shell` (фич-трэшинг paint-стека) до/после.
+2. **4.1 консолидация тест-бинарей** (паттерн BT-1): font — 5 файлов, js — 4, image — 4, paint — 3. Мерить `cargo test -p <crate> --no-run` по каждому.
+3. **4.2 фич-диета wgpu** (`default-features = false, features = ["dx12", "wgsl"]`) — сначала решить вопрос Vulkan-fallback; мерить S3.
 
 Памятка: после подтяжки main каждый старый worktree/target один раз пересоберёт мир (~19 мин, sccache-кэш под новые флаги наполняется заново) — это ожидаемо, не баг. Для пошаговой отладки теперь `--profile debugging`.
 
@@ -262,6 +265,7 @@ Cargo пайплайнит по `.rmeta`: правка **тела** функци
 | 2026-07-12 | 3.1 debuginfo: dev=`line-tables-only`, deps=`false` | **4.24с (−32%)** | 4.9–7.9с (шум, без изменений — check без codegen) | **8м25с (−34%,** тёплый sccache 92.8% hit) | 5м57с первая (холодный кэш новых флагов); **relink после touch driver = 2.82с** (до BT-1-замер давал 7.6с, −63%) | Одноразовая цена внедрения: пересборка мира под новые флаги = 18м52с (sccache-кэш под новые флаги пуст). Выигрыш = codegen debuginfo + PDB-линковка |
 | 2026-07-12 | 3.3 `CC/CXX = "sccache cl"` | — | — | — | — | **Откачено:** вне VS-окружения sccache не находит cl.exe (см. §3.3). Находка: C-код компилирует и aws-lc-sys |
 | 2026-07-12 | 4.3 dev-release `incremental = true` | touch shell: 39–47с → **3.8–12с** | — | полная dev-release: 7м57с (для справки) | — | touch layout (каскад до shell): 50с → **8.6–15с**. Одноразово: первая пересборка после смены профиля = 2м42с (только workspace-members). Главный выигрыш — итерация graphic_tests |
+| 2026-07-12 | 3.2 Defender + 3.5 fsutil (применены elevated) | 4.22–4.34с (без изм.) | 6.13с (без изм.) | 9м05с (тёплый sccache 92.8% hit; 1-й прогон свежего worktree 10м29с при 81.7%) | 3м47с первая (тёплый кэш) / 0.72с no-op / relink 2.80с | **Эффекта нет — база уже была с исключённым `D:\RustProjects\lumen-browser` и отключённым lastaccess/8dot3.** Worktree `build-speed-32-35`; первый check в worktree = 1м33с |
 
 Готча замера: `[env] SCCACHE_SERVER_PORT=4150` из `.cargo/config.toml` действует только на cargo-процессы — CLI-вызовы `sccache --show-stats`/`--zero-stats` без `SCCACHE_SERVER_PORT=4150` уходят на другой сервер (дефолтный порт) и показывают нули.
 
