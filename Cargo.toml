@@ -132,3 +132,7 @@ lto = false
 codegen-units = 8
 strip = false
 debug = false
+# Инкремент действует только на workspace-members (registry-зависимости cargo
+# и так собирает неинкрементально). Пересборка после touch: shell 39–47с → ?,
+# каскад layout→shell 50с → ? — замер docs/build-speed.md §4.3.
+incremental = true

@@ -11,6 +11,10 @@ rustc-wrapper = "sccache"
 # и подбери порт вне всех диапазонов.
 [env]
 SCCACHE_SERVER_PORT = "4150"
+# НЕ добавлять CC/CXX = "sccache cl": вне VS-окружения cl.exe не в PATH,
+# sccache его не находит ("cannot find binary path"), а путь к cl.exe
+# содержит пробелы и в CC не передаётся. Проверено 2026-07-12 —
+# docs/build-speed.md §3.3.
 
 # rust-lld — встроенный в Rust LLVM-линковщик.
 # На Windows MSVC быстрее link.exe примерно в 2–5 раз на финальной линковке
