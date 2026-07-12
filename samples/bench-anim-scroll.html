@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<!-- Animated-content scroll benchmark page (p1-exp-wgpu-only, EXPERIMENT.md p.2,
+     static/animated split slice).
+
+     Purpose: measure SLOW scroll of a page whose display list changes every
+     scrolled frame. Every section carries scroll-driven animations
+     (animation-timeline: scroll(); transform + background-color), so each
+     1px scroll step rebuilds the anim display list - the monolith repaints
+     everything, the static/animated split keeps the static band cached and
+     redraws only the animated boxes.
+
+     All animation here is SCROLL-DRIVEN, hence deterministic by scroll
+     position: two runs scrolled to the same offset render identical pixels.
+     That makes this page the A/B target for anim_split_ab_diff.py (time-based
+     content like GIFs would phase-drift between runs).
+
+     NOT a graphic test: no magenta frame, not registered in run.py. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #f4f4f8; font-family: sans-serif; }
+  .row { display: flex; gap: 16px; padding: 16px; }
+  .card {
+    width: 180px; height: 120px; border-radius: 12px;
+    background: linear-gradient(135deg, #4a90d9, #d94a90);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  .blurred { filter: blur(6px); }
+  .bright { filter: brightness(1.2) saturate(1.4); }
+  .faded { opacity: 0.7; }
+  .ring {
+    width: 120px; height: 120px; border-radius: 50%;
+    border: 12px solid #2a9d8f; background: radial-gradient(circle, #e9c46a, #f4a261);
+  }
+  .txt { max-width: 640px; padding: 0 16px; color: #222; }
+  @keyframes slide {
+    from { transform: translateX(0); background: #e65100; }
+    to   { transform: translateX(320px); background: #00838f; }
+  }
+  @keyframes grow {
+    from { transform: scale(1); background: #6a1b9a; }
+    to   { transform: scale(1.5); background: #2e7d32; }
+  }
+  .anim-slide {
+    animation-name: slide; animation-duration: 1s;
+    animation-timeline: scroll(); animation-fill-mode: both;
+    width: 48px; height: 48px; border-radius: 8px; background: #e65100;
+  }
+  .anim-grow {
+    animation-name: grow; animation-duration: 1s;
+    animation-timeline: scroll(); animation-fill-mode: both;
+    width: 40px; height: 40px; border-radius: 50%; background: #6a1b9a;
+  }
+  .anim-row { display: flex; gap: 24px; padding: 4px 16px 12px; }
+</style>
+</head>
+<body>
+<h2 style="padding-left:16px">Section 1</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 2</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 3</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 4</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 5</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 6</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 7</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 8</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 9</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 10</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 11</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 12</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 13</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 14</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 15</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 16</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 17</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 18</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 19</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 20</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 21</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 22</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 23</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 24</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 25</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 26</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 27</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 28</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 29</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 30</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 31</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 32</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 33</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 34</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 35</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 36</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 37</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 38</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 39</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+<h2 style="padding-left:16px">Section 40</h2>
+<div class="anim-row"><div class="anim-slide"></div><div class="anim-grow"></div></div>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Animated scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while scroll-driven boxes above slide and
+grow with every scrolled pixel. 0123456789 &amp;#%@.</p>
+</body>
+</html>
