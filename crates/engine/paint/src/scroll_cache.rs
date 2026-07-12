@@ -107,6 +107,21 @@ pub enum ScrollFramePlan {
     },
 }
 
+impl ScrollFramePlan {
+    /// A stable one-word label for the plan variant — `"blit"`,
+    /// `"blit+expose"`, or `"repaint"`. Used by the frame-log instrumentation
+    /// (ADR-016 M3.2) to report the scroll-frame band mix without formatting the
+    /// full `Debug` payload; also convenient for backend metrics.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            ScrollFramePlan::Blit { .. } => "blit",
+            ScrollFramePlan::BlitAndExpose { .. } => "blit+expose",
+            ScrollFramePlan::Repaint { .. } => "repaint",
+        }
+    }
+}
+
 /// Bookkeeping for the retained scroll-content surface (ADR-016 M3).
 ///
 /// Tracks *which* document-space region the backend's content texture currently
@@ -590,6 +605,16 @@ mod tests {
             c.plan(5, (0.0, 1000.0 + VH), (VW, VH)),
             ScrollFramePlan::Repaint { .. }
         ));
+    }
+
+    #[test]
+    fn plan_labels_are_stable() {
+        // Blit inside band, BlitAndExpose one notch out, Repaint on a far jump —
+        // each reports the label the frame-log instrumentation (M3.2) prints.
+        let c = populated(512.0, 7, (0.0, 1000.0));
+        assert_eq!(c.plan(7, (0.0, 1120.0), (VW, VH)).label(), "blit");
+        assert_eq!(c.plan(7, (0.0, 1600.0), (VW, VH)).label(), "blit+expose");
+        assert_eq!(c.plan(7, (0.0, 5000.0), (VW, VH)).label(), "repaint");
     }
 
     #[test]
