@@ -2966,6 +2966,15 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
     // `emit_box_self`, which never opened the mask group).
     if emit_push_mask(&mut pre, b) {
         post.push(DisplayCommand::PopMask);
+        // CSS Masking L1 §4.6 — `mask-clip` restricts the masked painting to the
+        // padding/content box. Pushed inside the mask group (after PushMask); the
+        // clip result is identical whether the scissor sits inside or outside the
+        // offscreen. `post` is reversed later, so pushing PopClip after PopMask
+        // yields `… PopClip PopMask` — PopClip nests inside the mask group.
+        if let Some(clip) = mask_clip_paint_rect(b) {
+            pre.push(DisplayCommand::PushClipRect { rect: clip });
+            post.push(DisplayCommand::PopClip);
+        }
     }
 
     // CSS Overflow L3 §3.2: overflow clip to padding-box edge; unconstrained
@@ -3499,6 +3508,25 @@ fn background_color_clip(b: &LayoutBox) -> BackgroundClip {
     b.style.background_layers.last().map_or(BackgroundClip::BorderBox, |l| l.clip)
 }
 
+/// CSS Masking L1 §4.6 — the `mask-clip` painting area for a masked element.
+///
+/// Returns `Some(rect)` for `padding-box` / `content-box`, which shrink the area
+/// so the masked element's painting must be clipped to it; the caller wraps the
+/// mask group in a `PushClipRect` / `PopClip` pair around this rect.
+///
+/// Returns `None` for the default `border-box` (whose clip equals the element's
+/// border-box `b.rect` and would be a no-op scissor) and for `Text` (treated as
+/// border-box, matching `background_clip_rect`) — so unmasked-default rendering
+/// stays byte-identical.
+fn mask_clip_paint_rect(b: &LayoutBox) -> Option<Rect> {
+    match b.style.mask_clip {
+        BackgroundClip::PaddingBox | BackgroundClip::ContentBox => {
+            Some(background_clip_rect(b, b.style.mask_clip))
+        }
+        BackgroundClip::BorderBox | BackgroundClip::Text => None,
+    }
+}
+
 /// Converts `background-origin` to the equivalent `BackgroundClip` for rect computation.
 ///
 /// CSS Backgrounds L3 §3.5: background-origin has the same box keywords as background-clip
@@ -4010,9 +4038,11 @@ fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
     // unchanged.
     let rect = background_origin_rect(b, b.style.mask_origin);
     let mode = b.style.mask_mode;
-    // CSS: mask-clip — the painting/clip area still defaults to the positioning
-    // area here. Full wiring needs a separate clip rect threaded through the
-    // PushMask* / PopMask pair plus a backend scissor.
+    // CSS Masking L1 §4.6 — `mask-clip` restricts the masked element's painting
+    // area. It is wired at the call sites by wrapping the whole mask group in a
+    // `PushClipRect` / `PopClip` pair (see `mask_clip_paint_rect`), reusing the
+    // existing scissor path instead of threading a clip rect through the mask
+    // commands + every backend.
     // CSS: mask-composite — needs the multi-layer mask infrastructure (mask-image
     // as a layer list) before add/subtract/intersect/exclude can be applied.
     match &b.style.mask_image {
@@ -6038,6 +6068,13 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             // CSS Masking L1 §4: mask-image wraps the entire element (opacity+transform+content).
             // Emitted outermost so the mask applies to the fully composited element.
             let has_mask = emit_push_mask(out, b);
+            // CSS Masking L1 §4.6 — `mask-clip` restricts the masked painting to
+            // the padding/content box. Pushed inside the mask group; popped before
+            // PopMask below.
+            let mask_clip = if has_mask { mask_clip_paint_rect(b) } else { None };
+            if let Some(clip) = mask_clip {
+                out.push(DisplayCommand::PushClipRect { rect: clip });
+            }
             // CSS Masking L1 §9: clip-path clips the fully composited element;
             // эмитится ниже — ВНУТРИ PushTransform (BUG-140).
             let has_clip_path = b.style.clip_path.is_some();
@@ -6272,6 +6309,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             }
             if has_blend {
                 out.push(DisplayCommand::PopBlendMode);
+            }
+            if mask_clip.is_some() {
+                out.push(DisplayCommand::PopClip);
             }
             if has_mask {
                 out.push(DisplayCommand::PopMask);
@@ -10444,6 +10484,66 @@ mod tests {
         let pop = pop.expect("ordered path must emit PopMask");
         let fill = fill.expect("masked box must still fill its background");
         assert!(push < fill && fill < pop, "mask must wrap the box background: push={push} fill={fill} pop={pop}");
+    }
+
+    /// CSS Masking L1 §4.6 — `mask-clip: content-box` must clip the masked
+    /// element's painting to its content box. The ordered path wraps the mask
+    /// group in a `PushClipRect` (content-box rect) / `PopClip` pair *inside*
+    /// `PushMask…` / `PopMask`, so the stream is
+    /// `PushMask … PushClipRect … PopClip PopMask`.
+    #[test]
+    fn ordered_mask_clip_content_box_clips_painting_area() {
+        let dl = build_ordered(
+            "<div class='m'></div>",
+            ".m { width: 100px; height: 100px; border: 10px solid #000; \
+             padding: 5px; background: #f00; \
+             mask-image: linear-gradient(to bottom, black, transparent); \
+             mask-clip: content-box; }",
+        );
+        let push_mask = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushMaskLinearGradient { .. }))
+            .expect("must emit PushMaskLinearGradient");
+        let (clip_pos, clip_rect) = dl
+            .iter()
+            .enumerate()
+            .find_map(|(i, c)| match c {
+                DisplayCommand::PushClipRect { rect } => Some((i, *rect)),
+                _ => None,
+            })
+            .expect("mask-clip: content-box must emit a PushClipRect");
+        let pop_clip = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PopClip))
+            .expect("must emit PopClip");
+        let pop_mask = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PopMask))
+            .expect("must emit PopMask");
+        assert!(
+            push_mask < clip_pos && clip_pos < pop_clip && pop_clip < pop_mask,
+            "mask-clip must nest inside the mask group: \
+             push_mask={push_mask} clip={clip_pos} pop_clip={pop_clip} pop_mask={pop_mask}"
+        );
+        // content-box width = border-box(130) − 2·border(10) − 2·padding(5) = 100.
+        assert_eq!(clip_rect.width, 100.0, "clip width must equal content-box width");
+        assert_eq!(clip_rect.height, 100.0, "clip height must equal content-box height");
+    }
+
+    /// The default `mask-clip: border-box` must stay a no-op: no extra
+    /// `PushClipRect` is emitted around the mask group (byte-identical to the
+    /// pre-mask-clip behaviour).
+    #[test]
+    fn ordered_mask_clip_border_box_emits_no_clip() {
+        let dl = build_ordered(
+            "<div class='m'></div>",
+            ".m { width: 100px; height: 100px; background: #f00; \
+             mask-image: linear-gradient(to bottom, black, transparent); }",
+        );
+        assert!(
+            !dl.iter().any(|c| matches!(c, DisplayCommand::PushClipRect { .. })),
+            "border-box mask-clip must not emit a PushClipRect"
+        );
     }
 
     /// BUG-200: under `border-collapse: collapse` a thick cell border must survive a
