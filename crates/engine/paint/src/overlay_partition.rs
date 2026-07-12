@@ -129,6 +129,114 @@ pub fn has_overlay(content: &[DisplayCommand]) -> bool {
     })
 }
 
+/// The scroll-blit backend's per-frame overlay decision (ADR-016 M3.2.1c-3).
+///
+/// Produced by [`plan_overlays`] and consumed by the femtovg backend to route the
+/// frame: raster the band without overlay content and replay it on top, or fall
+/// back to the plain path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OverlayPlan {
+    /// No viewport-pinned overlay content — the blit fast path applies unchanged
+    /// (the band is the whole display list, nothing is replayed).
+    None,
+    /// Overlay content present and **every** span sits at display-list nesting
+    /// depth 0 — no ancestor clip / transform / opacity / filter / mask / scroll
+    /// layer wraps it — so each span can be replayed in isolation on top of the
+    /// band. The band raster skips these ranges; the backend replays them per
+    /// frame after presenting the band, where their draw-time scroll compensation
+    /// re-pins them. Ranges are the outermost spans [`overlay_ranges`] reports.
+    Replay(Vec<Range<usize>>),
+    /// Overlay content present but at least one span is nested under ancestor layer
+    /// context this slice cannot reconstruct in an isolated replay — e.g. a
+    /// `position:sticky` box inside an `overflow:scroll` container's
+    /// `PushScrollLayer`, or under a clip/transform/opacity. The backend must fall
+    /// back to the direct, un-blitted render for this frame, which draws the
+    /// overlay inline with its full ancestor state (byte-identical to the pre-blit
+    /// path). A later slice can lift this by capturing the ancestor stack.
+    NestedFallback,
+}
+
+/// Classify the viewport-pinned overlay content of a scroll-independent display
+/// list for the scroll-blit backend (ADR-016 M3.2.1c-3).
+///
+/// Returns [`OverlayPlan::None`] when there is no overlay content, [`OverlayPlan::Replay`]
+/// when every overlay span sits at nesting depth 0 (replayable in isolation), and
+/// [`OverlayPlan::NestedFallback`] when any span is wrapped by ancestor layer
+/// context (clip / transform / opacity / blend / mask / filter / scroll) that an
+/// isolated replay would drop.
+///
+/// The depth is the running balance of layer-opening vs layer-closing commands
+/// ([`layer_delta`]). Because [`overlay_ranges`] reports only the *outermost*
+/// overlay spans, no overlay bracket is ever open at a span's start, so the balance
+/// there equals the ancestor (non-overlay) layer depth: `0` means top-level.
+#[must_use]
+pub fn plan_overlays(content: &[DisplayCommand]) -> OverlayPlan {
+    let ranges = overlay_ranges(content);
+    if ranges.is_empty() {
+        return OverlayPlan::None;
+    }
+    let mut depth: i32 = 0;
+    let mut next = 0usize; // index of the next span whose start we are watching for
+    for (i, cmd) in content.iter().enumerate() {
+        if next < ranges.len() && i == ranges[next].start {
+            // At the opening marker of an outermost span: `depth` is the ancestor
+            // layer depth here (all earlier overlay brackets are balanced). A
+            // non-zero depth means this overlay is wrapped by state we cannot
+            // reconstruct in an isolated replay.
+            if depth != 0 {
+                return OverlayPlan::NestedFallback;
+            }
+            next += 1;
+        }
+        depth += layer_delta(cmd);
+    }
+    OverlayPlan::Replay(ranges)
+}
+
+/// The nesting-balance contribution of a display command: `+1` for a command that
+/// opens a rendering layer (clip, transform, opacity, blend, mask, filter,
+/// backdrop filter, scroll layer, or an overlay bracket), `-1` for the matching
+/// close, `0` for leaf/paint commands.
+///
+/// Used by [`plan_overlays`] to compute the ancestor layer depth at each overlay
+/// span. Overlay brackets count too, but since [`overlay_ranges`] yields only
+/// outermost spans they are always balanced before a span's start, so they do not
+/// perturb the ancestor-depth reading. Keep this in sync with the `Push*`/`Pop*`
+/// and `Begin*`/`End*` pairs in [`DisplayCommand`].
+#[must_use]
+fn layer_delta(cmd: &DisplayCommand) -> i32 {
+    match cmd {
+        DisplayCommand::PushClipRect { .. }
+        | DisplayCommand::PushClipRoundedRect { .. }
+        | DisplayCommand::PushClipPath { .. }
+        | DisplayCommand::PushOpacity { .. }
+        | DisplayCommand::PushBlendMode { .. }
+        | DisplayCommand::PushMaskImage { .. }
+        | DisplayCommand::PushMaskLinearGradient { .. }
+        | DisplayCommand::PushMaskRadialGradient { .. }
+        | DisplayCommand::PushMaskConicGradient { .. }
+        | DisplayCommand::PushMaskLayer { .. }
+        | DisplayCommand::PushTransform { .. }
+        | DisplayCommand::PushFilter { .. }
+        | DisplayCommand::PushBackdropFilter { .. }
+        | DisplayCommand::PushScrollLayer { .. }
+        | DisplayCommand::BeginStickyLayer { .. }
+        | DisplayCommand::BeginFixedLayer => 1,
+        DisplayCommand::PopClip
+        | DisplayCommand::PopOpacity
+        | DisplayCommand::PopBlendMode
+        | DisplayCommand::PopMask
+        | DisplayCommand::PopMaskLayer
+        | DisplayCommand::PopTransform
+        | DisplayCommand::PopFilter
+        | DisplayCommand::PopBackdropFilter
+        | DisplayCommand::PopScrollLayer
+        | DisplayCommand::EndStickyLayer
+        | DisplayCommand::EndFixedLayer => -1,
+        _ => 0,
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -338,5 +446,103 @@ mod tests {
             DisplayCommand::EndFixedLayer,  // outer close @3
         ];
         assert_eq!(overlay_ranges(&dl), vec![0..4]);
+    }
+
+    // ── plan_overlays (M3.2.1c-3) ────────────────────────────────────────────
+
+    /// A `PushClipRect`/`PopClip` pair to stand in for ancestor layer context.
+    fn push_clip() -> DisplayCommand {
+        DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 100.0, 100.0) }
+    }
+
+    #[test]
+    fn plan_none_when_no_overlay() {
+        assert_eq!(plan_overlays(&[]), OverlayPlan::None);
+        assert_eq!(plan_overlays(&[leaf(), push_clip(), leaf(), DisplayCommand::PopClip]), OverlayPlan::None);
+    }
+
+    #[test]
+    fn plan_replay_for_top_level_sticky() {
+        let dl = vec![
+            leaf(),
+            begin_sticky(),
+            leaf(),
+            DisplayCommand::EndStickyLayer,
+            leaf(),
+        ];
+        match plan_overlays(&dl) {
+            OverlayPlan::Replay(r) => assert_eq!(r, vec![1..4]),
+            other => panic!("expected Replay, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_replay_for_top_level_fixed() {
+        let dl = vec![begin_fixed(), leaf(), DisplayCommand::EndFixedLayer];
+        match plan_overlays(&dl) {
+            OverlayPlan::Replay(r) => assert_eq!(r, vec![0..3]),
+            other => panic!("expected Replay, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_replay_for_two_disjoint_top_level_spans() {
+        // A clip that fully opens and closes *between* the spans keeps both at
+        // depth 0, so the plan is still a clean replay.
+        let dl = vec![
+            begin_sticky(),
+            DisplayCommand::EndStickyLayer, // span 0..2 at depth 0
+            push_clip(),
+            leaf(),
+            DisplayCommand::PopClip, // balanced, back to depth 0
+            begin_fixed(),
+            DisplayCommand::EndFixedLayer, // span 5..7 at depth 0
+        ];
+        assert_eq!(plan_overlays(&dl), OverlayPlan::Replay(vec![0..2, 5..7]));
+    }
+
+    #[test]
+    fn plan_nested_fallback_when_overlay_inside_clip() {
+        // Sticky wrapped by an ancestor clip → depth 1 at the span start → the
+        // isolated replay would drop the clip, so fall back.
+        let dl = vec![
+            push_clip(), // opens ancestor layer @0
+            begin_sticky(), // @1, ancestor depth 1 here
+            leaf(),
+            DisplayCommand::EndStickyLayer,
+            DisplayCommand::PopClip,
+        ];
+        assert_eq!(plan_overlays(&dl), OverlayPlan::NestedFallback);
+    }
+
+    #[test]
+    fn plan_nested_fallback_when_overlay_inside_scroll_layer() {
+        // The exact real-world case: sticky inside an overflow:scroll container.
+        let dl = vec![
+            DisplayCommand::PushScrollLayer {
+                clip_rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+            },
+            begin_sticky(),
+            DisplayCommand::EndStickyLayer,
+            DisplayCommand::PopScrollLayer,
+        ];
+        assert_eq!(plan_overlays(&dl), OverlayPlan::NestedFallback);
+    }
+
+    #[test]
+    fn plan_fallback_if_any_span_is_nested_even_when_another_is_top_level() {
+        // First span top-level, second nested → the whole frame falls back (one
+        // decision per frame).
+        let dl = vec![
+            begin_fixed(),
+            DisplayCommand::EndFixedLayer, // span 0..2 depth 0
+            push_clip(),
+            begin_sticky(), // depth 1
+            DisplayCommand::EndStickyLayer,
+            DisplayCommand::PopClip,
+        ];
+        assert_eq!(plan_overlays(&dl), OverlayPlan::NestedFallback);
     }
 }
