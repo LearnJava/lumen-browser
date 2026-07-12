@@ -3925,6 +3925,11 @@ impl FemtovgBackend {
                 }
             }
 
+            // ── Fixed layer (ADR-016 M3.2.1c) ────────────────────────────────
+            // Pure partition markers for the scroll-blit overlay split; fixed
+            // content is already at viewport-fixed coords, so no canvas offset.
+            DisplayCommand::BeginFixedLayer | DisplayCommand::EndFixedLayer => {}
+
             // ── Page break (print only) ──────────────────────────────────────
             DisplayCommand::PageBreak => {}
         }

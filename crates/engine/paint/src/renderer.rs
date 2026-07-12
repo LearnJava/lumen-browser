@@ -5396,6 +5396,10 @@ impl Renderer {
                         sticky_stack.pop();
                     }
                 }
+                // CSS Positioning L3 §6.1 — position:fixed partition markers
+                // (ADR-016 M3.2.1c). No draw-time offset: fixed content is already
+                // at viewport-fixed coords, so these are pure no-ops here.
+                DisplayCommand::BeginFixedLayer | DisplayCommand::EndFixedLayer => {}
                 // CSS Masking L1 §5 — PushMaskLayer: open an offscreen layer for mask content.
                 // The caller (emit_box) is responsible for ensuring the element content is
                 // isolated in the parent layer (e.g. via PushOpacity) before calling this.
