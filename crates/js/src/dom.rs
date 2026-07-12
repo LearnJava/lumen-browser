@@ -2440,9 +2440,9 @@ fn install_primitives(
                 if matches!(node.data, NodeData::ShadowRoot { .. }) {
                     return node.parent.map(|h| h.index() as u32);
                 }
-                match node.parent {
-                    Some(p) => cur = p,
-                    None => return None,
+                {
+                    let p = node.parent?;
+                    cur = p
                 }
             }
         });
