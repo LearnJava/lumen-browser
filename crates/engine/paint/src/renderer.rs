@@ -3353,27 +3353,169 @@ impl Renderer {
         };
         // Мемоизация: горячий путь (каждый DrawText каждого кадра) — один
         // hash-lookup без аллокаций вместо to_lowercase + pick_face.
-        let cache_key = {
-            use std::hash::Hasher;
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            for fam in families {
-                h.write(fam.as_bytes());
-                h.write_u8(0xFF); // разделитель — ["ab","c"] ≠ ["a","bc"]
-            }
-            h.write_u16(weight.0);
-            h.write_u8(match style {
-                FontStyle::Normal => 0,
-                FontStyle::Italic => 1,
-                FontStyle::Oblique => 2,
-            });
-            h.finish()
-        };
+        let cache_key = Self::resolve_cache_key(families, weight, style);
         if let Some(&id) = self.resolve_cache.get(&cache_key) {
             return id;
         }
         let resolved = self.resolve_face_id_uncached(families, weight, style, &provider);
         self.resolve_cache.insert(cache_key, resolved);
         resolved
+    }
+
+    /// Ключ мемо-кэша [`Self::resolve_face_id`]: хэш `(families, weight,
+    /// style)` без аллокаций. Вынесен, чтобы префетч и резолв считали ключ
+    /// одинаково.
+    fn resolve_cache_key(families: &[String], weight: FontWeight, style: FontStyle) -> u64 {
+        use std::hash::Hasher;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for fam in families {
+            h.write(fam.as_bytes());
+            h.write_u8(0xFF); // разделитель — ["ab","c"] ≠ ["a","bc"]
+        }
+        h.write_u16(weight.0);
+        h.write_u8(match style {
+            FontStyle::Normal => 0,
+            FontStyle::Italic => 1,
+            FontStyle::Oblique => 2,
+        });
+        h.finish()
+    }
+
+    /// Generic CSS-family (`serif`/`sans-serif`/…) — резолвится в default,
+    /// провайдер не спрашивается (Phase 0 без per-generic-fallback таблицы).
+    fn is_generic_family(lowercase_name: &str) -> bool {
+        matches!(
+            lowercase_name,
+            "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
+        )
+    }
+
+    /// Конверсия paint-стиля в стиль `FontProvider`-а.
+    fn css_style_of(style: FontStyle) -> CssFontStyle {
+        match style {
+            FontStyle::Normal => CssFontStyle::Normal,
+            FontStyle::Italic => CssFontStyle::Italic,
+            FontStyle::Oblique => CssFontStyle::Oblique,
+        }
+    }
+
+    /// Параллельная предзагрузка face-ов для всех `DrawText` кадра
+    /// (p1-exp-wgpu-only, ярус 1 «вынос загрузки face-ов с render-пути»).
+    ///
+    /// Раньше первый кадр страницы грузил каждый новый face
+    /// ПОСЛЕДОВАТЕЛЬНО внутри пре-резолва: `fs::read` + WOFF-декод +
+    /// `build_face_metrics` (~180 мс на 1000000-final.html). Здесь та же
+    /// работа выполняется до резолва пачкой в scoped-потоках: диск и декод
+    /// независимых face-ов идут параллельно, вставка в `self.faces` — на
+    /// UI-потоке в детерминированном порядке (порядок первого появления в
+    /// display list-е, как у последовательного кода).
+    ///
+    /// Семантика [`Self::resolve_face_id_uncached`] сохранена: грузится
+    /// только первый `pick_face`-кандидат каждого списка family; если его
+    /// загрузка/парсинг провалились — face просто не вставляется, и
+    /// последующий последовательный резолв повторит попытку и упадёт на
+    /// следующую family штатным путём (редкий случай битого шрифта).
+    /// Тёплый кадр (все ключи в `resolve_cache`) не делает ничего.
+    fn prefetch_faces_parallel(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+    ) {
+        let Some(provider) = self.font_provider.clone() else {
+            return;
+        };
+        // Кандидаты: путь + байты из провайдера (@font-face virtual path)
+        // либо None → fs::read в воркере.
+        let mut jobs: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
+        let mut seen_keys: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let mut scheduled: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        for cmd in content.iter().chain(overlay.iter()) {
+            let DisplayCommand::DrawText { font_family, font_weight, font_style, .. } = cmd
+            else {
+                continue;
+            };
+            let key = Self::resolve_cache_key(font_family, *font_weight, *font_style);
+            if self.resolve_cache.contains_key(&key) || !seen_keys.insert(key) {
+                continue;
+            }
+            for fam in font_family {
+                let lc = fam.to_lowercase();
+                if Self::is_generic_family(&lc) {
+                    continue;
+                }
+                let Some(rec) =
+                    provider.pick_face(fam, font_weight.0, Self::css_style_of(*font_style))
+                else {
+                    continue;
+                };
+                if !self.face_id_by_path.contains_key(&rec.path)
+                    && !scheduled.contains(&rec.path)
+                {
+                    let mem = provider.read_face_bytes(&rec.path);
+                    scheduled.insert(rec.path.clone());
+                    jobs.push((rec.path, mem));
+                }
+                break; // как в резолве: первый pick_face-хит завершает перебор
+            }
+        }
+        if jobs.is_empty() {
+            return;
+        }
+
+        // Воркеры разбирают job-ы через атомарный курсор; результат кладётся
+        // по индексу job-а — порядок вставки детерминирован.
+        let n_workers = std::thread::available_parallelism()
+            .map_or(4, std::num::NonZeroUsize::get)
+            .min(jobs.len())
+            .min(8);
+        let cursor = std::sync::atomic::AtomicUsize::new(0);
+        // Слот результата job-а: байты шрифта + построенные метрики.
+        type FaceSlot = std::sync::Mutex<Option<(Vec<u8>, FaceMetrics)>>;
+        let results: Vec<FaceSlot> =
+            jobs.iter().map(|_| std::sync::Mutex::new(None)).collect();
+        std::thread::scope(|s| {
+            for _ in 0..n_workers {
+                s.spawn(|| {
+                    loop {
+                        let i = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some((path, mem)) = jobs.get(i) else {
+                            break;
+                        };
+                        let raw = match mem {
+                            Some(bytes) => bytes.clone(),
+                            None => match std::fs::read(path) {
+                                Ok(b) => b,
+                                Err(_) => continue,
+                            },
+                        };
+                        // Ошибки декода/парсинга здесь НЕ логируются: face
+                        // просто не вставляется, последовательный резолв
+                        // повторит попытку и залогирует штатно (без дублей).
+                        let bytes = match maybe_decode_font(&raw) {
+                            Ok(Some(decoded)) => decoded,
+                            Ok(None) => raw,
+                            Err(_) => continue,
+                        };
+                        let Some(metrics) = build_face_metrics(&bytes) else {
+                            continue;
+                        };
+                        if let Ok(mut slot) = results[i].lock() {
+                            *slot = Some((bytes, metrics));
+                        }
+                    }
+                });
+            }
+        });
+
+        for ((path, _), slot) in jobs.into_iter().zip(results) {
+            let Ok(mut guard) = slot.lock() else { continue };
+            let Some((bytes, metrics)) = guard.take() else {
+                continue; // битый шрифт: последовательный резолв повторит и залогирует
+            };
+            let id = self.faces.len();
+            self.faces.push(LoadedFace { bytes, metrics: Some(metrics) });
+            self.face_id_by_path.insert(path, id);
+        }
     }
 
     /// Полный (немемоизированный) резолв — вынесен из [`Self::resolve_face_id`],
@@ -3387,18 +3529,10 @@ impl Renderer {
     ) -> usize {
         for fam in families {
             let lc = fam.to_lowercase();
-            if matches!(
-                lc.as_str(),
-                "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
-            ) {
+            if Self::is_generic_family(&lc) {
                 continue;
             }
-            let css_style = match style {
-                FontStyle::Normal => CssFontStyle::Normal,
-                FontStyle::Italic => CssFontStyle::Italic,
-                FontStyle::Oblique => CssFontStyle::Oblique,
-            };
-            let Some(rec) = provider.pick_face(fam, weight.0, css_style) else {
+            let Some(rec) = provider.pick_face(fam, weight.0, Self::css_style_of(style)) else {
                 continue;
             };
             if let Some(&id) = self.face_id_by_path.get(&rec.path) {
@@ -3535,6 +3669,98 @@ impl Renderer {
                 let gi = self.make_gpu_image_entry(&rgba, tw, th);
                 self.images.insert(gpu_key, gi);
             }
+        }
+    }
+
+    /// Параллельный image pre-pass (p1-exp-wgpu-only, ярус 1 «не рисовать
+    /// лишнее»): CPU-ресайзы всех `DrawImage`/`LazyImageSlot` кадра.
+    ///
+    /// Раньше холодный кадр ресайзил картинки ПОСЛЕДОВАТЕЛЬНО внутри
+    /// [`Self::ensure_image_gpu_key`] (~158 мс на 1000000-final.html,
+    /// 12 картинок) — это и была почти вся «фаза faces» холодного кадра
+    /// (замер faces-sub 2026-07-09). Здесь CPU-часть (resize, RGBA-конверсия,
+    /// ICC-коррекция) выполняется в scoped-потоках, заимствуя
+    /// `self.raw_images` разделяемо; заливка GPU-текстур — после, на
+    /// UI-потоке, в детерминированном порядке job-ов. Тёплый кадр (все
+    /// gpu_key уже в `self.images`) не делает ничего.
+    fn prefetch_image_resizes_parallel(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+    ) {
+        // (gpu_key, src, tw, th) — уникальные недостающие ресайзы кадра.
+        let mut jobs: Vec<(String, String, u32, u32)> = Vec::new();
+        let mut scheduled: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for cmd in content.iter().chain(overlay.iter()) {
+            let (DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. }
+            | DisplayCommand::LazyImageSlot { rect, src, object_fit, object_position, .. }) = cmd
+            else {
+                continue;
+            };
+            let Some(raw) = self.raw_images.get(src) else {
+                continue;
+            };
+            let placed = fit_image_rect(*rect, (raw.width, raw.height), *object_fit, *object_position);
+            let tw = placed.width.round().max(1.0) as u32;
+            let th = placed.height.round().max(1.0) as u32;
+            if tw == raw.width && th == raw.height {
+                continue; // интринсик-размер: текстура есть из register_image
+            }
+            let gpu_key = format!("{src}@{tw}x{th}");
+            if self.images.contains_key(&gpu_key) || !scheduled.insert(gpu_key.clone()) {
+                continue;
+            }
+            jobs.push((gpu_key, src.clone(), tw, th));
+        }
+        if jobs.is_empty() {
+            return;
+        }
+
+        // CPU-часть параллельно: воркеры разбирают job-ы атомарным курсором,
+        // raw_images заимствуется разделяемо (только чтение).
+        let raw_images = &self.raw_images;
+        let n_workers = std::thread::available_parallelism()
+            .map_or(4, std::num::NonZeroUsize::get)
+            .min(jobs.len())
+            .min(8);
+        let cursor = std::sync::atomic::AtomicUsize::new(0);
+        let results: Vec<std::sync::Mutex<Option<Vec<u8>>>> =
+            jobs.iter().map(|_| std::sync::Mutex::new(None)).collect();
+        std::thread::scope(|s| {
+            for _ in 0..n_workers {
+                s.spawn(|| {
+                    loop {
+                        let i = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some((_, src, tw, th)) = jobs.get(i) else {
+                            break;
+                        };
+                        let Some(raw) = raw_images.get(src) else {
+                            continue;
+                        };
+                        let resized = if *tw <= raw.width && *th <= raw.height {
+                            resize_area_avg(raw, *tw, *th)
+                        } else {
+                            resize_bilinear(raw, *tw, *th)
+                        };
+                        let mut rgba = convert_to_rgba(&resized);
+                        // ICC-профиль лежит на оригинале — resize_* его не переносит.
+                        if let Some(ref profile) = raw.icc_profile {
+                            correct_rgba_pixels(&mut rgba, profile);
+                        }
+                        if let Ok(mut slot) = results[i].lock() {
+                            *slot = Some(rgba);
+                        }
+                    }
+                });
+            }
+        });
+
+        // Заливка GPU-текстур — на UI-потоке, порядок детерминирован.
+        for ((gpu_key, _, tw, th), slot) in jobs.into_iter().zip(results) {
+            let Ok(mut guard) = slot.lock() else { continue };
+            let Some(rgba) = guard.take() else { continue };
+            let gi = self.make_gpu_image_entry(&rgba, tw, th);
+            self.images.insert(gpu_key, gi);
         }
     }
 
@@ -4186,6 +4412,11 @@ impl Renderer {
             None
         };
 
+        // Параллельная предзагрузка новых face-ов (диск + WOFF-декод +
+        // метрики в scoped-потоках) — до пре-резолва, чтобы холодный кадр
+        // не грузил шрифты последовательно (~180 мс → max по одному face).
+        self.prefetch_faces_parallel(content, overlay);
+
         // Pre-resolve primary face_id для каждой DrawText-команды +
         // lazy-загрузка новых face-ов до сбора вершин. Делается до парсинга
         // (resolve мутирует self.faces). Resolve бежит по обеим полосам
@@ -4209,6 +4440,9 @@ impl Renderer {
         // PRE-PASS: создаём CPU-ресайз текстуры для DrawImage до того, как
         // lazy_faces займёт &self.faces. Scroll offset не влияет на SIZE
         // (только на position), поэтому используем rect напрямую.
+        // Тяжёлая CPU-часть (resize + RGBA + ICC) — параллельно; цикл
+        // ensure_image_gpu_key ниже остаётся страховкой (на попадании — no-op).
+        self.prefetch_image_resizes_parallel(content, overlay);
         for cmd in content.iter().chain(overlay.iter()) {
             match cmd {
                 DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. }
