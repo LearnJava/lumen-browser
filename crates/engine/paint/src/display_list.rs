@@ -1174,6 +1174,28 @@ pub(crate) fn bg_tile_geometry(
         }
     };
 
+    // CSS Backgrounds L3 §3.4 — `round`: rescale the tile so a whole number of
+    // copies exactly fills the positioning area along each axis (no clipped
+    // partial tiles at the far edge). `n = max(1, round(area / tile))`, then the
+    // tile is stretched to `area / n`. Both axes are rounded independently, which
+    // may distort the aspect ratio — matching the reference rendering (the spec's
+    // "note" explicitly permits distortion when only one axis, or a size-auto
+    // axis, is involved). Applied before offset resolution so percentage
+    // positions resolve against the rounded tile size.
+    let (tile_w, tile_h) = if repeat == BackgroundRepeat::Round {
+        let round_axis = |area: f32, tile: f32| -> f32 {
+            if tile > 0.0 && area > 0.0 {
+                let n = (area / tile).round().max(1.0);
+                area / n
+            } else {
+                tile
+            }
+        };
+        (round_axis(oarea_w, tile_w), round_axis(oarea_h, tile_h))
+    } else {
+        (tile_w, tile_h)
+    };
+
     let off_x = match position.x {
         PositionComponent::Px(px) => px,
         PositionComponent::Percent(p) => (oarea_w - tile_w) * p,
@@ -7739,6 +7761,54 @@ mod tests {
         ] {
             assert!(cmd.cull_rect().is_none(), "structural cmd must be un-cullable: {}", cmd.variant_name());
         }
+    }
+
+    // ── CSS Backgrounds L3 §3.4: `background-repeat: round` tile rescale ────
+    #[cfg(any(feature = "backend-femtovg", feature = "cpu-render"))]
+    #[test]
+    fn bg_tile_geometry_round_rescales_tile_to_whole_count() {
+        // A 30px tile in a 100px area: round(100/30) = 3 copies, so the tile is
+        // stretched to 100/3 ≈ 33.33px on both axes (no clipped partial tile).
+        let pos = ObjectPosition::background_initial();
+        let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
+            BackgroundSize::Auto,
+            &pos,
+            BackgroundRepeat::Round,
+            30.0,
+            30.0,
+            100.0,
+            100.0,
+            0.0,
+            0.0,
+        );
+        assert!((tw - 100.0 / 3.0).abs() < 1e-3, "tile_w rounded: {tw}");
+        assert!((th - 100.0 / 3.0).abs() < 1e-3, "tile_h rounded: {th}");
+        // Default (top-left) position → tiling starts flush at the area origin.
+        assert!((x0 - 0.0).abs() < 1e-3, "tile_x_start: {x0}");
+        assert!((y0 - 0.0).abs() < 1e-3, "tile_y_start: {y0}");
+        assert!(rx && ry, "round repeats on both axes");
+    }
+
+    // `round` must NOT rescale when the tile already fits a whole number of
+    // times, and stays a plain repeat otherwise (regression guard vs `Repeat`).
+    #[cfg(any(feature = "backend-femtovg", feature = "cpu-render"))]
+    #[test]
+    fn bg_tile_geometry_round_exact_fit_is_unchanged() {
+        let pos = ObjectPosition::background_initial();
+        let (tw, th, ..) = bg_tile_geometry(
+            BackgroundSize::Auto,
+            &pos,
+            BackgroundRepeat::Round,
+            25.0,
+            50.0,
+            100.0,
+            100.0,
+            0.0,
+            0.0,
+        );
+        // 100/25 = 4 and 100/50 = 2 are already whole → tile size preserved.
+        assert!((tw - 25.0).abs() < 1e-3, "tile_w: {tw}");
+        assert!((th - 50.0).abs() < 1e-3, "tile_h: {th}");
     }
 
     #[test]
