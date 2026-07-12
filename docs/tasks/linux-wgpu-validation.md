@@ -209,6 +209,19 @@ optimizations (band compositor + anim split) which are NOT in main. Porting
 those (bbox-scissor → viewport-cull → strip+blit) is what closes the gap;
 BUG-276 tracks the blur-page swapchain wedge they would fix.
 
+**Reconciling the two Chromium comparisons** (they measure different things,
+both are valid): the Step-3 table drove both browsers at the same ~7 events/s
+and compared the *cost* of identical slow scrolling — there Lumen wins memory
+(347 vs 460 MiB) and idle (0.4 % vs 0.9 %) and nearly matches scroll CPU
+(17.2 % vs 14.1 %). The matrix above measures the *ceiling* — the fastest each
+can repaint: Lumen's 132 ms frame caps it at 7.5 fps while Chromium holds
+60 fps (burning 93.5 % CPU when it actually does). Same underlying fact both
+times: Lumen spends ≈Chromium's CPU per scroll while producing 8× fewer
+frames, because one frame costs 132 ms instead of <16.7 ms. Cutting the frame
+cost is exactly what the exp-branch slices do (bbox-scissor + viewport-cull:
+53 → 8.8 ms; strip+blit: 6–8×) — porting them to main is the path to "scroll
+better than Chromium" in smoothness, not just in RAM.
+
 **Wayland harness caveat:** the `LUMEN_BENCH` about_to_wait redraw loop stalls
 swapchain acquire on KWin/Wayland (Timeout every ~4 frames = swapchain depth)
 even when paced and visible; occluded windows get no frame callbacks at all
