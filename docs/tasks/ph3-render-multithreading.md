@@ -1424,12 +1424,28 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
       `position:fixed`/`sticky` content baked into it moves with the scroll (fixed
       by M3.2.1c). This is why the flag stays off by default.
 
-    - **M3.2.1b-2b — `BlitAndExpose` strip reuse (next).** On `BlitAndExpose`,
-      blit the `retained` overlap from the old band into the new one and raster
-      only the `expose` strips, instead of the full-band re-raster 2a does. Needs
-      an image→image region blit (GL `blit_framebuffer` or a textured-quad draw of
-      the old band into the new RT) honoring FLIP_Y. Wins the one-notch-out-of-band
-      case (the common wheel step past the overscan margin).
+    - **M3.2.1b-2b — `BlitAndExpose` strip reuse.** ✅ (branch
+      `p1-mt-m3-2-1b-2b`). On a `BlitAndExpose` frame the backend now reuses the
+      overlap with the previous band instead of the full-band re-raster 2a did: it
+      **blits** the `retained` document region from the old band FBO into the
+      freshly-acquired one, then **rasters only the `expose` strips** (each
+      scissored to its scroll-space rect), which together tile the new band
+      exactly. The blit is a textured-quad draw of the whole old-band image
+      (placed via the pure `band_blit_placement` helper so its UV mapping lines the
+      shared document region up 1:1, filling only the overlap sub-rect) honoring
+      `FLIP_Y` — the same FBO→FBO composite idiom as `composite_opacity_layer`. The
+      content pass was factored into `run_content_pass(content, band_src, scissor,
+      …)` so the direct-to-screen path, the full `Repaint` band, and each exposed
+      strip share one transform stack (`+src` prepend → zoom → `−scroll` → optional
+      scissor → `page_offset`); the scissor is set in scroll-space right after the
+      `−scroll` translate so a strip maps to band-local exactly. New `BandDraw`
+      enum (`Repaint` / `Expose`) selects the fill; `Expose` needs a live band +
+      retained surface, else it falls back to a full re-raster (always correct).
+      `band_blit_placement` is unit-tested (vertical + diagonal). Dead by default
+      (`LUMEN_SCROLL_BLIT`); no new deps, no `unsafe`. The flag stays off until
+      M3.2.1c splits fixed/sticky out of the band. Wins the one-notch-out-of-band
+      case (the common wheel step past the overscan margin): a cheap overlap copy
+      plus a thin strip fill instead of a full band re-raster.
 
   - **M3.2.1c — `position:fixed`/`sticky` separation.** Fixed/sticky content
     cannot live in a scrollable band (blitting would move it). Split it out of
