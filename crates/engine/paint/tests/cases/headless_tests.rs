@@ -10,7 +10,7 @@ use lumen_core::ColorSpace;
 use lumen_layout::Color;
 use lumen_paint::{DisplayCommand, Renderer};
 
-const INTER: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+const INTER: &[u8] = include_bytes!("../../../../../assets/fonts/Inter-Regular.ttf");
 
 fn red_rect_dl(w: f32, h: f32) -> Vec<DisplayCommand> {
     vec![DisplayCommand::FillRect {

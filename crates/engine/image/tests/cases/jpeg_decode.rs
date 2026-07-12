@@ -1,20 +1,20 @@
 use lumen_image::{decode_jpeg, PixelFormat};
 
-const RED_444: &[u8] = include_bytes!("fixtures/rgb_444_red_16x16.jpg");
-const BLUE_420: &[u8] = include_bytes!("fixtures/rgb_420_blue_16x16.jpg");
-const GRAY_DARK: &[u8] = include_bytes!("fixtures/gray_black_16x16.jpg");
-const GRAY_LIGHT: &[u8] = include_bytes!("fixtures/gray_light_16x16.jpg");
-const GREEN_422: &[u8] = include_bytes!("fixtures/rgb_422_green_16x16.jpg");
-const PURPLE_NONALIGNED: &[u8] = include_bytes!("fixtures/rgb_420_purple_17x9.jpg");
-const GRADIENT_V_32: &[u8] = include_bytes!("fixtures/gradient_v_32x32.jpg");
-const GRADIENT_RB: &[u8] = include_bytes!("fixtures/gradient_red_blue_32x16.jpg");
-const RESTART_24: &[u8] = include_bytes!("fixtures/restart_interval_24x24.jpg");
-const PROG_RED_444: &[u8] = include_bytes!("fixtures/progressive_red_444_16x16.jpg");
-const PROG_BLUE_420: &[u8] = include_bytes!("fixtures/progressive_blue_420_16x16.jpg");
-const PROG_GRAY: &[u8] = include_bytes!("fixtures/progressive_gray_16x16.jpg");
-const PROG_GRAD_V_32: &[u8] = include_bytes!("fixtures/progressive_gradient_v_32x32.jpg");
-const PROG_GRAD_RB: &[u8] = include_bytes!("fixtures/progressive_gradient_rb_32x16.jpg");
-const PROG_DC_REFINE: &[u8] = include_bytes!("fixtures/progressive_dc_refine_32x32.jpg");
+const RED_444: &[u8] = include_bytes!("../fixtures/rgb_444_red_16x16.jpg");
+const BLUE_420: &[u8] = include_bytes!("../fixtures/rgb_420_blue_16x16.jpg");
+const GRAY_DARK: &[u8] = include_bytes!("../fixtures/gray_black_16x16.jpg");
+const GRAY_LIGHT: &[u8] = include_bytes!("../fixtures/gray_light_16x16.jpg");
+const GREEN_422: &[u8] = include_bytes!("../fixtures/rgb_422_green_16x16.jpg");
+const PURPLE_NONALIGNED: &[u8] = include_bytes!("../fixtures/rgb_420_purple_17x9.jpg");
+const GRADIENT_V_32: &[u8] = include_bytes!("../fixtures/gradient_v_32x32.jpg");
+const GRADIENT_RB: &[u8] = include_bytes!("../fixtures/gradient_red_blue_32x16.jpg");
+const RESTART_24: &[u8] = include_bytes!("../fixtures/restart_interval_24x24.jpg");
+const PROG_RED_444: &[u8] = include_bytes!("../fixtures/progressive_red_444_16x16.jpg");
+const PROG_BLUE_420: &[u8] = include_bytes!("../fixtures/progressive_blue_420_16x16.jpg");
+const PROG_GRAY: &[u8] = include_bytes!("../fixtures/progressive_gray_16x16.jpg");
+const PROG_GRAD_V_32: &[u8] = include_bytes!("../fixtures/progressive_gradient_v_32x32.jpg");
+const PROG_GRAD_RB: &[u8] = include_bytes!("../fixtures/progressive_gradient_rb_32x16.jpg");
+const PROG_DC_REFINE: &[u8] = include_bytes!("../fixtures/progressive_dc_refine_32x32.jpg");
 
 #[test]
 fn decode_solid_red_4_4_4_yields_red_pixels() {
