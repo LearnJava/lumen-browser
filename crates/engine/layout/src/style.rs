@@ -10141,11 +10141,10 @@ pub fn parse_font_variation_settings(val: &str) -> Option<Vec<FontVariationSetti
         let (tag_str, rest) = if let Some(stripped) = pair.strip_prefix('"') {
             let end = stripped.find('"')?;
             (&stripped[..end], stripped[end + 1..].trim())
-        } else if let Some(stripped) = pair.strip_prefix('\'') {
+        } else {
+            let stripped = pair.strip_prefix('\'')?;
             let end = stripped.find('\'')?;
             (&stripped[..end], stripped[end + 1..].trim())
-        } else {
-            return None;
         };
         // Tag должен быть ровно 4 ASCII символа
         if tag_str.len() != 4 || !tag_str.is_ascii() {
@@ -10185,11 +10184,10 @@ pub fn parse_font_feature_settings(val: &str) -> Option<Vec<FontFeatureSetting>>
         let (tag_str, rest) = if let Some(stripped) = pair.strip_prefix('"') {
             let end = stripped.find('"')?;
             (&stripped[..end], stripped[end + 1..].trim())
-        } else if let Some(stripped) = pair.strip_prefix('\'') {
+        } else {
+            let stripped = pair.strip_prefix('\'')?;
             let end = stripped.find('\'')?;
             (&stripped[..end], stripped[end + 1..].trim())
-        } else {
-            return None;
         };
         // Тег — ровно 4 печатных ASCII-символа (U+20–U+7E).
         if tag_str.len() != 4 || !tag_str.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
@@ -11503,10 +11501,9 @@ fn expand_vars(value: &str, custom: &HashMap<String, String>, depth: u32) -> Opt
     }
     let resolved = if let Some(v) = custom.get(name) {
         expand_vars(v.trim(), custom, depth + 1)?
-    } else if let Some(fb) = fallback {
-        expand_vars(fb.trim(), custom, depth + 1)?
     } else {
-        return None;
+        let fb = fallback?;
+        expand_vars(fb.trim(), custom, depth + 1)?
     };
     let combined = format!("{prefix}{resolved}{after_close}");
     expand_vars(&combined, custom, depth + 1)
@@ -11543,10 +11540,9 @@ fn expand_env_vars(
     }
     let resolved = if let Some(v) = env_registry.get(env_name) {
         expand_env_vars(v.trim(), env_registry, depth + 1)?
-    } else if let Some(fb) = fallback {
-        expand_env_vars(fb.trim(), env_registry, depth + 1)?
     } else {
-        return None;
+        let fb = fallback?;
+        expand_env_vars(fb.trim(), env_registry, depth + 1)?
     };
     let combined = format!("{prefix}{resolved}{after_close}");
     expand_env_vars(&combined, env_registry, depth + 1)
@@ -15101,13 +15097,12 @@ fn parse_text_emphasis_style(val: &str) -> Option<TextEmphasisStyle> {
                 return None;
             }
             fill = Some(f);
-        } else if let Some(sh) = parse_text_emphasis_shape(tok) {
+        } else {
+            let sh = parse_text_emphasis_shape(tok)?;
             if shape.is_some() {
                 return None;
             }
             shape = Some(sh);
-        } else {
-            return None;
         }
     }
     if fill.is_none() && shape.is_none() {
@@ -15266,10 +15261,9 @@ fn parse_contain_intrinsic_size(val: &str) -> Option<(Option<Length>, Option<Len
         let t = tokens[i];
         if t.eq_ignore_ascii_case("none") {
             comps.push(None);
-        } else if let Some(l) = parse_length(t) {
-            comps.push(Some(l));
         } else {
-            return None;
+            let l = parse_length(t)?;
+            comps.push(Some(l));
         }
         i += 1;
     }
@@ -19919,10 +19913,9 @@ fn parse_function_color(s: &str) -> Option<Color> {
         (ColorFn::Oklab, b)
     } else if let Some(b) = lower.strip_prefix("lab(").and_then(|t| t.strip_suffix(')')) {
         (ColorFn::Lab, b)
-    } else if let Some(b) = lower.strip_prefix("lch(").and_then(|t| t.strip_suffix(')')) {
-        (ColorFn::Lch, b)
     } else {
-        return None;
+        let b = lower.strip_prefix("lch(").and_then(|t| t.strip_suffix(')'))?;
+        (ColorFn::Lch, b)
     };
     // CSS Color L5 §4 — relative color: `<fn>(from <origin> c1 c2 c3 [/ a])`.
     if let Some(rest) = body.trim_start().strip_prefix("from ") {

@@ -1816,10 +1816,7 @@ pub fn find_editing_host(doc: &Document, mut node: NodeId) -> Option<NodeId> {
         if node_is_contenteditable(doc, node) {
             return Some(node);
         }
-        match doc.get(node).parent {
-            Some(p) => node = p,
-            None => return None,
-        }
+        node = doc.get(node).parent?;
     }
 }
 
