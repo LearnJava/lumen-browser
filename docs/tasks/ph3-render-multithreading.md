@@ -1306,6 +1306,25 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
 
 [`DEFAULT_OVERSCAN`]: ../../crates/engine/paint/src/scroll_cache.rs
 
+- **M3.1 — incremental band exposure (pure decision, no GPU).** ✅ (branch
+  `p1-mt-m3-1`). `scroll_cache.rs` gains a third plan variant
+  `ScrollFramePlan::BlitAndExpose { origin, size, retained, prev_origin,
+  expose: [Option<Rect>; 4] }`. When the viewport leaves the band but the same
+  content's re-centered band still *overlaps* the old one (the common one-notch
+  case), `plan()` no longer returns a full `Repaint`: it returns the overlap
+  (`retained`) to blit from the previous surface plus up to four
+  document-space `expose` strips (top/bottom/left/right) that the old surface
+  did not cover — `retained` + `expose` tile the new band exactly, so the
+  backend rasters only the newly revealed pixels. A stale content hash or a
+  disjoint jump (no reusable pixels) still falls through to a full `Repaint`.
+  Pure — the plan carries enough offsets (`prev_origin`, `origin`) for the
+  backend to place the blit source/dst, but owns no GPU state. The GL wiring
+  (allocating the surface, executing the blit + strip raster, ping-pong pool)
+  is M3.2. 6 new/updated unit tests: leave-band-below/above/horizontal each
+  expose only their strip, diagonal exit exposes two strips, far-jump and
+  stale-hash force full repaint, plus a tiling invariant (`retained + expose ==
+  band`, no strip escapes the band). No new deps, no `unsafe`.
+
 ### M4 — parallel style/layout (M, gated on incremental layout)
 
 - First wire `lay_out_incremental` + `DirtyBits` into the live shell path for
