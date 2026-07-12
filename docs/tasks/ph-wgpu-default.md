@@ -91,33 +91,58 @@ Each slice: own `p1-wgpu-default-<slice>` worktree/branch, its own `LUMEN_NO_*` 
 by `LUMEN_BACKEND=wgpu python graphic_tests/run.py --continue-on-fail` at the existing 0.5%
 threshold, compared against the femtovg-default baseline pass rate.
 
-1. Font-metrics cache (`0013b715`) — `OwnedCmap` (`lumen-font/src/cmap.rs`),
+**Correction 2026-07-12:** the order below was re-derived from `git log --oneline --reverse
+02cc0f44..origin/p1-exp-wgpu-only` directly (the first pass — done by a sub-agent — reported a
+wrong chronology and skipped 4 real commits: `5423a84a`, `3eb396b3`, `ec45c8e6`, `fd2694d0`).
+Confirmed while porting: `b298ba03` (skip-identical-frame) actually lands chronologically
+*third* on the exp branch, long before the structural hash (`8305de10`) — it has no hard
+dependency on that hash being fast, only on *some* `hash_display_list` existing (which it
+already does on `main`), so it moves much earlier than originally planned.
+
+1. Skip-identical-frame (`b298ba03`) — `content_generation: u64` + `last_frame_hash` on
+   `Renderer`; every content-mutating method bumps `content_generation`, `render()` skips the
+   GPU submit entirely on an unchanged hash. Independent — do not gate this on the structural
+   hash slice below.
+2. Allocation-free Debug-hashing (`5423a84a`) — `HashFmt`/`hash_one_command` reused in
+   `display_list_cache.rs`'s `hash_commands` and `tile_grid.rs`'s diff path (was
+   `format!("{cmd:?}")` per command per frame). Small, mechanical, same Debug representation
+   so hash values are unchanged.
+3. Scroll-container in-place DL patch (`3eb396b3`) — `patch_scroll_layer` mutates only the
+   scroll offsets in `PushScrollLayer` + scrollbar-thumb rects in-place instead of rebuilding
+   the whole display list on every wheel tick (~12×). Touches `display_list.rs`'s existing
+   scroll-container path — check for interaction with main's own fixed/sticky markers before
+   porting (same caution as slice 5 below, smaller surface).
+4. Font-metrics cache (`0013b715`) — `OwnedCmap` (`lumen-font/src/cmap.rs`),
    `FaceMetrics`/`LazyParsedFaces`/`resolve_cache_key` (`renderer.rs`). Independent, low risk.
-2. Box filter + parallel image prefetch (`2ff7183e`) — separable `resize_area_avg`
+5. Box filter + parallel image prefetch (`2ff7183e`) — separable `resize_area_avg`
    (`lumen-image/src/lib.rs`), `prefetch_image_resizes_parallel`/`prefetch_faces_parallel`
-   (`renderer.rs`). Must land before slice 9 (mip-chain supersedes its CPU path).
-3. Structural display-list hash (`8305de10`) — `hash_command_into`/`hash_one_command`
+   (`renderer.rs`). Must land before slice 12 (mip-chain supersedes its CPU path).
+6. Structural display-list hash (`8305de10`) — `hash_command_into`/`hash_one_command`
    (`display_list.rs`). **Must add match arms for `BeginStickyLayer`/`EndStickyLayer`/
    `BeginFixedLayer`/`EndFixedLayer`** (main-only variants, not seen on the exp branch) or
-   the hash is silently wrong on fixed/sticky pages. Slices 4, 7, 11 depend on this being
-   trustworthy.
-4. bbox-scissor filter passes / `LevelBounds` (`6d13d5be`) — depends on slice 3. Slices 5, 8
+   the hash is silently wrong on fixed/sticky pages.
+7. bbox-scissor filter passes / `LevelBounds` (`6d13d5be`) — depends on slice 6. Slices 8, 11
    depend on this.
-5. Viewport-cull invisible layers (`34a53113`) — depends on slice 4.
-6. wgpu scroll compositor, persistent strip+blit (`0dadfb1c`) — large/invasive. Keep as a
+8. Viewport-cull invisible layers (`34a53113`) — depends on slice 7.
+9. wgpu scroll compositor, persistent strip+blit (`0dadfb1c`) — large/invasive. Keep as a
    **wgpu-specific** mechanism coexisting with main's already-merged femtovg path
    (`overlay_partition.rs`, ADR-016) — do not try to unify them in this task. Must correctly
-   pass through main's fixed/sticky markers.
-7. Static/animated split compositor (`7d867742`) — **highest-risk slice.** Depends on
-   4/5/6. Requires a genuine three-way merge of `display_list.rs` against main's
-   independent M3.x work. Plan a dedicated session for this slice alone.
-8. bbox-offscreen backdrop filter cache (`3f49e673`) — depends on slice 4.
-9. Image mip-chain (`5e6905c4`) — port after slice 2; supersedes its CPU-resize path behind
-   a kill switch, does not delete slice 2's code.
-10. Texture pool for gradient masks (`03b8599d`) — independent. Fixes `renderer.rs:6103`.
+   pass through main's fixed/sticky markers. Slices 10, 13, 14 depend on this.
+10. Fast-scroll degradation (`ec45c8e6`) — EMA scroll-speed hysteresis (enter ≥48, exit <12
+    CSS px/frame) freezes CSS animation/transition ticks + GIF/video-texture updates during a
+    fast scroll so the display list stays scroll-stable and hits the slice-9 compositor's
+    page-compose fast path instead of a monolithic repaint. Depends on slice 9.
+11. Static/animated split compositor (`7d867742`) — **highest-risk slice.** Depends on
+    7/8/9. Requires a genuine three-way merge of `display_list.rs` against main's
+    independent M3.x work. Plan a dedicated session for this slice alone.
+12. bbox-offscreen backdrop filter cache (`3f49e673`) — depends on slice 7.
+13. VRAM hygiene (`fd2694d0`) — evicted level-textures return to the pool instead of being
+    dropped (band↔window resize flap), band-depth texture cached in `PageBandCache` instead of
+    recreated per band-miss. Depends on slice 9's `PageBandCache`. Time-neutral, VRAM-only.
+14. Image mip-chain (`5e6905c4`) — port after slice 5; supersedes its CPU-resize path behind
+    a kill switch, does not delete slice 5's code.
+15. Texture pool for gradient masks (`03b8599d`) — independent. Fixes `renderer.rs:6103`.
     Add a kill switch (none existed on the exp branch — add one for A/B parity).
-11. Skip-identical-frame (`b298ba03`) — port last; depends on slice 3's hash being
-    trustworthy across every content-mutating `Renderer` method.
 
 ### Phase 3 — flip the default + docs
 1. `backend_factory.rs`: empty `LUMEN_BACKEND` tries wgpu (via the Phase 1 probe) first,
