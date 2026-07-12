@@ -33,6 +33,8 @@ pub mod hit_test;
 pub mod layer_cache;
 pub mod overlay_partition;
 #[cfg(feature = "backend-wgpu")]
+pub mod backend_probe;
+#[cfg(feature = "backend-wgpu")]
 pub mod renderer;
 pub mod scroll_cache;
 pub mod scroll_snap;
