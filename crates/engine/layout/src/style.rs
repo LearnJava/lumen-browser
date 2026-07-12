@@ -3692,9 +3692,14 @@ pub struct ContainerContext {
 /// Phase 0: handles `(min-width: Npx)`, `(max-width: Npx)`, `(min-height: Npx)`,
 /// `(max-height: Npx)`, `(width: Npx)`, `(height: Npx)`, and `and`/`or`/`not` operators.
 /// Also supports `style(--prop: value)` and boolean `style(--prop)` forms
-/// (CSS Containment L3 §4). Phase 0 limitations:
+/// (CSS Containment L3 §4). Custom-property style queries compare the container's
+/// value against the query value as *normalized* token streams — internal runs of
+/// whitespace collapse to a single space and whitespace around commas is removed,
+/// so `style(--gap: 1px 2px)` matches a container declaring `--gap: 1px  2px` or
+/// `--gap:1px 2px` (CSS Custom Properties L1 §2 «computed value is the specified
+/// value with whitespace trimmed»). Phase 0 limitations:
 /// - Only a single declaration inside `style()` (no comma-separated list).
-/// - Literal string comparison, no `var()` substitution.
+/// - No `var()` substitution inside the query value.
 /// - Only custom properties (`--*`) are recognized; other names return false.
 ///
 /// Unknown features → false (safe fallback).
@@ -3730,9 +3735,13 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
         // Declaration form: `style(--prop: value)`
         if let Some((name, value)) = inner.split_once(':') {
             let name = name.trim();
-            let value = value.trim();
             if name.starts_with("--") {
-                return ctx.custom_props.get(name).map(|v| v.trim()) == Some(value);
+                let want = normalize_style_value(value);
+                return ctx
+                    .custom_props
+                    .get(name)
+                    .map(|v| normalize_style_value(v))
+                    == Some(want);
             }
             return false;
         }
@@ -3762,6 +3771,47 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
         ("height", Some(v))     => ctx.height.is_some_and(|h| (h - v).abs() < 0.5),
         _ => false,
     }
+}
+
+/// Normalizes a custom-property value for `style()` query comparison.
+///
+/// Collapses each run of ASCII whitespace to a single space, trims the ends, and
+/// removes whitespace immediately around commas. This mirrors how a custom
+/// property's computed value drops insignificant whitespace between tokens
+/// (CSS Custom Properties L1 §2), so equivalent declarations compare equal
+/// regardless of the author's spacing (`1px 2px` == `1px  2px`, `a,b` == `a, b`).
+fn normalize_style_value(s: &str) -> String {
+    // First collapse internal whitespace runs to single spaces.
+    let collapsed: String = {
+        let mut out = String::with_capacity(s.len());
+        let mut prev_ws = false;
+        for ch in s.trim().chars() {
+            if ch.is_ascii_whitespace() {
+                if !prev_ws {
+                    out.push(' ');
+                }
+                prev_ws = true;
+            } else {
+                out.push(ch);
+                prev_ws = false;
+            }
+        }
+        out
+    };
+    // Then strip the spaces that sit directly around commas.
+    let mut out = String::with_capacity(collapsed.len());
+    let bytes = collapsed.as_bytes();
+    for (i, ch) in collapsed.char_indices() {
+        if ch == ' ' {
+            let next_is_comma = bytes.get(i + 1) == Some(&b',');
+            let prev_is_comma = i > 0 && bytes[i - 1] == b',';
+            if next_is_comma || prev_is_comma {
+                continue;
+            }
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// Parses a CSS length value to pixels (px / em not supported — just px for Phase 0).

@@ -7395,6 +7395,34 @@ mod tests {
         assert!(!crate::evaluate_container_condition("style(width: 100px)", &ctx));
     }
 
+    #[test]
+    fn style_query_value_internal_whitespace_normalized() {
+        // Container declares `1px  2px` (two spaces); query uses a single space.
+        let ctx = style_ctx(&[("--gap", "1px  2px")]);
+        assert!(crate::evaluate_container_condition("style(--gap: 1px 2px)", &ctx));
+    }
+
+    #[test]
+    fn style_query_value_no_space_matches_spaced() {
+        // Query without a space after the colon matches a spaced container value.
+        let ctx = style_ctx(&[("--gap", "1px 2px")]);
+        assert!(crate::evaluate_container_condition("style(--gap:1px 2px)", &ctx));
+    }
+
+    #[test]
+    fn style_query_value_comma_whitespace_normalized() {
+        // `a, b` (container) equals `a,b` (query) after comma-space normalization.
+        let ctx = style_ctx(&[("--list", "a, b")]);
+        assert!(crate::evaluate_container_condition("style(--list: a,b)", &ctx));
+    }
+
+    #[test]
+    fn style_query_value_whitespace_difference_still_distinguishes_tokens() {
+        // Normalization must not merge distinct tokens: `1px2px` != `1px 2px`.
+        let ctx = style_ctx(&[("--gap", "1px2px")]);
+        assert!(!crate::evaluate_container_condition("style(--gap: 1px 2px)", &ctx));
+    }
+
     // ── CSS Container Queries L1 ──────────────────────────────────────────
 
     /// @container (min-width) — rule applies when container is wide enough.
