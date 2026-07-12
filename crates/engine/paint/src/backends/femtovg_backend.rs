@@ -524,6 +524,12 @@ pub struct FemtovgBackend {
     /// Device-pixel size `layer_pool` textures were created for; a mismatch
     /// (window resize) retires pooled textures via the pending-delete queue.
     layer_pool_size: (u32, u32),
+    /// ADR-016 M3.2.1a: when set, `render()` draws page content into a retained
+    /// offscreen surface and presents it to the screen instead of drawing
+    /// content directly. Foundation for the M3.2.1b scroll-blit fast path. Read
+    /// once from `LUMEN_SCROLL_BLIT` at construction; `false` (default) keeps the
+    /// direct-to-screen path byte-identical.
+    scroll_blit: bool,
 }
 
 // SAFETY: FemtovgBackend используется только из одного потока одновременно
@@ -1290,6 +1296,7 @@ impl FemtovgBackend {
             gradient_pending_delete: Vec::new(),
             layer_pool: Vec::new(),
             layer_pool_size: (0, 0),
+            scroll_blit: crate::scroll_blit_enabled(),
         })
     }
 
@@ -1424,6 +1431,31 @@ impl FemtovgBackend {
             _ => None,
         };
         self.canvas.set_render_target(rt);
+    }
+
+    /// ADR-016 M3.2.1a: composite the retained content surface onto the screen
+    /// and return it to the layer pool.
+    ///
+    /// The surface is a full-framebuffer FLIP_Y FBO holding this frame's page
+    /// content over a transparent background; drawing it 1:1 over the
+    /// already-bg-cleared screen reproduces the direct clear+content result.
+    /// Mirrors the offscreen-layer composite idiom
+    /// ([`composite_opacity_layer`](Self::composite_opacity_layer)): reset the
+    /// transform and fill the whole viewport with the image paint — the FLIP_Y
+    /// sampler flag corrects the FBO's bottom-up rows.
+    fn present_content_surface(&mut self, surface: femtovg::ImageId) {
+        self.switch_render_target(femtovg::RenderTarget::Screen);
+        self.canvas.save();
+        self.canvas.reset_transform();
+        let css_w = (self.width as f64 / self.scale) as f32;
+        let css_h = (self.height as f64 / self.scale) as f32;
+        let paint = femtovg::Paint::image(surface, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+        let mut path = femtovg::Path::new();
+        path.rect(0.0, 0.0, css_w, css_h);
+        self.canvas.fill_path(&path, &paint);
+        self.canvas.restore();
+        // BUG-272: back to the pool for reuse by the next frame.
+        self.release_layer(surface);
     }
 
     // ─── Drawing helpers ──────────────────────────────────────────────────────
@@ -3638,6 +3670,29 @@ impl RenderBackend for FemtovgBackend {
             .map_or(femtovg::Color::rgb(255, 255, 255), lumen_to_fvg);
         self.canvas.clear_rect(0, 0, self.width, self.height, clear);
 
+        // ADR-016 M3.2.1a: optionally redirect page content into a retained
+        // offscreen surface, presented to the screen after the content pass.
+        // This is the foundation for the M3.2.1b scroll-blit fast path (on a
+        // scroll-only frame blit a cached surface instead of re-executing the
+        // display list). In this slice the surface is re-rendered every frame
+        // and presented 1:1, so the on-screen result is identical to the direct
+        // path — only the flag-gated plumbing is new. The surface is a
+        // full-framebuffer FLIP_Y FBO from `layer_pool` (BUG-272), cleared to
+        // transparent so compositing it over the already-bg-cleared screen
+        // reproduces the direct clear+content order exactly. On allocation
+        // failure we silently fall back to the direct-to-screen path.
+        let content_surface = if self.scroll_blit {
+            self.acquire_layer().inspect(|&id| {
+                self.switch_render_target(femtovg::RenderTarget::Image(id));
+                self.canvas.clear_rect(
+                    0, 0, self.width, self.height,
+                    femtovg::Color::rgba(0, 0, 0, 0),
+                );
+            })
+        } else {
+            None
+        };
+
         // Контент — с учётом scroll.
         self.canvas.save();
         // ADR-016 M0.3: превью-масштаб зума применяется ДО scroll-трансляции,
@@ -3688,6 +3743,11 @@ impl RenderBackend for FemtovgBackend {
             }
         }
         self.canvas.restore();
+        // ADR-016 M3.2.1a: present the retained content surface to the screen
+        // (no-op when the flag is off / allocation failed).
+        if let Some(surface) = content_surface {
+            self.present_content_surface(surface);
+        }
         let t_content = frame_t0.map(|t0| t0.elapsed());
 
         // Overlay — без scroll (tab bar, панели).

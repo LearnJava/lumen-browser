@@ -73,6 +73,25 @@ pub fn frame_log_enabled() -> bool {
     frame_log_level() >= 1
 }
 
+/// `true`, если включён экспериментальный scroll-blit путь рендера
+/// (`LUMEN_SCROLL_BLIT=1`, ADR-016 M3.2.1).
+///
+/// Когда включён, бэкенды рисуют content не прямо в экран, а в удерживаемую
+/// offscreen-поверхность, которую затем презентуют на экран — фундамент для
+/// blit-скролла (M3.2.1b) поверх решений [`ScrollCache`]. По умолчанию выключен:
+/// путь рендера байт-идентичен прямой отрисовке. Значение читается из окружения
+/// один раз за процесс (нулевая стоимость в горячем цикле).
+#[must_use]
+pub fn scroll_blit_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("LUMEN_SCROLL_BLIT")
+            .ok()
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    })
+}
+
 /// Аккумулятор времён кадров для сессионной сводки (`LUMEN_FRAME_LOG`).
 ///
 /// Собирает миллисекунды кадра (полное время цикла redraw) и по запросу считает
