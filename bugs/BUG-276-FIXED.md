@@ -1,9 +1,8 @@
 # BUG-276 — wgpu-бэкенд не проходит TEST-00 против эталона Edge (4.85%, никогда не проверялось)
 
-**Статус:** OPEN — найдено побочно, не root-caused
-**Компонент:** paint (`WgpuBackend`/`renderer.rs`) или graphic_tests capture/calibration — не разделено
-**Найден:** 2026-07-12, в рамках `docs/tasks/ph-wgpu-default.md` (перенос wgpu-оптимизаций из
-`p1-exp-wgpu-only` + план сделать wgpu дефолтным бэкендом)
+**Статус:** FIXED 2026-07-13 — root-caused и исправлен в `p1-wgpu-bug276`
+**Компонент:** paint (`WgpuBackend` / `renderer.rs`) — PushClipRect не применял accumulated transform
+**Найден:** 2026-07-12 · **Исправлен:** 2026-07-13
 
 ## Симптом
 
@@ -41,26 +40,27 @@ Windows. То есть этот дефект, вероятно, существо
 ДО того, как сравнивать срезы Фазы 2 между собой (иначе непонятно, испортил ли срез что-то
 новое, или это старый долг). Финальный гейт Фазы 3 (флип дефолта) тоже упирается в этот баг.
 
-## Что НЕ проверено (следующие шаги)
+## Root-cause (установлен 2026-07-13)
 
-- Полный прогон `LUMEN_BACKEND=wgpu python graphic_tests/run.py --continue-on-fail` —
-  сколько тестов реально проходят на wgpu сегодня (это единственный прогон TEST-00, остальные
-  139 пропущены пайплайном при первом же FAIL).
-- Скриншот-диф не сохранился (перезаписан следующим прогоном с femtovg) — нужно перезапустить
-  и посмотреть `graphic_tests/screenshots/00-calibration-diff.png`/`-lumen-cropped.png` не
-  перезаписывая их сразу другим прогоном.
-- Разделить гипотезы: рендер (scrollbar/chrome в нижней полосе окна) vs захват/калибровка
-  (magenta-рамка на wgpu-презентации может откалиброваться иначе, чем на femtovg-окне).
+Shell оборачивает page display list в `PushTransform(translate(0, TAB_BAR_HEIGHT=36))`, чтобы
+сдвинуть контент ниже таб-бара (wgpu-путь, поскольку `supports_page_offset() = false`). Обработчик
+`PushClipRect` в `renderer.rs` клал rect `(0,0,1024,720)` прямо в `clip_stack`, не применяя
+накопленный transform из `transform_stack`. `sync_scissor_to_stack()` затем выставлял scissor в
+устройственных координатах `(0,0,1024,720)`, обрезая контент по y=720. Но реальный контент
+начинается с y=37 (tab bar) → нижние 35px (720..755) оказывались за пределами scissor →
+рисовались в цвет очистки (magenta) → диф 4.85% в полосе y:684-718.
 
-## Как воспроизвести
+## Фикс
 
-```bash
-export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
-LUMEN_BACKEND=wgpu python graphic_tests/run.py --only 00
+`crates/engine/paint/src/renderer.rs` — добавлен хелпер `apply_transform_to_clip(rect, m)`:
+вычисляет AABB трансформированных углов rect через `m.transform_point_2d()` и возвращает
+screen-space clip rect. Применяется в трёх обработчиках: `PushClipRect`, `PushClipRoundedRect`,
+`PushClipPath` — сразу после `translate_rect(dx, dy)` и до пересечения с `clip_stack.last()`.
+
+```
+TEST-00: FAIL (4.85%)  →  TEST-00: PASS (0.00%)
 ```
 
-## Контекст
-
-Не таргетированный баг-хант — побочная находка при первом прогоне граф.тестов против wgpu в
-рамках `docs/tasks/ph-wgpu-default.md` (перенос perf-наработок `p1-exp-wgpu-only`, план сделать
-wgpu дефолтным бэкендом при сохранении femtovg).
+Полный wgpu-прогон после фикса: 65/141 PASS, 38 FAIL (wgpu-специфичные расхождения с Edge),
+38 DEBTOR (существующие femtovg-долги). Новый баг BUG-277 фиксирует список этих 38 тестов
+как wgpu-базлайн для Фазы 3.
