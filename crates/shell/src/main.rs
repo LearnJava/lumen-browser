@@ -19630,6 +19630,8 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PopBackdropFilter
             | DisplayCommand::BeginStickyLayer { .. }
             | DisplayCommand::EndStickyLayer
+            | DisplayCommand::BeginFixedLayer
+            | DisplayCommand::EndFixedLayer
             | DisplayCommand::PushScrollLayer { .. }
             | DisplayCommand::PopScrollLayer
             | DisplayCommand::DrawSvgPath { .. }
@@ -19690,6 +19692,8 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PopBackdropFilter
             | DisplayCommand::BeginStickyLayer { .. }
             | DisplayCommand::EndStickyLayer
+            | DisplayCommand::BeginFixedLayer
+            | DisplayCommand::EndFixedLayer
             | DisplayCommand::PushScrollLayer { .. }
             | DisplayCommand::PopScrollLayer
             | DisplayCommand::DrawSvgPath { .. }

@@ -736,6 +736,22 @@ pub enum DisplayCommand {
     },
     /// Closes the sticky layer opened by `BeginStickyLayer`.
     EndStickyLayer,
+    /// CSS Positioning L3 §6.1 — position:fixed layer marker (ADR-016 M3.2.1c).
+    ///
+    /// A **pure bracket** with no payload: it marks where a `position:fixed`
+    /// element (and its subtree) begins in the scroll-independent display list so
+    /// the compositor scroll-blit fast path can split it out of the scrollable
+    /// band and redraw it per frame (see [`overlay_ranges`]). Unlike
+    /// `BeginStickyLayer` it carries **no** insets and applies **no** draw-time
+    /// offset: fixed content is already placed at its viewport-fixed coordinates
+    /// by layout (BUG-159 keeps it from inheriting the scroll translate), so every
+    /// backend renders this marker as a no-op. It exists solely as partition
+    /// metadata for the overlay layer.
+    ///
+    /// [`overlay_ranges`]: crate::overlay_partition::overlay_ranges
+    BeginFixedLayer,
+    /// Closes the fixed layer opened by `BeginFixedLayer`. No-op in every backend.
+    EndFixedLayer,
     /// CSS Overflow L3 §3.2 — `overflow: scroll` / `overflow: auto` scroll region.
     ///
     /// Clips rendering to `clip_rect` (padding-box of the container) and translates
@@ -943,6 +959,8 @@ impl DisplayCommand {
             Self::PopBackdropFilter => "PopBackdropFilter",
             Self::BeginStickyLayer { .. } => "BeginStickyLayer",
             Self::EndStickyLayer => "EndStickyLayer",
+            Self::BeginFixedLayer => "BeginFixedLayer",
+            Self::EndFixedLayer => "EndFixedLayer",
             Self::PushScrollLayer { .. } => "PushScrollLayer",
             Self::PopScrollLayer => "PopScrollLayer",
             Self::DrawSvgPath { .. } => "DrawSvgPath",
@@ -1966,6 +1984,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::EndStickyLayer => {
                 out.push_str("EndStickyLayer\n");
+            }
+            DisplayCommand::BeginFixedLayer => {
+                out.push_str("BeginFixedLayer\n");
+            }
+            DisplayCommand::EndFixedLayer => {
+                out.push_str("EndFixedLayer\n");
             }
             DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } => {
                 out.push_str(&format!(
@@ -6061,6 +6085,15 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             right:  s.right.to_px_opt(),
         });
     }
+    // CSS Positioning L3 §6.1 — position:fixed. Brackets the box (and subtree)
+    // with a BeginFixedLayer/EndFixedLayer pair so the compositor scroll-blit can
+    // split it out of the scrollable band (ADR-016 M3.2.1c). No draw-time offset:
+    // fixed content is already at viewport-fixed coords (BUG-159), so the markers
+    // render as no-ops — they are partition metadata only.
+    let is_fixed = matches!(b.style.position, Position::Fixed);
+    if is_fixed {
+        out.push(DisplayCommand::BeginFixedLayer);
+    }
     match &b.kind {
         BoxKind::Skip | BoxKind::Contents => {}
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
@@ -6655,6 +6688,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             // // CSS: text-anchor, dominant-baseline, baseline-shift
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
         }
+    }
+    if is_fixed {
+        out.push(DisplayCommand::EndFixedLayer);
     }
     if is_sticky {
         out.push(DisplayCommand::EndStickyLayer);
@@ -7358,6 +7394,11 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
             right:  s.right.to_px_opt(),
         });
     }
+    // CSS Positioning L3 §6.1 — position:fixed (same as in walk).
+    let is_fixed = matches!(b.style.position, Position::Fixed);
+    if is_fixed {
+        out.push(DisplayCommand::BeginFixedLayer);
+    }
 
     // Determine effective opacity: animated override wins over style.
     let effective_opacity = ov.and_then(|o| o.opacity).unwrap_or(b.style.opacity);
@@ -7478,6 +7519,9 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
         _ => {
             walk(b, out, dpr, None);
         }
+    }
+    if is_fixed {
+        out.push(DisplayCommand::EndFixedLayer);
     }
     if is_sticky {
         out.push(DisplayCommand::EndStickyLayer);
@@ -9290,6 +9334,8 @@ mod tests {
                 DisplayCommand::PopBackdropFilter => "PopBackdropFilter",
                 DisplayCommand::BeginStickyLayer { .. } => "BeginStickyLayer",
                 DisplayCommand::EndStickyLayer => "EndStickyLayer",
+                DisplayCommand::BeginFixedLayer => "BeginFixedLayer",
+                DisplayCommand::EndFixedLayer => "EndFixedLayer",
                 DisplayCommand::PushScrollLayer { .. } => "PushScrollLayer",
                 DisplayCommand::PopScrollLayer => "PopScrollLayer",
                 DisplayCommand::DrawSvgPath { .. } => "DrawSvgPath",
@@ -13130,6 +13176,41 @@ mod tests {
         );
         let has_begin = dl.iter().any(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. }));
         assert!(!has_begin, "position:relative must not emit BeginStickyLayer");
+    }
+
+    #[test]
+    fn fixed_emits_begin_end_fixed_layer_bracketing_fill() {
+        // ADR-016 M3.2.1c-2: position:fixed brackets its box with a payload-free
+        // BeginFixedLayer/EndFixedLayer pair (no draw-time offset — pure metadata).
+        let dl = build(
+            r#"<div style="position:fixed;top:0;left:0;background:blue;width:100px;height:40px"></div>"#,
+            "",
+        );
+        let begin_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::BeginFixedLayer))
+            .expect("expected BeginFixedLayer in display list");
+        let fill_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::FillRect { .. }))
+            .expect("expected the fixed box FillRect");
+        let end_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::EndFixedLayer))
+            .expect("expected EndFixedLayer in display list");
+        assert!(begin_idx < fill_idx, "BeginFixedLayer must come before FillRect");
+        assert!(fill_idx < end_idx, "FillRect must come before EndFixedLayer");
+    }
+
+    #[test]
+    fn non_fixed_no_fixed_layer() {
+        // Only position:fixed emits the fixed-layer bracket; sticky uses its own pair.
+        let dl = build(
+            r#"<div style="position:sticky;top:10px;background:blue;width:200px;height:50px"></div>"#,
+            "",
+        );
+        let has_fixed = dl.iter().any(|c| matches!(c, DisplayCommand::BeginFixedLayer));
+        assert!(!has_fixed, "position:sticky must not emit BeginFixedLayer");
     }
 
     #[test]

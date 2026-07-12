@@ -1473,6 +1473,24 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
       isolated replay would drop) and **z-order** (overlay redrawn on top of the
       whole band). 9 unit tests. No new deps, no `unsafe`.
 
+    - **M3.2.1c-2 — `position:fixed` markers + fold into `overlay_ranges`.** ✅
+      (branch `p1-mt-m3-2-1c-2`). Two new `DisplayCommand` variants,
+      `BeginFixedLayer`/`EndFixedLayer` — a **payload-free bracket** (unlike
+      sticky, fixed needs no scroll-clamp insets: layout already places it at
+      viewport-fixed coords, BUG-159 stops it inheriting the scroll translate).
+      Emitted around every `position:fixed` box in both display-list emit paths
+      (`walk` + the compositor-offloadable path), mirroring the sticky wrap. Every
+      backend (femtovg, wgpu/cpu `renderer.rs`) renders them as **no-ops**, and
+      the shell's `content_{width,height}_of` skip them — so rendering is
+      pixel-identical; the markers are pure partition metadata. `overlay_ranges`
+      and `has_overlay` now fold both kinds via a shared bracket family (same depth
+      counter), so a fixed layer nested inside a sticky one (or vice versa)
+      collapses into the enclosing outermost span. Still dead by default —
+      consumed by nobody until the backend replay slice. What remains for that
+      *consuming* slice is unchanged: overlay **replay context** (ancestor
+      clip/transform state) and **z-order** (overlay on top of the band). +9 unit
+      tests (7 overlay-partition, 2 display-list emit). No new deps, no `unsafe`.
+
 ### M4 — parallel style/layout (M, gated on incremental layout)
 
 - First wire `lay_out_incremental` + `DirtyBits` into the live shell path for

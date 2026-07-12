@@ -4,10 +4,10 @@
 //! and, on a [`Blit`] frame, re-presents it shifted by the scroll delta **without
 //! re-executing the display list**. That is correct for ordinary in-flow content —
 //! it scrolls 1:1 with the page — but it is *wrong* for content that is meant to
-//! stay pinned to the viewport as the page scrolls: `position:sticky` (and, once
-//! it is marked, `position:fixed`). Such content is rastered into the band at its
-//! seat-time on-screen position and then dragged along by the wholesale shift,
-//! instead of staying put. This is why `LUMEN_SCROLL_BLIT` is off by default.
+//! stay pinned to the viewport as the page scrolls: `position:sticky` and
+//! `position:fixed`. Such content is rastered into the band at its seat-time
+//! on-screen position and then dragged along by the wholesale shift, instead of
+//! staying put. This is why `LUMEN_SCROLL_BLIT` is off by default.
 //!
 //! M3.2.1c splits this **overlay** content out of the band: the band is rastered
 //! *without* it, and it is redrawn per frame on top of the presented band so its
@@ -18,15 +18,18 @@
 //! backend consumes the ranges to skip overlay commands while filling the band and
 //! to replay them afterwards.
 //!
-//! # Scope of this slice (M3.2.1c-1)
+//! # Scope of this slice (M3.2.1c-2)
 //!
-//! Only `position:sticky` layers are reported: they carry explicit
-//! [`BeginStickyLayer`]/[`EndStickyLayer`] markers in the display list, so their
-//! spans are unambiguous. `position:fixed` has **no** marker in the
-//! scroll-independent display list yet; emitting one (mirroring the sticky pair)
-//! and folding it into [`overlay_ranges`] is a later slice. Until then a
-//! `position:fixed` element retains the pre-M3 behaviour on a blit frame (it is
-//! not separately pinned), exactly as on the direct-to-screen path.
+//! Both overlay kinds are now reported. `position:sticky` carries the
+//! [`BeginStickyLayer`]/[`EndStickyLayer`] pair (with scroll-clamp insets), and
+//! `position:fixed` carries the [`BeginFixedLayer`]/[`EndFixedLayer`] pair added
+//! this slice — a payload-free bracket, since fixed content needs no draw-time
+//! offset (it is already at viewport-fixed coordinates). A shared bracket family
+//! folds both into [`overlay_ranges`], so a fixed layer nested inside a sticky one
+//! (or vice versa) collapses into the enclosing outermost span. What remains for a
+//! later slice is the *consuming* backend work: overlay **replay context**
+//! (an overlay span may sit inside ancestor clip/transform state) and **z-order**
+//! (overlay redrawn on top of the whole band).
 //!
 //! # Why index ranges, not extracted commands
 //!
@@ -42,6 +45,8 @@
 //! [`Blit`]: crate::scroll_cache::ScrollFramePlan::Blit
 //! [`BeginStickyLayer`]: crate::display_list::DisplayCommand::BeginStickyLayer
 //! [`EndStickyLayer`]: crate::display_list::DisplayCommand::EndStickyLayer
+//! [`BeginFixedLayer`]: crate::display_list::DisplayCommand::BeginFixedLayer
+//! [`EndFixedLayer`]: crate::display_list::DisplayCommand::EndFixedLayer
 
 use crate::display_list::DisplayCommand;
 use std::ops::Range;
@@ -49,22 +54,23 @@ use std::ops::Range;
 /// Report the command index ranges of viewport-pinned **overlay** content in a
 /// scroll-independent display list (ADR-016 M3.2.1c).
 ///
-/// Each returned [`Range`] spans one *outermost* `position:sticky` layer — from
-/// its `BeginStickyLayer` up to and including the matching `EndStickyLayer`
-/// (`content[range]`, half-open, so `range.end` is one past the `EndStickyLayer`).
-/// Nested sticky layers are absorbed into the enclosing span rather than reported
-/// separately, so the whole sticky subtree is one replay unit. Ranges are returned
-/// in ascending order and never overlap.
+/// Each returned [`Range`] spans one *outermost* overlay layer — a `position:sticky`
+/// (`BeginStickyLayer`..=`EndStickyLayer`) or `position:fixed`
+/// (`BeginFixedLayer`..=`EndFixedLayer`) bracket — inclusive of both markers
+/// (`content[range]`, half-open, so `range.end` is one past the closing marker).
+/// Nested overlay layers, of either kind, are absorbed into the enclosing span
+/// rather than reported separately, so the whole overlay subtree is one replay
+/// unit. Ranges are returned in ascending order and never overlap.
 ///
 /// The scroll-blit backend uses these to raster the band *without* overlay content
 /// (skip the commands inside any range) and to redraw that content per frame on
 /// top of the presented band, where its draw-time scroll compensation re-pins it.
 ///
-/// An unbalanced list (an `EndStickyLayer` with no open `BeginStickyLayer`, or a
-/// `BeginStickyLayer` left open at the end of the slice) is tolerated defensively:
-/// a stray close is ignored, and an unclosed open extends to the end of the slice.
-/// A well-formed display list — the only kind the emitters produce — is always
-/// balanced, so these branches are belt-and-suspenders, not expected inputs.
+/// An unbalanced list (a close marker with no open bracket, or a bracket left open
+/// at the end of the slice) is tolerated defensively: a stray close is ignored, and
+/// an unclosed open extends to the end of the slice. A well-formed display list —
+/// the only kind the emitters produce — is always balanced, so these branches are
+/// belt-and-suspenders, not expected inputs.
 #[must_use]
 pub fn overlay_ranges(content: &[DisplayCommand]) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
@@ -72,7 +78,11 @@ pub fn overlay_ranges(content: &[DisplayCommand]) -> Vec<Range<usize>> {
     let mut start = 0usize;
     for (i, cmd) in content.iter().enumerate() {
         match cmd {
-            DisplayCommand::BeginStickyLayer { .. } => {
+            // Both overlay kinds — `position:sticky` and `position:fixed` — open a
+            // span. A shared depth counter treats them as one bracket family, so a
+            // fixed layer nested inside a sticky one (or vice versa) collapses into
+            // the enclosing outermost span, replayed together as a single unit.
+            DisplayCommand::BeginStickyLayer { .. } | DisplayCommand::BeginFixedLayer => {
                 // Only the outermost open records the span start; nested opens
                 // just deepen the balance so the whole subtree stays as one unit.
                 if depth == 0 {
@@ -80,7 +90,7 @@ pub fn overlay_ranges(content: &[DisplayCommand]) -> Vec<Range<usize>> {
                 }
                 depth += 1;
             }
-            DisplayCommand::EndStickyLayer => {
+            DisplayCommand::EndStickyLayer | DisplayCommand::EndFixedLayer => {
                 match depth {
                     // Stray close with nothing open — ignore (defensive).
                     0 => {}
@@ -95,7 +105,7 @@ pub fn overlay_ranges(content: &[DisplayCommand]) -> Vec<Range<usize>> {
             _ => {}
         }
     }
-    // Defensive: an unclosed sticky layer extends to the end of the slice so the
+    // Defensive: an unclosed overlay layer extends to the end of the slice so the
     // backend still skips it from the band rather than half-including it.
     if depth > 0 {
         ranges.push(start..content.len());
@@ -111,9 +121,12 @@ pub fn overlay_ranges(content: &[DisplayCommand]) -> Vec<Range<usize>> {
 /// per-frame re-pinning), so the overlay replay can be skipped entirely.
 #[must_use]
 pub fn has_overlay(content: &[DisplayCommand]) -> bool {
-    content
-        .iter()
-        .any(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. }))
+    content.iter().any(|c| {
+        matches!(
+            c,
+            DisplayCommand::BeginStickyLayer { .. } | DisplayCommand::BeginFixedLayer
+        )
+    })
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -133,6 +146,11 @@ mod tests {
             left: None,
             right: None,
         }
+    }
+
+    /// A `BeginFixedLayer` marker — a payload-free bracket for `position:fixed`.
+    fn begin_fixed() -> DisplayCommand {
+        DisplayCommand::BeginFixedLayer
     }
 
     /// A trivial non-marker leaf command to stand in for band content.
@@ -241,6 +259,83 @@ mod tests {
             begin_sticky(),                 // inner @1
             DisplayCommand::EndStickyLayer, // inner close @2 (depth 2→1)
             leaf(),                         // @3
+        ];
+        assert_eq!(overlay_ranges(&dl), vec![0..4]);
+    }
+
+    // ── position:fixed (M3.2.1c-2) ───────────────────────────────────────────
+
+    #[test]
+    fn single_fixed_span_is_reported_inclusive_of_markers() {
+        let dl = vec![
+            leaf(),
+            begin_fixed(),
+            leaf(),
+            DisplayCommand::EndFixedLayer,
+            leaf(),
+        ];
+        assert_eq!(overlay_ranges(&dl), vec![1..4]);
+        assert!(has_overlay(&dl));
+        assert!(matches!(dl[1], DisplayCommand::BeginFixedLayer));
+        assert!(matches!(dl[3], DisplayCommand::EndFixedLayer));
+    }
+
+    #[test]
+    fn list_with_only_leaves_still_reports_no_fixed_overlay() {
+        let dl = vec![leaf(), leaf()];
+        assert!(!has_overlay(&dl));
+        assert!(overlay_ranges(&dl).is_empty());
+    }
+
+    #[test]
+    fn stray_end_fixed_marker_is_ignored() {
+        let dl = vec![leaf(), DisplayCommand::EndFixedLayer, leaf()];
+        assert!(overlay_ranges(&dl).is_empty());
+    }
+
+    #[test]
+    fn unclosed_fixed_extends_to_end_of_slice() {
+        let dl = vec![leaf(), begin_fixed(), leaf(), leaf()];
+        assert_eq!(overlay_ranges(&dl), vec![1..4]);
+    }
+
+    #[test]
+    fn disjoint_sticky_and_fixed_spans_reported_in_order() {
+        let dl = vec![
+            begin_sticky(),
+            DisplayCommand::EndStickyLayer, // span 0..2
+            leaf(),
+            begin_fixed(),
+            leaf(),
+            DisplayCommand::EndFixedLayer, // span 3..6
+        ];
+        assert_eq!(overlay_ranges(&dl), vec![0..2, 3..6]);
+    }
+
+    #[test]
+    fn fixed_nested_in_sticky_collapses_into_outer_span() {
+        // A fixed layer inside a sticky one is one overlay unit: the shared bracket
+        // family counts both kinds on the same depth, so only the outer span shows.
+        let dl = vec![
+            leaf(),
+            begin_sticky(), // outer open  @1
+            leaf(),
+            begin_fixed(), // inner open  @3
+            leaf(),
+            DisplayCommand::EndFixedLayer, // inner close @5
+            leaf(),
+            DisplayCommand::EndStickyLayer, // outer close @7
+        ];
+        assert_eq!(overlay_ranges(&dl), vec![1..8]);
+    }
+
+    #[test]
+    fn sticky_nested_in_fixed_collapses_into_outer_span() {
+        let dl = vec![
+            begin_fixed(),  // outer open  @0
+            begin_sticky(), // inner open  @1
+            DisplayCommand::EndStickyLayer, // inner close @2
+            DisplayCommand::EndFixedLayer,  // outer close @3
         ];
         assert_eq!(overlay_ranges(&dl), vec![0..4]);
     }
