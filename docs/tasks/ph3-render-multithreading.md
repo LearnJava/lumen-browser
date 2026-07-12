@@ -1562,6 +1562,34 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
     What remains before the flag can default on: broader real-page acceptance
     (M3.2.1c-6). No new deps, no `unsafe`.
 
+  - **M3.2.1c-6 — pixel acceptance: flag-on vs flag-off (direct render).** ✅
+    (branch `p1-mt-m3-2-1c-6`). The empirical gate the whole c-series was building
+    toward: prove the scroll-blit output is pixel-equivalent to the direct
+    (flag-off) render — which is byte-identical to the shipping renderer, i.e. the
+    ground truth. The live-window MCP `screenshot` tool re-renders on the **CPU**
+    (`render_current_page_to_png` → `render_to_image_cpu`), so it cannot see the
+    femtovg blit; capture is therefore `ffmpeg` gdigrab of the real window (the same
+    mechanism `run.py --live` uses), cropped to the viewport via the scroll-0
+    magenta-frame calibration. New committed harness
+    [`scripts/scroll_blit_accept.py`](../../scripts/scroll_blit_accept.py) drives one
+    live window per flag state through an identical sequence of 12 scroll stops (mix
+    of in-band one-notch steps → `Blit`/`BlitAndExpose`, and out-of-band jumps →
+    `Repaint`, down then back up) and diffs the on-vs-off capture frame for frame.
+    Fixtures ([`scripts/gen_blit_fixtures.py`](../../scripts/gen_blit_fixtures.py) →
+    `graphic_tests/blit-accept/`): `01-plain-tall` (bare band blit + expose),
+    `02-fixed-header` (top-level `position:fixed` replay), `03-sticky-header`
+    (`position:sticky` replay), `04-transform-fixed` (`position:fixed` under a
+    transform ancestor → spatial-ancestor replay, c-4/c-5). Result (dev-release,
+    threshold 0.5%): **all PASS** — worst-per-stop 0.000 % (plain / sticky /
+    transform-fixed) and 0.012 % (fixed-header, sub-pixel AA on the `border-radius`
+    badge at band seams). The blit path was verified *active* (not silently falling
+    back) via the shell `[frame] band` log: in-band scrolls report `blit` (20) vs
+    `repaint` (3). Pure acceptance slice — **no production code change**, harness +
+    fixtures + docs only. The flag **stays off**: flipping the global default is the
+    next slice, gated on broader real-site coverage + a scroll-perf sign-off; this
+    slice establishes that the correctness-critical overlay-replay paths (c-3…c-5)
+    are pixel-clean on their targeted fixtures.
+
 ### M4 — parallel style/layout (M, gated on incremental layout)
 
 - First wire `lay_out_incremental` + `DirtyBits` into the live shell path for
