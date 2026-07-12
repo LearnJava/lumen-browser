@@ -60,7 +60,11 @@ lumen-a11y = { path = "crates/engine/a11y" }
 # Exception #1 (§5): OS event loop + окна. Свой = годы Win32/X11/Wayland/AppKit.
 winit = "0.30"
 # Exception #2 (§5): GPU API. Свой = ад driver-bugs под Vulkan/Metal/DX12.
-wgpu = "26"
+# Feature-diet (§4.2 build-speed): на Windows достаточно DX12 + WGSL. Отключаем
+# дефолт-фичи, чтобы из дерева ушли ash (Vulkan) и glow (GL) — дорогие в сборке.
+# femtovg — основной рендерер; wgpu лишь fallback/WebGPU-бэкенд, а DX12 доступен
+# на любом WDDM-2.0 GPU под Win10/11, так что рантайм-Vulkan-fallback не нужен.
+wgpu = { version = "26", default-features = false, features = ["dx12", "wgsl", "std"] }
 # Exception #3 (§5): TLS / crypto. Своя реализация — security antipattern.
 rustls = { version = "0.23", features = ["std"] }
 webpki-roots = "0.26"
