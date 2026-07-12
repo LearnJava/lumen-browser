@@ -31,6 +31,7 @@ pub mod gap_decorations;
 pub mod fingerprint;
 pub mod hit_test;
 pub mod layer_cache;
+pub mod overlay_partition;
 #[cfg(feature = "backend-wgpu")]
 pub mod renderer;
 pub mod scroll_cache;
@@ -330,6 +331,7 @@ pub use display_list::{
 pub use gap_decorations::{emit_gap_rules, GapDecorationContext, GapSegment};
 pub use tile_grid::{TileDirty, TileGrid, DEFAULT_TILE_SIZE};
 pub use scroll_cache::{ScrollCache, ScrollFramePlan, DEFAULT_OVERSCAN};
+pub use overlay_partition::{has_overlay, overlay_ranges};
 pub use fingerprint::GpuFingerprint;
 pub use hit_test::{hit_test, HitTestResult};
 pub use layer_cache::{LayerCache, LayerKey};
