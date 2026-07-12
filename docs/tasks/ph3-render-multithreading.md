@@ -1369,13 +1369,39 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
     the screen. Allocation failure falls back to the direct path for that frame.
     Dead by default; no new deps, no `unsafe`.
 
-  - **M3.2.1b — band-sized surface + blit/expose fast path (next).** Grow the
+  - **M3.2.1b — band-sized surface + blit/expose fast path.** Grow the
     surface to viewport + overscan (band-sized, not framebuffer-sized), render
     content translated by `−origin`, widen culling to the band, and drive it
     from a backend-owned `ScrollCache`: on `Blit` present the cached surface
     shifted by `src` with **no** display-list re-execution; on `BlitAndExpose`
     raster only the `expose` strips (ping-pong pool); on `Repaint` re-raster the
-    whole band. This is where the scroll-blit win lands.
+    whole band. This is where the scroll-blit win lands. Sub-sliced because the
+    band geometry (a >framebuffer image RT, culling separated from the sticky
+    viewport, the present offset) is de-riskable independently of the cross-frame
+    cache/blit:
+
+    - **M3.2.1b-1 — band-sized surface + present-at-offset (re-render).** ✅
+      (branch `p1-mt-m3-2-1b`). Behind `LUMEN_SCROLL_BLIT`, `render()` draws the
+      content pass into a band-sized FBO (viewport + 2·`DEFAULT_OVERSCAN`, from a
+      new `content_band_pool`) via a **uniform `+overscan` prepend** as the
+      outermost content transform, widens culling to the band (new `cull_css_w/h`,
+      kept separate from `viewport_css_w/h` so sticky pinning stays anchored to
+      the real viewport), then `present_content_band` draws the band back shifted
+      by `−overscan` — undoing the prepend exactly. femtovg sizes the GL viewport
+      to the image itself for an `Image` RT (`opengl.rs` `set_target`), so the
+      overscan margin is rastered, not clipped. The band is re-rendered every
+      frame (no cross-frame reuse yet), so on-screen output is **byte-identical**
+      to the direct path at any scroll — including sticky/fixed, since the prepend
+      is uniform. Pure `band_geometry` helper unit-tested. Alloc failure /
+      degenerate viewport falls back to the direct path. Dead by default; no new
+      deps, no `unsafe`. De-risks the band geometry the reuse path builds on.
+
+    - **M3.2.1b-2 — cross-frame reuse + blit/expose (next).** Retain the band
+      across frames (ping-pong pool), own a `ScrollCache`, and consume its
+      `ScrollFramePlan`: `Blit` re-presents the retained band shifted by `src`
+      with no display-list re-execution; `BlitAndExpose` blits the overlap and
+      rasters only the `expose` strips; `Repaint` re-rasters the whole band. This
+      is where the scroll-blit win actually lands.
 
   - **M3.2.1c — `position:fixed`/`sticky` separation.** Fixed/sticky content
     cannot live in a scrollable band (blitting would move it). Split it out of

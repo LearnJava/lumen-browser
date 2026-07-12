@@ -445,6 +445,15 @@ pub struct FemtovgBackend {
     viewport_css_w: f32,
     /// CSS высота viewport (height / scale), нужна для sticky-вычислений.
     viewport_css_h: f32,
+    /// ADR-016 M3.2.1b: culling bounds (CSS px) used by [`Self::is_command_culled`].
+    /// Normally the viewport (`viewport_css_w`/`h`), but during the scroll-blit
+    /// band content pass it widens to the band (viewport + 2·overscan) so the
+    /// off-viewport overscan margin is rastered into the band instead of culled.
+    /// Kept separate from `viewport_css_w`/`h` because those drive sticky pinning,
+    /// which must stay anchored to the *real* viewport regardless of the band.
+    cull_css_w: f32,
+    /// ADR-016 M3.2.1b: culling height bound (CSS px); see [`Self::cull_css_w`].
+    cull_css_h: f32,
     /// ADR-016 M0.2 per-frame culling counters `(culled, total_leaf)` for the
     /// `LUMEN_FRAME_LOG` line. Reset at the start of every `render()`.
     cull_stats: (u32, u32),
@@ -524,12 +533,28 @@ pub struct FemtovgBackend {
     /// Device-pixel size `layer_pool` textures were created for; a mismatch
     /// (window resize) retires pooled textures via the pending-delete queue.
     layer_pool_size: (u32, u32),
-    /// ADR-016 M3.2.1a: when set, `render()` draws page content into a retained
-    /// offscreen surface and presents it to the screen instead of drawing
-    /// content directly. Foundation for the M3.2.1b scroll-blit fast path. Read
-    /// once from `LUMEN_SCROLL_BLIT` at construction; `false` (default) keeps the
-    /// direct-to-screen path byte-identical.
+    /// ADR-016 M3.2.1a/b: when set, `render()` draws page content into a retained
+    /// **band-sized** offscreen surface (viewport + overscan margin) translated by
+    /// a uniform overscan prepend, then presents it to the screen shifted back by
+    /// that margin. Foundation for the M3.2.1b-2 scroll-blit fast path (reuse the
+    /// band across frames, blitting the cached pixels shifted by the scroll delta
+    /// instead of re-executing the display list). Read once from `LUMEN_SCROLL_BLIT`
+    /// at construction; `false` (default) keeps the direct-to-screen path
+    /// byte-identical. While the band is re-rendered every frame (M3.2.1b-1) the
+    /// on-screen output is identical to the direct path at any scroll — including
+    /// sticky/fixed content, since the prepend is applied uniformly to the whole
+    /// content pass and undone at present.
     scroll_blit: bool,
+    /// ADR-016 M3.2.1b: pool of reusable band-sized content surfaces
+    /// (`offscreen_layer_image_flags()`, device px). Sized to viewport + 2·overscan
+    /// on each axis — larger than the framebuffer, so `layer_pool` (framebuffer
+    /// sized, BUG-272) cannot supply them. femtovg sizes the GL viewport to the
+    /// image itself when rendering to an `Image` target, so the overscan margin is
+    /// rastered, not clipped.
+    content_band_pool: Vec<femtovg::ImageId>,
+    /// Device-pixel size the `content_band_pool` textures were created for; a
+    /// mismatch (resize / DPI change) retires them via the pending-delete queue.
+    content_band_size: (u32, u32),
 }
 
 // SAFETY: FemtovgBackend используется только из одного потока одновременно
@@ -575,6 +600,27 @@ struct FilterLayerEntry {
 /// their memory is already top-down and FLIP_Y would flip them.
 fn offscreen_layer_image_flags() -> femtovg::ImageFlags {
     femtovg::ImageFlags::PREMULTIPLIED | femtovg::ImageFlags::FLIP_Y
+}
+
+/// ADR-016 M3.2.1b: geometry of the scroll-blit content band.
+///
+/// Given the viewport in CSS px, the overscan margin (CSS px, added on every
+/// side), and the device-pixel scale, returns `(band_css_w, band_css_h, dev_w,
+/// dev_h)`: the band's CSS extent (viewport + 2·overscan) and its device-pixel
+/// texture size (rounded **up** so the whole CSS band fits — a truncating cast
+/// could drop the last row/column of the overscan margin). Pure arithmetic,
+/// factored out of `render()` so the rounding is unit-testable in isolation.
+fn band_geometry(
+    viewport_css_w: f32,
+    viewport_css_h: f32,
+    overscan_css: f32,
+    scale: f64,
+) -> (f32, f32, u32, u32) {
+    let band_css_w = viewport_css_w + 2.0 * overscan_css;
+    let band_css_h = viewport_css_h + 2.0 * overscan_css;
+    let dev_w = (band_css_w as f64 * scale).ceil() as u32;
+    let dev_h = (band_css_h as f64 * scale).ceil() as u32;
+    (band_css_w, band_css_h, dev_w, dev_h)
 }
 
 /// Entry pushed onto `FemtovgBackend::opacity_layer_stack` by `PushOpacity`.
@@ -1279,6 +1325,8 @@ impl FemtovgBackend {
             page_offset: (0.0, 0.0),
             viewport_css_w: size.width as f32 / scale as f32,
             viewport_css_h: size.height as f32 / scale as f32,
+            cull_css_w: size.width as f32 / scale as f32,
+            cull_css_h: size.height as f32 / scale as f32,
             cull_stats: (0, 0),
             frame_commit_id: None,
             preview_scale: 1.0,
@@ -1297,6 +1345,8 @@ impl FemtovgBackend {
             layer_pool: Vec::new(),
             layer_pool_size: (0, 0),
             scroll_blit: crate::scroll_blit_enabled(),
+            content_band_pool: Vec::new(),
+            content_band_size: (0, 0),
         })
     }
 
@@ -1417,6 +1467,49 @@ impl FemtovgBackend {
         }
     }
 
+    /// ADR-016 M3.2.1b: take a band-sized content surface (`dev_w × dev_h` device
+    /// px, viewport + overscan) from `content_band_pool`, creating one only when
+    /// the pool is empty. A pool sized for different band dimensions (resize / DPI
+    /// change) is retired via the after-flush pending-delete queue — deleting an
+    /// ImageId mid-frame is unsafe while queued draw commands still reference it.
+    ///
+    /// The caller MUST clear the surface before drawing (a reused texture holds
+    /// the previous frame's pixels). Returns `None` if allocation fails, so the
+    /// caller can fall back to the direct-to-screen path for that frame.
+    fn acquire_content_band(&mut self, dev_w: u32, dev_h: u32) -> Option<femtovg::ImageId> {
+        if self.content_band_size != (dev_w, dev_h) {
+            self.filter_layer_pending_delete.append(&mut self.content_band_pool);
+            self.content_band_size = (dev_w, dev_h);
+        }
+        if let Some(id) = self.content_band_pool.pop() {
+            return Some(id);
+        }
+        self.canvas
+            .create_image_empty(
+                dev_w as usize,
+                dev_h as usize,
+                femtovg::PixelFormat::Rgba8,
+                offscreen_layer_image_flags(),
+            )
+            .ok()
+    }
+
+    /// ADR-016 M3.2.1b: return a band surface from [`Self::acquire_content_band`]
+    /// to the pool for reuse by a later frame. A stale-sized surface (the pool has
+    /// since re-seated to a new band size) is retired via the pending-delete queue.
+    fn release_content_band(&mut self, id: femtovg::ImageId, dev_w: u32, dev_h: u32) {
+        /// One retained band is enough for the re-render path (M3.2.1b-1); the
+        /// blit path (M3.2.1b-2) will ping-pong two.
+        const MAX_POOLED_BANDS: usize = 2;
+        if self.content_band_size == (dev_w, dev_h)
+            && self.content_band_pool.len() < MAX_POOLED_BANDS
+        {
+            self.content_band_pool.push(id);
+        } else {
+            self.filter_layer_pending_delete.push(id);
+        }
+    }
+
     fn current_rt(&self) -> femtovg::RenderTarget {
         match self.active_rt_image {
             Some(id) => femtovg::RenderTarget::Image(id),
@@ -1433,29 +1526,46 @@ impl FemtovgBackend {
         self.canvas.set_render_target(rt);
     }
 
-    /// ADR-016 M3.2.1a: composite the retained content surface onto the screen
-    /// and return it to the layer pool.
+    /// ADR-016 M3.2.1b: composite the retained band-sized content surface onto
+    /// the screen.
     ///
-    /// The surface is a full-framebuffer FLIP_Y FBO holding this frame's page
-    /// content over a transparent background; drawing it 1:1 over the
-    /// already-bg-cleared screen reproduces the direct clear+content result.
-    /// Mirrors the offscreen-layer composite idiom
+    /// The band is a FLIP_Y FBO covering `band_css_w × band_css_h` CSS px of the
+    /// content pass, translated by a uniform `+overscan` prepend so band-local
+    /// coordinate `(overscan, overscan)` holds what belongs at screen `(0, 0)`.
+    /// Presenting it means placing the image so that band-local `(overscan,
+    /// overscan)` lands at screen `(0, 0)`: draw the image with its top-left at
+    /// screen `(−overscan, −overscan)` and its full band CSS size, filling the
+    /// viewport rect (the overflow is clipped by the screen). This exactly undoes
+    /// the prepend, so the on-screen result equals the direct path. Mirrors the
+    /// offscreen-layer composite idiom
     /// ([`composite_opacity_layer`](Self::composite_opacity_layer)): reset the
-    /// transform and fill the whole viewport with the image paint — the FLIP_Y
-    /// sampler flag corrects the FBO's bottom-up rows.
-    fn present_content_surface(&mut self, surface: femtovg::ImageId) {
+    /// transform and fill with the image paint — the FLIP_Y sampler flag corrects
+    /// the FBO's bottom-up rows.
+    fn present_content_band(
+        &mut self,
+        surface: femtovg::ImageId,
+        overscan_css: f32,
+        band_css_w: f32,
+        band_css_h: f32,
+    ) {
         self.switch_render_target(femtovg::RenderTarget::Screen);
         self.canvas.save();
         self.canvas.reset_transform();
         let css_w = (self.width as f64 / self.scale) as f32;
         let css_h = (self.height as f64 / self.scale) as f32;
-        let paint = femtovg::Paint::image(surface, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+        let paint = femtovg::Paint::image(
+            surface,
+            -overscan_css,
+            -overscan_css,
+            band_css_w,
+            band_css_h,
+            0.0,
+            1.0,
+        );
         let mut path = femtovg::Path::new();
         path.rect(0.0, 0.0, css_w, css_h);
         self.canvas.fill_path(&path, &paint);
         self.canvas.restore();
-        // BUG-272: back to the pool for reuse by the next frame.
-        self.release_layer(surface);
     }
 
     // ─── Drawing helpers ──────────────────────────────────────────────────────
@@ -2784,8 +2894,8 @@ impl FemtovgBackend {
         let slop = Self::CULL_SLOP_CSS_PX;
         max_x < -slop
             || max_y < -slop
-            || min_x > self.viewport_css_w + slop
-            || min_y > self.viewport_css_h + slop
+            || min_x > self.cull_css_w + slop
+            || min_y > self.cull_css_h + slop
     }
 
     fn render_command(&mut self, cmd: &DisplayCommand) {
@@ -3633,11 +3743,12 @@ impl RenderBackend for FemtovgBackend {
     fn debug_mem_report(&self) -> String {
         let raw_bytes: usize = self.raw_images.values().map(|i| i.data.len()).sum();
         format!(
-            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}",
+            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}",
             self.raw_images.len(),
             raw_bytes as f64 / 1e6,
             self.images.len(),
-            self.layer_pool.len()
+            self.layer_pool.len(),
+            self.content_band_pool.len()
         )
     }
 
@@ -3659,6 +3770,10 @@ impl RenderBackend for FemtovgBackend {
         self.cull_stats = (0, 0);
         self.viewport_css_w = (self.width as f64 / self.scale) as f32;
         self.viewport_css_h = (self.height as f64 / self.scale) as f32;
+        // ADR-016 M3.2.1b: culling defaults to the viewport; the band content
+        // pass (below) widens it to include the overscan margin, then restores it.
+        self.cull_css_w = self.viewport_css_w;
+        self.cull_css_h = self.viewport_css_h;
 
         self.canvas.set_size(self.width, self.height, self.scale as f32);
         // CSS Backgrounds §3.11.1: the root element's background becomes the
@@ -3670,24 +3785,37 @@ impl RenderBackend for FemtovgBackend {
             .map_or(femtovg::Color::rgb(255, 255, 255), lumen_to_fvg);
         self.canvas.clear_rect(0, 0, self.width, self.height, clear);
 
-        // ADR-016 M3.2.1a: optionally redirect page content into a retained
-        // offscreen surface, presented to the screen after the content pass.
-        // This is the foundation for the M3.2.1b scroll-blit fast path (on a
-        // scroll-only frame blit a cached surface instead of re-executing the
-        // display list). In this slice the surface is re-rendered every frame
-        // and presented 1:1, so the on-screen result is identical to the direct
-        // path — only the flag-gated plumbing is new. The surface is a
-        // full-framebuffer FLIP_Y FBO from `layer_pool` (BUG-272), cleared to
-        // transparent so compositing it over the already-bg-cleared screen
-        // reproduces the direct clear+content order exactly. On allocation
-        // failure we silently fall back to the direct-to-screen path.
-        let content_surface = if self.scroll_blit {
-            self.acquire_layer().inspect(|&id| {
+        // ADR-016 M3.2.1b: optionally redirect page content into a retained
+        // *band-sized* offscreen surface (viewport + overscan on every side),
+        // presented back to the screen after the content pass. This is the
+        // foundation for the M3.2.1b-2 scroll-blit fast path (on a scroll-only
+        // frame reuse the cached band shifted by the scroll delta instead of
+        // re-executing the display list). In this slice the band is re-rendered
+        // every frame and presented at the matching offset, so the on-screen
+        // result is identical to the direct path at any scroll — including
+        // sticky/fixed content, since the content pass gets a uniform `+overscan`
+        // prepend that `present_content_band` undoes.
+        //
+        // The band FBO (FLIP_Y, `content_band_pool`) is cleared transparent so
+        // compositing it over the already-bg-cleared screen reproduces the direct
+        // clear+content order. On allocation failure (or a degenerate viewport) we
+        // silently fall back to the direct-to-screen path for this frame. `band`
+        // carries `(id, band_css_w, band_css_h, dev_w, dev_h)`.
+        let overscan_css = crate::DEFAULT_OVERSCAN;
+        let band = if self.scroll_blit && self.viewport_css_w > 0.0 && self.viewport_css_h > 0.0 {
+            let (band_css_w, band_css_h, dev_w, dev_h) = band_geometry(
+                self.viewport_css_w,
+                self.viewport_css_h,
+                overscan_css,
+                self.scale,
+            );
+            self.acquire_content_band(dev_w, dev_h).map(|id| {
                 self.switch_render_target(femtovg::RenderTarget::Image(id));
-                self.canvas.clear_rect(
-                    0, 0, self.width, self.height,
-                    femtovg::Color::rgba(0, 0, 0, 0),
-                );
+                self.canvas.clear_rect(0, 0, dev_w, dev_h, femtovg::Color::rgba(0, 0, 0, 0));
+                // Widen culling so the overscan margin is rastered, not culled.
+                self.cull_css_w = band_css_w;
+                self.cull_css_h = band_css_h;
+                (id, band_css_w, band_css_h, dev_w, dev_h)
             })
         } else {
             None
@@ -3695,6 +3823,17 @@ impl RenderBackend for FemtovgBackend {
 
         // Контент — с учётом scroll.
         self.canvas.save();
+        // ADR-016 M3.2.1b: when drawing into a band surface, prepend a uniform
+        // `+overscan` translate as the OUTERMOST transform of the content pass, so
+        // band-local `(overscan, overscan)` holds what belongs at screen `(0, 0)`
+        // and the off-viewport overscan margin fits inside the band. Applied
+        // before the zoom-preview scale, it is not scaled by preview, so
+        // `present_content_band` undoes it exactly (screen output == direct path).
+        // The whole content pass — including sticky/fixed layers — inherits it
+        // uniformly, so no per-command adjustment is needed.
+        if band.is_some() {
+            self.canvas.translate(overscan_css, overscan_css);
+        }
         // ADR-016 M0.3: превью-масштаб зума применяется ДО scroll-трансляции,
         // поэтому точка документа p отображается в s·(p − scroll) — масштаб
         // вокруг верхнего-левого угла вьюпорта. `s == 1.0` — превью выключено
@@ -3743,10 +3882,14 @@ impl RenderBackend for FemtovgBackend {
             }
         }
         self.canvas.restore();
-        // ADR-016 M3.2.1a: present the retained content surface to the screen
-        // (no-op when the flag is off / allocation failed).
-        if let Some(surface) = content_surface {
-            self.present_content_surface(surface);
+        // ADR-016 M3.2.1b: present the retained band to the screen (shifted back
+        // by the overscan prepend) and return it to the pool; restore culling to
+        // the viewport. No-op when the flag is off / allocation failed.
+        if let Some((surface, band_css_w, band_css_h, dev_w, dev_h)) = band {
+            self.present_content_band(surface, overscan_css, band_css_w, band_css_h);
+            self.release_content_band(surface, dev_w, dev_h);
+            self.cull_css_w = self.viewport_css_w;
+            self.cull_css_h = self.viewport_css_h;
         }
         let t_content = frame_t0.map(|t0| t0.elapsed());
 
@@ -4007,6 +4150,34 @@ mod tests {
     use lumen_layout::BgSizeAxis;
     use lumen_layout::PositionComponent;
     use lumen_layout::Length;
+
+    // ─── ADR-016 M3.2.1b band geometry ──────────────────────────────────────
+
+    #[test]
+    fn band_geometry_adds_overscan_on_every_side() {
+        // 1024×720 viewport, 512 overscan, scale 1 → band grows by 1024 on each
+        // axis (2·overscan), device px == CSS px at scale 1.
+        let (cw, ch, dw, dh) = band_geometry(1024.0, 720.0, 512.0, 1.0);
+        assert_eq!((cw, ch), (2048.0, 1744.0));
+        assert_eq!((dw, dh), (2048, 1744));
+    }
+
+    #[test]
+    fn band_geometry_scales_and_rounds_up_device_pixels() {
+        // At a fractional scale the device size must round UP so the whole CSS
+        // band fits — a truncating cast would clip the overscan's last row/col.
+        let (cw, ch, dw, dh) = band_geometry(801.0, 601.0, 10.0, 1.25);
+        assert_eq!((cw, ch), (821.0, 621.0));
+        // 821 * 1.25 = 1026.25 → 1027; 621 * 1.25 = 776.25 → 777.
+        assert_eq!((dw, dh), (1027, 777));
+    }
+
+    #[test]
+    fn band_geometry_zero_overscan_is_the_viewport() {
+        let (cw, ch, dw, dh) = band_geometry(640.0, 480.0, 0.0, 2.0);
+        assert_eq!((cw, ch), (640.0, 480.0));
+        assert_eq!((dw, dh), (1280, 960));
+    }
 
     /// BUG-133 / BUG-146 / BUG-144: offscreen layers composited directly from
     /// their FBO on the GPU (opacity groups, filter layers, blur destinations,
