@@ -382,6 +382,36 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Mip-каскад картинок (p1-exp-wgpu-only): fullscreen-triangle blit
+/// «mip N−1 → mip N». Bilinear-выборка ровно между четырьмя текселями
+/// источника = 2×2 box-фильтр — стандартный GPU-даунскейл (так же строит
+/// mip-ы Chromium). Bind group — `image_bgl` (texture + sampler).
+const MIPGEN_SHADER_SRC: &str = r#"
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_smp: sampler;
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VOut {
+    // Fullscreen triangle: (-1,-1), (3,-1), (-1,3); uv (0,1), (2,1), (0,-1).
+    let x = f32(vi & 1u) * 4.0 - 1.0;
+    let y = f32((vi >> 1u) & 1u) * 4.0 - 1.0;
+    var out: VOut;
+    out.clip = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>(x, -y) * 0.5 + 0.5;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    return textureSample(src_tex, src_smp, in.uv);
+}
+"#;
+
 /// CSS Images L4 §4 — `cross-fade(A, B, p)` shader.
 ///
 /// Bindings:
@@ -1265,6 +1295,71 @@ struct GpuImage {
     height: u32,
 }
 
+/// Скролл-композитор страницы (EXPERIMENT.md §2, срез 1): персистентная
+/// текстура «полосы» документа — вьюпорт плюс запас сверху и снизу,
+/// растеризованная в документных координатах (scroll-инвариантно). Пока
+/// вьюпорт остаётся внутри полосы и содержимое не меняется, кадр скролла =
+/// один blit этой текстуры со сдвигом + overlay, без перерисовки страницы.
+struct PageBandCache {
+    /// Держит GPU-память полосы (wgpu освобождает её при дропе последней
+    /// ссылки; view её не удерживает — как `GpuImage::_texture`).
+    _texture: wgpu::Texture,
+    /// View полосы — источник blit-а и цель Band-рендера.
+    view: wgpu::TextureView,
+    /// Scroll-инвариантный ключ содержимого: хэш content-полосы display
+    /// list-а при scroll (0,0) + `content_generation` + геометрия полосы.
+    /// Урок EXPERIMENT.md п.15: скролл в ключе = промах каждый кадр.
+    key: u64,
+    /// Y верхнего края полосы в документных CSS px (≥ 0).
+    band_top_css: f32,
+    /// Ширина текстуры полосы в device px (= ширине surface).
+    w_px: u32,
+    /// Высота текстуры полосы в device px (surface + 2×запас).
+    h_px: u32,
+    /// Depth-текстура Band-рендера (обязана совпадать размером с полосой).
+    /// Кэшируется вместе с полосой: раньше создавалась заново на каждый
+    /// miss (7+ МБ Depth32 на band-размере — чистый churn VRAM).
+    depth_t: wgpu::Texture,
+    /// View depth-текстуры полосы.
+    depth_v: wgpu::TextureView,
+}
+
+/// Одноразовая инъекция blit-квада полосы в начало draw-плана level 0
+/// следующего `render_impl`-вызова (Compose-путь скролл-композитора).
+struct PendingBaseBlit {
+    /// Bind group `image_bgl` поверх текстуры полосы (linear sampler).
+    bind_group: wgpu::BindGroup,
+    /// Смещение полосы относительно viewport-а: `band_top_css - scroll_y` (≤ 0).
+    dy_css: f32,
+    /// Ширина квада в CSS px (= ширине viewport-а).
+    w_css: f32,
+    /// Высота квада в CSS px (= высоте полосы).
+    h_css: f32,
+}
+
+/// Финальная цель одного `render_impl`-вызова.
+enum RenderPassMode {
+    /// Обычный кадр: present, `FRAMES_RENDERED`, обновление `last_frame_hash`.
+    Normal {
+        /// Тотальный хэш кадра, посчитанный в `render()` (для skip-identical).
+        frame_hash: u64,
+    },
+    /// Оффскрин-рендер полосы страницы: без present, без счётчиков кадров,
+    /// без `last_frame_hash`; размеры «поверхности» = размеры полосы.
+    Band {
+        /// Цель рендера (view текстуры полосы).
+        view: wgpu::TextureView,
+        /// Ширина полосы в device px.
+        w_px: u32,
+        /// Высота полосы в device px.
+        h_px: u32,
+    },
+    /// Композиция кадра из готовой полосы (через `pending_base_blit`) +
+    /// overlay: present и `FRAMES_RENDERED`, но `last_frame_hash` обновляет
+    /// вызывающий (`render()`) — хэш Compose-аргументов не описывает кадр.
+    Compose,
+}
+
 /// GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 /// `ensure_layer_textures`; переиспользуется пока размер surface не меняется.
 /// `texture` хранится pub чтобы можно было использовать в
@@ -1519,6 +1614,9 @@ pub struct Renderer {
     rrect_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
+    /// Blit-каскад mip-цепочки картинок: пасс «mip N−1 → mip N» при
+    /// `register_image` (fullscreen triangle, bilinear = 2×2 box).
+    mipgen_pipeline: wgpu::RenderPipeline,
     /// CSS Images L4 §4 — `cross-fade(A, B, p)` two-texture blend pipeline.
     /// Uses `CrossFadeVertex` layout (pos+uv). Bind group 0 = viewport uniform
     /// (shared with `image_pipeline`); bind group 1 = `cross_fade_bgl`
@@ -1569,6 +1667,12 @@ pub struct Renderer {
     /// Reused across frames on a cache hit; the color-filter pass still runs at
     /// blit time so only the expensive blur is skipped.
     backdrop_cache_textures: HashMap<u32, OffscreenLayer>,
+    /// Кэш depth-текстур под bbox-офскрины (регион ≠ размеру окна/полосы):
+    /// пасс с маленьким color-attachment обязан иметь depth того же размера
+    /// (валидация wgpu). Ключ — (w, h) в device px; размеры регионов
+    /// выровнены до 64 px, так что классов мало. Чистится при переполнении
+    /// (> 16 записей) — обычная страница держит 1-3 размера.
+    small_depth_cache: HashMap<(u32, u32), wgpu::TextureView>,
     /// CSS Images L3 §3.3 — linear/radial gradient pipeline.
     gradient_bgl: wgpu::BindGroupLayout,
     gradient_pipeline: wgpu::RenderPipeline,
@@ -1603,6 +1707,18 @@ pub struct Renderer {
     /// (display list + overlay + scroll + размер + `content_generation`).
     /// Совпадение со следующим кадром ⇒ пиксели идентичны ⇒ кадр пропускается.
     last_frame_hash: Option<u64>,
+    /// Скролл-композитор страницы (EXPERIMENT.md §2): персистентная полоса
+    /// документа. `None` — ещё не рисовалась (или сброшена сменой геометрии).
+    page_band: Option<PageBandCache>,
+    /// Blit-квад полосы для следующего Compose-рендера. Ставится только
+    /// `try_page_compose`, снимается `take()`-ом в начале сбора вершин.
+    pending_base_blit: Option<PendingBaseBlit>,
+    /// Scroll-инвариантный ключ контента ПРОШЛОГО кадра. Полоса рисуется
+    /// только по стабильному контенту (ключ совпал два кадра подряд):
+    /// анимация/GIF/стриминг парсера меняют ключ каждый кадр, и рендер
+    /// полосы (1.7× выше вьюпорта) там был бы дороже монолита — замерено
+    /// 2026-07-10: 511 промахов из 629 кадров, медиана 10.7 → 21 мс.
+    last_content_key: Option<u64>,
     /// GPU layer cache with LRU eviction (ADR-008 Phase 2).
     /// Tracks layer textures by stacking context ID + size for off-viewport eviction.
     layer_cache: crate::layer_cache::LayerCache,
@@ -1648,6 +1764,7 @@ pub struct Renderer {
 /// Creates a `Depth32Float` texture + view sized `width×height` for GPU depth testing.
 /// Called once in `init_pipelines` and on every `resize`.
 fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+    count_texture_created_labeled("depth-texture", width, height);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("depth-texture"),
         size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
@@ -1701,6 +1818,127 @@ fn frame_skip_disabled() -> bool {
     use std::sync::OnceLock;
     static DISABLED: OnceLock<bool> = OnceLock::new();
     *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_FRAME_SKIP").is_ok_and(|v| v == "1"))
+}
+
+/// BUG-274 diagnostics: total number of `create_texture` calls in this
+/// process (all `Renderer`s). Printed by the `LUMEN_FRAME_LOG=2` phase log
+/// to correlate pass-end cost with live-resource growth.
+pub static TEXTURES_CREATED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// BUG-274 diagnostics: bump [`TEXTURES_CREATED`].
+fn count_texture_created() {
+    TEXTURES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Перепись созданных текстур по `(label, w, h)` — отвечает на вопрос п.23
+/// «кто создаёт ~350 текстур за флинг». Заполняется только при
+/// `LUMEN_FRAME_LOG=3`; в обычном режиме — один branch поверх счётчика.
+type TextureCensusMap = HashMap<(&'static str, u32, u32), u64>;
+static TEXTURE_CENSUS: std::sync::OnceLock<std::sync::Mutex<TextureCensusMap>> =
+    std::sync::OnceLock::new();
+
+/// Как [`count_texture_created`], но при `LUMEN_FRAME_LOG=3` дополнительно
+/// пишет `(label, w, h)` в [`TEXTURE_CENSUS`] (печатается в `alloc:`-блоке).
+fn count_texture_created_labeled(label: &'static str, width: u32, height: u32) {
+    count_texture_created();
+    if crate::frame_log_level() >= 3 {
+        let census = TEXTURE_CENSUS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+        if let Ok(mut m) = census.lock() {
+            *m.entry((label, width, height)).or_insert(0) += 1;
+        }
+    }
+}
+
+/// BUG-274 diagnostics: wall time spent inside `create_texture` +
+/// `create_view` + `create_bind_group` for offscreen layers, in nanoseconds.
+///
+/// Separates *allocating* a render target from *using* it: if the cold-frame
+/// `encode` cost lived in allocation, this counter would carry it. It does not
+/// — which is the whole point of measuring before optimizing.
+pub static TEXTURE_CREATE_NANOS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// BUG-274 diagnostics: offscreen-layer texture pool hits.
+pub static TEXTURE_POOL_HITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// BUG-274 diagnostics: offscreen-layer texture pool misses (→ fresh allocation).
+pub static TEXTURE_POOL_MISSES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Frames that reached the GPU (`render` ran to completion and presented).
+pub static FRAMES_RENDERED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Frames dropped by skip-identical-frame (hash matched the last presented frame).
+///
+/// A benchmark that claims to measure repaints must prove it caused repaints.
+/// Without this counter a harness that silently perturbs nothing reports the
+/// skip path's timing and looks like a spectacular optimization.
+pub static FRAMES_SKIPPED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Reads a diagnostics counter.
+pub fn load_counter(c: &std::sync::atomic::AtomicU64) -> u64 {
+    c.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `true`, если скролл-композитор страницы отключён
+/// (`LUMEN_NO_SCROLL_COMPOSITOR=1`). Диагностика: A/B картинки и скорости
+/// на одном бинарнике (как `LUMEN_NO_BBOX_SCISSOR`).
+fn scroll_compositor_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_SCROLL_COMPOSITOR").is_ok_and(|v| v == "1")
+    })
+}
+
+/// `true`, если static/animated split скролл-композитора отключён
+/// (`LUMEN_NO_ANIM_SPLIT=1`). Диагностика: A/B картинки и скорости на одном
+/// бинарнике; при выключенном split анимируемые кадры рисуются монолитом,
+/// как до среза.
+fn anim_split_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_ANIM_SPLIT").is_ok_and(|v| v == "1")
+    })
+}
+
+/// `true`, если bbox-scissor фильтр-пассов отключён (`LUMEN_NO_BBOX_SCISSOR=1`).
+/// Диагностика: A/B-сравнение картинки и скорости на одном бинарнике.
+fn bbox_scissor_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_BBOX_SCISSOR").is_ok_and(|v| v == "1")
+    })
+}
+
+/// `true`, если bbox-офскрины backdrop-фильтра отключены
+/// (`LUMEN_NO_BBOX_BACKDROP=1`): ping-pong/кэш-текстуры backdrop-пути
+/// создаются размером с родителя, как до среза. Диагностика: A/B-сравнение
+/// картинки и скорости на одном бинарнике.
+fn bbox_backdrop_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_BBOX_BACKDROP").is_ok_and(|v| v == "1")
+    })
+}
+
+/// `true`, если mip-цепочка картинок отключена (`LUMEN_NO_IMAGE_MIPS=1`):
+/// возврат к CPU-ресайзу под каждый placed-размер (`src@WxH`-зоопарк) и
+/// nearest-выбору mip-уровня в сэмплере. Диагностика: A/B-сравнение картинки,
+/// скорости и памяти на одном бинарнике.
+fn image_mips_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_IMAGE_MIPS").is_ok_and(|v| v == "1")
+    })
 }
 
 impl Renderer {
@@ -1783,12 +2021,23 @@ impl Renderer {
 
         let caps = surface.get_capabilities(&adapter);
         let format = select_surface_format(&caps, target_color_space);
+        // LUMEN_PRESENT=mailbox|immediate|fifo — эксперимент BUG-274/Vulkan-white:
+        // выбор present mode из поддерживаемых драйвером (дефолт Fifo).
+        let present_mode = match std::env::var("LUMEN_PRESENT").as_deref() {
+            Ok("mailbox") if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) => {
+                wgpu::PresentMode::Mailbox
+            }
+            Ok("immediate") if caps.present_modes.contains(&wgpu::PresentMode::Immediate) => {
+                wgpu::PresentMode::Immediate
+            }
+            _ => wgpu::PresentMode::Fifo,
+        };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width,
             height,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -1796,10 +2045,17 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let adapter_info = adapter.get_info();
+        // BUG-274: имя адаптера в stderr — диагностика «не WARP ли это»
+        // (программный растеризатор объясняет аномальный CPU/память).
         if crate::frame_log_enabled() {
             eprintln!(
                 "[wgpu] adapter: {} ({:?}, {:?})",
                 adapter_info.name, adapter_info.device_type, adapter_info.backend
+            );
+            eprintln!(
+                "[wgpu] surface: format {:?} (of {:?}) alpha {:?} (of {:?}) present {:?}",
+                config.format, caps.formats, config.alpha_mode, caps.alpha_modes,
+                config.present_mode,
             );
         }
         let gpu_fingerprint = GpuFingerprint::from_adapter_info(&adapter_info);
@@ -1954,6 +2210,7 @@ impl Renderer {
         });
 
         // ── Atlas texture + sampler + bind group ───────────────────────────
+        count_texture_created_labeled("glyph-atlas", ATLAS_DIM, ATLAS_DIM);
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph-atlas"),
             size: wgpu::Extent3d {
@@ -2335,7 +2592,15 @@ impl Renderer {
             label: Some("image-sampler-linear"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            // Трилинейный выбор mip-уровня: даунскейл картинок делает GPU по
+            // mip-цепочке (см. make_gpu_image_entry_mipped). На 1-mip
+            // текстурах (снапшоты, полоса) LOD клампится в 0 — поведение
+            // не меняется.
+            mipmap_filter: if image_mips_disabled() {
+                wgpu::FilterMode::Nearest
+            } else {
+                wgpu::FilterMode::Linear
+            },
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -2414,6 +2679,46 @@ impl Renderer {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // ── Mipgen pipeline (mip-цепочка картинок) ────────────────────────
+        // Пасс «mip N−1 → mip N» без depth и без блендинга: fullscreen
+        // triangle пишет bilinear-выборку источника (2×2 box-даунскейл).
+        let mipgen_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("mipgen-shader"),
+            source: wgpu::ShaderSource::Wgsl(MIPGEN_SHADER_SRC.into()),
+        });
+        let mipgen_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mipgen-layout"),
+            bind_group_layouts: &[&image_bgl],
+            push_constant_ranges: &[],
+        });
+        let mipgen_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mipgen-pipeline"),
+            layout: Some(&mipgen_layout),
+            vertex: wgpu::VertexState {
+                module: &mipgen_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mipgen_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    // Картинки всегда Rgba8Unorm (см. make_gpu_image_entry),
+                    // не surface format.
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -3220,6 +3525,7 @@ impl Renderer {
             rrect_pipeline,
             text_pipeline,
             image_pipeline,
+            mipgen_pipeline,
             cross_fade_pipeline,
             cross_fade_bgl,
             uniform_buffer,
@@ -3234,6 +3540,9 @@ impl Renderer {
             layer_snapshots: HashMap::new(),
             content_generation: 0,
             last_frame_hash: None,
+            page_band: None,
+            pending_base_blit: None,
+            last_content_key: None,
             layer_cache: crate::layer_cache::LayerCache::new(),
             composite_pipeline,
             composite_bgl,
@@ -3251,6 +3560,7 @@ impl Renderer {
             blur_uniform,
             backdrop_blit_pipeline,
             backdrop_layer: None,
+            small_depth_cache: HashMap::new(),
             backdrop_cache: crate::backdrop_cache::BackdropCache::new(),
             backdrop_cache_textures: HashMap::new(),
             gradient_bgl,
@@ -3597,19 +3907,28 @@ impl Renderer {
             });
         }
 
-        // Храним декодированный образ для on-demand resize при DrawImage.
-        self.raw_images.insert(src.clone(), image.clone());
+        // CPU-копия декода нужна только старому пути (on-demand resize при
+        // DrawImage). Mip-путь читает исключительно GPU-текстуру — не платим
+        // RAM за второй экземпляр каждой картинки.
+        if image_mips_disabled() {
+            self.raw_images.insert(src.clone(), image.clone());
+        }
 
-        // Загружаем оригинал в GPU (без resize — используется только когда
-        // layout-size == intrinsic-size, т.е. для object-fit:none / scale-down
-        // на маленьких картинках).
+        // Загружаем оригинал в GPU с mip-цепочкой (blit-каскад): даунскейл
+        // под любой placed-размер делает сэмплер по mip-ам, CPU-ресайзы и
+        // текстуры "src@WxH" не нужны. Kill-switch LUMEN_NO_IMAGE_MIPS=1
+        // возвращает старый путь (1 mip + CPU-ресайзы в ensure/prefetch).
         let mut rgba = convert_to_rgba(image);
         // Apply ICC colour correction before GPU upload so wide-gamut (Display P3,
         // Rec2020) photos render correctly on sRGB displays.
         if let Some(ref profile) = image.icc_profile {
             correct_rgba_pixels(&mut rgba, profile);
         }
-        let gi = self.make_gpu_image_entry(&rgba, image.width, image.height);
+        let gi = if image_mips_disabled() {
+            self.make_gpu_image_entry(&rgba, image.width, image.height)
+        } else {
+            self.make_gpu_image_entry_mipped(&rgba, image.width, image.height)
+        };
         self.images.insert(src, gi);
         Ok(())
     }
@@ -3618,6 +3937,11 @@ impl Renderer {
     /// render-цикла, где `lazy_faces` держит `&self.faces`.
     /// Предполагается, что нужная текстура уже создана через `ensure_image_gpu_key`.
     fn compute_image_gpu_key(&self, src: &str, box_rect: Rect, fit: ObjectFit, pos: ObjectPosition) -> String {
+        // Mip-путь: текстура одна (оригинал с mip-цепочкой), ключ всегда src;
+        // масштабирование делает трилинейный сэмплер.
+        if !image_mips_disabled() {
+            return src.to_owned();
+        }
         self.raw_images.get(src).map(|raw| {
             let placed = fit_image_rect(box_rect, (raw.width, raw.height), fit, pos);
             let tw = placed.width.round().max(1.0) as u32;
@@ -3642,6 +3966,11 @@ impl Renderer {
         fit: ObjectFit,
         pos: ObjectPosition,
     ) {
+        // Mip-путь: ресайз-текстуры не создаются, оригинал уже загружен
+        // с mip-цепочкой в register_image.
+        if !image_mips_disabled() {
+            return;
+        }
         let resize_target = self.raw_images.get(src).map(|raw| {
             let placed = fit_image_rect(box_rect, (raw.width, raw.height), fit, pos);
             let tw = placed.width.round().max(1.0) as u32;
@@ -3688,6 +4017,10 @@ impl Renderer {
         content: &[DisplayCommand],
         overlay: &[DisplayCommand],
     ) {
+        // Mip-путь: CPU-ресайзов нет вовсе — pre-pass не нужен.
+        if !image_mips_disabled() {
+            return;
+        }
         // (gpu_key, src, tw, th) — уникальные недостающие ресайзы кадра.
         let mut jobs: Vec<(String, String, u32, u32)> = Vec::new();
         let mut scheduled: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -3767,6 +4100,7 @@ impl Renderer {
     /// Создаёт `GpuImage` из RGBA8-буфера заданного размера.
     /// `&self` достаточно — мутировать нужно только `images`, это делает caller.
     fn make_gpu_image_entry(&self, rgba: &[u8], width: u32, height: u32) -> GpuImage {
+        count_texture_created_labeled("image", width, height);
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("lumen-image-texture"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -3794,6 +4128,119 @@ impl Renderer {
             },
             wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let make_bg = |sampler: &wgpu::Sampler| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("image-bg"),
+                layout: &self.image_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
+        };
+        let bind_group_linear = make_bg(&self.image_sampler);
+        let bind_group_nearest = make_bg(&self.image_sampler_nearest);
+        GpuImage { bind_group_linear, bind_group_nearest, view, _texture: texture, width, height }
+    }
+
+    /// Создаёт `GpuImage` с полной mip-цепочкой: mip 0 заливается с CPU,
+    /// остальные уровни строятся GPU blit-каскадом (`mipgen_pipeline`,
+    /// bilinear = 2×2 box на пасс). Замена CPU-ресайзов под каждый
+    /// placed-размер: одна текстура на `src`, даунскейл при отрисовке делает
+    /// трилинейный сэмплер (как в Chromium). Стоимость каскада — по одному
+    /// крошечному пассу на уровень, один раз на `register_image`.
+    fn make_gpu_image_entry_mipped(&self, rgba: &[u8], width: u32, height: u32) -> GpuImage {
+        count_texture_created_labeled("image-mipped", width, height);
+        // floor(log2(max(w,h))) + 1; width/height ≥ 1 гарантированы caller-ом.
+        let mip_level_count = 32 - width.max(height).leading_zeros();
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("lumen-image-texture-mipped"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // Не sRGB — как make_gpu_image_entry (surface тоже non-sRGB).
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        if mip_level_count > 1 {
+            let mut encoder = self.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("lumen-image-mipgen") },
+            );
+            let mip_view = |level: u32| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("lumen-image-mip-level"),
+                    base_mip_level: level,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                })
+            };
+            let mut src_view = mip_view(0);
+            for level in 1..mip_level_count {
+                let dst_view = mip_view(level);
+                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("mipgen-bg"),
+                    layout: &self.image_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&src_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                        },
+                    ],
+                });
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("mipgen-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &dst_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            // Fullscreen triangle перекрывает уровень целиком.
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(&self.mipgen_pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.draw(0..3, 0..1);
+                drop(pass);
+                src_view = dst_view;
+            }
+            self.queue.submit(Some(encoder.finish()));
+        }
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let make_bg = |sampler: &wgpu::Sampler| {
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3876,6 +4323,7 @@ impl Renderer {
             });
         }
 
+        count_texture_created_labeled("layer-snapshot", width, height);
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("layer-snapshot"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -4196,8 +4644,11 @@ impl Renderer {
     }
 
     fn create_layer_texture(&mut self, width: u32, height: u32) -> OffscreenLayer {
+        use std::sync::atomic::Ordering::Relaxed;
+
         // Try to acquire a texture from the pool before creating a new one (Phase 2).
         if let Some(pooled) = self.texture_pool.acquire(width, height) {
+            TEXTURE_POOL_HITS.fetch_add(1, Relaxed);
             return OffscreenLayer {
                 texture: pooled.texture,
                 view: pooled.view,
@@ -4208,6 +4659,9 @@ impl Renderer {
         }
 
         // Pool miss: allocate a new texture.
+        TEXTURE_POOL_MISSES.fetch_add(1, Relaxed);
+        count_texture_created_labeled("opacity-layer", width, height);
+        let t_alloc0 = std::time::Instant::now();
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("opacity-layer"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -4216,9 +4670,12 @@ impl Renderer {
             dimension: wgpu::TextureDimension::D2,
             format: self.surface_format,
             // COPY_SRC needed for encoder.copy_texture_to_texture in blend compositing.
+            // COPY_DST added for the backdrop bbox path: pooled ping-pong
+            // textures receive the parent-region copy (copy_texture_to_texture).
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -4236,8 +4693,41 @@ impl Renderer {
                 },
             ],
         });
+        TEXTURE_CREATE_NANOS.fetch_add(
+            u64::try_from(t_alloc0.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            Relaxed,
+        );
         self.texture_pool.update_size(1); // Track new allocation.
         OffscreenLayer { texture, view, bind_group, width, height }
+    }
+
+    /// Возвращает offscreen-слой в texture_pool для переиспользования.
+    /// Безопасно сразу после записи команд: команды исполняются в порядке
+    /// encoder-а, повторное использование той же текстуры позже в кадре
+    /// упорядочено записью (та же дисциплина, что у слотов layer_textures).
+    fn release_layer_to_pool(&mut self, layer: OffscreenLayer) {
+        self.texture_pool.release(crate::texture_pool::PooledTexture {
+            texture: layer.texture,
+            view: layer.view,
+            bind_group: layer.bind_group,
+            width: layer.width,
+            height: layer.height,
+        });
+    }
+
+    /// Depth-текстура под пасс с bbox-офскрином (регион меньше окна/полосы).
+    /// Кэшируется по размеру: blur-пассы backdrop-фильтра гоняются каждый
+    /// кадр, а классов размеров мало (выравнивание до 64 px).
+    fn small_depth_view(&mut self, width: u32, height: u32) -> wgpu::TextureView {
+        if let Some(v) = self.small_depth_cache.get(&(width, height)) {
+            return v.clone();
+        }
+        if self.small_depth_cache.len() > 16 {
+            self.small_depth_cache.clear();
+        }
+        let (_t, v) = create_depth_texture(&self.device, width, height);
+        self.small_depth_cache.insert((width, height), v.clone());
+        v
     }
 
     /// Создаёт или пересоздаёт `scratch_layer` нужного размера.
@@ -4250,6 +4740,7 @@ impl Renderer {
             .as_ref()
             .is_none_or(|s| s.width != width || s.height != height);
         if needs_create {
+            count_texture_created_labeled("blend-scratch-layer", width, height);
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("blend-scratch-layer"),
                 size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -4317,6 +4808,7 @@ impl Renderer {
         if !needs_create {
             return false;
         }
+        count_texture_created_labeled("backdrop-cache-layer", width, height);
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("backdrop-cache-layer"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -4350,7 +4842,12 @@ impl Renderer {
         }
         for i in 0..count {
             if self.layer_textures[i].width != width || self.layer_textures[i].height != height {
-                self.layer_textures[i] = self.create_layer_texture(width, height);
+                // Band↔window флап размеров на каждом miss полосы: вытесняемую
+                // текстуру вернуть в пул, а не дропать — следующий кадр другого
+                // режима возьмёт её обратно (классов размера всего два).
+                let t = self.create_layer_texture(width, height);
+                let old = std::mem::replace(&mut self.layer_textures[i], t);
+                self.release_layer_to_pool(old);
             }
         }
     }
@@ -4363,6 +4860,256 @@ impl Renderer {
     ///   scroll-смещения. Делает overlay viewport-locked даже когда страница
     ///   прокручена.
     ///
+    /// Скролл-композитор страницы, срез 1 (EXPERIMENT.md §2): пробует собрать
+    /// кадр из персистентной полосы документа вместо перерисовки контента.
+    ///
+    /// Применим, когда кадр — чистая трансляция контента: оконный рендер,
+    /// нет горизонтального скролла, скролл ДВИЖЕТСЯ (кадры «DL изменился,
+    /// скролл тот же» — анимация, ввод — идут монолитом) и в контенте нет
+    /// `BeginStickyLayer` — единственной команды, чей результат зависит от
+    /// scroll_y нелинейно (sticky-кламп); всё остальное транслируется
+    /// равномерно, включая fixed (см. BUG-159: fixed не получает спец-
+    /// обработки в рендере — полоса воспроизводит его поведение бит-в-бит).
+    ///
+    /// Ключ полосы scroll-инвариантен — хэш контента при scroll (0,0) +
+    /// `content_generation` + геометрия (урок п.15: скролл в ключе = промах
+    /// каждый кадр = 30× регрессия). Промах стоит ОДИН рендер контента
+    /// (в полосу) + дешёвую композицию (blit + overlay) — урок п.15 №2.
+    ///
+    /// Static/animated split (EXPERIMENT.md §2): при непустых `anim_ranges`
+    /// (диапазоны анимируемых сегментов от
+    /// [`build_display_list_ordered_with_anim_split`]) полоса строится и
+    /// хэшируется ТОЛЬКО по статичной части списка, а сегменты рисуются
+    /// поверх blit-а каждым кадром (реплей их transform/clip-контекста —
+    /// `anim_split_compose_plan`). Так медленный скролл анимированной
+    /// страницы попадает в полосу, хотя display list меняется каждый кадр.
+    /// Painter's-order guard: если статичная команда позже сегмента
+    /// пересекает его bbox — split небезопасен, кадр идёт монолитом.
+    /// Kill-switch: `LUMEN_NO_ANIM_SPLIT=1`.
+    ///
+    /// [`build_display_list_ordered_with_anim_split`]: crate::display_list::build_display_list_ordered_with_anim_split
+    /// [`anim_split_compose_plan`]: crate::display_list::anim_split_compose_plan
+    ///
+    /// Возвращает `Ok(true)`, если кадр показан этим путём.
+    fn try_page_compose(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+        scroll_y: f32,
+        scroll_x: f32,
+        anim_ranges: &[std::ops::Range<usize>],
+    ) -> Result<bool, wgpu::SurfaceError> {
+        if self.surface.is_none()
+            || scroll_compositor_disabled()
+            || scroll_x != 0.0
+            || content.is_empty()
+            || content
+                .iter()
+                .any(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. }))
+        {
+            return Ok(false);
+        }
+        let (sw, sh) = self.surface_dims();
+        let dpr = self.scale_factor.max(1e-6) as f32;
+        let vp_h_css = sh as f32 / dpr;
+        // Запас полосы: по 3/4 вьюпорта сверху и снизу, но не больше 768 CSS px.
+        let margin_css = (vp_h_css * 0.75).min(768.0).floor();
+        let band_h_px = sh + 2 * (margin_css * dpr).round() as u32;
+        if band_h_px > self.device.limits().max_texture_dimension_2d {
+            return Ok(false);
+        }
+        let band_h_css = band_h_px as f32 / dpr;
+
+        // Static/animated split: план оверлея сегментов. При конфликте
+        // painter's order план сам расширяет диапазоны tail-split-ом —
+        // хэш/полосу дальше считаем по ЕГО effective-диапазонам. Полный
+        // отказ (нереплеябельный контекст и т.п.) — split выключается на
+        // кадр, ключ считается по полному списку (= поведение до среза).
+        let mut ranges: &[std::ops::Range<usize>] = if anim_split_disabled() {
+            &[]
+        } else {
+            anim_ranges
+        };
+        let effective_ranges: Vec<std::ops::Range<usize>>;
+        let seg_plan: Option<crate::display_list::DisplayList> = if ranges.is_empty() {
+            None
+        } else {
+            match crate::display_list::anim_split_compose_plan(content, ranges) {
+                Some((p, eff)) => {
+                    effective_ranges = eff;
+                    ranges = &effective_ranges;
+                    Some(p)
+                }
+                None => {
+                    ranges = &[];
+                    None
+                }
+            }
+        };
+
+        // Scroll-инвариантный ключ содержимого полосы (по статике при split-е).
+        let key = {
+            use std::hash::Hasher;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            h.write_u64(crate::display_list::hash_display_list_skipping(
+                content, ranges, &[], 0.0, 0.0, sw, band_h_px,
+            ));
+            h.write_u64(self.content_generation);
+            h.finish()
+        };
+
+        // Контент стабилен, если его ключ совпал с ключом прошлого кадра.
+        // Нестабильный контент (анимация, GIF, стриминг парсера) в полосу не
+        // рисуем: промах на КАЖДОМ кадре при полосе 1.7× вьюпорта дороже
+        // монолита (замер 2026-07-10: медиана 10.7 → 21 мс). После первого
+        // же стабильного кадра полоса легализуется, а редкие тики (GIF
+        // 10 fps под 60 fps скроллом) дают band-рендер раз в тик + hit-ы
+        // между тиками — это всё ещё выигрыш.
+        let content_stable = self.last_content_key == Some(key);
+        self.last_content_key = Some(key);
+        if !content_stable && crate::frame_log_level() >= 2 {
+            eprintln!(
+                "[frame:wgpu] page-compose unstable-key: gen {} ranges {} dl {}",
+                self.content_generation,
+                ranges.len(),
+                content.len(),
+            );
+        }
+
+        let fits = self.page_band.as_ref().is_some_and(|b| {
+            b.key == key
+                && b.w_px == sw
+                && b.h_px == band_h_px
+                && scroll_y >= b.band_top_css
+                && scroll_y + vp_h_css <= b.band_top_css + band_h_css
+        });
+        if !fits {
+            if !content_stable {
+                return Ok(false);
+            }
+            // Промах: перерисовать полосу — один рендер контента. Верх полосы
+            // выравнен на целый CSS px, чтобы blit был texel-точным при целых
+            // scroll_y (при dpr=1).
+            let band_top_css = (scroll_y - margin_css).max(0.0).floor();
+            let recreate = self
+                .page_band
+                .as_ref()
+                .is_none_or(|b| b.w_px != sw || b.h_px != band_h_px);
+            if recreate {
+                count_texture_created_labeled("page-band", sw, band_h_px);
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("page-band"),
+                    size: wgpu::Extent3d {
+                        width: sw,
+                        height: band_h_px,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: self.surface_format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let (depth_t, depth_v) = create_depth_texture(&self.device, sw, band_h_px);
+                self.page_band = Some(PageBandCache {
+                    _texture: texture,
+                    view,
+                    key: 0, // невалиден, пока рендер полосы ниже не пройдёт
+                    band_top_css,
+                    w_px: sw,
+                    h_px: band_h_px,
+                    depth_t,
+                    depth_v,
+                });
+            }
+            let Some(view) = self.page_band.as_ref().map(|b| b.view.clone()) else {
+                return Ok(false);
+            };
+            // Split: в полосу идёт только статичная часть списка — сегменты
+            // выколоты (они рисуются поверх blit-а каждым кадром).
+            let static_content: std::borrow::Cow<'_, [DisplayCommand]> = if ranges.is_empty() {
+                std::borrow::Cow::Borrowed(content)
+            } else {
+                let mut v = Vec::with_capacity(content.len());
+                let mut prev = 0usize;
+                for r in ranges {
+                    v.extend_from_slice(&content[prev..r.start]);
+                    prev = r.end;
+                }
+                v.extend_from_slice(&content[prev..]);
+                std::borrow::Cow::Owned(v)
+            };
+            // Depth-attachment обязан совпадать по размеру с целью пасса —
+            // на время Band-рендера подменяем оконную depth-текстуру
+            // полосной из кэша (и возвращаем обратно, включая случай ошибки).
+            let (band_depth_t, band_depth_v) = self
+                .page_band
+                .as_ref()
+                .map(|b| (b.depth_t.clone(), b.depth_v.clone()))
+                .unwrap_or_else(|| create_depth_texture(&self.device, sw, band_h_px));
+            let saved_depth_t = self.depth_texture.replace(band_depth_t);
+            let saved_depth_v = self.depth_view.replace(band_depth_v);
+            let band_result = self.render_impl(
+                &static_content,
+                &[],
+                band_top_css,
+                0.0,
+                RenderPassMode::Band { view, w_px: sw, h_px: band_h_px },
+            );
+            self.depth_texture = saved_depth_t;
+            self.depth_view = saved_depth_v;
+            band_result?;
+            if let Some(b) = self.page_band.as_mut() {
+                b.key = key;
+                b.band_top_css = band_top_css;
+            }
+            if crate::frame_log_level() >= 2 {
+                eprintln!(
+                    "[frame:wgpu] page-compose MISS: band y={band_top_css:.0}..{:.0} css ({sw}x{band_h_px} px, {} anim segs)",
+                    band_top_css + band_h_css,
+                    ranges.len(),
+                );
+            }
+        } else if crate::frame_log_level() >= 2 {
+            eprintln!("[frame:wgpu] page-compose HIT ({} anim segs)", ranges.len());
+        }
+
+        // Композиция: blit полосы со сдвигом + overlay поверх.
+        let Some((band_top_css, band_view)) =
+            self.page_band.as_ref().map(|b| (b.band_top_css, b.view.clone()))
+        else {
+            return Ok(false);
+        };
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("page-band-bg"),
+            layout: &self.image_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&band_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                },
+            ],
+        });
+        self.pending_base_blit = Some(PendingBaseBlit {
+            bind_group,
+            dy_css: band_top_css - scroll_y,
+            w_css: sw as f32 / dpr,
+            h_css: band_h_css,
+        });
+        // Split: анимируемые сегменты рисуются как content-полоса Compose-кадра
+        // (получают штатный сдвиг -scroll_y) — поверх blit-а, под overlay.
+        let seg_content: &[DisplayCommand] = seg_plan.as_deref().unwrap_or(&[]);
+        self.render_impl(seg_content, overlay, scroll_y, 0.0, RenderPassMode::Compose)?;
+        Ok(true)
+    }
+
     /// `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0.
     pub fn render(
         &mut self,
@@ -4371,13 +5118,32 @@ impl Renderer {
         scroll_y: f32,
         scroll_x: f32,
     ) -> Result<(), wgpu::SurfaceError> {
-        // Skip-identical-frame (ported from p1-exp-wgpu-only): total frame hash —
-        // display list + overlay + scroll + surface size (Debug representation of
-        // each command, see hash_display_list) — combined with content_generation
-        // (register_image/GIF frames/snapshots/fonts/canvas-bg bump it). A match
-        // against the last successfully presented frame guarantees pixel identity:
-        // the frame isn't drawn at all, the last present stays on screen. Windowed
-        // only — headless must render for readback. LUMEN_NO_FRAME_SKIP=1 disables.
+        self.render_with_anim(content, overlay, scroll_y, scroll_x, &[])
+    }
+
+    /// Как [`render`](Self::render), но с диапазонами анимируемых сегментов
+    /// `content` (static/animated split скролл-композитора, EXPERIMENT.md §2).
+    /// Пустые `anim_ranges` — поведение идентично `render`.
+    pub fn render_with_anim(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+        scroll_y: f32,
+        scroll_x: f32,
+        anim_ranges: &[std::ops::Range<usize>],
+    ) -> Result<(), wgpu::SurfaceError> {
+        // Skip-identical-frame (p1-exp-wgpu-only): тотальный хэш кадра —
+        // display list + overlay + scroll + размер поверхности (структурный
+        // фолд команд, см. hash_display_list) — складывается с поколением
+        // контента (register_image / GIF-кадры / снапшоты / шрифты / canvas-bg
+        // бампают content_generation). Совпадение с последним успешно
+        // отрисованным кадром гарантирует пиксельную идентичность: кадр не
+        // рисуется вовсе, на экране остаётся последний present. Только для
+        // оконного режима — headless обязан рисовать для readback.
+        // LUMEN_NO_FRAME_SKIP=1 отключает пропуск (диагностика).
+        // Живёт в оркестраторе, а не в render_impl: скролл-композитор ниже
+        // разбивает кадр на band/compose-вызовы, чьи собственные хэши кадр
+        // не описывают.
         let (sw0, sh0) = self.surface_dims();
         let base_hash = crate::display_list::hash_display_list(
             content, overlay, scroll_x, scroll_y, sw0, sh0,
@@ -4393,21 +5159,74 @@ impl Renderer {
             && !frame_skip_disabled()
             && self.last_frame_hash == Some(frame_hash)
         {
-            if crate::frame_log_enabled() {
+            FRAMES_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if crate::frame_log_level() >= 2 {
                 eprintln!("[frame:wgpu] skip (identical frame)");
             }
             return Ok(());
         }
 
+        // Скролл-композитор страницы (EXPERIMENT.md §2): при попадании кадр
+        // собирается из персистентной полосы + overlay, минуя перерисовку
+        // контента. `false` — путь неприменим, рисуем монолитом как раньше.
+        if self.try_page_compose(content, overlay, scroll_y, scroll_x, anim_ranges)? {
+            self.last_frame_hash = Some(frame_hash);
+            return Ok(());
+        }
+
+        self.render_impl(
+            content,
+            overlay,
+            scroll_y,
+            scroll_x,
+            RenderPassMode::Normal { frame_hash },
+        )
+    }
+
+    /// Тело рендера одного пасса-цели (см. [`RenderPassMode`]). Общий для
+    /// обычного кадра, оффскрин-рендера полосы скролл-композитора и
+    /// композиции полоса+overlay; отличия сведены к выбору целевого view,
+    /// размеров «поверхности» и финализации (present / счётчики / хэш).
+    fn render_impl(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+        scroll_y: f32,
+        scroll_x: f32,
+        mode: RenderPassMode,
+    ) -> Result<(), wgpu::SurfaceError> {
+        // BUG-274: пофазный тайминг кадра (LUMEN_FRAME_LOG=2) — разбивка
+        // wgpu-кадра на faces/collect/prep/acquire/encode/submit, чтобы
+        // диагностировать, какая фаза жжёт CPU в простое.
+        let phase_log = crate::frame_log_level() >= 2;
+        let t_frame0 = std::time::Instant::now();
+
+        // BUG-274: снимки диагностических счётчиков на входе в кадр — печатаем
+        // дельту за кадр, а не процессный итог (кумулятивные числа не отвечают
+        // на вопрос «сколько текстур родилось именно в этом кадре»).
+        let tex_created_at_entry = load_counter(&TEXTURES_CREATED);
+        let tex_nanos_at_entry = load_counter(&TEXTURE_CREATE_NANOS);
+        let pool_hits_at_entry = load_counter(&TEXTURE_POOL_HITS);
+        let pool_misses_at_entry = load_counter(&TEXTURE_POOL_MISSES);
+
+        // Размеры цели: для Band — полоса, иначе — поверхность окна/headless.
+        let (sw0, sh0) = match &mode {
+            RenderPassMode::Band { w_px, h_px, .. } => (*w_px, *h_px),
+            _ => self.surface_dims(),
+        };
+
         // CSS Filter Effects L1 §2 — backdrop-filter result cache.
         // Two consecutive frames hashing identically guarantee every backdrop
         // element's filtered output is identical, so the composite step can
         // reuse the cached texture and skip the expensive blur passes.
-        // Reuses the skip-frame base hash (identical inputs).
+        // (Хэш считается только при наличии backdrop-filter — после переезда
+        // skip-identical в render() дешёвого готового base_hash здесь нет.)
         let backdrop_frame_hash: Option<u64> = if self.backdrop_cache.is_enabled()
             && crate::display_list::contains_backdrop_filter(content, overlay)
         {
-            Some(base_hash)
+            Some(crate::display_list::hash_display_list(
+                content, overlay, scroll_x, scroll_y, sw0, sh0,
+            ))
         } else {
             None
         };
@@ -4459,6 +5278,7 @@ impl Renderer {
         // и выполняется лениво через per-frame memo. Тёплый кадр не парсит
         // ни одного face-а (раньше: все face-ы каждый кадр, 1.4–2.7 мс).
         let mut lazy_faces = LazyParsedFaces::new(&self.faces);
+        let t_after_faces = t_frame0.elapsed();
 
         // ── Сбор вершин ────────────────────────────────────────────────────
         let mut fill_vertices: Vec<FillVertex> = Vec::new();
@@ -4548,6 +5368,14 @@ impl Renderer {
             from_level: usize,
             filters: Vec<FilterFn>,
             comp_v_start: u32,
+            /// Ограничение закрашиваемой области всех трёх фильтр-пассов
+            /// (blur H / blur V / composite): bbox контента уровня, раздутый
+            /// на радиус блюра (= min(ceil(3σ),32) текселей — как в шейдере,
+            /// и как BLUR_SAMPLE_SCALE=3.0 в WebRender). None = контент
+            /// уровня не удалось ограничить → полноэкранные пассы, как раньше.
+            /// Корректность чтений за пределами scissor гарантирована полными
+            /// LoadOp::Clear этих текстур (clear не подчиняется scissor).
+            scissor: Option<DeviceScissor>,
         }
         // CSS Filter Effects L1 §2 / Compositing §13 — backdrop-filter plan.
         // `from_level` = element's offscreen layer (content rendered here).
@@ -4562,6 +5390,15 @@ impl Renderer {
             /// Stable index among backdrop elements in this frame (paint order).
             /// Cache key for [`Renderer::backdrop_cache`] and the matching texture.
             ordinal: u32,
+            /// bbox-офскрины backdrop-фильтра (EXPERIMENT.md §2): рабочая
+            /// область `[x, y, w, h]` в device px родительской текстуры —
+            /// element bounds + радиус ядра блюра (формула шейдера), ширина/
+            /// высота выровнены вверх до 64 px (стабильность texture_pool).
+            /// Ping-pong/кэш-текстуры создаются этого размера, а не размера
+            /// родителя; UV bounds-квада запечены относительно региона.
+            /// `None` — фолбэк на полноразмерный путь (kill-switch, вырожденные
+            /// bounds или регион ≈ весь родитель).
+            region: Option<[u32; 4]>,
         }
         // CSS Masking L1 §5 — mask-layer composite plan.
         // `from_level`   = offscreen level where mask content was rendered.
@@ -4603,12 +5440,54 @@ impl Renderer {
         // Stack for PushMaskLayer: (rect, mode). Popped by PopMaskLayer.
         let mut mask_layer_stack: Vec<(Rect, MaskMode)> = Vec::new();
 
+        /// Фактически закрашенная область offscreen-уровня в CSS px
+        /// (эксперимент bbox-scissor, EXPERIMENT.md §2). `Empty` — в уровень
+        /// ещё ничего не нарисовано; `Rect` — объединение вершин всех draw-ops
+        /// уровня плюс области дочерних композитов; `Unbounded` — состав
+        /// уровня не удалось ограничить (маска/backdrop) → пассы уровня
+        /// остаются полноэкранными. Безопасность по построению: любой
+        /// не-учтённый источник пикселей обязан помечать уровень Unbounded.
+        #[derive(Clone, Copy)]
+        enum LevelBounds {
+            Empty,
+            Rect { x0: f32, y0: f32, x1: f32, y1: f32 },
+            Unbounded,
+        }
+        impl LevelBounds {
+            fn add_point(&mut self, x: f32, y: f32) {
+                if !x.is_finite() || !y.is_finite() {
+                    *self = LevelBounds::Unbounded;
+                    return;
+                }
+                match self {
+                    LevelBounds::Empty => *self = LevelBounds::Rect { x0: x, y0: y, x1: x, y1: y },
+                    LevelBounds::Rect { x0, y0, x1, y1 } => {
+                        *x0 = x0.min(x);
+                        *y0 = y0.min(y);
+                        *x1 = x1.max(x);
+                        *y1 = y1.max(y);
+                    }
+                    LevelBounds::Unbounded => {}
+                }
+            }
+            fn add_rect(&mut self, rx0: f32, ry0: f32, rx1: f32, ry1: f32) {
+                self.add_point(rx0, ry0);
+                self.add_point(rx1, ry1);
+            }
+        }
+        let mut level_bounds: Vec<LevelBounds> = vec![LevelBounds::Unbounded];
+
         let mut current_level: usize = 0;
-        let mut level_alpha_stack: Vec<f32> = Vec::new();
+        // (alpha, метка render_plan.len() на момент Push) — метка позволяет
+        // выбросить из плана ВСЕ пассы слоя (viewport-cull невидимых слоёв):
+        // offscreen-текстуры имеют размер окна, контент за его пределами
+        // физически не попадает ни в одну текстуру, так что отсечение
+        // эквивалентно сегодняшнему клиппингу растеризацией.
+        let mut level_alpha_stack: Vec<(f32, usize)> = Vec::new();
         // Tracks blend mode per opened offscreen level (for non-Normal PushBlendMode).
-        let mut level_blend_mode_stack: Vec<BlendMode> = Vec::new();
+        let mut level_blend_mode_stack: Vec<(BlendMode, usize)> = Vec::new();
         // Tracks filter list per opened offscreen level (for CSS filter compositing).
-        let mut filter_stack: Vec<Vec<FilterFn>> = Vec::new();
+        let mut filter_stack: Vec<(Vec<FilterFn>, usize)> = Vec::new();
         // Stack for backdrop-filter: (filter_list, element_bounds_css_px).
         let mut backdrop_filter_stack: Vec<(Vec<FilterFn>, lumen_core::geom::Rect)> = Vec::new();
         // Monotonic counter assigning a stable ordinal to each backdrop element
@@ -4620,12 +5499,41 @@ impl Renderer {
         // Текущий выставленный scissor (для дедупликации SetScисsor-команд).
         // None = не выставлен (первый SetScissor нужен в любом случае).
         let mut current_scissor: Option<DeviceScissor> = None;
-        let (surface_w, surface_h) = self.surface_dims();
+        // Размеры цели пасса (для Band — полосы), не поверхности окна.
+        let (surface_w, surface_h) = (sw0, sh0);
 
         let dpr_f32 = self.scale_factor.max(1e-6) as f32;
 
+        // Объединяет позиции вершин диапазона draw-op-а в bbox уровня.
+        // Вершины уже в CSS px, после transform/scroll — bbox финальный.
+        macro_rules! union_op_verts {
+            ($lb:expr, $vec:ident, $start:expr, $count:expr) => {
+                for v in &$vec[*$start as usize..(*$start + *$count) as usize] {
+                    $lb.add_point(v.pos[0], v.pos[1]);
+                }
+            };
+        }
+
         macro_rules! flush_batch {
             () => {{
+                // bbox-scissor: перед сбросом батча учесть его вершины в
+                // границах текущего offscreen-уровня (уровень 0 не считаем).
+                if current_level > 0 && batch_start < draw_ops.len() {
+                    if let Some(lb) = level_bounds.get_mut(current_level) {
+                        for op in &draw_ops[batch_start..] {
+                            match op {
+                                DrawOp::SetScissor(_) => {}
+                                DrawOp::Fill { v_start, v_count } => union_op_verts!(lb, fill_vertices, v_start, v_count),
+                                DrawOp::Circle { v_start, v_count } => union_op_verts!(lb, circle_vertices, v_start, v_count),
+                                DrawOp::RRect { v_start, v_count } => union_op_verts!(lb, rrect_vertices, v_start, v_count),
+                                DrawOp::Text { v_start, v_count } => union_op_verts!(lb, text_vertices, v_start, v_count),
+                                DrawOp::Image { v_start, v_count, .. } => union_op_verts!(lb, image_vertices, v_start, v_count),
+                                DrawOp::Gradient { v_start, v_count, .. } => union_op_verts!(lb, grad_vertices, v_start, v_count),
+                                DrawOp::CrossFade { v_start, v_count, .. } => union_op_verts!(lb, cross_fade_vertices, v_start, v_count),
+                            }
+                        }
+                    }
+                }
                 let first = level_first.get(current_level).copied().unwrap_or(false);
                 let load_op = if first {
                     if current_level == 0 {
@@ -4663,6 +5571,24 @@ impl Renderer {
         let viewport_css_h = surface_h as f32 / dpr_f32;
         let viewport_css_w = surface_w as f32 / dpr_f32;
         let mut sticky_stack: Vec<(f32, f32)> = Vec::new();
+
+        // Compose-путь скролл-композитора: полоса страницы рисуется первым
+        // op-ом level 0 (после LoadOp::Clear того же пасса) — под overlay,
+        // на месте контента, который она заменяет. Обычный image-квад:
+        // painter's order и батчинг не нарушаются.
+        if let Some(blit) = self.pending_base_blit.take() {
+            let v_start = image_vertices.len() as u32;
+            push_image_quad(
+                &mut image_vertices,
+                Rect { x: 0.0, y: blit.dy_css, width: blit.w_css, height: blit.h_css },
+                [0.0, 0.0],
+                [1.0, 1.0],
+                1.0,
+            );
+            let image_batch_idx = image_bind_groups.len() as u32;
+            image_bind_groups.push(blit.bind_group);
+            draw_ops.push(DrawOp::Image { v_start, v_count: 6, image_batch_idx });
+        }
 
         let iter_content = content.iter().map(|c| (c, false));
         let iter_overlay = overlay.iter().map(|c| (c, true));
@@ -5195,17 +6121,48 @@ impl Renderer {
                 }
                 DisplayCommand::PushOpacity { alpha } => {
                     flush_batch!();
-                    level_alpha_stack.push(*alpha);
+                    level_alpha_stack.push((*alpha, render_plan.len()));
                     current_level += 1;
                     while level_first.len() <= current_level {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PopOpacity => {
                     if !level_alpha_stack.is_empty() {
                         flush_batch!();
-                        let layer_alpha = level_alpha_stack.pop().unwrap();
+                        let (layer_alpha, plan_mark) = level_alpha_stack.pop().unwrap();
+                        // viewport-cull: слой с alpha=0, пустой или целиком вне
+                        // поверхности не виден — выбросить из плана и его
+                        // контент, и композит.
+                        let child_now = if bbox_scissor_disabled() {
+                            LevelBounds::Unbounded
+                        } else {
+                            level_bounds
+                                .get(current_level)
+                                .copied()
+                                .unwrap_or(LevelBounds::Unbounded)
+                        };
+                        let invisible = layer_alpha <= 0.0
+                            || match child_now {
+                                LevelBounds::Empty => true,
+                                LevelBounds::Rect { x0, y0, x1, y1 } => {
+                                    x1 * dpr_f32 <= 0.0
+                                        || y1 * dpr_f32 <= 0.0
+                                        || x0 * dpr_f32 >= surface_w as f32
+                                        || y0 * dpr_f32 >= surface_h as f32
+                                }
+                                LevelBounds::Unbounded => false,
+                            };
+                        if invisible {
+                            render_plan.truncate(plan_mark);
+                            current_level -= 1;
+                            continue;
+                        }
                         let comp_v_start = composite_vertices.len() as u32;
                         push_composite_quad(&mut composite_vertices, layer_alpha);
                         render_plan.push(RenderPlanItem::Composite(CompositePlan {
@@ -5213,7 +6170,22 @@ impl Renderer {
                             comp_v_start,
                             mode: BlendMode::Normal,
                         }));
+                        let child = level_bounds
+                            .get(current_level)
+                            .copied()
+                            .unwrap_or(LevelBounds::Unbounded);
                         current_level -= 1;
+                        // Composite переносит контент дочернего уровня 1:1 —
+                        // границы родителя расширяются на bbox ребёнка.
+                        if current_level > 0
+                            && let Some(lb) = level_bounds.get_mut(current_level)
+                        {
+                            match child {
+                                LevelBounds::Empty => {}
+                                LevelBounds::Rect { x0, y0, x1, y1 } => lb.add_rect(x0, y0, x1, y1),
+                                LevelBounds::Unbounded => *lb = LevelBounds::Unbounded,
+                            }
+                        }
                     }
                 }
                 // CSS Compositing & Blending L1 §5 — mix-blend-mode compositing.
@@ -5223,18 +6195,48 @@ impl Renderer {
                     blend_mode_stack.push(*mode);
                     if *mode != BlendMode::Normal {
                         flush_batch!();
-                        level_blend_mode_stack.push(*mode);
+                        level_blend_mode_stack.push((*mode, render_plan.len()));
                         current_level += 1;
                         while level_first.len() <= current_level {
                             level_first.push(true);
                         }
                         level_first[current_level] = true;
+                        while level_bounds.len() <= current_level {
+                            level_bounds.push(LevelBounds::Empty);
+                        }
+                        level_bounds[current_level] = LevelBounds::Empty;
                     }
                 }
                 DisplayCommand::PopBlendMode => {
                     blend_mode_stack.pop();
-                    if let Some(mode) = level_blend_mode_stack.pop() {
+                    if let Some((mode, plan_mark)) = level_blend_mode_stack.pop() {
                         flush_batch!();
+                        // viewport-cull: для всех CSS-блэндов прозрачный src
+                        // оставляет backdrop неизменным (co = cs + cb·(1−as)),
+                        // поэтому пустой/за-экранный слой невидим целиком.
+                        let child_now = if bbox_scissor_disabled() {
+                            LevelBounds::Unbounded
+                        } else {
+                            level_bounds
+                                .get(current_level)
+                                .copied()
+                                .unwrap_or(LevelBounds::Unbounded)
+                        };
+                        let invisible = match child_now {
+                            LevelBounds::Empty => true,
+                            LevelBounds::Rect { x0, y0, x1, y1 } => {
+                                x1 * dpr_f32 <= 0.0
+                                    || y1 * dpr_f32 <= 0.0
+                                    || x0 * dpr_f32 >= surface_w as f32
+                                    || y0 * dpr_f32 >= surface_h as f32
+                            }
+                            LevelBounds::Unbounded => false,
+                        };
+                        if invisible {
+                            render_plan.truncate(plan_mark);
+                            current_level -= 1;
+                            continue;
+                        }
                         let comp_v_start = composite_vertices.len() as u32;
                         // alpha=1.0: blend shader handles all compositing math.
                         push_composite_quad(&mut composite_vertices, 1.0);
@@ -5243,7 +6245,22 @@ impl Renderer {
                             comp_v_start,
                             mode,
                         }));
+                        let child = level_bounds
+                            .get(current_level)
+                            .copied()
+                            .unwrap_or(LevelBounds::Unbounded);
                         current_level -= 1;
+                        // Blend-composite тоже красит родителя только в bbox
+                        // ребёнка (за его пределами src прозрачен).
+                        if current_level > 0
+                            && let Some(lb) = level_bounds.get_mut(current_level)
+                        {
+                            match child {
+                                LevelBounds::Empty => {}
+                                LevelBounds::Rect { x0, y0, x1, y1 } => lb.add_rect(x0, y0, x1, y1),
+                                LevelBounds::Unbounded => *lb = LevelBounds::Unbounded,
+                            }
+                        }
                     }
                 }
                 // CSS Backgrounds L3 §3.3/3.4/3.5 — background-size/position/repeat.
@@ -5509,6 +6526,10 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 // CSS Masking L1 §4 — gradient masks: build GradParamsCpu at plan time;
                 // render-time pass renders gradient → surface-size temp texture → use as mask.
@@ -5531,6 +6552,10 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PushMaskRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
                     flush_batch!();
@@ -5551,6 +6576,10 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PushMaskConicGradient { rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
                     flush_batch!();
@@ -5573,6 +6602,10 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PopMask => {
                     flush_batch!();
@@ -5699,29 +6732,114 @@ impl Renderer {
                         mask_gradient,
                     }));
                     current_level -= 1;
+                    // bbox-scissor v1: mask-композит не отслеживаем — родитель
+                    // помечается неограниченным (безопасный фолбэк).
+                    if current_level > 0
+                        && let Some(lb) = level_bounds.get_mut(current_level)
+                    {
+                        *lb = LevelBounds::Unbounded;
+                    }
                 }
                 // CSS Filter Effects L1 — PushFilter opens an offscreen level;
                 // PopFilter composites it onto the parent with filter applied.
                 DisplayCommand::PushFilter { filters, bounds: _ } => {
                     flush_batch!();
-                    filter_stack.push(filters.clone());
+                    filter_stack.push((filters.clone(), render_plan.len()));
                     current_level += 1;
                     while level_first.len() <= current_level {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PopFilter => {
-                    if let Some(filters) = filter_stack.pop() {
+                    if let Some((filters, plan_mark)) = filter_stack.pop() {
                         flush_batch!();
+                        let content = if bbox_scissor_disabled() {
+                            LevelBounds::Unbounded
+                        } else {
+                            level_bounds
+                                .get(current_level)
+                                .copied()
+                                .unwrap_or(LevelBounds::Unbounded)
+                        };
+                        // Радиус блюра в текселях — та же формула, что в
+                        // BLUR_SHADER_SRC: min(ceil(3σ),32); шейпер шагает по
+                        // 1 текселю surface-текстуры. + 2 px запас на bilinear.
+                        let blur_pad = filters
+                            .iter()
+                            .find_map(|f| match f {
+                                FilterFn::Blur(s) if *s > 0.0 => {
+                                    Some((3.0 * *s).ceil().min(32.0))
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or(0.0)
+                            + 2.0;
+                        // (scissor пассов, раздутый bbox в CSS px для родителя)
+                        let (scissor, parent_rect) = match content {
+                            LevelBounds::Unbounded => (None, None),
+                            LevelBounds::Empty => {
+                                // Слой пуст: composite прозрачной текстуры —
+                                // визуальный no-op; выбросить из плана и
+                                // отрисовку контента слоя (viewport-cull).
+                                render_plan.truncate(plan_mark);
+                                current_level -= 1;
+                                continue;
+                            }
+                            LevelBounds::Rect { x0, y0, x1, y1 } => {
+                                let pad_css = blur_pad / dpr_f32;
+                                let (ix0, iy0) = (x0 - pad_css, y0 - pad_css);
+                                let (ix1, iy1) = (x1 + pad_css, y1 + pad_css);
+                                let sx0 = ((ix0 * dpr_f32).floor().max(0.0) as u32).min(surface_w);
+                                let sy0 = ((iy0 * dpr_f32).floor().max(0.0) as u32).min(surface_h);
+                                let sx1 = ((ix1 * dpr_f32).ceil().max(0.0) as u32).min(surface_w);
+                                let sy1 = ((iy1 * dpr_f32).ceil().max(0.0) as u32).min(surface_h);
+                                if sx1 <= sx0 || sy1 <= sy0 {
+                                    // Контент целиком за пределами surface —
+                                    // фильтр не виден, его контент-пассы тоже
+                                    // выбрасываются (viewport-cull).
+                                    render_plan.truncate(plan_mark);
+                                    current_level -= 1;
+                                    continue;
+                                }
+                                let full = sx0 == 0
+                                    && sy0 == 0
+                                    && sx1 >= surface_w
+                                    && sy1 >= surface_h;
+                                (
+                                    (!full).then_some(DeviceScissor {
+                                        x: sx0,
+                                        y: sy0,
+                                        width: sx1 - sx0,
+                                        height: sy1 - sy0,
+                                    }),
+                                    Some((ix0, iy0, ix1, iy1)),
+                                )
+                            }
+                        };
                         let comp_v_start = composite_vertices.len() as u32;
                         push_composite_quad(&mut composite_vertices, 1.0);
                         render_plan.push(RenderPlanItem::FilterComposite(FilterCompositePlan {
                             from_level: current_level,
                             filters,
                             comp_v_start,
+                            scissor,
                         }));
                         current_level -= 1;
+                        // Композит фильтра красит родителя в пределах
+                        // раздутого bbox — учесть в границах родителя.
+                        if current_level > 0
+                            && let Some(lb) = level_bounds.get_mut(current_level)
+                        {
+                            match parent_rect {
+                                Some((rx0, ry0, rx1, ry1)) => lb.add_rect(rx0, ry0, rx1, ry1),
+                                None => *lb = LevelBounds::Unbounded,
+                            }
+                        }
                     }
                 }
                 // CSS Filter Effects L1 §2 — backdrop-filter.
@@ -5734,12 +6852,69 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PopBackdropFilter => {
                     if let Some((filters, bounds)) = backdrop_filter_stack.pop() {
                         flush_batch!();
                         let comp_v_start = composite_vertices.len() as u32;
                         push_composite_quad(&mut composite_vertices, 1.0);
+                        // bbox-офскрины backdrop: рабочая область = bounds +
+                        // радиус ядра блюра (формула BLUR_SHADER_SRC:
+                        // min(ceil(3σ),32) + 2 запас), клип по родителю,
+                        // ширина/высота выровнены вверх до 64 px — чтобы
+                        // texture_pool стабильно попадал при движении bounds.
+                        // Пиксельная эквивалентность: blit читает только
+                        // bounds, а все выборки блюра для пикселей bounds
+                        // лежат внутри региона (та же математика, что у
+                        // bbox-scissor п.16).
+                        let region: Option<[u32; 4]> = if bbox_backdrop_disabled() {
+                            None
+                        } else {
+                            let blur_pad = filters
+                                .iter()
+                                .find_map(|f| match f {
+                                    FilterFn::Blur(s) if *s > 0.0 => {
+                                        Some((3.0 * *s).ceil().min(32.0))
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or(0.0)
+                                + 2.0;
+                            let pad_css = blur_pad / dpr_f32;
+                            let rx0 = (((bounds.x - pad_css) * dpr_f32).floor().max(0.0) as u32)
+                                .min(surface_w);
+                            let ry0 = (((bounds.y - pad_css) * dpr_f32).floor().max(0.0) as u32)
+                                .min(surface_h);
+                            let rx1 = (((bounds.x + bounds.width + pad_css) * dpr_f32)
+                                .ceil()
+                                .max(0.0) as u32)
+                                .min(surface_w);
+                            let ry1 = (((bounds.y + bounds.height + pad_css) * dpr_f32)
+                                .ceil()
+                                .max(0.0) as u32)
+                                .min(surface_h);
+                            if rx1 <= rx0 || ry1 <= ry0 {
+                                // Элемент целиком вне surface — blit невидим,
+                                // но пассы должны отработать как раньше
+                                // (полноразмерный фолбэк, нулевой регион
+                                // ломал бы копию/кэш).
+                                None
+                            } else {
+                                let rw = (rx1 - rx0).div_ceil(64) * 64;
+                                let rh = (ry1 - ry0).div_ceil(64) * 64;
+                                // Регион ≈ весь родитель — выигрыша нет,
+                                // остаёмся на старом пути (и его кэш-хэшах).
+                                if rw >= surface_w && rh >= surface_h {
+                                    None
+                                } else {
+                                    Some([rx0, ry0, rw, rh])
+                                }
+                            }
+                        };
                         let bounds_v_start = composite_vertices.len() as u32;
                         push_bounded_quad(
                             &mut composite_vertices,
@@ -5748,6 +6923,7 @@ impl Renderer {
                             surface_h as f32,
                             dpr_f32,
                             1.0,
+                            region,
                         );
                         let ordinal = backdrop_ordinal;
                         backdrop_ordinal += 1;
@@ -5758,9 +6934,17 @@ impl Renderer {
                                 comp_v_start,
                                 bounds_v_start,
                                 ordinal,
+                                region,
                             },
                         ));
                         current_level -= 1;
+                        // bbox-scissor v1: backdrop-композит не отслеживаем —
+                        // родитель помечается неограниченным (безопасный фолбэк).
+                        if current_level > 0
+                            && let Some(lb) = level_bounds.get_mut(current_level)
+                        {
+                            *lb = LevelBounds::Unbounded;
+                        }
                     }
                 }
                 DisplayCommand::DrawSvgPath { vertices, color } => {
@@ -5864,6 +7048,10 @@ impl Renderer {
                         level_first.resize(current_level + 1, true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 // CSS Masking L1 §5 — PopMaskLayer: composite mask layer onto parent.
                 // Algorithm:
@@ -5897,6 +7085,13 @@ impl Renderer {
                         ml_v_end,
                     }));
                     current_level -= 1;
+                    // bbox-scissor v1: mask-layer-композит не отслеживаем —
+                    // родитель помечается неограниченным (безопасный фолбэк).
+                    if current_level > 0
+                        && let Some(lb) = level_bounds.get_mut(current_level)
+                    {
+                        *lb = LevelBounds::Unbounded;
+                    }
                 }
                 // Scrollbar track + thumb: two fill quads drawn with the current
                 // clip/transform stack (parent's, NOT scroll layer's).
@@ -6030,6 +7225,7 @@ impl Renderer {
         }
         flush_batch!();
         let _ = (batch_start, current_scissor); // terminal flush — values not needed after
+        let t_after_collect = t_frame0.elapsed();
 
         // ── Atlas upload (если изменился) ─────────────────────────────────
         if self.atlas.dirty() {
@@ -6063,7 +7259,7 @@ impl Renderer {
         // 200% scaling, 16-px CSS текст рендерится на 32 device px.
         // f32 cast терпит небольшую потерю точности — DPR редко > 4.0.
         let dpr = self.scale_factor.max(1e-6) as f32;
-        let (dims_w, dims_h) = self.surface_dims();
+        let (dims_w, dims_h) = (surface_w, surface_h);
         let viewport = [
             dims_w as f32 / dpr,
             dims_h as f32 / dpr,
@@ -6232,25 +7428,48 @@ impl Renderer {
             self.ensure_layer_textures(max_level, surface_w, surface_h);
         }
 
-        // CSS Masking L1 §4 — gradient mask temp textures.
-        // Kept alive until after encoder.submit() so GPU commands can safely read them.
-        // Each entry corresponds to one MaskComposite plan item with mask_gradient.
-        // Populated lazily during the render loop (see MaskComposite handler below).
-        let mut temp_grad_textures: Vec<(wgpu::Texture, wgpu::TextureView)> = Vec::new();
+        // CSS Masking L1 §4 — gradient mask temp textures ИЗ ПУЛА.
+        // Раньше на каждый кадр на каждый MaskComposite с градиентом
+        // создавалась свежая текстура размером с target и дропалась после
+        // submit — 196 из 237 созданий за флинг-прогон (перепись п.23/24,
+        // 1024×1800 ≈ 7.4 МБ каждая). Пред-захват до цикла (внутри цикла
+        // живут заимствования &self), возврат в пул после submit.
+        let grad_mask_count = render_plan
+            .iter()
+            .filter(|item| {
+                matches!(item, RenderPlanItem::MaskComposite(c)
+                    if c.mask_gradient.is_some()
+                        && c.mask_src.as_ref().is_none_or(|src| !self.images.contains_key(src)))
+            })
+            .count();
+        let mut temp_grad_layers: Vec<OffscreenLayer> = Vec::with_capacity(grad_mask_count);
+        for _ in 0..grad_mask_count {
+            let layer = self.create_layer_texture(surface_w, surface_h);
+            temp_grad_layers.push(layer);
+        }
+        let mut temp_grad_next = 0usize;
 
         // ── Frame ─────────────────────────────────────────────────────────
         // Windowed: get the next swapchain image from the surface.
         // Headless: create a temporary RGBA8 RENDER_ATTACHMENT|COPY_SRC texture so
         //   render_to_image() can read it back after this call.
+        let t_after_prep = t_frame0.elapsed();
         let windowed_frame: Option<wgpu::SurfaceTexture>;
         let headless_tex: Option<wgpu::Texture>;
         let frame_view: wgpu::TextureView;
-        if let Some(ref surface) = self.surface {
+        if let RenderPassMode::Band { view, .. } = &mode {
+            // Оффскрин-рендер полосы: цель задана вызывающим, swapchain не
+            // трогаем (клон view — дешёвый Arc-хэндл wgpu).
+            frame_view = view.clone();
+            windowed_frame = None;
+            headless_tex = None;
+        } else if let Some(ref surface) = self.surface {
             let f = surface.get_current_texture()?;
             frame_view = f.texture.create_view(&wgpu::TextureViewDescriptor::default());
             windowed_frame = Some(f);
             headless_tex = None;
         } else {
+            count_texture_created_labeled("headless-frame", surface_w, surface_h);
             let tex = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("headless-frame"),
                 size: wgpu::Extent3d {
@@ -6269,6 +7488,7 @@ impl Renderer {
             windowed_frame = None;
             headless_tex = Some(tex);
         }
+        let t_after_acquire = t_frame0.elapsed();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -6365,7 +7585,39 @@ impl Renderer {
         // value (wgpu batches all write_buffer calls before any encoder commands run).
         let mut filter_param_bufs: Vec<wgpu::Buffer> = Vec::new();
 
+        // BUG-274: поэлементный CPU-учёт encode-фазы (LUMEN_FRAME_LOG=2) —
+        // суммарное время и число элементов по каждому типу RenderPlanItem.
+        let mut t_plan: [std::time::Duration; 6] = Default::default();
+        let mut n_plan: [u32; 6] = [0; 6];
+        // BUG-274: разбивка Draw-пасса — begin_render_pass / запись ops / drop(pass).
+        let mut t_draw_sub: [std::time::Duration; 3] = Default::default();
+
+        // BUG-274 (LUMEN_FRAME_LOG=3): пер-элементный профиль encode.
+        // Средние по типу пасса скрывают форму распределения: «161 пасс по
+        // 0.62 мс» и «146 пассов по 0.02 мс + 15 по 6.5 мс» дают одну и ту же
+        // сумму, но требуют противоположных решений (схлопывать пассы против
+        // переиспользовать текстуры). Пишем каждый элемент, печатаем топ.
+        let item_log = crate::frame_log_level() >= 3;
+        // (plan_kind, target_level, длительность, drop(pass) для Draw)
+        let mut items_prof: Vec<(usize, usize, std::time::Duration, std::time::Duration)> =
+            if item_log { Vec::with_capacity(render_plan.len()) } else { Vec::new() };
+
         for item in &render_plan {
+            let t_item0 = std::time::Instant::now();
+            // usize::MAX = «уровень неприменим к этому типу элемента».
+            let item_level = match item {
+                RenderPlanItem::Draw(batch) => batch.target_level,
+                _ => usize::MAX,
+            };
+            let mut item_pass_end = std::time::Duration::ZERO;
+            let plan_kind = match item {
+                RenderPlanItem::Draw(_) => 0,
+                RenderPlanItem::Composite(_) => 1,
+                RenderPlanItem::MaskComposite(_) => 2,
+                RenderPlanItem::FilterComposite(_) => 3,
+                RenderPlanItem::BackdropFilterComposite(_) => 4,
+                RenderPlanItem::MaskLayerComposite(_) => 5,
+            };
             match item {
                 RenderPlanItem::Draw(batch) => {
                     let target_view = if batch.target_level == 0 {
@@ -6404,6 +7656,7 @@ impl Renderer {
                         }),
                         stencil_ops: None,
                     });
+                    let t_d0 = std::time::Instant::now();
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("draw-pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -6416,7 +7669,15 @@ impl Renderer {
                         timestamp_writes: None,
                         occlusion_query_set: None,
                     });
+                    let t_d1 = t_d0.elapsed();
                     run_draw_ops!(pass, batch.ops_start, batch.ops_end);
+                    let t_d2 = t_d0.elapsed();
+                    drop(pass);
+                    let t_d3 = t_d0.elapsed();
+                    t_draw_sub[0] += t_d1;
+                    t_draw_sub[1] += t_d2 - t_d1;
+                    t_draw_sub[2] += t_d3 - t_d2;
+                    item_pass_end = t_d3 - t_d2;
                 }
                 RenderPlanItem::Composite(comp) => {
                     if let Some(cvb) = &comp_vbuf {
@@ -6552,19 +7813,13 @@ impl Renderer {
                             MaskGradientSpec::Radial { params, rect } => (params, rect),
                             MaskGradientSpec::Conic  { params, rect } => (params, rect),
                         };
-                        let temp_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-                            label: Some("mask-grad-tex"),
-                            size: wgpu::Extent3d {
-                                width: surface_w, height: surface_h, depth_or_array_layers: 1,
-                            },
-                            mip_level_count: 1, sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: self.surface_format,
-                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                                 | wgpu::TextureUsages::TEXTURE_BINDING,
-                            view_formats: &[],
-                        });
-                        let temp_view = temp_tex.create_view(&wgpu::TextureViewDescriptor::default());
+                        // Пул-текстура пред-захвачена до цикла (temp_grad_layers);
+                        // LoadOp::Clear ниже гарантирует чистый старт при reuse.
+                        let Some(grad_layer) = temp_grad_layers.get(temp_grad_next) else {
+                            continue;
+                        };
+                        temp_grad_next += 1;
+                        let temp_view = &grad_layer.view;
                         // Write gradient params uniform and build bind group.
                         let grad_ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
                             label: Some("mask-grad-ubuf"),
@@ -6604,7 +7859,7 @@ impl Renderer {
                             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                 label: Some("mask-grad-render"),
                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &temp_view,
+                                    view: temp_view,
                                     resolve_target: None,
                                     depth_slice: None,
                                     ops: wgpu::Operations {
@@ -6626,9 +7881,7 @@ impl Renderer {
                             pass.set_vertex_buffer(0, grad_vbuf_m.slice(..));
                             pass.draw(0..6, 0..1);
                         }
-                        // Store temp texture so it lives until encoder.submit().
-                        temp_grad_textures.push((temp_tex, temp_view));
-                        Some(&temp_grad_textures.last().unwrap().1)
+                        Some(temp_view)
                     } else {
                         None
                     };
@@ -6774,6 +8027,9 @@ impl Renderer {
                                 occlusion_query_set: None,
                             });
                             pass.set_pipeline(&self.blur_pipeline);
+                            if let Some(s) = plan.scissor {
+                                pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                            }
                             pass.set_bind_group(0, &blur_bg_h, &[]);
                             pass.set_vertex_buffer(0, cvb.slice(..));
                             pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
@@ -6811,6 +8067,9 @@ impl Renderer {
                                 occlusion_query_set: None,
                             });
                             pass.set_pipeline(&self.blur_pipeline);
+                            if let Some(s) = plan.scissor {
+                                pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                            }
                             pass.set_bind_group(0, &blur_bg_v, &[]);
                             pass.set_vertex_buffer(0, cvb.slice(..));
                             pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
@@ -6867,6 +8126,9 @@ impl Renderer {
                             occlusion_query_set: None,
                         });
                         pass.set_pipeline(&self.filter_pipeline);
+                        if let Some(s) = plan.scissor {
+                            pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                        }
                         pass.set_bind_group(0, &filter_bg, &[]);
                         pass.set_vertex_buffer(0, cvb.slice(..));
                         pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
@@ -6896,14 +8158,63 @@ impl Renderer {
                     let parent_idx = plan.from_level - 2;
                     let parent_w = self.layer_textures[parent_idx].width;
                     let parent_h = self.layer_textures[parent_idx].height;
-                    self.ensure_scratch_layer(parent_w, parent_h);
-                    self.ensure_backdrop_layer(parent_w, parent_h);
+                    // bbox-офскрины backdrop-фильтра (EXPERIMENT.md §2):
+                    // ping-pong и кэш живут в размере региона (bounds + ядро
+                    // блюра), а не родителя. region=None — прежний
+                    // полноразмерный путь (kill-switch/фолбэк).
+                    let (rx, ry, rw, rh) = match plan.region {
+                        Some([x, y, w, h]) => (x, y, w, h),
+                        None => (0, 0, parent_w, parent_h),
+                    };
+                    let use_region = plan.region.is_some();
+                    // Копия из родителя не может выйти за его края: текстуры
+                    // выровнены до 64 px и бывают шире остатка родителя.
+                    // Копия всегда покрывает невыровненный (логический)
+                    // регион — все выборки блюра для читаемых blit-ом
+                    // пикселей лежат в скопированной области.
+                    let copy_w = rw.min(parent_w.saturating_sub(rx)).max(1);
+                    let copy_h = rh.min(parent_h.saturating_sub(ry)).max(1);
+                    let mut pooled_ping: Option<OffscreenLayer> = None;
+                    let mut pooled_pong: Option<OffscreenLayer> = None;
+                    if use_region {
+                        pooled_ping = Some(self.create_layer_texture(rw, rh));
+                        pooled_pong = Some(self.create_layer_texture(rw, rh));
+                    } else {
+                        self.ensure_scratch_layer(parent_w, parent_h);
+                        self.ensure_backdrop_layer(parent_w, parent_h);
+                    }
+                    // Depth-attachment обязан совпадать по размеру с
+                    // color-attachment (валидация wgpu).
+                    let bd_depth_view: Option<wgpu::TextureView> = if use_region {
+                        Some(self.small_depth_view(rw, rh))
+                    } else {
+                        self.depth_view.clone()
+                    };
                     // The per-ordinal cache texture is the blit source (always), and on a
                     // cache hit it already holds the previous frame's filtered backdrop.
-                    if self.ensure_backdrop_cache_texture(plan.ordinal, parent_w, parent_h) {
+                    if self.ensure_backdrop_cache_texture(plan.ordinal, rw, rh) {
                         // A resize discarded the cached pixels — drop the stale hash so it
                         // cannot produce a hit against the fresh (uninitialised) texture.
                         self.backdrop_cache.invalidate(plan.ordinal);
+                    }
+                    // Ping = вход блюра (копия родителя), pong = выход H-пасса.
+                    let ping_tex: wgpu::Texture;
+                    let ping_view: wgpu::TextureView;
+                    let pong_view: wgpu::TextureView;
+                    if let (Some(a), Some(b)) = (pooled_ping.as_ref(), pooled_pong.as_ref()) {
+                        ping_tex = a.texture.clone();
+                        ping_view = a.view.clone();
+                        pong_view = b.view.clone();
+                    } else {
+                        let s = self.scratch_layer.as_ref().unwrap();
+                        ping_tex = s.texture.clone();
+                        ping_view = s.view.clone();
+                        pong_view = self.backdrop_layer.as_ref().unwrap().view.clone();
+                    }
+                    if use_region && crate::frame_log_level() >= 2 {
+                        eprintln!(
+                            "[frame:wgpu]   bdrop region {rw}x{rh} @({rx},{ry}) of {parent_w}x{parent_h}"
+                        );
                     }
                     // Cache HIT: the cached texture is unchanged → skip the copy + blur
                     // passes entirely. Disabled cache (`backdrop_frame_hash == None`)
@@ -6920,26 +8231,25 @@ impl Renderer {
 
                     if !cache_hit {
                         if let Some(sigma) = blur_sigma {
-                            // Step 1: copy parent layer → scratch (blur H-pass input).
-                            // parent has COPY_SRC, scratch has COPY_DST.
-                            let parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
-                            let scratch_copy = self.scratch_layer.as_ref().unwrap().texture.as_image_copy();
+                            // Step 1: copy parent-region → ping (blur H-pass input).
+                            // parent has COPY_SRC, ping (pooled/scratch) has COPY_DST.
+                            let mut parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
+                            parent_copy.origin = wgpu::Origin3d { x: rx, y: ry, z: 0 };
+                            let ping_copy = ping_tex.as_image_copy();
                             encoder.copy_texture_to_texture(
                                 parent_copy,
-                                scratch_copy,
-                                wgpu::Extent3d { width: parent_w, height: parent_h, depth_or_array_layers: 1 },
+                                ping_copy,
+                                wgpu::Extent3d { width: copy_w, height: copy_h, depth_or_array_layers: 1 },
                             );
 
-                            // Step 2 H pass: scratch → backdrop_layer (REPLACE).
+                            // Step 2 H pass: ping → pong (REPLACE).
                             let blur_h = BlurParamsCpu { sigma, direction: 0, _p0: 0, _p1: 0 };
                             self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_h]));
-                            let scratch_view_h = &self.scratch_layer.as_ref().unwrap().view;
-                            let backdrop_view_h = &self.backdrop_layer.as_ref().unwrap().view;
                             let blur_bg_h = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                 label: Some("backdrop-blur-h-bg"),
                                 layout: &self.blur_bgl,
                                 entries: &[
-                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_view_h) },
+                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&ping_view) },
                                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
                                     wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
                                 ],
@@ -6948,12 +8258,12 @@ impl Renderer {
                                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                     label: Some("backdrop-blur-h-pass"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: backdrop_view_h,
+                                        view: &pong_view,
                                         resolve_target: None,
                                         depth_slice: None,
                                         ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                     })],
-                                    depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                                    depth_stencil_attachment: bd_depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
                             view: dv,
                             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                             stencil_ops: None,
@@ -6966,17 +8276,16 @@ impl Renderer {
                                 pass.set_vertex_buffer(0, cvb.slice(..));
                                 pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
                             }
-                            // Step 2 V pass: backdrop_layer → CACHE texture (REPLACE).
+                            // Step 2 V pass: pong → CACHE texture (REPLACE).
                             // The blurred result lands in the cache, ready for reuse next frame.
                             let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
                             self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_v]));
-                            let backdrop_view_v = &self.backdrop_layer.as_ref().unwrap().view;
                             let cache_view_v = &self.backdrop_cache_textures[&plan.ordinal].view;
                             let blur_bg_v = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                 label: Some("backdrop-blur-v-bg"),
                                 layout: &self.blur_bgl,
                                 entries: &[
-                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(backdrop_view_v) },
+                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&pong_view) },
                                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
                                     wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
                                 ],
@@ -6990,7 +8299,7 @@ impl Renderer {
                                         depth_slice: None,
                                         ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                     })],
-                                    depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                                    depth_stencil_attachment: bd_depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
                             view: dv,
                             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                             stencil_ops: None,
@@ -7004,21 +8313,22 @@ impl Renderer {
                                 pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
                             }
                         } else {
-                            // Filter-only backdrop (no blur): copy parent → cache directly.
+                            // Filter-only backdrop (no blur): copy parent-region → cache directly.
                             // parent has COPY_SRC, cache has COPY_DST.
-                            let parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
+                            let mut parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
+                            parent_copy.origin = wgpu::Origin3d { x: rx, y: ry, z: 0 };
                             let cache_copy = self.backdrop_cache_textures[&plan.ordinal].texture.as_image_copy();
                             encoder.copy_texture_to_texture(
                                 parent_copy,
                                 cache_copy,
-                                wgpu::Extent3d { width: parent_w, height: parent_h, depth_or_array_layers: 1 },
+                                wgpu::Extent3d { width: copy_w, height: copy_h, depth_or_array_layers: 1 },
                             );
                         }
 
                         // Record the freshly produced backdrop in the cache (skipped when
                         // caching is disabled — `backdrop_frame_hash == None`).
                         if let Some(fh) = backdrop_frame_hash {
-                            let bytes = parent_w as usize * parent_h as usize * 4;
+                            let bytes = rw as usize * rh as usize * 4;
                             evicted_ordinals = self.backdrop_cache.store(plan.ordinal, fh, bytes);
                         }
                     }
@@ -7076,6 +8386,16 @@ impl Renderer {
                         pass.draw(plan.bounds_v_start..plan.bounds_v_start + 6, 0..1);
                     }
 
+                    // bbox-офскрины: ping-pong вернуть в пул (кэш-текстура
+                    // остаётся жить у ordinal-а — её читают blit и след. кадры).
+                    // Переиспользование в этом же кадре безопасно: команды
+                    // исполняются в порядке encoder-а.
+                    if let Some(l) = pooled_ping.take() {
+                        self.release_layer_to_pool(l);
+                    }
+                    if let Some(l) = pooled_pong.take() {
+                        self.release_layer_to_pool(l);
+                    }
                     } // end if !skip_backdrop
 
                     // Step 4: composite element layer → parent (ALPHA_BLENDING).
@@ -7222,14 +8542,142 @@ impl Renderer {
                     }
                 }
             }
+            let t_item = t_item0.elapsed();
+            t_plan[plan_kind] += t_item;
+            n_plan[plan_kind] += 1;
+            if item_log {
+                items_prof.push((plan_kind, item_level, t_item, item_pass_end));
+            }
         }
 
+        let t_after_encode = t_frame0.elapsed();
         self.queue.submit([encoder.finish()]);
+        // Градиент-маски: временные текстуры обратно в пул (команды уже
+        // сабмичены; wgpu удерживает ресурсы до исполнения сам).
+        for layer in temp_grad_layers.drain(..) {
+            self.release_layer_to_pool(layer);
+        }
         if let Some(frame) = windowed_frame {
             frame.present();
         }
-        // Кадр успешно отрисован и показан — фиксируем хэш для skip-identical.
-        self.last_frame_hash = Some(frame_hash);
+        if phase_log {
+            let t_total = t_frame0.elapsed();
+            eprintln!(
+                "[frame:wgpu] total {:7.2}ms | faces {:6.2} collect {:6.2} prep {:6.2} \
+                 acquire {:6.2} encode {:6.2} submit {:6.2} | ops {} layers {}",
+                t_total.as_secs_f64() * 1e3,
+                t_after_faces.as_secs_f64() * 1e3,
+                (t_after_collect - t_after_faces).as_secs_f64() * 1e3,
+                (t_after_prep - t_after_collect).as_secs_f64() * 1e3,
+                (t_after_acquire - t_after_prep).as_secs_f64() * 1e3,
+                (t_after_encode - t_after_acquire).as_secs_f64() * 1e3,
+                (t_total - t_after_encode).as_secs_f64() * 1e3,
+                draw_ops.len(),
+                max_level,
+            );
+            let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+            eprintln!(
+                "[frame:wgpu]   plan: draw {}x{:.1}ms comp {}x{:.1}ms mask {}x{:.1}ms \
+                 filt {}x{:.1}ms bdrop {}x{:.1}ms mlayer {}x{:.1}ms",
+                n_plan[0], ms(t_plan[0]), n_plan[1], ms(t_plan[1]), n_plan[2], ms(t_plan[2]),
+                n_plan[3], ms(t_plan[3]), n_plan[4], ms(t_plan[4]), n_plan[5], ms(t_plan[5]),
+            );
+            eprintln!(
+                "[frame:wgpu]   draw-sub: begin {:.1}ms ops {:.1}ms end {:.1}ms |                  textures_created {} pool {}",
+                ms(t_draw_sub[0]), ms(t_draw_sub[1]), ms(t_draw_sub[2]),
+                TEXTURES_CREATED.load(std::sync::atomic::Ordering::Relaxed),
+                self.texture_pool.len(),
+            );
+
+            // LUMEN_FRAME_LOG=3 — распределение, а не среднее.
+            if item_log {
+                let d_created = load_counter(&TEXTURES_CREATED) - tex_created_at_entry;
+                let d_nanos = load_counter(&TEXTURE_CREATE_NANOS) - tex_nanos_at_entry;
+                let d_hits = load_counter(&TEXTURE_POOL_HITS) - pool_hits_at_entry;
+                let d_misses = load_counter(&TEXTURE_POOL_MISSES) - pool_misses_at_entry;
+                eprintln!(
+                    "[frame:wgpu]   alloc: this frame created {d_created} tex in {:.2}ms | \
+                     pool hit {d_hits} miss {d_misses}",
+                    d_nanos as f64 / 1e6,
+                );
+                // Перепись «кто создаёт текстуры» (суммарно за процесс,
+                // вопрос п.23): топ-8 по количеству, с размерами.
+                if let Some(census) = TEXTURE_CENSUS.get()
+                    && let Ok(m) = census.lock()
+                {
+                    let mut rows: Vec<_> = m.iter().map(|(k, n)| (*k, *n)).collect();
+                    rows.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+                    let s = rows
+                        .iter()
+                        .take(8)
+                        .map(|((l, w, h), n)| format!("{l} {w}x{h} x{n}"))
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    eprintln!("[frame:wgpu]   alloc-census (total): {s}");
+                }
+
+                const KIND: [&str; 6] =
+                    ["draw", "comp", "mask", "filt", "bdrop", "mlayer"];
+
+                // Гистограмма по длительности: «дорог каждый пасс» против
+                // «дороги единицы пассов» различаются здесь и только здесь.
+                let mut buckets = [0u32; 5]; // <0.05, <0.2, <1, <5, >=5 ms
+                for (_, _, dur, _) in &items_prof {
+                    let m = ms(*dur);
+                    let b = if m < 0.05 {
+                        0
+                    } else if m < 0.2 {
+                        1
+                    } else if m < 1.0 {
+                        2
+                    } else if m < 5.0 {
+                        3
+                    } else {
+                        4
+                    };
+                    buckets[b] += 1;
+                }
+                eprintln!(
+                    "[frame:wgpu]   items {} | hist <0.05ms {} <0.2ms {} <1ms {} <5ms {} >=5ms {}",
+                    items_prof.len(),
+                    buckets[0], buckets[1], buckets[2], buckets[3], buckets[4],
+                );
+
+                let mut top = items_prof.clone();
+                top.sort_unstable_by_key(|i| std::cmp::Reverse(i.2));
+                let shown = top.len().min(12);
+                let top_sum: f64 = top[..shown].iter().map(|i| ms(i.2)).sum();
+                let all_sum: f64 = top.iter().map(|i| ms(i.2)).sum();
+                eprintln!(
+                    "[frame:wgpu]   top {shown} items = {top_sum:.1}ms of {all_sum:.1}ms encode"
+                );
+                for (kind, level, dur, pass_end) in &top[..shown] {
+                    let lvl = if *level == usize::MAX {
+                        "-".to_string()
+                    } else {
+                        level.to_string()
+                    };
+                    eprintln!(
+                        "[frame:wgpu]     {:<6} lvl {:<3} {:7.2}ms  (drop(pass) {:6.2}ms)",
+                        KIND[*kind], lvl, ms(*dur), ms(*pass_end),
+                    );
+                }
+            }
+        }
+        // Финализация по режиму: Band — служебный оффскрин-проход, не кадр
+        // (не считаем и хэш не трогаем); Compose — настоящий кадр, но его
+        // хэш фиксирует вызывающий render() (хэш Compose-аргументов кадр не
+        // описывает); Normal — кадр и хэш, как раньше.
+        match mode {
+            RenderPassMode::Band { .. } => {}
+            RenderPassMode::Compose => {
+                FRAMES_RENDERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            RenderPassMode::Normal { frame_hash } => {
+                FRAMES_RENDERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.last_frame_hash = Some(frame_hash);
+            }
+        }
         // In headless mode, keep the rendered texture alive for render_to_image().
         self.pending_readback = headless_tex;
         Ok(())
@@ -7933,6 +9381,10 @@ fn push_composite_quad(out: &mut Vec<CompositeVertex>, alpha: f32) {
 /// NDC x = css_x / vw * 2 - 1; NDC y = 1 - css_y / vh * 2 (Y flipped).
 /// UV  x = css_x / vw;         UV  y = css_y / vh.
 /// `vw = surf_w / dpr`, `vh = surf_h / dpr`.
+///
+/// `src_region = Some([rx, ry, rw, rh])` (device px) — источник не
+/// полноразмерная текстура, а bbox-офскрин региона: UV считается
+/// относительно региона (`(css·dpr − r0) / rдлина`), NDC не меняется.
 fn push_bounded_quad(
     out: &mut Vec<CompositeVertex>,
     bounds: lumen_core::geom::Rect,
@@ -7940,6 +9392,7 @@ fn push_bounded_quad(
     surf_h: f32,
     dpr: f32,
     alpha: f32,
+    src_region: Option<[u32; 4]>,
 ) {
     let vw = surf_w / dpr;
     let vh = surf_h / dpr;
@@ -7947,10 +9400,23 @@ fn push_bounded_quad(
     let x1 = (bounds.x + bounds.width) / vw * 2.0 - 1.0;
     let y0 = 1.0 - bounds.y / vh * 2.0;
     let y1 = 1.0 - (bounds.y + bounds.height) / vh * 2.0;
-    let u0 = bounds.x / vw;
-    let u1 = (bounds.x + bounds.width) / vw;
-    let v0 = bounds.y / vh;
-    let v1 = (bounds.y + bounds.height) / vh;
+    let (u0, u1, v0, v1) = match src_region {
+        Some([rx, ry, rw, rh]) => {
+            let (rx, ry, rw, rh) = (rx as f32, ry as f32, (rw as f32).max(1.0), (rh as f32).max(1.0));
+            (
+                (bounds.x * dpr - rx) / rw,
+                ((bounds.x + bounds.width) * dpr - rx) / rw,
+                (bounds.y * dpr - ry) / rh,
+                ((bounds.y + bounds.height) * dpr - ry) / rh,
+            )
+        }
+        None => (
+            bounds.x / vw,
+            (bounds.x + bounds.width) / vw,
+            bounds.y / vh,
+            (bounds.y + bounds.height) / vh,
+        ),
+    };
     out.extend_from_slice(&[
         CompositeVertex { pos: [x0, y0], uv: [u0, v0], alpha },
         CompositeVertex { pos: [x1, y0], uv: [u1, v0], alpha },

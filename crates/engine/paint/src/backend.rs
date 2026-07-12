@@ -144,6 +144,23 @@ pub trait RenderBackend: Send {
         false
     }
 
+    /// Как [`render`](Self::render), но с диапазонами анимируемых сегментов
+    /// `content` (static/animated split скролл-композитора, EXPERIMENT.md §2:
+    /// полоса кэшируется по статике, сегменты рисуются поверх каждым кадром).
+    ///
+    /// Дефолт игнорирует диапазоны — бэкенды без скролл-композитора рисуют
+    /// монолитом, поведение не меняется.
+    fn render_with_anim(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+        scroll_y: f32,
+        scroll_x: f32,
+        _anim_ranges: &[std::ops::Range<usize>],
+    ) -> Result<(), RenderError> {
+        self.render(content, overlay, scroll_y, scroll_x)
+    }
+
     /// Обновляет размер поверхности рендеринга (физические пиксели).
     ///
     /// Вызывается при изменении размера окна или изменении DPI.

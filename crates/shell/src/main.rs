@@ -29,6 +29,7 @@ mod address_bar;
 mod animation_scheduler;
 mod click_log;
 mod backend_factory;
+mod bench_frames;
 use lumen_bidi_server::spawn as bidi_spawn;
 mod config;
 mod deterministic;
@@ -101,7 +102,10 @@ use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scro
 use lumen_layout::collect_computed_styles;
 use lumen_layout::style::{ComputedStyle, ScrollBehavior};
 use lumen_layout::computed_style_to_map;
-use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, RenderBackend};
+use lumen_paint::{
+    build_display_list_ordered, build_display_list_ordered_with_anim_split, hit_test, DisplayList,
+    RenderBackend,
+};
 use lumen_layout::Cursor as CssCursor;
 use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply, AutomationRequest, WaitCondition};
 use winit::application::ApplicationHandler;
@@ -299,7 +303,19 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, CursorIcon, Window, WindowId};
 
+/// `true`, если fast-scroll деградация отключена
+/// (`LUMEN_NO_FAST_SCROLL_DEGRADE=1`). Диагностика: A/B поведения и скорости
+/// на одном бинарнике (паттерн `LUMEN_NO_SCROLL_COMPOSITOR`).
+fn fast_scroll_degrade_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_FAST_SCROLL_DEGRADE").is_ok_and(|v| v == "1")
+    })
+}
+
 fn main() -> ExitCode {
+    // Anchor for launch->first-frame timing (§4 score table) — before any work.
+    bench_frames::mark_process_start();
     // Load the fingerprint profile (9F.1) once, before any network or JS setup.
     // Absent config → engine defaults, so behaviour is unchanged out of the box.
     config::init_global(config::load().unwrap_or_default());
@@ -749,6 +765,9 @@ fn run_window_mode(
         prev_styles: HashMap::new(),
         anim_frame: None,
         layout_box: None,
+        last_frame_scroll_y: 0.0,
+        scroll_velocity: 0.0,
+        fast_scroll: false,
         page_tracks: tracks::PageTracks::default(),
         snap_containers: Vec::new(),
         scroll_containers: Vec::new(),
@@ -6090,6 +6109,14 @@ struct Lumen {
     /// Растёт вправо, клампится в `[0, max(0, content_width − viewport_width)]`.
     /// На load/reload сбрасывается в 0.
     scroll_x: f32,
+    /// `scroll_y` предыдущего `RedrawRequested` — для оценки скорости скролла
+    /// (fast-scroll деградация, EXPERIMENT.md §2 срез 2).
+    last_frame_scroll_y: f32,
+    /// EMA-скорость скролла в CSS px/кадр (сглаживает разовые wheel-рывки).
+    scroll_velocity: f32,
+    /// Режим быстрого скролла: тики CSS-анимаций/GIF/video-GIF заморожены,
+    /// контент scroll-стабилен, кадры уходят в page-compose HIT.
+    fast_scroll: bool,
     /// Полная высота контента в CSS px — `max(rect.y + rect.height)` по
     /// текущему display list-у. Обновляется после load/reload. 0 — нет контента.
     content_height: f32,
@@ -9224,6 +9251,32 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Warm-frame bench (LUMEN_BENCH=hover:N | scroll:N). Drives redraws
+        // itself instead of waiting for a human, then exits. Placed first so a
+        // benched process never falls through into the idle paths below.
+        //
+        // Gated on `window.is_some()`: before `resumed()` there is nothing to
+        // redraw, and the first frame must come from the normal load path.
+        if let Some(cfg) = bench_frames::cfg()
+            && self.window.is_some()
+        {
+            if bench_frames::done() {
+                bench_frames::report();
+                event_loop.exit();
+                return;
+            }
+            bench_frames::log_geometry_once(
+                self.content_height,
+                self.viewport_height_css(),
+                self.max_scroll(),
+                self.display_list.len(),
+            );
+            if cfg.mode == bench_frames::BenchMode::Scroll {
+                self.scroll_y = bench_frames::next_scroll(self.scroll_y, self.max_scroll());
+            }
+            self.request_redraw();
+        }
+
         // TEMP BUG-272 diagnostics: dump known-store sizes every ~10 s.
         if std::env::var("LUMEN_MEM_REPORT").is_ok() {
             let now_s = self.epoch.elapsed().as_secs_f64();
@@ -12283,6 +12336,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let frame_log_t0 =
                     lumen_paint::frame_log_enabled().then(std::time::Instant::now);
 
+                // Warm-frame bench (LUMEN_BENCH): таймер всего RedrawRequested,
+                // включая skip-путь — на нём как раз и меряется цена решения
+                // «не рисовать» (см. crates/shell/src/bench_frames.rs).
+                let bench_t0 = bench_frames::active().then(std::time::Instant::now);
+
                 // Step 1: scroll update.
                 if self.advance_scroll_anim() {
                     self.request_redraw();
@@ -12307,6 +12365,39 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Step 1.6: content-visibility: auto (BB-4) — пропущенный узел
                 // вошёл в расширенный viewport → ratchet relevant + relayout.
                 self.maybe_expand_cv_relevant();
+
+                // Fast-scroll деградация (EXPERIMENT.md §2 срез 2, принцип
+                // пользователя 2026-07-10: чем быстрее скролл, тем меньше
+                // пользователю важно содержимое). При быстром скролле
+                // замораживаются ИСТОЧНИКИ изменений контента — тики
+                // CSS-анимаций/transitions (Step 2), GIF (Step 2.5) и
+                // video-GIF (Step 2.6). Display list становится
+                // scroll-стабильным, и кадр скролла уходит в page-compose HIT
+                // (~2 мс) вместо монолитной перерисовки. Анимации time-based:
+                // при выходе из режима они сами догоняют текущее время,
+                // «пауза» видна только во время быстрой прокрутки.
+                // Гистерезис по EMA-скорости: вход ≥48 CSS px/кадр (полный
+                // wheel-notch за кадр), выход <12. Разовая прокрутка колёсиком
+                // даёт одну-две замороженных пары кадров, плавный трекпад не
+                // входит в режим вовсе. LUMEN_NO_FAST_SCROLL_DEGRADE=1 — выкл.
+                let scroll_step = (self.scroll_y - self.last_frame_scroll_y).abs();
+                self.last_frame_scroll_y = self.scroll_y;
+                self.scroll_velocity = 0.6 * self.scroll_velocity + 0.4 * scroll_step;
+                self.fast_scroll = !fast_scroll_degrade_disabled()
+                    && if self.fast_scroll {
+                        self.scroll_velocity >= 12.0
+                    } else {
+                        self.scroll_velocity >= 48.0
+                    };
+                let freeze_content_ticks = self.fast_scroll;
+                if freeze_content_ticks
+                    && (self.anim_frame.is_some() || !self.animated_gifs.is_empty())
+                {
+                    // Замороженным источникам нужен живой цикл кадров: на
+                    // кадре, где скорость упадёт ниже порога, тики
+                    // возобновятся и анимации продолжатся.
+                    self.request_redraw();
+                }
 
                 // Step 1.5: CSS Scroll-Driven Animations — update ScrollTimeline.currentTime.
                 // Spec §8.1.5.1 step «update scroll-linked animations» precedes CSS animations.
@@ -12343,7 +12434,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Step 2: CSS Animations + Transitions tick (spec order: before rAF).
                 // Both schedulers are ticked once per frame and merged into a single
                 // AnimationFrame. Transition values override @keyframes when both apply.
-                if let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source) {
+                // При fast-scroll тик пропускается: anim_frame остаётся с прошлыми
+                // значениями → пересобранный anim_dl идентичен → ключ полосы стабилен.
+                if !freeze_content_ticks
+                    && let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source)
+                {
                     let vp = lumen_layout::Viewport {
                         width: self.viewport_width_css(),
                         height: self.viewport_height_css(),
@@ -12368,7 +12463,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Step 2.5: GIF animation — update GPU textures for frames that changed.
                 // Uses the same `epoch` as rAF timestamps so GIF timing is consistent
                 // with CSS animations and JS. Runs before rAF so JS can read correct img.
-                if !self.animated_gifs.is_empty() {
+                // При fast-scroll кадры GIF не обновляются (register_image бампает
+                // content_generation и убивал бы ключ полосы каждый тик).
+                if !freeze_content_ticks && !self.animated_gifs.is_empty() {
                     let elapsed_ms = self.epoch.elapsed().as_millis() as u64;
 
                     // Collect (url, frame_idx, frame_image) for frames that changed.
@@ -12414,8 +12511,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 // Step 2.6: Video GIF animation — drain pending loads, advance frames.
-                let video_elapsed_ms = self.epoch.elapsed().as_millis() as u64;
-                self.tick_video_gifs(video_elapsed_ms);
+                // Заморожено при fast-scroll по той же причине, что и Step 2.5.
+                if !freeze_content_ticks {
+                    let video_elapsed_ms = self.epoch.elapsed().as_millis() as u64;
+                    self.tick_video_gifs(video_elapsed_ms);
+                }
 
                 // Step 3: rAF callbacks + microtask checkpoint.
                 self.runtime.run_rendering_step(timestamp_ms);
@@ -12488,6 +12588,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.relayout_raf_dirty_readback();
                     }
                 }
+
+                // Launch->first-frame metric (§4 score table): fires on the
+                // first frame that has page content, present happens at the
+                // end of this same handler (±1 frame accuracy is enough).
+                bench_frames::log_first_frame_once(self.display_list.len());
 
                 // Step 5: PerformancePaintTiming (W3C Paint Timing §2).
                 // Delivered once per page load; subsequent frames skip this block.
@@ -12647,13 +12752,33 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Compositor offload: если есть активные анимации с opacity/transform/
                 // color/background-color — пересобираем display list из layout_box с
                 // overrides, минуя relayout (BUG-231 распространил offload на цвета).
+                // Static/animated split (EXPERIMENT.md §2): вместе со списком строятся
+                // диапазоны анимируемых сегментов — скролл-композитор кэширует полосу
+                // по статике, сегменты рисует поверх. Позднейшие append-ы в anim_dl
+                // (cue, squiggles) идут в конец списка и диапазоны не сдвигают.
+                let mut anim_ranges: Vec<std::ops::Range<usize>> = Vec::new();
                 let mut anim_dl: Option<lumen_paint::DisplayList> =
                     if let (Some(frame), Some(lb)) = (&self.anim_frame, &self.layout_box) {
                         let comp = frame.to_compositor_frame();
                         if !comp.is_empty() {
                             let tree = StackingTree::build(lb);
                             let order = PaintOrder::from_tree(&tree);
-                            Some(build_display_list_ordered_with_anim(lb, &tree, &order, Some(&comp)))
+                            let (dl, ranges) = build_display_list_ordered_with_anim_split(
+                                lb,
+                                &tree,
+                                &order,
+                                Some(&comp),
+                            );
+                            if std::env::var("LUMEN_FRAME_LOG").is_ok_and(|v| v != "0") {
+                                eprintln!(
+                                    "[frame] anim_dl: {} cmds, {} ranges, {} overrides",
+                                    dl.len(),
+                                    ranges.len(),
+                                    comp.overrides.len(),
+                                );
+                            }
+                            anim_ranges = ranges;
+                            Some(dl)
                         } else {
                             None
                         }
@@ -13344,6 +13469,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // Раньше каждый кадр (в т.ч. на каждом кадре инерционного
                         // скролла) сюда копировался весь список ради одного
                         // `PushTransform` — O(n) глубокий клон команд.
+                        // Anim-split диапазоны фаст-пасу не мешают: femtovg (который
+                        // единственный отвечает supports_page_offset=true) игнорирует
+                        // их и рисует монолитом — контент списка тот же.
                         if inspector_box_dl.is_empty() && r.supports_page_offset() {
                             r.set_page_offset(page_x_offset, tabs::strip::TAB_BAR_HEIGHT);
                             if let Err(err) = r.render(base, &overlay_buf, scroll_y, scroll_x) {
@@ -13352,7 +13480,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         } else {
                             // Fallback: активен inspector-оверлей или бэкенд не
                             // поддерживает page-offset — оборачиваем контент в
-                            // `PushTransform`, как раньше.
+                            // `PushTransform`, как раньше. Anim-split диапазоны
+                            // (static/animated split скролл-композитора wgpu-пути)
+                            // прокидываются через render_with_anim.
                             r.set_page_offset(0.0, 0.0);
                             let mut shifted: lumen_paint::DisplayList =
                                 Vec::with_capacity(base.len() + 2);
@@ -13366,7 +13496,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             // Inspector box-model overlay rides inside the page transform.
                             shifted.extend_from_slice(&inspector_box_dl);
                             shifted.push(lumen_paint::DisplayCommand::PopTransform);
-                            if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
+                            // Split-диапазоны валидны только когда base == anim_dl;
+                            // +1 — сдвиг на prepended PushTransform страницы.
+                            let shifted_ranges: Vec<std::ops::Range<usize>> =
+                                if anim_dl.is_some() {
+                                    anim_ranges
+                                        .iter()
+                                        .map(|rr| rr.start + 1..rr.end + 1)
+                                        .collect()
+                                } else {
+                                    Vec::new()
+                                };
+                            if let Err(err) = r.render_with_anim(
+                                &shifted,
+                                &overlay_buf,
+                                scroll_y,
+                                scroll_x,
+                                &shifted_ranges,
+                            ) {
                                 eprintln!("Ошибка рендера: {err:?}");
                             }
                         }
@@ -13437,6 +13584,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                         self.last_frame_fp = Some(fp);
                     }
+                }
+                if let Some(t0) = bench_t0 {
+                    bench_frames::record_frame(t0.elapsed().as_secs_f64() * 1e3);
                 }
             }
             _ => {}

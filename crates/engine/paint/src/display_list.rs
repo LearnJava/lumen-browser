@@ -1642,6 +1642,48 @@ pub fn hash_content(content: &[DisplayCommand], surface_w: u32, surface_h: u32) 
     hasher.finish()
 }
 
+/// Как [`hash_display_list`], но с выколотыми диапазонами `skip` (static-часть
+/// кадра для scroll-инвариантного ключа полосы скролл-композитора).
+///
+/// Эквивалентен `hash_display_list` от материализованного списка без
+/// skip-команд: та же свёртка, длиной content-полосы служит число
+/// оставшихся команд. `skip` обязан быть отсортирован и не пересекаться
+/// (гарантируется [`build_display_list_ordered_with_anim_split`]).
+pub fn hash_display_list_skipping(
+    content: &[DisplayCommand],
+    skip: &[std::ops::Range<usize>],
+    overlay: &[DisplayCommand],
+    scroll_x: f32,
+    scroll_y: f32,
+    surface_w: u32,
+    surface_h: u32,
+) -> u64 {
+    use std::hash::Hasher;
+
+    let skipped: usize = skip.iter().map(std::ops::Range::len).sum();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write_u32(surface_w);
+    hasher.write_u32(surface_h);
+    hasher.write_u32(scroll_x.to_bits());
+    hasher.write_u32(scroll_y.to_bits());
+    hasher.write_usize(content.len().saturating_sub(skipped));
+    hasher.write_usize(overlay.len());
+    let mut skip_iter = skip.iter().peekable();
+    for (i, cmd) in content.iter().enumerate() {
+        while skip_iter.peek().is_some_and(|r| r.end <= i) {
+            skip_iter.next();
+        }
+        if skip_iter.peek().is_some_and(|r| r.contains(&i)) {
+            continue;
+        }
+        hash_command_into(cmd, &mut hasher);
+    }
+    for cmd in overlay {
+        hash_command_into(cmd, &mut hasher);
+    }
+    hasher.finish()
+}
+
 /// How a frame differs from the previously presented one (ADR-016 M0.5).
 ///
 /// Produced by [`FrameFingerprint::delta_from`]. The variants map directly onto
@@ -1715,6 +1757,461 @@ impl FrameFingerprint {
             FrameDelta::Identical
         }
     }
+}
+
+// ─── Static/animated split: план оверлея + painter's-order guard ────────────
+
+/// Консервативный bbox draw-команды в её локальных координатах (до
+/// transform-стека). `None` — команда ничего не рисует (push/pop/PageBreak).
+/// `SegBounds::Unbounded` — экстент вычислить нельзя (рисует «где-то»).
+fn draw_cmd_local_bbox(cmd: &DisplayCommand) -> Option<SegBounds> {
+    fn pts_bbox(iter: impl Iterator<Item = [f32; 2]>) -> SegBounds {
+        let mut min_x = f32::INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+        let mut any = false;
+        for [x, y] in iter {
+            any = true;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+        if any {
+            SegBounds::Rect(Rect::new(min_x, min_y, max_x - min_x, max_y - min_y))
+        } else {
+            SegBounds::Empty
+        }
+    }
+    Some(match cmd {
+        DisplayCommand::FillRect { rect, .. }
+        | DisplayCommand::FillRoundedRect { rect, .. }
+        | DisplayCommand::DrawBorder { rect, .. }
+        | DisplayCommand::DrawImage { rect, .. }
+        | DisplayCommand::LazyImageSlot { rect, .. }
+        | DisplayCommand::DrawBackgroundImage { rect, .. }
+        | DisplayCommand::DrawLinearGradient { rect, .. }
+        | DisplayCommand::DrawRadialGradient { rect, .. }
+        | DisplayCommand::DrawConicGradient { rect, .. }
+        | DisplayCommand::DrawLayerSnapshot { rect, .. } => SegBounds::Rect(*rect),
+        // Глифы могут выступать за line-box (курсив, свисания) — запас в
+        // половину кегля со всех сторон, строго в большую сторону.
+        DisplayCommand::DrawText { rect, font_size, .. } => {
+            SegBounds::Rect(inflate_rect(*rect, font_size * 0.5))
+        }
+        DisplayCommand::DrawOutline { rect, width, offset, .. } => {
+            SegBounds::Rect(inflate_rect(*rect, width + offset.max(0.0)))
+        }
+        DisplayCommand::DrawCrossFade { dest, .. } => SegBounds::Rect(*dest),
+        DisplayCommand::BoxModelOverlay { margin, .. } => SegBounds::Rect(*margin),
+        DisplayCommand::DrawScrollbar { track_rect, thumb_rect, .. } => {
+            SegBounds::Rect(union_rects(*track_rect, *thumb_rect))
+        }
+        DisplayCommand::DrawSvgPath { vertices, .. } => pts_bbox(vertices.iter().copied()),
+        DisplayCommand::DrawSvgFill { contours, .. } => {
+            pts_bbox(contours.iter().flatten().copied())
+        }
+        DisplayCommand::DrawSvgStroke { contours, params, .. } => {
+            // Miter-стык может выступать до half_width·miterlimit от осевой.
+            let d = params.half_width * params.miterlimit.max(1.0) + 1.0;
+            match pts_bbox(contours.iter().flatten().copied()) {
+                SegBounds::Rect(r) => SegBounds::Rect(inflate_rect(r, d)),
+                other => other,
+            }
+        }
+        DisplayCommand::PageBreak => SegBounds::Empty,
+        _ => return None,
+    })
+}
+
+/// Экстент множества draw-команд: пустой, прямоугольник или «неизвестно».
+enum SegBounds {
+    /// Ничего не нарисовано.
+    Empty,
+    /// Всё нарисованное лежит внутри прямоугольника (документные CSS px).
+    Rect(Rect),
+    /// Экстент вычислить нельзя.
+    Unbounded,
+}
+
+impl SegBounds {
+    fn union(&mut self, other: SegBounds) {
+        match (&*self, other) {
+            (_, SegBounds::Empty) => {}
+            (SegBounds::Unbounded, _) => {}
+            (_, SegBounds::Unbounded) => *self = SegBounds::Unbounded,
+            (SegBounds::Empty, r @ SegBounds::Rect(_)) => *self = r,
+            (SegBounds::Rect(a), SegBounds::Rect(b)) => {
+                *self = SegBounds::Rect(union_rects(*a, b));
+            }
+        }
+    }
+}
+
+fn inflate_rect(r: Rect, d: f32) -> Rect {
+    Rect::new(r.x - d, r.y - d, r.width + 2.0 * d, r.height + 2.0 * d)
+}
+
+fn rects_overlap(a: &Rect, b: &Rect) -> bool {
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+}
+
+/// Аффинный bbox прямоугольника после матрицы (4 угла → min/max).
+fn affine_rect_bbox(m: &Mat4, r: Rect) -> Rect {
+    let a = m.0[0];
+    let b = m.0[1];
+    let c = m.0[4];
+    let d = m.0[5];
+    let e = m.0[12];
+    let f = m.0[13];
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (px, py) in [
+        (r.x, r.y),
+        (r.x + r.width, r.y),
+        (r.x, r.y + r.height),
+        (r.x + r.width, r.y + r.height),
+    ] {
+        let tx = a * px + c * py + e;
+        let ty = b * px + d * py + f;
+        min_x = min_x.min(tx);
+        min_y = min_y.min(ty);
+        max_x = max_x.max(tx);
+        max_y = max_y.max(ty);
+    }
+    Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+/// Суммарная инфляция bbox от blur-функций фильтра — ровно охват ядра
+/// нашего блюр-шейдера: `min(ceil(3σ), 32) + 2` текселя (та же формула,
+/// что у bbox-scissor фильтр-пассов, EXPERIMENT.md п.16). Займётся
+/// downscale-цепочка для σ > 4 — формулу менять синхронно с шейдером.
+fn filter_bbox_inflate(filters: &[FilterFn]) -> f32 {
+    filters
+        .iter()
+        .map(|f| match f {
+            FilterFn::Blur(r) => (3.0 * r).ceil().min(32.0) + 2.0,
+            _ => 0.0,
+        })
+        .sum()
+}
+
+/// Static/animated split (EXPERIMENT.md §2): строит план отрисовки
+/// анимируемых сегментов поверх статичной полосы и проверяет, что перенос
+/// сегментов в конец painter's order не меняет картинку.
+///
+/// Возвращает `Some(plan)` — команды сегментов, обёрнутые в реплей их
+/// внешнего контекста (transform/clip/scroll-layer), в исходном порядке.
+/// `None` — split в этом кадре небезопасен, рисовать монолитом:
+/// - контекст сегмента содержит нереплеябельные группы (opacity/filter/
+///   blend/mask поверх сегмента);
+/// - сегмент несбалансирован по push/pop (не должно случаться по построению);
+/// - статичная команда, рисуемая ПОЗЖЕ сегмента, пересекает его bbox —
+///   сегмент, нарисованный поверх полосы, перекрыл бы её;
+/// - в списке есть `BeginStickyLayer` (нелинейная зависимость от скролла).
+pub fn anim_split_compose_plan(
+    content: &[DisplayCommand],
+    ranges: &[std::ops::Range<usize>],
+) -> Option<(DisplayList, Vec<std::ops::Range<usize>>)> {
+    // Диагностика причин отказа (LUMEN_FRAME_LOG=2) — один eprintln на кадр.
+    macro_rules! bail {
+        ($($why:tt)*) => {{
+            if crate::frame_log_level() >= 2 {
+                eprintln!("[frame:wgpu] anim-split bail: {}", format_args!($($why)*));
+            }
+            return None;
+        }};
+    }
+    // Валидация диапазонов: отсортированы, не пересекаются, в пределах списка.
+    let mut prev_end = 0usize;
+    for r in ranges {
+        if r.start < prev_end || r.end <= r.start || r.end > content.len() {
+            bail!("malformed range {}..{}", r.start, r.end);
+        }
+        prev_end = r.end;
+    }
+
+    /// Push-команда пригодна для реплея вокруг сегмента: чистая
+    /// геометрия/клип, без offscreen-групповой семантики.
+    fn ctx_replayable(cmd: &DisplayCommand) -> bool {
+        matches!(
+            cmd,
+            DisplayCommand::PushTransform { .. }
+                | DisplayCommand::PushClipRect { .. }
+                | DisplayCommand::PushClipRoundedRect { .. }
+                | DisplayCommand::PushClipPath { .. }
+                | DisplayCommand::PushScrollLayer { .. }
+        )
+    }
+
+    fn pop_for_ctx(cmd: &DisplayCommand) -> DisplayCommand {
+        match cmd {
+            DisplayCommand::PushTransform { .. } => DisplayCommand::PopTransform,
+            DisplayCommand::PushScrollLayer { .. } => DisplayCommand::PopScrollLayer,
+            _ => DisplayCommand::PopClip,
+        }
+    }
+
+    let mut ctx_stack: Vec<usize> = Vec::new(); // индексы активных Push-команд
+    let mut mat_stack: Vec<Option<Mat4>> = Vec::new(); // накопленный 2D-аффинный transform (None = не-2D)
+    let mut infl_stack: Vec<f32> = Vec::new(); // накопленная blur-инфляция активных фильтров
+    let mut seg_bounds: Vec<SegBounds> = Vec::with_capacity(ranges.len());
+    let mut seg_ctx: Vec<Vec<usize>> = Vec::with_capacity(ranges.len());
+    let mut cur_range: Option<(usize, usize)> = None; // (индекс диапазона, глубина ctx на входе)
+    let mut next_range = 0usize;
+    let mut cur_bounds = SegBounds::Empty;
+    // Первая статичная команда, конфликтующая с bbox сегмента → tail-split.
+    let mut violation: Option<usize> = None;
+
+    for (i, cmd) in content.iter().enumerate() {
+        if cur_range.is_none() && next_range < ranges.len() && i == ranges[next_range].start {
+            if let Some(&ci) = ctx_stack.iter().find(|&&ci| !ctx_replayable(&content[ci])) {
+                bail!("ctx not replayable at {}: {}", i, content[ci].variant_name());
+            }
+            seg_ctx.push(ctx_stack.clone());
+            cur_range = Some((next_range, ctx_stack.len()));
+            cur_bounds = SegBounds::Empty;
+        }
+
+        let cur_mat = mat_stack.last().copied().flatten();
+        let cur_infl = infl_stack.last().copied().unwrap_or(0.0);
+        let identity_below = mat_stack.is_empty();
+
+        match cmd {
+            DisplayCommand::BeginStickyLayer { .. } => bail!("sticky layer at {}", i),
+            DisplayCommand::PushTransform { matrix } => {
+                let m = if matrix.is_2d_affine() {
+                    if identity_below {
+                        Some(*matrix)
+                    } else {
+                        cur_mat.map(|prev| prev.multiply(matrix))
+                    }
+                } else {
+                    None
+                };
+                ctx_stack.push(i);
+                mat_stack.push(m);
+                infl_stack.push(cur_infl);
+            }
+            DisplayCommand::PushScrollLayer { scroll_x, scroll_y, .. } => {
+                let t = Mat4::translation_2d(-*scroll_x, -*scroll_y);
+                let m = if identity_below { Some(t) } else { cur_mat.map(|prev| prev.multiply(&t)) };
+                ctx_stack.push(i);
+                mat_stack.push(m);
+                infl_stack.push(cur_infl);
+            }
+            DisplayCommand::PushFilter { filters, .. } => {
+                ctx_stack.push(i);
+                mat_stack.push(if identity_below { Some(Mat4::IDENTITY) } else { cur_mat });
+                infl_stack.push(cur_infl + filter_bbox_inflate(filters));
+            }
+            DisplayCommand::PushBackdropFilter { filters, bounds } => {
+                // Composite backdrop-фильтра пишет в `bounds` — учитываем его
+                // как «рисующую» область (плюс blur-инфляция).
+                let region = inflate_rect(*bounds, filter_bbox_inflate(filters));
+                let eff = if identity_below {
+                    SegBounds::Rect(region)
+                } else {
+                    match cur_mat {
+                        Some(m) => SegBounds::Rect(affine_rect_bbox(&m, region)),
+                        None => SegBounds::Unbounded,
+                    }
+                };
+                if cur_range.is_some() {
+                    cur_bounds.union(eff);
+                } else if seg_hit(&seg_bounds, &eff) {
+                    violation = Some(i);
+                }
+                ctx_stack.push(i);
+                mat_stack.push(if identity_below { Some(Mat4::IDENTITY) } else { cur_mat });
+                infl_stack.push(cur_infl + filter_bbox_inflate(filters));
+            }
+            DisplayCommand::PushClipRect { .. }
+            | DisplayCommand::PushClipRoundedRect { .. }
+            | DisplayCommand::PushClipPath { .. }
+            | DisplayCommand::PushOpacity { .. }
+            | DisplayCommand::PushBlendMode { .. }
+            | DisplayCommand::PushMaskImage { .. }
+            | DisplayCommand::PushMaskLinearGradient { .. }
+            | DisplayCommand::PushMaskRadialGradient { .. }
+            | DisplayCommand::PushMaskConicGradient { .. }
+            | DisplayCommand::PushMaskLayer { .. } => {
+                ctx_stack.push(i);
+                mat_stack.push(if identity_below { Some(Mat4::IDENTITY) } else { cur_mat });
+                infl_stack.push(cur_infl);
+            }
+            DisplayCommand::PopTransform
+            | DisplayCommand::PopClip
+            | DisplayCommand::PopOpacity
+            | DisplayCommand::PopBlendMode
+            | DisplayCommand::PopMask
+            | DisplayCommand::PopMaskLayer
+            | DisplayCommand::PopFilter
+            | DisplayCommand::PopBackdropFilter
+            | DisplayCommand::PopScrollLayer
+            | DisplayCommand::EndStickyLayer => {
+                if ctx_stack.pop().is_none() {
+                    bail!("unbalanced pop at {}", i); // malformed список
+                }
+                mat_stack.pop();
+                infl_stack.pop();
+                if let Some((_, depth)) = cur_range
+                    && ctx_stack.len() < depth
+                {
+                    bail!("segment pop below entry depth at {}", i);
+                }
+            }
+            _ => {
+                if let Some(local) = draw_cmd_local_bbox(cmd) {
+                    let eff = match local {
+                        SegBounds::Empty => SegBounds::Empty,
+                        SegBounds::Unbounded => SegBounds::Unbounded,
+                        SegBounds::Rect(r) => {
+                            let r = inflate_rect(r, cur_infl);
+                            if identity_below {
+                                SegBounds::Rect(r)
+                            } else {
+                                match cur_mat {
+                                    Some(m) => SegBounds::Rect(affine_rect_bbox(&m, r)),
+                                    None => SegBounds::Unbounded,
+                                }
+                            }
+                        }
+                    };
+                    if cur_range.is_some() {
+                        cur_bounds.union(eff);
+                    } else if seg_hit(&seg_bounds, &eff) {
+                        violation = Some(i);
+                    }
+                }
+            }
+        }
+
+        if violation.is_some() {
+            // Конфликт вне сегмента (cur_range == None): стеки заморожены на
+            // моменте конфликта — по ним считается точка tail-cut ниже.
+            break;
+        }
+
+        if let Some((ri, depth)) = cur_range
+            && i + 1 == ranges[ri].end
+        {
+            if ctx_stack.len() != depth {
+                bail!("segment unbalanced at {}", i);
+            }
+            seg_bounds.push(std::mem::replace(&mut cur_bounds, SegBounds::Empty));
+            cur_range = None;
+            next_range += 1;
+        }
+    }
+
+    // Tail-split: точка отреза = начало внешней нереплеябельной группы
+    // конфликтующей команды (иначе — сама команда). Всё от cut до конца
+    // уходит в оверлей; сегменты, завершившиеся до cut, остаются сегментами.
+    let (kept, tail): (usize, Option<(usize, Vec<usize>)>) = if let Some(vi) = violation {
+        let split_pos = ctx_stack.iter().position(|&ci| !ctx_replayable(&content[ci]));
+        let (cut, tail_ctx): (usize, Vec<usize>) = match split_pos {
+            Some(p) => (ctx_stack[p], ctx_stack[..p].to_vec()),
+            None => (vi, ctx_stack.clone()),
+        };
+        if cut * 2 < content.len() {
+            bail!("tail cut {} too early (dl {})", cut, content.len());
+        }
+        // Симуляция баланса хвоста: он обязан закрыть реплеенный контекст
+        // и выйти в ноль (весь список сбалансирован эмиттером).
+        let mut depth = tail_ctx.len() as i64;
+        for cmd in &content[cut..] {
+            depth += layer_push_pop_delta(cmd);
+            if depth < 0 {
+                bail!("tail below entry depth");
+            }
+        }
+        if depth != 0 {
+            bail!("tail unbalanced at end: {depth}");
+        }
+        if crate::frame_log_level() >= 2 {
+            eprintln!(
+                "[frame:wgpu] anim-split tail cut at {} of {} (violation at {})",
+                cut,
+                content.len(),
+                vi,
+            );
+        }
+        (seg_bounds.len(), Some((cut, tail_ctx)))
+    } else {
+        (ranges.len(), None)
+    };
+
+    // План: каждый сегмент — реплей внешнего контекста + команды сегмента +
+    // закрывающие Pop-ы в LIFO-порядке; затем хвост (закрывает реплеенный
+    // контекст собственными Pop-ами — они в нём уже есть).
+    let mut plan: DisplayList = Vec::new();
+    let mut effective: Vec<std::ops::Range<usize>> = Vec::with_capacity(kept + 1);
+    for (k, r) in ranges.iter().take(kept).enumerate() {
+        for &ci in &seg_ctx[k] {
+            plan.push(content[ci].clone());
+        }
+        plan.extend_from_slice(&content[r.clone()]);
+        for &ci in seg_ctx[k].iter().rev() {
+            plan.push(pop_for_ctx(&content[ci]));
+        }
+        effective.push(r.clone());
+    }
+    if let Some((cut, tail_ctx)) = tail {
+        for &ci in &tail_ctx {
+            plan.push(content[ci].clone());
+        }
+        plan.extend_from_slice(&content[cut..]);
+        effective.push(cut..content.len());
+    }
+    Some((plan, effective))
+}
+
+/// Δ push/pop-глубины layer-команды: +1 для Push*/Begin*, −1 для Pop*/End*.
+fn layer_push_pop_delta(cmd: &DisplayCommand) -> i64 {
+    match cmd {
+        DisplayCommand::PushTransform { .. }
+        | DisplayCommand::PushClipRect { .. }
+        | DisplayCommand::PushClipRoundedRect { .. }
+        | DisplayCommand::PushClipPath { .. }
+        | DisplayCommand::PushOpacity { .. }
+        | DisplayCommand::PushBlendMode { .. }
+        | DisplayCommand::PushFilter { .. }
+        | DisplayCommand::PushBackdropFilter { .. }
+        | DisplayCommand::PushMaskImage { .. }
+        | DisplayCommand::PushMaskLinearGradient { .. }
+        | DisplayCommand::PushMaskRadialGradient { .. }
+        | DisplayCommand::PushMaskConicGradient { .. }
+        | DisplayCommand::PushMaskLayer { .. }
+        | DisplayCommand::PushScrollLayer { .. }
+        | DisplayCommand::BeginStickyLayer { .. } => 1,
+        DisplayCommand::PopTransform
+        | DisplayCommand::PopClip
+        | DisplayCommand::PopOpacity
+        | DisplayCommand::PopBlendMode
+        | DisplayCommand::PopFilter
+        | DisplayCommand::PopBackdropFilter
+        | DisplayCommand::PopMask
+        | DisplayCommand::PopMaskLayer
+        | DisplayCommand::PopScrollLayer
+        | DisplayCommand::EndStickyLayer => -1,
+        _ => 0,
+    }
+}
+
+/// Пересекает ли `eff` какой-либо из завершённых сегментов.
+fn seg_hit(seg_bounds: &[SegBounds], eff: &SegBounds) -> bool {
+    if matches!(eff, SegBounds::Empty) {
+        return false;
+    }
+    seg_bounds.iter().any(|s| match (s, eff) {
+        (SegBounds::Empty, _) | (_, SegBounds::Empty) => false,
+        (SegBounds::Unbounded, _) | (_, SegBounds::Unbounded) => true,
+        (SegBounds::Rect(a), SegBounds::Rect(b)) => rects_overlap(a, b),
+    })
 }
 
 /// Результат сравнения двух display-list-ов.
@@ -2404,7 +2901,8 @@ pub fn build_display_list_ordered_dpr(
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None, dpr, &[]);
+    let mut split = SplitTracker::disabled();
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None, dpr, &[], &mut split);
 
     let mut out = Vec::new();
     for (sc_id, phase) in &order.steps {
@@ -2462,12 +2960,91 @@ pub fn build_display_list_ordered_with_anim_dpr(
     anim: Option<&CompositorAnimFrame>,
     dpr: f32,
 ) -> DisplayList {
+    ordered_with_anim_internal(root, tree, order, anim, dpr, false).0
+}
+
+/// Static/animated split (EXPERIMENT.md §2): как
+/// [`build_display_list_ordered_with_anim`], но дополнительно возвращает
+/// отсортированные непересекающиеся диапазоны команд итогового списка,
+/// содержимое которых зависит от anim-override-ов (поддеревья анимируемых
+/// узлов целиком: layer-ops + собственные команды + потомки).
+///
+/// Пустой Vec означает «split в этом кадре неприменим» (нет overrides,
+/// override на корне, либо SC-потомок разрывает inline-спан non-SC узла) —
+/// список при этом валиден и идентичен обычной anim-сборке.
+///
+/// Скролл-композитор использует диапазоны, чтобы кэшировать статичную часть
+/// страницы в полосе (ключ полосы считается ТОЛЬКО по статике), а анимируемые
+/// сегменты рисовать поверх каждым кадром.
+pub fn build_display_list_ordered_with_anim_split(
+    root: &LayoutBox,
+    tree: &StackingTree,
+    order: &PaintOrder,
+    anim: Option<&CompositorAnimFrame>,
+) -> (DisplayList, Vec<std::ops::Range<usize>>) {
+    ordered_with_anim_internal(root, tree, order, anim, 1.0, true)
+}
+
+/// Трекер static/animated split — собирается в `fill_buckets`, конвертируется
+/// в диапазоны итогового списка при сборке бакетов.
+struct SplitTracker {
+    /// Собираем ли split-метаданные (false в обычных сборках — нулевая цена).
+    enabled: bool,
+    /// SC-owner-ы с anim-override: диапазон = RootBackground..CloseLayer их SC.
+    animated_scs: Vec<u32>,
+    /// Спаны non-SC override-узлов в `contents` их бакета: (sc, start, end).
+    content_spans: Vec<(u32, usize, usize)>,
+    /// Split невозможен в этом кадре (override на корневом SC, SC-потомок
+    /// внутри inline-спана и т.п.).
+    invalid: bool,
+    /// Счётчик входов в SC-ветку — детектор «SC-потомок сбежал из спана
+    /// в собственный бакет» (его команды не были бы покрыты диапазоном).
+    sc_entries: u32,
+}
+
+impl SplitTracker {
+    fn disabled() -> Self {
+        Self {
+            enabled: false,
+            animated_scs: Vec::new(),
+            content_spans: Vec::new(),
+            invalid: false,
+            sc_entries: 0,
+        }
+    }
+}
+
+/// Общее тело ordered-сборки с anim-override-ами. При `track_split` собирает
+/// диапазоны анимируемых сегментов (см. [`build_display_list_ordered_with_anim_split`]);
+/// иначе возвращает пустой Vec диапазонов и ведёт себя байт-в-байт как раньше.
+fn ordered_with_anim_internal(
+    root: &LayoutBox,
+    tree: &StackingTree,
+    order: &PaintOrder,
+    anim: Option<&CompositorAnimFrame>,
+    dpr: f32,
+    track_split: bool,
+) -> (DisplayList, Vec<std::ops::Range<usize>>) {
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, anim, dpr, &[]);
+    let mut split = SplitTracker::disabled();
+    split.enabled = track_split && anim.is_some_and(|a| !a.is_empty());
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, anim, dpr, &[], &mut split);
+
+    let animated_scs: std::collections::HashSet<u32> =
+        split.animated_scs.iter().copied().collect();
+    let mut spans_by_sc: std::collections::HashMap<u32, Vec<(usize, usize)>> =
+        std::collections::HashMap::new();
+    for &(sc, s, e) in &split.content_spans {
+        spans_by_sc.entry(sc).or_default().push((s, e));
+    }
 
     let mut out = Vec::new();
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    // Открытый диапазон анимируемого SC: (sc_id, старт в out). Вложенные
+    // анимируемые SC/спаны внутри открытого диапазона уже покрыты им.
+    let mut open: Option<(u32, usize)> = None;
     for (sc_id, phase) in &order.steps {
         let idx = sc_id.0 as usize;
         if idx >= buckets.len() {
@@ -2476,24 +3053,65 @@ pub fn build_display_list_ordered_with_anim_dpr(
         let bucket = &mut buckets[idx];
         match phase {
             PaintPhase::RootBackground => {
+                if open.is_none() && animated_scs.contains(&sc_id.0) {
+                    open = Some((sc_id.0, out.len()));
+                }
                 out.append(&mut bucket.pre);
                 out.append(&mut bucket.root_bg);
             }
             PaintPhase::InlineContent => {
+                let base = out.len();
                 out.append(&mut bucket.contents);
                 // post (PopTransform / PopOpacity / etc.) is now in CloseLayer —
                 // emitted AFTER all child SCs so nested transforms compose correctly
                 // (BUG-139). Do NOT move post back here.
+                if open.is_none()
+                    && let Some(spans) = spans_by_sc.get(&sc_id.0)
+                {
+                    for &(s, e) in spans {
+                        if e > s {
+                            ranges.push(base + s..base + e);
+                        }
+                    }
+                }
             }
             // CloseLayer is emitted last in paint_sc, after all child SCs, so the
             // parent's Pop-commands wrap the children's Push-commands correctly.
             PaintPhase::CloseLayer => {
                 out.append(&mut bucket.post);
+                if let Some((id, start)) = open
+                    && id == sc_id.0
+                {
+                    if out.len() > start {
+                        ranges.push(start..out.len());
+                    }
+                    open = None;
+                }
             }
             _ => {}
         }
     }
-    out
+    // Незакрытый диапазон (SC без CloseLayer-шага) — split невалиден.
+    if split.invalid || open.is_some() {
+        return (out, Vec::new());
+    }
+    // Сортировка + выбрасывание вложенных спанов (спан текстового потомка
+    // внутри спана его элемента и т.п.). Частичное пересечение диапазонов
+    // невозможно по построению; если встретилось — split невалиден.
+    ranges.sort_by_key(|r| (r.start, std::cmp::Reverse(r.end)));
+    let mut dedup: Vec<std::ops::Range<usize>> = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        match dedup.last() {
+            Some(last) if r.start < last.end => {
+                if r.end <= last.end {
+                    continue; // вложенный — покрыт внешним
+                }
+                return (out, Vec::new()); // частичное пересечение — не бывает
+            }
+            _ => dedup.push(r),
+        }
+    }
+    (out, dedup)
 }
 
 /// Builds a print display list from paginated layout.
@@ -3341,11 +3959,22 @@ fn fill_buckets(
     anim: Option<&CompositorAnimFrame>,
     dpr: f32,
     inherited_clips: &[DisplayCommand],
+    split: &mut SplitTracker,
 ) {
     let ov = anim.and_then(|a| a.get(b.node));
     let ops = box_layer_ops(b, ov);
 
     if is_sc_root {
+        split.sc_entries += 1;
+        if split.enabled && ov.is_some() {
+            if current_sc == StackingContextId::ROOT {
+                // Override на владельце корневого SC анимирует всю страницу —
+                // статики не остаётся, split бессмыслен.
+                split.invalid = true;
+            } else {
+                split.animated_scs.push(current_sc.0);
+            }
+        }
         let bucket = &mut buckets[current_sc.0 as usize];
         // BUG-131: переустановить клипы non-SC предков как внешний слой SC.
         for clip in inherited_clips {
@@ -3376,9 +4005,9 @@ fn fill_buckets(
             if child_creates_sc {
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &[]);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &[], split);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &[]);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &[], split);
             }
         }
         // BUG-200: redraw collapsed cell borders on top of all cell backgrounds —
@@ -3395,6 +4024,13 @@ fn fill_buckets(
         // Non-SC box: inline Push/Pop в contents текущего SC. Это нужно для
         // `overflow:hidden` на обычном in-flow box-е (opacity/blend
         // триггерят SC сами, до сюда не дойдут с не-пустым pre).
+        // Static/animated split: non-SC узел с override эмитит всё поддерево
+        // (layer-ops + self + потомки) подряд в contents текущего SC —
+        // запоминаем спан. SC-потомок внутри спана уводит свои команды в
+        // собственный бакет (другая позиция painting order) — спан рвётся,
+        // split этого кадра инвалидируется через счётчик sc_entries.
+        let split_span_start = (split.enabled && ov.is_some())
+            .then(|| (buckets[current_sc.0 as usize].contents.len(), split.sc_entries));
         let bucket = &mut buckets[current_sc.0 as usize];
         bucket.contents.extend(ops.pre);
         emit_box_self(b, &mut bucket.contents, dpr, None, ov);
@@ -3447,9 +4083,9 @@ fn fill_buckets(
                     };
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &child_layers);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &child_layers, split);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &child_clips);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &child_clips, split);
             }
         }
 
@@ -3474,6 +4110,14 @@ fn fill_buckets(
         }
         bucket.contents.extend(ops.overflow_post);
         bucket.contents.extend(ops.post);
+        if let Some((start, sc_before)) = split_span_start {
+            if split.sc_entries != sc_before {
+                split.invalid = true;
+            } else {
+                let end = buckets[current_sc.0 as usize].contents.len();
+                split.content_spans.push((current_sc.0, start, end));
+            }
+        }
     }
 }
 
@@ -13199,6 +13843,290 @@ mod tests {
                 if *color == green)),
             "после override зелёного фона быть не должно"
         );
+    }
+
+    // ── Static/animated split (EXPERIMENT.md §2) ─────────────────────────────
+
+    /// Push/Pop-глубина среза сбалансирована и не уходит ниже нуля.
+    fn assert_segment_balanced(seg: &[DisplayCommand]) {
+        let mut depth: i32 = 0;
+        for c in seg {
+            match c {
+                DisplayCommand::PushTransform { .. }
+                | DisplayCommand::PushClipRect { .. }
+                | DisplayCommand::PushClipRoundedRect { .. }
+                | DisplayCommand::PushClipPath { .. }
+                | DisplayCommand::PushOpacity { .. }
+                | DisplayCommand::PushBlendMode { .. }
+                | DisplayCommand::PushFilter { .. }
+                | DisplayCommand::PushBackdropFilter { .. }
+                | DisplayCommand::PushMaskImage { .. }
+                | DisplayCommand::PushMaskLinearGradient { .. }
+                | DisplayCommand::PushMaskRadialGradient { .. }
+                | DisplayCommand::PushMaskConicGradient { .. }
+                | DisplayCommand::PushMaskLayer { .. }
+                | DisplayCommand::PushScrollLayer { .. }
+                | DisplayCommand::BeginStickyLayer { .. } => depth += 1,
+                DisplayCommand::PopTransform
+                | DisplayCommand::PopClip
+                | DisplayCommand::PopOpacity
+                | DisplayCommand::PopBlendMode
+                | DisplayCommand::PopFilter
+                | DisplayCommand::PopBackdropFilter
+                | DisplayCommand::PopMask
+                | DisplayCommand::PopMaskLayer
+                | DisplayCommand::PopScrollLayer
+                | DisplayCommand::EndStickyLayer => {
+                    depth -= 1;
+                    assert!(depth >= 0, "Pop ниже входной глубины сегмента");
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(depth, 0, "сегмент несбалансирован по Push/Pop");
+    }
+
+    fn split_fixture(
+        html: &str,
+        overrides: HashMap<NodeId, CompositorOverride>,
+    ) -> (DisplayList, Vec<std::ops::Range<usize>>, DisplayList) {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let stacking_tree = lumen_layout::StackingTree::build(&tree);
+        let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
+        let frame = CompositorAnimFrame { overrides, has_active: true };
+        let (list, ranges) = build_display_list_ordered_with_anim_split(
+            &tree,
+            &stacking_tree,
+            &order,
+            Some(&frame),
+        );
+        let plain =
+            build_display_list_ordered_with_anim(&tree, &stacking_tree, &order, Some(&frame));
+        (list, ranges, plain)
+    }
+
+    #[test]
+    fn anim_split_list_identical_to_with_anim() {
+        // Split-сборка обязана давать байт-в-байт тот же список, что обычная
+        // anim-сборка — диапазоны лишь метаданные поверх него.
+        let html = r#"<div style="background:#008000;width:100px;height:50px"></div>
+            <div style="background:#123456;width:100px;height:50px"></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let green = Color { r: 0, g: 0x80, b: 0, a: 255 };
+        let node = find_bg_node(&tree, green).expect("box with green background");
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            node,
+            CompositorOverride { opacity: Some(0.4), ..Default::default() },
+        );
+        let (list, ranges, plain) = split_fixture(html, {
+            let mut o = HashMap::new();
+            o.insert(node, CompositorOverride { opacity: Some(0.4), ..Default::default() });
+            o
+        });
+        assert_eq!(list, plain, "split-список должен совпадать с anim-списком");
+        assert!(!ranges.is_empty(), "override на боксе должен дать диапазон");
+    }
+
+    #[test]
+    fn anim_split_range_covers_animated_box_only() {
+        // Два соседних бокса; transform-override на зелёном. Его заливка —
+        // внутри диапазона, заливка соседа — снаружи; сегмент сбалансирован.
+        let html = r#"<div style="background:#008000;width:100px;height:50px"></div>
+            <div style="background:#123456;width:100px;height:50px"></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let green = Color { r: 0, g: 0x80, b: 0, a: 255 };
+        let other = Color { r: 0x12, g: 0x34, b: 0x56, a: 255 };
+        let node = find_bg_node(&tree, green).expect("box with green background");
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            node,
+            CompositorOverride {
+                transform: Some(vec![lumen_layout::TransformFn::Translate(30.0, 0.0)]),
+                ..Default::default()
+            },
+        );
+        let (list, ranges, _) = split_fixture(html, overrides);
+        assert_eq!(ranges.len(), 1, "ровно один анимируемый сегмент");
+        let r = ranges[0].clone();
+        let in_range = |i: usize| i >= r.start && i < r.end;
+        let green_idx = list
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::FillRect { color, .. } if *color == green))
+            .expect("зелёная заливка");
+        let other_idx = list
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::FillRect { color, .. } if *color == other))
+            .expect("заливка соседа");
+        assert!(in_range(green_idx), "заливка анимируемого бокса — в диапазоне");
+        assert!(!in_range(other_idx), "заливка статичного соседа — вне диапазона");
+        assert!(
+            list[r.clone()]
+                .iter()
+                .any(|c| matches!(c, DisplayCommand::PushTransform { .. })),
+            "override-transform внутри сегмента"
+        );
+        assert_segment_balanced(&list[r]);
+    }
+
+    #[test]
+    fn anim_split_root_override_yields_no_ranges() {
+        let html = r#"<div style="background:#008000;width:100px;height:50px"></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            tree.node,
+            CompositorOverride { opacity: Some(0.5), ..Default::default() },
+        );
+        let (_, ranges, _) = split_fixture(html, overrides);
+        assert!(ranges.is_empty(), "override на корне — split неприменим");
+    }
+
+    #[test]
+    fn hash_skipping_equals_materialized_static() {
+        let html = r#"<div style="background:#008000;width:100px;height:50px;border:2px solid #000"></div>
+            <div style="background:#123456;width:100px;height:50px;border:2px solid #fff"></div>
+            <div style="background:#654321;width:60px;height:20px"></div>"#;
+        let dl = build_ordered(html, "");
+        assert!(dl.len() >= 4, "нужен список из нескольких команд, есть {}", dl.len());
+        let skip = vec![1usize..2, 3usize..4];
+        let mut materialized: DisplayList = Vec::new();
+        let mut prev = 0usize;
+        for r in &skip {
+            materialized.extend_from_slice(&dl[prev..r.start]);
+            prev = r.end;
+        }
+        materialized.extend_from_slice(&dl[prev..]);
+        let h_skip = hash_display_list_skipping(&dl, &skip, &[], 0.0, 0.0, 1024, 720);
+        let h_mat = hash_display_list(&materialized, &[], 0.0, 0.0, 1024, 720);
+        assert_eq!(h_skip, h_mat, "skip-хэш должен совпадать с хэшем статики");
+        // Пустой skip эквивалентен обычному хэшу.
+        assert_eq!(
+            hash_display_list_skipping(&dl, &[], &[], 0.0, 0.0, 1024, 720),
+            hash_display_list(&dl, &[], 0.0, 0.0, 1024, 720),
+        );
+    }
+
+    #[test]
+    fn compose_plan_replays_enclosing_context() {
+        use lumen_layout::property_trees::Mat4 as M;
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let content = vec![
+            DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 500.0, 500.0) },
+            DisplayCommand::PushTransform { matrix: M::translation_2d(10.0, 10.0) },
+            DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 50.0, 50.0), color: red },
+            // сегмент: анимируемый бокс
+            DisplayCommand::PushTransform { matrix: M::translation_2d(100.0, 0.0) },
+            DisplayCommand::FillRect { rect: Rect::new(200.0, 0.0, 40.0, 40.0), color: red },
+            DisplayCommand::PopTransform,
+            // конец сегмента
+            DisplayCommand::PopTransform,
+            DisplayCommand::PopClip,
+        ];
+        let ranges = std::slice::from_ref(&(3usize..6));
+        let (plan, eff) = anim_split_compose_plan(&content, ranges)
+            .expect("контекст clip+transform реплеябелен");
+        assert_eq!(eff, vec![3usize..6], "без конфликтов диапазоны не меняются");
+        // Реплей: PushClipRect + PushTransform, сегмент (3 команды), два Pop-а.
+        assert_eq!(plan.len(), 2 + 3 + 2);
+        assert!(matches!(plan[0], DisplayCommand::PushClipRect { .. }));
+        assert!(matches!(plan[1], DisplayCommand::PushTransform { .. }));
+        assert!(matches!(plan[plan.len() - 2], DisplayCommand::PopTransform));
+        assert!(matches!(plan[plan.len() - 1], DisplayCommand::PopClip));
+        assert_segment_balanced(&plan);
+    }
+
+    #[test]
+    fn compose_plan_tail_splits_on_overlapping_later_static() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // Статичная команда ПОСЛЕ сегмента перекрывает его bbox — она (и всё
+        // после неё) уходит в оверлей tail-split-ом, painter's order сохранён.
+        let content = vec![
+            DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 40.0, 40.0), color: red },
+            DisplayCommand::FillRect { rect: Rect::new(20.0, 20.0, 40.0, 40.0), color: red },
+        ];
+        let (plan, eff) =
+            anim_split_compose_plan(&content, std::slice::from_ref(&(0usize..1)))
+                .expect("конфликт решается tail-split-ом");
+        assert_eq!(eff, vec![0usize..1, 1usize..2], "хвост от конфликта до конца");
+        assert_eq!(plan.len(), 2, "сегмент + хвост, без реплей-обёрток");
+        // Непересекающаяся статика — план строится без хвоста.
+        let content_ok = vec![
+            DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 40.0, 40.0), color: red },
+            DisplayCommand::FillRect { rect: Rect::new(100.0, 100.0, 40.0, 40.0), color: red },
+        ];
+        let (_, eff_ok) =
+            anim_split_compose_plan(&content_ok, std::slice::from_ref(&(0usize..1)))
+                .expect("непересекающаяся статика");
+        assert_eq!(eff_ok, vec![0usize..1]);
+    }
+
+    #[test]
+    fn compose_plan_bails_when_tail_cut_too_early() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // Конфликт в самом начале длинного списка: хвост поглотил бы больше
+        // половины — полоса вырождается, split отклоняется целиком.
+        let mut content = vec![
+            DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 40.0, 40.0), color: red },
+            DisplayCommand::FillRect { rect: Rect::new(20.0, 20.0, 40.0, 40.0), color: red },
+        ];
+        for k in 0..6 {
+            content.push(DisplayCommand::FillRect {
+                rect: Rect::new(1000.0 + 100.0 * k as f32, 1000.0, 10.0, 10.0),
+                color: red,
+            });
+        }
+        assert!(anim_split_compose_plan(&content, std::slice::from_ref(&(0usize..1))).is_none());
+    }
+
+    #[test]
+    fn compose_plan_bails_on_non_replayable_context() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // Сегмент внутри opacity-группы: реплей исказил бы групповую
+        // композицию — план не строится.
+        let content = vec![
+            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 40.0, 40.0), color: red },
+            DisplayCommand::PopOpacity,
+        ];
+        assert!(anim_split_compose_plan(&content, std::slice::from_ref(&(1usize..2))).is_none());
+    }
+
+    #[test]
+    fn compose_plan_respects_transformed_overlap() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        use lumen_layout::property_trees::Mat4 as M;
+        // Сегмент сдвинут transform-ом на (200, 0): без учёта матрицы его
+        // локальный rect (0,0,40,40) «пересёкся» бы с поздней статикой в
+        // (10,10) — но эффективные координаты не пересекаются.
+        let content = vec![
+            DisplayCommand::PushTransform { matrix: M::translation_2d(200.0, 0.0) },
+            DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 40.0, 40.0), color: red },
+            DisplayCommand::PopTransform,
+            DisplayCommand::FillRect { rect: Rect::new(10.0, 10.0, 20.0, 20.0), color: red },
+        ];
+        let (_, eff) = anim_split_compose_plan(&content, std::slice::from_ref(&(0usize..3)))
+            .expect("эффективные координаты не пересекаются");
+        assert_eq!(eff, vec![0usize..3], "без конфликта — без хвоста");
+        // А статика, накрывающая сдвинутую позицию, — пересекается: хвост.
+        let content_hit = vec![
+            DisplayCommand::PushTransform { matrix: M::translation_2d(200.0, 0.0) },
+            DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 40.0, 40.0), color: red },
+            DisplayCommand::PopTransform,
+            DisplayCommand::FillRect { rect: Rect::new(210.0, 10.0, 20.0, 20.0), color: red },
+        ];
+        let (_, eff_hit) =
+            anim_split_compose_plan(&content_hit, std::slice::from_ref(&(0usize..3)))
+                .expect("конфликт решается tail-split-ом");
+        assert_eq!(eff_hit, vec![0usize..3, 3usize..4]);
     }
 
     // ── text-emphasis rendering ───────────────────────────────────────────────
