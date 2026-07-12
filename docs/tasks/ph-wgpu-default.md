@@ -178,6 +178,16 @@ both backends smoke-tested in a real window, CPU-screenshot pixel parity vs pre-
 (max delta 1, ≤0.023% px — box-filter quantization class). Remaining: Phase 0 (Linux),
 Phase 1 re-measure (BUG-274), Phase 3 flip + ADR + BUG-276.
 
+**P1-wgpu-vkgl DONE 2026-07-13** — Windows wgpu now compiled with `dx12+vulkan+gles+wgsl+std`
+(per-target in `crates/engine/paint/Cargo.toml`); workspace wgpu entry stripped to version-only
+(`default-features = false`). `backend_probe` now actually tests all 3 candidates:
+- Intel Iris Plus result: Vulkan=WHITE (BUG-275), GL=WHITE (wgpu-GLES also white-screens on this
+  GPU), DX12=ok → probe correctly selects DX12.
+- Idle-CPU with Phase 2 + probe: femtovg ~219ms/10s, wgpu/DX12 ~2391ms/10s. Regression vs
+  pre-Phase2 baseline (~1422ms) likely from scroll-compositor blit every frame even in idle
+  (skip-identical-frame prevents repaint but not blit). Remaining: P1-wgpu-bug276 (wgpu graphic
+  test baseline + BUG-276 root-cause) → P1-wgpu-flip (default flip + ADR).
+
 ## Notes
 
 - `p1-exp-wgpu-only` is read-only source material (`git show origin/p1-exp-wgpu-only:<path>`)

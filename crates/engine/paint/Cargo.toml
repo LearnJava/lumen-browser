@@ -17,7 +17,6 @@ lumen-image.workspace = true
 # Exception #1 + #2 из §5: wgpu-surface привязан к winit-окну; оба опциональны
 # и гейтируются фичей backend-wgpu (ADR-010).
 winit = { workspace = true, optional = true }
-wgpu = { workspace = true, optional = true }
 
 # femtovg + glutin — Phase 2 default rendering backend (ADR-010 RB-9).
 # Why this dependency: femtovg is a stable 2D GPU renderer (OpenGL ES 2.0) that covers
@@ -34,6 +33,24 @@ rgb = { version = "0.8", optional = true }
 
 # CPU-рендеринг для детерминистичных тестов без GPU (8A.5)
 tiny-skia = { version = "0.11", optional = true }
+
+# Графический бэкенд wgpu выбирается per-target: workspace.dependencies не умеет
+# `[target.'cfg(...)'.dependencies]`, поэтому набор `features` (какой GPU API
+# компилируется внутрь wgpu) живёт здесь, а не в корневом Cargo.toml.
+#
+# Windows: dx12 + vulkan + gles — три кандидата для backend_probe (Vulkan→GL→DX12
+# по умолчанию; BUG-274/275). До P1-wgpu-vkgl был только dx12, поэтому проба
+# всегда откатывалась на DX12. Cargo-фича = "gles"; enum-константа = Backends::GL.
+# Linux: vulkan (стандарт для desktop-компоузиторов).
+# macOS: metal.
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["dx12", "vulkan", "gles", "wgsl", "std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["vulkan", "wgsl", "std"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["metal", "wgsl", "std"] }
 
 [dev-dependencies]
 lumen-html-parser.workspace = true

@@ -97,3 +97,41 @@ target\dev-release\lumen.exe graphic_tests\1000000-final.html
 (миграционный путь бэкендов) и `subsystems/paint.md`. До закрытия этого бага wgpu как
 дефолтный live-путь брать не стоит — простой на статичной странице должен стоить ~0 CPU
 (инвариант, закреплённый BUG-271), а на wgpu он нарушен.
+
+## Обновление 2026-07-13 — P1-wgpu-vkgl: замер с новыми фичами
+
+До этого коммита wgpu на Windows собирался только с фичей `dx12`; `backend_probe` (Vulkan→GL→DX12)
+всегда откатывался на DX12 — кандидаты Vulkan и GL были недоступны на уровне wgpu-runtime.
+С P1-wgpu-vkgl Windows-сборка включает `["dx12", "vulkan", "gles", "wgsl", "std"]`.
+
+### Результаты probe на Intel Iris Plus (2026-07-13)
+
+```
+[probe] Vulkan: present=WHITE texture=ok  adapter="Intel(R) Iris(R) Plus Graphics" — отклонён
+[probe] GL:     present=WHITE texture=n/a adapter="Intel(R) Iris(R) Plus Graphics" — отклонён
+[probe] DX12:   present=ok    texture=ok  adapter="Intel(R) Iris(R) Plus Graphics" — ПРИНЯТ
+[probe] бэкенд выбран за 2127 мс: DX12
+```
+
+Выводы:
+- **Vulkan** — BUG-275 подтверждён (`present=WHITE`, DWM-заголовок исправен).
+- **GL (GLES через wgpu/WGSL)** — тоже `present=WHITE`; это wgpu-over-GLES, не femtovg-over-GL —
+  драйвер Intel Iris Plus не презентует wgpu-GLES-swapchain через DWM. `texture=n/a` означает
+  отсутствие COPY_SRC у GLES-поверхности.
+- **DX12** — единственный рабочий путь на этой машине.
+
+Данные из exp-ветки о "wgpu-GL как лучшем" применимы к другой машине или другой конфигурации
+GLES-бэкенда — на Intel Iris Plus он также white-screens.
+
+### Замер idle CPU (dev-release, график. 1000000-final.html, t=5..15 с)
+
+| Бэкенд | Дельта CPU за 10 с | % одного ядра | Примечание |
+|---|---|---|---|
+| femtovg (new) | ~219 мс | ~2.2% | базовая линия |
+| wgpu/DX12 probe (new, Phase 2) | ~2391 мс | ~23.9% | probe 2.1 с overhead; blit per-frame |
+| wgpu/DX12 (original BUG-274, pre-Phase2) | ~1422 мс | ~14.2% | |
+
+Wgpu DX12 ухудшился vs исходного замера (~24% vs 14%). Гипотеза: scroll-compositor (Phase 2,
+M3 blit path) делает GPU-blit каждый кадр даже в idle (`[frame] delta Identical` → `[frame] band blit`),
+тогда как skip-identical-frame только предотвращает полный repaint, но не сам blit. Фикс = добавить
+skip-blit когда `delta Identical` и нет dirty-regions (отдельная подзадача).

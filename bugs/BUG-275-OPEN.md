@@ -43,3 +43,18 @@ Windows 10, либо несовместимость wgpu 26 Vulkan-swapchain с 
   сравнения презентации (не как возврат к glutin/femtovg).
 - Если Vulkan заработает — вернуть Vulkan-first: это снимает ~12× CPU-разницу DX12
   (BUG-274) без единой строчки в рендер-коде.
+
+## Обновление 2026-07-13 — P1-wgpu-vkgl: GL тоже белый на этой машине
+
+С P1-wgpu-vkgl wgpu теперь компилирует `vulkan + gles + dx12` на Windows. Probe-результат:
+```
+[probe] Vulkan: present=WHITE texture=ok  adapter="Intel(R) Iris(R) Plus Graphics" — отклонён
+[probe] GL:     present=WHITE texture=n/a adapter="Intel(R) Iris(R) Plus Graphics" — отклонён
+[probe] DX12:   present=ok    texture=ok  adapter="Intel(R) Iris(R) Plus Graphics" — ПРИНЯТ
+```
+`wgpu::Backends::GL` (GLES через wgpu-hal) также даёт `present=WHITE` на Intel Iris Plus.
+`texture=n/a` = GLES-поверхность не поддерживает COPY_SRC (readback недоступен).
+Т.о. симптом белого экрана специфичен не только для Vulkan, но и для wgpu-GLES на этом
+GPU/драйвере — вероятно проблема в DWM-слое или WSI-расширении Intel.
+
+DX12 по-прежнему единственный рабочий wgpu-бэкенд на этой машине.
