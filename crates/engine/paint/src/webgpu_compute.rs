@@ -91,25 +91,27 @@ struct ComputeContext {
 /// Глобальный кэш GPU-контекста: `None` — адаптер недоступен (нет GPU/драйвера).
 static CONTEXT: OnceLock<Option<ComputeContext>> = OnceLock::new();
 
-/// Создаёт headless wgpu-устройство тем же выбором бэкенда, что и рендерер (BUG-057):
-/// DX12 на Windows, PRIMARY иначе. Возвращает `None`, если адаптер недоступен.
+/// Создаёт headless wgpu-устройство той же цепочкой резервов, что и рендерер
+/// (BUG-057/274/275): DX12 → Vulkan → GL на Windows, PRIMARY → GL иначе. Без
+/// стартовой пробы — этот контекст не привязан к окну, реальную презентацию
+/// проверять не на чем. Возвращает `None`, если ни один кандидат не дал
+/// рабочий адаптер.
 fn init_context() -> Option<ComputeContext> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: if cfg!(target_os = "windows") {
-            wgpu::Backends::DX12
-        } else {
-            wgpu::Backends::PRIMARY
-        },
-        ..Default::default()
-    });
-
+    let backend_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
+        &[wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
+    } else {
+        &[wgpu::Backends::PRIMARY, wgpu::Backends::GL]
+    };
     // Surface не нужен — compute/validation работают без окна.
-    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .ok()?;
+    let adapter = backend_prefs.iter().find_map(|&backends| {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor { backends, ..Default::default() });
+        block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .ok()
+    })?;
 
     let raw = adapter.get_info();
     let info = AdapterInfo {

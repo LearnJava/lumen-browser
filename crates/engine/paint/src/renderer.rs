@@ -1625,25 +1625,50 @@ impl Renderer {
 
         // BUG-057: on Windows the Vulkan backend causes a double-panic on the first
         // rendered frame (encoder invalidated, then Surface drop races SurfaceTexture).
-        // DX12 does not exhibit this issue. Default to DX12 on Windows; allow the
-        // WGPU_BACKEND env-var to override for debugging / fallback.
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: if cfg!(target_os = "windows") {
-                wgpu::Backends::DX12
-            } else {
-                wgpu::Backends::PRIMARY
-            },
-            ..Default::default()
+        // BUG-274: DX12 pays a fixed ~2.3ms CPU cost per render pass regardless of
+        // frame area (doesn't amortize) — with ~270 passes/frame this dominates
+        // idle CPU. Vulkan avoids it but a subset of Intel iGPUs present a fully
+        // white window despite an error-free submit (BUG-275, WSI/driver issue,
+        // undetectable from wgpu's own error scopes). `backend_probe::pick_backend`
+        // draws a real probe frame and checks actual DWM presentation to pick the
+        // first candidate that genuinely works; `None` falls through to the static
+        // preference chain below (also used when the probe is disabled or this
+        // isn't Windows). `WGPU_BACKEND` env-var still overrides both.
+        let probed = crate::backend_probe::pick_backend(&window).await;
+        let static_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
+            &[wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
+        } else {
+            &[wgpu::Backends::PRIMARY, wgpu::Backends::GL]
+        };
+        let backend_prefs: Vec<wgpu::Backends> = probed
+            .into_iter()
+            .chain(static_prefs.iter().copied().filter(|b| Some(*b) != probed))
+            .collect();
+        let mut picked = None;
+        for backends in backend_prefs {
+            let instance = wgpu::Instance::new(
+                &wgpu::InstanceDescriptor { backends, ..Default::default() }.with_env(),
+            );
+            let Ok(surface) = instance.create_surface(window.clone()) else {
+                continue;
+            };
+            match instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: Some(&surface),
+                    force_fallback_adapter: false,
+                })
+                .await
+            {
+                Ok(adapter) => {
+                    picked = Some((surface, adapter));
+                    break;
+                }
+                Err(_) => continue,
+            }
         }
-        .with_env());
-        let surface = instance.create_surface(window)?;
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await?;
+        let (surface, adapter) =
+            picked.ok_or("no GPU adapter under any candidate backend (DX12/Vulkan/GL)")?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("lumen-device"),
@@ -1669,6 +1694,12 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let adapter_info = adapter.get_info();
+        if crate::frame_log_enabled() {
+            eprintln!(
+                "[wgpu] adapter: {} ({:?}, {:?})",
+                adapter_info.name, adapter_info.device_type, adapter_info.backend
+            );
+        }
         let gpu_fingerprint = GpuFingerprint::from_adapter_info(&adapter_info);
 
         Self::init_pipelines(
@@ -1708,24 +1739,38 @@ impl Renderer {
         height: u32,
         target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Mirror the windowed-mode backend choice (BUG-057).
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: if cfg!(target_os = "windows") {
-                wgpu::Backends::DX12
-            } else {
-                wgpu::Backends::PRIMARY
-            },
-            ..Default::default()
-        }
-        .with_env());
+        // Mirror the windowed-mode fallback chain (BUG-057/274/275) minus the
+        // probe: headless has no window to verify real presentation against, and
+        // callers (tests, `--screenshot`, driver snapshots) need deterministic
+        // backend selection run to run. `WGPU_BACKEND` still overrides.
+        let backend_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
+            &[wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
+        } else {
+            &[wgpu::Backends::PRIMARY, wgpu::Backends::GL]
+        };
         // No surface needed — request adapter without compatible_surface constraint.
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await?;
+        let mut picked = None;
+        for &backends in backend_prefs {
+            let instance = wgpu::Instance::new(
+                &wgpu::InstanceDescriptor { backends, ..Default::default() }.with_env(),
+            );
+            match instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                })
+                .await
+            {
+                Ok(adapter) => {
+                    picked = Some(adapter);
+                    break;
+                }
+                Err(_) => continue,
+            }
+        }
+        let adapter =
+            picked.ok_or("no GPU adapter under any candidate backend (DX12/Vulkan/GL)")?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("lumen-headless-device"),

@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-12",
  "counts": {
-  "open": 21,
+  "open": 22,
   "fixed": 226,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 247,
+ "total_bugs": 248,
  "phases": [
   {
    "id": "P0",
@@ -265,6 +265,25 @@
        "status": "done",
        "size": "M",
        "note": "`graphic_tests/run.py --live`: один живой `lumen --mcp-live-port` процесс/окно на весь прогон вместо kill+relaunch на каждый тест (`LiveWindowClient`, MCP JSON-RPC — `navigate`+`wait(document_ready)` вместо блокирующего `time.sleep(LUMEN_WAIT_SEC=5)`); пиксельный снимок остался gdigrab-ом реального femtovg-окна (не CPU `resource://screenshot`, тот же разрыв паритета что у `--ipc`), поэтому проходят и JS-тесты (57, 129–138). TEST-00 калибрует crop offset один раз, как раньше. Валидировано полным прогоном: результат идентичен baseline (`Изменений нет`), 139 тестов за ~10.5 мин. По пути найдены и исправлены 2 бага живого окна, важных и для SDC-2: `AutomationCommand::Navigate` не поддерживал `file://` (всегда `PageSource::Url` → сетевой `HttpClient` → \"unsupported scheme: file\"); команда с BiDi/MCP-потока не будила запаркованный `ControlFlow::Wait` event loop (добавлен `LoadEvent::AutomationWake` + `AutomationHandle::set_wake`)"
+      }
+     ]
+    },
+    {
+     "id": "P1-wgpu-default",
+     "title": "Ph-wgpu-default: перенос + флип дефолта",
+     "status": "active",
+     "size": "XL",
+     "note": "Перенос perf/reliability-наработок из постоянной эксперимент-ветки `p1-exp-wgpu-only` (никогда не вливается) в main с сохранением femtovg, затем флип дефолтного рендер-бэкенда на wgpu; бриф `docs/tasks/ph-wgpu-default.md`; Фаза 0 (кроссплатформенная база `p1-wgpu-cross-platform`) ждёт Linux-отчёта; Фаза 1 срез 1 (backend_probe DX12/Vulkan/GL) СДЕЛАН и влит; находка BUG-276 (wgpu не проходит TEST-00 против Edge — не регрессия, никогда не проверялось)",
+     "bugs": [
+      "BUG-276"
+     ],
+     "tasks": [
+      {
+       "id": "P1-wgpu-default-probe",
+       "title": "Ph-wgpu-default: срез backend_probe",
+       "status": "done",
+       "size": "M",
+       "note": "Фаза 1 срез 1: перенесён `backend_probe.rs` (авто-проба Vulkan→GL→DX12 с реальной проверкой презентации, ловит BUG-275) + единственный жёсткий выбор DX12-или-PRIMARY в renderer.rs/webgpu_compute.rs заменён на цепочку резервов. Смоук на реальной машине (тот же адаптер, что в экспериментах) — проба работает, откатывается на DX12, рендер не сломан. Расширение фич (vulkan/gl на Windows) — follow-up, нужен для реального эффекта на BUG-274"
       }
      ]
     }
@@ -2999,6 +3018,13 @@
    "status": "open",
    "title": "Сравнение `LUMEN_BACKEND=femtovg` vs `=wgpu` на 1000000-final.html: в простое (10с, без ввода) wgpu жжёт ~1422 мс CPU против 375 мс у femtovg (~4×) — похоже на…",
    "component": "paint (WgpuBackend) / shell (event loop, wgpu-путь)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-276": {
+   "status": "open",
+   "title": "`LUMEN_BACKEND=wgpu python graphic_tests/run.py --only 00` (впервые прогнанный вообще, набор всегда неявно проверял только femtovg) — `TEST-00 FAIL 4.85%` (femt…",
+   "component": "paint (WgpuBackend) или graphic_tests capture/calibration — не разделено",
    "date": null,
    "debtor": false
   }
