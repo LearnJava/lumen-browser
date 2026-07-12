@@ -1379,16 +1379,187 @@ impl std::fmt::Write for HashFmt<'_> {
     }
 }
 
-/// Хеширует одну команду через её Debug-представление без аллокаций.
-pub(crate) fn hash_one_command(cmd: &DisplayCommand) -> u64 {
+/// Writes an `f32` into the hasher by its bit pattern.
+///
+/// Bit-hashing is *stricter* than the `Debug` text it replaces: `NaN` payloads
+/// that print identically hash differently. That direction is safe — it can
+/// only produce a spurious "changed" verdict (an extra repaint), never a
+/// spurious "identical" one (stale pixels on screen).
+#[inline]
+fn h_f32(h: &mut std::collections::hash_map::DefaultHasher, v: f32) {
+    use std::hash::Hasher;
+    h.write_u32(v.to_bits());
+}
+
+/// Writes a [`Rect`] into the hasher field-by-field.
+#[inline]
+fn h_rect(h: &mut std::collections::hash_map::DefaultHasher, r: &Rect) {
+    h_f32(h, r.x);
+    h_f32(h, r.y);
+    h_f32(h, r.width);
+    h_f32(h, r.height);
+}
+
+/// Writes an RGBA8 [`Color`] into the hasher.
+#[inline]
+fn h_color(h: &mut std::collections::hash_map::DefaultHasher, c: &Color) {
+    use std::hash::Hasher;
+    h.write_u8(c.r);
+    h.write_u8(c.g);
+    h.write_u8(c.b);
+    h.write_u8(c.a);
+}
+
+/// Writes all eight [`CornerRadii`] components into the hasher.
+#[inline]
+fn h_radii(h: &mut std::collections::hash_map::DefaultHasher, r: &CornerRadii) {
+    for v in [r.tl, r.tl_y, r.tr, r.tr_y, r.br, r.br_y, r.bl, r.bl_y] {
+        h_f32(h, v);
+    }
+}
+
+/// Writes a string into the hasher with a terminator, so that `"ab" + "c"`
+/// cannot collide with `"a" + "bc"`.
+#[inline]
+fn h_str(h: &mut std::collections::hash_map::DefaultHasher, s: &str) {
+    use std::hash::Hasher;
+    h.write(s.as_bytes());
+    h.write_u8(0xff);
+}
+
+/// Folds one [`DisplayCommand`] into `h` **structurally** — raw field bytes,
+/// no `core::fmt` machinery.
+///
+/// Why: the frame-skip hash used to fold every command through `{cmd:?}`.
+/// `Debug` for `f32` runs the Grisu/Dragon shortest-repr algorithm per float,
+/// and a typical frame carries thousands of them — measured at 1.2–2.5 ms per
+/// frame on `1000000-final.html` (see EXPERIMENT.md §9 "открытые хвосты").
+///
+/// **Safety of the fast path.** The hot variants below destructure *every*
+/// field explicitly — no `..` rest-pattern — so adding a field to one of them
+/// is a compile error, not a silent stale-pixel bug. Every other variant falls
+/// through to the original `Debug` fold, which is exhaustive by construction:
+/// a newly added variant is hashed correctly (just slower) from day one. The
+/// variant tag itself is always folded via `mem::discriminant`, so two variants
+/// with structurally identical payloads can never collide.
+pub(crate) fn hash_command_into(
+    cmd: &DisplayCommand,
+    h: &mut std::collections::hash_map::DefaultHasher,
+) {
     use std::fmt::Write as _;
+    use std::hash::{Hash as _, Hasher as _};
+
+    std::mem::discriminant(cmd).hash(h);
+
+    match cmd {
+        DisplayCommand::FillRect { rect, color } => {
+            h_rect(h, rect);
+            h_color(h, color);
+        }
+        DisplayCommand::FillRoundedRect { rect, color, radii } => {
+            h_rect(h, rect);
+            h_color(h, color);
+            h_radii(h, radii);
+        }
+        DisplayCommand::DrawBorder { rect, widths, colors, styles, radii } => {
+            h_rect(h, rect);
+            for w in widths {
+                h_f32(h, *w);
+            }
+            for c in colors {
+                h_color(h, c);
+            }
+            for s in styles {
+                std::mem::discriminant(s).hash(h);
+            }
+            h_radii(h, radii);
+        }
+        DisplayCommand::DrawOutline { rect, width, style, color, offset } => {
+            h_rect(h, rect);
+            h_f32(h, *width);
+            std::mem::discriminant(style).hash(h);
+            h_color(h, color);
+            h_f32(h, *offset);
+        }
+        DisplayCommand::PushClipRect { rect } => h_rect(h, rect),
+        DisplayCommand::PushOpacity { alpha } => h_f32(h, *alpha),
+        DisplayCommand::PushTransform { matrix } => {
+            for v in matrix.0 {
+                h_f32(h, v);
+            }
+        }
+        DisplayCommand::DrawText {
+            rect,
+            text,
+            font_size,
+            color,
+            font_family,
+            font_weight,
+            font_style,
+            font_variation_axes,
+            font_features,
+            font_palette,
+            tab_size,
+            highlight_name,
+            text_orientation,
+        } => {
+            h_rect(h, rect);
+            h_str(h, text);
+            h_f32(h, *font_size);
+            h_color(h, color);
+            h.write_usize(font_family.len());
+            for f in font_family {
+                h_str(h, f);
+            }
+            h.write_u16(font_weight.0);
+            std::mem::discriminant(font_style).hash(h);
+            h.write_usize(font_variation_axes.len());
+            for (tag, v) in font_variation_axes {
+                h.write(tag);
+                h_f32(h, *v);
+            }
+            h.write_usize(font_features.len());
+            for (tag, v) in font_features {
+                h.write(tag);
+                h.write_u32(*v);
+            }
+            // Structurally complex and almost always `None` — `Debug` here costs
+            // four bytes and no float formatting.
+            {
+                let mut hf = HashFmt(h);
+                let _ = write!(hf, "{font_palette:?}");
+            }
+            h_f32(h, *tab_size);
+            match highlight_name {
+                Some(s) => {
+                    h.write_u8(1);
+                    h_str(h, s);
+                }
+                None => h.write_u8(0),
+            }
+            match text_orientation {
+                Some(t) => {
+                    h.write_u8(1);
+                    std::mem::discriminant(t).hash(h);
+                }
+                None => h.write_u8(0),
+            }
+        }
+        // Cold variants: gradients, SVG, masks, filters, snapshots, scrollbars,
+        // and every unit variant. Folded through `Debug` exactly as before.
+        other => {
+            let mut hf = HashFmt(h);
+            // Errors are impossible: HashFmt::write_str never fails.
+            let _ = write!(hf, "{other:?}");
+        }
+    }
+}
+
+/// Хеширует одну команду структурно, без аллокаций.
+pub(crate) fn hash_one_command(cmd: &DisplayCommand) -> u64 {
     use std::hash::Hasher;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    {
-        let mut hf = HashFmt(&mut hasher);
-        // Errors are impossible: HashFmt::write_str never fails.
-        let _ = write!(hf, "{cmd:?}");
-    }
+    hash_command_into(cmd, &mut hasher);
     hasher.finish()
 }
 
@@ -1400,10 +1571,10 @@ pub(crate) fn hash_one_command(cmd: &DisplayCommand) -> u64 {
 /// filtered result is guaranteed identical, so the blur passes can be skipped
 /// and the cached texture reused.
 ///
-/// The hash is **total** — it folds every field of every command via each
-/// command's `Debug` representation — so adding new `DisplayCommand` variants or
-/// fields can never silently produce a false cache hit (which would paint stale
-/// pixels). It is computed only when [`contains_backdrop_filter`] is true.
+/// The hash is **total** — it folds every field of every command (see
+/// [`hash_command_into`]: explicit fields for the hot variants, `Debug` for the
+/// cold ones) — so adding new `DisplayCommand` variants or fields can never
+/// silently produce a false cache hit (which would paint stale pixels).
 ///
 /// The hasher (`DefaultHasher`) is process-deterministic and never influences
 /// pixel output (only the skip decision), so cross-OS bit-identity is not a
@@ -1417,7 +1588,6 @@ pub fn hash_display_list(
     surface_w: u32,
     surface_h: u32,
 ) -> u64 {
-    use std::fmt::Write as _;
     use std::hash::Hasher;
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1425,12 +1595,12 @@ pub fn hash_display_list(
     hasher.write_u32(surface_h);
     hasher.write_u32(scroll_x.to_bits());
     hasher.write_u32(scroll_y.to_bits());
-    {
-        let mut hf = HashFmt(&mut hasher);
-        for cmd in content.iter().chain(overlay.iter()) {
-            // Errors are impossible: HashFmt::write_str never fails.
-            let _ = write!(hf, "{cmd:?}");
-        }
+    // Lane lengths: keeps the "content then overlay" fold unambiguous when a
+    // command migrates between lanes.
+    hasher.write_usize(content.len());
+    hasher.write_usize(overlay.len());
+    for cmd in content.iter().chain(overlay.iter()) {
+        hash_command_into(cmd, &mut hasher);
     }
     hasher.finish()
 }
@@ -14747,18 +14917,254 @@ mod tests {
     #[test]
     fn hash_distinguishes_content_from_overlay_lane() {
         // The same command in the content lane vs the overlay lane must not
-        // collide — order across lanes is part of the hashed sequence.
+        // collide: both lane lengths are folded before the command sequence.
         let cmd = vec![red_fill(5.0)];
         let in_content = hash_display_list(&cmd, &[], 0.0, 0.0, 1024, 720);
         let in_overlay = hash_display_list(&[], &cmd, 0.0, 0.0, 1024, 720);
-        // Both fold the same single command, so to make them distinct we add a
-        // second distinguishing command to one lane.
+        assert_ne!(in_content, in_overlay, "lane identity is part of the hash");
+
         let two_content = hash_display_list(&[red_fill(5.0), red_fill(9.0)], &[], 0.0, 0.0, 1024, 720);
         assert_ne!(in_content, two_content);
-        // content+overlay folding is sequential: content first, then overlay.
+        // Same command sequence, different lane split → different hash.
         let split = hash_display_list(&[red_fill(5.0)], &[red_fill(9.0)], 0.0, 0.0, 1024, 720);
-        assert_eq!(two_content, split, "lanes fold in sequence (content then overlay)");
-        let _ = in_overlay;
+        assert_ne!(two_content, split, "a lane boundary shift must change the hash");
+    }
+
+    // ── Структурный хэш команд (p1-exp-wgpu-only) ─────────────────────────
+    //
+    // `hash_command_into` заменил тотальный Debug-фолд. Инвариант, который
+    // нельзя нарушить: структурный хэш должен различать НЕ МЕНЬШЕ, чем Debug.
+    // Если два Debug-представления различны, структурные хэши обязаны быть
+    // различны — иначе кадр с изменившимся содержимым получит старый хэш и НЕ
+    // будет перерисован (ложный skip → устаревшие пиксели на экране).
+
+    /// Эталон: старый фолд команды через её `Debug`-представление.
+    fn debug_hash_one(cmd: &DisplayCommand) -> u64 {
+        use std::fmt::Write as _;
+        use std::hash::Hasher;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        {
+            let mut hf = HashFmt(&mut h);
+            let _ = write!(hf, "{cmd:?}");
+        }
+        h.finish()
+    }
+
+    fn text_cmd(text: &str, font_size: f32, weight: u16) -> DisplayCommand {
+        DisplayCommand::DrawText {
+            rect: Rect::new(1.0, 2.0, 30.0, 12.0),
+            text: text.to_string(),
+            font_size,
+            color: Color { r: 10, g: 20, b: 30, a: 255 },
+            font_family: vec!["Inter".to_string()],
+            font_weight: FontWeight(weight),
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![(*b"wght", 400.0)],
+            font_features: vec![(*b"liga", 1)],
+            font_palette: None,
+            tab_size: 0.0,
+            highlight_name: None,
+            text_orientation: None,
+        }
+    }
+
+    /// Корпус, покрывающий каждую быструю ветку `hash_command_into` и пару
+    /// холодных (Debug-fallback) вариантов.
+    fn hash_corpus() -> Vec<DisplayCommand> {
+        let radii = CornerRadii { tl: 4.0, ..CornerRadii::default() };
+        let radii2 = CornerRadii { tl_y: 4.0, ..CornerRadii::default() };
+        let c1 = Color { r: 255, g: 0, b: 0, a: 255 };
+        let c2 = Color { r: 255, g: 0, b: 0, a: 254 };
+        vec![
+            // FillRect: сдвиг rect и изменение alpha цвета.
+            DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0), color: c1 },
+            DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 10.0, 10.1), color: c1 },
+            DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0), color: c2 },
+            // FillRoundedRect: tl против tl_y — ловит перепутанные поля радиусов.
+            DisplayCommand::FillRoundedRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0), color: c1, radii },
+            DisplayCommand::FillRoundedRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0), color: c1, radii: radii2 },
+            // DrawBorder: ширины, цвета, стили, радиусы — каждое поле отдельно.
+            DisplayCommand::DrawBorder {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                widths: [1.0, 1.0, 1.0, 1.0],
+                colors: [c1; 4],
+                styles: [BorderStyle::Solid; 4],
+                radii: CornerRadii::default(),
+            },
+            DisplayCommand::DrawBorder {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                widths: [1.0, 2.0, 1.0, 1.0],
+                colors: [c1; 4],
+                styles: [BorderStyle::Solid; 4],
+                radii: CornerRadii::default(),
+            },
+            DisplayCommand::DrawBorder {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                widths: [1.0, 1.0, 1.0, 1.0],
+                colors: [c1, c2, c1, c1],
+                styles: [BorderStyle::Solid; 4],
+                radii: CornerRadii::default(),
+            },
+            DisplayCommand::DrawBorder {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                widths: [1.0, 1.0, 1.0, 1.0],
+                colors: [c1; 4],
+                styles: [BorderStyle::Dashed, BorderStyle::Solid, BorderStyle::Solid, BorderStyle::Solid],
+                radii: CornerRadii::default(),
+            },
+            DisplayCommand::DrawBorder {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                widths: [1.0, 1.0, 1.0, 1.0],
+                colors: [c1; 4],
+                styles: [BorderStyle::Solid; 4],
+                radii,
+            },
+            // DrawOutline: width против offset (одинаковый тип, разный смысл).
+            DisplayCommand::DrawOutline {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                width: 2.0,
+                style: OutlineStyle::Solid,
+                color: c1,
+                offset: 0.0,
+            },
+            DisplayCommand::DrawOutline {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                width: 0.0,
+                style: OutlineStyle::Solid,
+                color: c1,
+                offset: 2.0,
+            },
+            DisplayCommand::DrawOutline {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                width: 2.0,
+                style: OutlineStyle::Dotted,
+                color: c1,
+                offset: 0.0,
+            },
+            // Clip / opacity / transform.
+            DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0) },
+            DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 10.0, 11.0) },
+            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::PushOpacity { alpha: 0.5001 },
+            DisplayCommand::PushTransform { matrix: Mat4::IDENTITY },
+            DisplayCommand::PushTransform { matrix: Mat4::translation_2d(1.0, 0.0) },
+            DisplayCommand::PushTransform { matrix: Mat4::translation_2d(0.0, 1.0) },
+            // DrawText: текст, кегль, вес.
+            text_cmd("abc", 16.0, 400),
+            text_cmd("abd", 16.0, 400),
+            text_cmd("abc", 16.5, 400),
+            text_cmd("abc", 16.0, 700),
+            // Склейка строк не должна коллизировать: "ab"+"c" ≠ "a"+"bc".
+            text_cmd("ab\u{0}c", 16.0, 400),
+            // Холодные варианты (Debug-fallback) + unit-варианты, включая
+            // main-специфичные fixed/sticky маркеры (их не было на exp-ветке —
+            // корректность их Debug-фолда проверяется этим же корпусом).
+            backdrop_cmd(),
+            DisplayCommand::PopBackdropFilter,
+            DisplayCommand::PopTransform,
+            DisplayCommand::BeginFixedLayer,
+            DisplayCommand::EndFixedLayer,
+        ]
+    }
+
+    #[test]
+    fn structural_hash_is_stable_and_collision_free_on_corpus() {
+        let corpus = hash_corpus();
+        for cmd in &corpus {
+            assert_eq!(
+                hash_one_command(cmd),
+                hash_one_command(&cmd.clone()),
+                "hash must be a pure function of the command"
+            );
+        }
+        for (i, a) in corpus.iter().enumerate() {
+            for (j, b) in corpus.iter().enumerate().skip(i + 1) {
+                assert_ne!(
+                    hash_one_command(a),
+                    hash_one_command(b),
+                    "structural hash collision between corpus[{i}] and corpus[{j}]:\n{a:?}\n{b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn structural_hash_refines_debug_hash() {
+        // Ключевой инвариант отсутствия ложных skip: всё, что различал старый
+        // Debug-фолд, обязан различать и структурный. Обратное не требуется —
+        // структурный строже (напр. различает NaN-payload'ы), и лишнее
+        // различие даёт лишь лишнюю перерисовку, а не устаревшие пиксели.
+        let corpus = hash_corpus();
+        for (i, a) in corpus.iter().enumerate() {
+            for (j, b) in corpus.iter().enumerate().skip(i + 1) {
+                if debug_hash_one(a) != debug_hash_one(b) {
+                    assert_ne!(
+                        hash_one_command(a),
+                        hash_one_command(b),
+                        "structural hash is coarser than Debug at corpus[{i}] vs corpus[{j}]:\n{a:?}\n{b:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// ДО/ПОСЛЕ в одном прогоне: Debug-фолд против структурного на кадре,
+    /// сопоставимом с `graphic_tests/1000000-final.html` (~1000 команд).
+    ///
+    /// `cargo test -p lumen-paint --release hash_display_list_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "бенч: запускать вручную с --release --nocapture"]
+    fn hash_display_list_bench() {
+        use std::hash::Hasher;
+        use std::time::Instant;
+
+        // Кадр: повторяем корпус до ~1060 команд, слегка сдвигая геометрию.
+        let mut frame: Vec<DisplayCommand> = Vec::with_capacity(1060);
+        let corpus = hash_corpus();
+        let mut i = 0.0_f32;
+        while frame.len() < 1060 {
+            for c in &corpus {
+                let mut c = c.clone();
+                if let DisplayCommand::FillRect { rect, .. } = &mut c {
+                    rect.x += i;
+                }
+                frame.push(c);
+                i += 0.25;
+            }
+        }
+        frame.truncate(1060);
+
+        let iters = 200;
+
+        // Эталонный (старый) путь: один хешер на кадр, Debug-фолд каждой команды.
+        let t0 = Instant::now();
+        let mut sink = 0u64;
+        for _ in 0..iters {
+            use std::fmt::Write as _;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            {
+                let mut hf = HashFmt(&mut h);
+                for cmd in &frame {
+                    let _ = write!(hf, "{cmd:?}");
+                }
+            }
+            sink ^= h.finish();
+        }
+        let debug_ms = t0.elapsed().as_secs_f64() * 1000.0 / f64::from(iters);
+
+        let t1 = Instant::now();
+        for _ in 0..iters {
+            sink ^= hash_display_list(&frame, &[], 0.0, 0.0, 1024, 720);
+        }
+        let structural_ms = t1.elapsed().as_secs_f64() * 1000.0 / f64::from(iters);
+
+        eprintln!(
+            "[hash bench] {} cmds × {iters}: debug-fmt {debug_ms:.3} ms/frame → structural \
+             {structural_ms:.3} ms/frame ({:.1}×), sink={sink}",
+            frame.len(),
+            debug_ms / structural_ms.max(f64::MIN_POSITIVE),
+        );
+        assert!(structural_ms < debug_ms, "структурный фолд обязан быть быстрее Debug-фолда");
     }
 
     // ── ADR-016 M0.5: content-only hash + frame-delta classification ──────
