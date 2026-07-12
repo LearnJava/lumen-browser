@@ -193,6 +193,159 @@ pub fn plan_overlays(content: &[DisplayCommand]) -> OverlayPlan {
     OverlayPlan::Replay(ranges)
 }
 
+/// One replayable overlay span together with the ancestor **spatial** layer
+/// commands that enclose it (ADR-016 M3.2.1c-4).
+///
+/// The M3.2.1c-3 backend can only replay overlay spans that sit at nesting depth 0;
+/// anything wrapped by ancestor layer state takes the direct fallback. This carries
+/// the missing context so a later slice can replay a nested overlay in isolation:
+/// the enclosing ancestors are all *spatial* layers (clip / transform / scroll —
+/// see [`is_spatial_layer_open`]), which composite per-primitive, so re-establishing
+/// them around the overlay alone yields the same pixels as the direct render.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlaySpan {
+    /// Half-open command range of the overlay bracket itself (inclusive of the
+    /// `Begin`/`End` markers) — the same span [`overlay_ranges`] reports.
+    pub span: Range<usize>,
+    /// Indices of the enclosing ancestor layer-opening commands, **outer→inner**.
+    /// Empty for a top-level overlay. Every entry is a spatial layer open
+    /// ([`is_spatial_layer_open`]); a replay executes these before `span` and emits
+    /// their matching pops (in reverse) after, reconstructing the clip / transform /
+    /// scroll state the direct path would have applied.
+    pub ancestors: Vec<usize>,
+}
+
+/// Richer overlay classification that can also replay spans nested under **spatial**
+/// ancestor layers, not only top-level ones (ADR-016 M3.2.1c-4).
+///
+/// Produced by [`plan_overlays_nested`]. Where [`plan_overlays`] (M3.2.1c-3) reports
+/// [`OverlayPlan::NestedFallback`] for *any* nested overlay, this narrows the
+/// fallback to overlays wrapped by a *compositing* group (opacity / blend / mask /
+/// filter / backdrop-filter) whose group effect an isolated replay cannot reproduce;
+/// overlays wrapped only by spatial layers become [`NestedOverlayPlan::Replay`] with
+/// their ancestor context captured. Consumed by nobody yet — the backend wiring is a
+/// later slice (mirrors the pure-first cadence of M3.2.1c-1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NestedOverlayPlan {
+    /// No viewport-pinned overlay content — the blit fast path applies unchanged.
+    None,
+    /// Every overlay span is replayable: it is either top-level (`ancestors` empty)
+    /// or nested only under spatial layers whose indices are captured in the
+    /// [`OverlaySpan`]. Spans are returned in ascending order.
+    Replay(Vec<OverlaySpan>),
+    /// At least one overlay span is nested under a *compositing* ancestor
+    /// (opacity / blend / mask / filter / backdrop-filter) whose group effect an
+    /// isolated replay cannot reproduce — the backend must render this frame
+    /// directly (byte-identical to the pre-blit path). A stricter analogue of
+    /// [`OverlayPlan::NestedFallback`] that fires only when a split would actually
+    /// change pixels.
+    Fallback,
+}
+
+/// Classify the viewport-pinned overlay content of a scroll-independent display list,
+/// capturing the spatial ancestor context of any nested overlay (ADR-016 M3.2.1c-4).
+///
+/// Walks the list maintaining a stack of the currently-open *ancestor* (non-overlay)
+/// layer indices. At each outermost overlay span start the ancestor stack is exactly
+/// the layer context wrapping that overlay:
+/// - all-spatial (clip / transform / scroll) → the span is replayable, its ancestor
+///   indices captured in an [`OverlaySpan`];
+/// - contains a compositing layer (opacity / blend / mask / filter / backdrop) →
+///   [`NestedOverlayPlan::Fallback`], since compositing a group as one unit cannot be
+///   reproduced by drawing the overlay separately.
+///
+/// Returns [`NestedOverlayPlan::None`] when there is no overlay content. Overlay
+/// brackets never enter the ancestor stack (they *are* the spans, and nested overlays
+/// collapse into the outermost via [`overlay_ranges`]), so the stack reflects only
+/// enclosing clip/transform/scroll/compositing state.
+#[must_use]
+pub fn plan_overlays_nested(content: &[DisplayCommand]) -> NestedOverlayPlan {
+    let ranges = overlay_ranges(content);
+    if ranges.is_empty() {
+        return NestedOverlayPlan::None;
+    }
+    // Indices of the ancestor (non-overlay) layers currently open. An overlay
+    // bracket is skipped here: it delimits a span, it is not ancestor context.
+    let mut stack: Vec<usize> = Vec::new();
+    let mut spans: Vec<OverlaySpan> = Vec::with_capacity(ranges.len());
+    let mut next = 0usize; // index of the next span whose start we watch for
+    for (i, cmd) in content.iter().enumerate() {
+        if next < ranges.len() && i == ranges[next].start {
+            // A compositing ancestor cannot be split off around an isolated replay.
+            if stack.iter().any(|&a| is_compositing_layer_open(&content[a])) {
+                return NestedOverlayPlan::Fallback;
+            }
+            spans.push(OverlaySpan { span: ranges[next].clone(), ancestors: stack.clone() });
+            next += 1;
+        }
+        // Maintain the ancestor stack, ignoring overlay brackets. Spatial and
+        // compositing opens push their index; every layer close pops. Interior
+        // layers of a span balance out before the span ends, so a later disjoint
+        // span sees only its true enclosing ancestors.
+        if is_overlay_bracket(cmd) {
+            continue;
+        }
+        match layer_delta(cmd) {
+            d if d > 0 => stack.push(i),
+            d if d < 0 => {
+                stack.pop();
+            }
+            _ => {}
+        }
+    }
+    NestedOverlayPlan::Replay(spans)
+}
+
+/// `true` for an overlay bracket marker of either kind (`Begin`/`End` of
+/// `position:sticky` or `position:fixed`). Such markers delimit overlay spans and
+/// are excluded from the ancestor-layer stack in [`plan_overlays_nested`].
+#[must_use]
+fn is_overlay_bracket(cmd: &DisplayCommand) -> bool {
+    matches!(
+        cmd,
+        DisplayCommand::BeginStickyLayer { .. }
+            | DisplayCommand::BeginFixedLayer
+            | DisplayCommand::EndStickyLayer
+            | DisplayCommand::EndFixedLayer
+    )
+}
+
+/// `true` for a command that opens a **spatial** ancestor layer — clip, transform,
+/// or scroll layer. Spatial layers affect *where/how* each primitive draws and
+/// composite per-primitive, so re-establishing them around an isolated overlay
+/// replay reproduces the direct render exactly.
+#[must_use]
+pub fn is_spatial_layer_open(cmd: &DisplayCommand) -> bool {
+    matches!(
+        cmd,
+        DisplayCommand::PushClipRect { .. }
+            | DisplayCommand::PushClipRoundedRect { .. }
+            | DisplayCommand::PushClipPath { .. }
+            | DisplayCommand::PushTransform { .. }
+            | DisplayCommand::PushScrollLayer { .. }
+    )
+}
+
+/// `true` for a command that opens a **compositing** ancestor layer — opacity, blend
+/// mode, mask, filter, or backdrop filter. Such a layer composites its whole subtree
+/// as one group, so splitting an overlay out of it would change pixels; overlays
+/// under one force [`NestedOverlayPlan::Fallback`].
+#[must_use]
+pub fn is_compositing_layer_open(cmd: &DisplayCommand) -> bool {
+    matches!(
+        cmd,
+        DisplayCommand::PushOpacity { .. }
+            | DisplayCommand::PushBlendMode { .. }
+            | DisplayCommand::PushMaskImage { .. }
+            | DisplayCommand::PushMaskLinearGradient { .. }
+            | DisplayCommand::PushMaskRadialGradient { .. }
+            | DisplayCommand::PushMaskConicGradient { .. }
+            | DisplayCommand::PushMaskLayer { .. }
+            | DisplayCommand::PushFilter { .. }
+            | DisplayCommand::PushBackdropFilter { .. }
+    )
+}
+
 /// The nesting-balance contribution of a display command: `+1` for a command that
 /// opens a rendering layer (clip, transform, opacity, blend, mask, filter,
 /// backdrop filter, scroll layer, or an overlay bracket), `-1` for the matching
@@ -544,5 +697,180 @@ mod tests {
             DisplayCommand::PopClip,
         ];
         assert_eq!(plan_overlays(&dl), OverlayPlan::NestedFallback);
+    }
+
+    // ── plan_overlays_nested (M3.2.1c-4) ─────────────────────────────────────
+
+    /// A `PushTransform`/`PopTransform` pair to stand in for a spatial ancestor.
+    fn push_transform() -> DisplayCommand {
+        DisplayCommand::PushTransform {
+            matrix: lumen_layout::Mat4::translation_2d(5.0, 5.0),
+        }
+    }
+
+    /// A `PushScrollLayer` to stand in for an `overflow:scroll` ancestor.
+    fn push_scroll_layer() -> DisplayCommand {
+        DisplayCommand::PushScrollLayer {
+            clip_rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        }
+    }
+
+    /// A `PushOpacity`/`PopOpacity` pair to stand in for a compositing ancestor.
+    fn push_opacity() -> DisplayCommand {
+        DisplayCommand::PushOpacity { alpha: 0.5 }
+    }
+
+    #[test]
+    fn nested_plan_none_when_no_overlay() {
+        assert_eq!(plan_overlays_nested(&[]), NestedOverlayPlan::None);
+        assert_eq!(
+            plan_overlays_nested(&[leaf(), push_clip(), leaf(), DisplayCommand::PopClip]),
+            NestedOverlayPlan::None
+        );
+    }
+
+    #[test]
+    fn nested_plan_top_level_span_has_empty_ancestors() {
+        let dl = vec![leaf(), begin_sticky(), leaf(), DisplayCommand::EndStickyLayer];
+        assert_eq!(
+            plan_overlays_nested(&dl),
+            NestedOverlayPlan::Replay(vec![OverlaySpan { span: 1..4, ancestors: vec![] }])
+        );
+    }
+
+    #[test]
+    fn nested_plan_captures_single_clip_ancestor() {
+        // Sticky wrapped by a clip → replayable, ancestor index captured (was a
+        // blanket NestedFallback under `plan_overlays`).
+        let dl = vec![
+            push_clip(), // @0 spatial ancestor
+            begin_sticky(),
+            leaf(),
+            DisplayCommand::EndStickyLayer,
+            DisplayCommand::PopClip,
+        ];
+        assert_eq!(
+            plan_overlays_nested(&dl),
+            NestedOverlayPlan::Replay(vec![OverlaySpan { span: 1..4, ancestors: vec![0] }])
+        );
+        // Contrast with the M3.2.1c-3 classifier, which bails on any nesting.
+        assert_eq!(plan_overlays(&dl), OverlayPlan::NestedFallback);
+    }
+
+    #[test]
+    fn nested_plan_captures_scroll_layer_ancestor() {
+        // The real-world case: sticky inside overflow:scroll is now replayable.
+        let dl = vec![
+            push_scroll_layer(), // @0
+            begin_sticky(),
+            DisplayCommand::EndStickyLayer,
+            DisplayCommand::PopScrollLayer,
+        ];
+        assert_eq!(
+            plan_overlays_nested(&dl),
+            NestedOverlayPlan::Replay(vec![OverlaySpan { span: 1..3, ancestors: vec![0] }])
+        );
+    }
+
+    #[test]
+    fn nested_plan_captures_multiple_spatial_ancestors_outer_to_inner() {
+        // clip → transform → sticky: both ancestors captured, outer first.
+        let dl = vec![
+            push_clip(),      // @0
+            push_transform(), // @1
+            begin_fixed(),
+            DisplayCommand::EndFixedLayer,
+            DisplayCommand::PopTransform,
+            DisplayCommand::PopClip,
+        ];
+        assert_eq!(
+            plan_overlays_nested(&dl),
+            NestedOverlayPlan::Replay(vec![OverlaySpan { span: 2..4, ancestors: vec![0, 1] }])
+        );
+    }
+
+    #[test]
+    fn nested_plan_fallback_under_compositing_ancestor() {
+        // Opacity group cannot be split → fallback, not a captured replay.
+        let dl = vec![
+            push_opacity(), // @0 compositing
+            begin_sticky(),
+            DisplayCommand::EndStickyLayer,
+            DisplayCommand::PopOpacity,
+        ];
+        assert_eq!(plan_overlays_nested(&dl), NestedOverlayPlan::Fallback);
+    }
+
+    #[test]
+    fn nested_plan_fallback_when_compositing_wraps_spatial() {
+        // opacity → clip → sticky: the compositing ancestor still forces fallback
+        // even though the innermost ancestor is spatial.
+        let dl = vec![
+            push_opacity(), // @0 compositing
+            push_clip(),    // @1 spatial
+            begin_sticky(),
+            DisplayCommand::EndStickyLayer,
+            DisplayCommand::PopClip,
+            DisplayCommand::PopOpacity,
+        ];
+        assert_eq!(plan_overlays_nested(&dl), NestedOverlayPlan::Fallback);
+    }
+
+    #[test]
+    fn nested_plan_two_disjoint_spans_each_carry_their_own_ancestors() {
+        // First span under a clip, second top-level (the clip closed between them).
+        let dl = vec![
+            push_clip(),    // @0
+            begin_sticky(), // span 1..3 under clip
+            DisplayCommand::EndStickyLayer,
+            DisplayCommand::PopClip, // @3 clip closes → back to depth 0
+            begin_fixed(),           // span 4..6 top-level
+            DisplayCommand::EndFixedLayer,
+        ];
+        assert_eq!(
+            plan_overlays_nested(&dl),
+            NestedOverlayPlan::Replay(vec![
+                OverlaySpan { span: 1..3, ancestors: vec![0] },
+                OverlaySpan { span: 4..6, ancestors: vec![] },
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_plan_interior_spatial_layers_do_not_leak_into_later_ancestors() {
+        // A span with its own interior clip must not pollute the ancestor stack seen
+        // by a later disjoint span.
+        let dl = vec![
+            begin_sticky(), // span 0..4
+            push_clip(),    // interior @1
+            leaf(),
+            DisplayCommand::PopClip, // interior close @3
+            DisplayCommand::EndStickyLayer,
+            begin_fixed(), // span 5..7, top-level
+            DisplayCommand::EndFixedLayer,
+        ];
+        assert_eq!(
+            plan_overlays_nested(&dl),
+            NestedOverlayPlan::Replay(vec![
+                OverlaySpan { span: 0..5, ancestors: vec![] },
+                OverlaySpan { span: 5..7, ancestors: vec![] },
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_plan_fallback_if_any_span_is_compositing_nested() {
+        // One clean span, one under opacity → whole frame falls back.
+        let dl = vec![
+            begin_fixed(),
+            DisplayCommand::EndFixedLayer, // span 0..2 top-level
+            push_opacity(),                // @2 compositing
+            begin_sticky(),
+            DisplayCommand::EndStickyLayer,
+            DisplayCommand::PopOpacity,
+        ];
+        assert_eq!(plan_overlays_nested(&dl), NestedOverlayPlan::Fallback);
     }
 }
