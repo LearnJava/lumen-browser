@@ -121,6 +121,51 @@ otherwise.
 
 ### Result (fill in after running Steps 1–2)
 
-- Smoke test (Step 1): _pending_
-- Scroll test (Step 2): _pending_
-- Idle-CPU spot check (Step 3): _pending_
+Linux session 2026-07-12: CachyOS (Arch), KDE/Wayland, Intel iGPU (Mesa Vulkan),
+Rust 1.97 stable.
+
+- **Smoke test (Step 1): PASS** (after two Linux-only fixes, see below).
+  `cargo check` / `cargo clippy -- -D warnings` / `cargo test` for `lumen-paint
+  --features backend-wgpu` all green; 1003 + 34 tests passed. `LUMEN_BACKEND=wgpu`
+  opens a window on Wayland, finds the Vulkan adapter (direct `create_wgpu` path,
+  no fallback), renders `samples/page.html` correctly — verified by a real window
+  screenshot (colors, backgrounds, link, list all present; no panic, no adapter
+  errors on stderr).
+  - **Fix 1 (this branch):** `crates/shell/src/platform/display_color_profile.rs`
+    had `pub use NullDisplayColorProfile as PlatformDisplayColorProfile;` without
+    the `lumen_core::ext::` path — E0432 on every non-Windows build of
+    `lumen-shell` (the `cfg(not(windows))` branch had never been compiled).
+    Replaced with a proper non-Windows `PlatformDisplayColorProfile` impl
+    (always sRGB) so the `::new()` call site works on all OSes.
+  - **Fix 2 (this branch):** 11 new clippy 1.97 lints (`byte_char_slices`,
+    `question_mark`) in `lumen-image`/`lumen-dom`/`lumen-layout`/`lumen-paint` —
+    pre-existing code, surfaced because `rust-toolchain.toml` pins `channel =
+    "stable"` (not a version), and Linux stable is already 1.97. Fixed
+    mechanically (`cargo clippy --fix`).
+  - Machine note: `.cargo/config.toml` hardcodes `rustc-wrapper = "sccache"`;
+    sccache is not installed on this Linux box — worked around per-command with
+    `RUSTC_WRAPPER=""`. Consider guarding the wrapper per-OS or documenting.
+- **Scroll test (Step 2): PASS (wgpu), femtovg comparison not run yet.**
+  Manual gdigrab tooling was not needed: `--mcp-live-port` + the `scroll` tool
+  drives the real window, real-pixel capture via KDE `spectacle` on the active
+  window (KWin script activates the Lumen window). Scroll on
+  `graphic_tests/1000000-final.html` (2013 DOM nodes, 12 images) works under
+  wgpu/Vulkan: `window.scrollY` tracks deltas, continuous ±120 px scrolling for
+  20 s — no panic, no visual corruption. Note: MCP `screenshot` resource renders
+  via `render_to_image_cpu`, i.e. it does NOT capture actual GPU output — real
+  wgpu-vs-femtovg pixel comparison needs window capture (spectacle works).
+- **Idle-CPU spot check (Step 3): wgpu/Vulkan does NOT show the BUG-274 idle
+  regression.** Release build, `1000000-final.html`, vs Chromium (same page,
+  isolated profile, CDP-driven wheel events at the same ~7 events/s):
+
+  | | idle CPU (10 s) | scroll CPU (20 s) | memory (PSS) |
+  |---|---|---|---|
+  | Lumen wgpu/Vulkan (1 proc) | **0.4 %** | 17.2 % | **347 MiB** |
+  | Chromium (15 procs, sum) | 0.9 % | **14.1 %** | 460 MiB |
+
+  Lumen wins on idle CPU and memory; loses ~20 % on scroll CPU. Likely because
+  every scroll re-renders the full display list while Chromium composites
+  pre-rasterized layers. The scroll strip+blit work on `p1-exp-wgpu-only` is the
+  known candidate fix — porting it is the separate follow-up track (see "Out of
+  scope"). Caveat: Chromium smooth-scrolls wheel events (animation frames), so
+  per-event work is not perfectly identical; numbers are indicative, not a gate.
