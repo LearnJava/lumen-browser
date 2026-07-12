@@ -1450,7 +1450,28 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
   - **M3.2.1c — `position:fixed`/`sticky` separation.** Fixed/sticky content
     cannot live in a scrollable band (blitting would move it). Split it out of
     the band and re-draw it per frame on top of the blitted surface. Required
-    before M3.2.1b can be the default on real pages.
+    before M3.2.1b can be the default on real pages. Sliced:
+
+    - **M3.2.1c-1 — pure overlay/band partition helper.** ✅ (branch
+      `p1-mt-m3-2-1c-1`). New pure module `overlay_partition.rs`:
+      `overlay_ranges(content) -> Vec<Range<usize>>` returns the command index
+      spans of viewport-pinned **overlay** content (each *outermost*
+      `BeginStickyLayer..=EndStickyLayer`, nested layers absorbed into the
+      enclosing span, ascending + non-overlapping), and `has_overlay(content)`
+      is the cheap `any`-marker pre-check. Half-open ranges borrow into the
+      caller's own slice so the future backend consumer can iterate band commands
+      (outside the ranges) and overlay commands (inside them) with no clone. This
+      is the pure decision layer only — consumed by nobody yet (mirrors M3.0/M3.1
+      pure-logic slices), so it is byte-identical dead code. Unbalanced input is
+      tolerated defensively (stray close ignored, unclosed open extends to slice
+      end). **Scope note:** only `position:sticky` is reported this slice — it
+      has explicit display-list markers; `position:fixed` has no marker in the
+      scroll-independent display list yet, so emitting a `BeginFixedLayer` pair
+      (mirroring sticky) and folding it into `overlay_ranges` is the next slice.
+      The consuming slice must also solve overlay **replay context** (an overlay
+      span may sit inside ancestor `PushClipRect`/`PushTransform` state that an
+      isolated replay would drop) and **z-order** (overlay redrawn on top of the
+      whole band). 9 unit tests. No new deps, no `unsafe`.
 
 ### M4 — parallel style/layout (M, gated on incremental layout)
 
