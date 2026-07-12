@@ -1540,6 +1540,28 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
     two-disjoint own-ancestors / interior-no-leak / any-compositing-nested). No new
     deps, no `unsafe`.
 
+  - **M3.2.1c-5 — consume the nested plan: replay overlays under their spatial
+    ancestors.** ✅ (branch `p1-mt-m3-2-1c-5`). The backend now drives the frame
+    from `plan_overlays_nested` (M3.2.1c-4) instead of `plan_overlays` (M3.2.1c-3):
+    `NestedOverlayPlan::Fallback` (compositing ancestor) disables the blit path for
+    the frame, `Replay(spans)` rasters the band skipping each span's range and then
+    replays each `OverlaySpan` on top. The replay (`replay_overlays`, now taking
+    `&[OverlaySpan]`) re-executes the captured spatial ancestor opens outer→inner
+    before the span, then the overlay bracket, then their matching closes inner→outer
+    via a new pure helper `spatial_layer_close(open) -> Option<DisplayCommand>`
+    (clip→`PopClip`, transform→`PopTransform`, scroll→`PopScrollLayer`) — so the
+    overlay draws under the exact clip/transform/scroll the direct render applied and
+    the canvas/clip/layer bookkeeping stays balanced. This lifts the last KNOWN
+    LIMITATION that kept overlays nested under spatial layers on the direct fallback:
+    `position:sticky` inside an `overflow:scroll` container now blits correctly. Only
+    the span ranges leave the band (ancestor `Push`/`Pop` stay, wrapping the band's
+    own content); still gated behind `LUMEN_SCROLL_BLIT` (default **off**), and
+    flag-off / no-overlay pages stay byte-identical (`NestedOverlayPlan::None` →
+    empty spans, no replay). +3 unit tests (`spatial_layer_close`: every spatial open
+    → its pop / None for non-spatial-open / covers-every-`is_spatial_layer_open`).
+    What remains before the flag can default on: broader real-page acceptance
+    (M3.2.1c-6). No new deps, no `unsafe`.
+
 ### M4 — parallel style/layout (M, gated on incremental layout)
 
 - First wire `lay_out_incremental` + `DirtyBits` into the live shell path for

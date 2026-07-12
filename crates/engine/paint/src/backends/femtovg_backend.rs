@@ -1759,9 +1759,9 @@ impl FemtovgBackend {
         self.canvas.restore();
     }
 
-    /// ADR-016 M3.2.1c-3: replay the viewport-pinned overlay spans
+    /// ADR-016 M3.2.1c-5: replay the viewport-pinned overlay spans
     /// (`position:fixed` / `position:sticky`) on top of the just-presented band.
-    /// The band was rastered *without* them (their indices skipped in
+    /// The band was rastered *without* them (their span ranges skipped in
     /// [`run_content_pass`](Self::run_content_pass)), so they are redrawn here each
     /// frame at the current scroll: `render_command`'s `BeginStickyLayer` re-pins
     /// sticky content, and fixed content is already at viewport-fixed coordinates.
@@ -1770,18 +1770,39 @@ impl FemtovgBackend {
     /// already switched to it) under the same `-scroll` + page-offset transform the
     /// direct path uses, so on-screen position matches the un-blitted render, and
     /// after the band composite so overlays keep their z-order **on top** of the
-    /// band. Only called when [`plan_overlays`](crate::plan_overlays) returned
-    /// `Replay` (every span at nesting depth 0); nested overlays take the direct
-    /// fallback instead, so no ancestor clip/transform is lost here.
-    fn replay_overlays(&mut self, content: &[DisplayCommand], ranges: &[std::ops::Range<usize>]) {
+    /// band.
+    ///
+    /// Each [`OverlaySpan`](crate::OverlaySpan) may carry enclosing **spatial**
+    /// ancestor layers (clip / transform / scroll — captured by
+    /// [`plan_overlays_nested`](crate::plan_overlays_nested)). Their opening commands
+    /// are executed outer→inner before the span so the overlay draws under the same
+    /// clip/transform/scroll state the direct path applied, then their matching closes
+    /// ([`spatial_layer_close`](crate::spatial_layer_close)) run inner→outer to
+    /// re-balance the canvas stack. A top-level span has no ancestors and replays as
+    /// before. Only called when the plan is `Replay`; overlays under a *compositing*
+    /// ancestor take the direct fallback, so no group effect is lost here.
+    fn replay_overlays(&mut self, content: &[DisplayCommand], spans: &[crate::OverlaySpan]) {
         self.canvas.save();
         self.canvas.translate(-self.scroll_x, -self.scroll_y);
         if self.page_offset != (0.0, 0.0) {
             self.canvas.translate(self.page_offset.0, self.page_offset.1);
         }
-        for range in ranges {
-            for cmd in &content[range.clone()] {
+        for span in spans {
+            // Re-establish the spatial ancestor stack outer→inner, so the overlay
+            // draws under the exact clip/transform/scroll the direct render applied.
+            for &a in &span.ancestors {
+                self.render_command(&content[a]);
+            }
+            // The overlay bracket itself (inclusive of the Begin/End markers).
+            for cmd in &content[span.span.clone()] {
                 self.render_command(cmd);
+            }
+            // Balance each ancestor inner→outer with its matching close command,
+            // keeping the backend's clip/layer bookkeeping consistent.
+            for &a in span.ancestors.iter().rev() {
+                if let Some(close) = crate::spatial_layer_close(&content[a]) {
+                    self.render_command(&close);
+                }
             }
         }
         self.canvas.restore();
@@ -4050,37 +4071,47 @@ impl RenderBackend for FemtovgBackend {
         // allocation failure (or a degenerate viewport / zoom-preview / flag off)
         // we silently fall back to the direct-to-screen path for that frame.
         //
-        // ADR-016 M3.2.1c-3: `position:fixed`/`sticky` content must not scroll with
-        // the band. `plan_overlays` classifies it: `None` (no overlays → plain
-        // blit), `Replay(ranges)` (every overlay span is top-level → raster the band
-        // *without* those ranges and replay them on top each frame, where their
-        // draw-time scroll compensation re-pins them), or `NestedFallback` (an
-        // overlay sits under ancestor clip/transform/scroll-layer state an isolated
-        // replay would drop → disable the blit path for this frame and render
-        // directly, byte-identical to the pre-blit path). Skipped entirely when the
-        // flag is off.
+        // ADR-016 M3.2.1c-5: `position:fixed`/`sticky` content must not scroll with
+        // the band. `plan_overlays_nested` classifies it: `None` (no overlays → plain
+        // blit), `Replay(spans)` (every overlay span is either top-level or nested
+        // only under *spatial* ancestor layers (clip / transform / scroll) whose
+        // indices are captured → raster the band *without* the span ranges and replay
+        // each span on top each frame, re-establishing its ancestor stack so its
+        // draw-time scroll compensation re-pins it), or `Fallback` (an overlay sits
+        // under a *compositing* ancestor (opacity / blend / mask / filter / backdrop)
+        // whose group effect an isolated replay cannot reproduce → disable the blit
+        // path for this frame and render directly, byte-identical to the pre-blit
+        // path). Where M3.2.1c-3's `plan_overlays` bailed on *any* nesting, this
+        // narrows the fallback to compositing ancestors only. Skipped when the flag
+        // is off.
         let overscan_css = crate::DEFAULT_OVERSCAN;
         let overlay_plan = if self.scroll_blit {
-            crate::plan_overlays(content)
+            crate::plan_overlays_nested(content)
         } else {
-            crate::OverlayPlan::None
+            crate::NestedOverlayPlan::None
         };
         // ADR-016 M3.2.1b-2: the scroll-blit path is active only when the flag is
         // on, the viewport is non-degenerate, and zoom-preview is off (`src`-based
         // present assumes an un-scaled band; preview frames fall back to the direct
-        // path, leaving the retained band intact for when preview ends). M3.2.1c-3:
-        // and no overlay is nested under ancestor layer context we cannot replay.
+        // path, leaving the retained band intact for when preview ends). M3.2.1c-5:
+        // and no overlay is nested under a compositing ancestor we cannot replay.
         let scroll_blit_active = self.scroll_blit
-            && !matches!(overlay_plan, crate::OverlayPlan::NestedFallback)
+            && !matches!(overlay_plan, crate::NestedOverlayPlan::Fallback)
             && self.viewport_css_w > 0.0
             && self.viewport_css_h > 0.0
             && (self.preview_scale - 1.0).abs() <= f32::EPSILON;
-        // The overlay ranges to keep out of the band and replay on top (empty
-        // unless the plan is `Replay`).
-        let overlay_ranges: &[std::ops::Range<usize>] = match &overlay_plan {
-            crate::OverlayPlan::Replay(r) => r,
+        // The overlay spans to keep out of the band and replay (with their captured
+        // spatial ancestor context) on top — empty unless the plan is `Replay`.
+        let overlay_spans: &[crate::OverlaySpan] = match &overlay_plan {
+            crate::NestedOverlayPlan::Replay(s) => s,
             _ => &[],
         };
+        // Only the span ranges are skipped while rastering the band; the ancestor
+        // layers stay in the band pass (they still wrap the band's own content). Each
+        // span is a self-balanced bracket, so skipping it whole keeps the canvas
+        // stack balanced.
+        let skip_ranges: Vec<std::ops::Range<usize>> =
+            overlay_spans.iter().map(|s| s.span.clone()).collect();
         let (band_css_w, band_css_h, dev_w, dev_h) =
             band_geometry(self.viewport_css_w, self.viewport_css_h, overscan_css, self.scale);
 
@@ -4193,10 +4224,10 @@ impl RenderBackend for FemtovgBackend {
         // `run_content_pass` for the full transform stack.
         let band_src = band.map(|(_, src, _, _, _)| src);
         let frame_log_lvl2 = crate::frame_log_level() >= 2;
-        // M3.2.1c-3: overlay content is skipped only when rastering into a band
+        // M3.2.1c-5: overlay span content is skipped only when rastering into a band
         // (band_src set); on the direct-to-screen path it draws inline as before.
         let skip: &[std::ops::Range<usize>] =
-            if band_src.is_some() { overlay_ranges } else { &[] };
+            if band_src.is_some() { &skip_ranges } else { &[] };
         match &band_draw {
             // M3.2.1b-2b: reuse the overlap with the previous band. Blit the
             // retained region from the old band FBO into the fresh one, then
@@ -4239,16 +4270,16 @@ impl RenderBackend for FemtovgBackend {
         }
         } // end `if !did_blit`
 
-        // ADR-016 M3.2.1c-3: on a blit-path frame (a pure `Blit`, or a
+        // ADR-016 M3.2.1c-5: on a blit-path frame (a pure `Blit`, or a
         // `Repaint`/`BlitAndExpose` that seated a fresh band) the band was rastered
-        // without the overlay ranges — replay them now, on top of the presented
-        // band, so `position:fixed`/`sticky` content stays pinned at the current
-        // scroll instead of being dragged along by the wholesale band shift. The
-        // render target is the screen here (the band present switched to it). Only
-        // reached with a non-empty `Replay` plan; the direct path drew overlays
-        // inline and leaves `overlay_ranges` empty.
-        if (did_blit || band.is_some()) && !overlay_ranges.is_empty() {
-            self.replay_overlays(content, overlay_ranges);
+        // without the overlay spans — replay them now, on top of the presented band,
+        // each under its captured spatial ancestor stack, so `position:fixed`/`sticky`
+        // content stays pinned at the current scroll instead of being dragged along by
+        // the wholesale band shift. The render target is the screen here (the band
+        // present switched to it). Only reached with a non-empty `Replay` plan; the
+        // direct path drew overlays inline and leaves `overlay_spans` empty.
+        if (did_blit || band.is_some()) && !overlay_spans.is_empty() {
+            self.replay_overlays(content, overlay_spans);
         }
         let t_content = frame_t0.map(|t0| t0.elapsed());
 

@@ -333,7 +333,7 @@ pub use tile_grid::{TileDirty, TileGrid, DEFAULT_TILE_SIZE};
 pub use scroll_cache::{ScrollCache, ScrollFramePlan, DEFAULT_OVERSCAN};
 pub use overlay_partition::{
     has_overlay, is_compositing_layer_open, is_spatial_layer_open, overlay_ranges, plan_overlays,
-    plan_overlays_nested, NestedOverlayPlan, OverlayPlan, OverlaySpan,
+    plan_overlays_nested, spatial_layer_close, NestedOverlayPlan, OverlayPlan, OverlaySpan,
 };
 pub use fingerprint::GpuFingerprint;
 pub use hit_test::{hit_test, HitTestResult};
