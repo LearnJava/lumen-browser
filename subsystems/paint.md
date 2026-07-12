@@ -116,8 +116,8 @@ pub trait RenderBackend: Send {
 
 | File | Feature flag | Status | Notes |
 |---|---|---|---|
-| `backends/wgpu_backend.rs` | `backend-wgpu` | ✅ exists (`Renderer`) | wrapped, fallback |
-| `backends/femtovg_backend.rs` | `backend-femtovg` | ✅ **live default** | OpenGL ES 2.0; no custom shaders; paint bugs from graphic_tests are fixed here |
+| `backends/wgpu_backend.rs` | `backend-wgpu` | ✅ **live default** | probe-selected (Vulkan→GL→DX12 on Win, ADR-017); paint bugs fixed in `renderer.rs` |
+| `backends/femtovg_backend.rs` | `backend-femtovg` | ✅ explicit override | OpenGL ES 2.0; `LUMEN_BACKEND=femtovg` or wgpu-init-failure fallback; paint bugs fixed in `femtovg_backend.rs` |
 | `backends/vello_backend.rs` | `backend-vello` | ⬜ Phase 3 | compute-based; stub until vello API stabilises |
 | `backends/cpu_backend.rs` | `backend-cpu` | ✅ exists (`cpu_raster`) | CI / no-GPU |
 | `backends/compare_backend.rs` | `compare` | ⬜ Phase 2 | renders with two backends, pixel diff |
@@ -157,10 +157,12 @@ cargo test -p lumen-driver --features compare-femtovg-vello
 ```
 Phase 1 (now):  wgpu (DX12 on Win, BUG-057 fix)  fallback: cpu
 Phase 2:        femtovg default                    fallback: wgpu → cpu
-Phase 3:        vello default (once API stable)    fallback: femtovg → wgpu → cpu
+Phase 3 (now):  wgpu default (probe ADR-017)       fallback: femtovg → cpu
+Phase 4:        vello default (once API stable)    fallback: wgpu → femtovg → cpu
 ```
 
 Shell reads `LUMEN_BACKEND` env var to override at runtime.
+`LUMEN_NO_BACKEND_PROBE=1` skips the presentation probe (static DX12→Vulkan→GL chain).
 
 ### Backend selection at runtime (shell)
 

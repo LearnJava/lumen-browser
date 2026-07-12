@@ -9,8 +9,8 @@
 //! 2. Скомпилированный дефолт из feature-флагов.
 //! 3. Auto-fallback: если предпочтительный бэкенд не инициализировался — пробуем следующий.
 //!
-//! Phase 2 (текущая): femtovg по умолчанию; fallback → wgpu (ADR-010 RB-9).
-//! Phase 3: vello станет default (RB-10).
+//! Phase 3 (текущая): wgpu по умолчанию (probe Vulkan→GL→DX12, ADR-017); fallback → femtovg.
+//! `LUMEN_BACKEND=femtovg` — детерминированный femtovg (без fallback-а на wgpu).
 
 use lumen_core::ColorSpace;
 use std::sync::Arc;
@@ -28,12 +28,12 @@ use winit::window::Window;
 /// Создаёт windowed рендер-бэкенд для окна `window`.
 ///
 /// Читает `LUMEN_BACKEND` env var для выбора бэкенда. Если переменная не задана —
-/// используется femtovg (Phase 2 default, ADR-010 RB-9); при ошибке инициализации
-/// автоматически fallback на wgpu.
+/// используется wgpu (Phase 3 default, ADR-017) с probe-выбором API (Vulkan→GL→DX12);
+/// при ошибке инициализации wgpu автоматически fallback на femtovg.
 ///
 /// При `LUMEN_BACKEND=wgpu` создаёт `WgpuBackend` напрямую (без fallback).
-/// При `LUMEN_BACKEND=femtovg` создаёт `FemtovgBackend` с fallback на wgpu.
-/// При `LUMEN_BACKEND=vello` создаёт `VelloBackend` (RB-7 заглушка, ADR-010 Phase 3).
+/// При `LUMEN_BACKEND=femtovg` создаёт `FemtovgBackend` напрямую (без fallback на wgpu).
+/// При `LUMEN_BACKEND=vello` создаёт `VelloBackend` (RB-7 заглушка, ADR-010).
 ///
 /// # ADR-016 M1 (spike): рендер-поток
 /// Если задан `LUMEN_RENDER_THREAD=1`, настоящий бэкенд создаётся и живёт на
@@ -135,9 +135,9 @@ fn create_backend_inprocess(
     let name = requested.trim().to_ascii_lowercase();
 
     match name.as_str() {
-        // Phase 2 default: femtovg → fallback wgpu (ADR-010 RB-9)
-        "" => create_femtovg_or_wgpu(window, font_bytes, target_color_space),
-        // Явный запрос femtovg: тот же путь (femtovg → wgpu при ошибке)
+        // Phase 3 default: wgpu (probe Vulkan→GL→DX12) → fallback femtovg (ADR-017)
+        "" => create_wgpu_or_femtovg(window, font_bytes, target_color_space),
+        // Явный запрос femtovg: femtovg → wgpu при ошибке (детерминированный приоритет)
         "femtovg" => create_femtovg_or_wgpu(window, font_bytes, target_color_space),
         // Явный запрос wgpu: прямой, без femtovg fallback
         "wgpu" => create_wgpu(window, font_bytes, target_color_space),
@@ -165,9 +165,31 @@ fn create_backend_inprocess(
     }
 }
 
+/// Phase 3 цепочка (ADR-017): пытается создать `WgpuBackend` (с probe-выбором API);
+/// при ошибке — fallback на `FemtovgBackend`.
+///
+/// Вызывается только для дефолта (пустой `LUMEN_BACKEND`).
+fn create_wgpu_or_femtovg(
+    window: Arc<Window>,
+    font_bytes: Vec<u8>,
+    target_color_space: ColorSpace,
+) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
+    #[cfg(feature = "backend-wgpu")]
+    {
+        match create_wgpu(window.clone(), font_bytes.clone(), target_color_space) {
+            Ok(b) => return Ok(b),
+            Err(e) => eprintln!("wgpu: ошибка инициализации ({e}), fallback → femtovg"),
+        }
+    }
+    // Финальный femtovg fallback; `create_femtovg_or_wgpu` обрабатывает случай
+    // когда backend-femtovg не скомпилирован (и тогда снова попытается wgpu, которая
+    // тоже завершится ошибкой — приемлемо при полностью неработающем GPU).
+    create_femtovg_or_wgpu(window, font_bytes, target_color_space)
+}
+
 /// Phase 2 цепочка: пытается создать `FemtovgBackend`; при ошибке — fallback на `WgpuBackend`.
 ///
-/// Вызывается как для дефолта (пустой LUMEN_BACKEND), так и для явного `LUMEN_BACKEND=femtovg`.
+/// Вызывается для явного `LUMEN_BACKEND=femtovg`.
 fn create_femtovg_or_wgpu(
     window: Arc<Window>,
     font_bytes: Vec<u8>,
@@ -252,11 +274,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_name_is_phase2_default() {
-        // Phase 2: пустой LUMEN_BACKEND → femtovg (или wgpu fallback)
-        // Пустая строка маршрутизируется как дефолт, не как явный wgpu/vello/cpu
+    fn empty_name_is_phase3_default() {
+        // Phase 3: пустой LUMEN_BACKEND → wgpu (probe, ADR-017) → femtovg fallback
+        // Пустая строка маршрутизируется как дефолт, не как явный femtovg/vello/cpu
         let name = "";
-        let is_explicit_named = matches!(name, "wgpu" | "vello" | "cpu");
+        let is_explicit_named = matches!(name, "wgpu" | "femtovg" | "vello" | "cpu");
         assert!(!is_explicit_named);
     }
 

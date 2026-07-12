@@ -201,7 +201,13 @@ TEST-00: FAIL 4.85% → PASS 0.00%.
 → **65 PASS · 38 FAIL · 38 DEBTOR** (141 total). The 38 FAIL tests are wgpu-specific rendering
 differences from Edge (documented in BUG-277). They are not regressions — they reflect wgpu never
 having been run against this suite before. The Phase 3 final gate must bring all 38 to PASS or
-justified KNOWN_DEBTOR. Remaining: → P1-wgpu-flip.
+justified KNOWN_DEBTOR.
+
+**P1-wgpu-flip DONE 2026-07-13** — Phase 3 complete: `backend_factory.rs` default arm flipped
+from `create_femtovg_or_wgpu` to `create_wgpu_or_femtovg`; wgpu is now the Phase 3 default (probe
+selects Vulkan→GL→DX12 on Windows, femtovg as init-failure fallback); `LUMEN_BACKEND=femtovg`
+unchanged. ADR-017 written (`docs/decisions/ADR-017-wgpu-default-backend.md`), supersedes ADR-010
+closing note. Doc-sync: CAPABILITIES.md, `subsystems/paint.md`, `docs/decisions/README.md`.
 
 ## Notes
 
