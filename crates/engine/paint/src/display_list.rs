@@ -1367,7 +1367,9 @@ pub fn contains_backdrop_filter(content: &[DisplayCommand], overlay: &[DisplayCo
 
 /// Adapter that feeds `core::fmt` output straight into a [`Hasher`] without
 /// allocating an intermediate `String`.
-struct HashFmt<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+/// Адаптер `fmt::Write` → `Hasher`: пишет Debug-представление напрямую в хешер,
+/// без промежуточной `String` (нулевые аллокации в горячем пути кадра).
+pub(crate) struct HashFmt<'a>(pub(crate) &'a mut std::collections::hash_map::DefaultHasher);
 
 impl std::fmt::Write for HashFmt<'_> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
@@ -1375,6 +1377,19 @@ impl std::fmt::Write for HashFmt<'_> {
         self.0.write(s.as_bytes());
         Ok(())
     }
+}
+
+/// Хеширует одну команду через её Debug-представление без аллокаций.
+pub(crate) fn hash_one_command(cmd: &DisplayCommand) -> u64 {
+    use std::fmt::Write as _;
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    {
+        let mut hf = HashFmt(&mut hasher);
+        // Errors are impossible: HashFmt::write_str never fails.
+        let _ = write!(hf, "{cmd:?}");
+    }
+    hasher.finish()
 }
 
 /// Computes a content hash over a frame's display list plus the viewport state
@@ -1583,7 +1598,6 @@ pub fn diff_display_lists(prev: &[DisplayCommand], next: &[DisplayCommand]) -> D
     }
 
     // Вычисляем hashes обеих последовательностей и сравниваем поэлементно.
-    use std::hash::{Hash, Hasher};
     let mut all_identical = true;
     let mut changed_rects = Rect {
         x: f32::INFINITY,
@@ -1593,19 +1607,9 @@ pub fn diff_display_lists(prev: &[DisplayCommand], next: &[DisplayCommand]) -> D
     };
 
     for (prev_cmd, next_cmd) in prev.iter().zip(next.iter()) {
-        // Используем Debug-представление для хеширования (как в hash_display_list).
-        let prev_hash = {
-            use std::collections::hash_map::DefaultHasher;
-            let mut hasher = DefaultHasher::new();
-            format!("{:?}", prev_cmd).hash(&mut hasher);
-            hasher.finish()
-        };
-        let next_hash = {
-            use std::collections::hash_map::DefaultHasher;
-            let mut hasher = DefaultHasher::new();
-            format!("{:?}", next_cmd).hash(&mut hasher);
-            hasher.finish()
-        };
+        // Debug-представление через HashFmt — без String-аллокаций на команду.
+        let prev_hash = hash_one_command(prev_cmd);
+        let next_hash = hash_one_command(next_cmd);
 
         if prev_hash != next_hash {
             all_identical = false;

@@ -242,11 +242,16 @@ impl lumen_core::EvictableCache for DisplayListCache {
 /// content + overlay + scroll + surface size and is used for full-frame dedup.
 /// This function is for per-subtree (stacking-context) caching.
 pub fn hash_commands(cmds: &[DisplayCommand]) -> u64 {
+    use std::fmt::Write as _;
     let mut h = DefaultHasher::new();
     cmds.len().hash(&mut h);
-    for cmd in cmds {
-        // Hash the Debug representation: portable, deterministic within a run.
-        format!("{cmd:?}").hash(&mut h);
+    {
+        let mut hf = crate::display_list::HashFmt(&mut h);
+        for cmd in cmds {
+            // Debug-представление пишется прямо в хешер (HashFmt) — без
+            // String-аллокации на команду в горячем пути кадра.
+            let _ = write!(hf, "{cmd:?}");
+        }
     }
     h.finish()
 }
