@@ -758,6 +758,7 @@ fn run_window_mode(
         frame_stats: lumen_paint::FrameStats::new(),
         engine_stats: lumen_paint::FrameStats::new(),
         last_frame_fp: None,
+        scroll_cache: lumen_paint::ScrollCache::default_overscan(),
         find: find::FindState::default(),
         address_bar: address_bar::AddressBarState::default(),
         hint: hints::HintState::default(),
@@ -6059,6 +6060,16 @@ struct Lumen {
     /// before M3 turns `OffsetOnly` into an actual blit fast path. `None` until
     /// the first logged frame.
     last_frame_fp: Option<lumen_paint::FrameFingerprint>,
+    /// ADR-016 M3.2: retained scroll-band bookkeeping (the pure decision brain
+    /// from M3.0/M3.1). Fed the layout content hash + scroll offset + viewport
+    /// each frame to classify it as blit / blit+expose / repaint against the
+    /// cached overscan band. Currently drives only the `LUMEN_FRAME_LOG`
+    /// instrumentation (M3.2.0 — measure the real-content band mix before the GL
+    /// blit path acts on it); the femtovg backend does not yet own a content
+    /// surface, so normal runs pay nothing. Invalidated on navigation
+    /// ([`Lumen::reset_to_blank_tab`]); resize/nav content changes also fall out
+    /// naturally because the content hash folds surface size.
+    scroll_cache: lumen_paint::ScrollCache,
     /// Состояние Ctrl+F. Открыт ли bar, текущий query и индекс активного
     /// совпадения. Содержимое поиска не сохраняется между reload-ами
     /// (close() полностью очищает state); это сознательно: после reload
@@ -13395,6 +13406,35 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             Some(d) => eprintln!("[frame] delta {d:?}"),
                             None => eprintln!("[frame] delta first"),
                         }
+                        // ADR-016 M3.2.0: classify the frame against the retained
+                        // overscan band (blit / blit+expose / repaint) using the
+                        // scroll-independent content hash. Measurement only — the
+                        // femtovg backend does not yet own the content surface, so
+                        // this just reports the band mix real scrolling would hit
+                        // before the GL blit path (M3.2.1) acts on it. Record the
+                        // non-blit plans so the band re-seats exactly as the future
+                        // backend will after `record_repaint`.
+                        let content_hash = fp.content_hash;
+                        let scale = self
+                            .window
+                            .as_ref()
+                            .map_or(1.0_f32, |w| w.scale_factor() as f32);
+                        let viewport = (sw as f32 / scale, sh as f32 / scale);
+                        let plan = self.scroll_cache.plan(
+                            content_hash,
+                            (self.scroll_x, self.scroll_y),
+                            viewport,
+                        );
+                        eprintln!("[frame] band {}", plan.label());
+                        match plan {
+                            lumen_paint::ScrollFramePlan::Repaint { origin, size }
+                            | lumen_paint::ScrollFramePlan::BlitAndExpose {
+                                origin,
+                                size,
+                                ..
+                            } => self.scroll_cache.record_repaint(content_hash, origin, size),
+                            lumen_paint::ScrollFramePlan::Blit { .. } => {}
+                        }
                         self.last_frame_fp = Some(fp);
                     }
                 }
@@ -18848,6 +18888,9 @@ impl Lumen {
         self.hint = hints::HintState::default();
         self.scroll_y = 0.0;
         self.scroll_x = 0.0;
+        // ADR-016 M3.2: the retained scroll band belongs to the old page — drop
+        // it so the next frame repaints instead of blitting stale pixels.
+        self.scroll_cache.invalidate();
         self.content_height = 0.0;
         self.content_width = 0.0;
         self.layout_source = None;

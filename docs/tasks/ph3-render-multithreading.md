@@ -1325,6 +1325,32 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
   stale-hash force full repaint, plus a tiling invariant (`retained + expose ==
   band`, no strip escapes the band). No new deps, no `unsafe`.
 
+- **M3.2.0 — wire the decision brain into the shell (measurement, no GL).** ✅
+  (branch `p1-mt-m3-2-0`). `Lumen` gains a `scroll_cache: ScrollCache`
+  (`default_overscan`), invalidated in `reset_to_blank_tab` on navigation. In the
+  `LUMEN_FRAME_LOG` block (next to the M0.5 fingerprint delta), each frame feeds
+  the scroll-independent `FrameFingerprint::content_hash` + scroll offset +
+  CSS-px viewport to `ScrollCache::plan()` and logs `[frame] band <label>`
+  (`blit` / `blit+expose` / `repaint`), calling `record_repaint` on the non-blit
+  plans so the band re-seats exactly as the future backend will. This connects
+  the pure M3.0/M3.1 logic to real content hashes + scroll — surfacing the true
+  band mix (not just M0.5's consecutive-frame Identical/OffsetOnly split) and
+  de-risking the integration seam (which hash to feed, nav invalidation) — before
+  the GL slice touches the render target. New `ScrollFramePlan::label()` helper
+  (`"blit"`/`"blit+expose"`/`"repaint"`) + one unit test. Dead by default: the
+  cache is only driven under `LUMEN_FRAME_LOG`, so normal runs pay nothing and
+  output is byte-identical. No new deps, no `unsafe`.
+
+- **M3.2.1 — GL content surface + blit (next).** The femtovg backend gains a
+  retained band-sized content `ImageId` (reuse `layer_pool`/`acquire_layer`
+  experience, but band-sized, not framebuffer-sized), renders the content
+  display list into it translated by `−origin`, and on a `Blit` frame draws that
+  surface to the screen shifted by `src` instead of re-executing the display
+  list. `BlitAndExpose` rasters only the `expose` strips into the new surface
+  (ping-pong pool); `Repaint` re-rasters the whole band. Gated by a flag, off =
+  today's direct-to-screen path (byte-identical). This is where the actual
+  scroll-blit win lands.
+
 ### M4 — parallel style/layout (M, gated on incremental layout)
 
 - First wire `lay_out_incremental` + `DirtyBits` into the live shell path for

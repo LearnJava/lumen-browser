@@ -3506,7 +3506,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (384 symbols)
+## lumen-paint  (385 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -3782,15 +3782,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:6814` **fn** `render_tile`
 `crates/engine/paint/src/renderer.rs:6853` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
 `crates/engine/paint/src/renderer.rs:6956` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
-`crates/engine/paint/src/scroll_cache.rs:42` **enum** `ScrollFramePlan` — What the render backend should do with the current frame, given the retained
-`crates/engine/paint/src/scroll_cache.rs:72` **struct** `ScrollCache` — Bookkeeping for the retained scroll-content surface (ADR-016 M3)
-`crates/engine/paint/src/scroll_cache.rs:88` **fn** `new` — Create an empty cache with the given overscan margin (CSS px). A negative
-`crates/engine/paint/src/scroll_cache.rs:99` **fn** `default_overscan` — Create an empty cache with [`DEFAULT_OVERSCAN`]
-`crates/engine/paint/src/scroll_cache.rs:105` **fn** `overscan` — Overscan margin (CSS px) this cache rasters on each side of the viewport
-`crates/engine/paint/src/scroll_cache.rs:112` **fn** `is_populated` — `true` when the cache holds a valid rastered band (i.e. a `Blit` is at
-`crates/engine/paint/src/scroll_cache.rs:119` **fn** `invalidate` — Drop the retained surface: the next [`plan`](Self::plan) returns
-`crates/engine/paint/src/scroll_cache.rs:135` **fn** `plan` — Decide blit-vs-repaint for the frame with page-content hash
-`crates/engine/paint/src/scroll_cache.rs:155` **fn** `record_repaint` — Record that the backend rastered the surface to cover `size` document
+`crates/engine/paint/src/scroll_cache.rs:60` **enum** `ScrollFramePlan` — What the render backend should do with the current frame, given the retained
+`crates/engine/paint/src/scroll_cache.rs:116` **fn** `label` — A stable one-word label for the plan variant — `"blit"`,
+`crates/engine/paint/src/scroll_cache.rs:131` **struct** `ScrollCache` — Bookkeeping for the retained scroll-content surface (ADR-016 M3)
+`crates/engine/paint/src/scroll_cache.rs:147` **fn** `new` — Create an empty cache with the given overscan margin (CSS px). A negative
+`crates/engine/paint/src/scroll_cache.rs:158` **fn** `default_overscan` — Create an empty cache with [`DEFAULT_OVERSCAN`]
+`crates/engine/paint/src/scroll_cache.rs:164` **fn** `overscan` — Overscan margin (CSS px) this cache rasters on each side of the viewport
+`crates/engine/paint/src/scroll_cache.rs:171` **fn** `is_populated` — `true` when the cache holds a valid rastered band (i.e. a `Blit` is at
+`crates/engine/paint/src/scroll_cache.rs:178` **fn** `invalidate` — Drop the retained surface: the next [`plan`](Self::plan) returns
+`crates/engine/paint/src/scroll_cache.rs:196` **fn** `plan` — Decide blit-vs-repaint for the frame with page-content hash
+`crates/engine/paint/src/scroll_cache.rs:232` **fn** `record_repaint` — Record that the backend rastered the surface to cover `size` document
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
 `crates/engine/paint/src/svg_path.rs:16` **enum** `PathSegment` — One SVG path command (absolute coords, after normalization)
@@ -5331,4 +5332,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5260 symbols in 22 crates*
+*Total: 5261 symbols in 22 crates*
