@@ -28,6 +28,11 @@ use crate::DisplayCommand;
 fn surface_error_to_render_error(e: wgpu::SurfaceError) -> RenderError {
     match e {
         wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Timeout => {
+            // Вариант ошибки различим только здесь (RenderError::SurfaceLost
+            // их сворачивает), а для диагностики стоек acquire на Wayland
+            // (Timeout) против пересоздания поверхности (Lost/Outdated)
+            // разница принципиальна — одна строка в stderr на каждый случай.
+            eprintln!("wgpu surface error: {e:?}");
             RenderError::SurfaceLost
         }
         wgpu::SurfaceError::OutOfMemory => {

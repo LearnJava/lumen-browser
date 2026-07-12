@@ -27,6 +27,7 @@
 mod adblock;
 mod address_bar;
 mod animation_scheduler;
+mod bench_frames;
 mod click_log;
 mod backend_factory;
 use lumen_bidi_server::spawn as bidi_spawn;
@@ -300,6 +301,7 @@ use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, CursorIcon, Window, WindowId};
 
 fn main() -> ExitCode {
+    bench_frames::mark_process_start();
     // Load the fingerprint profile (9F.1) once, before any network or JS setup.
     // Absent config → engine defaults, so behaviour is unchanged out of the box.
     config::init_global(config::load().unwrap_or_default());
@@ -9224,6 +9226,38 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Warm-frame bench (LUMEN_BENCH=hover:N | scroll:N). Drives redraws
+        // itself instead of waiting for a human, then exits. Placed first so a
+        // benched process never falls through into the idle paths below.
+        //
+        // Gated on `window.is_some()`: before `resumed()` there is nothing to
+        // redraw, and the first frame must come from the normal load path.
+        if let Some(cfg) = bench_frames::cfg()
+            && self.window.is_some()
+        {
+            if bench_frames::done() {
+                bench_frames::report();
+                event_loop.exit();
+                return;
+            }
+            bench_frames::log_geometry_once(
+                self.content_height,
+                self.viewport_height_css(),
+                self.max_scroll(),
+                self.display_list.len(),
+            );
+            if bench_frames::should_drive() {
+                if cfg.mode == bench_frames::BenchMode::Scroll {
+                    self.scroll_y =
+                        bench_frames::next_scroll(self.scroll_y, self.max_scroll());
+                }
+                self.request_redraw();
+            }
+            // Pacing gap: the wakeup for the next driven frame is merged into
+            // `next_wakeup` at the end of this function — setting the control
+            // flow here would be clobbered by the BUG-271 park below.
+        }
+
         // TEMP BUG-272 diagnostics: dump known-store sizes every ~10 s.
         if std::env::var("LUMEN_MEM_REPORT").is_ok() {
             let now_s = self.epoch.elapsed().as_secs_f64();
@@ -9466,6 +9500,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         {
             let poll = std::time::Instant::now() + std::time::Duration::from_millis(4);
             next_wakeup = Some(next_wakeup.map_or(poll, |t| t.min(poll)));
+        }
+        // Warm-frame bench: wake the loop for the next paced frame; without
+        // this the BUG-271 `Wait` park below would stall the harness between
+        // driven frames.
+        if bench_frames::active() && self.window.is_some() && !bench_frames::done() {
+            let d = bench_frames::next_drive_deadline();
+            next_wakeup = Some(next_wakeup.map_or(d, |t| t.min(d)));
         }
         match next_wakeup {
             Some(wakeup) => event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup)),
@@ -12283,6 +12324,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let frame_log_t0 =
                     lumen_paint::frame_log_enabled().then(std::time::Instant::now);
 
+                // Warm-frame bench (LUMEN_BENCH): таймер всего RedrawRequested —
+                // полная цена кадра под вводом (см. crates/shell/src/bench_frames.rs).
+                let bench_t0 = bench_frames::active().then(std::time::Instant::now);
+
+                // Поверхность потеряна на этом кадре (Lost/Outdated/Timeout в
+                // acquire) — после рендер-секции свопчейн реконфигурируется.
+                let mut surface_lost = false;
+
                 // Step 1: scroll update.
                 if self.advance_scroll_anim() {
                     self.request_redraw();
@@ -13329,6 +13378,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         r.set_page_offset(0.0, 0.0);
                         if let Err(err) = r.render(&combined, &overlay_buf, 0.0, 0.0) {
                             eprintln!("Ошибка рендера (split): {err:?}");
+                            surface_lost |=
+                                matches!(err, lumen_paint::RenderError::SurfaceLost);
                         }
                     } else {
                         // Normal single-pane mode: shift page below tab bar (and right of
@@ -13348,6 +13399,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             r.set_page_offset(page_x_offset, tabs::strip::TAB_BAR_HEIGHT);
                             if let Err(err) = r.render(base, &overlay_buf, scroll_y, scroll_x) {
                                 eprintln!("Ошибка рендера: {err:?}");
+                                surface_lost |=
+                                    matches!(err, lumen_paint::RenderError::SurfaceLost);
                             }
                         } else {
                             // Fallback: активен inspector-оверлей или бэкенд не
@@ -13368,9 +13421,36 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             shifted.push(lumen_paint::DisplayCommand::PopTransform);
                             if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
                                 eprintln!("Ошибка рендера: {err:?}");
+                                surface_lost |=
+                                    matches!(err, lumen_paint::RenderError::SurfaceLost);
                             }
                         }
                     }
+                }
+
+                bench_frames::log_first_frame_once(self.display_list.len());
+                if self.renderer.is_some() {
+                    bench_frames::mark_rendered();
+                }
+                // SurfaceLost recovery per the RenderBackend contract
+                // (backend.rs: «shell вызовет resize и повторит кадр»):
+                // reconfigure the swapchain at the current window size and
+                // schedule a repaint. Without this a single Lost/Outdated
+                // acquire permanently kills rendering — every later frame
+                // fails on the stale surface.
+                if surface_lost
+                    && let Some(w) = self.window.as_ref()
+                {
+                    let size = w.inner_size();
+                    if size.width > 0 && size.height > 0 {
+                        if let Some(r) = self.renderer.as_mut() {
+                            r.resize(size.width, size.height);
+                        }
+                        self.request_redraw();
+                    }
+                }
+                if let Some(t0) = bench_t0 {
+                    bench_frames::record_frame(t0.elapsed().as_secs_f64() * 1e3);
                 }
 
                 if let Some(t0) = frame_log_t0 {

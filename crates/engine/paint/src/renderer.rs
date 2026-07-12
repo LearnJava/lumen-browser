@@ -1567,6 +1567,31 @@ fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu
     (texture, view)
 }
 
+/// Resolves `LUMEN_PRESENT` against the surface capabilities.
+///
+/// `immediate` / `mailbox` request an unthrottled present (needed by
+/// `LUMEN_BENCH=scroll`, where Fifo pins every sample at the refresh period).
+/// A requested mode absent from `caps.present_modes` (Wayland has no
+/// `Immediate`) falls back Immediate → Mailbox → Fifo instead of configuring
+/// an unsupported mode, which surfaces as `SurfaceLost` on every frame.
+/// Default and unknown values keep `Fifo` (vsync) — prior behaviour.
+fn select_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
+    let requested = match std::env::var("LUMEN_PRESENT").as_deref() {
+        Ok("immediate") => wgpu::PresentMode::Immediate,
+        Ok("mailbox") => wgpu::PresentMode::Mailbox,
+        _ => return wgpu::PresentMode::Fifo,
+    };
+    let supported = |m: wgpu::PresentMode| caps.present_modes.contains(&m);
+    let chosen = [requested, wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo]
+        .into_iter()
+        .find(|&m| supported(m))
+        .unwrap_or(wgpu::PresentMode::Fifo);
+    if chosen != requested {
+        eprintln!("LUMEN_PRESENT: {requested:?} не поддерживается поверхностью, выбран {chosen:?}");
+    }
+    chosen
+}
+
 /// Selects the best swap-chain format for the given `target` color space
 /// from the adapter-reported `caps.formats` (ph3-color-management Step 4).
 ///
@@ -1661,7 +1686,13 @@ impl Renderer {
             format,
             width,
             height,
-            present_mode: wgpu::PresentMode::Fifo,
+            // LUMEN_PRESENT=immediate|mailbox выключает ожидание vsync в
+            // present — обязательно для LUMEN_BENCH=scroll (иначе каждый
+            // сэмпл прибит к ~16.7 мс). Дефолт — Fifo (vsync), как раньше.
+            // Запрошенный режим сверяется с capabilities поверхности:
+            // Wayland не поддерживает Immediate (запрос ронял бы surface в
+            // SurfaceLost) — фолбэк Immediate → Mailbox → Fifo.
+            present_mode: select_present_mode(&caps),
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -3053,8 +3084,15 @@ impl Renderer {
 
         let atlas = GlyphAtlas::new(ATLAS_DIM);
 
+        // Depth must match the render target: in windowed mode that is the
+        // surface config, not the headless placeholder (X11 delivers no
+        // initial Resized before the first frame — a 1×1 depth against a
+        // full-size color attachment is a validation error).
+        let (depth_w, depth_h) = config
+            .as_ref()
+            .map_or((headless_w, headless_h), |c| (c.width, c.height));
         let (depth_texture, depth_view) = {
-            let (t, v) = create_depth_texture(&device, headless_w, headless_h);
+            let (t, v) = create_depth_texture(&device, depth_w.max(1), depth_h.max(1));
             (Some(t), Some(v))
         };
 
