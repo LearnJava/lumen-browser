@@ -96,6 +96,11 @@ pdf-writer = "0.12"
 
 [profile.dev]
 opt-level = 1
+# Полный debuginfo (дефолт debug = 2) — главная скрытая стоимость dev-профиля:
+# генерация + запись PDB линкером. line-tables-only сохраняет file:line в
+# backtrace при панике; для пошаговой отладки собирай --profile debugging.
+# Замер и источники — docs/build-speed.md §3.1.
+debug = "line-tables-only"
 
 # Сторонние зависимости (wgpu, winit, rustls, webpki-roots и их транзитивный
 # набор ~200 крейтов) собираются с opt-level = 3 даже в dev. Наш код остаётся
@@ -104,6 +109,13 @@ opt-level = 1
 # members), поэтому собственные крейты Lumen не затрагиваются.
 [profile.dev.package."*"]
 opt-level = 3
+debug = false                # зависимостям debuginfo не нужен вовсе
+
+# Профиль для реальной пошаговой отладки под дебаггером (полный debuginfo):
+#   cargo build -p lumen-shell --profile debugging
+[profile.debugging]
+inherits = "dev"
+debug = true
 
 [profile.release]
 lto = "thin"
