@@ -1277,6 +1277,35 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
 - M0.5's content-hash split is the trigger: "same content, new offset" →
   pure blit path.
 
+Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
+
+- **M3.0 — blit-vs-repaint decision brain (pure scaffold).** ✅ (branch
+  `p1-mt-m3-0`). New `crates/engine/paint/src/scroll_cache.rs`:
+  `ScrollCache` + `ScrollFramePlan { Blit { src }, Repaint { origin, size } }` —
+  the pure decision logic M3.1 will consume. A `ScrollCache` remembers which
+  document-space band the retained content surface holds (`origin` + `covered`
+  size) and the `content_hash` it was rastered for; `plan(content_hash, scroll,
+  viewport)` returns `Blit { src = scroll − origin }` **only** when the hash
+  matches *and* the visible viewport rect is fully contained in the cached band
+  (`covers()` range check), else `Repaint` with a band re-centered on the
+  viewport plus [`DEFAULT_OVERSCAN`] (512 CSS px) on each side, its origin
+  clamped at the document origin. The backend calls `record_repaint()` after it
+  actually rasters, and `invalidate()` on navigation/resize. **This deliberately
+  avoids the 2026-07-10 experiment's failure** (a full-surface cache keyed on a
+  *quantized* 20 px scroll bucket missed on every 120 px wheel step → two full
+  renders/frame, 30× slower): the hit test is a **containment range**, never a
+  scroll-value bucket, so any sub-pixel scroll inside the overscan band is a
+  blit. Incremental band exposure (`BlitAndExpose` — raster only the newly
+  revealed strip instead of a full repaint on band-exit) is the next slice
+  (M3.1/M3.2). Pure — no GPU state, no rasterization, dead by default (M3.1
+  wires the femtovg content surface via `layer_pool`/`acquire_layer`). 12 unit
+  tests (empty-repaints, origin-clamp, in-band-blit, the-old-experiment-step-is-
+  a-blit, leave-band-below/above, content-change-repaints, reseat, invalidate,
+  horizontal pan, zero-overscan, non-finite-overscan-clamp). No new deps, no
+  `unsafe`.
+
+[`DEFAULT_OVERSCAN`]: ../../crates/engine/paint/src/scroll_cache.rs
+
 ### M4 — parallel style/layout (M, gated on incremental layout)
 
 - First wire `lay_out_incremental` + `DirtyBits` into the live shell path for
