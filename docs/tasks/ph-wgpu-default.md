@@ -158,6 +158,26 @@ already does on `main`), so it moves much earlier than originally planned.
 
 ---
 
+## Progress (2026-07-13) — Phase 2 ported in full
+
+Slices 1–6 landed as individual branches (see `git log`: backend-probe, skip-frame,
+debug-hash, scroll-patch, font-metrics, box-filter). The remaining exp-branch commits were
+then ported **in one batch** (user decision 2026-07-12: port everything first, compile/test
+once at the end) on branch `p1-wgpu-default-structhash` via sequential `git cherry-pick -n`
+in exp-branch chronological order, resolving conflicts by hand, excluding `EXPERIMENT.md`,
+`scripts/exp/*` (PowerShell tooling stays unported) and bug-file renames:
+structural hash (`8305de10`) → frame diagnostics (`b0cc89d8` diag part, `36a4cbaa`
+LUMEN_PRESENT, `adf81070`+`561dd72d` bench_frames/LUMEN_BENCH stand) → bbox-scissor
+(`6d13d5be`) → viewport-cull (`34a53113`) → scroll compositor strip+blit (`0dadfb1c`) →
+fast-scroll degradation (`ec45c8e6`) → static/animated split (`7d867742`, incl. the 3-way
+merge with main's M0.4 page-offset fast path in `shell/main.rs` — fast path kept for
+femtovg, `render_with_anim` wired into the fallback/wgpu path) → bbox-backdrop (`3f49e673`)
+→ VRAM hygiene (`fd2694d0`) → image mip-chain (`5e6905c4`) → gradient-mask pool
+(`03b8599d`). Single batch gate: paint+shell clippy clean, lumen-paint 1025 tests green,
+both backends smoke-tested in a real window, CPU-screenshot pixel parity vs pre-batch main
+(max delta 1, ≤0.023% px — box-filter quantization class). Remaining: Phase 0 (Linux),
+Phase 1 re-measure (BUG-274), Phase 3 flip + ADR + BUG-276.
+
 ## Notes
 
 - `p1-exp-wgpu-only` is read-only source material (`git show origin/p1-exp-wgpu-only:<path>`)

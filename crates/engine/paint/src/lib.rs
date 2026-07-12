@@ -324,6 +324,7 @@ pub use compositor::{
 pub use display_list::{
     build_display_list, build_display_list_ordered, build_display_list_ordered_dpr,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
+    build_display_list_ordered_with_anim_split,
     build_display_list_with_anim, build_print_display_list, contains_backdrop_filter,
     cull_display_list, hash_content, hash_display_list, is_image_set, patch_scroll_layer,
     point_on_resize_grip, select_image_set_url, split_at_page_breaks, serialize_display_list,
@@ -342,7 +343,10 @@ pub use fingerprint::GpuFingerprint;
 pub use hit_test::{hit_test, HitTestResult};
 pub use layer_cache::{LayerCache, LayerKey};
 #[cfg(feature = "backend-wgpu")]
-pub use renderer::{ImageRegisterError, Renderer, SnapshotUploadError};
+pub use renderer::{
+    load_counter, ImageRegisterError, Renderer, SnapshotUploadError, FRAMES_RENDERED,
+    FRAMES_SKIPPED,
+};
 pub use scroll_snap::{find_scroll_snap_y, find_scroll_snap_y_proximity};
 pub use webgl::SoftwareWebGl;
 
