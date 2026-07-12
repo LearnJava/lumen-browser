@@ -639,6 +639,58 @@ fn band_geometry(
     (band_css_w, band_css_h, dev_w, dev_h)
 }
 
+/// ADR-016 M3.2.1b-2b: band-local placement for blitting the `retained`
+/// document-space overlap from the previous band into the freshly-acquired one.
+///
+/// The previous band maps band-local `(0, 0)` to document `prev_origin`; the new
+/// band maps `(0, 0)` to `new_origin`. Both cover the same `band_css` extent.
+/// Returns `(img, dst)`: `img` is where the **whole** previous-band image is
+/// placed (its top-left, i.e. `prev_origin` expressed in new-band-local CSS px)
+/// so the image-paint's UV mapping lines the shared document region up 1:1; `dst`
+/// is the sub-rect to fill — the `retained` overlap in new-band-local CSS px.
+/// Filling only `dst` (a sub-rect of the paint box) samples exactly the retained
+/// pixels. Pure arithmetic, factored out of
+/// [`FemtovgBackend::blit_retained_band`] so it is unit-testable without a GL
+/// context.
+fn band_blit_placement(
+    retained: lumen_core::geom::Rect,
+    prev_origin: (f32, f32),
+    new_origin: (f32, f32),
+) -> ((f32, f32), lumen_core::geom::Rect) {
+    let img = (prev_origin.0 - new_origin.0, prev_origin.1 - new_origin.1);
+    let dst = lumen_core::geom::Rect::new(
+        retained.x - new_origin.0,
+        retained.y - new_origin.1,
+        retained.width,
+        retained.height,
+    );
+    (img, dst)
+}
+
+/// ADR-016 M3.2.1b-2b: how a non-blit scroll-blit frame fills the freshly
+/// acquired band FBO.
+///
+/// A `Blit` frame never reaches this — it re-presents the retained band with no
+/// raster. `Repaint` re-rasters the whole band. `Expose` (the M3.2.1b-2b win)
+/// blits the `retained` overlap from the *previous* band and rasters only the
+/// newly revealed `expose` strips, which together tile the new band exactly.
+enum BandDraw {
+    /// Re-raster the whole viewport-plus-overscan band (empty cache, changed
+    /// content, or a scroll jump that left the old band entirely).
+    Repaint,
+    /// Reuse the overlap with the previous band, raster only the exposed strips.
+    Expose {
+        /// Document-space overlap reusable from the previous band.
+        retained: lumen_core::geom::Rect,
+        /// Document-space origin the previous band mapped to (to locate
+        /// `retained` within the old texture).
+        prev_origin: (f32, f32),
+        /// Up to four document-space strips the previous band did not cover —
+        /// the only regions re-rastered. `None` slots are unused.
+        expose: [Option<lumen_core::geom::Rect>; 4],
+    },
+}
+
 /// Entry pushed onto `FemtovgBackend::opacity_layer_stack` by `PushOpacity`.
 ///
 /// The group's subtree renders into the offscreen `image_id`; `PopOpacity`
@@ -1589,6 +1641,107 @@ impl FemtovgBackend {
         let mut path = femtovg::Path::new();
         path.rect(0.0, 0.0, css_w, css_h);
         self.canvas.fill_path(&path, &paint);
+        self.canvas.restore();
+    }
+
+    /// ADR-016 M3.2.1b-2b: copy the `retained` document-space overlap from the
+    /// previously retained band FBO (`old`, mapping band-local `(0, 0)` to
+    /// `prev_origin`) into the freshly-acquired band FBO (`new`, mapping `(0, 0)`
+    /// to `new_origin`) on a `BlitAndExpose` frame, so the unchanged overlap is
+    /// reused instead of re-rastered (only the `expose` strips are drawn).
+    ///
+    /// Both bands are FLIP_Y FBOs of the same `band_css_w × band_css_h` size; the
+    /// image paint's `FLIP_Y` sampler flag corrects the source's bottom-up rows,
+    /// mirroring the FBO-to-FBO composite idiom in
+    /// [`composite_opacity_layer`](Self::composite_opacity_layer). `img` (from
+    /// [`band_blit_placement`]) places the **whole** old image so its UV mapping
+    /// lines the shared document region up 1:1; only the `dst` sub-rect — the
+    /// overlap — is filled, so the flip stays correct for the partial copy. It
+    /// switches the render target to `Image(new)`.
+    fn blit_retained_band(
+        &mut self,
+        old: femtovg::ImageId,
+        new: femtovg::ImageId,
+        img: (f32, f32),
+        dst: lumen_core::geom::Rect,
+        band_css_w: f32,
+        band_css_h: f32,
+    ) {
+        self.switch_render_target(femtovg::RenderTarget::Image(new));
+        self.canvas.save();
+        self.canvas.reset_transform();
+        let paint =
+            femtovg::Paint::image(old, img.0, img.1, band_css_w, band_css_h, 0.0, 1.0);
+        let mut path = femtovg::Path::new();
+        path.rect(dst.x, dst.y, dst.width, dst.height);
+        self.canvas.fill_path(&path, &paint);
+        self.canvas.restore();
+    }
+
+    /// ADR-016 M3.2.1b-2: execute the page content display list once with the
+    /// standard scroll/zoom/page-offset transform stack.
+    ///
+    /// `band_src` is `Some(src)` when drawing into a band FBO — it prepends `+src`
+    /// (`src = scroll − origin`) as the outermost transform so band-local
+    /// `(0, 0)` maps to the band origin — or `None` for the direct-to-screen path.
+    /// `scissor` (a scroll-space document rect) limits raster to a single exposed
+    /// strip on a `BlitAndExpose` frame; `None` rasters the whole (culled)
+    /// surface. The scissor is set right after the `−scroll` translate — while the
+    /// transform maps scroll-space to band-local — so passing the strip in
+    /// scroll-space is exact; the later `page_offset` translate does not move an
+    /// already-recorded scissor. `frame_log_lvl2` splits the per-frame time by
+    /// command variant (`LUMEN_FRAME_LOG=2`).
+    fn run_content_pass(
+        &mut self,
+        content: &[DisplayCommand],
+        band_src: Option<(f32, f32)>,
+        scissor: Option<lumen_core::geom::Rect>,
+        frame_log_lvl2: bool,
+    ) {
+        self.canvas.save();
+        // ADR-016 M3.2.1b-2: band prepend `+src` (outermost), applied before the
+        // zoom-preview scale (identity on the band path — preview forces direct).
+        if let Some(src) = band_src {
+            self.canvas.translate(src.0, src.1);
+        }
+        // ADR-016 M0.3: zoom-preview scale before the scroll translate.
+        if (self.preview_scale - 1.0).abs() > f32::EPSILON {
+            self.canvas.scale(self.preview_scale, self.preview_scale);
+        }
+        self.canvas.translate(-self.scroll_x, -self.scroll_y);
+        // M3.2.1b-2b: scissor in scroll-space (transform now maps scroll-space →
+        // band-local), so a strip rect maps to band-local exactly.
+        if let Some(s) = scissor {
+            self.canvas.scissor(s.x, s.y, s.width, s.height);
+        }
+        // ADR-016 M0.4: fixed page offset (tab bar + docked panel) after scroll.
+        if self.page_offset != (0.0, 0.0) {
+            self.canvas.translate(self.page_offset.0, self.page_offset.1);
+        }
+        if frame_log_lvl2 {
+            // Уровень 2: разбивка времени по типам команд (top-8 за кадр).
+            let mut per_variant: HashMap<&'static str, (std::time::Duration, u32)> =
+                HashMap::new();
+            for cmd in content {
+                let t = std::time::Instant::now();
+                self.render_command(cmd);
+                let e = per_variant.entry(cmd.variant_name()).or_default();
+                e.0 += t.elapsed();
+                e.1 += 1;
+            }
+            let mut rows: Vec<_> = per_variant.into_iter().collect();
+            rows.sort_by_key(|&(_, (dur, _))| std::cmp::Reverse(dur));
+            let top: Vec<String> = rows
+                .iter()
+                .take(8)
+                .map(|(name, (dur, n))| format!("{name} {:.2}ms/{n}", dur.as_secs_f64() * 1000.0))
+                .collect();
+            eprintln!("[frame] top: {}", top.join(", "));
+        } else {
+            for cmd in content {
+                self.render_command(cmd);
+            }
+        }
         self.canvas.restore();
     }
 
@@ -3833,10 +3986,14 @@ impl RenderBackend for FemtovgBackend {
         //     content is unchanged: re-present the retained band-sized surface
         //     shifted by the scroll delta, with NO display-list re-execution. This
         //     is the scroll win.
-        //   • `Repaint`/`BlitAndExpose` — draw the whole viewport-plus-overscan
-        //     band into a fresh surface (the latter's strip-blit optimization is
-        //     deferred to M3.2.1b-2b; a full re-raster is always correct), present
-        //     it, and retain it for future blits.
+        //   • `Repaint` — draw the whole viewport-plus-overscan band into a fresh
+        //     surface, present it, and retain it for future blits.
+        //   • `BlitAndExpose` (M3.2.1b-2b) — the viewport left the band but the
+        //     re-centered band overlaps the old one: blit the retained overlap
+        //     from the previous band into the fresh surface and raster only the
+        //     newly revealed `expose` strips (each scissored), then present +
+        //     retain. Wins the common one-notch-out-of-band wheel step. Falls back
+        //     to a full re-raster if the previous band was already dropped.
         // The band FBO (FLIP_Y, `content_band_pool`) is cleared transparent so
         // compositing it over the already-bg-cleared screen reproduces the direct
         // clear+content order. The content pass gets a uniform `+src` prepend
@@ -3898,21 +4055,30 @@ impl RenderBackend for FemtovgBackend {
             _ => false,
         };
 
-        // Repaint / BlitAndExpose (the latter treated as a full re-raster in this
-        // slice — always correct; the strip-blit optimization lands in M3.2.1b-2b):
-        // draw the whole band into a fresh surface. `band` carries `(id, src, hash,
-        // origin, size)`; `None` means the direct-to-screen path (flag off, preview
-        // on, or allocation failure). On alloc failure we also invalidate so a
-        // later frame cannot blit against a band we never seated.
+        // Repaint / BlitAndExpose: acquire a fresh band surface. On alloc failure
+        // we invalidate so a later frame cannot blit against a band we never seated.
+        // `band` carries `(id, src, hash, origin, size)`; `band_draw` says how to
+        // fill it — a full `Repaint` re-raster, or M3.2.1b-2b's `Expose` (blit the
+        // retained overlap from the previous band, raster only the exposed strips).
+        // `band == None` (flag off, preview on, blit already handled, or allocation
+        // failure) drives the direct-to-screen path, where `band_draw` is ignored.
+        let mut band_draw = BandDraw::Repaint;
         let band = if did_blit {
             None
         } else {
             match band_plan {
                 Some((
                     content_hash,
-                    crate::ScrollFramePlan::Repaint { origin, size }
-                    | crate::ScrollFramePlan::BlitAndExpose { origin, size, .. },
+                    plan @ (crate::ScrollFramePlan::Repaint { .. }
+                    | crate::ScrollFramePlan::BlitAndExpose { .. }),
                 )) => {
+                    let (origin, size) = match plan {
+                        crate::ScrollFramePlan::Repaint { origin, size }
+                        | crate::ScrollFramePlan::BlitAndExpose { origin, size, .. } => {
+                            (origin, size)
+                        }
+                        crate::ScrollFramePlan::Blit { .. } => unreachable!("guarded above"),
+                    };
                     let src = (scroll_x - origin.0, scroll_y - origin.1);
                     match self.acquire_content_band(dev_w, dev_h) {
                         Some(id) => {
@@ -3927,6 +4093,20 @@ impl RenderBackend for FemtovgBackend {
                             // Widen culling so the overscan margin is rastered.
                             self.cull_css_w = band_css_w;
                             self.cull_css_h = band_css_h;
+                            // M3.2.1b-2b: reuse the overlap only when the plan is
+                            // `BlitAndExpose` AND we still hold the previous band to
+                            // blit from; otherwise fall back to a full re-raster
+                            // (always correct).
+                            if let crate::ScrollFramePlan::BlitAndExpose {
+                                retained,
+                                prev_origin,
+                                expose,
+                                ..
+                            } = plan
+                                && self.retained_band.is_some()
+                            {
+                                band_draw = BandDraw::Expose { retained, prev_origin, expose };
+                            }
                             Some((id, src, content_hash, origin, size))
                         }
                         None => {
@@ -3943,68 +4123,37 @@ impl RenderBackend for FemtovgBackend {
 
         // Контент — с учётом scroll. Skipped entirely on a pure blit frame.
         if !did_blit {
-        self.canvas.save();
-        // ADR-016 M3.2.1b-2: when drawing into a band surface, prepend `+src`
-        // (`src = scroll − origin`) as the OUTERMOST transform of the content pass,
-        // so band-local `(0, 0)` maps to document `origin` and what belongs at
-        // screen `(0, 0)` (document `scroll`) lands at band-local `src`. Applied
-        // before the zoom-preview scale (identity here — preview forces the direct
-        // path), so `present_content_band` undoes it exactly (screen output ==
-        // direct path). The whole content pass — including sticky/fixed layers —
-        // inherits it uniformly, so no per-command adjustment is needed. When the
-        // band re-seats to the same origin as before, `src == overscan`, matching
-        // the M3.2.1b-1 present-at-offset behavior.
-        if let Some((_, src, _, _, _)) = band {
-            self.canvas.translate(src.0, src.1);
-        }
-        // ADR-016 M0.3: превью-масштаб зума применяется ДО scroll-трансляции,
-        // поэтому точка документа p отображается в s·(p − scroll) — масштаб
-        // вокруг верхнего-левого угла вьюпорта. `s == 1.0` — превью выключено
-        // (identity, стоит почти ничего). Culling остаётся корректным: он
-        // мапит AABB через актуальный CTM (`self.canvas.transform()`), который
-        // уже включает этот scale.
-        if (self.preview_scale - 1.0).abs() > f32::EPSILON {
-            self.canvas.scale(self.preview_scale, self.preview_scale);
-        }
-        self.canvas.translate(-scroll_x, -scroll_y);
-        // ADR-016 M0.4: фиксированное смещение страницы (tab bar + левая
-        // docked-панель) накладывается ПОСЛЕ scroll-трансляции — ровно там, где
-        // раньше стоял `PushTransform(translate(offset))` во главе display-list.
-        // Итоговый CTM `scale · translate(-scroll) · translate(offset)` и
-        // порядок вложения sticky-слоёв не меняются, поэтому смещение так же
-        // масштабируется zoom-превью, а sticky-компенсация (`+scroll`) корректна.
-        // Culling остаётся верным: `is_command_culled` мапит AABB через
-        // актуальный CTM, который уже включает это смещение.
-        if self.page_offset != (0.0, 0.0) {
-            self.canvas.translate(self.page_offset.0, self.page_offset.1);
-        }
-        if crate::frame_log_level() >= 2 {
-            // Уровень 2: разбивка времени по типам команд (top-8 за кадр).
-            let mut per_variant: HashMap<&'static str, (std::time::Duration, u32)> =
-                HashMap::new();
-            for cmd in content {
-                let t = std::time::Instant::now();
-                self.render_command(cmd);
-                let e = per_variant.entry(cmd.variant_name()).or_default();
-                e.0 += t.elapsed();
-                e.1 += 1;
+        // ADR-016 M3.2.1b-2: `band_src` prepends `+src` (`src = scroll − origin`,
+        // outermost) when drawing into a band FBO so band-local `(0, 0)` maps to
+        // document `origin`; `None` on the direct-to-screen path. See
+        // `run_content_pass` for the full transform stack.
+        let band_src = band.map(|(_, src, _, _, _)| src);
+        let frame_log_lvl2 = crate::frame_log_level() >= 2;
+        match &band_draw {
+            // M3.2.1b-2b: reuse the overlap with the previous band. Blit the
+            // retained region from the old band FBO into the fresh one, then
+            // raster ONLY the exposed strips (each scissored to its scroll-space
+            // rect) — `retained` + `expose` tile the new band exactly, so the
+            // result equals a full re-raster with far less GPU fill.
+            BandDraw::Expose { retained, prev_origin, expose } => {
+                // `Expose` is only set with a live band + retained surface.
+                if let (Some((id, _, _, origin, _)), Some(old)) =
+                    (band, self.retained_band)
+                {
+                    let (img, dst) = band_blit_placement(*retained, *prev_origin, origin);
+                    self.blit_retained_band(old, id, img, dst, band_css_w, band_css_h);
+                    // Re-select the band as the render target after the blit.
+                    self.switch_render_target(femtovg::RenderTarget::Image(id));
+                    for strip in expose.iter().flatten() {
+                        self.run_content_pass(content, band_src, Some(*strip), frame_log_lvl2);
+                    }
+                }
             }
-            let mut rows: Vec<_> = per_variant.into_iter().collect();
-            rows.sort_by_key(|&(_, (dur, _))| std::cmp::Reverse(dur));
-            let top: Vec<String> = rows
-                .iter()
-                .take(8)
-                .map(|(name, (dur, n))| {
-                    format!("{name} {:.2}ms/{n}", dur.as_secs_f64() * 1000.0)
-                })
-                .collect();
-            eprintln!("[frame] top: {}", top.join(", "));
-        } else {
-            for cmd in content {
-                self.render_command(cmd);
+            // Full band re-raster (direct-to-screen path when `band == None`).
+            BandDraw::Repaint => {
+                self.run_content_pass(content, band_src, None, frame_log_lvl2);
             }
         }
-        self.canvas.restore();
         // ADR-016 M3.2.1b-2: present the freshly-rendered band to the screen
         // (shifted by `src`), retain it across frames for the blit fast path, and
         // record the new band coverage in the ScrollCache so subsequent in-band
@@ -4327,6 +4476,38 @@ mod tests {
         let (cw, ch, dw, dh) = band_geometry(640.0, 480.0, 0.0, 2.0);
         assert_eq!((cw, ch), (640.0, 480.0));
         assert_eq!((dw, dh), (1280, 960));
+    }
+
+    /// ADR-016 M3.2.1b-2b: the band-blit placement maps the shared document
+    /// region 1:1. The whole previous-band image is placed at `prev_origin −
+    /// new_origin` (so its UV mapping lines document space up), and the filled
+    /// sub-rect is the `retained` overlap in new-band-local coordinates.
+    #[test]
+    fn band_blit_placement_maps_overlap_to_new_band_local() {
+        use lumen_core::geom::Rect;
+        // Scroll down one notch: previous band at y=488, new band at y=1088.
+        // Overlap 1088..2232 is retained; the old image sits 600 px above the new
+        // band's top-left, and the retained rect starts at the new band's top.
+        let prev_origin = (0.0, 488.0);
+        let new_origin = (0.0, 1088.0);
+        let retained = Rect::new(0.0, 1088.0, 2048.0, 1144.0);
+        let (img, dst) = band_blit_placement(retained, prev_origin, new_origin);
+        assert_eq!(img, (0.0, -600.0));
+        assert_eq!(dst, Rect::new(0.0, 0.0, 2048.0, 1144.0));
+    }
+
+    /// A diagonal pan offsets both axes: the destination sub-rect is the overlap
+    /// expressed in new-band-local px, and the image origin carries the full
+    /// previous-band offset on both axes.
+    #[test]
+    fn band_blit_placement_handles_diagonal_offset() {
+        use lumen_core::geom::Rect;
+        let prev_origin = (1488.0, 488.0);
+        let new_origin = (2288.0, 488.0);
+        let retained = Rect::new(2288.0, 488.0, 1248.0, 1744.0);
+        let (img, dst) = band_blit_placement(retained, prev_origin, new_origin);
+        assert_eq!(img, (-800.0, 0.0));
+        assert_eq!(dst, Rect::new(0.0, 0.0, 1248.0, 1744.0));
     }
 
     /// BUG-133 / BUG-146 / BUG-144: offscreen layers composited directly from
