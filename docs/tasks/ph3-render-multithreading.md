@@ -1518,6 +1518,28 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
       sticky / replay fixed / disjoint / nested-in-clip / nested-in-scroll-layer /
       mixed fallback). No new deps, no `unsafe`.
 
+  - **M3.2.1c-4 — nested-overlay ancestor capture (pure decision).** ✅ (branch
+    `p1-mt-m3-2-1c-4`). The pure half of lifting the nested-overlay limitation,
+    consumed by nobody yet (mirrors the pure-first cadence of M3.2.1c-1). New
+    classifier `plan_overlays_nested(content) -> NestedOverlayPlan`
+    (`overlay_partition.rs`): where M3.2.1c-3's `plan_overlays` bails to
+    `NestedFallback` on *any* nesting, this narrows the fallback to overlays under a
+    **compositing** ancestor (opacity / blend / mask / filter / backdrop — group
+    effects a split would visibly change) and turns overlays under only **spatial**
+    ancestors (clip / transform / scroll — composite per-primitive) into
+    `Replay(Vec<OverlaySpan>)`, each `OverlaySpan { span, ancestors }` carrying the
+    enclosing spatial-layer command indices outer→inner. The walk keeps a stack of
+    open ancestor (non-overlay) layer indices and snapshots it at each outermost
+    span start; interior layers of a span balance out so a later disjoint span sees
+    only its true ancestors. Two exported predicates split the layer set:
+    `is_spatial_layer_open` / `is_compositing_layer_open`. Pure — no GPU state, no
+    rasterization; the backend wiring (execute ancestors + span + matching pops in
+    the replay, gated behind `LUMEN_SCROLL_BLIT`) is the next slice (M3.2.1c-5).
+    +10 unit tests (none / top-level empty-ancestors / single-clip / scroll-layer /
+    two-spatial outer→inner / compositing fallback / compositing-wraps-spatial /
+    two-disjoint own-ancestors / interior-no-leak / any-compositing-nested). No new
+    deps, no `unsafe`.
+
 ### M4 — parallel style/layout (M, gated on incremental layout)
 
 - First wire `lay_out_incremental` + `DirtyBits` into the live shell path for

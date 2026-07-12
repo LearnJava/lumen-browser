@@ -3506,7 +3506,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (390 symbols)
+## lumen-paint  (395 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -3726,19 +3726,24 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/lib.rs:159` **fn** `summary` — Считает перцентильную сводку. Возвращает `None` для пустой выборки
 `crates/engine/paint/src/lib.rs:190` **fn** `display_with` — Оборачивает сводку в [`Display`] с произвольным префиксом-меткой вместо
 `crates/engine/paint/src/lib.rs:197` **struct** `LabeledSummary` — [`Display`]-обёртка над [`FrameSummary`] с произвольной меткой-префиксом
-`crates/engine/paint/src/lib.rs:356` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:366` **fn** `new`
-`crates/engine/paint/src/lib.rs:565` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:575` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:589` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
-`crates/engine/paint/src/lib.rs:603` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
-`crates/engine/paint/src/lib.rs:619` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
-`crates/engine/paint/src/lib.rs:634` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
+`crates/engine/paint/src/lib.rs:359` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:369` **fn** `new`
+`crates/engine/paint/src/lib.rs:568` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:578` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:592` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
+`crates/engine/paint/src/lib.rs:606` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
+`crates/engine/paint/src/lib.rs:622` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:637` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
 `crates/engine/paint/src/matrix_util.rs:19` **fn** `mat4_to_2d_affine` — Извлекает 2D-аффинные компоненты `[a, b, c, d, e, f]` из column-major
 `crates/engine/paint/src/overlay_partition.rs:75` **fn** `overlay_ranges` — Report the command index ranges of viewport-pinned **overlay** content in a
 `crates/engine/paint/src/overlay_partition.rs:123` **fn** `has_overlay` — `true` when `content` holds any viewport-pinned overlay content — i.e
 `crates/engine/paint/src/overlay_partition.rs:138` **enum** `OverlayPlan` — The scroll-blit backend's per-frame overlay decision (ADR-016 M3.2.1c-3)
 `crates/engine/paint/src/overlay_partition.rs:173` **fn** `plan_overlays` — Classify the viewport-pinned overlay content of a scroll-independent display
+`crates/engine/paint/src/overlay_partition.rs:206` **struct** `OverlaySpan` — One replayable overlay span together with the ancestor **spatial** layer
+`crates/engine/paint/src/overlay_partition.rs:229` **enum** `NestedOverlayPlan` — Richer overlay classification that can also replay spans nested under **spatial**
+`crates/engine/paint/src/overlay_partition.rs:262` **fn** `plan_overlays_nested` — Classify the viewport-pinned overlay content of a scroll-independent display list,
+`crates/engine/paint/src/overlay_partition.rs:318` **fn** `is_spatial_layer_open` — `true` for a command that opens a **spatial** ancestor layer — clip, transform,
+`crates/engine/paint/src/overlay_partition.rs:334` **fn** `is_compositing_layer_open` — `true` for a command that opens a **compositing** ancestor layer — opacity, blend
 `crates/engine/paint/src/renderer.rs:1272` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1303` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:1332` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
@@ -5337,4 +5342,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5266 symbols in 22 crates*
+*Total: 5271 symbols in 22 crates*
