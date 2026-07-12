@@ -346,6 +346,35 @@ pub fn is_compositing_layer_open(cmd: &DisplayCommand) -> bool {
     )
 }
 
+/// The matching close command for a **spatial** ancestor layer open (ADR-016
+/// M3.2.1c-5). Given a spatial-layer-opening command ([`is_spatial_layer_open`]),
+/// returns the `Pop*` command that balances it in the display list:
+/// clip opens (rect / rounded-rect / path) close with [`PopClip`], a
+/// [`PushTransform`] closes with [`PopTransform`], and a [`PushScrollLayer`] closes
+/// with [`PopScrollLayer`]. Returns `None` for any non-spatial-open command.
+///
+/// The scroll-blit replay uses this to reconstruct a nested overlay's ancestor
+/// context: it executes the captured ancestor opens, then the overlay span, then the
+/// matching closes in reverse — so the backend's `Push`/`Pop` bookkeeping (canvas
+/// save/restore, clip stack, layer depth) stays balanced exactly as the direct path.
+///
+/// [`PopClip`]: DisplayCommand::PopClip
+/// [`PushTransform`]: DisplayCommand::PushTransform
+/// [`PopTransform`]: DisplayCommand::PopTransform
+/// [`PushScrollLayer`]: DisplayCommand::PushScrollLayer
+/// [`PopScrollLayer`]: DisplayCommand::PopScrollLayer
+#[must_use]
+pub fn spatial_layer_close(open: &DisplayCommand) -> Option<DisplayCommand> {
+    match open {
+        DisplayCommand::PushClipRect { .. }
+        | DisplayCommand::PushClipRoundedRect { .. }
+        | DisplayCommand::PushClipPath { .. } => Some(DisplayCommand::PopClip),
+        DisplayCommand::PushTransform { .. } => Some(DisplayCommand::PopTransform),
+        DisplayCommand::PushScrollLayer { .. } => Some(DisplayCommand::PopScrollLayer),
+        _ => None,
+    }
+}
+
 /// The nesting-balance contribution of a display command: `+1` for a command that
 /// opens a rendering layer (clip, transform, opacity, blend, mask, filter,
 /// backdrop filter, scroll layer, or an overlay bracket), `-1` for the matching
@@ -872,5 +901,61 @@ mod tests {
             DisplayCommand::PopOpacity,
         ];
         assert_eq!(plan_overlays_nested(&dl), NestedOverlayPlan::Fallback);
+    }
+
+    // ── spatial_layer_close (M3.2.1c-5) ──────────────────────────────────────
+
+    #[test]
+    fn spatial_close_maps_every_spatial_open_to_its_pop() {
+        // Each clip kind closes with PopClip; transform and scroll layer close with
+        // their own pops. This is the mapping the replay uses to balance ancestors.
+        assert_eq!(spatial_layer_close(&push_clip()), Some(DisplayCommand::PopClip));
+        assert_eq!(
+            spatial_layer_close(&DisplayCommand::PushClipRoundedRect {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                radii: [0.0; 4],
+            }),
+            Some(DisplayCommand::PopClip)
+        );
+        assert_eq!(spatial_layer_close(&push_transform()), Some(DisplayCommand::PopTransform));
+        assert_eq!(
+            spatial_layer_close(&push_scroll_layer()),
+            Some(DisplayCommand::PopScrollLayer)
+        );
+    }
+
+    #[test]
+    fn spatial_close_is_none_for_non_spatial_opens() {
+        // Every ancestor captured by `plan_overlays_nested` is a spatial open, so a
+        // compositing open, an overlay bracket, or a leaf must return None (they are
+        // never handed to `spatial_layer_close`, but the guard is belt-and-suspenders).
+        assert_eq!(spatial_layer_close(&push_opacity()), None);
+        assert_eq!(spatial_layer_close(&begin_sticky()), None);
+        assert_eq!(spatial_layer_close(&leaf()), None);
+        assert_eq!(spatial_layer_close(&DisplayCommand::PopClip), None);
+    }
+
+    #[test]
+    fn spatial_close_covers_every_spatial_open_predicate() {
+        // Guard against drift: any command `is_spatial_layer_open` accepts must have a
+        // matching close, or the replay would leak an unbalanced Push.
+        for cmd in [
+            push_clip(),
+            DisplayCommand::PushClipRoundedRect {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                radii: [0.0; 4],
+            },
+            DisplayCommand::PushClipPath {
+                shape: crate::display_list::ResolvedClipShape::Circle { cx: 0.0, cy: 0.0, r: 1.0 },
+            },
+            push_transform(),
+            push_scroll_layer(),
+        ] {
+            assert!(is_spatial_layer_open(&cmd));
+            assert!(
+                spatial_layer_close(&cmd).is_some(),
+                "spatial open {cmd:?} has no matching close"
+            );
+        }
     }
 }
