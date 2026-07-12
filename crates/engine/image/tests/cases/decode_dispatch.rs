@@ -3,10 +3,10 @@
 
 use lumen_image::{decode, ImageError, PixelFormat};
 
-const RGB_PNG_3X2: &[u8] = include_bytes!("fixtures/rgb8_3x2.png");
-const GRAY_PNG_4X4: &[u8] = include_bytes!("fixtures/gray8_4x4.png");
-const JPEG_RGB_GRADIENT: &[u8] = include_bytes!("fixtures/gradient_red_blue_32x16.jpg");
-const JPEG_GRAY_BLACK: &[u8] = include_bytes!("fixtures/gray_black_16x16.jpg");
+const RGB_PNG_3X2: &[u8] = include_bytes!("../fixtures/rgb8_3x2.png");
+const GRAY_PNG_4X4: &[u8] = include_bytes!("../fixtures/gray8_4x4.png");
+const JPEG_RGB_GRADIENT: &[u8] = include_bytes!("../fixtures/gradient_red_blue_32x16.jpg");
+const JPEG_GRAY_BLACK: &[u8] = include_bytes!("../fixtures/gray_black_16x16.jpg");
 
 #[test]
 fn decode_real_png_rgb() {
