@@ -17515,10 +17515,27 @@ impl Lumen {
             false
         };
         if scrolled {
-            // Rebuild display list and update JS scroll state cache.
-            let new_dl = paint_ordered(self.layout_box.as_ref().unwrap());
-            self.tile_grid.update_from_diff(&self.display_list, &new_dl);
-            self.display_list = new_dl;
+            // Быстрый путь: точечный патч скролл-слоя в готовом display list —
+            // layout детей при скролле не меняется, поэтому полная пересборка
+            // paint_ordered на каждый тик колеса не нужна (см.
+            // lumen_paint::patch_scroll_layer; эквивалентность пересборке
+            // закреплена тестами patch_scroll_layer_* в display_list.rs).
+            let patched = lumen_layout::find_box_by_node(
+                self.layout_box.as_ref().unwrap(),
+                target,
+            )
+            .is_some_and(|cb| lumen_paint::patch_scroll_layer(&mut self.display_list, cb));
+            if patched {
+                // Точечная правка: грязные только тайлы под контейнером.
+                if let Some(c) = self.scroll_containers.iter().find(|c| c.node == target) {
+                    self.tile_grid.mark_rect_dirty(c.clip_rect);
+                }
+            } else {
+                // Fallback: полная пересборка при любой нестандартной структуре DL.
+                let new_dl = paint_ordered(self.layout_box.as_ref().unwrap());
+                self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+                self.display_list = new_dl;
+            }
             self.update_scroll_containers();
             let states: std::collections::HashMap<_, _> = self.scroll_containers.iter()
                 .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))

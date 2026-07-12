@@ -80,6 +80,26 @@ impl TileGrid {
         }
     }
 
+    /// Mark all tiles intersecting `rect` (document-space CSS px) dirty.
+    ///
+    /// Used by targeted display-list edits (e.g. `patch_scroll_layer`) where
+    /// only one container's area changed and a full diff pass is unnecessary.
+    pub fn mark_rect_dirty(&mut self, rect: lumen_core::geom::Rect) {
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return;
+        }
+        let ts = self.tile_size as f32;
+        let x0 = (rect.x / ts).floor() as i32;
+        let y0 = (rect.y / ts).floor() as i32;
+        let x1 = ((rect.x + rect.width) / ts).ceil() as i32;
+        let y1 = ((rect.y + rect.height) / ts).ceil() as i32;
+        for ty in y0..y1 {
+            for tx in x0..x1 {
+                self.tiles.insert((tx, ty), TileDirty::Dirty);
+            }
+        }
+    }
+
     /// Return all tiles currently marked dirty.
     pub fn dirty_tiles(&self) -> Vec<(i32, i32)> {
         self.tiles

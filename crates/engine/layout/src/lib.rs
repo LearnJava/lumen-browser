@@ -1238,6 +1238,18 @@ fn collect_computed_styles_rec(
 ///
 /// Shell calls this on wheel events after determining the target scroll container
 /// via `collect_scroll_containers()` + hit testing against the pointer position.
+/// Находит layout-бокс по DOM-узлу (первое совпадение в порядке дерева).
+///
+/// Используется шеллом для точечных операций над конкретным боксом —
+/// например, быстрый патч скролл-слоя в display list без полной пересборки
+/// (`lumen_paint::patch_scroll_layer`).
+pub fn find_box_by_node(root: &LayoutBox, node: lumen_dom::NodeId) -> Option<&LayoutBox> {
+    if root.node == node {
+        return Some(root);
+    }
+    root.children.iter().find_map(|c| find_box_by_node(c, node))
+}
+
 pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {
     if root.node == node {
         let sw = content_width(root);
