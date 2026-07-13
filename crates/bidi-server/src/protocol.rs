@@ -36,16 +36,27 @@
 //! `script.evaluate`, `browsingContext.captureScreenshot`, and the pointer/key
 //! subset of `input.performActions` execute for real against a live
 //! [`lumen_driver::LiveWindowSession`] instead of only updating in-memory
-//! bookkeeping. Everything else (cookie events, network interception,
-//! `domContentLoaded`, full input action-chain fidelity) remains a later
-//! handoff — roadmap 8H.3.
+//! bookkeeping. `browsingContext.navigate` blocks on the JS runtime's real
+//! `document.readyState == "complete"` signal before emitting
+//! `browsingContext.load` with a real timestamp (P2-wpt S1). Everything else
+//! (cookie events, network interception, a dedicated `domContentLoaded`
+//! event, full input action-chain fidelity) remains a later handoff —
+//! roadmap 8H.3.
 //! Without a live window this layer stays a pure protocol state machine: one
 //! connection = one [`BidiState`].
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen_core::json::{parse as parse_json, JsonValue};
-use lumen_driver::{BrowserSession, LiveWindowSession, Target};
+use lumen_driver::{BrowserSession, LiveWindowSession, Target, WaitCondition};
+
+/// Upper bound on how long `bc_navigate` blocks waiting for
+/// `document.readyState == "complete"` before giving up (P2-wpt S1). Generous
+/// enough for a real page load (network + script execution) but still bounded
+/// so a page that never finishes loading fails the BiDi command instead of
+/// hanging the connection forever.
+const NAVIGATE_LOAD_TIMEOUT_MS: u64 = 30_000;
 
 /// Один browsing context в рамках соединения.
 struct BidiContext {
@@ -825,10 +836,13 @@ fn bc_close(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResul
 ///
 /// Возвращает `{navigation, url}`. Когда соединение привязано к живому окну
 /// (SDC-2, `--bidi-port` + окно), реально загружает страницу через
-/// `LiveWindowSession::navigate` перед ответом клиенту; ошибка навигации
-/// возвращается как BiDi `unknown error`. Без живого окна — только
-/// bookkeeping контекста (Phase 1 stub). Эмитит `browsingContext.load`, если
-/// подписан.
+/// `LiveWindowSession::navigate`, затем блокируется на
+/// `LiveWindowSession::wait(WaitCondition::DocumentReady, …)` — реальном
+/// `document.readyState == "complete"` от JS-рантайма (P2-wpt S1) — прежде
+/// чем ответить клиенту; ошибка навигации или таймаут ожидания возвращаются
+/// как BiDi `unknown error`. Без живого окна — только bookkeeping контекста
+/// (Phase 1 stub), event эмитится немедленно. Эмитит `browsingContext.load`
+/// с реальным Unix-timestamp (мс), если подписан.
 fn bc_navigate(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     let Some(cid) = params.get("context").and_then(|v| v.as_str()).map(str::to_owned) else {
         return DispatchResult::single(make_error(Some(id), "invalid argument", "missing context"));
@@ -844,10 +858,13 @@ fn bc_navigate(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchRe
         ));
     }
 
-    if let Some(live) = &mut state.live
-        && let Err(e) = live.navigate(&url)
-    {
-        return DispatchResult::single(make_error(Some(id), "unknown error", &format!("navigate: {e}")));
+    if let Some(live) = &mut state.live {
+        if let Err(e) = live.navigate(&url) {
+            return DispatchResult::single(make_error(Some(id), "unknown error", &format!("navigate: {e}")));
+        }
+        if let Err(e) = live.wait(WaitCondition::DocumentReady, NAVIGATE_LOAD_TIMEOUT_MS) {
+            return DispatchResult::single(make_error(Some(id), "unknown error", &format!("navigate: {e}")));
+        }
     }
 
     let navigation_id = state.next_id(0x4a71);
@@ -866,10 +883,17 @@ fn bc_navigate(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchRe
         ev.insert("context".into(), JsonValue::String(cid));
         ev.insert("navigation".into(), JsonValue::String(navigation_id));
         ev.insert("url".into(), JsonValue::String(url));
-        ev.insert("timestamp".into(), JsonValue::Number(0.0));
+        ev.insert("timestamp".into(), JsonValue::Number(unix_timestamp_ms()));
         frames.push(make_event("browsingContext.load", JsonValue::Object(ev)));
     }
     DispatchResult { frames, close: false }
+}
+
+/// Current Unix timestamp in milliseconds, for BiDi event `timestamp` fields
+/// (e.g. `browsingContext.load`). Falls back to `0.0` only if the system
+/// clock is set before the Unix epoch, which never happens in practice.
+fn unix_timestamp_ms() -> f64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
 }
 
 /// `browsingContext.activate` — пометить контекст активным (ACK).
@@ -1956,6 +1980,12 @@ mod tests {
     /// a background thread without any real winit/GPU state, so
     /// `LiveWindowSession` round-trips exercise the exact same channel path a
     /// real shell window uses.
+    ///
+    /// `Wait` replies `Ack` immediately (simulates a page that is already
+    /// ready) — the real `document.readyState` polling loop lives in
+    /// `crates/shell`'s `check_wait_condition`, out of reach of this
+    /// bidi-server-only fake; the timing behavior it implements is exercised
+    /// by the P2-wpt S1 manual verification, not this unit test.
     fn fake_live_session() -> LiveWindowSession {
         use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply};
         let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
@@ -1967,6 +1997,30 @@ mod tests {
                     AutomationCommand::Screenshot => AutomationReply::Screenshot(vec![0x89, b'P', b'N', b'G']),
                     AutomationCommand::Click(_) | AutomationCommand::Type(_, _) | AutomationCommand::Scroll(_) => {
                         AutomationReply::Ack
+                    }
+                    AutomationCommand::Wait(_, _) => AutomationReply::Ack,
+                    _ => AutomationReply::Error("unsupported in fake_live_session".into()),
+                };
+                let _ = reply_tx.send(reply);
+            }
+        });
+        LiveWindowSession::new(AutomationHandle::new(tx))
+    }
+
+    /// Same as [`fake_live_session`] but `Wait` always times out (never sends
+    /// `Ack`/`Error` for the wait itself — the real shell only replies once
+    /// `check_wait_condition` returns `true` or its deadline passes; here we
+    /// simulate "never becomes ready" by answering with the same timeout
+    /// error the real shell sends past its deadline).
+    fn fake_live_session_load_never_completes() -> LiveWindowSession {
+        use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply};
+        let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+        std::thread::spawn(move || {
+            for (cmd, reply_tx) in rx {
+                let reply = match cmd {
+                    AutomationCommand::Navigate(_) => AutomationReply::Ack,
+                    AutomationCommand::Wait(cond, _) => {
+                        AutomationReply::Error(format!("wait timeout: {cond:?}"))
                     }
                     _ => AutomationReply::Error("unsupported in fake_live_session".into()),
                 };
@@ -1985,6 +2039,43 @@ mod tests {
         );
         let r = dispatch(&cmd, &mut state);
         assert_eq!(parse(&r.frames[0]).get("type").and_then(|x| x.as_str()), Some("success"));
+    }
+
+    /// P2-wpt S1: `browsingContext.load`'s `timestamp` must be a real
+    /// (non-zero) Unix-ms clock reading, not the old hardcoded `0.0` emitted
+    /// unconditionally before the load signal existed.
+    #[test]
+    fn navigate_with_live_window_emits_load_with_real_timestamp() {
+        let mut state = BidiState::with_live_session(fake_live_session());
+        let cid = new_session_ctx(&mut state);
+        dispatch(
+            r#"{"id":9,"method":"session.subscribe","params":{"events":["browsingContext.load"]}}"#,
+            &mut state,
+        );
+        let cmd = format!(
+            r#"{{"id":10,"method":"browsingContext.navigate","params":{{"context":"{cid}","url":"https://example.com/"}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        let ev = parse(&r.frames[1]);
+        assert_eq!(ev.get("method").and_then(|x| x.as_str()), Some("browsingContext.load"));
+        let ts = ev.get("params").unwrap().get("timestamp").and_then(|x| x.as_number()).unwrap();
+        assert!(ts > 1_700_000_000_000.0, "timestamp should be a real Unix-ms clock reading, got {ts}");
+    }
+
+    /// P2-wpt S1: when the live window never reaches
+    /// `document.readyState == "complete"` within the wait's deadline, the
+    /// navigate command must fail loudly (`unknown error`), not silently
+    /// report success with a fabricated load event.
+    #[test]
+    fn navigate_with_live_window_errors_when_load_never_completes() {
+        let mut state = BidiState::with_live_session(fake_live_session_load_never_completes());
+        let cid = new_session_ctx(&mut state);
+        let cmd = format!(
+            r#"{{"id":10,"method":"browsingContext.navigate","params":{{"context":"{cid}","url":"https://example.com/"}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("unknown error"));
     }
 
     #[test]
