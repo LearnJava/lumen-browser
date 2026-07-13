@@ -121,6 +121,14 @@ pub mod attribution_reporting;
 pub mod pointer_capture;
 pub mod sw_worker;
 
+/// V8-based JS runtime (slice S1: runtime skeleton).
+///
+/// Compiled only when the `v8-backend` feature is enabled. Provides
+/// `V8JsRuntime` as a drop-in replacement for `QuickJsRuntime` and exposes
+/// `ensure_v8_platform` so all code in this crate shares one V8 init path.
+#[cfg(feature = "v8-backend")]
+pub mod v8_runtime;
+
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
 use rquickjs::{Array, Context, Ctx, FromJs, Function, IntoJs, Object, Runtime, Type, Value};

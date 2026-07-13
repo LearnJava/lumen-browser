@@ -306,8 +306,9 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
-- `rusty_v8` backend porting (S1–S12; S0 Build Spike done 2026-07-13 — v8 v150.1.0
-  optional dep under `v8-backend` feature, smoke tests pass on Windows MSVC).
+- `rusty_v8` backend porting (S2–S12; S0 done 2026-07-13, S1 done 2026-07-13 — v8 v150.1.0
+  optional dep under `v8-backend` feature; `V8JsRuntime`/`V8Inner`/`v8_thread_main` + full
+  `JsRuntime` trait impl + `from_v8`/`to_v8`; 17 тестов зелёные).
 
 ## Invariants
 
