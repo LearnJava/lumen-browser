@@ -267,8 +267,32 @@ option isn't lost — do not fold it into this task's scope.
       end-to-end in a clean venv against the committed `requirements.txt` — see
       `tests/wpt/README.md`. `tools/wpt/` (the `wpt` CLI wrapper) intentionally left for S3/S4, which
       is where it's actually invoked.
-- [ ] `tools/wptrunner/wptrunner/browsers/lumen.py` product plugin launches/stops `lumen` and
-      completes BiDi session negotiation.
+- [x] S3: `tools/wptrunner/wptrunner/browsers/lumen.py` product plugin launches/stops `lumen` and
+      completes BiDi session negotiation. `LumenBrowser(WebDriverBrowser)` reuses the base class's
+      process lifecycle (spawn, `wait_for_service` port poll, kill) but overrides `make_command`
+      (`lumen --bidi-port <port>`), `url` (`ws://host:port`, no HTTP), and `executor_browser()`
+      (ships `bidi_url` to the executor process instead of `webdriver_url`) — `binary` doubles as
+      `webdriver_binary` since Lumen has no separate driver process. New
+      `tools/wptrunner/wptrunner/executors/executorlumen.py`: `LumenBidiProtocol(Protocol)` opens
+      the session directly via `webdriver.bidi.client.BidiSession.bidi_only(...)` (unlike
+      `executorwebdriver.WebDriverBidiProtocol`, which layers BiDi on top of a classic HTTP
+      session — no classic session exists here to layer on). **Deviation from the "wptrunner not
+      modified" framing above:** `wptrunner/products.py`'s `BUILTIN_PRODUCTS` frozenset is a
+      hardcoded tuple of product names with no plugin-registration seam for vendored trees — a
+      one-line addition (`"lumen"`) was unavoidable for `--product lumen` to resolve
+      `wptrunner.browsers.lumen` at all (confirmed by reading `Product._from_dunder_wptrunner`
+      and `_builtin_loader`, `products.py:75-91`); this is registration data, not upstream logic,
+      but it does mean a future re-vendor must reapply this one line. `LumenTestharnessExecutor`
+      exists (`__wptrunner__["executor"]["testharness"]`) but `do_test` is an intentional
+      `NotImplementedError` stub — driving an actual test (navigate, inject
+      testharnessreport.js, read back results) is S4's scope; `TestExecutor.run_test` already
+      catches and reports this as a per-test `ERROR` rather than crashing the harness, so the
+      plugin loads and is selectable today without pretending to run tests it can't yet.
+      Verified end-to-end against a real spawned `lumen --bidi-port <port>` process (dev-release
+      build) with `tests/wpt/verify_s3_bidi_session.py` — not through `wpt run` (which needs S4's
+      `do_test`), but directly through the same `BidiSession.bidi_only` + `session.new` call the
+      protocol class makes: real `sessionId` and `capabilities` (`browserName: "Lumen"`, etc.)
+      came back over the wire.
 - [ ] `tests/wpt/resources/testharnessreport.js` shim; one smoke test passes end-to-end via
       `wpt run lumen --webdriver-bidi`.
 - [ ] A deliberately-failing assertion is observed as FAIL (harness genuinely checks assertions).
