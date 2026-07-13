@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-13",
+ "generated": "2026-07-14",
  "counts": {
-  "open": 22,
-  "fixed": 226,
+  "open": 23,
+  "fixed": 228,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 248,
+ "total_bugs": 251,
  "phases": [
   {
    "id": "P0",
@@ -628,9 +628,9 @@
       {
        "id": "P3-v8-s8",
        "title": "V8 S8: canvas2d + webgl_canvas",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "S8: ручной порт canvas2d + webgl_canvas (горячий путь, 85 упоминаний rquickjs; пиксельные очереди flush_canvas_updates); canvas-графтесты под v8"
+       "note": "S8 ЗАКРЫТ 2026-07-14 (branch p1-v8-s8): install_canvas2d_bindings_v8 (77 натива) + install_webgl_canvas_v8 (34 натива) через compat-слой (паттерн б, как video_bindings/audio_element — thread_local, без новых полей V8JsRuntime); WEBGL_SHIM eval'ится отдельно (не в WEB_API_SHIM); V8JsRuntime::flush_canvas_updates + V8PersistentJs wiring (замена no-op стаба S4); offscreen_canvas.rs НЕ портирован (вне скоупа S8, известный gap); dump-display-list байт-в-байт совпадает с quickjs на graphic_tests/57-canvas-2d.html; cargo test -p lumen-js --features v8-backend 2399+68 зелёные, clippy чистый"
       },
       {
        "id": "P3-v8-s9",
@@ -3065,6 +3065,27 @@
    "component": "paint (WgpuBackend) или graphic_tests capture/calibration — не разделено",
    "date": null,
    "debtor": false
+  },
+  "BUG-278": {
+   "status": "fixed",
+   "title": "HTTP-клиент отвергал close-delimited ответы (ни `Content-Length`, ни `chunked`, ни явный `Connection: close`) как протокольную ошибку — ломало все фетчи против…",
+   "component": "network (HTTP client)",
+   "date": "2026-07-13",
+   "debtor": false
+  },
+  "BUG-279": {
+   "status": "fixed",
+   "title": "`document.getElementsByTagName` отсутствовал целиком в `var document = {...}` (`crates/js/src/dom.rs`) — ронял `testharness.js`'s собственный module-level setup…",
+   "component": "js (live DOM bindings)",
+   "date": "2026-07-13",
+   "debtor": false
+  },
+  "BUG-280": {
+   "status": "open",
+   "title": "`window` — плоский JS-объект-литерал, не настоящий global object движка (см. BUG-233) — свойства, назначенные через `window.x = ...`/`self.x = ...` (в т.ч. `tes…",
+   "component": "js (JS environment bootstrap)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3120,6 +3141,12 @@
    "BUG-073",
    "BUG-155",
    "BUG-243"
+  ],
+  "js (JS environment bootstrap)": [
+   "BUG-280"
+  ],
+  "js (live DOM bindings)": [
+   "BUG-279"
   ],
   "js (shell)": [
    "BUG-233"
@@ -3245,6 +3272,9 @@
    "BUG-054",
    "BUG-062",
    "BUG-161"
+  ],
+  "network (HTTP client)": [
+   "BUG-278"
   ],
   "network+shell": [
    "BUG-169"

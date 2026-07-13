@@ -511,6 +511,13 @@ impl V8JsRuntime {
         std::mem::take(&mut *self.pending_focus_requests.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
+    /// Drain dirty `<canvas>` 2D buffers for GPU re-upload. Mirrors
+    /// [`crate::QuickJsRuntime::flush_canvas_updates`]. Must run on the JS
+    /// thread since `canvas2d`'s `CANVASES`/`DIRTY` registries are `thread_local!`.
+    pub fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
+        self.run(|_inner| crate::canvas2d::flush_dirty())
+    }
+
     /// Dispatch `f` to the JS thread, blocking until it completes.
     ///
     /// # Safety
@@ -3473,6 +3480,18 @@ impl V8JsRuntime {
                 }
             };
         }
+        // Ph3 V8 migration S8: canvas2d + webgl_canvas (hand-port, not part of the
+        // simple-module S5-S7 batch, but same best-effort orchestration). Mirrors
+        // lib.rs::install_dom's ordering (webgl before canvas2d).
+        let fingerprint = lumen_paint::GpuFingerprint {
+            vendor: "WebKit".to_string(),
+            renderer: "Generic GPU".to_string(),
+        };
+        if let Err(e) = crate::webgl_canvas::install_webgl_canvas_v8(self, &fingerprint) {
+            eprintln!("v8: webgl_canvas::install_webgl_canvas_v8 failed: {e}");
+        }
+        install_v8!(canvas2d::install_canvas2d_bindings_v8);
+
         install_v8!(async_context::install_async_context_v8);
         install_v8!(attribution_reporting::install_attribution_reporting_api_v8);
         install_v8!(audio_element::install_audio_element_bindings_v8);

@@ -238,7 +238,7 @@ above). S5-S7 is now fully closed (84/84 simple modules ported).
 **Reserved for later hand-port slices, not S5-S7**: canvas2d, offscreen_canvas,
 webgl_canvas (→ S8); webassembly, webgpu (→ S9); worker, shared_worker, sw_worker (→
 S10) — these take extra params too but are covered by their own slices below.
-| ☐ S8 | **canvas2d + webgl_canvas** | Hand-port (hot path, 85 rquickjs mentions; pixel queues via `flush_canvas_updates`) | canvas graphic tests pass under v8 feature | Medium |
+| ✅ S8 | **canvas2d + webgl_canvas** | Hand-port (hot path, 85 rquickjs mentions; pixel queues via `flush_canvas_updates`) | canvas graphic tests pass under v8 feature | Medium |
 | ☐ S9 | **wasm + webgpu** | `Persistent<Function>` GC roots → `v8::Global<Function>`; keep the `wasm::clear_registry()` teardown pattern (`lib.rs:401`) | wasm + webgpu test suites green (note: webgpu test flaky under load — rerun before blaming the port) | Medium |
 | ☐ S10 | **worker + shared_worker + sw_worker** | Per-thread `Runtime`+`Context` (`worker.rs:293`) → per-thread `OwnedIsolate`; same channel protocol | worker tests green | Medium |
 | ☐ S11 | **suspend/resume (partial 10C.2)** | `suspend()`: enumerate own globals set by page scripts, serialize *data* via `v8::ValueSerializer` into `SuspendedHeap.compressed` (zstd, ≤5 MB); `resume()`: `ValueDeserializer` restore. **Closures are NOT serializable (F1) — the re-run-scripts fallback at `main.rs:14599` stays.** Optional: pure-JS-shim startup snapshot (F2), only if cheap | `tests/v8_snapshot.rs`: `window.__test = 42` survives suspend→resume | Low |
@@ -291,6 +291,55 @@ is not rebuilt unless the v8 crate version changes. First-build download takes ~
 a fast connection.
 
 **Go/No-Go verdict: GO.** v8 150.1.0 builds and runs on Windows MSVC x86_64. Porting can begin.
+
+### S8 — canvas2d + webgl_canvas (2026-07-14, branch p1-v8-s8)
+
+Both modules use pattern (b) from S5-S7 (module-level `thread_local!` state —
+`CANVASES`/`DIRTY`/`GRADIENTS`/`PATTERNS`/`PATHS`/`TRANSFERRED` in
+`canvas2d.rs`, `CONTEXTS`/`NEXT_ID` in `webgl_canvas.rs`), so no new
+`V8JsRuntime` fields were needed — same shape as `video_bindings_v8`/
+`audio_element_v8`. Arities topped out at 7 (`_lumen_canvas2d_arc`,
+`_lumen_webgl_uniform4f` needed only 6); every argument/return type
+(`u32`/`i32`/`f64`/`String`/`bool`/`Vec<f64>`/`Vec<u8>`) was already covered
+by `v8_compat.rs`'s `FromJsValue`/`IntoJsReturn` impls — **no GC-root
+(`v8::Global<Function>`) mechanism was needed for S8**, confirming the
+migration brief's F3 note that only S9 (wasm) actually requires one.
+
+`install_canvas2d_bindings_v8` (77 natives) needs no shim `eval` — the
+`getContext('2d')` JS shim already lives in `dom.rs::WEB_API_SHIM`, shared by
+both engines. `install_webgl_canvas_v8` (34 natives) does need
+`rt.eval(WEBGL_SHIM)` since that shim is private to `webgl_canvas.rs`, not
+part of `WEB_API_SHIM` — mirrors `geolocation_v8`'s `rt.eval(&format!(...))`
+pattern for seeding `_LUMEN_GPU_VENDOR`/`_LUMEN_GPU_RENDERER` globals ahead of
+the shim. Both wired into `V8JsRuntime::install_dom` right before the S5-S7
+`install_v8!` macro list (webgl before canvas2d, mirroring `lib.rs`'s
+ordering). Added `V8JsRuntime::flush_canvas_updates()` (dispatches
+`canvas2d::flush_dirty()` on the JS thread via `self.run`, since the dirty
+registry is thread-local to that thread) and wired
+`V8PersistentJs::flush_canvas_updates` in `shell/main.rs` to it, replacing the
+no-op stub from S4.
+
+**`offscreen_canvas.rs` intentionally NOT ported in this slice** — the
+ROADMAP task title and DoD only name canvas2d + webgl_canvas, and
+`graphic_tests/57-canvas-2d.html` doesn't exercise `transferControlToOffscreen`.
+`_lumen_canvas_transfer_control_to_offscreen` still returns a valid
+`OffscreenCanvas` id under v8, but `.getContext('2d')` on that offscreen
+object won't work until `offscreen_canvas.rs` gets its own V8 port (left as a
+known gap, not currently claimed by any slice — `offscreen_canvas` is not
+covered by S9/S10 either).
+
+**Verification**: `cargo test -p lumen-js --features v8-backend` — 2399 lib
+unit tests (includes the existing rquickjs `canvas2d`/`webgl_canvas` tests,
+unaffected) + 68 integration tests, all green; `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` clean. No automated
+graphic-test runner exists for the v8 feature (`run.py` isn't parametrized by
+JS engine — noted as a gap in the S8 risk assessment); verified manually
+instead: `cargo run -p lumen-shell --no-default-features --features
+backend-femtovg,v8 -- --dump-display-list graphic_tests/57-canvas-2d.html`
+produced a display list **byte-for-byte identical** to the default (QuickJS)
+build's dump — same 6 `DrawImage src="canvas:N"` entries at identical
+coordinates, confirming `getContext('2d')`, `fillRect`, `arc`, path
+fill/stroke, and `drawImage` all execute correctly through the V8 bindings.
 
 ---
 

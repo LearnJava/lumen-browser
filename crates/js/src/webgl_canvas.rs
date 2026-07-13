@@ -494,6 +494,240 @@ const WEBGL_SHIM: &str = r#"(function() {
 })();
 "#;
 
+/// V8 port of [`install_webgl_canvas`] (Ph3 V8 migration S8): state
+/// (`CONTEXTS`, `NEXT_ID`) is module-level `thread_local!`, not a
+/// `V8JsRuntime` field — same pattern as `video_bindings_v8`/
+/// `audio_element_v8`. Unlike [`crate::canvas2d::install_canvas2d_bindings_v8`],
+/// [`WEBGL_SHIM`] is not part of `dom.rs::WEB_API_SHIM` and must be `eval`'d
+/// here explicitly, mirroring `geolocation_v8`/`notifications_bindings_v8`'s
+/// use of `rt.eval` to seed globals ahead of a standalone shim string.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_webgl_canvas_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    fingerprint: &lumen_paint::GpuFingerprint,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4, into_v8_fn5, into_v8_fn6};
+    use lumen_core::ext::JsRuntime as _;
+
+    let vendor = fingerprint.vendor().replace('\\', "\\\\").replace('\'', "\\'");
+    let renderer = fingerprint.renderer().replace('\\', "\\\\").replace('\'', "\\'");
+    rt.eval(&format!(
+        "globalThis._LUMEN_GPU_VENDOR = '{vendor}'; globalThis._LUMEN_GPU_RENDERER = '{renderer}';"
+    ))?;
+
+    rt.register_native(
+        "_lumen_webgl_create",
+        into_v8_fn2(|w: i32, h: i32| -> u32 {
+            let id = NEXT_ID.with(|n| {
+                let v = n.get();
+                n.set(v + 1);
+                v
+            });
+            let gl = SoftwareWebGl::new(w.max(1) as u32, h.max(1) as u32);
+            CONTEXTS.with(|c| c.borrow_mut().insert(id, gl));
+            id
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_destroy",
+        into_v8_fn1(|id: u32| {
+            CONTEXTS.with(|c| {
+                c.borrow_mut().remove(&id);
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_viewport",
+        into_v8_fn5(|id: u32, x: i32, y: i32, w: i32, h: i32| {
+            with_ctx(id, (), |gl| gl.viewport(x, y, w, h));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_clear_color",
+        into_v8_fn5(|id: u32, r: f64, g: f64, b: f64, a: f64| {
+            with_ctx(id, (), |gl| gl.clear_color(r as f32, g as f32, b as f32, a as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_clear",
+        into_v8_fn2(|id: u32, mask: u32| {
+            with_ctx(id, (), |gl| gl.clear(mask));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_create_buffer",
+        into_v8_fn1(|id: u32| -> u32 { with_ctx(id, 0, |gl| gl.create_buffer()) }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_bind_buffer",
+        into_v8_fn3(|id: u32, target: u32, buffer: u32| {
+            with_ctx(id, (), |gl| gl.bind_buffer(target, buffer));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_buffer_data",
+        into_v8_fn3(|id: u32, target: u32, data: Vec<f64>| {
+            let floats: Vec<f32> = data.into_iter().map(|v| v as f32).collect();
+            with_ctx(id, (), |gl| gl.buffer_data_f32(target, floats));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_create_shader",
+        into_v8_fn2(|id: u32, kind: u32| -> u32 { with_ctx(id, 0, |gl| gl.create_shader(kind)) }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_shader_source",
+        into_v8_fn3(|id: u32, shader: u32, src: String| {
+            with_ctx(id, (), |gl| gl.shader_source(shader, src));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_compile_shader",
+        into_v8_fn2(|id: u32, shader: u32| {
+            with_ctx(id, (), |gl| gl.compile_shader(shader));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_shader_compiled",
+        into_v8_fn2(|id: u32, shader: u32| -> bool { with_ctx(id, false, |gl| gl.shader_compiled(shader)) }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_create_program",
+        into_v8_fn1(|id: u32| -> u32 { with_ctx(id, 0, |gl| gl.create_program()) }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_attach_shader",
+        into_v8_fn3(|id: u32, program: u32, shader: u32| {
+            with_ctx(id, (), |gl| gl.attach_shader(program, shader));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_link_program",
+        into_v8_fn2(|id: u32, program: u32| {
+            with_ctx(id, (), |gl| gl.link_program(program));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_program_linked",
+        into_v8_fn2(|id: u32, program: u32| -> bool { with_ctx(id, false, |gl| gl.program_linked(program)) }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_use_program",
+        into_v8_fn2(|id: u32, program: u32| {
+            with_ctx(id, (), |gl| gl.use_program(program));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_attrib_location",
+        into_v8_fn3(|id: u32, program: u32, name: String| -> i32 {
+            with_ctx(id, -1, |gl| gl.get_attrib_location(program, &name))
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_uniform_location",
+        into_v8_fn3(|id: u32, program: u32, name: String| -> i32 {
+            with_ctx(id, -1, |gl| gl.get_uniform_location(program, &name))
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_enable_attrib",
+        into_v8_fn2(|id: u32, index: u32| {
+            with_ctx(id, (), |gl| gl.enable_vertex_attrib_array(index));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_disable_attrib",
+        into_v8_fn2(|id: u32, index: u32| {
+            with_ctx(id, (), |gl| gl.disable_vertex_attrib_array(index));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_attrib_pointer",
+        into_v8_fn5(|id: u32, index: u32, size: i32, stride: i32, offset: i32| {
+            with_ctx(id, (), |gl| {
+                gl.vertex_attrib_pointer(
+                    index,
+                    size.max(0) as usize,
+                    stride.max(0) as usize,
+                    offset.max(0) as usize,
+                );
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_uniform4f",
+        into_v8_fn6(|id: u32, loc: i32, x: f64, y: f64, z: f64, w: f64| {
+            with_ctx(id, (), |gl| gl.uniform4f(loc, x as f32, y as f32, z as f32, w as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_uniform3f",
+        into_v8_fn5(|id: u32, loc: i32, x: f64, y: f64, z: f64| {
+            with_ctx(id, (), |gl| gl.uniform3f(loc, x as f32, y as f32, z as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_uniform2f",
+        into_v8_fn4(|id: u32, loc: i32, x: f64, y: f64| {
+            with_ctx(id, (), |gl| gl.uniform2f(loc, x as f32, y as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_uniform1f",
+        into_v8_fn3(|id: u32, loc: i32, x: f64| {
+            with_ctx(id, (), |gl| gl.uniform1f(loc, x as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_uniform1i",
+        into_v8_fn3(|id: u32, loc: i32, v: i32| {
+            with_ctx(id, (), |gl| gl.uniform1i(loc, v));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_uniform_mat4fv",
+        into_v8_fn3(|id: u32, loc: i32, data: Vec<f64>| {
+            let fs: Vec<f32> = data.into_iter().map(|v| v as f32).collect();
+            with_ctx(id, (), |gl| gl.uniform_matrix4fv(loc, &fs));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_active_texture",
+        into_v8_fn2(|id: u32, unit: u32| {
+            with_ctx(id, (), |gl| gl.active_texture(unit));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_bind_texture",
+        into_v8_fn3(|id: u32, target: u32, tex_id: u32| {
+            with_ctx(id, (), |gl| gl.bind_texture(target, tex_id));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_tex_image_2d",
+        into_v8_fn5(|id: u32, tex_id: u32, w: u32, h: u32, data: Vec<u8>| {
+            with_ctx(id, (), |gl| gl.tex_image_2d_rgba(tex_id, w, h, &data));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_draw_arrays",
+        into_v8_fn4(|id: u32, mode: u32, first: i32, count: i32| {
+            with_ctx(id, (), |gl| gl.draw_arrays(mode, first, count));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_read_pixels",
+        into_v8_fn1(|id: u32| -> Vec<u8> { with_ctx(id, Vec::new(), |gl| gl.pixels().to_vec()) }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_dims",
+        into_v8_fn1(|id: u32| -> Vec<u32> { with_ctx(id, vec![0, 0], |gl| vec![gl.width(), gl.height()]) }),
+    )?;
+
+    rt.eval(WEBGL_SHIM)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
