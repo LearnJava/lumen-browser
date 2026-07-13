@@ -602,9 +602,9 @@
       {
        "id": "P3-v8-s3",
        "title": "V8 S3: core DOM",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "S3: порт install_primitives (184 reg!-натива, dom.rs) через compat-слой; WEB_API_SHIM без изменений; samples/page.html рендерится e2e под --features v8-backend"
+       "note": "S3 ЗАКРЫТ 2026-07-13 (branch p1-v8-s3): install_primitives (183/184 reg!-натива байт-в-байт, dom.rs) портирован через compat-слой в V8JsRuntime::install_dom; WEB_API_SHIM переиспользован (pub(crate), не изменён); _lumen_drain_microtasks — no-op стаб (V8 сам гоняет microtask queue); 27 тест PASS (v8_runtime), полный workspace clippy + scoped-test зелёные"
       },
       {
        "id": "P3-v8-s4",

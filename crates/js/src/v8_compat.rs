@@ -49,9 +49,9 @@ impl FromJsValue for String {
             JsValue::Number(n) => Ok(format_number(n)),
             JsValue::Bool(b) => Ok(if b { "true".into() } else { "false".into() }),
             JsValue::Null => Ok("null".into()),
-            JsValue::Undefined => {
-                Err(JsError::Runtime(format!("arg[{idx}]: expected string, got undefined")))
-            }
+            JsValue::Undefined => Err(JsError::Runtime(format!(
+                "arg[{idx}]: expected string, got undefined"
+            ))),
             JsValue::Array(_) | JsValue::Object(_) => Ok("[object]".into()),
         }
     }
@@ -83,6 +83,12 @@ impl FromJsValue for i32 {
     }
 }
 
+impl FromJsValue for u8 {
+    fn from_js_value(val: JsValue, idx: usize) -> JsResult<Self> {
+        Ok(f64::from_js_value(val, idx)? as u8)
+    }
+}
+
 impl FromJsValue for bool {
     fn from_js_value(val: JsValue, _: usize) -> JsResult<Self> {
         Ok(match val {
@@ -101,6 +107,45 @@ impl<T: FromJsValue> FromJsValue for Option<T> {
             JsValue::Null | JsValue::Undefined => Ok(None),
             other => T::from_js_value(other, idx).map(Some),
         }
+    }
+}
+
+/// Decode a `JsValue::Array` into a `Vec<T>` by converting each element with
+/// `T::from_js_value`. Non-array, non-null/undefined values yield a single-item
+/// vec (mirrors loose JS-array coercion); `Null`/`Undefined` yield an empty vec.
+fn array_from_js_value<T: FromJsValue>(val: JsValue, idx: usize) -> JsResult<Vec<T>> {
+    match val {
+        JsValue::Array(items) => items
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| T::from_js_value(v, i))
+            .collect(),
+        JsValue::Null | JsValue::Undefined => Ok(Vec::new()),
+        other => Ok(vec![T::from_js_value(other, idx)?]),
+    }
+}
+
+impl FromJsValue for Vec<String> {
+    fn from_js_value(val: JsValue, idx: usize) -> JsResult<Self> {
+        array_from_js_value(val, idx)
+    }
+}
+
+impl FromJsValue for Vec<u32> {
+    fn from_js_value(val: JsValue, idx: usize) -> JsResult<Self> {
+        array_from_js_value(val, idx)
+    }
+}
+
+impl FromJsValue for Vec<f64> {
+    fn from_js_value(val: JsValue, idx: usize) -> JsResult<Self> {
+        array_from_js_value(val, idx)
+    }
+}
+
+impl FromJsValue for Vec<u8> {
+    fn from_js_value(val: JsValue, idx: usize) -> JsResult<Self> {
+        array_from_js_value(val, idx)
     }
 }
 
@@ -157,6 +202,34 @@ impl<T: IntoJsReturn> IntoJsReturn for Option<T> {
     }
 }
 
+impl IntoJsReturn for Vec<String> {
+    fn into_js_return(self) -> JsValue {
+        JsValue::Array(self.into_iter().map(IntoJsReturn::into_js_return).collect())
+    }
+}
+
+impl IntoJsReturn for Vec<u32> {
+    fn into_js_return(self) -> JsValue {
+        JsValue::Array(self.into_iter().map(IntoJsReturn::into_js_return).collect())
+    }
+}
+
+impl IntoJsReturn for Vec<f64> {
+    fn into_js_return(self) -> JsValue {
+        JsValue::Array(self.into_iter().map(IntoJsReturn::into_js_return).collect())
+    }
+}
+
+impl IntoJsReturn for Vec<u8> {
+    fn into_js_return(self) -> JsValue {
+        JsValue::Array(
+            self.into_iter()
+                .map(|b| JsValue::Number(f64::from(b)))
+                .collect(),
+        )
+    }
+}
+
 // ── V8NativeFn trait (object-safe) ─────────────────────────────────────────
 
 /// Object-safe trait for all native functions registered with the V8 compat
@@ -192,8 +265,8 @@ pub(crate) struct NativeFn1<A, R, F> {
 }
 unsafe impl<A, R, F: Send + 'static> Send for NativeFn1<A, R, F> {}
 
-impl<A: FromJsValue + 'static, R: IntoJsReturn + 'static, F: Fn(A) -> R + Send + 'static>
-    V8NativeFn for NativeFn1<A, R, F>
+impl<A: FromJsValue + 'static, R: IntoJsReturn + 'static, F: Fn(A) -> R + Send + 'static> V8NativeFn
+    for NativeFn1<A, R, F>
 {
     fn call_js(&self, args: &[JsValue]) -> JsResult<JsValue> {
         let a = A::from_js_value(args.first().cloned().unwrap_or(JsValue::Undefined), 0)?;
@@ -379,7 +452,10 @@ where
     R: IntoJsReturn + 'static,
     F: Fn() -> R + Send + 'static,
 {
-    Box::new(NativeFn0 { f, _ph: PhantomData })
+    Box::new(NativeFn0 {
+        f,
+        _ph: PhantomData,
+    })
 }
 
 /// Wrap a 1-argument closure as a boxed [`V8NativeFn`].
@@ -389,7 +465,10 @@ where
     R: IntoJsReturn + 'static,
     F: Fn(A) -> R + Send + 'static,
 {
-    Box::new(NativeFn1 { f, _ph: PhantomData })
+    Box::new(NativeFn1 {
+        f,
+        _ph: PhantomData,
+    })
 }
 
 /// Wrap a 2-argument closure as a boxed [`V8NativeFn`].
@@ -401,7 +480,10 @@ where
     R: IntoJsReturn + 'static,
     F: Fn(A, B) -> R + Send + 'static,
 {
-    Box::new(NativeFn2 { f, _ph: PhantomData })
+    Box::new(NativeFn2 {
+        f,
+        _ph: PhantomData,
+    })
 }
 
 /// Wrap a 3-argument closure as a boxed [`V8NativeFn`].
@@ -414,7 +496,10 @@ where
     R: IntoJsReturn + 'static,
     F: Fn(A, B, C) -> R + Send + 'static,
 {
-    Box::new(NativeFn3 { f, _ph: PhantomData })
+    Box::new(NativeFn3 {
+        f,
+        _ph: PhantomData,
+    })
 }
 
 /// Wrap a 4-argument closure as a boxed [`V8NativeFn`].
@@ -428,7 +513,10 @@ where
     R: IntoJsReturn + 'static,
     F: Fn(A, B, C, D) -> R + Send + 'static,
 {
-    Box::new(NativeFn4 { f, _ph: PhantomData })
+    Box::new(NativeFn4 {
+        f,
+        _ph: PhantomData,
+    })
 }
 
 /// Wrap a 5-argument closure as a boxed [`V8NativeFn`].
@@ -443,7 +531,10 @@ where
     R: IntoJsReturn + 'static,
     F: Fn(A, B, C, D, E) -> R + Send + 'static,
 {
-    Box::new(NativeFn5 { f, _ph: PhantomData })
+    Box::new(NativeFn5 {
+        f,
+        _ph: PhantomData,
+    })
 }
 
 /// Wrap a 6-argument closure as a boxed [`V8NativeFn`].
@@ -459,7 +550,10 @@ where
     R: IntoJsReturn + 'static,
     F: Fn(A, B, C, D, E, G) -> R + Send + 'static,
 {
-    Box::new(NativeFn6 { f, _ph: PhantomData })
+    Box::new(NativeFn6 {
+        f,
+        _ph: PhantomData,
+    })
 }
 
 /// Wrap a 7-argument closure as a boxed [`V8NativeFn`].
@@ -476,7 +570,10 @@ where
     R: IntoJsReturn + 'static,
     F: Fn(A, B, C, D, E, G, H) -> R + Send + 'static,
 {
-    Box::new(NativeFn7 { f, _ph: PhantomData })
+    Box::new(NativeFn7 {
+        f,
+        _ph: PhantomData,
+    })
 }
 
 // ── Ownership handle for registered native closures ─────────────────────────
@@ -496,7 +593,9 @@ impl Drop for OwnedNativeFn {
     fn drop(&mut self) {
         if !self.0.is_null() {
             // SAFETY: created by Box::into_raw(Box::new(f))
-            unsafe { drop(Box::from_raw(self.0)); }
+            unsafe {
+                drop(Box::from_raw(self.0));
+            }
         }
     }
 }
@@ -581,8 +680,7 @@ pub(crate) fn native_fn_trampoline(
     // SAFETY: pointer was stored by `register_v8_native` from a `Box::into_raw`
     // call.  It is kept alive in `V8Inner::native_fn_store` for the lifetime of
     // the isolate.
-    let fn_ref: &dyn V8NativeFn =
-        unsafe { &**(ext.value() as *const Box<dyn V8NativeFn + Send>) };
+    let fn_ref: &dyn V8NativeFn = unsafe { &**(ext.value() as *const Box<dyn V8NativeFn + Send>) };
 
     // Convert V8 arguments to JsValue.
     let n = args.length() as usize;

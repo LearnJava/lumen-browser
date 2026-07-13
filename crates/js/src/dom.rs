@@ -3099,7 +3099,7 @@ fn remove_attribute(doc: &mut Document, id: NodeId, name: &str) {
 ///
 /// `parentElement` and `children` are non-enumerable to prevent infinite
 /// recursion when `from_rq` serializes the returned object (parent↔child cycles).
-const WEB_API_SHIM: &str = "
+pub(crate) const WEB_API_SHIM: &str = "
 function _lumen_u2n(v) { return v !== undefined ? v : null; }
 
 // ── Event / CustomEvent constructors ─────────────────────────────────────────
