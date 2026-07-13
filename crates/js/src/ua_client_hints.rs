@@ -13,6 +13,15 @@ pub fn install_ua_client_hints_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_ua_client_hints_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_ua_client_hints_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(UA_CLIENT_HINTS_SHIM)?;
+    Ok(())
+}
+
 const UA_CLIENT_HINTS_SHIM: &str = r#"
 (function() {
   // NavigatorUABrandVersion — one entry in the brands / fullVersionList arrays.

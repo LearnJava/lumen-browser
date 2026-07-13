@@ -283,6 +283,283 @@ pub fn install_webcodecs_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_webcodecs_bindings`] (Ph3 V8 migration S5-S7): identical
+/// JS shims (error constructors + WebCodecs class stubs), evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_webcodecs_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+
+    // Install error constructors
+    let error_shim = r#"
+        class NotSupportedError extends DOMException {
+            constructor(message = '') {
+                super(message, 'NotSupportedError');
+                this.name = 'NotSupportedError';
+            }
+        }
+        class OperationError extends DOMException {
+            constructor(message = '') {
+                super(message, 'OperationError');
+                this.name = 'OperationError';
+            }
+        }
+        // Referenced by encode()/decode() when the codec is not configured.
+        // Defined here so a not-configured call throws a real InvalidStateError
+        // (per spec) rather than a ReferenceError.
+        class InvalidStateError extends DOMException {
+            constructor(message = '') {
+                super(message, 'InvalidStateError');
+                this.name = 'InvalidStateError';
+            }
+        }
+        globalThis.NotSupportedError = NotSupportedError;
+        globalThis.OperationError = OperationError;
+        if (typeof globalThis.InvalidStateError === 'undefined') {
+            globalThis.InvalidStateError = InvalidStateError;
+        }
+    "#;
+    rt.eval(error_shim)?;
+
+    // Install WebCodecs classes
+    let webcodecs_shim = r#"
+        class VideoEncoder {
+            constructor(output, error) {
+                this._output = output;
+                this._error = error;
+                this._state = 'unconfigured';
+            }
+            configure(config) {
+                // Phase 0 has no codec backend. Per the WebCodecs spec, an
+                // unsupported configuration is reported asynchronously through
+                // the error callback — NOT a synchronous throw (which crashes
+                // SPAs that don't wrap configure() in try/catch).
+                this._state = 'configured';
+                var err = this._error;
+                if (typeof err === 'function') {
+                    Promise.resolve().then(function() {
+                        err(new NotSupportedError('VideoEncoder: codec not supported'));
+                    });
+                }
+            }
+            encode(frame, options) {
+                if (this._state === 'unconfigured') {
+                    throw new InvalidStateError('VideoEncoder not configured');
+                }
+            }
+            async flush() {
+                // Phase 0: no-op
+            }
+            reset() {
+                this._state = 'unconfigured';
+            }
+            close() {
+                this._state = 'closed';
+            }
+            static isConfigSupported(config) {
+                return Promise.resolve(false);
+            }
+        }
+
+        class VideoDecoder {
+            constructor(output, error) {
+                this._output = output;
+                this._error = error;
+                this._state = 'unconfigured';
+            }
+            configure(config) {
+                // See VideoEncoder.configure — report unsupported async, no throw.
+                this._state = 'configured';
+                var err = this._error;
+                if (typeof err === 'function') {
+                    Promise.resolve().then(function() {
+                        err(new NotSupportedError('VideoDecoder: codec not supported'));
+                    });
+                }
+            }
+            decode(chunk) {
+                if (this._state === 'unconfigured') {
+                    throw new InvalidStateError('VideoDecoder not configured');
+                }
+            }
+            async flush() {
+                // Phase 0: no-op
+            }
+            reset() {
+                this._state = 'unconfigured';
+            }
+            close() {
+                this._state = 'closed';
+            }
+            static isConfigSupported(config) {
+                return Promise.resolve(false);
+            }
+        }
+
+        class AudioEncoder {
+            constructor(output, error) {
+                this._output = output;
+                this._error = error;
+                this._state = 'unconfigured';
+            }
+            configure(config) {
+                // See VideoEncoder.configure — report unsupported async, no throw.
+                this._state = 'configured';
+                var err = this._error;
+                if (typeof err === 'function') {
+                    Promise.resolve().then(function() {
+                        err(new NotSupportedError('AudioEncoder: codec not supported'));
+                    });
+                }
+            }
+            encode(data) {
+                if (this._state === 'unconfigured') {
+                    throw new InvalidStateError('AudioEncoder not configured');
+                }
+            }
+            async flush() {
+                // Phase 0: no-op
+            }
+            reset() {
+                this._state = 'unconfigured';
+            }
+            close() {
+                this._state = 'closed';
+            }
+            static isConfigSupported(config) {
+                return Promise.resolve(false);
+            }
+        }
+
+        class AudioDecoder {
+            constructor(output, error) {
+                this._output = output;
+                this._error = error;
+                this._state = 'unconfigured';
+            }
+            configure(config) {
+                // See VideoEncoder.configure — report unsupported async, no throw.
+                this._state = 'configured';
+                var err = this._error;
+                if (typeof err === 'function') {
+                    Promise.resolve().then(function() {
+                        err(new NotSupportedError('AudioDecoder: codec not supported'));
+                    });
+                }
+            }
+            decode(chunk) {
+                if (this._state === 'unconfigured') {
+                    throw new InvalidStateError('AudioDecoder not configured');
+                }
+            }
+            async flush() {
+                // Phase 0: no-op
+            }
+            reset() {
+                this._state = 'unconfigured';
+            }
+            close() {
+                this._state = 'closed';
+            }
+            static isConfigSupported(config) {
+                return Promise.resolve(false);
+            }
+        }
+
+        class EncodedVideoChunk {
+            constructor(init) {
+                this.type = init.type || 'key';
+                this.timestamp = init.timestamp || 0;
+                this.duration = init.duration || 0;
+                this._data = init.data || new Uint8Array(0);
+            }
+            get byteLength() {
+                return this._data.byteLength;
+            }
+            copyTo(destination) {
+                // Phase 0: no-op
+            }
+        }
+
+        class EncodedAudioChunk {
+            constructor(init) {
+                this.type = init.type || 'key';
+                this.timestamp = init.timestamp || 0;
+                this.duration = init.duration || 0;
+                this._data = init.data || new Uint8Array(0);
+            }
+            get byteLength() {
+                return this._data.byteLength;
+            }
+            copyTo(destination) {
+                // Phase 0: no-op
+            }
+        }
+
+        class VideoFrame {
+            constructor(data, init) {
+                this.format = init.format || 'I420';
+                this.codedWidth = init.codedWidth || 0;
+                this.codedHeight = init.codedHeight || 0;
+                this.timestamp = init.timestamp || 0;
+                this.duration = init.duration || 0;
+            }
+            close() {
+                // Phase 0: no-op
+            }
+            clone() {
+                return new VideoFrame(null, {
+                    format: this.format,
+                    codedWidth: this.codedWidth,
+                    codedHeight: this.codedHeight,
+                    timestamp: this.timestamp,
+                    duration: this.duration
+                });
+            }
+        }
+
+        class AudioData {
+            constructor(init) {
+                this.format = init.format || 'f32';
+                this.sampleRate = init.sampleRate || 48000;
+                this.numberOfFrames = init.numberOfFrames || 0;
+                this.numberOfChannels = init.numberOfChannels || 0;
+                this.timestamp = init.timestamp || 0;
+                this.duration = init.duration || 0;
+            }
+            close() {
+                // Phase 0: no-op
+            }
+            clone() {
+                return new AudioData({
+                    format: this.format,
+                    sampleRate: this.sampleRate,
+                    numberOfFrames: this.numberOfFrames,
+                    numberOfChannels: this.numberOfChannels,
+                    timestamp: this.timestamp,
+                    duration: this.duration
+                });
+            }
+            copyTo(destination) {
+                // Phase 0: no-op
+            }
+        }
+
+        globalThis.VideoEncoder = VideoEncoder;
+        globalThis.VideoDecoder = VideoDecoder;
+        globalThis.AudioEncoder = AudioEncoder;
+        globalThis.AudioDecoder = AudioDecoder;
+        globalThis.EncodedVideoChunk = EncodedVideoChunk;
+        globalThis.EncodedAudioChunk = EncodedAudioChunk;
+        globalThis.VideoFrame = VideoFrame;
+        globalThis.AudioData = AudioData;
+    "#;
+    rt.eval(webcodecs_shim)?;
+
+    Ok(())
+
+}
+
 #[cfg(test)]
 mod tests {
     use rquickjs::{Context, Runtime};

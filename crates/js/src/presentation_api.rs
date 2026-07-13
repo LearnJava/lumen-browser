@@ -21,6 +21,15 @@ pub fn install_presentation_api(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_presentation_api`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_presentation_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(PRESENTATION_API_SHIM)?;
+    Ok(())
+}
+
 /// JavaScript shim implementing W3C Presentation API Level 1 (Phase 0).
 const PRESENTATION_API_SHIM: &str = r#"(function() {
   'use strict';

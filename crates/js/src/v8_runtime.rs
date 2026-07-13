@@ -100,6 +100,55 @@ enum V8Command {
 /// Bound for the V8 command queue (same value as `QuickJsRuntime`).
 const V8_CMD_QUEUE_BOUND: usize = 64;
 
+/// `DOMException` polyfill (Ph3 V8 migration S5-S7). quickjs-ng bundles this as a
+/// built-in (`Context::full()`); V8 has no web-platform globals. Mirrors the
+/// probed quickjs-ng shape: legacy numeric `code` derived from the WHATWG DOM
+/// §4.3 name table, full constant table on the constructor, `instanceof Error`.
+const DOM_EXCEPTION_POLYFILL: &str = r#"(function() {
+  if (typeof globalThis.DOMException !== 'undefined') return;
+  var LEGACY_CODES = {
+    IndexSizeError: 1, DOMStringSizeError: 2, HierarchyRequestError: 3,
+    WrongDocumentError: 4, InvalidCharacterError: 5, NoDataAllowedError: 6,
+    NoModificationAllowedError: 7, NotFoundError: 8, NotSupportedError: 9,
+    InUseAttributeError: 10, InvalidStateError: 11, SyntaxError: 12,
+    InvalidModificationError: 13, NamespaceError: 14, InvalidAccessError: 15,
+    ValidationError: 16, TypeMismatchError: 17, SecurityError: 18,
+    NetworkError: 19, AbortError: 20, URLMismatchError: 21,
+    QuotaExceededError: 22, TimeoutError: 23, InvalidNodeTypeError: 24,
+    DataCloneError: 25,
+  };
+  function DOMException(message, name) {
+    var err = Error.call(this, message === undefined ? '' : String(message));
+    this.message = err.message;
+    this.name = name === undefined ? 'Error' : String(name);
+    this.code = LEGACY_CODES[this.name] || 0;
+    if (Error.captureStackTrace) Error.captureStackTrace(this, DOMException);
+  }
+  DOMException.prototype = Object.create(Error.prototype);
+  DOMException.prototype.constructor = DOMException;
+  DOMException.prototype.name = 'Error';
+  Object.defineProperty(DOMException, 'name', { value: 'DOMException' });
+  // WHATWG DOM §4.3 legacy constant table (numeric codes on the constructor
+  // and prototype, e.g. `DOMException.ABORT_ERR === 20`).
+  var CONSTANTS = {
+    INDEX_SIZE_ERR: 1, DOMSTRING_SIZE_ERR: 2, HIERARCHY_REQUEST_ERR: 3,
+    WRONG_DOCUMENT_ERR: 4, INVALID_CHARACTER_ERR: 5, NO_DATA_ALLOWED_ERR: 6,
+    NO_MODIFICATION_ALLOWED_ERR: 7, NOT_FOUND_ERR: 8, NOT_SUPPORTED_ERR: 9,
+    INUSE_ATTRIBUTE_ERR: 10, INVALID_STATE_ERR: 11, SYNTAX_ERR: 12,
+    INVALID_MODIFICATION_ERR: 13, NAMESPACE_ERR: 14, INVALID_ACCESS_ERR: 15,
+    VALIDATION_ERR: 16, TYPE_MISMATCH_ERR: 17, SECURITY_ERR: 18,
+    NETWORK_ERR: 19, ABORT_ERR: 20, URL_MISMATCH_ERR: 21,
+    QUOTA_EXCEEDED_ERR: 22, TIMEOUT_ERR: 23, INVALID_NODE_TYPE_ERR: 24,
+    DATA_CLONE_ERR: 25,
+  };
+  for (var c in CONSTANTS) {
+    Object.defineProperty(DOMException, c, { value: CONSTANTS[c], enumerable: true });
+    Object.defineProperty(DOMException.prototype, c, { value: CONSTANTS[c], enumerable: true });
+  }
+  globalThis.DOMException = DOMException;
+})();
+"#;
+
 // ── Thread entry point ────────────────────────────────────────────────────────
 
 /// Entry point of the dedicated V8 thread.
@@ -3257,6 +3306,33 @@ impl V8JsRuntime {
                 ctx.global(scope).set(scope, key.into(), val.into());
             }
 
+            // Polyfill `DOMException`: quickjs-ng provides it as a built-in (part of
+            // `Context::full()`'s bundled extras), V8 has no web-platform globals at
+            // all. `WEB_API_SHIM` and dozens of `install_*` module shims (Ph3 V8
+            // migration S5-S7) construct `new DOMException(...)` — without this,
+            // `class X extends DOMException` throws `ReferenceError` the moment any
+            // such module is evaluated. Shape probed against quickjs-ng's built-in
+            // (legacy numeric `code`, full WHATWG constant table, `instanceof Error`).
+            {
+                v8::tc_scope!(tc, scope);
+                let src = v8::String::new(tc, DOM_EXCEPTION_POLYFILL)
+                    .ok_or_else(|| JsError::Runtime("OOM: DOM_EXCEPTION_POLYFILL source".into()))?;
+                let compiled = v8::Script::compile(tc, src, None);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let compiled = compiled.ok_or_else(|| {
+                    JsError::Runtime("DOM_EXCEPTION_POLYFILL compile returned None".into())
+                })?;
+                let result = compiled.run(tc);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let _ = result;
+            }
+
             // Evaluate WEB_API_SHIM inline. Cannot call `self.eval(...)` here: the JS
             // thread is already busy running this job (dispatched via `self.run`), and
             // `run` cannot be re-entered from inside its own job closure (it would
@@ -3313,7 +3389,93 @@ impl V8JsRuntime {
             }
 
             Ok(())
-        })
+        })?;
+
+        // Ph3 V8 migration S5-S7: simple-module batch (~68 modules, plain JS-shim
+        // installs with no native `Function::new` registrations, or ≤2 trivial
+        // shims) — see docs/tasks/ph3-v8-migration.md for the ported/pending
+        // checklist. Called outside the `self.run` dispatch above because each
+        // `install_*_v8` helper dispatches its own job via `self.eval` internally.
+        // Best-effort like the rquickjs orchestration in `lib.rs::install_dom`
+        // (`if let Err(e) = X::install_Y(&ctx) { eprintln!(...) }`): one broken/
+        // partial module (Phase 0 stub) must not abort DOM bootstrap for the
+        // other 67.
+        macro_rules! install_v8 {
+            ($module:ident :: $func:ident) => {
+                if let Err(e) = crate::$module::$func(self) {
+                    eprintln!("v8: {}::{} failed: {e}", stringify!($module), stringify!($func));
+                }
+            };
+        }
+        install_v8!(async_context::install_async_context_v8);
+        install_v8!(attribution_reporting::install_attribution_reporting_api_v8);
+        install_v8!(badging::install_badging_bindings_v8);
+        install_v8!(battery_bindings::install_battery_bindings_v8);
+        install_v8!(bluetooth::install_bluetooth_bindings_v8);
+        install_v8!(close_watcher::install_close_watcher_v8);
+        install_v8!(compute_pressure::install_compute_pressure_bindings_v8);
+        install_v8!(content_index::install_content_index_api_v8);
+        install_v8!(credentials::install_credentials_bindings_v8);
+        install_v8!(csp::install_csp_bindings_v8);
+        install_v8!(css_properties_values_api::install_css_properties_values_api_v8);
+        install_v8!(decorators::install_decorator_shim_v8);
+        install_v8!(device_sensors::install_device_sensors_bindings_v8);
+        install_v8!(digital_credentials::install_digital_credentials_api_v8);
+        install_v8!(document_pip::install_document_pip_api_v8);
+        install_v8!(dom_parser::install_dom_parser_v8);
+        install_v8!(element_internals::install_element_internals_bindings_v8);
+        install_v8!(es2026_proposals::install_es2026_proposals_v8);
+        install_v8!(eye_dropper::install_eye_dropper_bindings_v8);
+        install_v8!(form_validation::install_form_validation_bindings_v8);
+        install_v8!(gamepad::install_gamepad_bindings_v8);
+        install_v8!(generic_sensor::install_generic_sensor_bindings_v8);
+        install_v8!(highlight_api::install_highlight_api_bindings_v8);
+        install_v8!(iframe_element::install_iframe_element_bindings_v8);
+        install_v8!(inert::install_inert_api_v8);
+        install_v8!(intl_bindings::install_intl_bindings_v8);
+        install_v8!(launch_handler::install_launch_handler_api_v8);
+        install_v8!(local_font_access::install_local_font_access_api_v8);
+        install_v8!(long_animation_frames::install_long_animation_frames_bindings_v8);
+        install_v8!(media_capabilities::install_media_capabilities_bindings_v8);
+        install_v8!(media_devices::install_media_devices_bindings_v8);
+        install_v8!(media_session::install_media_session_bindings_v8);
+        install_v8!(navigation_api::install_navigation_api_v8);
+        install_v8!(navigator_bindings::install_navigator_bindings_v8);
+        install_v8!(paint_worklet::install_paint_worklet_api_v8);
+        install_v8!(permissions_policy::install_permissions_policy_bindings_v8);
+        install_v8!(presentation_api::install_presentation_api_v8);
+        install_v8!(reporting_api::install_reporting_api_bindings_v8);
+        install_v8!(sanitizer::install_sanitizer_bindings_v8);
+        install_v8!(scheduler::install_scheduler_api_v8);
+        install_v8!(screen_orientation::install_screen_orientation_bindings_v8);
+        install_v8!(scroll_snap_events::install_scroll_snap_events_bindings_v8);
+        install_v8!(scroll_timeline::install_scroll_timeline_bindings_v8);
+        install_v8!(serial::install_serial_bindings_v8);
+        install_v8!(shape_detection::install_shape_detection_bindings_v8);
+        install_v8!(shared_storage::install_shared_storage_v8);
+        install_v8!(soft_navigation::install_soft_navigation_api_v8);
+        install_v8!(speculation_rules::install_speculation_rules_api_v8);
+        install_v8!(storage_manager::install_storage_manager_bindings_v8);
+        install_v8!(surface_api::install_surface_api_protection_v8);
+        install_v8!(svg::install_svg_bindings_v8);
+        install_v8!(tc39_proposals::install_tc39_proposals_v8);
+        install_v8!(temporal_api::install_temporal_api_v8);
+        install_v8!(topics_api::install_topics_api_v8);
+        install_v8!(typed_om_api::install_typed_om_api_v8);
+        install_v8!(ua_client_hints::install_ua_client_hints_bindings_v8);
+        install_v8!(url_pattern::install_url_pattern_api_v8);
+        install_v8!(video_pip::install_video_pip_api_v8);
+        install_v8!(virtual_keyboard::install_virtual_keyboard_bindings_v8);
+        install_v8!(webhid::install_webhid_bindings_v8);
+        install_v8!(web_locks::install_web_locks_bindings_v8);
+        install_v8!(web_midi::install_web_midi_api_v8);
+        install_v8!(webrtc_stub::install_webrtc_bindings_v8);
+        install_v8!(webusb::install_webusb_bindings_v8);
+        install_v8!(webxr::install_webxr_bindings_v8);
+        install_v8!(window_management::install_window_management_api_v8);
+        install_v8!(xhr::install_xhr_bindings_v8);
+        install_v8!(web_codecs::install_webcodecs_bindings_v8);
+        Ok(())
     }
 }
 

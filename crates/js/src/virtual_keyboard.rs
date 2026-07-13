@@ -17,6 +17,15 @@ pub fn install_virtual_keyboard_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_virtual_keyboard_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_virtual_keyboard_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(VIRTUAL_KEYBOARD_SHIM)?;
+    Ok(())
+}
+
 const VIRTUAL_KEYBOARD_SHIM: &str = r#"
 (function() {
   // Phase 0 native hooks — no-op; shell installs real handlers in Phase 1.
