@@ -6950,6 +6950,25 @@ function _lumen_fire_page_lifecycle(type, persisted) {
     }
 }
 
+// Whether the current page must be denied a full bfcache freeze (HTML Living
+// Standard §8.6): an open WebSocket/EventSource connection, or a registered
+// `unload`/`beforeunload` handler, would silently hang or never fire while the
+// page sits frozen in the cache. `readyState === 1` is OPEN for both
+// WebSocket and EventSource (see `_ws_instances`/`_sse_instances` below).
+// `unload`/`beforeunload` have no dedicated `addEventListener` case, so
+// listeners land in the generic `_other_win_listeners` bucket; `onunload`/
+// `onbeforeunload` are plain assignable properties, checked directly.
+// Called from the shell via `PersistentJs::has_bfcache_freeze_blocker`.
+function _lumen_bfcache_blocked() {
+    if (_ws_instances.some(function(w) { return w.readyState === 1; })) return true;
+    if (_sse_instances.some(function(s) { return s.readyState === 1; })) return true;
+    if (typeof window.onbeforeunload === 'function') return true;
+    if (typeof window.onunload === 'function') return true;
+    if (_other_win_listeners['beforeunload'] && _other_win_listeners['beforeunload'].length > 0) return true;
+    if (_other_win_listeners['unload'] && _other_win_listeners['unload'].length > 0) return true;
+    return false;
+}
+
 // ── Fetch API (Fetch Standard §3) ─────────────────────────────────────────────
 // AbortController / AbortSignal. abort() records state and fires listeners;
 // fetch() checks signal.aborted before issuing the (synchronous) request.
@@ -15388,6 +15407,77 @@ mod tests {
                  ws.onerror = function() { fired = true; };
                  ws.readyState === 3",
             )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── _lumen_bfcache_blocked: bfcache eligibility filters (Ph3 bfcache L1) ──
+
+    #[test]
+    fn bfcache_blocked_false_by_default() {
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+        let r = rt.eval("_lumen_bfcache_blocked()").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn bfcache_blocked_true_when_websocket_open() {
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+        let r = rt
+            .eval("_ws_instances.push({ readyState: 1 }); _lumen_bfcache_blocked()")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn bfcache_blocked_false_when_websocket_closed() {
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+        // readyState 3 (CLOSED) must not block — only OPEN (1) does.
+        let r = rt
+            .eval("_ws_instances.push({ readyState: 3 }); _lumen_bfcache_blocked()")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn bfcache_blocked_true_when_eventsource_open() {
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+        let r = rt
+            .eval("_sse_instances.push({ readyState: 1 }); _lumen_bfcache_blocked()")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn bfcache_blocked_true_when_beforeunload_listener_registered() {
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+        let r = rt
+            .eval("window.addEventListener('beforeunload', function() {}); _lumen_bfcache_blocked()")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn bfcache_blocked_true_when_unload_listener_registered() {
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+        let r = rt
+            .eval("window.addEventListener('unload', function() {}); _lumen_bfcache_blocked()")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn bfcache_blocked_true_when_onbeforeunload_property_set() {
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+        let r = rt
+            .eval("window.onbeforeunload = function() {}; _lumen_bfcache_blocked()")
             .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }

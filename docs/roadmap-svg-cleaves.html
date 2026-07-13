@@ -743,7 +743,7 @@
      "title": "Back/forward cache (bfcache)",
      "status": "active",
      "size": "M",
-     "note": "DOM freeze/thaw влит в main 2026-07-02 (ветка p1-ph3-bfcache удалена). DoD разбит на 2 уровня (2026-07-08, docs/tasks/ph3-bfcache.md): уровень 1 = eligibility-фильтры (WS/SSE/no-store/unload) + бенчмарк bfcache_restore_ms + деградация T2→T3, ~3 сессии — закрывает задачу; уровень 2 (JS-куча переживает заморозку) перенесён в P3-v8 (10C.2 заблокирован rquickjs)"
+     "note": "DOM freeze/thaw влит в main 2026-07-02 (ветка p1-ph3-bfcache удалена). DoD разбит на 2 уровня (2026-07-08, docs/tasks/ph3-bfcache.md). Уровень 1: eligibility-фильтры WS/SSE/unload сделаны 2026-07-13 (ветка p1-bfcache-eligibility, _lumen_bfcache_blocked в dom.rs + PersistentJs::has_bfcache_freeze_blocker); осталось — no-store, бенчмарк bfcache_restore_ms, деградация T2→T3 (~2 сессии); уровень 2 (JS-куча переживает заморозку) перенесён в P3-v8 (10C.2 заблокирован rquickjs)"
     },
     {
      "id": "P3-navapi",
