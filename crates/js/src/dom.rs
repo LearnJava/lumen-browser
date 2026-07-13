@@ -11409,7 +11409,7 @@ if (typeof _lumen_idb_load === 'function') {
             });
         },
 
-        // ── encrypt (AES-GCM / AES-CBC / AES-CTR) ────────────────────────────
+        // ── encrypt (RSA-OAEP / AES-GCM / AES-CBC / AES-CTR) ────────────────
         encrypt: function (algorithm, key, data) {
             return new Promise(function (resolve, reject) {
                 try {
@@ -11419,7 +11419,10 @@ if (typeof _lumen_idb_load === 'function') {
                     var algName = (algorithm && algorithm.name) ? algorithm.name.toUpperCase() : '';
                     var pt = _to_bytes(data);
                     var ct;
-                    if (algName === 'AES-CBC') {
+                    if (algName === 'RSA-OAEP') {
+                        var label = algorithm.label ? _to_bytes(algorithm.label) : [];
+                        ct = _lumen_subtle_rsa_oaep_encrypt(key.__ckid, label, pt);
+                    } else if (algName === 'AES-CBC') {
                         var iv = _to_bytes(algorithm.iv || new Uint8Array(16));
                         ct = _lumen_subtle_aes_cbc_encrypt(key.__ckid, iv, pt);
                     } else if (algName === 'AES-CTR') {
@@ -11440,7 +11443,7 @@ if (typeof _lumen_idb_load === 'function') {
             });
         },
 
-        // ── decrypt (AES-GCM / AES-CBC / AES-CTR) ────────────────────────────
+        // ── decrypt (RSA-OAEP / AES-GCM / AES-CBC / AES-CTR) ────────────────
         decrypt: function (algorithm, key, data) {
             return new Promise(function (resolve, reject) {
                 try {
@@ -11450,7 +11453,10 @@ if (typeof _lumen_idb_load === 'function') {
                     var algName = (algorithm && algorithm.name) ? algorithm.name.toUpperCase() : '';
                     var ct = _to_bytes(data);
                     var pt;
-                    if (algName === 'AES-CBC') {
+                    if (algName === 'RSA-OAEP') {
+                        var label = algorithm.label ? _to_bytes(algorithm.label) : [];
+                        pt = _lumen_subtle_rsa_oaep_decrypt(key.__ckid, label, ct);
+                    } else if (algName === 'AES-CBC') {
                         var iv = _to_bytes(algorithm.iv || new Uint8Array(16));
                         pt = _lumen_subtle_aes_cbc_decrypt(key.__ckid, iv, ct);
                     } else if (algName === 'AES-CTR') {
@@ -11471,7 +11477,7 @@ if (typeof _lumen_idb_load === 'function') {
             });
         },
 
-        // ── deriveBits (PBKDF2 / HKDF) ───────────────────────────────────────
+        // ── deriveBits (PBKDF2 / HKDF / ECDH) ───────────────────────────────
         deriveBits: function (algorithm, key, length) {
             return new Promise(function (resolve, reject) {
                 try {
@@ -11479,17 +11485,26 @@ if (typeof _lumen_idb_load === 'function') {
                         reject(new TypeError('deriveBits: argument is not a CryptoKey')); return;
                     }
                     var alg = (typeof algorithm === 'string') ? { name: algorithm } : algorithm;
-                    var hashName = (alg.hash && alg.hash.name) ? alg.hash.name : (alg.hash || 'SHA-256');
-                    var salt = alg.salt ? Array.from(_to_bytes(alg.salt)) : [];
-                    var info = alg.info ? Array.from(_to_bytes(alg.info)) : [];
-                    var algFull = JSON.stringify({
-                        name: alg.name,
-                        hash: hashName,
-                        salt: salt,
-                        info: info,
-                        iterations: alg.iterations || 100000
-                    });
-                    var bits = _lumen_subtle_derive_bits(algFull, key.__ckid, length || 256);
+                    var algName = (alg.name || '').toUpperCase();
+                    var bits;
+                    if (algName === 'ECDH') {
+                        // ECDH: algorithm.public is the peer's CryptoKey
+                        var peerKeyId = (alg.public instanceof CryptoKey) ? alg.public.__ckid : 0;
+                        var algFull = JSON.stringify({ name: alg.name, publicKeyId: peerKeyId });
+                        bits = _lumen_subtle_derive_bits(algFull, key.__ckid, length || 256);
+                    } else {
+                        var hashName = (alg.hash && alg.hash.name) ? alg.hash.name : (alg.hash || 'SHA-256');
+                        var salt = alg.salt ? Array.from(_to_bytes(alg.salt)) : [];
+                        var info = alg.info ? Array.from(_to_bytes(alg.info)) : [];
+                        var algFull = JSON.stringify({
+                            name: alg.name,
+                            hash: hashName,
+                            salt: salt,
+                            info: info,
+                            iterations: alg.iterations || 100000
+                        });
+                        bits = _lumen_subtle_derive_bits(algFull, key.__ckid, length || 256);
+                    }
                     if (!bits || bits.length === 0) {
                         reject(new DOMException('deriveBits: operation failed', 'OperationError')); return;
                     }

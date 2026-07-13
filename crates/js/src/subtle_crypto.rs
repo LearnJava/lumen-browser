@@ -6,15 +6,19 @@
 //!
 //! # Supported algorithms
 //!
-//! | Algorithm  | Operations                                | Key formats       |
-//! |------------|-------------------------------------------|-------------------|
-//! | ECDSA P-256| sign, verify, generateKey, import, export | raw(pub), spki, pkcs8, jwk |
-//! | HMAC-SHA*  | sign, verify, generateKey, import, export | raw, jwk          |
-//! | AES-GCM    | encrypt, decrypt, generateKey, import, export | raw, jwk       |
-//! | AES-CBC    | encrypt, decrypt, generateKey, import, export | raw, jwk       |
-//! | AES-CTR    | encrypt, decrypt, generateKey, import, export | raw, jwk       |
-//! | PBKDF2     | importKey (raw password), deriveBits/deriveKey | raw            |
-//! | HKDF       | importKey (raw IKM), deriveBits/deriveKey  | raw              |
+//! | Algorithm           | Operations                                | Key formats             |
+//! |---------------------|-------------------------------------------|-------------------------|
+//! | ECDSA P-256         | sign, verify, generateKey, import, export | raw(pub), spki, pkcs8, jwk |
+//! | HMAC-SHA*           | sign, verify, generateKey, import, export | raw, jwk                |
+//! | AES-GCM             | encrypt, decrypt, generateKey, import, export | raw, jwk            |
+//! | AES-CBC             | encrypt, decrypt, generateKey, import, export | raw, jwk            |
+//! | AES-CTR             | encrypt, decrypt, generateKey, import, export | raw, jwk            |
+//! | PBKDF2              | importKey (raw password), deriveBits/deriveKey | raw               |
+//! | HKDF                | importKey (raw IKM), deriveBits/deriveKey  | raw                    |
+//! | RSA-OAEP            | encrypt, decrypt, generateKey, import, export | spki, pkcs8, jwk   |
+//! | RSA-PSS             | sign, verify, generateKey, import, export | spki, pkcs8, jwk        |
+//! | RSASSA-PKCS1-v1_5   | sign, verify, generateKey, import, export | spki, pkcs8, jwk        |
+//! | ECDH P-256          | deriveBits/deriveKey, generateKey, import, export | raw(pub), spki, pkcs8, jwk |
 //!
 //! # State model
 //!
@@ -32,6 +36,12 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use rquickjs::{Ctx, Function};
+
+// RSA imports
+use rsa::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _, EncodePrivateKey as _, EncodePublicKey as _};
+use rsa::traits::{PrivateKeyParts as _, PublicKeyParts as _};
+// p256 SEC1 encoding trait for ECDH public key export
+use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 
 // ─── key registry ─────────────────────────────────────────────────────────────
 
@@ -53,6 +63,26 @@ pub(crate) enum KeyMaterial {
     Pbkdf2Raw(Vec<u8>),
     /// HKDF raw IKM (input keying material) bytes (non-extractable by spec).
     HkdfRaw(Vec<u8>),
+    /// RSA private key (RSA-OAEP / RSA-PSS / RSASSA-PKCS1-v1_5).
+    RsaPrivate {
+        key: Box<rsa::RsaPrivateKey>,
+        /// "RSA-OAEP", "RSA-PSS", or "RSASSA-PKCS1-V1_5"
+        alg_name: String,
+        /// "SHA-256", "SHA-384", or "SHA-512"
+        hash: String,
+    },
+    /// RSA public key (RSA-OAEP / RSA-PSS / RSASSA-PKCS1-v1_5).
+    RsaPublic {
+        key: Box<rsa::RsaPublicKey>,
+        /// "RSA-OAEP", "RSA-PSS", or "RSASSA-PKCS1-V1_5"
+        alg_name: String,
+        /// "SHA-256", "SHA-384", or "SHA-512"
+        hash: String,
+    },
+    /// ECDH P-256 private key.
+    EcdhPrivate(Box<p256::SecretKey>),
+    /// ECDH P-256 public key.
+    EcdhPublic(Box<p256::PublicKey>),
 }
 
 /// Full metadata + material for one CryptoKey.
@@ -306,6 +336,85 @@ pub(crate) fn generate_key(alg_json: &str, extractable: bool, usages_json: &str)
                 material: KeyMaterial::AesCtr(raw),
             });
             id.to_string()
+        }
+        n @ ("RSA-OAEP" | "RSA-PSS" | "RSASSA-PKCS1-V1_5") => {
+            let alg_name = n.to_string();
+            let hash = json_str_field(alg_json, "hash")
+                .unwrap_or("SHA-256")
+                .to_ascii_uppercase();
+            let modulus_len = json_num_field(alg_json, "modulusLength").unwrap_or(2048) as usize;
+            match rsa::RsaPrivateKey::new(&mut rand_core::OsRng, modulus_len) {
+                Ok(priv_key) => {
+                    let pub_key = priv_key.to_public_key();
+                    let alg_j_pub = format!(
+                        r#"{{"name":"{alg_name}","modulusLength":{modulus_len},"hash":{{"name":"{hash}"}}}}"#
+                    );
+                    let alg_j_priv = alg_j_pub.clone();
+                    let priv_id = alloc_key(CryptoKeyEntry {
+                        key_type: "private",
+                        algorithm_json: alg_j_priv,
+                        extractable,
+                        usages_json: if alg_name == "RSA-OAEP" {
+                            r#"["decrypt"]"#.to_string()
+                        } else {
+                            r#"["sign"]"#.to_string()
+                        },
+                        material: KeyMaterial::RsaPrivate {
+                            key: Box::new(priv_key),
+                            alg_name: alg_name.clone(),
+                            hash: hash.clone(),
+                        },
+                    });
+                    let pub_id = alloc_key(CryptoKeyEntry {
+                        key_type: "public",
+                        algorithm_json: alg_j_pub,
+                        extractable: true,
+                        usages_json: if alg_name == "RSA-OAEP" {
+                            r#"["encrypt"]"#.to_string()
+                        } else {
+                            r#"["verify"]"#.to_string()
+                        },
+                        material: KeyMaterial::RsaPublic {
+                            key: Box::new(pub_key),
+                            alg_name,
+                            hash,
+                        },
+                    });
+                    format!("{pub_id},{priv_id}")
+                }
+                Err(_) => "err:OperationError".to_string(),
+            }
+        }
+        "ECDH" => {
+            let curve = json_str_field(alg_json, "namedCurve")
+                .unwrap_or("P-256")
+                .to_string();
+            if curve != "P-256" {
+                return "err:NotSupportedError".to_string();
+            }
+            let mut seed = [0u8; 32];
+            getrandom::getrandom(&mut seed).unwrap_or(());
+            let priv_key = match p256::SecretKey::from_slice(&seed) {
+                Ok(k) => k,
+                Err(_) => return "err:OperationError".to_string(),
+            };
+            let pub_key = priv_key.public_key();
+            let alg_j = format!(r#"{{"name":"ECDH","namedCurve":"{curve}"}}"#);
+            let priv_id = alloc_key(CryptoKeyEntry {
+                key_type: "private",
+                algorithm_json: alg_j.clone(),
+                extractable,
+                usages_json: r#"["deriveBits","deriveKey"]"#.to_string(),
+                material: KeyMaterial::EcdhPrivate(Box::new(priv_key)),
+            });
+            let pub_id = alloc_key(CryptoKeyEntry {
+                key_type: "public",
+                algorithm_json: alg_j,
+                extractable: true,
+                usages_json: r#"[]"#.to_string(),
+                material: KeyMaterial::EcdhPublic(Box::new(pub_key)),
+            });
+            format!("{pub_id},{priv_id}")
         }
         _ => "err:NotSupportedError".to_string(),
     }
@@ -591,6 +700,260 @@ pub(crate) fn import_key(
             });
             id.to_string()
         }
+        n @ ("RSA-OAEP" | "RSA-PSS" | "RSASSA-PKCS1-V1_5") => {
+            let alg_name = n.to_string();
+            let hash = json_str_field(alg_json, "hash")
+                .unwrap_or("SHA-256")
+                .to_ascii_uppercase();
+            match format {
+                "spki" => {
+                    match rsa::RsaPublicKey::from_public_key_der(&key_data) {
+                        Ok(pub_key) => {
+                            let modlen = pub_key.n().bits();
+                            let alg_j = format!(
+                                r#"{{"name":"{alg_name}","modulusLength":{modlen},"hash":{{"name":"{hash}"}}}}"#
+                            );
+                            let id = alloc_key(CryptoKeyEntry {
+                                key_type: "public",
+                                algorithm_json: alg_j,
+                                extractable,
+                                usages_json: usages_json.to_string(),
+                                material: KeyMaterial::RsaPublic {
+                                    key: Box::new(pub_key),
+                                    alg_name,
+                                    hash,
+                                },
+                            });
+                            id.to_string()
+                        }
+                        Err(_) => "err:DataError".to_string(),
+                    }
+                }
+                "pkcs8" => {
+                    match rsa::RsaPrivateKey::from_pkcs8_der(&key_data) {
+                        Ok(priv_key) => {
+                            let modlen = priv_key.n().bits();
+                            let alg_j = format!(
+                                r#"{{"name":"{alg_name}","modulusLength":{modlen},"hash":{{"name":"{hash}"}}}}"#
+                            );
+                            let id = alloc_key(CryptoKeyEntry {
+                                key_type: "private",
+                                algorithm_json: alg_j,
+                                extractable,
+                                usages_json: usages_json.to_string(),
+                                material: KeyMaterial::RsaPrivate {
+                                    key: Box::new(priv_key),
+                                    alg_name,
+                                    hash,
+                                },
+                            });
+                            id.to_string()
+                        }
+                        Err(_) => "err:DataError".to_string(),
+                    }
+                }
+                "jwk" => {
+                    let jwk = String::from_utf8(key_data).unwrap_or_default();
+                    let kty = json_str_field(&jwk, "kty").unwrap_or("").to_uppercase();
+                    if kty != "RSA" {
+                        return "err:DataError".to_string();
+                    }
+                    let n_b64 = match json_str_field(&jwk, "n") {
+                        Some(v) => v.to_string(),
+                        None => return "err:DataError".to_string(),
+                    };
+                    let e_b64 = match json_str_field(&jwk, "e") {
+                        Some(v) => v.to_string(),
+                        None => return "err:DataError".to_string(),
+                    };
+                    let n_bytes = match b64url_decode(&n_b64) {
+                        Some(v) => v,
+                        None => return "err:DataError".to_string(),
+                    };
+                    let e_bytes = match b64url_decode(&e_b64) {
+                        Some(v) => v,
+                        None => return "err:DataError".to_string(),
+                    };
+                    let n_big = rsa::BigUint::from_bytes_be(&n_bytes);
+                    let e_big = rsa::BigUint::from_bytes_be(&e_bytes);
+                    // Check for private key fields (d, p, q)
+                    if let Some(d_b64) = json_str_field(&jwk, "d") {
+                        let d_bytes = match b64url_decode(d_b64) {
+                            Some(v) => v,
+                            None => return "err:DataError".to_string(),
+                        };
+                        let d_big = rsa::BigUint::from_bytes_be(&d_bytes);
+                        let p_bytes = json_str_field(&jwk, "p").and_then(b64url_decode);
+                        let q_bytes = json_str_field(&jwk, "q").and_then(b64url_decode);
+                        let primes = match (p_bytes, q_bytes) {
+                            (Some(p), Some(q)) => vec![
+                                rsa::BigUint::from_bytes_be(&p),
+                                rsa::BigUint::from_bytes_be(&q),
+                            ],
+                            _ => vec![],
+                        };
+                        match rsa::RsaPrivateKey::from_components(n_big, e_big, d_big, primes) {
+                            Ok(priv_key) => {
+                                let modlen = priv_key.n().bits();
+                                let alg_j = format!(
+                                    r#"{{"name":"{alg_name}","modulusLength":{modlen},"hash":{{"name":"{hash}"}}}}"#
+                                );
+                                let id = alloc_key(CryptoKeyEntry {
+                                    key_type: "private",
+                                    algorithm_json: alg_j,
+                                    extractable,
+                                    usages_json: usages_json.to_string(),
+                                    material: KeyMaterial::RsaPrivate {
+                                        key: Box::new(priv_key),
+                                        alg_name,
+                                        hash,
+                                    },
+                                });
+                                id.to_string()
+                            }
+                            Err(_) => "err:DataError".to_string(),
+                        }
+                    } else {
+                        match rsa::RsaPublicKey::new(n_big, e_big) {
+                            Ok(pub_key) => {
+                                let modlen = pub_key.n().bits();
+                                let alg_j = format!(
+                                    r#"{{"name":"{alg_name}","modulusLength":{modlen},"hash":{{"name":"{hash}"}}}}"#
+                                );
+                                let id = alloc_key(CryptoKeyEntry {
+                                    key_type: "public",
+                                    algorithm_json: alg_j,
+                                    extractable,
+                                    usages_json: usages_json.to_string(),
+                                    material: KeyMaterial::RsaPublic {
+                                        key: Box::new(pub_key),
+                                        alg_name,
+                                        hash,
+                                    },
+                                });
+                                id.to_string()
+                            }
+                            Err(_) => "err:DataError".to_string(),
+                        }
+                    }
+                }
+                _ => "err:NotSupportedError".to_string(),
+            }
+        }
+        "ECDH" => {
+            let curve = json_str_field(alg_json, "namedCurve")
+                .unwrap_or("P-256")
+                .to_string();
+            if curve != "P-256" {
+                return "err:NotSupportedError".to_string();
+            }
+            let alg_j = format!(r#"{{"name":"ECDH","namedCurve":"{curve}"}}"#);
+            match format {
+                "raw" => {
+                    match p256::PublicKey::from_sec1_bytes(&key_data) {
+                        Ok(pub_key) => {
+                            let id = alloc_key(CryptoKeyEntry {
+                                key_type: "public",
+                                algorithm_json: alg_j,
+                                extractable: true,
+                                usages_json: usages_json.to_string(),
+                                material: KeyMaterial::EcdhPublic(Box::new(pub_key)),
+                            });
+                            id.to_string()
+                        }
+                        Err(_) => "err:DataError".to_string(),
+                    }
+                }
+                "spki" => {
+                    use p256::pkcs8::DecodePublicKey as _;
+                    match p256::PublicKey::from_public_key_der(&key_data) {
+                        Ok(pub_key) => {
+                            let id = alloc_key(CryptoKeyEntry {
+                                key_type: "public",
+                                algorithm_json: alg_j,
+                                extractable: true,
+                                usages_json: usages_json.to_string(),
+                                material: KeyMaterial::EcdhPublic(Box::new(pub_key)),
+                            });
+                            id.to_string()
+                        }
+                        Err(_) => "err:DataError".to_string(),
+                    }
+                }
+                "pkcs8" => {
+                    use p256::pkcs8::DecodePrivateKey as _;
+                    match p256::SecretKey::from_pkcs8_der(&key_data) {
+                        Ok(priv_key) => {
+                            let id = alloc_key(CryptoKeyEntry {
+                                key_type: "private",
+                                algorithm_json: alg_j,
+                                extractable,
+                                usages_json: usages_json.to_string(),
+                                material: KeyMaterial::EcdhPrivate(Box::new(priv_key)),
+                            });
+                            id.to_string()
+                        }
+                        Err(_) => "err:DataError".to_string(),
+                    }
+                }
+                "jwk" => {
+                    let jwk = String::from_utf8(key_data).unwrap_or_default();
+                    if let Some(d_b64) = json_str_field(&jwk, "d") {
+                        // Private key
+                        let d_bytes = match b64url_decode(d_b64) {
+                            Some(v) => v,
+                            None => return "err:DataError".to_string(),
+                        };
+                        match p256::SecretKey::from_slice(&d_bytes) {
+                            Ok(priv_key) => {
+                                let id = alloc_key(CryptoKeyEntry {
+                                    key_type: "private",
+                                    algorithm_json: alg_j,
+                                    extractable,
+                                    usages_json: usages_json.to_string(),
+                                    material: KeyMaterial::EcdhPrivate(Box::new(priv_key)),
+                                });
+                                id.to_string()
+                            }
+                            Err(_) => "err:DataError".to_string(),
+                        }
+                    } else {
+                        // Public key: reconstruct from x, y
+                        let x = match json_str_field(&jwk, "x").and_then(b64url_decode) {
+                            Some(v) => v,
+                            None => return "err:DataError".to_string(),
+                        };
+                        let y = match json_str_field(&jwk, "y").and_then(b64url_decode) {
+                            Some(v) => v,
+                            None => return "err:DataError".to_string(),
+                        };
+                        let mut point = Vec::with_capacity(65);
+                        point.push(0x04u8);
+                        let pad = |v: Vec<u8>| -> Vec<u8> {
+                            let mut p = vec![0u8; 32usize.saturating_sub(v.len())];
+                            p.extend_from_slice(&v[v.len().saturating_sub(32)..]);
+                            p
+                        };
+                        point.extend_from_slice(&pad(x));
+                        point.extend_from_slice(&pad(y));
+                        match p256::PublicKey::from_sec1_bytes(&point) {
+                            Ok(pub_key) => {
+                                let id = alloc_key(CryptoKeyEntry {
+                                    key_type: "public",
+                                    algorithm_json: alg_j,
+                                    extractable: true,
+                                    usages_json: usages_json.to_string(),
+                                    material: KeyMaterial::EcdhPublic(Box::new(pub_key)),
+                                });
+                                id.to_string()
+                            }
+                            Err(_) => "err:DataError".to_string(),
+                        }
+                    }
+                }
+                _ => "err:NotSupportedError".to_string(),
+            }
+        }
         _ => "err:NotSupportedError".to_string(),
     }
 }
@@ -678,9 +1041,126 @@ pub(crate) fn export_key(format: &str, key_id: u32) -> Result<Vec<u8>, &'static 
                 )
                 .into_bytes())
             }
+            // ── RSA export ────────────────────────────────────────────────────
+            (KeyMaterial::RsaPublic { key, .. }, "spki") => {
+                key.to_public_key_der()
+                    .map(|d| d.into_vec())
+                    .map_err(|_| "OperationError")
+            }
+            (KeyMaterial::RsaPublic { key, alg_name, .. }, "jwk") => {
+                let n = b64url_encode(&key.n().to_bytes_be());
+                let e = b64url_encode(&key.e().to_bytes_be());
+                let alg_tag = rsa_jwk_alg(alg_name, &entry.algorithm_json);
+                Ok(format!(
+                    r#"{{"kty":"RSA","n":"{n}","e":"{e}","alg":"{alg_tag}","key_ops":["encrypt"]}}"#
+                )
+                .into_bytes())
+            }
+            (KeyMaterial::RsaPrivate { key, .. }, "pkcs8") => {
+                key.to_pkcs8_der()
+                    .map(|d| d.as_bytes().to_vec())
+                    .map_err(|_| "OperationError")
+            }
+            (KeyMaterial::RsaPrivate { key, alg_name, .. }, "jwk") => {
+                let pub_key = key.to_public_key();
+                let n = b64url_encode(&pub_key.n().to_bytes_be());
+                let e = b64url_encode(&pub_key.e().to_bytes_be());
+                let d = b64url_encode(&key.d().to_bytes_be());
+                let primes = key.primes();
+                let p = if !primes.is_empty() {
+                    b64url_encode(&primes[0].to_bytes_be())
+                } else {
+                    String::new()
+                };
+                let q = if primes.len() > 1 {
+                    b64url_encode(&primes[1].to_bytes_be())
+                } else {
+                    String::new()
+                };
+                let alg_tag = rsa_jwk_alg(alg_name, &entry.algorithm_json);
+                let mut jwk = format!(
+                    r#"{{"kty":"RSA","n":"{n}","e":"{e}","d":"{d}","alg":"{alg_tag}""#
+                );
+                if !p.is_empty() && !q.is_empty() {
+                    jwk.push_str(&format!(r#","p":"{p}","q":"{q}""#));
+                    // CRT exponents
+                    if let Some(dp) = key.dp() {
+                        let dp_s = b64url_encode(&dp.to_bytes_be());
+                        jwk.push_str(&format!(r#","dp":"{dp_s}""#));
+                    }
+                    if let Some(dq) = key.dq() {
+                        let dq_s = b64url_encode(&dq.to_bytes_be());
+                        jwk.push_str(&format!(r#","dq":"{dq_s}""#));
+                    }
+                }
+                jwk.push_str(r#","key_ops":["sign"]}"#);
+                Ok(jwk.into_bytes())
+            }
+            // ── ECDH export ──────────────────────────────────────────────────
+            (KeyMaterial::EcdhPublic(pub_key), "raw") => {
+                let ep = (**pub_key).to_encoded_point(false);
+                Ok(ep.as_bytes().to_vec())
+            }
+            (KeyMaterial::EcdhPublic(pub_key), "spki") => {
+                use p256::pkcs8::EncodePublicKey as _;
+                (**pub_key).to_public_key_der()
+                    .map(|d| d.into_vec())
+                    .map_err(|_| "OperationError")
+            }
+            (KeyMaterial::EcdhPublic(pub_key), "jwk") => {
+                let ep = (**pub_key).to_encoded_point(false);
+                let x = b64url_encode(ep.x().map(|v| v.as_slice()).unwrap_or(&[]));
+                let y = b64url_encode(ep.y().map(|v| v.as_slice()).unwrap_or(&[]));
+                Ok(format!(
+                    r#"{{"kty":"EC","crv":"P-256","x":"{x}","y":"{y}","key_ops":[]}}"#
+                )
+                .into_bytes())
+            }
+            (KeyMaterial::EcdhPrivate(priv_key), "pkcs8") => {
+                use p256::pkcs8::EncodePrivateKey as _;
+                (**priv_key).to_pkcs8_der()
+                    .map(|d| d.as_bytes().to_vec())
+                    .map_err(|_| "OperationError")
+            }
+            (KeyMaterial::EcdhPrivate(priv_key), "jwk") => {
+                let pub_key = (**priv_key).public_key();
+                let ep = pub_key.to_encoded_point(false);
+                let x = b64url_encode(ep.x().map(|v| v.as_slice()).unwrap_or(&[]));
+                let y = b64url_encode(ep.y().map(|v| v.as_slice()).unwrap_or(&[]));
+                let d = b64url_encode((**priv_key).to_bytes().as_slice());
+                Ok(format!(
+                    r#"{{"kty":"EC","crv":"P-256","x":"{x}","y":"{y}","d":"{d}","key_ops":["deriveBits","deriveKey"]}}"#
+                )
+                .into_bytes())
+            }
             _ => Err("NotSupportedError"),
         }
     })
+}
+
+/// Map RSA algorithm name to JWK "alg" string based on hash.
+fn rsa_jwk_alg(alg_name: &str, algorithm_json: &str) -> String {
+    let hash = json_str_field(algorithm_json, "name")
+        .filter(|n| n.starts_with("SHA"))
+        .unwrap_or("");
+    let hash = if hash.is_empty() {
+        json_str_field(algorithm_json, "hash").unwrap_or("SHA-256")
+    } else {
+        hash
+    };
+    match (alg_name, hash) {
+        ("RSA-OAEP", "SHA-1") => "RSA-OAEP".to_string(),
+        ("RSA-OAEP", "SHA-384") => "RSA-OAEP-384".to_string(),
+        ("RSA-OAEP", "SHA-512") => "RSA-OAEP-512".to_string(),
+        ("RSA-OAEP", _) => "RSA-OAEP-256".to_string(),
+        ("RSA-PSS", "SHA-384") => "PS384".to_string(),
+        ("RSA-PSS", "SHA-512") => "PS512".to_string(),
+        ("RSA-PSS", _) => "PS256".to_string(),
+        ("RSASSA-PKCS1-V1_5", "SHA-384") => "RS384".to_string(),
+        ("RSASSA-PKCS1-V1_5", "SHA-512") => "RS512".to_string(),
+        ("RSASSA-PKCS1-V1_5", _) => "RS256".to_string(),
+        _ => alg_name.to_string(),
+    }
 }
 
 // ─── sign ─────────────────────────────────────────────────────────────────────
@@ -688,7 +1168,7 @@ pub(crate) fn export_key(format: &str, key_id: u32) -> Result<Vec<u8>, &'static 
 /// Sign `data` with the key identified by `key_id`.
 /// `alg_json` provides algorithm params (e.g. hash name for ECDSA).
 /// Returns signature bytes, or empty Vec on error.
-pub(crate) fn sign_data(_alg_json: &str, key_id: u32, data: &[u8]) -> Vec<u8> {
+pub(crate) fn sign_data(alg_json: &str, key_id: u32, data: &[u8]) -> Vec<u8> {
     CRYPTO_KEYS.with(|ks| {
         let store = ks.borrow();
         let entry = match store.get(&key_id) {
@@ -725,16 +1205,86 @@ pub(crate) fn sign_data(_alg_json: &str, key_id: u32, data: &[u8]) -> Vec<u8> {
                 // WebCrypto uses IEEE P1363 (raw r||s), not DER
                 sig.to_bytes().to_vec()
             }
+            KeyMaterial::RsaPrivate { key, alg_name, hash } => {
+                rsa_sign(alg_name, hash, key, alg_json, data)
+            }
             _ => Vec::new(),
         }
     })
+}
+
+/// Dispatch RSA signing to the appropriate scheme.
+fn rsa_sign(
+    alg_name: &str,
+    hash: &str,
+    key: &rsa::RsaPrivateKey,
+    alg_json: &str,
+    data: &[u8],
+) -> Vec<u8> {
+    use rsa::signature::{RandomizedSigner, Signer, SignatureEncoding};
+    match alg_name {
+        "RSA-PSS" => {
+            let salt_len = json_num_field(alg_json, "saltLength");
+            match hash {
+                "SHA-384" => {
+                    let sk = rsa::pss::SigningKey::<sha2::Sha384>::new(key.clone());
+                    if let Some(sl) = salt_len {
+                        let blinded = rsa::pss::BlindedSigningKey::<sha2::Sha384>::new_with_salt_len(
+                            key.clone(), sl as usize,
+                        );
+                        blinded.sign_with_rng(&mut rand_core::OsRng, data).to_bytes().to_vec()
+                    } else {
+                        sk.sign_with_rng(&mut rand_core::OsRng, data).to_bytes().to_vec()
+                    }
+                }
+                "SHA-512" => {
+                    let sk = rsa::pss::SigningKey::<sha2::Sha512>::new(key.clone());
+                    if let Some(sl) = salt_len {
+                        let blinded = rsa::pss::BlindedSigningKey::<sha2::Sha512>::new_with_salt_len(
+                            key.clone(), sl as usize,
+                        );
+                        blinded.sign_with_rng(&mut rand_core::OsRng, data).to_bytes().to_vec()
+                    } else {
+                        sk.sign_with_rng(&mut rand_core::OsRng, data).to_bytes().to_vec()
+                    }
+                }
+                _ => {
+                    // Default SHA-256
+                    let sk = rsa::pss::SigningKey::<sha2::Sha256>::new(key.clone());
+                    if let Some(sl) = salt_len {
+                        let blinded = rsa::pss::BlindedSigningKey::<sha2::Sha256>::new_with_salt_len(
+                            key.clone(), sl as usize,
+                        );
+                        blinded.sign_with_rng(&mut rand_core::OsRng, data).to_bytes().to_vec()
+                    } else {
+                        sk.sign_with_rng(&mut rand_core::OsRng, data).to_bytes().to_vec()
+                    }
+                }
+            }
+        }
+        "RSASSA-PKCS1-V1_5" => match hash {
+            "SHA-384" => {
+                let sk = rsa::pkcs1v15::SigningKey::<sha2::Sha384>::new(key.clone());
+                sk.sign(data).to_bytes().to_vec()
+            }
+            "SHA-512" => {
+                let sk = rsa::pkcs1v15::SigningKey::<sha2::Sha512>::new(key.clone());
+                sk.sign(data).to_bytes().to_vec()
+            }
+            _ => {
+                let sk = rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(key.clone());
+                sk.sign(data).to_bytes().to_vec()
+            }
+        },
+        _ => Vec::new(),
+    }
 }
 
 // ─── verify ───────────────────────────────────────────────────────────────────
 
 /// Verify a signature produced by `sign_data`.
 /// Returns `true` if the signature is valid, `false` otherwise.
-pub(crate) fn verify_signature(_alg_json: &str, key_id: u32, sig: &[u8], data: &[u8]) -> bool {
+pub(crate) fn verify_signature(alg_json: &str, key_id: u32, sig: &[u8], data: &[u8]) -> bool {
     CRYPTO_KEYS.with(|ks| {
         let store = ks.borrow();
         let entry = match store.get(&key_id) {
@@ -780,9 +1330,76 @@ pub(crate) fn verify_signature(_alg_json: &str, key_id: u32, sig: &[u8], data: &
                 };
                 vk.verify(data, &signature).is_ok()
             }
+            KeyMaterial::RsaPublic { key, alg_name, hash } => {
+                rsa_verify(alg_name, hash, key, alg_json, sig, data)
+            }
             _ => false,
         }
     })
+}
+
+/// Dispatch RSA signature verification to the appropriate scheme.
+fn rsa_verify(
+    alg_name: &str,
+    hash: &str,
+    key: &rsa::RsaPublicKey,
+    _alg_json: &str,
+    sig: &[u8],
+    data: &[u8],
+) -> bool {
+    use rsa::signature::Verifier;
+    match alg_name {
+        "RSA-PSS" => match hash {
+            "SHA-384" => {
+                let vk = rsa::pss::VerifyingKey::<sha2::Sha384>::new(key.clone());
+                let s = rsa::pss::Signature::try_from(sig).unwrap_or_else(|_| {
+                    rsa::pss::Signature::try_from(&[] as &[u8]).unwrap_or_else(|_| {
+                        // Empty sig — always fails
+                        rsa::pss::Signature::try_from(&[0u8; 1][..]).unwrap()
+                    })
+                });
+                vk.verify(data, &s).is_ok()
+            }
+            "SHA-512" => {
+                let vk = rsa::pss::VerifyingKey::<sha2::Sha512>::new(key.clone());
+                match rsa::pss::Signature::try_from(sig) {
+                    Ok(s) => vk.verify(data, &s).is_ok(),
+                    Err(_) => false,
+                }
+            }
+            _ => {
+                let vk = rsa::pss::VerifyingKey::<sha2::Sha256>::new(key.clone());
+                match rsa::pss::Signature::try_from(sig) {
+                    Ok(s) => vk.verify(data, &s).is_ok(),
+                    Err(_) => false,
+                }
+            }
+        },
+        "RSASSA-PKCS1-V1_5" => match hash {
+            "SHA-384" => {
+                let vk = rsa::pkcs1v15::VerifyingKey::<sha2::Sha384>::new(key.clone());
+                match rsa::pkcs1v15::Signature::try_from(sig) {
+                    Ok(s) => vk.verify(data, &s).is_ok(),
+                    Err(_) => false,
+                }
+            }
+            "SHA-512" => {
+                let vk = rsa::pkcs1v15::VerifyingKey::<sha2::Sha512>::new(key.clone());
+                match rsa::pkcs1v15::Signature::try_from(sig) {
+                    Ok(s) => vk.verify(data, &s).is_ok(),
+                    Err(_) => false,
+                }
+            }
+            _ => {
+                let vk = rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(key.clone());
+                match rsa::pkcs1v15::Signature::try_from(sig) {
+                    Ok(s) => vk.verify(data, &s).is_ok(),
+                    Err(_) => false,
+                }
+            }
+        },
+        _ => false,
+    }
 }
 
 // ─── encrypt / decrypt ────────────────────────────────────────────────────────
@@ -987,6 +1604,141 @@ pub(crate) fn aes_ctr_crypt(
     })
 }
 
+// ─── RSA-OAEP encrypt / decrypt ──────────────────────────────────────────────
+
+/// Encrypt `plaintext` using RSA-OAEP with the stored hash.
+/// `label` is optional additional data (usually empty).
+/// Returns ciphertext or empty Vec on error.
+pub(crate) fn rsa_oaep_encrypt(key_id: u32, label: &[u8], plaintext: &[u8]) -> Vec<u8> {
+    CRYPTO_KEYS.with(|ks| {
+        let store = ks.borrow();
+        let entry = match store.get(&key_id) {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+        match &entry.material {
+            KeyMaterial::RsaPublic { key, hash, .. } => {
+                let label_vec = if label.is_empty() {
+                    None
+                } else {
+                    Some(label.to_vec())
+                };
+                rsa_oaep_encrypt_with_hash(key, hash, label_vec, plaintext)
+            }
+            _ => Vec::new(),
+        }
+    })
+}
+
+/// Decrypt RSA-OAEP ciphertext.
+pub(crate) fn rsa_oaep_decrypt(key_id: u32, label: &[u8], ciphertext: &[u8]) -> Vec<u8> {
+    CRYPTO_KEYS.with(|ks| {
+        let store = ks.borrow();
+        let entry = match store.get(&key_id) {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+        match &entry.material {
+            KeyMaterial::RsaPrivate { key, hash, .. } => {
+                let label_vec = if label.is_empty() {
+                    None
+                } else {
+                    Some(label.to_vec())
+                };
+                rsa_oaep_decrypt_with_hash(key, hash, label_vec, ciphertext)
+            }
+            _ => Vec::new(),
+        }
+    })
+}
+
+fn rsa_oaep_encrypt_with_hash(
+    key: &rsa::RsaPublicKey,
+    hash: &str,
+    label: Option<Vec<u8>>,
+    plaintext: &[u8],
+) -> Vec<u8> {
+    // rsa::Oaep::label is Option<String>; labels are opaque bytes passed to a hash.
+    // Non-UTF-8 labels are not used in practice, so we silently skip them.
+    let label_str: Option<String> = label.and_then(|b| String::from_utf8(b).ok());
+    macro_rules! do_encrypt {
+        ($h:ty) => {{
+            let mut padding = rsa::Oaep::new::<$h>();
+            padding.label = label_str.clone();
+            key.encrypt(&mut rand_core::OsRng, padding, plaintext)
+                .unwrap_or_default()
+        }};
+    }
+    match hash {
+        "SHA-384" => do_encrypt!(sha2::Sha384),
+        "SHA-512" => do_encrypt!(sha2::Sha512),
+        _ => do_encrypt!(sha2::Sha256),
+    }
+}
+
+fn rsa_oaep_decrypt_with_hash(
+    key: &rsa::RsaPrivateKey,
+    hash: &str,
+    label: Option<Vec<u8>>,
+    ciphertext: &[u8],
+) -> Vec<u8> {
+    let label_str: Option<String> = label.and_then(|b| String::from_utf8(b).ok());
+    macro_rules! do_decrypt {
+        ($h:ty) => {{
+            let mut padding = rsa::Oaep::new::<$h>();
+            padding.label = label_str.clone();
+            key.decrypt(padding, ciphertext).unwrap_or_default()
+        }};
+    }
+    match hash {
+        "SHA-384" => do_decrypt!(sha2::Sha384),
+        "SHA-512" => do_decrypt!(sha2::Sha512),
+        _ => do_decrypt!(sha2::Sha256),
+    }
+}
+
+// ─── ECDH deriveBits ─────────────────────────────────────────────────────────
+
+/// Derive shared secret bytes via ECDH P-256.
+///
+/// `private_key_id` — own private ECDH key; `peer_public_key_id` — the peer's
+/// public ECDH key already stored in the registry.  Returns the raw X coordinate
+/// (32 bytes), or empty Vec on error.
+pub(crate) fn ecdh_derive_bits(private_key_id: u32, peer_public_key_id: u32, length_bytes: usize) -> Vec<u8> {
+    CRYPTO_KEYS.with(|ks| {
+        let store = ks.borrow();
+        let priv_entry = match store.get(&private_key_id) {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+        let pub_entry = match store.get(&peer_public_key_id) {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+        let priv_key = match &priv_entry.material {
+            KeyMaterial::EcdhPrivate(k) => k,
+            _ => return Vec::new(),
+        };
+        let peer_pub = match &pub_entry.material {
+            KeyMaterial::EcdhPublic(k) => k,
+            _ => return Vec::new(),
+        };
+        use p256::ecdh::diffie_hellman;
+        let shared = diffie_hellman(
+            priv_key.to_nonzero_scalar(),
+            peer_pub.as_affine(),
+        );
+        // Raw secret bytes are the 32-byte X coordinate (ECDH shared secret)
+        let raw = shared.raw_secret_bytes();
+        let full = raw.as_slice();
+        if length_bytes >= full.len() {
+            full.to_vec()
+        } else {
+            full[..length_bytes].to_vec()
+        }
+    })
+}
+
 // ─── HMAC helper (shared by PBKDF2 and HKDF) ─────────────────────────────────
 
 /// Compute HMAC-SHA256/384/512 of `data` with `key`.
@@ -1119,6 +1871,12 @@ pub(crate) fn derive_bits(alg_json: &str, key_id: u32, length_bits: u32) -> Vec<
         .unwrap_or("SHA-256")
         .to_ascii_uppercase();
     let length_bytes = (length_bits as usize).div_ceil(8);
+
+    if name_raw == "ECDH" {
+        // ECDH: the peer public key id is embedded in alg_json as "publicKeyId"
+        let peer_id = json_num_field(alg_json, "publicKeyId").unwrap_or(0);
+        return ecdh_derive_bits(key_id, peer_id, length_bytes);
+    }
 
     with_key(
         key_id,
@@ -1268,6 +2026,20 @@ pub(crate) fn install_subtle_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
         "_lumen_subtle_derive_bits",
         |alg_json: String, key_id: u32, length_bits: u32| -> Vec<u8> {
             derive_bits(&alg_json, key_id, length_bits)
+        }
+    );
+
+    reg!(
+        "_lumen_subtle_rsa_oaep_encrypt",
+        |key_id: u32, label: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
+            rsa_oaep_encrypt(key_id, &label, &plaintext)
+        }
+    );
+
+    reg!(
+        "_lumen_subtle_rsa_oaep_decrypt",
+        |key_id: u32, label: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
+            rsa_oaep_decrypt(key_id, &label, &ciphertext)
         }
     );
 
@@ -1492,7 +2264,8 @@ mod tests {
     #[test]
     fn generate_key_unsupported_algo_returns_err() {
         fresh_store();
-        let result = generate_key(r#"{"name":"RSA-OAEP"}"#, true, r#"["encrypt"]"#);
+        // RSA-OAEP is now supported; use a truly unknown algorithm
+        let result = generate_key(r#"{"name":"UNKNOWN-ALGO"}"#, true, r#"["encrypt"]"#);
         assert!(result.starts_with("err:NotSupportedError"), "{result}");
     }
 
@@ -1726,5 +2499,219 @@ mod tests {
         assert_eq!(salt, vec![10u8, 20, 30]);
         let empty = json_bytes_field(json, "info");
         assert!(empty.is_empty());
+    }
+
+    // ─── RSA-OAEP tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn rsa_oaep_generate_encrypt_decrypt() {
+        fresh_store();
+        let alg = r#"{"name":"RSA-OAEP","modulusLength":2048,"hash":"SHA-256"}"#;
+        let result = generate_key(alg, true, r#"["encrypt","decrypt"]"#);
+        assert!(!result.starts_with("err:"), "generate RSA-OAEP failed: {result}");
+        let parts: Vec<&str> = result.split(',').collect();
+        assert_eq!(parts.len(), 2, "expected pub_id,priv_id");
+        let pub_id: u32 = parts[0].parse().unwrap();
+        let priv_id: u32 = parts[1].parse().unwrap();
+
+        let plaintext = b"hello RSA-OAEP";
+        let ct = rsa_oaep_encrypt(pub_id, &[], plaintext);
+        assert!(!ct.is_empty(), "encrypt returned empty");
+        assert_ne!(ct.as_slice(), plaintext, "ciphertext != plaintext");
+
+        let pt = rsa_oaep_decrypt(priv_id, &[], &ct);
+        assert_eq!(pt, plaintext, "decrypt round-trip failed");
+    }
+
+    #[test]
+    fn rsa_oaep_import_spki_and_encrypt() {
+        fresh_store();
+        let alg = r#"{"name":"RSA-OAEP","modulusLength":2048,"hash":"SHA-256"}"#;
+        let result = generate_key(alg, true, r#"["encrypt","decrypt"]"#);
+        let parts: Vec<&str> = result.split(',').collect();
+        let pub_id: u32 = parts[0].parse().unwrap();
+        let priv_id: u32 = parts[1].parse().unwrap();
+
+        let spki = export_key("spki", pub_id).unwrap();
+        let pkcs8 = export_key("pkcs8", priv_id).unwrap();
+
+        fresh_store();
+        let imp_pub = import_key("spki", spki, alg, true, r#"["encrypt"]"#);
+        let imp_priv = import_key("pkcs8", pkcs8, alg, true, r#"["decrypt"]"#);
+        let pub_id2: u32 = imp_pub.parse().unwrap();
+        let priv_id2: u32 = imp_priv.parse().unwrap();
+
+        let plaintext = b"spki round-trip";
+        let ct = rsa_oaep_encrypt(pub_id2, &[], plaintext);
+        let pt = rsa_oaep_decrypt(priv_id2, &[], &ct);
+        assert_eq!(pt, plaintext, "spki+pkcs8 import round-trip");
+    }
+
+    #[test]
+    fn rsa_oaep_jwk_public_roundtrip() {
+        fresh_store();
+        let alg = r#"{"name":"RSA-OAEP","modulusLength":2048,"hash":"SHA-256"}"#;
+        let result = generate_key(alg, true, r#"["encrypt","decrypt"]"#);
+        let parts: Vec<&str> = result.split(',').collect();
+        let pub_id: u32 = parts[0].parse().unwrap();
+        let jwk_bytes = export_key("jwk", pub_id).unwrap();
+        let jwk = String::from_utf8(jwk_bytes).unwrap();
+        assert!(jwk.contains("\"kty\":\"RSA\""), "RSA JWK: {jwk}");
+        assert!(jwk.contains("\"n\":"), "modulus: {jwk}");
+        assert!(jwk.contains("\"e\":"), "exponent: {jwk}");
+    }
+
+    // ─── RSA-PSS tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn rsa_pss_generate_sign_verify() {
+        fresh_store();
+        let alg = r#"{"name":"RSA-PSS","modulusLength":2048,"hash":"SHA-256"}"#;
+        let result = generate_key(alg, true, r#"["sign","verify"]"#);
+        assert!(!result.starts_with("err:"), "generate RSA-PSS failed: {result}");
+        let parts: Vec<&str> = result.split(',').collect();
+        let pub_id: u32 = parts[0].parse().unwrap();
+        let priv_id: u32 = parts[1].parse().unwrap();
+
+        let data = b"message for PSS";
+        let sign_alg = r#"{"name":"RSA-PSS","saltLength":32}"#;
+        let sig = sign_data(sign_alg, priv_id, data);
+        assert!(!sig.is_empty(), "RSA-PSS sign returned empty");
+
+        assert!(verify_signature(sign_alg, pub_id, &sig, data), "valid PSS sig");
+        let mut bad = sig.clone();
+        bad[0] ^= 0xff;
+        assert!(!verify_signature(sign_alg, pub_id, &bad, data), "corrupted sig");
+    }
+
+    // ─── RSASSA-PKCS1-v1_5 tests ─────────────────────────────────────────────
+
+    #[test]
+    fn rsassa_pkcs1v15_generate_sign_verify() {
+        fresh_store();
+        let alg = r#"{"name":"RSASSA-PKCS1-V1_5","modulusLength":2048,"hash":"SHA-256"}"#;
+        let result = generate_key(alg, true, r#"["sign","verify"]"#);
+        assert!(!result.starts_with("err:"), "generate PKCS1-v1.5 failed: {result}");
+        let parts: Vec<&str> = result.split(',').collect();
+        let pub_id: u32 = parts[0].parse().unwrap();
+        let priv_id: u32 = parts[1].parse().unwrap();
+
+        let data = b"message for PKCS1v15";
+        let sign_alg = r#"{"name":"RSASSA-PKCS1-V1_5"}"#;
+        let sig = sign_data(sign_alg, priv_id, data);
+        assert!(!sig.is_empty(), "PKCS1-v1.5 sign returned empty");
+
+        assert!(verify_signature(sign_alg, pub_id, &sig, data), "valid sig");
+        let mut bad = sig.clone();
+        bad[0] ^= 0x01;
+        assert!(!verify_signature(sign_alg, pub_id, &bad, data), "corrupted sig");
+    }
+
+    #[test]
+    fn rsassa_pkcs1v15_import_spki_pkcs8_roundtrip() {
+        fresh_store();
+        let alg = r#"{"name":"RSASSA-PKCS1-V1_5","modulusLength":2048,"hash":"SHA-256"}"#;
+        let result = generate_key(alg, true, r#"["sign","verify"]"#);
+        let parts: Vec<&str> = result.split(',').collect();
+        let pub_id: u32 = parts[0].parse().unwrap();
+        let priv_id: u32 = parts[1].parse().unwrap();
+
+        let spki = export_key("spki", pub_id).unwrap();
+        let pkcs8 = export_key("pkcs8", priv_id).unwrap();
+
+        fresh_store();
+        let id_pub = import_key("spki", spki, alg, true, r#"["verify"]"#);
+        let id_priv = import_key("pkcs8", pkcs8, alg, true, r#"["sign"]"#);
+        assert!(!id_pub.starts_with("err:"), "spki import: {id_pub}");
+        assert!(!id_priv.starts_with("err:"), "pkcs8 import: {id_priv}");
+
+        let data = b"import test";
+        let sign_alg = r#"{"name":"RSASSA-PKCS1-V1_5"}"#;
+        let priv_id2: u32 = id_priv.parse().unwrap();
+        let pub_id2: u32 = id_pub.parse().unwrap();
+        let sig = sign_data(sign_alg, priv_id2, data);
+        assert!(verify_signature(sign_alg, pub_id2, &sig, data));
+    }
+
+    // ─── ECDH tests ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn ecdh_generate_derive_bits() {
+        fresh_store();
+        let alg = r#"{"name":"ECDH","namedCurve":"P-256"}"#;
+
+        // Generate two ECDH key pairs
+        let r1 = generate_key(alg, true, r#"["deriveBits","deriveKey"]"#);
+        assert!(!r1.starts_with("err:"), "keygen1: {r1}");
+        let p1: Vec<&str> = r1.split(',').collect();
+        let pub1: u32 = p1[0].parse().unwrap();
+        let priv1: u32 = p1[1].parse().unwrap();
+
+        let r2 = generate_key(alg, true, r#"["deriveBits","deriveKey"]"#);
+        let p2: Vec<&str> = r2.split(',').collect();
+        let pub2: u32 = p2[0].parse().unwrap();
+        let priv2: u32 = p2[1].parse().unwrap();
+
+        // ECDH shared secret: priv1 + pub2 == priv2 + pub1
+        let secret1 = ecdh_derive_bits(priv1, pub2, 32);
+        let secret2 = ecdh_derive_bits(priv2, pub1, 32);
+        assert_eq!(secret1.len(), 32, "expected 32 bytes");
+        assert_eq!(secret1, secret2, "ECDH shared secret must match both directions");
+    }
+
+    #[test]
+    fn ecdh_import_export_roundtrip() {
+        fresh_store();
+        let alg = r#"{"name":"ECDH","namedCurve":"P-256"}"#;
+        let r = generate_key(alg, true, r#"["deriveBits"]"#);
+        let parts: Vec<&str> = r.split(',').collect();
+        let pub_id: u32 = parts[0].parse().unwrap();
+        let _priv_id: u32 = parts[1].parse().unwrap();
+
+        // Export and re-import public key via raw
+        let raw_pub = export_key("raw", pub_id).unwrap();
+        assert_eq!(raw_pub.len(), 65, "uncompressed SEC1 point is 65 bytes");
+
+        fresh_store();
+        let id2 = import_key("raw", raw_pub.clone(), alg, true, r#"[]"#);
+        assert!(!id2.starts_with("err:"), "raw import: {id2}");
+
+        // Export via JWK
+        fresh_store();
+        let imp = import_key("raw", raw_pub, alg, true, r#"[]"#);
+        let pub2: u32 = imp.parse().unwrap();
+        let jwk_bytes = export_key("jwk", pub2).unwrap();
+        let jwk = String::from_utf8(jwk_bytes).unwrap();
+        assert!(jwk.contains("\"crv\":\"P-256\""), "ECDH JWK: {jwk}");
+
+        // Export private via PKCS8
+        fresh_store();
+        let r2 = generate_key(alg, true, r#"["deriveBits"]"#);
+        let p2: Vec<&str> = r2.split(',').collect();
+        let priv2: u32 = p2[1].parse().unwrap();
+        let pkcs8 = export_key("pkcs8", priv2).unwrap();
+        assert!(!pkcs8.is_empty());
+        let id3 = import_key("pkcs8", pkcs8, alg, true, r#"["deriveBits"]"#);
+        assert!(!id3.starts_with("err:"), "pkcs8 import: {id3}");
+    }
+
+    #[test]
+    fn ecdh_derive_bits_wrong_key_type_returns_empty() {
+        fresh_store();
+        // Use an HMAC key as private, should fail gracefully
+        let hmac_id: u32 = generate_key(
+            r#"{"name":"HMAC","hash":"SHA-256"}"#,
+            true,
+            r#"["sign"]"#,
+        )
+        .parse()
+        .unwrap();
+        let ecdh_alg = r#"{"name":"ECDH","namedCurve":"P-256"}"#;
+        let r = generate_key(ecdh_alg, true, r#"["deriveBits"]"#);
+        let parts: Vec<&str> = r.split(',').collect();
+        let pub_id: u32 = parts[0].parse().unwrap();
+        // Passing HMAC key as private — should return empty, not panic
+        let result = ecdh_derive_bits(hmac_id, pub_id, 32);
+        assert!(result.is_empty(), "wrong key type must return empty");
     }
 }

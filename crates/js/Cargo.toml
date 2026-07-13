@@ -48,7 +48,15 @@ flate2.workspace = true
 # Permanent (crypto exception #3): ECDSA P-256 for SubtleCrypto.generateKey/sign/verify/
 # importKey/exportKey. Same crate already used in lumen-network (WebAuthn, 9F).
 # pkcs8 feature: spki/pkcs8 key import/export formats.
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "ecdh"] }
+# Permanent (crypto exception #3): RSA-OAEP/RSA-PSS/RSASSA-PKCS1-v1_5 for SubtleCrypto.
+# sha2 feature: enables SHA-2 hash adapters for OAEP/PSS/PKCS1v1.5 operations.
+# Why: permanent; same RustCrypto family; rsa 0.9 already in lumen-network; no alternatives.
+rsa = { version = "0.9", features = ["sha2"] }
+# Permanent: OS CSPRNG via rand_core 0.6 interface — required by rsa::RsaPrivateKey::new().
+# rsa 0.9 signs with rand_core 0.6 OsRng; getrandom 0.2 already present but wrong API shape.
+# Why: permanent companion to rsa dep; no logic here, just entropy plumbing.
+rand_core = { version = "0.6", features = ["getrandom"] }
 # Provisional: HMAC-SHA256/384/512 for SubtleCrypto.sign/verify/generateKey/importKey.
 # Pure-Rust, minimal; graduation criterion: remove if built-in sha2-based MAC suffices.
 hmac = { version = "0.12", features = [] }
