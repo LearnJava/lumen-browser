@@ -270,21 +270,21 @@
       {
        "id": "P1-wgpu-ph0",
        "title": "Ph-wgpu-default Ф0: влить cross-platform базу",
-       "status": "planned",
+       "status": "active",
        "size": "S",
        "note": "Фаза 0: довести и влить `p1-wgpu-cross-platform` (per-target wgpu-фичи dx12/vulkan/metal); ЗАБЛОКИРОВАНО внешним отчётом Linux-сессии (docs/tasks/linux-wgpu-validation.md, smoke+scroll на реальной машине); без этого wgpu-дефолт на Linux не находит адаптер"
       },
       {
        "id": "P1-wgpu-vkgl",
        "title": "Ph-wgpu-default: фичи Vulkan/GL + перемер BUG-274",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Добавить `vulkan`+`gl` в wgpu-фичи Windows (crates/engine/paint/Cargo.toml, поверх per-target схемы Ф0 или до неё): сейчас скомпилирован только dx12 и backend_probe всегда откатывается на DX12; после — перемерить BUG-274/275 по протоколу idle-CPU 10с (на этой машине wgpu-GL был лучшим: 156мс против ~1500 у DX12) и обновить bugs/BUG-274-OPEN.md"
+       "note": "DONE 2026-07-13: per-target wgpu-фичи (Windows: dx12+vulkan+gles, Linux: vulkan, macOS: metal); backend_probe теперь тестирует все 3 кандидата. Замер: на Intel Iris Plus Vulkan=WHITE(BUG-275)+GL=WHITE→DX12 ПРИНЯТ; wgpu/DX12 idle-CPU ~24% core (femtovg ~2.2%); gles тоже белый через wgpu-hal — отдельная подзадача skip-blit-in-idle."
       },
       {
        "id": "P1-wgpu-bug276",
        "title": "Ph-wgpu-default: wgpu-базлайн граф-тестов + BUG-276",
-       "status": "planned",
+       "status": "done",
        "size": "M",
        "note": "Установить полный wgpu-базлайн: `LUMEN_BACKEND=wgpu python graphic_tests/run.py --continue-on-fail` (все 140 тестов, впервые); root-cause TEST-00 полосы y:684-718 (рендер vs захват/калибровка gdigrab); починить или оформить KNOWN_DEBTOR-ами; блокер финального гейта Фазы 3",
        "bugs": [
@@ -294,7 +294,7 @@
       {
        "id": "P1-wgpu-flip",
        "title": "Ph-wgpu-default Ф3: флип дефолта + ADR",
-       "status": "planned",
+       "status": "done",
        "size": "M",
        "note": "Фаза 3: backend_factory.rs — пустой LUMEN_BACKEND пробует wgpu (через probe) первым, femtovg = fallback (явный LUMEN_BACKEND=femtovg не трогать); новая ADR, разворачивающая финал ADR-010 («remove wgpu as default»); doc-sync (CAPABILITIES.md, subsystems/paint.md, README.md, docs/decisions/README.md); финальный гейт = полный graphic_tests-прогон с пустым LUMEN_BACKEND против femtovg-базлайна; требует vkgl+bug276 (ph0 — для не-Windows)"
       }
@@ -556,30 +556,30 @@
     {
      "id": "P3-v8",
      "title": "Переход на V8 (rusty_v8) + Tier 2 Web APIs",
-     "status": "planned",
+     "status": "active",
      "size": "XL",
      "note": "Срезы S0–S12 — подзадачами ниже (истина в docs/tasks/ph3-v8-migration.md). Разблокирован (v0.5.0 вышел). Единственное лекарство для тяжёлых SPA: аудит 2026-07-02 — github.com не дорендерился за 280 с (ресурсы загружены к 6.6 с, затык в QuickJS-интерпретаторе без JIT). Рекомендация: делать ПОСЛЕ дешёвых RP-5…RP-9 (они закрывают бо́льшую часть «не как в Edge» и не зависят от JS-движка), затем V8 как флагман Phase 3. Опц. промежуточный митигейт — watchdog/бюджет исполнения JS, чтобы страницы падали graceful, а не висли. Бриф docs/tasks/ph3-v8-migration.md. Сюда же перенесён уровень 2 bfcache — JS-куча переживает заморозку через ValueSerializer (docs/tasks/ph3-bfcache.md, DoD Level 2)",
      "tasks": [
       {
        "id": "P3-v8-s0",
        "title": "V8 S0: build spike (go/no-go)",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "S0: v8 как optional dep за feature v8-backend; smoke-тест init platform + isolate + eval 1+1; go/no-go гейт — до зелёного никакого портирования; бриф docs/tasks/ph3-v8-migration.md"
+       "note": "S0 ЗАКРЫТ 2026-07-13 (branch p1-v8-s0): v8 v150.1.0 optional dep за v8-backend; smoke-тесты PASS; Windows MSVC gotchas задокументированы в docs/tasks/ph3-v8-migration.md; GO"
       },
       {
        "id": "P3-v8-s1",
        "title": "V8 S1: скелет рантайма",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "S1: v8_runtime.rs — V8JsRuntime/V8Inner/V8Command/v8_thread_main, impl JsRuntime (eval/set_global/get_global/call_function), конвертеры JsValue"
+       "note": "S1 ЗАКРЫТ 2026-07-13 (branch p1-v8-s1): V8JsRuntime + V8Inner + v8_thread_main + impl JsRuntime (eval/set_global/get_global/call_function) + from_v8/to_v8; 17 unit + integration тестов зелёные"
       },
       {
        "id": "P3-v8-s2",
        "title": "V8 S2: compat-слой",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "S2: свой IntoJsFn (arity 0..7) + reg!-двойник поверх V8 с эргономикой rquickjs; 3 console-нативы как доказательство — де-рискует всё после"
+       "note": "S2 ЗАКРЫТ 2026-07-13 (branch p1-v8-s2): into_v8_fnN (arity 0..7) + V8NativeFn trait + OwnedNativeFn + trampoline + register_v8_native; reg! macro; 3 console natives; 21 тест PASS"
       },
       {
        "id": "P3-v8-s3",
@@ -642,7 +642,7 @@
     {
      "id": "P3-mt",
      "title": "Многопоточный рендер-конвейер (ADR-016)",
-     "status": "active",
+     "status": "done",
      "size": "XL",
      "note": "ADR-016 (мандат пользователя 2026-07-09): многопоточный рендер-конвейер; бриф docs/tasks/ph3-render-multithreading.md; M0, M1, M2.0–M2.2d СДЕЛАНЫ и влиты в main 2026-07-11 (см. бриф); ниже — остаток",
      "tasks": [
@@ -670,16 +670,23 @@
       {
        "id": "P3-mt-m3",
        "title": "MT M3: полоса + blit-скролл (femtovg)",
-       "status": "active",
+       "status": "done",
        "size": "L",
-       "note": "АКТУАЛИЗАЦИЯ 2026-07-13: M3.0–M3.2.1c-6 СДЕЛАНЫ и влиты (femtovg полоса+blit за LUMEN_SCROLL_BLIT, дефолт off; пиксельная приёмка c-6 PASS ≤0.012%); остаток = c-7 (флип флага в default on: широкое покрытие реальных сайтов + перф-подпись); история по срезам — docs/tasks/ph3-render-multithreading.md"
+       "note": "АКТУАЛИЗАЦИЯ 2026-07-13: M3.0–M3.2.1c-7 СДЕЛАНЫ и влиты (femtovg полоса+blit за LUMEN_SCROLL_BLIT, дефолт on (c-7); пиксельная приёмка c-6 PASS ≤0.012%); история по срезам — docs/tasks/ph3-render-multithreading.md"
       },
       {
        "id": "P3-mt-m4",
-       "title": "MT M4: параллельный style/layout",
-       "status": "planned",
+       "title": "MT M4.0: incremental layout в shell",
+       "status": "done",
+       "size": "S",
+       "note": "M4.0 ЗАКРЫТ 2026-07-13 (branch p1-mt-m4): layout_mutation_incremental() = layout_streaming_incremental + пост-layout passes; shell: relayout_page_incremental / compute_layout_incremental / try_relayout_raf_incremental; relayout_raf_dirty + relayout_raf_dirty_readback пробуют incremental перед полным; 21 тест ok. Детали — docs/tasks/ph3-render-multithreading.md"
+      },
+      {
+       "id": "P3-mt-m4-rayon",
+       "title": "MT M4.1: rayon parallel subtrees",
+       "status": "done",
        "size": "M",
-       "note": "M4: сперва lay_out_incremental + DirtyBits в живой шелл-путь JS-мутаций, потом rayon по независимым dirty-поддеревьям; полное дерево НЕ параллелить"
+       "note": "M4.1: rayon параллельный build_box для flex/grid/table item containers (≥8 детей); StyleEnvSnapshot propagation; rayon как permanent dep (ADR-016); влит 2026-07-13"
       }
      ]
     },
@@ -900,8 +907,8 @@
     {
      "id": "P3-webcrypto",
      "title": "Web Crypto SubtleCrypto (полный набор алгоритмов)",
-     "status": "active",
-     "note": "срез 1 ✅ AES-GCM+ECDSA-P256+HMAC-SHA* (2026-07-02); срез 2 ✅ 2026-07-08 AES-CBC+AES-CTR+PBKDF2+HKDF (subtle_crypto.rs); дошить — RSA-OAEP/RSA-PSS/RSASSA-PKCS1-v1_5/ECDH"
+     "status": "done",
+     "note": "ЗАВЕРШЁН 2026-07-13: срез 1 ✅ AES-GCM+ECDSA-P256+HMAC-SHA*; срез 2 ✅ AES-CBC+AES-CTR+PBKDF2+HKDF; срез 3 ✅ RSA-OAEP/RSA-PSS/RSASSA-PKCS1-v1_5/ECDH P-256 — полный набор SubtleCrypto"
     },
     {
      "id": "P3-weblocks",
