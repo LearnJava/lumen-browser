@@ -76,22 +76,24 @@ pub fn frame_log_enabled() -> bool {
     frame_log_level() >= 1
 }
 
-/// `true`, если включён экспериментальный scroll-blit путь рендера
-/// (`LUMEN_SCROLL_BLIT=1`, ADR-016 M3.2.1).
+/// `true`, если включён scroll-blit путь рендера (ADR-016 M3.2.1).
 ///
 /// Когда включён, бэкенды рисуют content не прямо в экран, а в удерживаемую
-/// offscreen-поверхность, которую затем презентуют на экран — фундамент для
-/// blit-скролла (M3.2.1b) поверх решений [`ScrollCache`]. По умолчанию выключен:
-/// путь рендера байт-идентичен прямой отрисовке. Значение читается из окружения
-/// один раз за процесс (нулевая стоимость в горячем цикле).
+/// offscreen-поверхность и блитают её по дельте скролла — сокращая работу
+/// GPU на in-band прокрутке (M3.2.1b). По умолчанию **включён** с M3.2.1c-7;
+/// kill-switch: `LUMEN_SCROLL_BLIT=0` (или `false`). Явный `LUMEN_SCROLL_BLIT=1`
+/// тоже работает (совместимость с тестовыми скриптами). Значение читается из
+/// окружения один раз за процесс (нулевая стоимость в горячем цикле).
 #[must_use]
 pub fn scroll_blit_enabled() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("LUMEN_SCROLL_BLIT")
-            .ok()
-            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        match std::env::var("LUMEN_SCROLL_BLIT").as_deref() {
+            Ok("0") | Ok("false") | Ok("False") | Ok("FALSE") => false,
+            Ok("1") | Ok("true") | Ok("True") | Ok("TRUE") => true,
+            _ => true, // default on (M3.2.1c-7)
+        }
     })
 }
 

@@ -1590,6 +1590,16 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
     slice establishes that the correctness-critical overlay-replay paths (c-3…c-5)
     are pixel-clean on their targeted fixtures.
 
+  - **M3.2.1c-7 — flip `LUMEN_SCROLL_BLIT` default to on.** ✅
+    (branch `p1-mt-m3-2-1c-7`). `scroll_blit_enabled()` (`paint/src/lib.rs`)
+    now returns `true` by default; kill-switch `LUMEN_SCROLL_BLIT=0` disables
+    it. `scripts/scroll_blit_accept.py` updated: `blit_on=false` branch now
+    sets `LUMEN_SCROLL_BLIT=0` (was pop, which was "no flag → default off").
+    Doc comments updated in `lib.rs`, `overlay_partition.rs`,
+    `femtovg_backend.rs`. The full graphic_tests suite and the blit-accept
+    harness remain valid: all existing baselines were captured with the blit
+    path active (since c-6 confirmed pixel equivalence at ≤0.012%).
+
 ### M4 — parallel style/layout (M, gated on incremental layout)
 
 - First wire `lay_out_incremental` + `DirtyBits` into the live shell path for

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Blit-scroll pixel acceptance: LUMEN_SCROLL_BLIT on vs off (ADR-016 M3.2.1c-6).
+"""Blit-scroll pixel acceptance: LUMEN_SCROLL_BLIT on vs off (ADR-016 M3.2.1c).
 
-The scroll-blit path (`LUMEN_SCROLL_BLIT`, default off) presents a retained
-content band shifted by the scroll delta instead of re-executing the display
-list, replaying `position:fixed`/`sticky` overlays on top (M3.2.1c-3…c-5). The
-flag stays off until we have *empirical* proof that, on real scrolling pages,
-the blit output is pixel-equivalent to the direct (flag-off) render — which is
-byte-identical to today's shipping renderer, i.e. the ground truth.
+The scroll-blit path presents a retained content band shifted by the scroll
+delta instead of re-executing the display list, replaying `position:fixed`/
+`sticky` overlays on top (M3.2.1c-3…c-5). Default is **on** since M3.2.1c-7;
+kill-switch: `LUMEN_SCROLL_BLIT=0`. This harness compares blit-on vs blit-off
+to confirm pixel equivalence (the ground truth is the direct/flag-off render,
+which is byte-identical to the shipping renderer).
 
 This harness drives one live Lumen window per flag state through an identical
 sequence of scroll stops and diffs the on-vs-off desktop captures frame for
@@ -130,9 +130,9 @@ def run_flag(exe: str, fixture: str, blit_on: bool, tag: str) -> list[str] | Non
     port = free_port()
     env = dict(os.environ)
     if blit_on:
-        env["LUMEN_SCROLL_BLIT"] = "1"
+        env.pop("LUMEN_SCROLL_BLIT", None)  # default on; explicit pop keeps env clean
     else:
-        env.pop("LUMEN_SCROLL_BLIT", None)
+        env["LUMEN_SCROLL_BLIT"] = "0"  # kill-switch: disable the default-on path
     log_path = os.path.join(TMP, f"{tag}.stderr.log")
     log_f = open(log_path, "w", encoding="utf-8", errors="replace")
     proc = subprocess.Popen(
