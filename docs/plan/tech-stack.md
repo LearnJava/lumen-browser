@@ -107,6 +107,7 @@ Trait-anchor у каждого — в `lumen-core::ext`. Подключаем п
 - `cargo-vet` — supply-chain reviews.
 - `cargo-dist` — упаковка релизов (опционально).
 - `cross` — кросс-компиляция на CI.
+- `cargo-hakari` + `workspace-hack` (internal crate) — feature-unification: 55 общих транзитивных зависимостей пришпилены к единому набору фич; устраняет перекомпиляцию при переключении между `-p lumen-shell` и `-p lumen-driver`. Категория: постоянная dev-инфраструктура; публикации нет; `workspace-hack` — path-dep только внутри workspace. Добавлено 2026-07-13 (§3.4 `docs/build-speed.md`).
 
 ### Принцип «no new dep без обоснования»
 

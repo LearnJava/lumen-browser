@@ -10,3 +10,4 @@ description = "Lumen: HTML Canvas 2D rendering context (CanvasRenderingContext2D
 [dependencies]
 lumen-core.workspace = true
 lumen-layout.workspace = true
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }

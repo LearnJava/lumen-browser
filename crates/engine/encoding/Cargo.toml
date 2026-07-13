@@ -13,3 +13,4 @@ icu_segmenter = { version = "2", features = ["compiled_data"] }
 icu_provider = { version = "2", features = ["sync"] }
 unicode-bidi = "0.3"
 hyphenation.workspace = true
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }

@@ -11,3 +11,4 @@ description = "Lumen: knowledge layer — полнотекстовый поис�
 lumen-core.workspace = true
 lumen-storage.workspace = true
 rusqlite.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

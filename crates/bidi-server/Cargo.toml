@@ -11,3 +11,4 @@ description = "WebDriver BiDi WebSocket server for Lumen browser (W3C WebDriver 
 lumen-core.workspace = true
 lumen-devtools.workspace = true
 lumen-driver.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

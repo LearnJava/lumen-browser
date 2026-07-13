@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 lumen-dom = { workspace = true }
 serde = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Provisional: windows-sys — Win32 accessibility (NotifyWinEvent, EVENT_OBJECT_FOCUS).

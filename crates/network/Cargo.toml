@@ -84,6 +84,7 @@ flate2 = { workspace = true }
 # Exception #6 (§5): regex — EasyList /regex/ pattern matching; same workspace entry used
 # by find-in-page. Trait-anchor: RequestFilter (easylist.rs /regex/ rule variant).
 regex = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 # Test-only: OS CSPRNG (rand_core 0.6 `OsRng`, the version `rsa` 0.9 signs with) to

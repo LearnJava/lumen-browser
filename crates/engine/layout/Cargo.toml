@@ -13,3 +13,4 @@ lumen-dom.workspace = true
 lumen-css-parser.workspace = true
 lumen-html-parser.workspace = true
 lumen-image.workspace = true
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }

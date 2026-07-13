@@ -23,6 +23,7 @@ members = [
     "crates/engine/image",
     "crates/engine/canvas",
     "crates/engine/a11y",
+    "workspace-hack",
 ]
 
 [workspace.package]

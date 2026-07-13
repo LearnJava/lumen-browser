@@ -33,6 +33,7 @@ rgb = { version = "0.8", optional = true }
 
 # CPU-рендеринг для детерминистичных тестов без GPU (8A.5)
 tiny-skia = { version = "0.11", optional = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 # Графический бэкенд wgpu выбирается per-target: workspace.dependencies не умеет
 # `[target.'cfg(...)'.dependencies]`, поэтому набор `features` (какой GPU API

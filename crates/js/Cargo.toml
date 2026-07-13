@@ -69,6 +69,7 @@ ctr = "0.9"
 # Import Maps (HTML LS §8.1.6.2) JSON parsing for <script type="importmap">.
 # Lightweight JSON parser; reuses serde which is already in the workspace.
 serde_json = "1.0"
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [features]
 # Реальный WebGPU-бэкенд (U-4c, Stage 1): включает wgpu-устройство в lumen-paint и

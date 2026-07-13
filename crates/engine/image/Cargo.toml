@@ -26,3 +26,4 @@ flate2.workspace = true
 # Graduation: permanent когда AVIF станет обязательным форматом в pipeline.
 # Требует cmake + nasm — подключается через feature "avif".
 image = { version = "0.25", default-features = false, features = ["avif"], optional = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
