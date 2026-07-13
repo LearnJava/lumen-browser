@@ -748,7 +748,7 @@ RATE_LIMIT_TEXT_RE = re.compile(r"hit your\b.*\blimit|rate.?limit|session limit"
 # именно полный ID, чтобы пользователь понимал, что запустилось.
 MODEL_ALIASES: dict[str, str] = {
     "haiku":  "claude-haiku-4-5",
-    "sonnet": "claude-sonnet-4-6",
+    "sonnet": "claude-sonnet-5",
     "opus":   "claude-opus-4-8",
     "fable":  "claude-fable-5",
 }
