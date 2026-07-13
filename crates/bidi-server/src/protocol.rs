@@ -58,6 +58,15 @@ use lumen_driver::{BrowserSession, LiveWindowSession, Target, WaitCondition};
 /// hanging the connection forever.
 const NAVIGATE_LOAD_TIMEOUT_MS: u64 = 30_000;
 
+/// Opaque `clientWindow` id reported in `BrowsingContextInfo` (BiDi spec field,
+/// distinct from `context`: it identifies the OS-level window a context is
+/// rendered in). Lumen runs one native window per process, so a single
+/// constant is correct until multi-window support exists — `wptrunner`'s
+/// `webdriver.bidi.modules.browsing_context._assert_browsing_context_info`
+/// asserts this field is present and a string, so omitting it breaks any BiDi
+/// client using that module (found while implementing P2-wpt S4).
+const CLIENT_WINDOW_ID: &str = "lumen-client-window-1";
+
 /// Один browsing context в рамках соединения.
 struct BidiContext {
     /// Непрозрачный идентификатор контекста (BiDi `context`).
@@ -981,6 +990,7 @@ fn context_info_flat(ctx: &BidiContext) -> JsonValue {
     );
     info.insert("userContext".into(), JsonValue::String("default".into()));
     info.insert("originalOpener".into(), JsonValue::Null);
+    info.insert("clientWindow".into(), JsonValue::String(CLIENT_WINDOW_ID.into()));
     info.insert("viewport".into(), viewport_json(ctx.viewport));
     JsonValue::Object(info)
 }
@@ -1006,6 +1016,7 @@ fn context_info_tree(state: &BidiState, ctx: &BidiContext) -> JsonValue {
     );
     info.insert("userContext".into(), JsonValue::String("default".into()));
     info.insert("originalOpener".into(), JsonValue::Null);
+    info.insert("clientWindow".into(), JsonValue::String(CLIENT_WINDOW_ID.into()));
     info.insert("viewport".into(), viewport_json(ctx.viewport));
     JsonValue::Object(info)
 }

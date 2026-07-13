@@ -45,7 +45,17 @@ def executor_kwargs(logger, test_type, test_environment, run_info_data, **kwargs
 
 
 def env_options():
-    return {}
+    # `wptserve`'s own default (`browser_host = "web-platform.test"`,
+    # `serve.py`) requires that hostname (and a long list of
+    # `*.web-platform.test` subdomains) resolve via the OS resolver — normally
+    # satisfied by adding entries to `/etc/hosts` (`wpt make-hosts-file`).
+    # This project's "no live network / fully offline" rule (P2-wpt task doc)
+    # rules out relying on that machine-wide setup step, and BiDi automation
+    # doesn't exercise WPT's cross-origin subdomain tests anyway (S4/S5 scope
+    # is same-origin `dom/` tests) — a literal IP needs no resolution at all,
+    # sidestepping the `[Errno 11001] getaddrinfo failed` this produced
+    # against the default hostname (found while implementing S4).
+    return {"browser_host": "127.0.0.1", "bind_address": True}
 
 
 def env_extras(**kwargs):

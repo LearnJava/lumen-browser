@@ -4,13 +4,19 @@ P2-wpt (`docs/tasks/p2-wpt-integration.md`, slices S1–S8). Runs the real, unmo
 `wptrunner` against Lumen over WebDriver BiDi (`lumen --bidi-port N`) — not a
 bespoke test runner. See the task doc for the full architecture and slice plan.
 
-**Status:** S1 (real `browsingContext.load` signal), S2 (vendoring), and S3
-(`browsers/lumen.py` product plugin, BiDi session negotiation) are done. `wpt run
-lumen …` still does not run an actual test — `LumenTestharnessExecutor.do_test`
-is a stub raising `NotImplementedError`; wiring it up (navigate + inject
-testharnessreport.js + read back results) is S4. This README covers S2 (vendored,
-offline-capable `wptrunner`) and S3 (the product plugin + how to verify session
-negotiation without a full `wpt run`).
+**Status:** S1–S3 done. S4 (`LumenTestharnessExecutor.do_test`, `testharnessreport.js`
+shim, smoke driver) is **implemented but blocked**: `tests/wpt/run_smoke.py` drives
+a real `lumen --bidi-port` through navigate + eval end to end, but the smoke test
+(`dom/nodes/Element-hasAttribute.html`) still doesn't PASS — blocked on
+[BUG-280](../../bugs/BUG-280-OPEN.md) (`window` isn't the JS engine's real global
+object, so `testharness.js`'s `expose()`-based public API — `test`, `assert_*`,
+`add_completion_callback`, …, ~50 functions — is unreachable as bare identifiers).
+Two other real engine gaps surfaced and were fixed while proving this path:
+[BUG-278](../../bugs/BUG-278-FIXED.md) (HTTP client rejected `wptserve`'s
+close-delimited responses) and [BUG-279](../../bugs/BUG-279-FIXED.md)
+(`document.getElementsByTagName` was missing entirely — broke `testharness.js`'s
+own module-level setup). See those bug files and the task doc's S4 section for the
+full diagnosis trail (BiDi-eval-based bisection of `testharness.js`'s execution).
 
 ## What's here
 
@@ -28,23 +34,46 @@ negotiation without a full `wpt run`).
 - `tools/wptrunner/wptrunner/executors/executorlumen.py` — **ours** —
   `LumenBidiProtocol` (BiDi-only session negotiation via
   `webdriver.bidi.client.BidiSession.bidi_only`, no classic HTTP session) and
-  `LumenTestharnessExecutor` (`do_test` stubbed until S4).
+  `LumenTestharnessExecutor.do_test` (S4): `browsingContext.navigate` then
+  `script.evaluate`-polls for `tests/wpt/resources/testharnessreport.js`'s
+  JSON result global, tolerating the transient "JS context not available"
+  BiDi error while the new document's JS runtime is still installing.
 - `tests/wpt/resources/testharness.js` — vendored upstream client-side test harness.
-- `tests/wpt/dom/nodes/` — one vendored test category (S4's smoke-test candidate,
-  `Document-createElement.html`, lives here).
+- `tests/wpt/resources/testharnessreport.js` — **ours** (S4) — on harness
+  completion, serializes `[url, harness_status, message, stack, subtests]` to
+  JSON on `window.__lumen_wpt_results`, polled by `do_test` above.
+- `tests/wpt/dom/nodes/` — one vendored test category. S4's smoke test is
+  `Element-hasAttribute.html` (not `Document-createElement.html`, floated as an
+  "e.g." example when this file was first drafted — turned out to need
+  un-vendored iframe fixtures and `async_test`, not actually trivial).
 - `tests/wpt/requirements.txt` — pip requirements to make the above importable.
 - `tests/wpt/verify_s3_bidi_session.py` — S3 verification: spawns a real
   `lumen --bidi-port <port>` and confirms BiDi session negotiation succeeds
-  (real `sessionId` + `capabilities`), without going through `wpt run` (which
-  needs S4's `do_test`). Run with:
+  (real `sessionId` + `capabilities`). Run with:
 
   ```bash
   LUMEN_PROFILE=dev-release <venv>/python tests/wpt/verify_s3_bidi_session.py
   ```
 
-  Defaults to `target/<LUMEN_PROFILE>/lumen.exe` (`LUMEN_PROFILE` env var,
-  default `release`), same convention as `graphic_tests/run.py`. Prints
-  `S3 OK: sessionId=... capabilities=...` and exits 0 on success.
+- `tests/wpt/run_smoke.py` — **ours** (S4) — minimal driver that calls
+  `wptcommandline`/`wptrunner.run_tests` directly against the smoke test (see
+  its own docstring for why this isn't `tools/wpt/wpt`). Run with:
+
+  ```bash
+  LUMEN_PROFILE=dev-release <venv>/python tests/wpt/run_smoke.py
+  ```
+
+  Both scripts default to `target/<LUMEN_PROFILE>/lumen.exe` (`LUMEN_PROFILE`
+  env var, default `release`), same convention as `graphic_tests/run.py`.
+  `run_smoke.py` currently exits non-zero — see Status above (BUG-280).
+- `tests/wpt/config.json` — **ours** (S4) — `wptserve` config override: pins
+  `browser_host` to `127.0.0.1` (the default, `web-platform.test`, needs
+  `/etc/hosts` entries this task's "no live network" rule can't rely on) and
+  disables the `wss`/`h2`/`webtransport-h3`/`dns` servers the smoke test
+  doesn't need (Python 3.14's `ssl` module dropped `wrap_socket`, breaking
+  `wptserve`'s `wss` server; unrelated to Lumen).
+- `tests/wpt/metadata/` — `--metadata` root; holds the generated (gitignored)
+  `MANIFEST.json` and will hold `.ini` expectations from S5 onward.
 
 ## Python setup
 
@@ -61,9 +90,8 @@ entry needed (see that file's dependency-policy scope: Rust deps only).
 
 ### Verifying the install (import-chain smoke check)
 
-Confirms the vendored tree + pip deps actually resolve, without yet running a test
-(that's S3/S4 — no `browsers/lumen.py` product plugin exists yet, so `wpt run lumen`
-isn't a command yet):
+Confirms the vendored tree + pip deps actually resolve, cheaper than a full
+`run_smoke.py` run when only checking the Python side:
 
 ```bash
 python - <<'PY'
