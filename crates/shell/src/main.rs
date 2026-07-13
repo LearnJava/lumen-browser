@@ -2914,14 +2914,18 @@ impl PersistentJs for V8PersistentJs {
     fn pump_sse(&self) {
         self.eval_js("if(typeof _lumen_pump_sse==='function')_lumen_pump_sse();");
     }
-    // Worker/BroadcastChannel/SharedWorker registries are not wired for V8 yet
-    // (slice S10) — no-op until then.
+    // Worker/SharedWorker registries are not wired for V8 yet (slice S10) — no-op until then.
     fn pump_workers(&self) {}
-    fn pump_broadcast_channels(&self) {}
     fn pump_shared_workers(&self) {}
+    fn pump_broadcast_channels(&self) {
+        self.rt.pump_broadcast_channels();
+    }
     fn take_notification_requests(&self) -> Vec<(String, String)> {
-        // Notifications bindings not ported to V8 yet (slice S5–S7).
-        Vec::new()
+        self.rt
+            .take_notification_requests()
+            .into_iter()
+            .map(|r| (r.title, r.body))
+            .collect()
     }
     fn gc_collect(&self, dead_nids: &[u32]) {
         if dead_nids.is_empty() {

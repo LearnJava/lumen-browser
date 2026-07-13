@@ -56,6 +56,28 @@ pub fn install_geolocation_bindings(ctx: &Ctx, fake_coords: Option<FakeCoords>) 
     Ok(())
 }
 
+/// V8 port of [`install_geolocation_bindings`] (Ph3 V8 migration S5-S7 batch 3):
+/// no natives at all — `fake_coords` is only baked into an injected JS global,
+/// the shim is unchanged. Must be called after the core DOM install.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_geolocation_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    fake_coords: Option<FakeCoords>,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+
+    let init = match fake_coords {
+        Some(c) => format!(
+            "globalThis._LUMEN_GEO_COORDS = {{lat:{},lon:{},acc:{}}};",
+            c.latitude, c.longitude, c.accuracy
+        ),
+        None => "globalThis._LUMEN_GEO_COORDS = null;".to_string(),
+    };
+    rt.eval(&init)?;
+    rt.eval(GEO_SHIM)?;
+    Ok(())
+}
+
 /// JavaScript shim implementing the W3C Geolocation API Level 2.
 const GEO_SHIM: &str = r#"(function() {
   if (typeof navigator === 'undefined') return;

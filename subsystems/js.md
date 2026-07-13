@@ -318,8 +318,8 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
-- `rusty_v8` backend porting (rest of batch 3, S8–S12 remain; S0/S1/S2/S3/S4 done
-  2026-07-13, S5-S7 batch 1/3 done 2026-07-13 — v8 v150.1.0 optional dep под `v8-backend`;
+- `rusty_v8` backend porting (S8–S12 remain; S0/S1/S2/S3/S4/S5-S7 done
+  2026-07-13 — v8 v150.1.0 optional dep под `v8-backend`;
   `V8JsRuntime`/`V8Inner`/`v8_thread_main` + `JsRuntime` trait impl + `v8_compat`:
   `into_v8_fnN` (arity 0..7) + `V8NativeFn` + `OwnedNativeFn` + trampoline +
   `register_v8_native` (+ `Vec<String>`/`Vec<u32>`/`Vec<f64>`/`Vec<u8>`/`u8` FromJsValue/IntoJsReturn
@@ -338,7 +338,15 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   web_audio, file_input, pip_bindings, wake_lock, media_capture, screen_capture) via
   `into_v8_fnN` + new `V8JsRuntime::register_native` (registers an already-wrapped native
   as a global without duplicating `install_dom`'s inline scope/store setup) — 79/90 ported
-  overall. 2467 tests green (v8_runtime + module tests); ported/pending checklist in
+  overall. S5-S7 batch 3 (p1-v8-s57-batch3, 2026-07-13, **closes S5-S7**, 90/90 ported):
+  video_bindings + audio_element (13-16 `Function::new` natives each, process-global
+  provider state — no new `V8JsRuntime` plumbing needed); geolocation (no natives at all,
+  `fake_coords` only baked into an injected JS global); broadcast_channel +
+  notifications_bindings (needed new `V8JsRuntime` plumbing — `broadcast_channels`/
+  `pending_notifications` fields mirroring `QuickJsRuntime`'s fields of the same name,
+  plus `broadcast_registry()`/`notification_queue()` accessors and
+  `pump_broadcast_channels()`/`take_notification_requests()` public methods mirroring the
+  QuickJS API). All tests green (v8_runtime + module tests); ported/pending checklist in
   `docs/tasks/ph3-v8-migration.md`.
 
 ## Invariants

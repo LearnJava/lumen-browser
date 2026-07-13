@@ -43,30 +43,30 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 ## lumen-bidi-server  (26 symbols)
 
-`crates/bidi-server/src/protocol.rs:159` **struct** `BidiState` — Connection-level BiDi state
-`crates/bidi-server/src/protocol.rs:228` **fn** `new` — Новое пустое состояние соединения (без живого окна — Phase 1 stub behavior)
-`crates/bidi-server/src/protocol.rs:234` **fn** `with_live_session` — State connected to a live shell window (SDC-2): real navigation,
-`crates/bidi-server/src/protocol.rs:273` **fn** `locale`
-`crates/bidi-server/src/protocol.rs:282` **fn** `timezone`
-`crates/bidi-server/src/protocol.rs:289` **fn** `is_offline`
-`crates/bidi-server/src/protocol.rs:296` **fn** `user_agent_for`
-`crates/bidi-server/src/protocol.rs:309` **fn** `viewport_for`
-`crates/bidi-server/src/protocol.rs:321` **fn** `cache_behavior`
-`crates/bidi-server/src/protocol.rs:328` **fn** `intercept_count`
-`crates/bidi-server/src/protocol.rs:337` **fn** `preload_scripts_for_context` — Return preload scripts that apply to `context_id`
-`crates/bidi-server/src/protocol.rs:349` **fn** `begin_download` — Register a new download and emit `browser.downloadWillBegin` if subscribed
-`crates/bidi-server/src/protocol.rs:376` **fn** `update_download` — Update download progress and emit `browser.downloadItemUpdated` if subscribed
-`crates/bidi-server/src/protocol.rs:401` **fn** `complete_download` — Mark download as completed and emit `browser.downloadItemCompleted` if subscribed
-`crates/bidi-server/src/protocol.rs:421` **fn** `abort_download` — Mark download as aborted and emit `browser.downloadItemAborted` if subscribed
-`crates/bidi-server/src/protocol.rs:444` **fn** `record_cookie_change` — Record a cookie change (add/update/remove) and emit `storage.cookie*` events
-`crates/bidi-server/src/protocol.rs:491` **fn** `fire_user_prompt` — Open a user-prompt dialog and emit `browsingContext.userPromptOpened` if subscribed
-`crates/bidi-server/src/protocol.rs:530` **fn** `open_prompt_count` — Number of currently open user prompts (for testing)
-`crates/bidi-server/src/protocol.rs:536` **fn** `cookie_count` — Number of cookies in the session (for testing)
-`crates/bidi-server/src/protocol.rs:542` **fn** `download_count` — Number of active download items
-`crates/bidi-server/src/protocol.rs:548` **fn** `preload_script_count` — Number of registered preload scripts
-`crates/bidi-server/src/protocol.rs:560` **fn** `record_response_body`
-`crates/bidi-server/src/protocol.rs:574` **struct** `DispatchResult` — Результат обработки одной команды
-`crates/bidi-server/src/protocol.rs:589` **fn** `dispatch` — Обработать одно BiDi-сообщение, вернуть фреймы для отправки клиенту
+`crates/bidi-server/src/protocol.rs:170` **struct** `BidiState` — Connection-level BiDi state
+`crates/bidi-server/src/protocol.rs:239` **fn** `new` — Новое пустое состояние соединения (без живого окна — Phase 1 stub behavior)
+`crates/bidi-server/src/protocol.rs:245` **fn** `with_live_session` — State connected to a live shell window (SDC-2): real navigation,
+`crates/bidi-server/src/protocol.rs:284` **fn** `locale`
+`crates/bidi-server/src/protocol.rs:293` **fn** `timezone`
+`crates/bidi-server/src/protocol.rs:300` **fn** `is_offline`
+`crates/bidi-server/src/protocol.rs:307` **fn** `user_agent_for`
+`crates/bidi-server/src/protocol.rs:320` **fn** `viewport_for`
+`crates/bidi-server/src/protocol.rs:332` **fn** `cache_behavior`
+`crates/bidi-server/src/protocol.rs:339` **fn** `intercept_count`
+`crates/bidi-server/src/protocol.rs:348` **fn** `preload_scripts_for_context` — Return preload scripts that apply to `context_id`
+`crates/bidi-server/src/protocol.rs:360` **fn** `begin_download` — Register a new download and emit `browser.downloadWillBegin` if subscribed
+`crates/bidi-server/src/protocol.rs:387` **fn** `update_download` — Update download progress and emit `browser.downloadItemUpdated` if subscribed
+`crates/bidi-server/src/protocol.rs:412` **fn** `complete_download` — Mark download as completed and emit `browser.downloadItemCompleted` if subscribed
+`crates/bidi-server/src/protocol.rs:432` **fn** `abort_download` — Mark download as aborted and emit `browser.downloadItemAborted` if subscribed
+`crates/bidi-server/src/protocol.rs:455` **fn** `record_cookie_change` — Record a cookie change (add/update/remove) and emit `storage.cookie*` events
+`crates/bidi-server/src/protocol.rs:502` **fn** `fire_user_prompt` — Open a user-prompt dialog and emit `browsingContext.userPromptOpened` if subscribed
+`crates/bidi-server/src/protocol.rs:541` **fn** `open_prompt_count` — Number of currently open user prompts (for testing)
+`crates/bidi-server/src/protocol.rs:547` **fn** `cookie_count` — Number of cookies in the session (for testing)
+`crates/bidi-server/src/protocol.rs:553` **fn** `download_count` — Number of active download items
+`crates/bidi-server/src/protocol.rs:559` **fn** `preload_script_count` — Number of registered preload scripts
+`crates/bidi-server/src/protocol.rs:571` **fn** `record_response_body`
+`crates/bidi-server/src/protocol.rs:585` **struct** `DispatchResult` — Результат обработки одной команды
+`crates/bidi-server/src/protocol.rs:600` **fn** `dispatch` — Обработать одно BiDi-сообщение, вернуть фреймы для отправки клиенту
 `crates/bidi-server/src/server.rs:23` **fn** `spawn` — Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread
 `crates/bidi-server/src/transport.rs:20` **fn** `handle` — Handle one accepted TCP stream: WS upgrade → BiDi command loop
 
@@ -1233,7 +1233,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:251` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:261` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (399 symbols)
+## lumen-js  (401 symbols)
 
 `crates/js/src/async_context.rs:32` **fn** `install_async_context` — Install the `AsyncContext` global (Variable + Snapshot) into the context
 `crates/js/src/attribution_reporting.rs:23` **fn** `install_attribution_reporting_api` — Install Attribution Reporting API bindings into the JS context
@@ -1509,35 +1509,37 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/url_pattern.rs:14` **fn** `install_url_pattern_api` — Install URL Pattern API into the JS context
 `crates/js/src/v8_runtime.rs:53` **fn** `ensure_v8_platform` — Initialize the V8 platform for this process
 `crates/js/src/v8_runtime.rs:199` **struct** `V8JsRuntime` — V8-backed JS runtime implementing [`JsRuntime`]
-`crates/js/src/v8_runtime.rs:259` **fn** `new` — Create a new V8 runtime on a dedicated thread
-`crates/js/src/v8_runtime.rs:303` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/v8_runtime.rs:312` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/v8_runtime.rs:320` **fn** `take_print_requests` — Drain all print requests queued by `window.print()`
-`crates/js/src/v8_runtime.rs:330` **fn** `set_deterministic_mode` — Enable or disable deterministic render mode (8F) before calling `install_dom`
-`crates/js/src/v8_runtime.rs:340` **fn** `with_sw_worker_store` — Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
-`crates/js/src/v8_runtime.rs:347` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/v8_runtime.rs:353` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/v8_runtime.rs:359` **fn** `has_raf_pending` — Non-consuming peek: `true` if rAF callbacks are queued
-`crates/js/src/v8_runtime.rs:365` **fn** `raf_pending_flag` — ADR-016 M2.3: shared, lock-free handle to the rAF-pending flag
-`crates/js/src/v8_runtime.rs:371` **fn** `dom_dirty_flag` — ADR-016 M2.3: shared, lock-free handle to the DOM-dirty flag
-`crates/js/src/v8_runtime.rs:377` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/v8_runtime.rs:383` **fn** `update_viewport_size` — Update the current viewport dimensions
-`crates/js/src/v8_runtime.rs:389` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by JS
-`crates/js/src/v8_runtime.rs:395` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/v8_runtime.rs:401` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/v8_runtime.rs:407` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy`
-`crates/js/src/v8_runtime.rs:413` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY`/`pageYOffset`
-`crates/js/src/v8_runtime.rs:419` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/v8_runtime.rs:425` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/v8_runtime.rs:431` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/v8_runtime.rs:437` **fn** `take_history_url_updates` — Drain `history.pushState`/`history.replaceState` URL-update notifications
-`crates/js/src/v8_runtime.rs:443` **fn** `take_history_traversals` — Drain all `history.go(n)`/back/forward traversal deltas queued by JS
-`crates/js/src/v8_runtime.rs:449` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
-`crates/js/src/v8_runtime.rs:455` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued during event dispatch
-`crates/js/src/v8_runtime.rs:461` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()`/`exitFullscreen()`
-`crates/js/src/v8_runtime.rs:467` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus`/`_lumen_request_blur`
-`crates/js/src/v8_runtime.rs:521` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
-`crates/js/src/v8_runtime.rs:590` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
+`crates/js/src/v8_runtime.rs:265` **fn** `new` — Create a new V8 runtime on a dedicated thread
+`crates/js/src/v8_runtime.rs:317` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/v8_runtime.rs:338` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/v8_runtime.rs:346` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/v8_runtime.rs:355` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/v8_runtime.rs:363` **fn** `take_print_requests` — Drain all print requests queued by `window.print()`
+`crates/js/src/v8_runtime.rs:373` **fn** `set_deterministic_mode` — Enable or disable deterministic render mode (8F) before calling `install_dom`
+`crates/js/src/v8_runtime.rs:383` **fn** `with_sw_worker_store` — Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
+`crates/js/src/v8_runtime.rs:390` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/v8_runtime.rs:396` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/v8_runtime.rs:402` **fn** `has_raf_pending` — Non-consuming peek: `true` if rAF callbacks are queued
+`crates/js/src/v8_runtime.rs:408` **fn** `raf_pending_flag` — ADR-016 M2.3: shared, lock-free handle to the rAF-pending flag
+`crates/js/src/v8_runtime.rs:414` **fn** `dom_dirty_flag` — ADR-016 M2.3: shared, lock-free handle to the DOM-dirty flag
+`crates/js/src/v8_runtime.rs:420` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/v8_runtime.rs:426` **fn** `update_viewport_size` — Update the current viewport dimensions
+`crates/js/src/v8_runtime.rs:432` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by JS
+`crates/js/src/v8_runtime.rs:438` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/v8_runtime.rs:444` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/v8_runtime.rs:450` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy`
+`crates/js/src/v8_runtime.rs:456` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY`/`pageYOffset`
+`crates/js/src/v8_runtime.rs:462` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/v8_runtime.rs:468` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/v8_runtime.rs:474` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/v8_runtime.rs:480` **fn** `take_history_url_updates` — Drain `history.pushState`/`history.replaceState` URL-update notifications
+`crates/js/src/v8_runtime.rs:486` **fn** `take_history_traversals` — Drain all `history.go(n)`/back/forward traversal deltas queued by JS
+`crates/js/src/v8_runtime.rs:492` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
+`crates/js/src/v8_runtime.rs:498` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued during event dispatch
+`crates/js/src/v8_runtime.rs:504` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()`/`exitFullscreen()`
+`crates/js/src/v8_runtime.rs:510` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus`/`_lumen_request_blur`
+`crates/js/src/v8_runtime.rs:587` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
+`crates/js/src/v8_runtime.rs:656` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
 `crates/js/src/video_bindings.rs:46` **fn** `install_video_bindings` — Install HTMLVideoElement Phase 1 bindings into the JS context
 `crates/js/src/video_gif_store.rs:36` **struct** `VideoPlaybackState` — Per-`<video>` playback timing, stored by the shell after a GIF is decoded
 `crates/js/src/video_gif_store.rs:57` **fn** `current_ms` — Playback position in ms at a given real-clock instant
@@ -5403,4 +5405,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5332 symbols in 22 crates*
+*Total: 5334 symbols in 22 crates*

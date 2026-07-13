@@ -603,9 +603,9 @@
       {
        "id": "P3-v8-s57",
        "title": "V8 S5–S7: батчи простых модулей",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "PARTIAL (2026-07-13, branch p1-v8-s57, батч 1/3): из 90 install_* портированы 68 (все simple `&ctx`-only модули без natives или с ≤2 тривиальными шимами) — install_X_v8 рядом с rquickjs-оригиналом, wiring в install_dom через install_v8! (best-effort: логирует и продолжает, как lib.rs). Попутный фикс: DOMException-полифилл в V8 (quickjs-ng даёт его как встроенный, у V8 веб-платформенных глобалов нет вообще — без него web_codecs и уже портированный в S3 WEB_API_SHIM падают ReferenceError). 2399 тестов lumen-js --features v8-backend зелёные; полный workspace clippy + scoped-test зелёные. Чеклист ported/pending — docs/tasks/ph3-v8-migration.md. Остаток (22): 11 модулей с 1-5 natives (download_bindings, filesystem_access, idle_detection, network_log_bindings, speech, web_audio, file_input, pip_bindings, wake_lock, media_capture, screen_capture) + video_bindings/audio_element (13-16 natives) + 3 с доп. параметрами (geolocation, broadcast_channel, notifications_bindings)"
+       "note": "ЗАКРЫТ 2026-07-13 (branch p1-v8-s57 + p1-v8-s57-batch3): все 90 install_* портированы — батч 1 (68, все simple `&ctx`-only модули без natives или с ≤2 тривиальными шимами) + батч 2 (11 модулей с 1-5 natives: download_bindings, filesystem_access, idle_detection, network_log_bindings, speech, web_audio, file_input, pip_bindings, wake_lock, media_capture, screen_capture — через `into_v8_fnN` + новый `V8JsRuntime::register_native`) + батч 3 (5 модулей: video_bindings/audio_element — 13-16 natives каждый; geolocation/broadcast_channel/notifications_bindings — новая V8JsRuntime-плюмбинг: поля broadcast_channels/pending_notifications + accessors, мирроря QuickJsRuntime). install_X_v8 рядом с rquickjs-оригиналом, wiring в install_dom через install_v8! (best-effort: логирует и продолжает, как lib.rs). Попутный фикс (батч 1): DOMException-полифилл в V8. Полный workspace clippy + scoped-test зелёные. Чеклист — docs/tasks/ph3-v8-migration.md. S5-S7 полностью закрыт; следующий срез — S8 (canvas2d + webgl_canvas)"
       },
       {
        "id": "P3-v8-s8",

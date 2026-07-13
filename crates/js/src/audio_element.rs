@@ -278,6 +278,165 @@ fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_audio_element_bindings`] (Ph3 V8 migration S5-S7
+/// batch 3): state is the process-global [`AudioPlaybackProvider`]
+/// (installed once via `set_audio_playback_provider`, backend-agnostic), so
+/// no new `V8JsRuntime` plumbing is needed — each native captures its own
+/// `get_provider()` clone exactly like the rquickjs original. The JS shim is
+/// unchanged.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_audio_element_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2};
+    use lumen_core::ext::JsRuntime as _;
+
+    {
+        let p = get_provider();
+        let alloc = into_v8_fn0(move || -> f64 { p.as_ref().map_or(0.0, |p| p.alloc_handle() as f64) });
+        rt.register_native("__lumen_audio_alloc", alloc)?;
+    }
+
+    {
+        let p = get_provider();
+        let free = into_v8_fn1(move |handle: f64| {
+            if let Some(p) = &p {
+                p.free_handle(handle as u64);
+            }
+        });
+        rt.register_native("__lumen_audio_free", free)?;
+    }
+
+    {
+        let p = get_provider();
+        let load = into_v8_fn2(move |handle: f64, url: String| {
+            if let Some(p) = &p {
+                p.load(handle as u64, &url);
+            }
+        });
+        rt.register_native("__lumen_audio_load", load)?;
+    }
+
+    {
+        let p = get_provider();
+        let play = into_v8_fn1(move |handle: f64| {
+            if let Some(p) = &p {
+                p.play(handle as u64);
+            }
+        });
+        rt.register_native("__lumen_audio_play", play)?;
+    }
+
+    {
+        let p = get_provider();
+        let pause = into_v8_fn1(move |handle: f64| {
+            if let Some(p) = &p {
+                p.pause(handle as u64);
+            }
+        });
+        rt.register_native("__lumen_audio_pause", pause)?;
+    }
+
+    {
+        let p = get_provider();
+        let stop = into_v8_fn1(move |handle: f64| {
+            if let Some(p) = &p {
+                p.stop(handle as u64);
+            }
+        });
+        rt.register_native("__lumen_audio_stop", stop)?;
+    }
+
+    {
+        let p = get_provider();
+        let seek = into_v8_fn2(move |handle: f64, secs: f64| {
+            if let Some(p) = &p {
+                p.seek(handle as u64, secs);
+            }
+        });
+        rt.register_native("__lumen_audio_seek", seek)?;
+    }
+
+    {
+        let p = get_provider();
+        let set_volume = into_v8_fn2(move |handle: f64, vol: f64| {
+            if let Some(p) = &p {
+                p.set_volume(handle as u64, vol);
+            }
+        });
+        rt.register_native("__lumen_audio_set_volume", set_volume)?;
+    }
+
+    {
+        let p = get_provider();
+        let set_rate = into_v8_fn2(move |handle: f64, rate: f64| {
+            if let Some(p) = &p {
+                p.set_playback_rate(handle as u64, rate);
+            }
+        });
+        rt.register_native("__lumen_audio_set_rate", set_rate)?;
+    }
+
+    {
+        let p = get_provider();
+        let current_time = into_v8_fn1(move |handle: f64| -> f64 {
+            p.as_ref().map_or(0.0, |p| p.current_time(handle as u64))
+        });
+        rt.register_native("__lumen_audio_current_time", current_time)?;
+    }
+
+    {
+        let p = get_provider();
+        let duration = into_v8_fn1(move |handle: f64| -> f64 {
+            p.as_ref().map_or(f64::NAN, |p| p.duration(handle as u64))
+        });
+        rt.register_native("__lumen_audio_duration", duration)?;
+    }
+
+    {
+        let p = get_provider();
+        let paused = into_v8_fn1(move |handle: f64| -> bool {
+            p.as_ref().is_none_or(|p| p.is_paused(handle as u64))
+        });
+        rt.register_native("__lumen_audio_paused", paused)?;
+    }
+
+    {
+        let p = get_provider();
+        let ended = into_v8_fn1(move |handle: f64| -> bool {
+            p.as_ref().is_some_and(|p| p.is_ended(handle as u64))
+        });
+        rt.register_native("__lumen_audio_ended", ended)?;
+    }
+
+    {
+        let p = get_provider();
+        let ready_state = into_v8_fn1(move |handle: f64| -> f64 {
+            p.as_ref().map_or(0.0, |p| p.ready_state(handle as u64) as f64)
+        });
+        rt.register_native("__lumen_audio_ready_state", ready_state)?;
+    }
+
+    {
+        let p = get_provider();
+        let has_error = into_v8_fn1(move |handle: f64| -> bool {
+            p.as_ref().is_some_and(|p| p.has_error(handle as u64))
+        });
+        rt.register_native("__lumen_audio_has_error", has_error)?;
+    }
+
+    {
+        let p = get_provider();
+        let can_play_type = into_v8_fn1(move |mime: String| -> String {
+            p.as_ref().map_or("", |p| p.can_play_type(&mime)).to_owned()
+        });
+        rt.register_native("__lumen_audio_can_play_type", can_play_type)?;
+    }
+
+    rt.eval(AUDIO_ELEMENT_SHIM)?;
+    Ok(())
+}
+
 // ── JavaScript shim ───────────────────────────────────────────────────────────
 
 /// HTMLAudioElement Phase 1 shim.

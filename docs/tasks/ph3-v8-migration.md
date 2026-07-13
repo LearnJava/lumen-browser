@@ -183,11 +183,12 @@ checklist after every merge.
 | ✅ S2 | **Compat layer** | `into_v8_fnN` free fns (arities 0..7) + `V8NativeFn` object-safe trait + `OwnedNativeFn` RAII + trampoline + `register_v8_native`; `reg!` macro в `v8_runtime.rs`; 3 console natives как proof; 4 новых теста. ЗАКРЫТ 2026-07-13 (p1-v8-s2). | typed Rust closure registers and is callable from JS with auto-converted args | Medium — **this slice de-risks everything after it** |
 | ✅ S3 | **Core DOM** | Port `install_primitives` (184 `reg!` natives, `dom.rs:401`) via compat layer; eval `WEB_API_SHIM` unchanged; `V8JsRuntime::install_dom` with same signature as QuickJS version. ЗАКРЫТ 2026-07-13 (p1-v8-s3): 183/184 natives ported (see subsystems/js.md), `_lumen_drain_microtasks` a no-op stub (V8 auto-runs its microtask queue), 27 тестов зелёные. | `document.querySelector`, `_lumen_tick_timers`, `window.location.href` work; `samples/page.html` renders under `--features v8-backend` e2e | Medium |
 | ✅ S4 | **Shell adapter** | `v8 = ["dep:lumen-js", "lumen-js/v8-backend"]` in shell `Cargo.toml`; `#[cfg(feature = "v8")] struct V8PersistentJs` mirroring `QuickPersistentJs` (~50 methods, mechanical); construction branch at `main.rs:4934`. ЗАКРЫТ 2026-07-13 (p1-v8-s4): `V8PersistentJs` implements all `PersistentJs` methods (state-backed ones delegate to `V8JsRuntime`; subsystems not yet ported to V8 — workers, canvas2d, view transitions, notifications — use empty/no-op stubs per slice table above). Both construction sites (initial load + bfcache thaw) mirrored; `quickjs` takes priority at compile time when both features are enabled (see `crates/shell/Cargo.toml` comment). | `cargo run -p lumen-shell --no-default-features --features backend-femtovg,v8 -- samples/page.html` interactive | Low |
-| 🟡 S5–S7 | **Simple-module batches** | ~90 modules, batches of ~30, via compat layer. Same transformation each — parallel subagents appropriate here. Keep a ported/pending checklist in this file | `cargo test -p lumen-js --features v8-backend` after each batch | Low |
+| ✅ S5–S7 | **Simple-module batches** | ~90 modules, batches of ~30, via compat layer. Same transformation each — parallel subagents appropriate here. Keep a ported/pending checklist in this file | `cargo test -p lumen-js --features v8-backend` after each batch | Low |
 
-**S5-S7 ported/pending checklist** (2026-07-13, p1-v8-s57): of the 90 `install_*` call
-sites in `lib.rs::install_dom` (QuickJS), 85 take a single `ctx: &Ctx` argument with no
-extra state — of those, **79 are ported** (batches 1-2): each got a `#[cfg(feature =
+**S5-S7 ported/pending checklist** (2026-07-13, p1-v8-s57, ЗАКРЫТ батчем 3): of the 90
+`install_*` call sites in `lib.rs::install_dom` (QuickJS), 85 take a single `ctx: &Ctx`
+argument with no extra state — of those, **all 79 + 5 (batch 3's video_bindings +
+audio_element) = 84 are ported** (batches 1-3): each got a `#[cfg(feature =
 "v8-backend")] pub(crate) fn install_X_v8(rt: &V8JsRuntime) -> JsResult<()>` sibling next
 to the rquickjs original (same JS shim(s), `rt.eval(...)` instead of `ctx.eval::<(),
 _>(...)`), wired via a `install_v8!` macro at the end of `V8JsRuntime::install_dom` —
@@ -200,9 +201,15 @@ for the rest. Side-fix: added a `DOMException` polyfill (`DOM_EXCEPTION_POLYFILL
 sites already ported in S3) throws `ReferenceError` the instant it's evaluated. Batch 2
 also added `V8JsRuntime::register_native` (registers an already-wrapped
 `into_v8_fnN` native as a global, for standalone modules that need `Function::new`-style
-natives without duplicating `install_dom`'s inline scope/store setup). 2467
-tests green (`cargo test -p lumen-js --features v8-backend`); full workspace clippy +
-scoped-test green.
+natives without duplicating `install_dom`'s inline scope/store setup). Batch 3 (2026-07-13,
+p1-v8-s57-batch3) ported the 3 modules that carry extra state beyond `&ctx`: added
+`broadcast_channels`/`pending_notifications` fields to `V8JsRuntime` (mirroring
+`QuickJsRuntime`'s fields of the same name) plus `broadcast_registry()`/
+`notification_queue()` accessors and `pump_broadcast_channels()`/
+`take_notification_requests()` public methods mirroring the QuickJS API; `geolocation`
+needed no new field (`fake_coords` is only baked into an injected JS global, same as the
+QuickJS original). All tests green (`cargo test -p lumen-js --features v8-backend`); full
+workspace clippy + scoped-test green.
 
 Ported (batch 1, 68): async_context, attribution_reporting, badging, battery_bindings,
 bluetooth, close_watcher, compute_pressure, content_index, credentials, csp,
@@ -223,16 +230,14 @@ network_log_bindings, speech, web_audio, file_input, pip_bindings, wake_lock,
 media_capture, screen_capture — each via `into_v8_fnN` + `register_native`, JS shims
 unchanged.
 
-Pending (batch 3, 5 — next session picks up here):
-- **Heavier native counts** (13-16 `Function::new`, still simpler than S8's canvas2d):
-  video_bindings, audio_element.
-- **Extra state params beyond `&ctx`** (need new `V8JsRuntime` plumbing):
-  geolocation (`fake_coords`), broadcast_channel, notifications_bindings — worker,
-  shared_worker, webgl_canvas, audio_bindings also take extra params but are already
-  covered by S8/S9/S10 below.
-- **Reserved for later hand-port slices, not S5-S7**: canvas2d, offscreen_canvas,
-  webgl_canvas (→ S8); webassembly, webgpu (→ S9); worker, shared_worker, sw_worker (→
-  S10).
+Ported (batch 3, 5): video_bindings, audio_element (heavier native counts, 13-16
+`Function::new` each, still simpler than S8's canvas2d); geolocation, broadcast_channel,
+notifications_bindings (extra state params beyond `&ctx` — see `V8JsRuntime` plumbing
+above). S5-S7 is now fully closed (84/84 simple modules ported).
+
+**Reserved for later hand-port slices, not S5-S7**: canvas2d, offscreen_canvas,
+webgl_canvas (→ S8); webassembly, webgpu (→ S9); worker, shared_worker, sw_worker (→
+S10) — these take extra params too but are covered by their own slices below.
 | ☐ S8 | **canvas2d + webgl_canvas** | Hand-port (hot path, 85 rquickjs mentions; pixel queues via `flush_canvas_updates`) | canvas graphic tests pass under v8 feature | Medium |
 | ☐ S9 | **wasm + webgpu** | `Persistent<Function>` GC roots → `v8::Global<Function>`; keep the `wasm::clear_registry()` teardown pattern (`lib.rs:401`) | wasm + webgpu test suites green (note: webgpu test flaky under load — rerun before blaming the port) | Medium |
 | ☐ S10 | **worker + shared_worker + sw_worker** | Per-thread `Runtime`+`Context` (`worker.rs:293`) → per-thread `OwnedIsolate`; same channel protocol | worker tests green | Medium |
