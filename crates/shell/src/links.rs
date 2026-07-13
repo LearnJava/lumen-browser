@@ -28,9 +28,9 @@ pub fn find_link_href(doc: &Document, mut node_id: NodeId) -> Option<String> {
                 return Some(h.to_owned());
             }
         }
-        match node.parent {
-            Some(parent) => node_id = parent,
-            None => return None,
+        {
+            let parent = node.parent?;
+            node_id = parent
         }
     }
 }

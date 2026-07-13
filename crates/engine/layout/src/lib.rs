@@ -465,9 +465,9 @@ fn link_ancestor(
         if element_href(doc, id).is_some() {
             return Some(id);
         }
-        match doc.get(id).parent {
-            Some(p) => id = p,
-            None => return None,
+        {
+            let p = doc.get(id).parent?;
+            id = p
         }
     }
 }
