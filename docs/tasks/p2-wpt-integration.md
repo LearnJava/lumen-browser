@@ -250,8 +250,23 @@ option isn't lost — do not fold it into this task's scope.
       (nearest patterns: `crates/shell/tests/ipc_server.rs` spawns the real binary but over the
       `--ipc-server` bincode protocol, not BiDi WebSocket) — left as follow-up tooling for S2/S7,
       not blocking S1 since the underlying signal is now provably real by code + unit test.
-- [ ] wptrunner vendored + pinned; hash recorded in `tests/wpt/VENDOR.md`; Python setup documented
-      in `tests/wpt/README.md`.
+- [x] wptrunner vendored + pinned; hash recorded in `tests/wpt/VENDOR.md`; Python setup documented
+      in `tests/wpt/README.md`. Pinned `35be3b44f3111c4d614b5b201e399493d20e7b38` (2026-07-13).
+      Vendored as a committed snapshot (not a submodule — a submodule would need network on every
+      checkout, violating "no live network in CI"): `tools/wptrunner/`, `tools/manifest/`,
+      `tools/serve/`, `tools/wptserve/`, `tools/webdriver/` (incl. the BiDi client S3 will drive),
+      `tools/metadata/`, `tools/gitignore/`, `tools/localpaths.py`, plus
+      `tests/wpt/resources/testharness.js` and the `dom/nodes/` test category. Scope grew past S2's
+      literal "vendor tools/wptrunner/" wording once static analysis showed `wptrunner` itself
+      hard-imports `manifest`/`serve`/`wptserve` at module load — vendoring only `tools/wptrunner/`
+      would have left it non-importable. `tools/third_party/` deliberately NOT vendored (76 MB,
+      mostly unrelated test-fixture bloat — e.g. `hpack/test/` alone is ~55 MB — and every leaf dep
+      it provides is independently available on PyPI); `tests/wpt/requirements.txt` covers those via
+      pip instead. The full import chain (`localpaths` → `manifest.manifest` → `tools.serve.serve`
+      → `wptrunner.wptrunner` → `wptrunner.wptcommandline` → `webdriver.bidi.client`) was verified
+      end-to-end in a clean venv against the committed `requirements.txt` — see
+      `tests/wpt/README.md`. `tools/wpt/` (the `wpt` CLI wrapper) intentionally left for S3/S4, which
+      is where it's actually invoked.
 - [ ] `tools/wptrunner/wptrunner/browsers/lumen.py` product plugin launches/stops `lumen` and
       completes BiDi session negotiation.
 - [ ] `tests/wpt/resources/testharnessreport.js` shim; one smoke test passes end-to-end via

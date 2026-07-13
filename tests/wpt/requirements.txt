@@ -1,0 +1,16 @@
+# Python deps for running the vendored wptrunner against Lumen (P2-wpt).
+#
+# `tools/wptrunner/requirements.txt` covers wptrunner's own advertised deps.
+# The extras below are what `tools/serve`/`tools/manifest`/`tools/wptserve`
+# additionally import at module load time — upstream normally supplies these
+# via the (unvendored, see tests/wpt/VENDOR.md) `tools/third_party/` tree;
+# we get them from PyPI instead. Versions are what was verified importable
+# end-to-end (see README.md) when this file was written — bump deliberately,
+# re-verify, don't let them drift silently.
+-r ../../tools/wptrunner/requirements.txt
+atomicwrites==1.4.1
+certifi==2026.6.17
+h2==4.3.0
+pywebsocket3==4.0.2
+webencodings==0.5.1
+websockets==16.1
