@@ -658,4 +658,73 @@ mod tests {
         assert!((root.children[0].rect.y - 110.0).abs() < f32::EPSILON,
             "clean child y must be translated: got {}", root.children[0].rect.y);
     }
+
+    // ── layout_mutation_incremental (M4) ──────────────────────────────────
+
+    #[test]
+    fn mutation_incremental_style_change_matches_full() {
+        // A height change on one div must produce the same geometry as a full
+        // layout: the changed div re-lays out, the unchanged one above stays in
+        // place, and siblings below are translated to the new position.
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_mutation_incremental;
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html_before = r#"<div style="height:40px"></div><div style="height:60px"></div>"#;
+        let prev = full_layout(html_before);
+
+        let html_after = r#"<div style="height:40px"></div><div style="height:80px"></div>"#;
+        let doc = parse_html(html_after);
+        let sheet = parse_css("");
+        let vp = Size::new(800.0, 600.0);
+        let incr = layout_mutation_incremental(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev,
+        );
+        let full = full_layout(html_after);
+
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        collect_rects(&incr, &mut a);
+        collect_rects(&full, &mut b);
+        assert_eq!(a.len(), b.len(), "box count must match full layout");
+        for ((na, ra), (nb, rb)) in a.iter().zip(b.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+    }
+
+    #[test]
+    fn mutation_incremental_unchanged_dom_matches_full() {
+        // When the DOM is identical to prev, mutation incremental must still
+        // produce geometry equal to a full layout (all-clean fast path).
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_mutation_incremental;
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = r#"<div style="height:50px"></div><div style="height:30px"></div>"#;
+        let prev = full_layout(html);
+        let doc = parse_html(html);
+        let sheet = parse_css("");
+        let vp = Size::new(800.0, 600.0);
+        let incr = layout_mutation_incremental(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev,
+        );
+        let full = full_layout(html);
+
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        collect_rects(&incr, &mut a);
+        collect_rects(&full, &mut b);
+        assert_eq!(a.len(), b.len(), "box count must match");
+        for ((na, ra), (nb, rb)) in a.iter().zip(b.iter()) {
+            assert_eq!(na, nb);
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+    }
 }
