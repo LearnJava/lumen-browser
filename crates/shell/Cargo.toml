@@ -21,6 +21,14 @@ default = ["backend-femtovg", "backend-wgpu", "quickjs"]
 # falls back to NullJsRuntime which silently ignores all inline scripts.
 quickjs = ["dep:lumen-js", "lumen-js/webgpu"]
 
+# Enable the V8 JavaScript engine (rusty_v8), Ph3 V8 migration (docs/tasks/ph3-v8-migration.md).
+# Off by default until the S12 cutover. `quickjs` and `v8` may both be compiled
+# in at once (both sets of natives build), but only one engine actually runs:
+# `quickjs` takes priority at compile time via #[cfg] guards in main.rs. To
+# exercise the V8 path, disable the default `quickjs` feature:
+# cargo run -p lumen-shell --no-default-features --features backend-femtovg,v8
+v8 = ["dep:lumen-js", "lumen-js/v8-backend"]
+
 # femtovg rendering backend — Phase 2 default (ADR-010 RB-9).
 backend-femtovg = ["lumen-paint/backend-femtovg"]
 

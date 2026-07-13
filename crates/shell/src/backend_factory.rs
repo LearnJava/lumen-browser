@@ -242,6 +242,7 @@ fn create_vello(
 fn create_wgpu(
     _window: Arc<Window>,
     _font_bytes: Vec<u8>,
+    _target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
     Err("wgpu backend not compiled in (missing feature backend-wgpu)".into())
 }
