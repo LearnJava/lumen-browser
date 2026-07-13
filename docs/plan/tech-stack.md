@@ -21,7 +21,7 @@
 - движка адблок-фильтров;
 - 2D-растеризации поверх GPU-абстракции;
 - ephemeral KV-хранилища (in-memory, для тестов и session-scope данных);
-- IPC, async-примитивов, work-stealing thread pool;
+- IPC, async-примитивов;
 - UI-фреймворка (иммедиат-режим поверх своих paint-примитивов);
 - собственных MD5 / SHA-256 (для HTTP Digest, не security-критично — challenge-response, не KDF), Base64;
 - knowledge layer §12 — это пользовательская ценность Lumen, не делегируется внешним библиотекам.
@@ -48,6 +48,7 @@ Bidi (UAX #9), line breaking (UAX #14), segmentation (UAX #29), normalization (U
 | **SQLite** (`rusqlite` с `bundled` feature) | Персистентное хранилище: history, bookmarks, notes, read-later, cookies-TTL, профили. FTS5 для §12.1 полнотекстового поиска. | `StorageBackend` + `KnowledgeStore` | 25 лет TH3-тестирования (100% MC/DC branch coverage), стандарт индустрии браузеров (Firefox/Chromium/Safari). Цена ошибки persistent storage асимметрична — молчаливая порча данных пользователя; та же логика, что у crypto. FTS5 закрывает §12.1 без своего inverted index |
 
 > **Долгосрочная стратегия: pure-Rust storage (redb + tantivy).** SQLite остаётся permanent exception на Phase 0–2. Однако `rusqlite` с `bundled` тянет ~250 КБ C-кода, который нельзя аудировать средствами Rust — это противоречит принципу «свой код = прозрачность». Целевая архитектура (Phase 3+): **redb** (pure Rust, ACID copy-on-write B+tree, ноль `unsafe`, используется в `cargo`) для key-value подсистем (localStorage, sessionStorage, IndexedDB, HTTP cache) + **tantivy** (Rust-native FTS) для полнотекстового поиска §12.1. Оба за `StorageBackend` / `KnowledgeStore` trait — drop-in замена. Graduation criterion: замерить p99 latency SQLite WAL vs redb на реальной нагрузке; если SQLite < 1 мс — миграция не срочна, но остаётся целью ради чистоты стека.
+| **`rayon`** | Work-stealing parallel iterator framework. ADR-016 M4.1: параллельный `compute_style` для независимых дочерних узлов flex/grid/table item containers в `lumen-layout::box_tree`. | нет (внутренний примитив параллелизма) | 8+ лет в production, правильный NUMA-aware work-stealing; своя реализация — недели без ценности для идентичности Lumen. Параллелизм layout — не ядро браузерного engine |
 | **JS engine** (`rquickjs` v0.5 → `rusty_v8` v1.0+) | Исполнение JavaScript | `JsRuntime` | V8 — 15 лет, миллиарды долларов, сотни инженеров. QuickJS на старте, V8 в v1.0+ |
 
 ### Provisional accelerators (берём готовое сейчас, заменяем по событию)
@@ -96,7 +97,6 @@ Trait-anchor у каждого — в `lumen-core::ext`. Подключаем п
 - ~~`readability`~~ → своя реализация readability heuristics с настройкой под кириллицу (§10.9).
 - ~~`postcard` + `serde`~~ → своя компактная binary serialization для IPC.
 - ~~`tokio`~~ → свой минимальный async-исполнитель поверх std + epoll/kqueue/IOCP (или single-threaded на старте).
-- ~~`rayon`~~ → свой work-stealing thread pool, когда понадобится параллельный layout / style.
 - ~~`egui` / `iced` / `Slint`~~ → свой иммедиат-режим UI поверх `wgpu`-примитивов из paint-крейта.
 - ~~`flate2` / `miniz_oxide`~~ для PNG — отвергнуто (см. [DECISIONS.md](DECISIONS.md)). PNG-декодер с собственным DEFLATE уже написан в `lumen-image`; DEFLATE переиспользуется для HTTP `Content-Encoding: gzip/deflate`.
 

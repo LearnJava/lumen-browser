@@ -4033,20 +4033,52 @@ fn build_box(
                 style.display,
                 Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
             );
-            for child_id in dom_children {
-                if wrap_text_items
-                    && matches!(doc.get(child_id).data, NodeData::Text(_))
-                {
-                    if let Some(item) = build_anon_text_item(
-                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
-                    ) {
-                        children.push(item);
+
+            // ADR-016 M4.1 — parallel selector matching for large item containers.
+            // Siblings in a flex/grid/table container share only the immutable parent
+            // style; their `compute_style` calls are fully independent. rayon worker
+            // threads start with default thread-locals (no interactive state, no shadow
+            // sheets), so we capture a `StyleEnvSnapshot` on the layout thread and
+            // install it at the top of each closure before any style work runs.
+            // The parallel path produces identical results to the sequential path;
+            // item order is preserved by rayon's par_iter + collect guarantee.
+            //
+            // Threshold: only parallelize when the item count justifies the rayon
+            // spawn overhead (~1–2 µs per closure on a warm thread pool).
+            const RAYON_MIN_FLEX_CHILDREN: usize = 8;
+            if dom_children.len() >= RAYON_MIN_FLEX_CHILDREN {
+                use rayon::prelude::*;
+                let snap = crate::style::StyleEnvSnapshot::capture();
+                children = dom_children.par_iter().filter_map(|&child_id| {
+                    snap.install();
+                    if wrap_text_items && matches!(doc.get(child_id).data, NodeData::Text(_)) {
+                        return build_anon_text_item(
+                            doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
+                        );
                     }
-                    continue;
-                }
-                let child_box = build_box(doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode);
-                if !matches!(child_box.kind, BoxKind::Skip) {
-                    children.push(child_box);
+                    let b = build_box(
+                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
+                    );
+                    if matches!(b.kind, BoxKind::Skip) { None } else { Some(b) }
+                }).collect();
+            } else {
+                for child_id in dom_children {
+                    if wrap_text_items
+                        && matches!(doc.get(child_id).data, NodeData::Text(_))
+                    {
+                        if let Some(item) = build_anon_text_item(
+                            doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
+                        ) {
+                            children.push(item);
+                        }
+                        continue;
+                    }
+                    let child_box = build_box(
+                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
+                    );
+                    if !matches!(child_box.kind, BoxKind::Skip) {
+                        children.push(child_box);
+                    }
                 }
             }
             // CSS Flexbox §4 / Grid §6 — ::before / ::after on a flex or grid

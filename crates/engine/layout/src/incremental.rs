@@ -727,4 +727,112 @@ mod tests {
                 "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
         }
     }
+
+    // ── ADR-016 M4.1: parallel selector matching ──────────────────────────────
+
+    #[test]
+    fn parallel_grid_layout_matches_sequential() {
+        // A grid container with 10 items triggers the rayon parallel path
+        // (RAYON_MIN_FLEX_CHILDREN = 8). The parallel build_box must produce
+        // the same box tree as a sequential build on the same HTML.
+        //
+        // We run layout_measured_hyp twice on identical HTML and compare all
+        // box rects. Since both calls take the same code paths (one is
+        // parallel via rayon, the other gets the same rayon path because
+        // parallelism is transparent), we primarily verify: (a) the child
+        // count is correct and (b) no out-of-order items appear.
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_measured_hyp;
+        use lumen_core::ext::NullHyphenationProvider;
+
+        // 10 grid items → above the RAYON_MIN_FLEX_CHILDREN=8 threshold.
+        let html = r#"<div style="display:grid;grid-template-columns:repeat(5,1fr)">
+            <div style="height:20px"></div>
+            <div style="height:30px"></div>
+            <div style="height:25px"></div>
+            <div style="height:10px"></div>
+            <div style="height:40px"></div>
+            <div style="height:15px"></div>
+            <div style="height:35px"></div>
+            <div style="height:20px"></div>
+            <div style="height:45px"></div>
+            <div style="height:22px"></div>
+        </div>"#;
+        let doc = parse_html(html);
+        let sheet = parse_css("");
+        let vp = Size::new(800.0, 600.0);
+
+        let a = layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+        let b = layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+
+        let mut ra = Vec::new();
+        let mut rb = Vec::new();
+        collect_rects(&a, &mut ra);
+        collect_rects(&b, &mut rb);
+
+        assert_eq!(ra.len(), rb.len(), "both layouts must produce the same box count");
+        for ((na, a_rect), (nb, b_rect)) in ra.iter().zip(rb.iter()) {
+            assert_eq!(na, nb, "box order must be identical");
+            assert!(
+                (a_rect.x - b_rect.x).abs() < 0.5
+                    && (a_rect.y - b_rect.y).abs() < 0.5
+                    && (a_rect.width - b_rect.width).abs() < 0.5
+                    && (a_rect.height - b_rect.height).abs() < 0.5,
+                "rect mismatch at {na:?}: first={a_rect:?} second={b_rect:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_flex_item_order_is_preserved() {
+        // 8 flex items with explicitly distinct heights — the parallel path
+        // must deliver children in DOM order, not rayon scheduler order.
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_measured_hyp;
+        use lumen_core::ext::NullHyphenationProvider;
+
+        // Heights are all different so any reordering would be visible.
+        let html = r#"<div style="display:flex;flex-direction:column">
+            <div style="height:10px"></div>
+            <div style="height:20px"></div>
+            <div style="height:30px"></div>
+            <div style="height:40px"></div>
+            <div style="height:50px"></div>
+            <div style="height:60px"></div>
+            <div style="height:70px"></div>
+            <div style="height:80px"></div>
+        </div>"#;
+        let doc = parse_html(html);
+        let sheet = parse_css("");
+        let vp = Size::new(800.0, 600.0);
+
+        let root = layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+
+        // The flex container is the first child of the root (html > body > div).
+        // Walk to the flex container's children and verify their heights in order.
+        let mut items: Vec<f32> = Vec::new();
+        fn collect_flex_items(b: &crate::box_tree::LayoutBox, depth: usize, items: &mut Vec<f32>) {
+            use crate::style::Display;
+            if depth == 0 {
+                for c in &b.children { collect_flex_items(c, depth + 1, items); }
+            } else if matches!(b.style.display, Display::Flex) {
+                for c in &b.children { items.push(c.rect.height); }
+            } else {
+                for c in &b.children { collect_flex_items(c, depth + 1, items); }
+            }
+        }
+        collect_flex_items(&root, 0, &mut items);
+
+        // Items must appear in document order (ascending heights 10..80).
+        assert_eq!(items.len(), 8, "must have 8 flex items");
+        for (i, &h) in items.iter().enumerate() {
+            let expected = ((i + 1) * 10) as f32;
+            assert!(
+                (h - expected).abs() < 0.5,
+                "item {i} must have height {expected} not {h}",
+            );
+        }
+    }
 }

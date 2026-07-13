@@ -10396,6 +10396,62 @@ pub fn print_media_active() -> bool {
     PRINT_MEDIA.with(|p| p.get())
 }
 
+// ─── Parallel style environment (ADR-016 M4.1) ───────────────────────────────
+
+/// Snapshot of all style-pass thread-locals needed for rayon worker threads.
+///
+/// `compute_style` reads several thread-locals set by the shell before a layout
+/// pass (interactive state, forced colors, shadow sheets, etc.). rayon worker
+/// threads start with each thread-local at its default value, which would
+/// produce incorrect styles for `:hover`/`:focus`/`:active`, shadow DOM, and
+/// forced-colors pages.
+///
+/// Capture a `StyleEnvSnapshot` on the layout thread immediately before
+/// spawning parallel work, then call [`StyleEnvSnapshot::install`] at the top
+/// of every rayon closure. This restores the correct state on each worker thread
+/// and calls [`invalidate_rule_idx_cache`] so the per-thread rule-index cache
+/// starts fresh (it is rebuilt lazily per worker, which is correct).
+///
+/// Shadow sheets are cloned from the current thread into the snapshot; for
+/// documents without shadow DOM this is a cheap empty-map clone.
+#[derive(Clone)]
+pub struct StyleEnvSnapshot {
+    hover_nid: u32,
+    focus_nid: u32,
+    active_nid: u32,
+    forced_colors: bool,
+    print_media: bool,
+    shadow_sheets: std::collections::HashMap<NodeId, lumen_css_parser::Stylesheet>,
+}
+
+impl StyleEnvSnapshot {
+    /// Capture the current thread's style environment.
+    pub fn capture() -> Self {
+        StyleEnvSnapshot {
+            hover_nid:     HOVER_NID.with(Cell::get),
+            focus_nid:     FOCUS_NID.with(Cell::get),
+            active_nid:    ACTIVE_NID.with(Cell::get),
+            forced_colors: FORCED_COLORS.with(Cell::get),
+            print_media:   PRINT_MEDIA.with(Cell::get),
+            shadow_sheets: SHADOW_SHEETS.with(|m| m.borrow().clone()),
+        }
+    }
+
+    /// Install this snapshot on the **current** (worker) thread.
+    ///
+    /// Also calls [`invalidate_rule_idx_cache`] to ensure the thread's
+    /// rule-index cache is reset before any `compute_style` calls.
+    pub fn install(&self) {
+        HOVER_NID.with(|h| h.set(self.hover_nid));
+        FOCUS_NID.with(|f| f.set(self.focus_nid));
+        ACTIVE_NID.with(|a| a.set(self.active_nid));
+        FORCED_COLORS.with(|f| f.set(self.forced_colors));
+        PRINT_MEDIA.with(|p| p.set(self.print_media));
+        SHADOW_SHEETS.with(|m| *m.borrow_mut() = self.shadow_sheets.clone());
+        invalidate_rule_idx_cache();
+    }
+}
+
 /// CSS Cascade L6 §5.1 — true when `node` is a descendant of (or is) an element
 /// matching any selector in `root_sel_str`. Empty `root_sel_str` → always true
 /// (implicit scope = document root, i.e. the rule applies everywhere).
@@ -32187,6 +32243,79 @@ mod anchor_positioning_tests {
         assert_eq!(EmptyCells::parse("show"), Some(EmptyCells::Show));
         assert_eq!(EmptyCells::parse("hide"), Some(EmptyCells::Hide));
         assert_eq!(EmptyCells::parse("bogus"), None);
+    }
+
+    // ── StyleEnvSnapshot (ADR-016 M4.1) ──────────────────────────────────────
+
+    #[test]
+    fn style_env_snapshot_captures_and_restores_interactive_state() {
+        // Set a non-default interactive state, capture it, reset, then install
+        // the snapshot and verify the state is restored correctly.
+        use lumen_dom::NodeId;
+
+        let hover  = NodeId::from_index(42);
+        let focus  = NodeId::from_index(7);
+        let active = NodeId::from_index(99);
+
+        set_interactive_state(Some(hover), Some(focus), Some(active));
+        set_forced_colors(true);
+        set_print_media(true);
+
+        let snap = StyleEnvSnapshot::capture();
+
+        // Reset to defaults on this thread.
+        clear_interactive_state();
+        set_forced_colors(false);
+        set_print_media(false);
+
+        assert!(!forced_colors_active());
+        assert!(!print_media_active());
+
+        // Install snapshot — must restore the captured values.
+        snap.install();
+
+        assert!(forced_colors_active(), "forced colors must be restored");
+        assert!(print_media_active(), "print media must be restored");
+        assert_eq!(
+            HOVER_NID.with(Cell::get),
+            hover.index() as u32,
+            "hover nid must be restored",
+        );
+        assert_eq!(
+            FOCUS_NID.with(Cell::get),
+            focus.index() as u32,
+            "focus nid must be restored",
+        );
+        assert_eq!(
+            ACTIVE_NID.with(Cell::get),
+            active.index() as u32,
+            "active nid must be restored",
+        );
+
+        // Cleanup so later tests on this thread see the screen default.
+        clear_interactive_state();
+        set_forced_colors(false);
+        set_print_media(false);
+    }
+
+    #[test]
+    fn style_env_snapshot_default_state_is_clean() {
+        // A snapshot captured in the default (no interactive state) condition
+        // must reinstall u32::MAX for all nids and false for bool flags.
+        clear_interactive_state();
+        set_forced_colors(false);
+        set_print_media(false);
+
+        let snap = StyleEnvSnapshot::capture();
+
+        // Corrupt thread state briefly, then restore via install.
+        HOVER_NID.with(|h| h.set(1));
+        FORCED_COLORS.with(|f| f.set(true));
+
+        snap.install();
+
+        assert_eq!(HOVER_NID.with(Cell::get), u32::MAX, "hover must be MAX");
+        assert!(!forced_colors_active(), "forced colors must be false");
     }
 
 }
