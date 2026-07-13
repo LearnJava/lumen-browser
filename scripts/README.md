@@ -92,6 +92,17 @@ LUMEN_MODEL=haiku python scripts/orchestrator.py P1 P2
 с заголовком «Lumen P1», «Lumen P2» и т.д. Вывод Claude виден в каждом окне
 в реальном времени.
 
+**Кроссплатформенность окон.** На Windows окна — это `cmd`. На Linux/BSD с
+графической сессией скрипт подбирает первый установленный эмулятор терминала
+(konsole → gnome-terminal → alacritty → kitty → xfce4-terminal → foot →
+xterm → x-terminal-emulator). Если графической сессии нет (`DISPLAY` и
+`WAYLAND_DISPLAY` не заданы), но есть `tmux`, каждый разработчик уходит в
+detached-сессию `lumen-<dev>` (подключение — `tmux attach -t lumen-P1`). Если
+нет ни того, ни другого — процессы запускаются в фоне текущего терминала (их
+вывод перемешивается; для изоляции поставьте `tmux`). Зависшие дочерние
+процессы `claude`/`cargo` добиваются после сессии на всех платформах (на
+Linux — через `/proc`, на macOS/BSD — через `ps`).
+
 ## Сводка флагов CLI
 
 | Флаг / env                       | Назначение                                                                                       |

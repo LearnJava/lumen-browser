@@ -284,10 +284,76 @@ if os.name == "nt":
 
 else:
     def _snapshot_descendants(root_pid: int) -> set:  # type: ignore[misc]
-        return set()
+        """Вернуть PID всех живых потомков root_pid (POSIX: Linux/macOS/BSD).
+
+        На Linux строит карту parent→children из /proc/<pid>/stat; при
+        отсутствии /proc (macOS/BSD) — из вывода `ps -eo pid=,ppid=`. Затем
+        обходит дерево от root_pid вширь. Пустое множество — если ни один
+        источник недоступен (тогда осиротевшие потомки не добиваются, как
+        было раньше на всех не-Windows).
+        """
+        parent_to_children: dict[int, list[int]] = {}
+        proc_dir = Path("/proc")
+        if proc_dir.is_dir():
+            for entry in proc_dir.iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    stat = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue  # процесс уже умер между iterdir и read
+                # Формат stat: "pid (comm) state ppid ...". comm может
+                # содержать пробелы и ')', поэтому режем хвост после ПОСЛЕДНЕЙ ')'.
+                rparen = stat.rfind(")")
+                if rparen == -1:
+                    continue
+                fields = stat[rparen + 2:].split()
+                if len(fields) < 2:
+                    continue
+                try:
+                    pid = int(entry.name)
+                    ppid = int(fields[1])
+                except ValueError:
+                    continue
+                parent_to_children.setdefault(ppid, []).append(pid)
+        else:
+            try:
+                out = subprocess.run(
+                    ["ps", "-eo", "pid=,ppid="],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout
+            except (OSError, subprocess.SubprocessError):
+                return set()
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) != 2:
+                    continue
+                try:
+                    pid, ppid = int(parts[0]), int(parts[1])
+                except ValueError:
+                    continue
+                parent_to_children.setdefault(ppid, []).append(pid)
+
+        result: set = set()
+        queue = [root_pid]
+        while queue:
+            pid = queue.pop()
+            for child in parent_to_children.get(pid, []):
+                if child not in result:
+                    result.add(child)
+                    queue.append(child)
+        return result
 
     def _kill_pids(pids: set) -> int:  # type: ignore[misc]
-        return 0
+        """Завершить процессы по PID через SIGKILL. Возвращает число убитых."""
+        killed = 0
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed += 1
+            except OSError:
+                pass  # процесс уже завершился или чужой — пропускаем
+        return killed
 
 
 def log(developer: str, message: str):
@@ -2497,6 +2563,80 @@ def create_stop_file(developers: list[str]):
         print(f"{dev} будет остановлен после текущей задачи. ({sf})")
 
 
+def _linux_terminal_argv(title: str, inner_cmd: str) -> list[str] | None:
+    """Подобрать argv для запуска inner_cmd в новом окне терминала (Linux/BSD).
+
+    Возвращает готовый argv для первого установленного эмулятора терминала
+    (konsole, gnome-terminal, alacritty, kitty, xfce4-terminal, foot, xterm,
+    x-terminal-emulator) или None, если ни один не найден либо нет графической
+    сессии (нет ни DISPLAY, ни WAYLAND_DISPLAY). Окно держится открытым после
+    завершения задачи (`exec bash`), чтобы можно было прочитать вывод.
+    """
+    import shutil
+
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return None
+    hold = f"{inner_cmd}; exec bash"
+    # (бинарь, построитель argv). Порядок = приоритет; первый найденный побеждает.
+    builders: list[tuple[str, "callable"]] = [
+        ("konsole",             lambda b: [b, "-p", f"tabtitle={title}", "-e", "bash", "-c", hold]),
+        ("gnome-terminal",      lambda b: [b, "--title", title, "--", "bash", "-c", hold]),
+        ("alacritty",           lambda b: [b, "-t", title, "-e", "bash", "-c", hold]),
+        ("kitty",               lambda b: [b, "--title", title, "bash", "-c", hold]),
+        ("xfce4-terminal",      lambda b: [b, f"--title={title}", "-x", "bash", "-c", hold]),
+        ("foot",                lambda b: [b, "-T", title, "bash", "-c", hold]),
+        ("xterm",               lambda b: [b, "-T", title, "-e", "bash", "-c", hold]),
+        ("x-terminal-emulator", lambda b: [b, "-T", title, "-e", "bash", "-c", hold]),
+    ]
+    for name, build in builders:
+        path = shutil.which(name)
+        if path:
+            return build(path)
+    return None
+
+
+def _spawn_dev_window(dev: str, cmd: str) -> None:
+    """Запустить команду разработчика в отдельном окне/сессии (кроссплатформенно).
+
+    Windows — новое окно cmd. Linux/BSD с графической сессией — новое окно
+    терминала (см. `_linux_terminal_argv`). Без графической сессии, но с tmux —
+    detached-сессия `lumen-<dev>` (подключиться: `tmux attach -t lumen-<dev>`).
+    Иначе (нет ни того, ни другого) — фоновый процесс в текущем терминале, вывод
+    нескольких разработчиков перемешается.
+    """
+    title = f"Lumen {dev}"
+    if os.name == "nt":
+        subprocess.Popen(f'start "{title}" cmd /k {cmd}', shell=True, cwd=PROJECT_DIR)
+        print(f"Запущен {dev} в отдельном окне.")
+        return
+
+    argv = _linux_terminal_argv(title, cmd)
+    if argv is not None:
+        # start_new_session — окно живёт независимо от процесса оркестратора.
+        subprocess.Popen(argv, cwd=PROJECT_DIR, start_new_session=True)
+        print(f"Запущен {dev} в отдельном окне терминала ({Path(argv[0]).name}).")
+        return
+
+    import shutil
+
+    tmux = shutil.which("tmux")
+    if tmux:
+        session = f"lumen-{dev}"
+        subprocess.Popen(
+            [tmux, "new-session", "-d", "-s", session, cmd],
+            cwd=PROJECT_DIR, start_new_session=True,
+        )
+        print(f"Запущен {dev} в tmux-сессии '{session}' "
+              f"(подключение: tmux attach -t {session}).")
+        return
+
+    subprocess.Popen(
+        ["bash", "-c", f"{cmd}; exec bash"], cwd=PROJECT_DIR, start_new_session=True,
+    )
+    print(f"Запущен {dev} в фоне (нет граф. сессии и tmux — вывод "
+          f"нескольких разработчиков перемешается; для изоляции установите tmux).")
+
+
 def dispatch_run(
     developers: list[str],
     max_tasks: int,
@@ -2539,12 +2679,7 @@ def dispatch_run(
     for dev in developers:
         cmd = (f'python "{script}" {dev}{max_arg}{fb_arg}{new_arg}'
                f'{model_arg}{coders_arg}{prep_arg}{review_arg}')
-        title = f"Lumen {dev}"
-        if os.name == "nt":
-            subprocess.Popen(f'start "{title}" cmd /k {cmd}', shell=True, cwd=PROJECT_DIR)
-        else:
-            subprocess.Popen(["bash", "-c", f"{cmd}; exec bash"], cwd=PROJECT_DIR)
-        print(f"Запущен {dev} в отдельном окне.")
+        _spawn_dev_window(dev, cmd)
 
     print()
     print("Для остановки: python scripts/orchestrator.py --stop P1")
