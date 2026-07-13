@@ -680,6 +680,9 @@ def format_event(event: dict, last_text: list[str] | None = None) -> list[str]:
 RATE_LIMIT_RE = re.compile(r"resets?\s+(\d{1,2}:\d{2}(?:\s*[ap]m)?)", re.IGNORECASE)
 # Фраза "hit your limit" не покрывает "hit your session limit" — используем широкий паттерн
 RATE_LIMIT_TEXT_RE = re.compile(r"hit your\b.*\blimit|rate.?limit|session limit", re.IGNORECASE)
+# "session limit" — часовой/сессионный лимит аккаунта (общий для ВСЕХ моделей),
+# в отличие от точечного 429 на одну модель, где fallback ещё имеет смысл.
+SESSION_LIMIT_TEXT_RE = re.compile(r"session limit", re.IGNORECASE)
 
 # Короткие алиасы. Принимаются в CLI (`--model`, `--fallback-model`),
 # env-переменных и в интерактивном prompt. Разворачиваются в полный
@@ -802,10 +805,13 @@ def run_claude(
     task_number: int = 0,
     resume_session_id: str | None = None,
     model: str | None = None,
-) -> tuple[int, bool, bool, str | None]:
-    """Запустить claude и показать прогресс. Возвращает (exit_code, rate_limited, auth_error, reset_time).
+) -> tuple[int, bool, bool, str | None, bool]:
+    """Запустить claude и показать прогресс.
 
+    Возвращает (exit_code, rate_limited, auth_error, reset_time, session_limit).
     reset_time — строка вида "6:50pm" из сообщения "resets 6:50pm", или None.
+    session_limit — True, если лимит — это часовой/сессионный лимит аккаунта
+    (общий для всех моделей), а не точечный 429 конкретной модели.
     При resume_session_id использует --resume <id> для продолжения прерванной сессии.
     При model передаёт `--model <id>` в CLI (используется для fallback на Haiku).
     """
@@ -855,6 +861,7 @@ def run_claude(
 
     try:
         rate_limited = False
+        session_limit = False
         auth_error = False
         reset_time: str | None = None
         # Даже при resume id захватываем заново: claude --resume порождает
@@ -875,6 +882,8 @@ def run_claude(
                 # Не-JSON строка — сообщение от CLI, здесь текстовый детект уместен
                 if RATE_LIMIT_TEXT_RE.search(line):
                     rate_limited = True
+                    if SESSION_LIMIT_TEXT_RE.search(line):
+                        session_limit = True
                     m = RATE_LIMIT_RE.search(line)
                     if m and reset_time is None:
                         reset_time = m.group(1)
@@ -892,11 +901,15 @@ def run_claude(
                     _session_id_saved = True
 
             # Детект rate limit в JSON-событии (только status=blocked;
-            # status=allowed — обычный служебный отчёт, не ошибка)
+            # status=allowed — обычный служебный отчёт, не ошибка). Это
+            # событие CLI — сигнал о часовом лимите АККАУНТА (единый на все
+            # модели), а не о точечном 429 одной модели, поэтому сразу
+            # session_limit=True: fallback на другую модель тут бессмыслен.
             if event.get("type") == "rate_limit_event":
                 info = event.get("rate_limit_info", {})
                 if info.get("status", "").startswith("blocked"):
                     rate_limited = True
+                    session_limit = True
                     log(developer, "  Rate limit (blocked)")
             # Детект через текст СИНТЕТИЧЕСКОГО ассистент-сообщения
             # ("You've hit your session limit …"). Обычные сообщения модели
@@ -910,6 +923,8 @@ def run_claude(
                             text = block.get("text", "")
                             if RATE_LIMIT_TEXT_RE.search(text):
                                 rate_limited = True
+                                if SESSION_LIMIT_TEXT_RE.search(text):
+                                    session_limit = True
                                 m = RATE_LIMIT_RE.search(text)
                                 if m and reset_time is None:
                                     reset_time = m.group(1)
@@ -927,9 +942,12 @@ def run_claude(
                     # Свежий терминальный 403 достовернее накопленного флага:
                     # обрыв сети тоже даёт 403, это не исчерпание лимита.
                     rate_limited = False
+                    session_limit = False
                     log(developer, "  Result: API 403 — auth error или обрыв сети")
                 elif api_status == 429 or RATE_LIMIT_TEXT_RE.search(rtext):
                     rate_limited = True
+                    if SESSION_LIMIT_TEXT_RE.search(rtext):
+                        session_limit = True
                     m = RATE_LIMIT_RE.search(rtext)
                     if m and reset_time is None:
                         reset_time = m.group(1)
@@ -944,6 +962,8 @@ def run_claude(
             sl = stderr_output.lower()
             if RATE_LIMIT_TEXT_RE.search(stderr_output):
                 rate_limited = True
+                if SESSION_LIMIT_TEXT_RE.search(stderr_output):
+                    session_limit = True
                 match = RATE_LIMIT_RE.search(stderr_output)
                 if match:
                     if reset_time is None:
@@ -956,7 +976,7 @@ def run_claude(
                 log(developer, "  Auth error (403) в stderr")
 
         process.wait()
-        return process.returncode, rate_limited, auth_error, reset_time
+        return process.returncode, rate_limited, auth_error, reset_time, session_limit
     finally:
         _stop_tracker.set()
         tracker.join(timeout=3.0)
@@ -2278,7 +2298,7 @@ def run_task_loop(
 
         while True:
             try:
-                exit_code, rate_limited, auth_error, reset_time = run_claude(
+                exit_code, rate_limited, auth_error, reset_time, session_limit = run_claude(
                     developer, prompt, task_number,
                     resume_session_id=resume_id,
                     model=fallback_model or model_override or initial_model,
@@ -2315,9 +2335,16 @@ def run_task_loop(
                     time.sleep(60)
             elif rate_limited:
                 generic_failures = 0
-                if fallback_model is None:
-                    # Первый rate limit — выбираем резервную модель и
-                    # возобновляем сессию сразу, без паузы.
+                if session_limit:
+                    # "session limit" — часовой лимит АККАУНТА, общий для
+                    # всех моделей разом (в т.ч. уже активного fallback).
+                    # Переключение модели тут ничего не даст — сразу ждём
+                    # reset_time вместо того, чтобы жечь попытку на fallback.
+                    log(developer, "Лимит сессии общий для всех моделей — fallback не поможет, жду сброса.")
+                    wait_for_rate_limit(developer, reset_time)
+                elif fallback_model is None:
+                    # Первый rate limit конкретной модели — выбираем
+                    # резервную и возобновляем сессию сразу, без паузы.
                     fallback_model = resolve_fallback_model(developer, fallback_preset)
                     announce_fallback(developer, f"задача #{task_number}", fallback_model)
                 else:
