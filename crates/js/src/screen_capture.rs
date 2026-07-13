@@ -205,6 +205,120 @@ pub fn install_screen_capture_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_screen_capture_bindings`] (Ph3 V8 migration S5-S7 batch
+/// 2): all five natives go through the compat layer, same provider snapshot and
+/// thread-local `CAPTURES` map (sound for the same reason as
+/// [`crate::media_capture::install_media_capture_bindings_v8`]).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_screen_capture_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{into_v8_fn0, into_v8_fn1};
+
+    let provider = get_provider();
+
+    {
+        let p = provider.clone();
+        let native = into_v8_fn0(move || -> String {
+            let Some(ref prov) = p else {
+                return "[]".to_owned();
+            };
+            let sources = prov.enumerate_sources();
+            let mut out = String::from('[');
+            for (i, s) in sources.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&format!(
+                    r#"{{"source_id":{:?},"label":{:?},"kind":{:?},"width":{},"height":{}}}"#,
+                    s.source_id, s.label, s.kind, s.width, s.height
+                ));
+            }
+            out.push(']');
+            out
+        });
+        rt.register_native("__lumen_screen_capture_list_sources", native)?;
+    }
+
+    {
+        let p = provider.clone();
+        let native = into_v8_fn1(move |source_id: String| -> f64 {
+            let Some(ref prov) = p else {
+                return -1.0;
+            };
+            let config = ScreenCaptureConfig {
+                source_id: if source_id.is_empty() { None } else { Some(source_id) },
+                ..ScreenCaptureConfig::default()
+            };
+            match prov.capture(config) {
+                Ok(handle) => {
+                    let id = NEXT_HANDLE_ID.fetch_add(1, Ordering::Relaxed);
+                    CAPTURES.with(|c| c.borrow_mut().insert(id, handle));
+                    id as f64
+                }
+                Err(_) => -1.0,
+            }
+        });
+        rt.register_native("__lumen_screen_capture_start", native)?;
+    }
+
+    let info = into_v8_fn1(|handle_id: f64| -> String {
+        CAPTURES.with(|c| {
+            let map = c.borrow();
+            if let Some(h) = map.get(&(handle_id as u64)) {
+                format!(
+                    r#"{{"width":{},"height":{},"source_id":{:?},"label":{:?}}}"#,
+                    h.width(),
+                    h.height(),
+                    h.source_id(),
+                    h.label(),
+                )
+            } else {
+                "{}".to_owned()
+            }
+        })
+    });
+    rt.register_native("__lumen_screen_capture_info", info)?;
+
+    let read_frame = into_v8_fn1(|handle_id: f64| -> String {
+        CAPTURES.with(|c| {
+            let mut map = c.borrow_mut();
+            if let Some(h) = map.get_mut(&(handle_id as u64)) {
+                match h.read_frame() {
+                    Some(frame) => {
+                        let mut out =
+                            format!(r#"{{"width":{},"height":{},"data":["#, frame.width, frame.height);
+                        for (i, &b) in frame.data.iter().enumerate() {
+                            if i > 0 {
+                                out.push(',');
+                            }
+                            out.push_str(&b.to_string());
+                        }
+                        out.push_str("]}");
+                        out
+                    }
+                    None => String::new(),
+                }
+            } else {
+                String::new()
+            }
+        })
+    });
+    rt.register_native("__lumen_screen_capture_read_frame", read_frame)?;
+
+    let stop = into_v8_fn1(|handle_id: f64| {
+        CAPTURES.with(|c| {
+            let mut map = c.borrow_mut();
+            if let Some(mut h) = map.remove(&(handle_id as u64)) {
+                h.stop();
+            }
+        });
+    });
+    rt.register_native("__lumen_screen_capture_stop", stop)?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

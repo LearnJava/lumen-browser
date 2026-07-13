@@ -27,6 +27,22 @@ pub fn install_web_audio_api(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_web_audio_api`] (Ph3 V8 migration S5-S7 batch 2): the
+/// native goes through the compat layer, the JS shim evaluates unchanged.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_web_audio_api_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::into_v8_fn0;
+    use lumen_core::ext::JsRuntime as _;
+
+    // Phase 0: no-op — currentTime advancement is handled purely in JS shim.
+    let native = into_v8_fn0(move || {});
+    rt.register_native("_lumen_audio_tick_time", native)?;
+    rt.eval(WEB_AUDIO_SHIM)?;
+    Ok(())
+}
+
 const WEB_AUDIO_SHIM: &str = r#"(function() {
   'use strict';
 

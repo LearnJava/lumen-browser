@@ -82,6 +82,38 @@ pub fn install_download_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_download_bindings`] (Ph3 V8 migration S5-S7 batch 2): the
+/// native goes through the compat layer (`into_v8_fn2` + `register_native`), the
+/// convenience shim evaluates unchanged.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_download_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::into_v8_fn2;
+    use lumen_core::ext::JsRuntime as _;
+
+    let native = into_v8_fn2(move |url: String, filename: String| {
+        let url = url.trim();
+        if url.is_empty() {
+            return;
+        }
+        let filename = filename.trim();
+        let filename = if filename.is_empty() {
+            None
+        } else {
+            Some(filename.to_string())
+        };
+        enqueue(url.to_string(), filename);
+    });
+    rt.register_native("_lumen_network_download", native)?;
+    rt.eval(
+        "globalThis._lumen_download = function(url, name) { \
+           _lumen_network_download(String(url), name == null ? '' : String(name)); \
+         };",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

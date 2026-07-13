@@ -107,6 +107,51 @@ pub fn install_network_log_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_network_log_bindings`] (Ph3 V8 migration S5-S7 batch 2):
+/// the native goes through the compat layer (`into_v8_fn4` + `register_native`),
+/// the convenience shim evaluates unchanged.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_network_log_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::into_v8_fn4;
+    use lumen_core::ext::JsRuntime as _;
+
+    let native = into_v8_fn4(
+        move |method: String, url: String, status: f64, duration_ms: f64| {
+            let url = url.trim();
+            if url.is_empty() {
+                return;
+            }
+            let method = method.trim();
+            let method = if method.is_empty() {
+                "GET".to_string()
+            } else {
+                method.to_uppercase()
+            };
+            let status = if status >= 1.0 && status <= f64::from(u16::MAX) {
+                Some(status as u16)
+            } else {
+                None
+            };
+            let duration_ms = if duration_ms >= 0.0 {
+                Some(duration_ms as u64)
+            } else {
+                None
+            };
+            enqueue(method, url.to_string(), status, duration_ms);
+        },
+    );
+    rt.register_native("_lumen_log_network_request", native)?;
+    rt.eval(
+        "globalThis._lumen_net_log = function(method, url, status, ms) { \
+           _lumen_log_network_request(String(method == null ? 'GET' : method), String(url), \
+             Number(status == null ? 0 : status), Number(ms == null ? -1 : ms)); \
+         };",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

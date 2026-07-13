@@ -94,6 +94,23 @@ pub fn install_speech_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_speech_bindings`] (Ph3 V8 migration S5-S7 batch 2): the
+/// native goes through the compat layer, the JS shim evaluates unchanged.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_speech_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::into_v8_fn1;
+    use lumen_core::ext::JsRuntime as _;
+
+    let native = into_v8_fn1(move |text: String| {
+        platform_speak_async(text);
+    });
+    rt.register_native("_lumen_speech_speak", native)?;
+    rt.eval(SPEECH_SHIM)?;
+    Ok(())
+}
+
 /// JavaScript shim: Web Speech API (W3C Web Speech §3–4).
 const SPEECH_SHIM: &str = r#"(function() {
 'use strict';

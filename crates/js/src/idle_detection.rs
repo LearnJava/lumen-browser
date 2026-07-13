@@ -92,6 +92,21 @@ pub fn install_idle_detection_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_idle_detection_bindings`] (Ph3 V8 migration S5-S7 batch
+/// 2): the native goes through the compat layer, the JS shim evaluates unchanged.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_idle_detection_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::into_v8_fn0;
+    use lumen_core::ext::JsRuntime as _;
+
+    let native = into_v8_fn0(move || -> f64 { user_idle_ms() as f64 });
+    rt.register_native("__lumen_idle_get_idle_ms", native)?;
+    rt.eval(IDLE_DETECTION_SHIM)?;
+    Ok(())
+}
+
 /// JavaScript shim implementing WICG Idle Detection API (Phase 1).
 ///
 /// Polls `__lumen_idle_get_idle_ms()` every `max(30_000, threshold/2)` ms
