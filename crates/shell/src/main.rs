@@ -2765,11 +2765,10 @@ impl PersistentJs for QuickPersistentJs {
 ///
 /// Mirrors [`QuickPersistentJs`] method-for-method. Methods backed by state
 /// wired in `install_dom` (S3 core DOM) delegate to `V8JsRuntime` accessors;
-/// methods for subsystems not yet ported to V8 (workers, canvas2d, view
-/// transitions, notifications, pointer capture, bfcache heap suspend — see
-/// `docs/tasks/ph3-v8-migration.md` slices S5–S11) use the trait's own
-/// default no-op/empty implementation or a local stub, and start returning
-/// real data once their slice lands.
+/// methods for subsystems not yet ported to V8 (workers, view transitions,
+/// pointer capture, bfcache heap suspend — see `docs/tasks/ph3-v8-migration.md`
+/// slices S9–S11) use the trait's own default no-op/empty implementation or a
+/// local stub, and start returning real data once their slice lands.
 #[cfg(feature = "v8")]
 struct V8PersistentJs {
     rt: lumen_js::v8_runtime::V8JsRuntime,
@@ -2980,8 +2979,7 @@ impl PersistentJs for V8PersistentJs {
         self.eval_js(&format!("_lumen_deliver_popstate({state_json}, '{escaped}')"));
     }
     fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
-        // Canvas 2D bindings not ported to V8 yet (slice S8).
-        Vec::new()
+        self.rt.flush_canvas_updates()
     }
     fn take_fullscreen_requests(&self) -> Vec<(bool, u32)> {
         self.rt

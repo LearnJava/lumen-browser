@@ -335,7 +335,7 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   `lumen-bidi-server`/`tests/wpt` scope.
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
-- `rusty_v8` backend porting (S8–S12 remain; S0/S1/S2/S3/S4/S5-S7 done
+- `rusty_v8` backend porting (S9–S12 remain; S0/S1/S2/S3/S4/S5-S7/S8 done
   2026-07-13 — v8 v150.1.0 optional dep под `v8-backend`;
   `V8JsRuntime`/`V8Inner`/`v8_thread_main` + `JsRuntime` trait impl + `v8_compat`:
   `into_v8_fnN` (arity 0..7) + `V8NativeFn` + `OwnedNativeFn` + trampoline +
@@ -363,7 +363,23 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   `pending_notifications` fields mirroring `QuickJsRuntime`'s fields of the same name,
   plus `broadcast_registry()`/`notification_queue()` accessors and
   `pump_broadcast_channels()`/`take_notification_requests()` public methods mirroring the
-  QuickJS API). All tests green (v8_runtime + module tests); ported/pending checklist in
+  QuickJS API). All tests green (v8_runtime + module tests). S8 (p1-v8-s8, 2026-07-14,
+  hand-port, not part of the S5-S7 simple-module batch): `install_canvas2d_bindings_v8`
+  (77 natives) + `install_webgl_canvas_v8` (34 natives), both pattern (b) — module-level
+  `thread_local!` state (`CANVASES`/`DIRTY`/`GRADIENTS`/`PATTERNS`/`PATHS`/`TRANSFERRED` in
+  `canvas2d.rs`, `CONTEXTS`/`NEXT_ID` in `webgl_canvas.rs`), no new `V8JsRuntime` fields.
+  Max arity 6 (`_lumen_webgl_uniform4f`); every arg/return type already covered by
+  `v8_compat.rs` — no `v8::Global<Function>` GC-root mechanism needed (that's S9's
+  concern, per `wasm::clear_registry` teardown). `canvas2d`'s `getContext('2d')` shim is
+  already in `WEB_API_SHIM` (shared, unchanged); `webgl_canvas`'s `WEBGL_SHIM` is private
+  and is `rt.eval`'d explicitly (mirrors `geolocation_v8`'s global-seeding pattern).
+  `V8JsRuntime::flush_canvas_updates()` added (dispatches `canvas2d::flush_dirty()` on the
+  JS thread); `V8PersistentJs::flush_canvas_updates` (shell) now delegates to it instead of
+  the S4 no-op stub. `offscreen_canvas.rs` intentionally NOT ported in S8 (not in the
+  ROADMAP task's scope; `transferControlToOffscreen()` still returns a valid id but the
+  resulting `OffscreenCanvas.getContext('2d')` won't work under v8 until a future slice
+  ports it). Verified via `--dump-display-list` on `graphic_tests/57-canvas-2d.html`:
+  byte-identical output between v8 and quickjs builds. Ported/pending checklist in
   `docs/tasks/ph3-v8-migration.md`.
 
 ## Invariants

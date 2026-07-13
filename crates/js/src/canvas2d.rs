@@ -1297,6 +1297,834 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_canvas2d_bindings`] (Ph3 V8 migration S8): all state
+/// (`CANVASES`, `DIRTY`, `GRADIENTS`, `PATTERNS`, `PATHS`, `TRANSFERRED`) is
+/// module-level `thread_local!`, keyed by DOM node index / auto-increment
+/// object ID — not a `V8JsRuntime` field — so this needs no new runtime
+/// plumbing, same pattern as `video_bindings_v8`/`audio_element_v8`. The
+/// `getContext('2d')` JS shim already lives in `dom.rs::WEB_API_SHIM`, shared
+/// by both engines, so this only registers the `_lumen_canvas2d_*`/
+/// `_lumen_canvas_*` natives.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_canvas2d_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{
+        into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4, into_v8_fn5, into_v8_fn6,
+        into_v8_fn7,
+    };
+
+    rt.register_native(
+        "_lumen_canvas2d_create",
+        into_v8_fn3(|nid: u32, w: u32, h: u32| {
+            let w = w.clamp(1, MAX_CANVAS_DIM);
+            let h = h.clamp(1, MAX_CANVAS_DIM);
+            CANVASES.with(|c| {
+                if let Ok(mut map) = c.try_borrow_mut() {
+                    map.entry(nid).or_insert_with(|| Context2D::new(w, h));
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_resize",
+        into_v8_fn3(|nid: u32, w: u32, h: u32| {
+            let w = w.clamp(1, MAX_CANVAS_DIM);
+            let h = h.clamp(1, MAX_CANVAS_DIM);
+            with_canvas(nid, |c| c.resize(w, h));
+            mark_dirty(nid);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_scale_resize",
+        into_v8_fn3(|nid: u32, w: u32, h: u32| {
+            let w = w.clamp(1, MAX_CANVAS_DIM);
+            let h = h.clamp(1, MAX_CANVAS_DIM);
+            with_canvas(nid, |c| c.scale_resize(w, h));
+            mark_dirty(nid);
+        }),
+    )?;
+
+    // ── Rectangles ──────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_fill_rect",
+        into_v8_fn5(|nid: u32, x: f64, y: f64, w: f64, h: f64| {
+            with_canvas(nid, |c| c.fill_rect(x as f32, y as f32, w as f32, h as f32));
+            mark_dirty(nid);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_clear_rect",
+        into_v8_fn5(|nid: u32, x: f64, y: f64, w: f64, h: f64| {
+            with_canvas(nid, |c| c.clear_rect(x as f32, y as f32, w as f32, h as f32));
+            mark_dirty(nid);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_stroke_rect",
+        into_v8_fn5(|nid: u32, x: f64, y: f64, w: f64, h: f64| {
+            with_canvas(nid, |c| c.stroke_rect(x as f32, y as f32, w as f32, h as f32));
+            mark_dirty(nid);
+        }),
+    )?;
+
+    // ── Paths ───────────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_begin_path",
+        into_v8_fn1(|nid: u32| {
+            with_canvas(nid, |c| c.begin_path());
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_move_to",
+        into_v8_fn3(|nid: u32, x: f64, y: f64| {
+            with_canvas(nid, |c| c.move_to(x as f32, y as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_line_to",
+        into_v8_fn3(|nid: u32, x: f64, y: f64| {
+            with_canvas(nid, |c| c.line_to(x as f32, y as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_close_path",
+        into_v8_fn1(|nid: u32| {
+            with_canvas(nid, |c| c.close_path());
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_arc",
+        into_v8_fn7(|nid: u32, cx: f64, cy: f64, r: f64, sa: f64, ea: f64, ccw: bool| {
+            with_canvas(nid, |c| {
+                c.arc(cx as f32, cy as f32, r as f32, sa as f32, ea as f32, ccw)
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_fill",
+        into_v8_fn1(|nid: u32| {
+            with_canvas(nid, |c| c.fill());
+            mark_dirty(nid);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_stroke",
+        into_v8_fn1(|nid: u32| {
+            with_canvas(nid, |c| c.stroke());
+            mark_dirty(nid);
+        }),
+    )?;
+
+    // ── Style setters ─────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_set_fill_style",
+        into_v8_fn2(|nid: u32, css: String| {
+            with_canvas(nid, |c| {
+                if let Some(color) = CanvasColor::from_css_str(&css) {
+                    c.fill_style = PaintSource::Color(color);
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_stroke_style",
+        into_v8_fn2(|nid: u32, css: String| {
+            with_canvas(nid, |c| {
+                if let Some(color) = CanvasColor::from_css_str(&css) {
+                    c.stroke_style = PaintSource::Color(color);
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_line_width",
+        into_v8_fn2(|nid: u32, w: f64| {
+            if w.is_finite() && w > 0.0 {
+                with_canvas(nid, |c| c.line_width = w as f32);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_global_alpha",
+        into_v8_fn2(|nid: u32, a: f64| {
+            if a.is_finite() && (0.0..=1.0).contains(&a) {
+                with_canvas(nid, |c| c.global_alpha = a as f32);
+            }
+        }),
+    )?;
+
+    // ── State stack ───────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_save",
+        into_v8_fn1(|nid: u32| {
+            with_canvas(nid, |c| c.save());
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_restore",
+        into_v8_fn1(|nid: u32| {
+            with_canvas(nid, |c| c.restore());
+        }),
+    )?;
+
+    // ── Transforms ────────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_translate",
+        into_v8_fn3(|nid: u32, tx: f64, ty: f64| {
+            with_canvas(nid, |c| c.translate(tx as f32, ty as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_rotate",
+        into_v8_fn2(|nid: u32, angle: f64| {
+            with_canvas(nid, |c| c.rotate(angle as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_scale",
+        into_v8_fn3(|nid: u32, sx: f64, sy: f64| {
+            with_canvas(nid, |c| c.scale(sx as f32, sy as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_transform",
+        into_v8_fn7(|nid: u32, a: f64, b: f64, c2: f64, d: f64, e: f64, f2: f64| {
+            with_canvas(nid, |c| {
+                c.transform(a as f32, b as f32, c2 as f32, d as f32, e as f32, f2 as f32);
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_transform",
+        into_v8_fn7(|nid: u32, a: f64, b: f64, c2: f64, d: f64, e: f64, f2: f64| {
+            with_canvas(nid, |c| {
+                c.set_transform(a as f32, b as f32, c2 as f32, d as f32, e as f32, f2 as f32);
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_reset_transform",
+        into_v8_fn1(|nid: u32| {
+            with_canvas(nid, |c| c.reset_transform());
+        }),
+    )?;
+
+    // ── Bézier curves and additional path operations ───────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_bezier_curve_to",
+        into_v8_fn7(|nid: u32, cp1x: f64, cp1y: f64, cp2x: f64, cp2y: f64, x: f64, y: f64| {
+            with_canvas(nid, |c| {
+                c.bezier_curve_to(
+                    cp1x as f32, cp1y as f32,
+                    cp2x as f32, cp2y as f32,
+                    x as f32, y as f32,
+                );
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_quadratic_curve_to",
+        into_v8_fn5(|nid: u32, cpx: f64, cpy: f64, x: f64, y: f64| {
+            with_canvas(nid, |c| {
+                c.quadratic_curve_to(cpx as f32, cpy as f32, x as f32, y as f32);
+            });
+        }),
+    )?;
+    // Note: `ellipse` is implemented in the JS shim (dom.rs, shared by both engines).
+    rt.register_native(
+        "_lumen_canvas2d_arc_to",
+        into_v8_fn6(|nid: u32, x1: f64, y1: f64, x2: f64, y2: f64, r: f64| {
+            with_canvas(nid, |c| {
+                c.arc_to(x1 as f32, y1 as f32, x2 as f32, y2 as f32, r as f32);
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_rect",
+        into_v8_fn5(|nid: u32, x: f64, y: f64, w: f64, h: f64| {
+            with_canvas(nid, |c| c.rect(x as f32, y as f32, w as f32, h as f32));
+        }),
+    )?;
+
+    // ── Additional property setters ───────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_set_global_composite_operation",
+        into_v8_fn2(|nid: u32, op: String| {
+            if let Some(op) = CompositeOperation::from_str(&op) {
+                with_canvas(nid, |c| c.composite_operation = op);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_line_cap",
+        into_v8_fn2(|nid: u32, cap: String| {
+            if let Some(cap) = LineCap::from_str(&cap) {
+                with_canvas(nid, |c| c.line_cap = cap);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_line_join",
+        into_v8_fn2(|nid: u32, join: String| {
+            if let Some(join) = LineJoin::from_str(&join) {
+                with_canvas(nid, |c| c.line_join = join);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_miter_limit",
+        into_v8_fn2(|nid: u32, limit: f64| {
+            if limit.is_finite() && limit > 0.0 {
+                with_canvas(nid, |c| c.miter_limit = limit as f32);
+            }
+        }),
+    )?;
+
+    // ── Gradients ────────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_create_linear_gradient",
+        into_v8_fn5(|_nid: u32, x0: f64, y0: f64, x1: f64, y1: f64| -> u32 {
+            let id = next_paint_id();
+            GRADIENTS.with(|gs| {
+                if let Ok(mut map) = gs.try_borrow_mut() {
+                    map.insert(id, CanvasGradient::linear(x0 as f32, y0 as f32, x1 as f32, y1 as f32));
+                }
+            });
+            id
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_create_radial_gradient",
+        into_v8_fn7(|_nid: u32, x0: f64, y0: f64, r0: f64, x1: f64, y1: f64, r1: f64| -> u32 {
+            let id = next_paint_id();
+            GRADIENTS.with(|gs| {
+                if let Ok(mut map) = gs.try_borrow_mut() {
+                    map.insert(id, CanvasGradient::radial(
+                        x0 as f32, y0 as f32, r0 as f32,
+                        x1 as f32, y1 as f32, r1 as f32,
+                    ));
+                }
+            });
+            id
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_create_conic_gradient",
+        into_v8_fn4(|_nid: u32, angle: f64, cx: f64, cy: f64| -> u32 {
+            let id = next_paint_id();
+            GRADIENTS.with(|gs| {
+                if let Ok(mut map) = gs.try_borrow_mut() {
+                    map.insert(id, CanvasGradient::conic(angle as f32, cx as f32, cy as f32));
+                }
+            });
+            id
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_gradient_add_color_stop",
+        into_v8_fn3(|grad_id: u32, offset: f64, css: String| {
+            if let Some(color) = CanvasColor::from_css_str(&css) {
+                GRADIENTS.with(|gs| {
+                    if let Ok(mut map) = gs.try_borrow_mut()
+                        && let Some(g) = map.get_mut(&grad_id)
+                    {
+                        g.add_color_stop(offset as f32, color);
+                    }
+                });
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_fill_style_gradient",
+        into_v8_fn2(|nid: u32, grad_id: u32| {
+            let grad = GRADIENTS.with(|gs| gs.try_borrow().ok()?.get(&grad_id).cloned());
+            if let Some(g) = grad {
+                with_canvas(nid, |c| c.fill_style = PaintSource::Gradient(g));
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_stroke_style_gradient",
+        into_v8_fn2(|nid: u32, grad_id: u32| {
+            let grad = GRADIENTS.with(|gs| gs.try_borrow().ok()?.get(&grad_id).cloned());
+            if let Some(g) = grad {
+                with_canvas(nid, |c| c.stroke_style = PaintSource::Gradient(g));
+            }
+        }),
+    )?;
+
+    // ── Patterns ─────────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_create_pattern",
+        into_v8_fn2(|src_nid: u32, repeat_str: String| -> u32 {
+            let repeat = match repeat_str.as_str() {
+                "repeat-x"  => RepeatMode::RepeatX,
+                "repeat-y"  => RepeatMode::RepeatY,
+                "no-repeat" => RepeatMode::NoRepeat,
+                _            => RepeatMode::Repeat,
+            };
+            let pat = CANVASES.with(|c| {
+                let map = c.try_borrow().ok()?;
+                let src = map.get(&src_nid)?;
+                Some(CanvasPattern::new(src.pixels().to_vec(), src.width(), src.height(), repeat))
+            });
+            let Some(p) = pat else { return 0; };
+            let id = next_paint_id();
+            PATTERNS.with(|ps| {
+                if let Ok(mut map) = ps.try_borrow_mut() {
+                    map.insert(id, p);
+                }
+            });
+            id
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_fill_style_pattern",
+        into_v8_fn2(|nid: u32, pat_id: u32| {
+            let pat = PATTERNS.with(|ps| ps.try_borrow().ok()?.get(&pat_id).cloned());
+            if let Some(p) = pat {
+                with_canvas(nid, |c| c.fill_style = PaintSource::Pattern(p));
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_stroke_style_pattern",
+        into_v8_fn2(|nid: u32, pat_id: u32| {
+            let pat = PATTERNS.with(|ps| ps.try_borrow().ok()?.get(&pat_id).cloned());
+            if let Some(p) = pat {
+                with_canvas(nid, |c| c.stroke_style = PaintSource::Pattern(p));
+            }
+        }),
+    )?;
+
+    // ── Shadow ───────────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_set_shadow_color",
+        into_v8_fn2(|nid: u32, css: String| {
+            with_canvas(nid, |c| {
+                if let Some(color) = CanvasColor::from_css_str(&css) {
+                    c.shadow_color = color;
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_shadow_blur",
+        into_v8_fn2(|nid: u32, v: f64| {
+            if v.is_finite() && v >= 0.0 {
+                with_canvas(nid, |c| c.shadow_blur = v as f32);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_shadow_offset_x",
+        into_v8_fn2(|nid: u32, v: f64| {
+            if v.is_finite() {
+                with_canvas(nid, |c| c.shadow_offset_x = v as f32);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_shadow_offset_y",
+        into_v8_fn2(|nid: u32, v: f64| {
+            if v.is_finite() {
+                with_canvas(nid, |c| c.shadow_offset_y = v as f32);
+            }
+        }),
+    )?;
+
+    // ── Clip ─────────────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_clip",
+        into_v8_fn1(|nid: u32| {
+            with_canvas(nid, |c| c.clip());
+        }),
+    )?;
+
+    // ── drawImage ────────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_draw_image",
+        into_v8_fn6(|dst_nid: u32, src_nid: u32, dx: f64, dy: f64, dw: f64, dh: f64| {
+            let (pixels, sw, sh) = CANVASES.with(|c| {
+                let map = c.try_borrow().ok()?;
+                let src = map.get(&src_nid)?;
+                Some((src.pixels().to_vec(), src.width(), src.height()))
+            }).unwrap_or_default();
+            if sw > 0 && sh > 0 {
+                with_canvas(dst_nid, |c| {
+                    c.draw_image(&pixels, sw, sh, dx as f32, dy as f32, dw as f32, dh as f32);
+                });
+                mark_dirty(dst_nid);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_draw_image_crop",
+        into_v8_fn3(|dst_nid: u32, src_nid: u32, coords_csv: String| {
+            let r: Vec<f32> = coords_csv.split(',').filter_map(|s| s.parse().ok()).collect();
+            if r.len() != 8 {
+                return;
+            }
+            let (pixels, sw, sh) = CANVASES.with(|c| {
+                let map = c.try_borrow().ok()?;
+                let src = map.get(&src_nid)?;
+                Some((src.pixels().to_vec(), src.width(), src.height()))
+            }).unwrap_or_default();
+            if sw > 0 && sh > 0 {
+                with_canvas(dst_nid, |c| {
+                    c.draw_image_cropped(
+                        &pixels, sw, sh,
+                        r[0], r[1], r[2], r[3],
+                        r[4], r[5], r[6], r[7],
+                    );
+                });
+                mark_dirty(dst_nid);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_draw_image_from_img",
+        into_v8_fn6(|dst_nid: u32, img_nid: u32, dx: f64, dy: f64, dw: f64, dh: f64| {
+            img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels| {
+                let w = if dw > 0.0 { dw as f32 } else { iw as f32 };
+                let h = if dh > 0.0 { dh as f32 } else { ih as f32 };
+                with_canvas(dst_nid, |c| {
+                    c.draw_image(pixels, iw, ih, dx as f32, dy as f32, w, h);
+                });
+                mark_dirty(dst_nid);
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_draw_image_crop_from_img",
+        into_v8_fn3(|dst_nid: u32, img_nid: u32, coords_csv: String| {
+            let r: Vec<f32> = coords_csv.split(',').filter_map(|s| s.parse().ok()).collect();
+            if r.len() != 8 {
+                return;
+            }
+            img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels| {
+                with_canvas(dst_nid, |c| {
+                    c.draw_image_cropped(
+                        pixels, iw, ih,
+                        r[0], r[1], r[2], r[3],
+                        r[4], r[5], r[6], r[7],
+                    );
+                });
+                mark_dirty(dst_nid);
+            });
+        }),
+    )?;
+
+    // ── ImageData ────────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_put_image_data",
+        into_v8_fn6(|nid: u32, hex: String, sw: u32, sh: u32, dx: i32, dy: i32| {
+            let data = decode_hex(&hex);
+            with_canvas(nid, |c| c.put_image_data(&data, sw, sh, dx, dy));
+            mark_dirty(nid);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_create_image_data",
+        into_v8_fn2(|sw: u32, sh: u32| -> String {
+            let data = Context2D::create_image_data(sw, sh);
+            let mut s = String::with_capacity(data.len() * 2);
+            use std::fmt::Write;
+            for b in &data {
+                let _ = write!(s, "{b:02x}");
+            }
+            s
+        }),
+    )?;
+
+    // ── Text / Font ──────────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_set_font",
+        into_v8_fn2(|nid: u32, font: String| {
+            with_canvas(nid, |c| c.font = font);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_text_align",
+        into_v8_fn2(|nid: u32, align: String| {
+            with_canvas(nid, |c| c.text_align = align);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_text_baseline",
+        into_v8_fn2(|nid: u32, baseline: String| {
+            with_canvas(nid, |c| c.text_baseline = baseline);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_fill_text",
+        into_v8_fn4(|nid: u32, text: String, x: f64, y: f64| {
+            let color = CANVASES.with(|c| {
+                c.borrow().get(&nid).map(|ctx| match &ctx.fill_style {
+                    PaintSource::Color(col) => *col,
+                    other => other.sample(x as f32, y as f32),
+                })
+            }).unwrap_or(CanvasColor::rgba(0, 0, 0, 255));
+            render_text_to_canvas(nid, &text, x as f32, y as f32, color);
+            mark_dirty(nid);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_stroke_text",
+        into_v8_fn4(|nid: u32, text: String, x: f64, y: f64| {
+            let color = CANVASES.with(|c| {
+                c.borrow().get(&nid).map(|ctx| match &ctx.stroke_style {
+                    PaintSource::Color(col) => *col,
+                    other => other.sample(x as f32, y as f32),
+                })
+            }).unwrap_or(CanvasColor::rgba(0, 0, 0, 255));
+            render_text_to_canvas(nid, &text, x as f32, y as f32, color);
+            mark_dirty(nid);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_measure_text",
+        into_v8_fn2(|nid: u32, text: String| -> f64 {
+            let font_str = CANVASES.with(|c| {
+                c.borrow().get(&nid).map(|ctx| ctx.font.clone()).unwrap_or_default()
+            });
+            let pixel_size = parse_canvas_font_size(&font_str);
+            measure_text_width(&text, pixel_size)
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_get_image_data",
+        into_v8_fn1(|nid: u32| -> String {
+            CANVASES.with(|c| {
+                let Ok(map) = c.try_borrow() else {
+                    return String::new();
+                };
+                let Some(ctx) = map.get(&nid) else {
+                    return String::new();
+                };
+                let pixels = ctx.get_image_data();
+                let mut s = String::with_capacity(pixels.len() * 2 + 12);
+                use std::fmt::Write;
+                let _ = write!(s, "{},{},", ctx.width(), ctx.height());
+                for b in &pixels {
+                    let _ = write!(s, "{b:02x}");
+                }
+                s
+            })
+        }),
+    )?;
+
+    // ── Path2D bindings ──────────────────────────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_path2d_new",
+        into_v8_fn1(|svg: String| -> u32 {
+            let path = if svg.is_empty() { Path2dData::new() } else { Path2dData::from_svg_str(&svg) };
+            let id = next_path_id();
+            PATHS.with(|p| p.borrow_mut().insert(id, path));
+            id
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_path2d_free",
+        into_v8_fn1(|path_id: u32| {
+            PATHS.with(|p| p.borrow_mut().remove(&path_id));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_path2d_move_to",
+        into_v8_fn3(|path_id: u32, x: f64, y: f64| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.move_to(x as f32, y as f32);
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_path2d_line_to",
+        into_v8_fn3(|path_id: u32, x: f64, y: f64| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.line_to(x as f32, y as f32);
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_path2d_close",
+        into_v8_fn1(|path_id: u32| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.close_path();
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_path2d_bezier",
+        into_v8_fn7(|path_id: u32, cp1x: f64, cp1y: f64, cp2x: f64, cp2y: f64, x: f64, y: f64| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.bezier_curve_to(
+                        cp1x as f32, cp1y as f32,
+                        cp2x as f32, cp2y as f32,
+                        x as f32, y as f32,
+                    );
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_path2d_quadratic",
+        into_v8_fn5(|path_id: u32, cpx: f64, cpy: f64, x: f64, y: f64| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.quadratic_curve_to(cpx as f32, cpy as f32, x as f32, y as f32);
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_path2d_arc",
+        into_v8_fn7(|path_id: u32, x: f64, y: f64, r: f64, start: f64, end: f64, ccw: bool| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.arc(x as f32, y as f32, r as f32, start as f32, end as f32, ccw);
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_path2d_arc_to",
+        into_v8_fn6(|path_id: u32, x1: f64, y1: f64, x2: f64, y2: f64, r: f64| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.arc_to(x1 as f32, y1 as f32, x2 as f32, y2 as f32, r as f32);
+                }
+            });
+        }),
+    )?;
+    // _lumen_canvas2d_path2d_ellipse is exposed from the JS shim (dom.rs), same as QuickJS.
+    rt.register_native(
+        "_lumen_canvas2d_path2d_rect",
+        into_v8_fn5(|path_id: u32, x: f64, y: f64, w: f64, h: f64| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.rect(x as f32, y as f32, w as f32, h as f32);
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_path2d_add_path",
+        into_v8_fn3(|dst_id: u32, src_id: u32, transform_csv: String| {
+            let transform: Option<[f32; 6]> = if transform_csv.is_empty() {
+                None
+            } else {
+                let parts: Vec<f32> = transform_csv.split(',').filter_map(|s| s.parse().ok()).collect();
+                if parts.len() == 6 {
+                    Some([parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]])
+                } else {
+                    None
+                }
+            };
+            PATHS.with(|p| {
+                let map = p.borrow();
+                if let Some(src) = map.get(&src_id) {
+                    let src_clone = src.clone();
+                    drop(map);
+                    if let Some(dst) = p.borrow_mut().get_mut(&dst_id) {
+                        dst.add_path(&src_clone, transform);
+                    }
+                }
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_fill_path",
+        into_v8_fn2(|nid: u32, path_id: u32| {
+            let path = PATHS.with(|p| p.borrow().get(&path_id).cloned());
+            if let Some(pd) = path {
+                CANVASES.with(|c| {
+                    if let Some(ctx2d) = c.borrow_mut().get_mut(&nid) {
+                        ctx2d.fill_with_path2d(&pd);
+                    }
+                });
+                mark_dirty(nid);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_stroke_path",
+        into_v8_fn2(|nid: u32, path_id: u32| {
+            let path = PATHS.with(|p| p.borrow().get(&path_id).cloned());
+            if let Some(pd) = path {
+                CANVASES.with(|c| {
+                    if let Some(ctx2d) = c.borrow_mut().get_mut(&nid) {
+                        ctx2d.stroke_with_path2d(&pd);
+                    }
+                });
+                mark_dirty(nid);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_clip_path",
+        into_v8_fn2(|nid: u32, path_id: u32| {
+            let path = PATHS.with(|p| p.borrow().get(&path_id).cloned());
+            if let Some(pd) = path {
+                CANVASES.with(|c| {
+                    if let Some(ctx2d) = c.borrow_mut().get_mut(&nid) {
+                        ctx2d.clip_with_path2d(&pd);
+                    }
+                });
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_is_point_in_path",
+        into_v8_fn4(|nid: u32, path_id: u32, x: f64, y: f64| -> bool {
+            let path = PATHS.with(|p| p.borrow().get(&path_id).cloned());
+            path.is_some_and(|pd| {
+                CANVASES.with(|c| {
+                    c.borrow().get(&nid)
+                        .is_some_and(|ctx2d| ctx2d.is_point_in_path2d(&pd, x as f32, y as f32))
+                })
+            })
+        }),
+    )?;
+
+    // ── transferControlToOffscreen (HTML LS §4.12.14) ─────────────────────────
+    //
+    // NOTE: the resulting OffscreenCanvas object is only partially functional
+    // under the v8-backend — `offscreen_canvas.rs` itself is not yet V8-ported
+    // (deferred past S8; the DOM canvas graphic tests don't exercise it).
+    rt.register_native(
+        "_lumen_canvas_transfer_control_to_offscreen",
+        into_v8_fn1(|nid: u32| -> String {
+            let (w, h, pixels) = CANVASES.with(|c| {
+                let Ok(mut map) = c.try_borrow_mut() else {
+                    return (1u32, 1u32, vec![0u8; 4]);
+                };
+                let ctx2d = map.entry(nid).or_insert_with(|| Context2D::new(1, 1));
+                (ctx2d.width(), ctx2d.height(), ctx2d.pixels().to_vec())
+            });
+            let offscreen_id = crate::offscreen_canvas::create_offscreen_from_pixels(w, h, pixels);
+            TRANSFERRED.with(|t| {
+                t.borrow_mut().insert(nid);
+            });
+            format!("{{\"__canvas_id__\":{offscreen_id},\"width\":{w},\"height\":{h}}}")
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas_is_transferred",
+        into_v8_fn1(|nid: u32| -> bool { TRANSFERRED.with(|t| t.borrow().contains(&nid)) }),
+    )?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
