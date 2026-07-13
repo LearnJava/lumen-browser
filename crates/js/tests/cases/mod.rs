@@ -12,4 +12,5 @@
 mod indexed_db;
 mod no_automation_markers;
 mod speech_api;
+mod v8_smoke;
 mod webauthn_credentials;

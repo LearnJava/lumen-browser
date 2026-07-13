@@ -49,7 +49,7 @@ Bidi (UAX #9), line breaking (UAX #14), segmentation (UAX #29), normalization (U
 
 > **Долгосрочная стратегия: pure-Rust storage (redb + tantivy).** SQLite остаётся permanent exception на Phase 0–2. Однако `rusqlite` с `bundled` тянет ~250 КБ C-кода, который нельзя аудировать средствами Rust — это противоречит принципу «свой код = прозрачность». Целевая архитектура (Phase 3+): **redb** (pure Rust, ACID copy-on-write B+tree, ноль `unsafe`, используется в `cargo`) для key-value подсистем (localStorage, sessionStorage, IndexedDB, HTTP cache) + **tantivy** (Rust-native FTS) для полнотекстового поиска §12.1. Оба за `StorageBackend` / `KnowledgeStore` trait — drop-in замена. Graduation criterion: замерить p99 latency SQLite WAL vs redb на реальной нагрузке; если SQLite < 1 мс — миграция не срочна, но остаётся целью ради чистоты стека.
 | **`rayon`** | Work-stealing parallel iterator framework. ADR-016 M4.1: параллельный `compute_style` для независимых дочерних узлов flex/grid/table item containers в `lumen-layout::box_tree`. | нет (внутренний примитив параллелизма) | 8+ лет в production, правильный NUMA-aware work-stealing; своя реализация — недели без ценности для идентичности Lumen. Параллелизм layout — не ядро браузерного engine |
-| **JS engine** (`rquickjs` v0.5 → `rusty_v8` v1.0+) | Исполнение JavaScript | `JsRuntime` | V8 — 15 лет, миллиарды долларов, сотни инженеров. QuickJS на старте, V8 в v1.0+ |
+| **JS engine** (`rquickjs` v0.11 now; `v8` v150.1.0 optional behind `v8-backend`, cutover at S12) | Исполнение JavaScript | `JsRuntime` | V8 — 15 лет, миллиарды долларов, сотни инженеров. QuickJS на старте Phase 0–2, V8 (rusty_v8) v1.0+. S0 go/no-go PASS 2026-07-13. |
 
 ### Provisional accelerators (берём готовое сейчас, заменяем по событию)
 
