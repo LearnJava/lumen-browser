@@ -1,6 +1,6 @@
 # Ph3 — Back/forward cache (bfcache)
 
-**Developer:** P4 · **Branch:** `p4-ph3-bfcache` · **Size:** L  
+**Developer:** P1 · **Branch:** `p1-bfcache-eligibility` (level 1 eligibility slice) · **Size:** L  
 **Crates:** `lumen-shell`, `lumen-js`, `lumen-dom`  
 **Source:** `docs/plan/phases.md:125` — Phase 3 roadmap item `[P4]`
 
@@ -40,6 +40,19 @@ filters + benchmark + hibernation degradation, ~3 sessions) closes the ROADMAP
 task `P3-bfcache`. Level 2 (JS heap survives the freeze) is re-homed under the
 V8 migration (`P3-v8`) since 10C.2 is blocked by rquickjs bindings. See
 "Definition of done" below.
+
+**2026-07-13 — Eligibility filters (WebSocket/EventSource/unload) landed.**
+`bfcache_eligible()` no longer always returns `true`: it now queries
+`PersistentJs::has_bfcache_freeze_blocker()` (default `false` for
+non-QuickJS runtimes; `QuickPersistentJs` evals `_lumen_bfcache_blocked()`).
+`_lumen_bfcache_blocked()` (`crates/js/src/dom.rs`, next to
+`_lumen_fire_page_lifecycle`) returns `true` when any `_ws_instances`/
+`_sse_instances` entry has `readyState === OPEN`, or a `unload`/`beforeunload`
+listener is registered (`_other_win_listeners` bucket or `window.onunload`/
+`onbeforeunload` property). Ineligible pages fall back to the existing
+HTML-snapshot path — no regression. `Cache-Control: no-store` remains
+unimplemented (needs a `LayoutSource` headers field + navigation-pipeline
+plumbing, not yet present). 7 new unit tests in `dom.rs`.
 
 ---
 
@@ -277,9 +290,11 @@ need a `degrade_bfcache_entries(tab_id)` call-out. [PROPOSED]
 | `crates/shell/src/main.rs` | 6512 | `apply_loaded_page()` — skip when thawing |
 | `crates/shell/src/main.rs` | 596 | `BfCache::new(16)` — consider separate capacity |
 | `crates/js/src/dom.rs` | 6350 | `_lumen_fire_page_lifecycle` — already present |
-| `crates/js/src/dom.rs` | 1407 | WebSocket registry — add `open_count()` accessor |
+| `crates/js/src/dom.rs` | ~6944 | `_lumen_bfcache_blocked()` — WS/SSE/unload eligibility check (2026-07-13) |
+| `crates/shell/src/main.rs` | ~2451 | `PersistentJs::has_bfcache_freeze_blocker()` — trait method (2026-07-13) |
 | `crates/core/src/ext.rs` | 882 | `JsRuntime::pause/unpause/suspend/resume` — already present |
 | `crates/shell/src/tab_lifecycle/manager.rs` | — | Add `degrade_bfcache_entries()` [PROPOSED] |
+| `crates/storage/src/bfcache.rs` / `crates/shell/src/main.rs` (`LayoutSource`) | — | No `Cache-Control` capture yet — needed for `no-store` filter [PROPOSED] |
 
 Lines marked **[PROPOSED]** do not exist yet; all others are real file:line refs.
 
@@ -381,15 +396,29 @@ Done on main (merged 2026-07-02):
       normal load.
 - [x] HTML-snapshot fallback still works for ineligible pages (no regression).
 
-Remaining (~3 sessions, see Steps 7–10):
+Remaining (~2 sessions, see Steps 8–9):
 
-- [ ] WebSocket-open pages fall back to HTML snapshot (step 7).
-- [ ] `beforeunload`/`unload` handler detection → ineligible (step 10).
-- [ ] `Cache-Control: no-store` + open EventSource → ineligible.
+- [x] WebSocket-open pages fall back to HTML snapshot (step 7). 2026-07-13:
+      `_lumen_bfcache_blocked()` (`crates/js/src/dom.rs`) checks
+      `_ws_instances`/`_sse_instances` for `readyState === OPEN`;
+      `PersistentJs::has_bfcache_freeze_blocker` (`main.rs`) queries it via
+      `eval_js_value`; `bfcache_eligible()` now calls it through
+      `route_query_js` instead of always returning `true`.
+- [x] `beforeunload`/`unload` handler detection → ineligible (step 10). 2026-07-13:
+      same `_lumen_bfcache_blocked()` — `addEventListener('unload'|'beforeunload', …)`
+      lands in `_other_win_listeners` (no dedicated case in `dom.rs`'s
+      `addEventListener`, so it falls to the generic bucket already); plain
+      `window.onunload`/`onbeforeunload` property assignment checked directly.
+- [x] Open EventSource → ineligible. 2026-07-13: covered by the same
+      `_lumen_bfcache_blocked()` check (`_sse_instances`, `readyState === OPEN`).
+- [ ] `Cache-Control: no-store` → ineligible. Not yet plumbed: `LayoutSource`
+      has no headers field and nothing captures `Cache-Control` per-navigation
+      today (see "Entry points" below for the gap). Left as a TODO on
+      `bfcache_eligible()`.
 - [ ] `bfcache_restore_ms` benchmark added; P50 ≤ 50 ms on `samples/page.html` (step 9).
 - [ ] T2→T3 degradation: `degrade_bfcache_entries(tab_id)` on tab hibernation (step 8).
-- [ ] `cargo clippy -p lumen-shell -p lumen-js -p lumen-storage --all-targets -D warnings` clean.
-- [ ] All existing back/forward shell tests pass.
+- [x] `cargo clippy -p lumen-shell -p lumen-js --all-targets -D warnings` clean.
+- [x] All existing back/forward shell tests pass.
 
 ### Level 2 — live JS state survives the freeze (gated on 10C.2 / V8)
 

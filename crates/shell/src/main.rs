@@ -2440,6 +2440,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Returns a compressed heap blob or empty vec if suspension fails/too large.
     #[allow(dead_code)] // called only for bfcache freeze
     fn suspend(&mut self) -> SuspendedHeap { SuspendedHeap::default() }
+    /// Whether the page has open realtime connections (`WebSocket`/`EventSource`
+    /// in `readyState === OPEN`) or registered `unload`/`beforeunload` handlers.
+    ///
+    /// Both disqualify a page from the full bfcache freeze per HTML Living
+    /// Standard §8.6 — [`Lumen::bfcache_eligible`] falls back to the
+    /// HTML-snapshot path when this returns `true`. Default `false` (no
+    /// blockers) covers runtimes without this introspection.
+    #[allow(dead_code)] // called only for bfcache eligibility check
+    fn has_bfcache_freeze_blocker(&self) -> bool { false }
     /// Atomically clear and return the current pointer capture target node ID.
     ///
     /// Called by the shell after `pointerup` (implicit release per W3C Pointer Events
@@ -2743,6 +2752,9 @@ impl PersistentJs for QuickPersistentJs {
         use lumen_core::ext::JsRuntime as _;
         // Fall back to an empty heap if suspend fails or the heap is too large.
         self.rt.suspend().unwrap_or_default()
+    }
+    fn has_bfcache_freeze_blocker(&self) -> bool {
+        matches!(self.eval_js_value("_lumen_bfcache_blocked()"), Ok(ref v) if v == "true")
     }
     fn take_pointer_capture(&self) -> Option<u32> {
         self.rt.take_pointer_capture()
@@ -15415,10 +15427,17 @@ impl Lumen {
     }
 
     /// Whether the current page may be stored as a full bfcache freeze.
-    /// Always `true` for now; ineligibility filters (open WebSocket/EventSource,
-    /// Cache-Control: no-store, unload handlers) land incrementally.
+    ///
+    /// `false` when the page has an open WebSocket/EventSource connection or a
+    /// registered `unload`/`beforeunload` handler ([`PersistentJs::has_bfcache_freeze_blocker`]).
+    /// `Cache-Control: no-store` is not yet plumbed through the navigation
+    /// pipeline — remains a TODO filter. Ineligible pages fall back to the
+    /// existing HTML-snapshot bfcache path (no regression).
     fn bfcache_eligible(&self) -> bool {
-        true
+        !route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.has_bfcache_freeze_blocker()
+        })
+        .unwrap_or(false)
     }
 
     /// Thaw a frozen page — restore DOM + stylesheet, reinstall a fresh JS runtime
