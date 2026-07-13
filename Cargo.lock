@@ -2175,7 +2175,9 @@ dependencies = [
  "lumen-layout",
  "lumen-paint",
  "p256",
+ "rand_core 0.6.4",
  "rquickjs",
+ "rsa",
  "serde_json",
  "sha1",
  "sha2",
@@ -2201,6 +2203,7 @@ dependencies = [
  "lumen-dom",
  "lumen-html-parser",
  "lumen-image",
+ "rayon",
  "workspace-hack",
 ]
 
@@ -3595,6 +3598,7 @@ dependencies = [
  "pkcs1",
  "pkcs8",
  "rand_core 0.6.4",
+ "sha2",
  "signature",
  "spki",
  "subtle",

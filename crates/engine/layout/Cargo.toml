@@ -13,4 +13,7 @@ lumen-dom.workspace = true
 lumen-css-parser.workspace = true
 lumen-html-parser.workspace = true
 lumen-image.workspace = true
+# ADR-016 M4.1: parallel selector matching for flex/grid/table item containers.
+# Permanent dep: work-stealing parallelism for independent sibling style computations.
+rayon = "1"
 workspace-hack = { version = "0.1", path = "../../../workspace-hack" }

@@ -1632,8 +1632,27 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
   `mutation_incremental_style_change_matches_full` and
   `mutation_incremental_unchanged_dom_matches_full` — both pass (21 total).
 
-**Remaining (M4.1):** rayon over independent dirty subtrees — separate
-ROADMAP entry `P3-mt-m4-rayon`.
+#### M4.1 — rayon parallel build_box ✅ 2026-07-13 (branch `p1-mt-m4-rayon`)
+
+**What was done:**
+
+- **`StyleEnvSnapshot`** added to `crates/engine/layout/src/style.rs`:
+  captures all thread-local style state (HOVER_NID, FOCUS_NID, ACTIVE_NID,
+  FORCED_COLORS, PRINT_MEDIA, SHADOW_SHEETS) at the start of a parallel
+  section via `capture()`, then installs it per rayon worker thread via
+  `install()` + `invalidate_rule_idx_cache()`.
+- **Parallel `build_box` path** in `crates/engine/layout/src/box_tree.rs`:
+  when `is_item_container` (flex/grid/table) and `dom_children.len() >= 8`,
+  children's `build_box` calls run via `par_iter().filter_map()` with a
+  captured `StyleEnvSnapshot` installed on each worker. Below the threshold
+  or for block-flow (where floats and y-cursor dependency make parallelism
+  incorrect), the existing sequential loop is used unchanged.
+- **`rayon = "1"`** added to `crates/engine/layout/Cargo.toml` as permanent dep
+  per dep-policy (ADR-016 M4.1 justification in Cargo.toml comment and
+  `docs/plan/tech-stack.md` permanent exceptions table).
+- **4 new tests** across `style.rs` (2: snapshot capture/restore) and
+  `incremental.rs` (2: grid parallel geometry matches sequential; flex parallel
+  order is preserved) — 25 total, all pass.
 
 ---
 
