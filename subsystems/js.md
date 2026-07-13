@@ -292,6 +292,16 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - New deps: `aes = "0.8"` (explicit pin, already transitive via `aes-gcm`), `cbc = "0.1"`, `ctr = "0.9"`. All RustCrypto family, permanent.
   - **Previously shipped (slice 1):** SHA-*/`digest`, HMAC-SHA256/384/512 (sign/verify), ECDSA-P256 (sign/verify), AES-GCM (encrypt/decrypt). **Remaining:** RSA-OAEP, RSA-PSS, RSASSA-PKCS1-v1_5, ECDH.
 
+- **Web Crypto SubtleCrypto — slice 3: RSA-OAEP / RSA-PSS / RSASSA-PKCS1-v1_5 / ECDH P-256** (`crates/js/src/subtle_crypto.rs`, P3-webcrypto, P1 2026-07-13). Task complete.
+  - **RSA-OAEP** (`rsa::Oaep`): `generateKey` (default 2048-bit, configurable `modulusLength`), `importKey` (spki/pkcs8/jwk), `exportKey` (spki/pkcs8/jwk), `encrypt`, `decrypt`. SHA-256/384/512. Optional `label`.
+  - **RSA-PSS** (`rsa::pss`): `generateKey`, `importKey`/`exportKey` (spki/pkcs8/jwk), `sign`, `verify`. `saltLength` from alg params. SHA-256/384/512.
+  - **RSASSA-PKCS1-v1_5** (`rsa::pkcs1v15`): `generateKey`, `importKey`/`exportKey` (spki/pkcs8/jwk), `sign` (deterministic), `verify`. SHA-256/384/512.
+  - **ECDH P-256** (`p256::ecdh::diffie_hellman`): `generateKey`, `importKey` (raw/spki/pkcs8/jwk), `exportKey` (raw/spki/pkcs8/jwk), `deriveBits`/`deriveKey` — returns 32-byte X coordinate of shared point.
+  - JS shim: `encrypt`/`decrypt` dispatch adds RSA-OAEP via `_lumen_subtle_rsa_oaep_encrypt/decrypt`; `deriveBits` dispatch adds ECDH via `publicKeyId` in JSON (peer public key by registry id).
+  - 2 new native bindings: `_lumen_subtle_rsa_oaep_encrypt`, `_lumen_subtle_rsa_oaep_decrypt`.
+  - 11 new Rust unit tests; 40/40 total subtle_crypto tests pass.
+  - New deps: `rsa = { version = "0.9", features = ["sha2"] }` (permanent, same crate as lumen-network), `rand_core = { version = "0.6", features = ["getrandom"] }` (companion to rsa, OsRng), `p256` updated: +`ecdh` feature.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
