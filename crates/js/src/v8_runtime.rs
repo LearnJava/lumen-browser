@@ -78,6 +78,10 @@ struct V8Inner {
     /// Each entry is a `Box::into_raw(Box::new(f) as Box<Box<dyn V8NativeFn +
     /// Send>>)` thin pointer.  Freed after `isolate` drops.
     native_fn_store: Vec<OwnedNativeFn>,
+    /// Keeps scoped natives (Ph3 V8 migration S9 — `crate::v8_compat::V8NativeFnScoped`)
+    /// alive for the isolate's lifetime. Twin of `native_fn_store` for natives
+    /// that need raw scope/argument access (the WASM host-import bridge).
+    native_fn_store_scoped: Vec<crate::v8_compat::OwnedNativeFnScoped>,
 }
 
 // ── Command channel ───────────────────────────────────────────────────────────
@@ -177,6 +181,7 @@ fn v8_thread_main(
         isolate,
         context,
         native_fn_store: Vec::new(),
+        native_fn_store_scoped: Vec::new(),
     };
     let _ = init_tx.send(Ok(()));
 
@@ -186,6 +191,12 @@ fn v8_thread_main(
             V8Command::Shutdown => break,
         }
     }
+    // Free WASM import `v8::Global` GC roots on this thread while the isolate
+    // is still alive (mirrors QuickJS's `wasm::clear_registry()` discipline at
+    // `lib.rs:447` — see BUG-222). `Global::drop` no-ops safely on an already
+    // disposed isolate, but releasing the persistent handle here is the
+    // correct, leak-free order.
+    crate::wasm::v8_bridge::clear_registry();
     // `inner` (OwnedIsolate + Global<Context>) drops here, on its owning thread.
 }
 
@@ -569,6 +580,27 @@ impl V8JsRuntime {
             let ctx = v8::Local::new(scope, context_global);
             let scope = &mut v8::ContextScope::new(scope, ctx);
             register_v8_native(scope, ctx, store, name, native)
+        })
+    }
+
+    /// Register one already-wrapped scoped native (built via a
+    /// [`crate::v8_compat::V8NativeFnScoped`] closure) as a global JS function
+    /// `name`. Twin of [`Self::register_native`] for natives that need raw
+    /// scope/argument access — currently only the WASM host-import bridge
+    /// (Ph3 V8 migration S9).
+    pub(crate) fn register_native_scoped(
+        &self,
+        name: &'static str,
+        native: Box<dyn crate::v8_compat::V8NativeFnScoped + Send>,
+    ) -> JsResult<()> {
+        self.run(move |inner| {
+            let isolate = &mut inner.isolate;
+            let context_global = &inner.context;
+            let store = &mut inner.native_fn_store_scoped;
+            v8::scope!(let scope, isolate);
+            let ctx = v8::Local::new(scope, context_global);
+            let scope = &mut v8::ContextScope::new(scope, ctx);
+            crate::v8_compat::register_v8_native_scoped(scope, ctx, store, name, native)
         })
     }
 }
@@ -3583,6 +3615,10 @@ impl V8JsRuntime {
         install_v8!(window_management::install_window_management_api_v8);
         install_v8!(xhr::install_xhr_bindings_v8);
         install_v8!(web_codecs::install_webcodecs_bindings_v8);
+        // Ph3 V8 migration S9: wasm + webgpu (hand-port, same best-effort
+        // orchestration as S8's canvas2d/webgl_canvas above).
+        install_v8!(webassembly::install_webassembly_bindings_v8);
+        install_v8!(webgpu::install_webgpu_bindings_v8);
         Ok(())
     }
 }

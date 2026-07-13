@@ -549,6 +549,238 @@ const WEBASSEMBLY_SHIM: &str = r#"
 })();
 "#;
 
+/// V8 port of [`install_webassembly_bindings`] (Ph3 V8 migration S9).
+///
+/// `__lumen_wasm_instantiate` and `__lumen_wasm_call` need raw scope access:
+/// the former to capture the JS import functions as `v8::Global<v8::Function>`
+/// GC roots (see `crate::wasm::v8_bridge::instantiate`), the latter because a
+/// call may re-enter a host import mid-execution, which also needs a live
+/// scope to invoke the stored `Global<Function>`. `__lumen_wasm_global_get`/
+/// `_set` also go through the scoped path so `i64` globals keep exact
+/// precision via `BigInt`, matching the W3C WebAssembly JS Interface (the
+/// generic compat layer's `f64`-only numeric bridge would round-trip a 64-bit
+/// integer through a 53-bit mantissa). All four are registered via
+/// [`crate::v8_runtime::V8JsRuntime::register_native_scoped`] instead of the
+/// generic `into_v8_fnN` path, which cannot represent a `Function` argument or
+/// an exact `BigInt` (see `crate::v8_compat::V8NativeFnScoped`). Every other
+/// native here is a plain numeric/string/bytes bridge and ports through the
+/// ergonomic compat layer unchanged.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_webassembly_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3};
+    use lumen_core::ext::JsRuntime as _;
+
+    rt.register_native(
+        "__lumen_wasm_validate",
+        into_v8_fn1(|bytes: Vec<u8>| -> bool { wasm::validate(&bytes) }),
+    )?;
+
+    // `__lumen_wasm_compile` needs raw scope access so a decode failure throws
+    // a JS exception (the shim's `Module` constructor wraps it as
+    // `CompileError`), matching [`wasm_compile_native`] — the generic compat
+    // layer's `IntoJsReturn` has no error/throw variant.
+    rt.register_native_scoped("__lumen_wasm_compile", Box::new(wasm_compile_native_v8))?;
+
+    rt.register_native(
+        "__lumen_wasm_module_exports",
+        into_v8_fn1(|id: u32| -> String { wasm::module_exports_json(id) }),
+    )?;
+
+    rt.register_native(
+        "__lumen_wasm_module_imports",
+        into_v8_fn1(|id: u32| -> String { wasm::module_imports_json(id) }),
+    )?;
+
+    rt.register_native_scoped(
+        "__lumen_wasm_instantiate",
+        Box::new(wasm_instantiate_native_v8),
+    )?;
+
+    rt.register_native_scoped("__lumen_wasm_call", Box::new(wasm_call_native_v8))?;
+
+    rt.register_native(
+        "__lumen_wasm_mem_size",
+        into_v8_fn1(|inst_id: u32| -> u32 { wasm::v8_bridge::mem_size(inst_id) }),
+    )?;
+    rt.register_native(
+        "__lumen_wasm_mem_grow",
+        into_v8_fn2(|inst_id: u32, delta: u32| -> i32 { wasm::v8_bridge::mem_grow(inst_id, delta) }),
+    )?;
+    rt.register_native(
+        "__lumen_wasm_mem_read",
+        into_v8_fn3(|inst_id: u32, offset: u32, len: u32| -> Vec<u8> {
+            wasm::v8_bridge::mem_read(inst_id, offset, len)
+        }),
+    )?;
+    rt.register_native(
+        "__lumen_wasm_mem_write",
+        into_v8_fn3(|inst_id: u32, offset: u32, bytes: Vec<u8>| -> bool {
+            wasm::v8_bridge::mem_write(inst_id, offset, &bytes)
+        }),
+    )?;
+    rt.register_native(
+        "__lumen_wasm_mem_buffer",
+        into_v8_fn1(|inst_id: u32| -> Vec<u8> { wasm::v8_bridge::mem_read_all(inst_id) }),
+    )?;
+    // `__lumen_wasm_global_get`/`_set` need raw scope access so an `i64`
+    // global round-trips exactly via `BigInt` (the generic compat layer's
+    // `FromJsValue`/`IntoJsReturn` only carry `f64`, which would truncate a
+    // 64-bit integer through a 53-bit mantissa).
+    rt.register_native_scoped("__lumen_wasm_global_get", Box::new(wasm_global_get_native_v8))?;
+    rt.register_native_scoped("__lumen_wasm_global_set", Box::new(wasm_global_set_native_v8))?;
+
+    rt.eval(WEBASSEMBLY_SHIM)?;
+    Ok(())
+}
+
+/// `__lumen_wasm_compile(bytes)` — V8 scoped native. `bytes` is a
+/// `Uint8Array`; throws (as `CompileError` via the shim) on decode failure,
+/// matching [`wasm_compile_native`].
+#[cfg(feature = "v8-backend")]
+fn wasm_compile_native_v8(
+    scope: &mut v8::PinScope,
+    args: &v8::FunctionCallbackArguments,
+    rv: &mut v8::ReturnValue,
+) {
+    let bytes = match v8::Local::<v8::Uint8Array>::try_from(args.get(0)) {
+        Ok(view) => {
+            let mut buf = vec![0u8; view.byte_length()];
+            view.copy_contents(&mut buf);
+            buf
+        }
+        Err(_) => Vec::new(),
+    };
+    match wasm::compile(&bytes) {
+        Ok(id) => rv.set(v8::Number::new(scope, f64::from(id)).into()),
+        Err(e) => throw_type_error(scope, &e),
+    }
+}
+
+/// `__lumen_wasm_instantiate(moduleId, funcs, globals)` — V8 scoped native.
+/// `funcs` is a JS array of import functions, captured as `v8::Global`
+/// GC roots; `globals` is a JS array of imported-global `f64`s.
+#[cfg(feature = "v8-backend")]
+fn wasm_instantiate_native_v8(
+    scope: &mut v8::PinScope,
+    args: &v8::FunctionCallbackArguments,
+    rv: &mut v8::ReturnValue,
+) {
+    let module_id = args.get(0).number_value(scope).unwrap_or(0.0) as u32;
+
+    let mut host_funcs: Vec<v8::Global<v8::Function>> = Vec::new();
+    if let Ok(arr) = v8::Local::<v8::Array>::try_from(args.get(1)) {
+        for i in 0..arr.length() {
+            if let Some(item) = arr.get_index(scope, i)
+                && let Ok(f) = v8::Local::<v8::Function>::try_from(item)
+            {
+                host_funcs.push(v8::Global::new(scope, f));
+            }
+        }
+    }
+
+    let mut globals: Vec<f64> = Vec::new();
+    if let Ok(arr) = v8::Local::<v8::Array>::try_from(args.get(2)) {
+        for i in 0..arr.length() {
+            let v = arr.get_index(scope, i).unwrap_or_else(|| v8::undefined(scope).into());
+            globals.push(v.number_value(scope).unwrap_or(0.0));
+        }
+    }
+
+    match wasm::v8_bridge::instantiate(scope, module_id, host_funcs, globals) {
+        Ok(id) => rv.set(v8::Number::new(scope, f64::from(id)).into()),
+        Err(e) => throw_type_error(scope, &e),
+    }
+}
+
+/// `__lumen_wasm_call(instId, funcIdx, args)` — V8 scoped native. Needs raw
+/// scope access because an in-flight call may re-enter a host import (a
+/// stored `Global<Function>`), which requires a live scope to invoke.
+#[cfg(feature = "v8-backend")]
+fn wasm_call_native_v8(
+    scope: &mut v8::PinScope,
+    args: &v8::FunctionCallbackArguments,
+    rv: &mut v8::ReturnValue,
+) {
+    let inst_id = args.get(0).number_value(scope).unwrap_or(0.0) as u32;
+    let func_idx = args.get(1).number_value(scope).unwrap_or(0.0) as u32;
+
+    let (params, _results) = wasm::v8_bridge::func_signature(inst_id, func_idx).unwrap_or_default();
+    let mut typed_args: Vec<wasm::value::Value> = Vec::new();
+    if let Ok(arr) = v8::Local::<v8::Array>::try_from(args.get(2)) {
+        for i in 0..arr.length() {
+            let v = arr.get_index(scope, i).unwrap_or_else(|| v8::undefined(scope).into());
+            let ty = params
+                .get(i as usize)
+                .copied()
+                .unwrap_or(wasm::value::ValType::F64);
+            typed_args.push(wasm::v8_bridge::v8_value_to_wasm(scope, v, ty));
+        }
+    }
+
+    match wasm::v8_bridge::call_typed(scope, inst_id, func_idx, &typed_args) {
+        Ok(results) => {
+            let out = v8::Array::new(scope, results.len() as i32);
+            for (i, v) in results.into_iter().enumerate() {
+                let jv = wasm::v8_bridge::wasm_value_to_v8(scope, v);
+                out.set_index(scope, i as u32, jv);
+            }
+            rv.set(out.into());
+        }
+        Err(e) => throw_type_error(scope, &e),
+    }
+}
+
+/// `__lumen_wasm_global_get(instId, idx)` — V8 scoped native. Returns the
+/// global's value as a `BigInt` (i64) or `Number` (other types), matching
+/// [`wasm_global_get_native`].
+#[cfg(feature = "v8-backend")]
+fn wasm_global_get_native_v8(
+    scope: &mut v8::PinScope,
+    args: &v8::FunctionCallbackArguments,
+    rv: &mut v8::ReturnValue,
+) {
+    let inst_id = args.get(0).number_value(scope).unwrap_or(0.0) as u32;
+    let idx = args.get(1).number_value(scope).unwrap_or(0.0) as u32;
+    let v = match wasm::v8_bridge::global_value(inst_id, idx) {
+        Some(v) => wasm::v8_bridge::wasm_value_to_v8(scope, v),
+        None => v8::Number::new(scope, 0.0).into(),
+    };
+    rv.set(v);
+}
+
+/// `__lumen_wasm_global_set(instId, idx, value)` — V8 scoped native. `value`
+/// may be a `BigInt` (i64 globals) or a `Number`; the generic compat layer
+/// has no `FromJsValue` for that union, so this reads the raw arg directly.
+#[cfg(feature = "v8-backend")]
+fn wasm_global_set_native_v8(
+    scope: &mut v8::PinScope,
+    args: &v8::FunctionCallbackArguments,
+    rv: &mut v8::ReturnValue,
+) {
+    let inst_id = args.get(0).number_value(scope).unwrap_or(0.0) as u32;
+    let idx = args.get(1).number_value(scope).unwrap_or(0.0) as u32;
+    let Some(cur) = wasm::v8_bridge::global_value(inst_id, idx) else {
+        rv.set(v8::Boolean::new(scope, false).into());
+        return;
+    };
+    let wv = wasm::v8_bridge::v8_value_to_wasm(scope, args.get(2), cur.val_type());
+    let ok = wasm::v8_bridge::global_set_value(inst_id, idx, wv);
+    rv.set(v8::Boolean::new(scope, ok).into());
+}
+
+/// Schedule a JS `TypeError` on `scope` (mirrors the generic compat layer's
+/// `native_fn_trampoline` error path for the scoped natives above, which
+/// don't go through [`crate::v8_compat::JsError`]).
+#[cfg(feature = "v8-backend")]
+fn throw_type_error(scope: &mut v8::PinScope, msg: &str) {
+    if let Some(s) = v8::String::new(scope, msg) {
+        let exc = v8::Exception::type_error(scope, s);
+        scope.throw_exception(exc);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -843,5 +1075,89 @@ mod tests {
                 .unwrap();
             assert!(ok, "memory must stay coherent across mixed WASM/JS access");
         });
+    }
+}
+
+/// V8-backend counterpart of the [`tests`] module above (Ph3 V8 migration S9).
+/// Kept minimal — just enough to prove the `v8::Global<v8::Function>` GC-root
+/// mechanism (this slice's core risk) actually works end to end, not merely
+/// compiles: an exported call, and a host import round-trip with exact `i64`
+/// `BigInt` precision, mirroring [`tests::webassembly_i64_import_arg_and_result_use_bigint`].
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::{JsRuntime, JsValue};
+
+    fn rt_with_wasm() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_webassembly_bindings_v8(&rt).unwrap();
+        rt
+    }
+
+    fn bytes_global(rt: &V8JsRuntime, name: &str, bytes: &[u8]) {
+        let arr = JsValue::Array(bytes.iter().map(|b| JsValue::Number(f64::from(*b))).collect());
+        rt.set_global(name, arr).unwrap();
+    }
+
+    /// `(module (func (export "add") (param i32 i32) (result i32)
+    ///   local.get 0 local.get 1 i32.add))` — same bytes as [`super::tests::ADD_WASM`].
+    const ADD_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, // header
+        0x01, 0x07, 0x01, 0x60, 0x02, 0x7F, 0x7F, 0x01, 0x7F, // type (i32,i32)->i32
+        0x03, 0x02, 0x01, 0x00, // one func of type 0
+        0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00, // export "add" func 0
+        0x0A, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B, // code
+    ];
+
+    #[test]
+    fn v8_instantiate_and_call_add() {
+        let rt = rt_with_wasm();
+        bytes_global(&rt, "__add_bytes", ADD_WASM);
+        let sum = rt
+            .eval(
+                "var m = new WebAssembly.Module(new Uint8Array(__add_bytes));\
+                 var inst = new WebAssembly.Instance(m);\
+                 inst.exports.add(40, 2)",
+            )
+            .unwrap();
+        assert_eq!(sum, JsValue::Number(42.0));
+    }
+
+    /// `(module (import "env" "h" (func (param i64) (result i64)))
+    ///   (func (export "f") (param i64) (result i64) local.get 0 call 0))`
+    /// — same bytes as [`super::tests::IMPORT64_WASM`].
+    const IMPORT64_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, // header
+        0x01, 0x06, 0x01, 0x60, 0x01, 0x7E, 0x01, 0x7E, // type (i64)->i64
+        0x02, 0x09, 0x01, 0x03, 0x65, 0x6E, 0x76, 0x01, 0x68, 0x00, 0x00, // import env.h func type0
+        0x03, 0x02, 0x01, 0x00, // defined func 1, type 0
+        0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x01, // export "f" func 1
+        0x0A, 0x08, 0x01, 0x06, 0x00, 0x20, 0x00, 0x10, 0x00, 0x0B, // code: local0 call0
+    ];
+
+    /// Proves the S9 GC-root mechanism: the host import closure is stored as
+    /// a `v8::Global<v8::Function>` across the `instantiate` call, then
+    /// resurrected and invoked mid-`call_typed` — with the `i64` argument and
+    /// result both keeping full 64-bit precision via `BigInt` (a plain `f64`
+    /// round-trip would round `2^53 + 1` and fail this assertion).
+    #[test]
+    fn v8_i64_import_arg_and_result_use_bigint() {
+        let rt = rt_with_wasm();
+        bytes_global(&rt, "__imp64_bytes", IMPORT64_WASM);
+        let ok = rt
+            .eval(
+                "var m = new WebAssembly.Module(new Uint8Array(__imp64_bytes));\
+                 var seen;\
+                 var inst = new WebAssembly.Instance(m, {env:{h:function(x){ seen = x; return x + 1n; }}});\
+                 var r = inst.exports.f(9007199254740993n);\
+                 (typeof seen === 'bigint') && (seen === 9007199254740993n) &&\
+                 (typeof r === 'bigint') && (r === 9007199254740994n)",
+            )
+            .unwrap();
+        assert_eq!(
+            ok,
+            JsValue::Bool(true),
+            "i64 import arg + result must round-trip as exact BigInt through a v8::Global<Function> host import"
+        );
     }
 }

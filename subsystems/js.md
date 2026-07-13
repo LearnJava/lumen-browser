@@ -335,7 +335,7 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   `lumen-bidi-server`/`tests/wpt` scope.
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
-- `rusty_v8` backend porting (S9–S12 remain; S0/S1/S2/S3/S4/S5-S7/S8 done
+- `rusty_v8` backend porting (S10–S12 remain; S0/S1/S2/S3/S4/S5-S7/S8/S9 done
   2026-07-13 — v8 v150.1.0 optional dep под `v8-backend`;
   `V8JsRuntime`/`V8Inner`/`v8_thread_main` + `JsRuntime` trait impl + `v8_compat`:
   `into_v8_fnN` (arity 0..7) + `V8NativeFn` + `OwnedNativeFn` + trampoline +
@@ -379,8 +379,39 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   ROADMAP task's scope; `transferControlToOffscreen()` still returns a valid id but the
   resulting `OffscreenCanvas.getContext('2d')` won't work under v8 until a future slice
   ports it). Verified via `--dump-display-list` on `graphic_tests/57-canvas-2d.html`:
-  byte-identical output between v8 and quickjs builds. Ported/pending checklist in
-  `docs/tasks/ph3-v8-migration.md`.
+  byte-identical output between v8 and quickjs builds. S9 (p1-v8-s9, 2026-07-14): wasm +
+  webgpu. `webgpu.rs` had zero `Persistent` usage (confirmed S8's prediction) — ports
+  unchanged through `into_v8_fnN`; without the `webgpu` Cargo feature it's just
+  `rt.eval(WEBGPU_SHIM)` (0 natives), mirroring `webgl_canvas`'s shim-eval pattern.
+  `webassembly.rs` needed the GC-root mechanism the generic compat layer can't express —
+  `JsValue` has no function variant, so a JS `Function` argument collapses to `Null`
+  (`v8_to_jsvalue`). Added `v8_compat::V8NativeFnScoped`: a second, object-safe native
+  trait giving raw `(scope, FunctionCallbackArguments, ReturnValue)` access instead of the
+  `JsValue` abstraction, with its own trampoline (`native_fn_trampoline_scoped`) and store
+  (`V8Inner::native_fn_store_scoped`, twin of `native_fn_store`); `V8JsRuntime::register_native_scoped`
+  mirrors `register_native`. 5 wasm natives use it: `__lumen_wasm_compile` (throws
+  `CompileError` — `IntoJsReturn` has no error variant), `__lumen_wasm_instantiate`
+  (captures the JS import-function array as `Vec<v8::Global<v8::Function>>`),
+  `__lumen_wasm_call` (may re-enter a host import mid-call, needs a live scope to invoke
+  the stored `Global`), `__lumen_wasm_global_get`/`_set` (need exact `i64` `BigInt`, which
+  `f64`-only `FromJsValue`/`IntoJsReturn` would truncate past 2^53). New submodule
+  `wasm::v8_bridge` (`#[cfg(feature = "v8-backend")]`) is a **separate** thread-local
+  instance registry from the QuickJS one (module ids shared via the existing
+  `with_module`; instances not, so the two backends never collide even if both features
+  are compiled in); its `JsHost` resurrects a `v8::Local<Function>` from the stored
+  `Global` via `v8::Local::new(scope, &global)` and invokes it with `Function::call`.
+  `wasm::v8_bridge::clear_registry()` wired into `v8_thread_main`'s teardown (mirrors
+  `lib.rs:447`'s `wasm::clear_registry()` for QuickJS; V8's `Global::drop` actually
+  no-ops safely on an already-disposed isolate, so this isn't needed to avoid an abort
+  like QuickJS's `gc_obj_list` assertion, but is still the correct leak-free order).
+  Verification: `cargo test -p lumen-js --features v8-backend[,webgpu]` — 2402 lib tests
+  (2399 + 3 new `tests_v8`) + 68 integration, all green; the 2 new `webassembly::tests_v8`
+  tests are load-bearing — one exported-call round-trip and one host-import `i64`/`BigInt`
+  round-trip (reusing `tests::IMPORT64_WASM`'s bytes) proving the `Global<Function>`
+  actually resurrects and invokes at runtime, not merely compiles (no display-list
+  equivalent exists for wasm to verify against, unlike S8's canvas diff).
+  `offscreen_canvas`/`worker`/`shared_worker`/`sw_worker` remain unported (S10). Ported/pending
+  checklist in `docs/tasks/ph3-v8-migration.md`.
 
 ## Invariants
 
