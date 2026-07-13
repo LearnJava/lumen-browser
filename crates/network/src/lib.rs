@@ -787,9 +787,13 @@ impl AbortWatchdog {
 fn read_response(conn: &mut Connection) -> Result<Response> {
     let (status, headers, server_wants_close) = read_head(conn)?;
 
-    // Body: chunked > Content-Length > read-to-EOF (последнее — только если
-    // сервер обещал закрыть соединение; для keep-alive без Content-Length
-    // длина неизвестна, что нелегально по RFC 7230 §3.3.3).
+    // Body: chunked > Content-Length > read-to-EOF. RFC 7230 §3.3.3 (7): a
+    // response with neither applies the read-to-EOF fallback unconditionally
+    // — NOT gated on an explicit `Connection: close` header. Many real
+    // servers (Python's `http.server` / wptserve, the reference server WPT
+    // tests run against) omit that header while still relying on
+    // close-delimited framing; treating its absence as a hard protocol error
+    // broke every fetch against them (found running P2-wpt S4).
     let is_chunked = header_value(&headers, "transfer-encoding")
         .map(|v| v.to_ascii_lowercase().contains("chunked"))
         .unwrap_or(false);
@@ -811,27 +815,19 @@ fn read_response(conn: &mut Connection) -> Result<Response> {
             return Err(Error::Network(format!("read body: {e}")));
         }
         buf
-    } else if server_wants_close || status == 204 || status == 304 {
+    } else if status == 204 || status == 304 {
         // 204 No Content / 304 Not Modified не имеют тела (RFC 7230 §3.3.3).
-        // Иначе при Connection: close без Content-Length — читаем до EOF.
-        if status == 204 || status == 304 {
-            Vec::new()
-        } else {
-            let mut buf = Vec::new();
-            if let Err(e) = conn.reader.read_to_end(&mut buf) {
-                conn.closed = true;
-                return Err(Error::Network(format!("read body: {e}")));
-            }
-            conn.closed = true;
-            buf
-        }
+        Vec::new()
     } else {
-        // RFC 7230: HTTP/1.1 без Content-Length и без chunked при keep-alive —
-        // протокольная ошибка. Закрываем соединение, чтобы не отравить пул.
+        // Ни chunked, ни Content-Length — читаем до EOF (RFC 7230 §3.3.3 п.7),
+        // независимо от того, прислал ли сервер явный `Connection: close`.
+        let mut buf = Vec::new();
+        if let Err(e) = conn.reader.read_to_end(&mut buf) {
+            conn.closed = true;
+            return Err(Error::Network(format!("read body: {e}")));
+        }
         conn.closed = true;
-        return Err(Error::Network(
-            "response without Content-Length or chunked".to_owned(),
-        ));
+        buf
     };
 
     if server_wants_close {
@@ -1133,25 +1129,18 @@ fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>) -> Result<
     let content_length =
         header_value(&headers, "content-length").and_then(|v| v.trim().parse::<usize>().ok());
 
+    // RFC 7230 §3.3.3 (7): neither chunked nor Content-Length → read-to-EOF
+    // framing applies unconditionally, not gated on an explicit `Connection:
+    // close` header (see `read_response`'s matching comment — found running
+    // P2-wpt S4 against wptserve, which omits that header).
     let framing = if is_chunked {
-        Some(BodyFraming::Chunked)
+        BodyFraming::Chunked
     } else if let Some(len) = content_length {
-        Some(BodyFraming::Length(len))
+        BodyFraming::Length(len)
     } else if status == 204 || status == 304 {
-        Some(BodyFraming::Length(0))
-    } else if server_wants_close {
-        Some(BodyFraming::Eof)
+        BodyFraming::Length(0)
     } else {
-        None
-    };
-
-    let Some(framing) = framing else {
-        // RFC 7230: HTTP/1.1 без Content-Length и без chunked при keep-alive —
-        // протокольная ошибка. Закрываем соединение, чтобы не отравить пул.
-        conn.closed = true;
-        return Err(Error::Network(
-            "response without Content-Length or chunked".to_owned(),
-        ));
+        BodyFraming::Eof
     };
 
     let stream = (200..=299).contains(&status);
@@ -1241,7 +1230,7 @@ fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>) -> Result<
         conn.closed = true;
         return Err(e);
     }
-    if server_wants_close {
+    if server_wants_close || matches!(framing, BodyFraming::Eof) {
         conn.closed = true;
     }
     Ok(Response {

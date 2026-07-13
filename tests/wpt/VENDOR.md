@@ -34,7 +34,7 @@ to move the pin — acceptable since WPT is pulled in rarely and deliberately he
 | `tools/gitignore/` | `tools/gitignore/` | `.gitignore`-pattern matcher — imported by `manifest.vcs`. |
 | `tools/localpaths.py` | `tools/localpaths.py` | Repo-root/sys.path bootstrap (`repo_root`, `sys.path` setup for the packages above). **Not modified** — see the sys.path note below. |
 | `tests/wpt/resources/testharness.js` | `resources/testharness.js` | The real WPT client-side test harness (assertion/reporting primitives every `testharness.js`-style test imports). |
-| `tests/wpt/dom/nodes/` | `dom/nodes/` | One full test category ("start tiny", per this task's Prerequisites) — includes the S4 smoke-test candidate `Document-createElement.html`. |
+| `tests/wpt/dom/nodes/` | `dom/nodes/` | One full test category ("start tiny", per this task's Prerequisites) — includes the S4 smoke test, `Element-hasAttribute.html` (`Document-createElement.html`, floated as an "e.g." example when this file was first drafted, turned out to need un-vendored `/common/dummy.xml`/`dummy.xhtml` iframe fixtures and `async_test` — not actually trivial; picked a genuinely self-contained synchronous test instead). |
 
 Each vendored top-level directory carries its own `LICENSE-WPT.md` (WPT is
 3-clause BSD, copyright web-platform-tests contributors) alongside the code.
@@ -55,11 +55,14 @@ Each vendored top-level directory carries its own `LICENSE-WPT.md` (WPT is
   clean venv with only `pip install -r` (see `tests/wpt/README.md`) — no
   `tools/third_party` needed. This keeps the vendor commit small and avoids
   committing megabytes of an unrelated project's test fixtures.
-- **`tools/wpt/`** (the `wpt` CLI wrapper script/package, i.e. what makes
-  `wpt run lumen --webdriver-bidi …` work as a command). Not imported by anything
+- **`tools/wpt/`** (the `wpt` CLI wrapper script/package). Not imported by anything
   vendored above (`wptrunner` itself doesn't depend on it — it's the outer CLI, not
-  the library) and not needed until S4 actually invokes `wpt run`. Scoped there
-  explicitly rather than guessed at now.
+  the library); it also does venv bootstrapping and browser-download machinery this
+  project doesn't need (we already have our own venv + a locally built `lumen.exe`).
+  S4 calls `wptcommandline`/`wptrunner.run_tests` directly instead
+  (`tests/wpt/run_smoke.py`) rather than vendor the whole wrapper for one flag's
+  worth of behavior; S7 ("CI wrapper + docs") is where a polished wrapper — either
+  growing `run_smoke.py` or actually vendoring `tools/wpt/` — gets decided.
 - **Self-test suites of the supporting packages** (`tools/manifest/tests/`,
   `tools/wptserve/tests/`, `tools/serve/test_serve.py`,
   `tools/serve/test_functional.py`) — not imported by anything on the path we

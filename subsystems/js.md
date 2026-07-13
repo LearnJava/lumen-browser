@@ -16,6 +16,14 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
 
 ## Done
 
+- **`document.getElementsByTagName(tag)` (BUG-279 fix, [P2] P2-wpt S4, 2026-07-13).**
+  Was missing entirely from `var document = {...}` in `dom.rs` — broke `testharness.js`'s own
+  module-level setup (`test_timeout()`/`get_script_url()` call it unconditionally) with a
+  `TypeError`. Delegates to the existing `_lumen_query_selector_all` bridge, same pattern as
+  `querySelectorAll` (a bare tag name / `*` is already a valid CSS type/universal selector).
+  Returns a static array, not a live `HTMLCollection` (same simplification `querySelectorAll`
+  already makes). `Element.prototype.getElementsByTagName` and
+  `document.getElementsByClassName` are still missing (out of this fix's scope).
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has
@@ -316,6 +324,15 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
 
 ## Deferred
 
+- **`window` is not the engine's real global object** ([BUG-280](../bugs/BUG-280-OPEN.md), found by
+  [P2] P2-wpt S4, 2026-07-13). `window` is built as a plain `WEB_API_SHIM` object literal, so
+  properties assigned via `window.x = ...`/`self.x = ...` (e.g. `testharness.js`'s `expose()`, ~50
+  functions) are unreachable as bare identifiers — a real browser has `self === window ===
+  globalThis` as the actual lexical global. A hardcoded alias list (`addEventListener`/
+  `removeEventListener`/`dispatchEvent`, same pattern as BUG-233's `self`/`window`/`globalThis`
+  aliases) only covers known-in-advance names; the general fix needs `window` to be the QuickJS
+  engine's real global object (or a `Proxy`-based forward) — an engine bootstrap change outside
+  `lumen-bidi-server`/`tests/wpt` scope.
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
 - `rusty_v8` backend porting (S8–S12 remain; S0/S1/S2/S3/S4/S5-S7 done

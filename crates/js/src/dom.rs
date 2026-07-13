@@ -5738,6 +5738,17 @@ var document = {
     querySelectorAll:  function(sel) {
         return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
     },
+    // DOM LS §4.2.6: getElementsByTagName(tag) — a bare tag name is already a
+    // valid CSS type selector (and '*' a valid universal selector), so this
+    // delegates straight to the same native query the CSS engine already
+    // handles for `_lumen_ce_upgrade_all` (custom-element tag matching).
+    // Returns a static array, not a live HTMLCollection — same simplification
+    // `querySelectorAll` above already makes. Found missing (broke
+    // `testharness.js`'s own `test_timeout()`/`get_script_url()`, which call
+    // it unconditionally) while implementing P2-wpt S4.
+    getElementsByTagName: function(tag) {
+        return _lumen_query_selector_all(String(tag)).map(_lumen_make_element);
+    },
     createElement:     function(tag) {
         var nid = _lumen_create_element(String(tag).toLowerCase());
         // QuickJS converts the Rust u32::MAX sentinel to -1 (signed overflow).
@@ -12765,6 +12776,19 @@ window.frames        = window;   // no real framesets; self-reference like brows
 window.top           = window;   // top-level browsing context is itself
 window.parent        = window;   // no parent frame
 window.length        = 0;        // number of child browsing contexts (frames)
+
+// In a real browser addEventListener/removeEventListener/dispatchEvent
+// resolve as bare identifiers because window IS the global object — the
+// same reason BUG-233 needed bare self/window/globalThis aliases above.
+// window here is a plain object literal (see comment above), so a bare,
+// unqualified addEventListener(...) call — used unconditionally by
+// testharness.js's own top-level setup (resources/testharness.js,
+// addEventListener('error', ...) / addEventListener('unhandledrejection', ...),
+// and by plenty of real-world scripts written the same way) — was a
+// ReferenceError. Found running P2-wpt S4.
+var addEventListener    = window.addEventListener.bind(window);
+var removeEventListener = window.removeEventListener.bind(window);
+var dispatchEvent       = window.dispatchEvent.bind(window);
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
