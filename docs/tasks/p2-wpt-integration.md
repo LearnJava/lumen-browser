@@ -1,251 +1,254 @@
-# P2-wpt — Web Platform Tests integration
+# P1-wpt-bidi — Web Platform Tests integration (official wptrunner over WebDriver BiDi)
 
-> **SPECULATIVE — not tracked in `ROADMAP.md`.** Forward design brief; verify assumptions
-> against code and add a ROADMAP.md row before starting.
+> **SPECULATIVE — not tracked in `ROADMAP.md` under this id.** `ROADMAP.md:131` has a stale
+> `P3-wpt` row (wrong owner — P3 is bug-fixes-only, see `docs/dev-roles.md`); fix the owner
+> column to `P1` in this task's first commit. Re-verify every fact below against code before
+> starting — this revision was grounded 2026-07-13, things drift.
 
 **Developer:** P1
-**Branch:** `p1-p2-wpt`
-**Size:** XL
-**Crates:** `lumen-driver` (harness), `lumen-shell` (headless entry), `lumen-js` (testharness support)
+**Branch:** `p1-wpt-bidi`
+**Size:** XXL — expect several merged slices (S1–S8 below), not one PR.
+**Crates:** `lumen-bidi-server` (possible fixes), `lumen-driver`/`lumen-shell` (possible fixes
+surfaced while proving S1); new Python tooling lives in `tests/wpt/`, not a Rust crate.
 
 ## Goal
 
-Integrate a curated subset of the [Web Platform Tests](https://github.com/web-platform-tests/wpt)
-suite as an automated conformance harness for Lumen. A WPT test is an HTML file that loads
-`testharness.js` + `testharnessreport.js`, runs `test()`/`promise_test()` assertions, and reports
-per-assertion PASS/FAIL/TIMEOUT/ERROR through JS callbacks. Lumen must vendor a small subset, drive
-each test headless through the real engine + QuickJS, capture the harness results out of the JS
-runtime, compare them against a committed expectations baseline (like `graphic_tests`), and print a
-pass/fail summary. This is greenfield infrastructure — the engine already executes page scripts and
-exposes a console drain, but there is no result-serialization shim, no runner, and no baseline.
+Run the real, unmodified [`wptrunner`](https://github.com/web-platform-tests/wpt/tree/master/tools/wptrunner)
+— the reference WPT test runner — against Lumen, using Lumen's existing WebDriver BiDi server
+(`lumen-bidi-server`, `lumen --bidi-port N`) via wptrunner's built-in `webdriver-bidi` executor.
+This is the same integration path real engines use in WPT CI (e.g. Firefox's BiDi lane). We do
+**not** write a bespoke test runner, result-serialization protocol, or async/timeout driving loop
+— wptrunner already has all of that, tested against every other BiDi-speaking browser.
+
+## Why this supersedes the previous revision of this file
+
+An earlier revision of this task (same filename) designed a custom in-process runner: a
+hand-rolled `testharnessreport.js` shim writing results into a JS global, read back through
+`lumen-driver`'s `get_global`, with a hand-rolled `expectations.json` ratchet. That design predates
+(or didn't account for) `lumen-bidi-server`, which now exists on `main` with a real WebDriver BiDi
+implementation — `session.*`, `browsingContext.*` (including `navigate`, `captureScreenshot`),
+`script.*` (`evaluate`, `callFunction`, `addPreloadScript`), `network.*`, `input.*`, `storage.*`
+(`crates/bidi-server/src/protocol.rs:616`–`659`, dispatch table). Building a second, parallel
+protocol when the standard one is already implemented is redundant. Concretely, going through
+wptrunner + BiDi buys:
+
+- **Async/timeout handling for free.** wptrunner's `webdriver-bidi` executor already solves the
+  `promise_test`/`async_test` completion-callback + timeout dance. The old design deferred this to
+  a "phase 2, may be its own task" — with wptrunner it's not extra Lumen-side work once navigation
+  is reliable (see S1).
+- **Tool-native expectations.** `.ini` per-test metadata (`wpt update-expectations`) replaces a
+  hand-rolled `expectations.json` — same ratchet idea as `KNOWN_DEBTORS` in `graphic_tests/`, but
+  maintained by the upstream tool, not reinvented.
+- **Manifest + test discovery for free.** `wpt manifest` / `--include` filtering replaces a
+  hand-curated file list.
+- **Reftests become reachable, not permanently out of scope.** The old draft explicitly excluded
+  reftests ("need pixel comparison, belongs with `graphic_tests`"). wptrunner's `reftest` executor
+  drives reftests via the browser's screenshot capability over the same protocol —
+  `browsingContext.captureScreenshot` already exists and returns real base64 PNG against a live
+  window (`protocol.rs:894`–`922`, confirmed working per `CAPABILITIES.md:210`). Kept as a
+  follow-up slice (S8) here, but no longer blocked on new infra.
 
 ## Prerequisites / scope decisions
 
-- **Start tiny.** Pick ~10–20 *synchronous, JS-only* tests from `dom/` and `html/dom/`
-  (e.g. `Document-createElement`, `Node-childNodes`, basic `querySelector`). Avoid anything needing
-  fetch, workers, reftests, iframes, or visual comparison in the first phase. Async
-  (`promise_test`, `async_test`) comes in phase 2 once the timer/microtask drive is proven.
-- **No live network.** Vendor the chosen subset + `testharness.js` into the repo
-  (`tests/wpt/` is already reserved in `docs/plan/architecture.md:155`). Do **not** add a runtime
-  dependency on cloning github.com/web-platform-tests/wpt; a pinned vendored snapshot is the
-  source of truth, mirroring how `graphic_tests/` Edge baselines are committed.
-- **Reftests are out of scope** for this task — they need pixel comparison and belong with the
-  existing `graphic_tests` / `snapshot_vs_edge` machinery, not the testharness path.
-- **Per-spec discipline (`docs/plan/testing.md:75`):** the documented v1.0 target is "WPT subset —
-  DOM, CSS, fetch, 60% pass". This task establishes the harness and a first DOM slice; raising the
-  pass rate is follow-up work, not part of DoD here.
-- **Custom `testharnessreport.js`.** WPT's upstream report file talks to a results server over
-  postMessage; we replace it with a Lumen shim that serializes results to a global JS value the
-  runner can read back. This file is ours, committed alongside the vendored harness.
+- **Start tiny, same discipline as before.** First working slice = one trivial synchronous
+  `dom/`-category test end to end. Grow the included set only after the pipe is proven.
+- **No live network in CI.** Vendor a pinned WPT commit's test subset + wptrunner tooling itself
+  (Python). Record the pinned hash in `tests/wpt/VENDOR.md`. Do not add a runtime dependency on
+  cloning `github.com/web-platform-tests/wpt` at test time.
+- **wptrunner is Python tooling, not a Rust dependency** — it does not touch
+  `docs/plan/tech-stack.md`'s Rust dependency policy or need a "why this dependency" justification
+  under that policy. It does need its own `requirements.txt`/pinned version documented in
+  `tests/wpt/README.md`.
+- **Reftests stay a separate follow-up task (S8)** even though now technically reachable — keep
+  this task's DoD scoped to testharness tests so it can actually ship.
+- **Any engine/DOM/BiDi gap surfaced while running the harness gets filed as `BUG-NNN`.** Never
+  weaken a vendored test to force a pass (same hard rule as `graphic_tests`).
 
-## Current state
+## Current state (real file:line, verified 2026-07-13)
 
-What exists today (real file:line):
-
-- **Driver harness.** `lumen-driver` is the in-process programmatic interface to the engine —
-  `crates/driver/src/lib.rs:62` defines the `BrowserSession` trait with `navigate`, `eval`,
-  `console_log`, `wait`, `query`, etc. Integration tests aggregate into one binary via
-  `crates/driver/tests/all.rs:4` → `crates/driver/tests/cases/mod.rs` (~70 submodules,
-  one test-binary to avoid 64 link steps, see the header comment). This is the natural home for the
-  WPT runner: add a `wpt.rs` case module + a driver-side runner type.
-- **Two session impls.** `InProcessSession` (`crates/driver/src/session.rs`) runs the engine
-  headless **without** a JS runtime — its `eval` is a deliberate stub returning `Err`
-  (`crates/driver/src/session.rs:526`), and `click`/`type_text` are no-ops pending a persistent JS
-  runtime. `GpuSession` (`crates/driver/src/gpu_session.rs:60`) is the JS-capable path:
-  `RenderedPage.js_navigate` (`gpu_session.rs:37`) shows JS already runs during load.
-- **The real JS runtime lives in the shell.** `crates/shell/src/main.rs` wraps
-  `lumen_js::QuickJsRuntime` (field at `crates/shell/src/main.rs:2077`) behind a `JsHandle` trait
-  with `eval_js` (`main.rs:2084` calls `self.rt.eval(script)`), `tick_timers`
-  (`main.rs:2097` → `_lumen_tick_timers()`), and `take_console_messages`
-  (`main.rs:2226` → `self.rt.take_console_messages()`).
-- **JS engine eval API.** `crates/js/src/lib.rs:2075` — `QuickJsRuntime` implements
-  `JsRuntime::eval(&self, script) -> JsResult<JsValue>`, plus `set_global`/`get_global`/
-  `call_function` (`lib.rs:2094`–`2134`) and `eval_module` (`lib.rs:571`). Console output is
-  buffered in `console_messages: Arc<Mutex<Vec<(u8,String)>>>` (`lib.rs:258`) and drained by
-  `take_console_messages()` (`lib.rs:1773`). `get_global` is the clean channel for reading a
-  serialized results object back out after a test runs.
-- **DOM/JS surface testharness.js needs — mostly present.** `crates/js/src/dom.rs` provides
-  `document.createElement`/`getElementById`/`querySelector`/`querySelectorAll`
-  (`dom.rs:5269`–`5306`), `addEventListener` incl. `DOMContentLoaded` firing immediately when ready
-  (`dom.rs:5306`), per-element `addEventListener` (`dom.rs:3524`, `dom.rs:4398`),
-  `EventTarget.prototype.addEventListener` (`dom.rs:2708`), and `setTimeout`/`setInterval`
-  (`dom.rs:6046`, timers ticked via `_lumen_tick_timers`). `JsValue` round-trips JSON-shaped
-  objects/arrays (`crates/js/src/lib.rs:2368`–`2392`).
-- **Headless entry points (shell).** `crates/shell/src/main.rs:7-11` documents the dump modes:
-  `--dump-source`, `--dump-layout`, `--dump-display-list`, and `--screenshot <out.png> <src>`
-  (`run_screenshot` at `main.rs:802`, full pipeline). `--ipc-server` (`main.rs` extract at
-  `main.rs:1531`) is a long-lived TCP tab-command server; its protocol
-  (`crates/ipc/src/lib.rs`) currently supports `NavigateTab` + `Screenshot` only — **no `Eval`
-  command exists yet**.
-- **Python runner pattern to mirror.** `graphic_tests/run.py` (header at top, uses `argparse`,
-  `subprocess`, `json`; results to `graphic_tests/results/*.json` with `latest.json`) is the
-  established Lumen test-runner shape: drive the binary per test, diff against a committed baseline,
-  emit one line per test + a JSON record. The WPT runner should follow this convention.
-
-What is **missing** (must be built):
-
-1. No vendored WPT tests or `testharness.js` in the repo (grep for `wpt`/`testharness`/`web-platform`
-   in `.rs`/`.py` returns only doc-plan mentions: `docs/plan/testing.md:9,25,75,85`,
-   `docs/plan/phases.md:117`, `docs/plan/architecture.md:155`).
-2. No `testharnessreport.js` shim that serializes results into a JS global.
-3. No way to drive the JS-capable engine over an arbitrary HTML file *and read a JS value back* from
-   a non-IPC headless invocation — `--screenshot` runs JS but only emits a PNG; IPC has no `Eval`.
-4. No expectations/baseline file and no comparison logic.
+- **`lumen-bidi-server` exists on `main`.** `crates/bidi-server/src/{lib.rs,protocol.rs,server.rs,transport.rs}`.
+  Module doc (`lib.rs:1`–`13`): three-layer structure (`server` TCP accept, `transport` WebSocket
+  framing, `protocol` pure state machine); implemented domains: `session.*`, `browsingContext.*`,
+  `script.*`, `network.*`, `input.*`, `browser.*`, `emulation.*`.
+- **Dispatch table** (`protocol.rs:616`–`659`): `session.status/new/subscribe/unsubscribe/end`,
+  `browsingContext.create/close/navigate/activate/getTree/captureScreenshot`,
+  `script.evaluate/callFunction/addPreloadScript/removePreloadScript/disown/getRealms`,
+  `network.getResponseBody/setOfflineStatus/addIntercept/removeIntercept/continueRequest*/setCacheBehavior`,
+  `input.performActions/releaseActions/setFiles`, `session.setDefaultUserContextLocale`,
+  `browser.setTimezoneOverride/getDownloads`, `emulation.setUserAgentOverride`,
+  `browsingContext.handleUserPrompt/setViewport`, `storage.getCookies/setCookie/deleteCookies`.
+- **SDC-2 live wiring** (`CAPABILITIES.md:210`): with `--bidi-port` + an open window, `BidiState`
+  holds a `LiveWindowSession`; `browsingContext.navigate`, `script.evaluate` (primitives get a real
+  `RemoteValue`; objects/arrays fall back to JSON text — **fine for our use case**, see S4),
+  `browsingContext.captureScreenshot` (base64 PNG), and pointer/key `input.performActions` execute
+  for real against the live shell window.
+- **Blocking gap, confirmed by reading the code (not just the doc note).**
+  `bc_navigate` (`protocol.rs:832`–`870`) calls `live.navigate(&url)` (a real, blocking round-trip
+  through `AutomationHandle` to the live window per `subsystems/driver.md`), but then
+  unconditionally emits `browsingContext.load` **immediately after `navigate()` returns**, with a
+  **hardcoded `timestamp: 0.0`** (`protocol.rs:864`–`870`). This is not tied to any real
+  DOMContentLoaded/load-complete signal from the engine — it fires as soon as the navigate command
+  itself completes, which may be well before scripts/resources on the new page have actually run.
+  `CAPABILITIES.md:211` and `lib.rs:12`–`13` independently confirm: "`domContentLoaded`, ... remains
+  a P3 handoff — roadmap 8H.3." **wptrunner's navigate step waits on this exact signal** — see S1.
+- **`lumen-driver` substrate** (`subsystems/driver.md`): `LiveWindowSession` implements
+  `BrowserSession` over `AutomationHandle`; real round-trips for
+  `navigate/click/type_text/scroll/wait/eval/screenshot/query/a11y_tree`. `AutomationHandle::execute`
+  blocks on `recv_timeout` and wakes a parked `winit` event loop — i.e. `navigate()` really does
+  block until the shell processes the command, but "processes the command" ≠ "page finished
+  loading."
+- **Shell flag:** `lumen --bidi-port N` starts the server (`lib.rs:3`).
+- **Nothing WPT-related is vendored.** No `tests/wpt/`, no wptrunner, no manifest, no expectations
+  anywhere in the repo — only the reserved path in `docs/plan/architecture.md:162`
+  (`tests/wpt/  # Web Platform Tests subset`).
+- **`ROADMAP.md:131`** has a stale row: `P3-wpt | P3 | | planned | | | | WPT pass rate ≥ 60%` — wrong
+  owner (P3 = bug-fixes-only). Fix the owner column to `P1` in the first commit of this task.
 
 ## Architecture
 
-How WPT runs upstream:
-
 ```
-test.html
-  ├─ <script src="/resources/testharness.js">      ← defines test(), async_test(), assert_*, add_result_callback, add_completion_callback
-  ├─ <script src="/resources/testharnessreport.js"> ← OUR SHIM: subscribes to callbacks, serializes results
-  └─ <script> test(() => { assert_equals(...); }, "name"); </script>
+wpt run lumen --webdriver-bidi tests/wpt/dom/nodes/Document-createElement.html
+    │
+    ▼
+tools/wptrunner (Python, vendored/pinned — NOT modified, upstream code)
+    │  loads our product plugin:
+    │  tools/wptrunner/wptrunner/browsers/lumen.py   ← OURS (new)
+    ▼
+LumenBrowser.start()  → spawn subprocess: `lumen --bidi-port <port>`
+    │
+    ▼
+WebDriverBiDiProtocol (wptrunner's existing BiDi client) connects over WebSocket
+    session.new                                        (capabilities negotiation)
+    browsingContext.create
+    script.addPreloadScript(<our testharnessreport shim>)   ← installed BEFORE test scripts run
+    browsingContext.navigate(url=test.html, wait="complete") ← BLOCKED ON S1
+    script.callFunction(<read results>, awaitPromise: true)  ← or script.evaluate, see S4
+    session.end
 ```
 
-`testharness.js` accumulates `Test` objects and, on completion, invokes registered
-`add_completion_callback(tests, harness_status)` listeners. The standard report file ships those to a
-remote server; we instead install a completion callback that writes a JSON-serializable array of
-`{name, status, message}` into a known JS global (e.g. `window.__lumen_wpt_results`), where
-`status` ∈ {PASS=0, FAIL=1, TIMEOUT=2, NOTRUN=3}.
+Two artifacts we own; everything else is upstream wptrunner code, unmodified:
 
-Wiring into Lumen — four pieces:
-
-1. **Vendoring (`tests/wpt/`).** Commit a pinned snapshot:
-   - `tests/wpt/resources/testharness.js` — upstream, unmodified, pinned to a recorded commit hash
-     (record the hash in `tests/wpt/VENDOR.md`).
-   - `tests/wpt/resources/testharnessreport.js` — **our shim** (below).
-   - `tests/wpt/<spec>/<test>.html` — the curated subset.
-   Rewrite the upstream `/resources/...` absolute script URLs to repo-relative `file://` paths at
-   vendor time (a small import-fixup is acceptable since these are static fixtures, not the test
-   logic — this does not violate the "never rewrite test pages" rule, which is about not weakening
-   assertions; the assertions stay byte-identical).
-
-2. **`testharnessreport.js` shim.** Minimal:
-   ```js
-   add_completion_callback(function (tests, status) {
-     globalThis.__lumen_wpt_results = JSON.stringify({
-       harness: { status: status.status, message: status.message },
-       tests: tests.map(t => ({ name: t.name, status: t.status, message: t.message })),
-     });
-   });
-   ```
-   The runner reads `__lumen_wpt_results` back via `JsRuntime::get_global`
-   (`crates/js/src/lib.rs:2101`) after driving the page to completion.
-
-3. **Runner (Rust, in `lumen-driver`).** Add `crates/driver/tests/cases/wpt.rs` plus a reusable
-   `WptRunner` in `crates/driver/src/` that, per test file:
-   - constructs the JS-capable session,
-   - navigates to the `file://` test URL,
-   - drives `tick_timers` + microtask pump in a bounded loop (cap iterations / wall-clock for
-     TIMEOUT — reuse the polling shape of `BrowserSession::wait` at `session.rs:495`) until
-     `__lumen_wpt_results` is populated or the timeout fires,
-   - reads + parses the results global,
-   - returns `Vec<{name, status, message}>`.
-
-   **Critical dependency:** the runner needs the JS-capable path. `InProcessSession::eval` is a stub
-   (`session.rs:526`); the working JS+`eval`+`tick_timers`+`get_global` loop lives in the shell
-   (`main.rs:2077`–2226). Decide the drive channel before coding (see Steps 1):
-   - **(a)** Expose the shell's JS-capable engine through `GpuSession`/a new driver session so the
-     Rust runner drives it in-process (preferred — no subprocess, results via `get_global`); **or**
-   - **(b)** Add a headless shell entry point — either a new `--dump-wpt <test.html>` mode next to
-     `run_screenshot` (`main.rs:802`) that runs the full pipeline, drives timers to quiescence, and
-     prints `__lumen_wpt_results` to stdout, or an `Eval { tab_id, script }` IPC command
-     (`crates/ipc/src/lib.rs`) — then a Python runner subprocess-drives the binary like
-     `graphic_tests/run.py`.
-
-   Path (a) keeps everything in `cargo test`; path (b) matches the existing Python-runner ergonomics
-   but requires a new shell flag/IPC verb. Pick one and document it in the branch's first commit.
-
-4. **Expectations baseline.** Commit `tests/wpt/expectations.json` mapping
-   `test-file → { subtest-name → expected-status }`. The runner diffs actual vs expected: an
-   unexpected FAIL is a regression (fail the run); a newly-passing subtest is a ratchet candidate
-   (update the baseline). This mirrors `KNOWN_DEBTORS` in `graphic_tests/run.py` and lets the suite
-   gate CI even before 100% pass. Results land in `tests/wpt/results/*.json` (+ `latest.json`),
-   gitignoring any HTML report as `graphic_tests` does.
+1. **`tools/wptrunner/wptrunner/browsers/lumen.py`** — a `Browser` + `ExecutorBrowser` product
+   plugin telling wptrunner how to spawn/stop the `lumen` binary and which BiDi capabilities to
+   request. Model it on an existing minimal BiDi product file in wptrunner's tree rather than
+   writing a WebDriver BiDi client from scratch — wptrunner already ships one.
+2. **`tests/wpt/resources/testharnessreport.js`** — same idea as the superseded draft: install a
+   `add_completion_callback` listener that serializes `{harness, tests}` into a JSON string on a
+   known global. The only change from the old design is the *read-back transport*: BiDi
+   `script.evaluate`/`callFunction` instead of a custom `get_global` call.
 
 ## Entry points
 
-- `crates/driver/src/lib.rs:62` — `BrowserSession` trait; `eval` (`:155`), `console_log` (`:127`),
-  `wait` (`:151`), `query` (`:159`) are the verbs the runner composes.
-- `crates/driver/src/session.rs:526` — `InProcessSession::eval` stub (returns Err): the gap that
-  forces choosing the JS-capable drive channel.
-- `crates/driver/src/gpu_session.rs:60` — `GpuSession`, the JS-capable session
-  (`RenderedPage.js_navigate` at `:37` proves JS runs during load).
-- `crates/driver/tests/cases/mod.rs` — register the new `wpt` submodule here.
-- `crates/js/src/lib.rs:2075` — `QuickJsRuntime::eval`; `:2101` `get_global` (read results back);
-  `:1773` `take_console_messages`; `:571` `eval_module`.
-- `crates/js/src/dom.rs:5269` — `document` shim (createElement/querySelector/getElementById);
-  `:5306` DOMContentLoaded fast-path; `:6046` `setTimeout`.
-- `crates/shell/src/main.rs:2077` — `JsHandle` over `QuickJsRuntime`; `:2084` `eval_js`,
-  `:2097` `tick_timers`, `:2226` `take_console_messages`.
-- `crates/shell/src/main.rs:802` — `run_screenshot` / full headless pipeline (model for a new
-  `--dump-wpt` mode if path (b) is chosen).
-- `crates/ipc/src/lib.rs` — IPC request/response enums (`NavigateTab`/`Screenshot`); add `Eval`
-  here if path (b)+IPC is chosen.
-- `graphic_tests/run.py` — Python runner pattern (argparse/subprocess/json, `results/latest.json`)
-  to mirror for the WPT runner.
-- `docs/plan/architecture.md:155` — reserved `tests/wpt/` location.
-- `docs/plan/testing.md:75` — documented WPT subset scope + 60% v1.0 target.
+- `crates/bidi-server/src/protocol.rs:616` — method dispatch table (what's implemented).
+- `crates/bidi-server/src/protocol.rs:832` — `bc_navigate`; `:846`–`870` the unconditional
+  zero-timestamp `browsingContext.load` emission — **the S1 blocker, fix here or trace where the
+  real signal should originate**.
+- `crates/bidi-server/src/protocol.rs:894`–`922` — `bc_capture_screenshot`, reused as-is by S8.
+- `crates/bidi-server/src/protocol.rs:1072`–`1082` — `script.evaluate`'s `live.eval(expr)` path;
+  primitives → real `RemoteValue`, objects/arrays → JSON text fallback (`:1106`–`1125`).
+- `crates/bidi-server/src/lib.rs:1`–`13` — module doc, confirms the 8H.3 gap in the project's own
+  words.
+- `subsystems/driver.md` — `LiveWindowSession`/`AutomationHandle` substrate BiDi sits on.
+- `CAPABILITIES.md:208`–`211` — `lumen-bidi-server` capability summary, SDC-2 scope, deferred list.
+- `docs/plan/architecture.md:162` — reserved `tests/wpt/` path.
+- `docs/plan/testing.md` — update the documented WPT scope/target once this lands (grep for
+  current wording before editing — this file changes independently of this task).
+- `ROADMAP.md:131` — the row to fix (owner) and later flip to `done`.
+- `graphic_tests/run.py` — for reference only, **not** the pattern to follow this time (that was
+  the superseded design); it's still the right model for `KNOWN_DEBTORS`-style ratchet thinking if
+  `.ini` expectations ever need a thin wrapper script.
 
-## Steps
+## Steps (slices — land independently, smallest first)
 
-Phased; ship the smallest end-to-end slice first.
+**S1 — Prove or fix the load-completion signal. Blocking prerequisite for everything else.**
+Do not build any Python tooling until this is settled — an unreliable load signal produces flaky,
+untrustworthy WPT results, which is worse than no WPT results.
+- Read `bc_navigate` fully and confirm today's behavior matches the "fires immediately,
+  zero-timestamp" reading above.
+- Scope the narrowest possible fix: `browsingContext.load` should fire only after the live
+  window's real navigation-complete signal (whatever the engine currently exposes for
+  DOMContentLoaded-equivalent — check `crates/shell/src/main.rs` for existing load-state tracking
+  before inventing a new one). This does **not** require finishing all of "8H.3" (network
+  interception, cookie events are out of scope here) — narrow it to "the load event is real."
+  If no such signal exists in the shell at all yet, that's the actual size of this slice; say so
+  before starting S2.
+- Verification: a BiDi client subscribed to `browsingContext.load`, navigating to a page with a
+  deliberately slow inline `<script>` (e.g. a busy-loop or a `setTimeout`-gated DOM mutation),
+  must observe the event *after* the mutation, not before.
 
-1. **Decide the drive channel.** Spike both options minimally and pick (a) in-process JS-capable
-   driver session vs (b) headless shell `--dump-wpt` / IPC `Eval`. Record the decision + rationale
-   in the first commit and (if architecturally significant) an ADR under `docs/decisions/`.
-2. **Vendor one test.** Add `tests/wpt/resources/testharness.js` (pinned, hash in
-   `tests/wpt/VENDOR.md`), the shim `tests/wpt/resources/testharnessreport.js`, and a single trivial
-   synchronous DOM test (e.g. `tests/wpt/dom/nodes/Document-createElement.html`) with its
-   `/resources/...` script URLs rewritten to repo-relative `file://`.
-3. **Manual end-to-end.** Drive that one file through the chosen channel; confirm
-   `__lumen_wpt_results` is populated and parses. Fix DOM/JS surface gaps surfaced by
-   `testharness.js` itself (it exercises a lot of the API on load) — file any engine gap as a
-   `BUG-NNN` per the bug-ownership rule rather than patching the test.
-4. **`WptRunner` + first case.** Implement the runner type in `crates/driver/src/`, add
-   `crates/driver/tests/cases/wpt.rs`, register it in `mod.rs`. Assert the single test passes.
-5. **Expectations baseline.** Add `tests/wpt/expectations.json`; make the runner diff actual vs
-   expected and classify regression / new-pass / known-fail.
-6. **Grow the synchronous subset** to ~10–20 DOM tests. Commit `expectations.json` with whatever
-   currently passes; do **not** weaken any test to force a pass.
-7. **Async phase (follow-up, may be its own task).** Once the timer/microtask drive loop is proven,
-   admit `async_test`/`promise_test` and a handful of `html/dom` async tests; enforce per-test
-   TIMEOUT via the bounded drive loop.
-8. **Optional Python wrapper.** If path (b), add `tests/wpt/run.py` mirroring `graphic_tests/run.py`
-   (argparse `--only`/`--continue-on-fail`/`--recheck`, `results/*.json` + `latest.json`).
-9. **Docs.** Update `docs/plan/testing.md` (mark the WPT harness as existing) and add a short
-   `tests/wpt/README.md` (how to add a test, how to re-vendor, how to ratchet expectations).
+**S2 — Vendor wptrunner + minimal WPT test resources, offline.**
+Pin a `web-platform-tests/wpt` commit. Vendor `tools/wptrunner/` (decide submodule vs. committed
+snapshot; document the choice) plus `resources/testharness.js` and one test directory. Record the
+pinned hash in `tests/wpt/VENDOR.md`. Document the Python-side setup (`requirements.txt` /
+`pip install -e`) in `tests/wpt/README.md` — this is tooling setup, not a Cargo dependency.
+
+**S3 — `browsers/lumen.py` product plugin.**
+Implement subprocess launch (`lumen --bidi-port <port>`) + BiDi capability negotiation + clean
+shutdown. Reuse wptrunner's existing BiDi client machinery; do not hand-roll WebSocket/JSON-RPC
+framing in Python — that duplicates what wptrunner already has.
+
+**S4 — Testharnessreport shim + one smoke test, end to end.**
+Add `tests/wpt/resources/testharnessreport.js` and one trivial synchronous DOM test (e.g.
+`tests/wpt/dom/nodes/Document-createElement.html`). Get
+`wpt run lumen --webdriver-bidi tests/wpt/dom/nodes/Document-createElement.html` to complete and
+report PASS correctly. Prove the harness actually observes failures: a deliberately-broken
+assertion in a scratch copy of the test must surface FAIL, not a silent pass or timeout. Confirm
+the objects/arrays-as-JSON-text fallback in `script.evaluate` (`protocol.rs:1106`–`1125`) is
+sufficient — our shim emits a JSON **string**, so it should hit the primitive path, not the
+fallback; verify this assumption against the actual response instead of assuming.
+
+**S5 — Expectations + curated subset.**
+Generate `.ini` expectation metadata (`wpt update-expectations` or manual authoring for the first
+batch). Grow the included subset to ~15–20 synchronous DOM tests (same "start tiny" ceiling as the
+superseded draft). File `BUG-NNN` for every genuine engine gap found; never weaken a vendored test.
+
+**S6 — Async tests (`promise_test`/`async_test`).**
+Only after S1 is proven reliable. Admit a handful of `html/dom` async tests. Verify
+`script.callFunction`'s `awaitPromise` handling in `protocol.rs` genuinely awaits engine-side
+promise resolution rather than returning immediately — read the implementation, don't assume.
+
+**S7 — CI wrapper + docs.**
+Thin wrapper script (or a documented direct `wpt run lumen ...` invocation) for repeatable local/CI
+runs. Update `docs/plan/testing.md`, fix + flip `ROADMAP.md:131`, write `tests/wpt/README.md` (how
+to add a test, re-vendor, regenerate expectations).
+
+**S8 — Reftests (separate follow-up task, not this task's DoD).**
+Once S1–S7 land, a new task file wires wptrunner's `reftest` executor to
+`browsingContext.captureScreenshot` (already implemented, `protocol.rs:894`). Note here only so the
+option isn't lost — do not fold it into this task's scope.
 
 ## Tests / verification
 
-- **Unit:** the shim's serialization shape round-trips — a hand-written results object set via
-  `set_global` and read via `get_global` (`crates/js/src/lib.rs:2094`/`:2101`) parses to the
-  expected `{harness, tests}` struct.
-- **End-to-end (the real proof):** `cargo test -p lumen-driver` (path a) or the runner subprocess
-  (path b) executes the vendored DOM subset and reports each subtest's PASS/FAIL matching
-  `tests/wpt/expectations.json`. A deliberately-broken assertion in a scratch test must surface as a
-  FAIL (proves the harness actually observes assertion failures, not just "ran without throwing").
-- **Regression gate:** flipping an expected PASS to FAIL in the engine causes the run to fail with a
-  named subtest, not a silent pass.
-- **No network:** the suite runs fully offline from vendored files (no clone, no fetch to
-  github.com/web-platform-tests/wpt at test time).
-- `cargo clippy -p lumen-driver --all-targets -- -D warnings` clean.
+- **S1 is proven with a real timing test**, not just "the endpoint returns 200" — see S1's own
+  verification bullet above.
+- **End-to-end (the real proof, S4):** `wpt run lumen --webdriver-bidi <smoke test>` reports PASS
+  for a correct assertion and FAIL for a deliberately-broken one in a scratch copy — proves the
+  harness observes assertions, not just "the script ran without throwing."
+- **Regression gate:** flipping an expected PASS to FAIL in the engine causes the documented
+  wrapper/CI invocation to fail on a named subtest, not a silent pass.
+- **Fully offline:** the suite runs with no live network calls to `github.com/web-platform-tests/wpt`
+  or any WPT CDN at test time — everything vendored/pinned.
+- `cargo clippy -p lumen-bidi-server --all-targets -- -D warnings` and existing `bidi-server`/
+  `driver` tests stay green after any S1 fix.
 
-## Definition of done
+## Definition of done (this task = S1–S7; S8 is a separate follow-up)
 
-- [ ] Drive-channel decision documented (first commit + ADR if significant).
-- [ ] `tests/wpt/resources/testharness.js` vendored + pinned (hash in `tests/wpt/VENDOR.md`).
-- [ ] `tests/wpt/resources/testharnessreport.js` shim serializes results into a JS global.
-- [ ] `WptRunner` in `lumen-driver` drives a `file://` WPT test to completion (timer/microtask loop
-      with TIMEOUT) and reads results back via `get_global`.
-- [ ] `crates/driver/tests/cases/wpt.rs` registered in `mod.rs`; ~10–20 synchronous DOM tests
-      execute and report per-subtest status.
-- [ ] `tests/wpt/expectations.json` committed; runner classifies regression / new-pass / known-fail.
+- [ ] `ROADMAP.md:131` owner column fixed to `P1` (first commit).
+- [ ] S1: `browsingContext.load` (or whatever signal wptrunner's navigate step actually waits on)
+      reflects real engine load completion, proven by a timing test, not just code review.
+- [ ] wptrunner vendored + pinned; hash recorded in `tests/wpt/VENDOR.md`; Python setup documented
+      in `tests/wpt/README.md`.
+- [ ] `tools/wptrunner/wptrunner/browsers/lumen.py` product plugin launches/stops `lumen` and
+      completes BiDi session negotiation.
+- [ ] `tests/wpt/resources/testharnessreport.js` shim; one smoke test passes end-to-end via
+      `wpt run lumen --webdriver-bidi`.
 - [ ] A deliberately-failing assertion is observed as FAIL (harness genuinely checks assertions).
+- [ ] `.ini` expectations committed for a curated ~15–20 synchronous DOM-test subset.
+- [ ] Async subset (S6) admitted, `awaitPromise` behavior verified against the implementation.
 - [ ] Suite runs fully offline.
-- [ ] `tests/wpt/README.md` (add test / re-vendor / ratchet); `docs/plan/testing.md` updated.
-- [ ] `cargo clippy -p lumen-driver --all-targets -- -D warnings` and `cargo test -p lumen-driver`
-      pass.
-- [ ] Any engine/DOM gaps found while running the harness filed as `BUG-NNN` (no test weakened to
+- [ ] `docs/plan/testing.md` updated; `ROADMAP.md:131` flipped to `done` (or split if S8 remains
+      open); `tests/wpt/README.md` written.
+- [ ] Any engine/BiDi gap found while running the harness filed as `BUG-NNN` (no test weakened to
       pass).
+- [ ] `cargo clippy -p lumen-bidi-server --all-targets -- -D warnings` clean; existing
+      `bidi-server`/`driver` test suites still pass.
