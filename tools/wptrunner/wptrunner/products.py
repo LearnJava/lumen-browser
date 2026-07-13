@@ -51,6 +51,7 @@ BUILTIN_PRODUCTS = frozenset(
         "firefox_android",
         "headless_shell",
         "ladybird",
+        "lumen",
         "opera",
         "safari",
         "sauce",
