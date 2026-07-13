@@ -142,6 +142,35 @@ pub fn install_file_input_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_file_input_bindings`] (Ph3 V8 migration S5-S7 batch 2):
+/// both natives go through the compat layer, the JS shim evaluates unchanged.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_file_input_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::into_v8_fn1;
+    use lumen_core::ext::JsRuntime as _;
+
+    let read_text = into_v8_fn1(move |token: f64| -> String {
+        let t = token as u64;
+        read_file_bytes_for_token(t)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
+    });
+    rt.register_native("__lumen_file_read_text", read_text)?;
+
+    let read_base64 = into_v8_fn1(move |token: f64| -> String {
+        let t = token as u64;
+        read_file_bytes_for_token(t)
+            .map(|b| to_base64(&b))
+            .unwrap_or_default()
+    });
+    rt.register_native("__lumen_file_read_base64", read_base64)?;
+
+    rt.eval(FILE_INPUT_SHIM)?;
+    Ok(())
+}
+
 const FILE_INPUT_SHIM: &str = r#"
 (function() {
 'use strict';

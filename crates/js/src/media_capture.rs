@@ -215,6 +215,129 @@ pub fn install_media_capture_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_media_capture_bindings`] (Ph3 V8 migration S5-S7 batch
+/// 2): all five natives go through the compat layer, same provider snapshot and
+/// thread-local `CAPTURES` map (sound because both engines dispatch every JS
+/// call — including trampoline-invoked natives — from the one dedicated JS
+/// thread; see slice S1's threading model).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_media_capture_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3};
+
+    let provider = get_provider();
+
+    {
+        let p = provider.clone();
+        let native = into_v8_fn0(move || -> String {
+            let Some(ref prov) = p else {
+                return "[]".to_owned();
+            };
+            let devs = prov.enumerate_devices();
+            let mut out = String::from('[');
+            for (i, d) in devs.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&format!(
+                    r#"{{"device_id":{:?},"group_id":{:?},"kind":{:?},"label":{:?},"is_default":{}}}"#,
+                    d.device_id, d.group_id, d.kind, d.label, d.is_default
+                ));
+            }
+            out.push(']');
+            out
+        });
+        rt.register_native("__lumen_enumerate_audio_devices", native)?;
+    }
+
+    {
+        let p = provider.clone();
+        let native = into_v8_fn3(
+            move |device_id: String, sample_rate: f64, channel_count: f64| -> f64 {
+                let Some(ref prov) = p else {
+                    return -1.0;
+                };
+                let config = AudioCaptureConfig {
+                    device_id: if device_id.is_empty() { None } else { Some(device_id) },
+                    sample_rate: if sample_rate > 0.0 { Some(sample_rate as u32) } else { None },
+                    channel_count: if channel_count > 0.0 {
+                        Some(channel_count as u32)
+                    } else {
+                        None
+                    },
+                    ..AudioCaptureConfig::default()
+                };
+                match prov.capture(config) {
+                    Ok(handle) => {
+                        let id = NEXT_HANDLE_ID.fetch_add(1, Ordering::Relaxed);
+                        CAPTURES.with(|c| c.borrow_mut().insert(id, handle));
+                        id as f64
+                    }
+                    Err(_) => -1.0,
+                }
+            },
+        );
+        rt.register_native("__lumen_start_audio_capture", native)?;
+    }
+
+    let info = into_v8_fn1(|handle_id: f64| -> String {
+        CAPTURES.with(|c| {
+            let map = c.borrow();
+            if let Some(h) = map.get(&(handle_id as u64)) {
+                format!(
+                    r#"{{"sample_rate":{},"channel_count":{},"device_id":{:?},"label":{:?}}}"#,
+                    h.sample_rate(),
+                    h.channel_count(),
+                    h.device_id(),
+                    h.device_label(),
+                )
+            } else {
+                "{}".to_owned()
+            }
+        })
+    });
+    rt.register_native("__lumen_audio_capture_info", info)?;
+
+    let read_pcm = into_v8_fn2(|handle_id: f64, max_samples: f64| -> String {
+        CAPTURES.with(|c| {
+            let mut map = c.borrow_mut();
+            if let Some(h) = map.get_mut(&(handle_id as u64)) {
+                let samples = h.read_pcm_f32();
+                let limit = (max_samples as usize).min(samples.len());
+                if limit == 0 {
+                    return "[]".to_owned();
+                }
+                let mut out = String::from('[');
+                for (i, &s) in samples[..limit].iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    let clamped = s.clamp(-1.0, 1.0);
+                    out.push_str(&format!("{clamped:.7}"));
+                }
+                out.push(']');
+                out
+            } else {
+                "[]".to_owned()
+            }
+        })
+    });
+    rt.register_native("__lumen_read_audio_pcm", read_pcm)?;
+
+    let stop = into_v8_fn1(|handle_id: f64| {
+        CAPTURES.with(|c| {
+            let mut map = c.borrow_mut();
+            if let Some(mut h) = map.remove(&(handle_id as u64)) {
+                h.stop();
+            }
+        });
+    });
+    rt.register_native("__lumen_stop_audio_capture", stop)?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -498,6 +498,29 @@ impl V8JsRuntime {
         }
         rx.recv().expect("lumen-v8 thread dropped without replying")
     }
+
+    /// Register one already-wrapped native (built via [`crate::v8_compat::into_v8_fn0`]..`fn7`)
+    /// as a global JS function `name`.
+    ///
+    /// Standalone module ports (S5-S7 batch 2+, one file per Web API) that need
+    /// `Function::new`-style natives call this instead of duplicating the
+    /// scope/store setup that `install_dom`'s mega-closure does inline for the
+    /// natives it owns directly.
+    pub(crate) fn register_native(
+        &self,
+        name: &'static str,
+        native: Box<dyn crate::v8_compat::V8NativeFn + Send>,
+    ) -> JsResult<()> {
+        self.run(move |inner| {
+            let isolate = &mut inner.isolate;
+            let context_global = &inner.context;
+            let store = &mut inner.native_fn_store;
+            v8::scope!(let scope, isolate);
+            let ctx = v8::Local::new(scope, context_global);
+            let scope = &mut v8::ContextScope::new(scope, ctx);
+            register_v8_native(scope, ctx, store, name, native)
+        })
+    }
 }
 
 impl Drop for V8JsRuntime {
@@ -3423,13 +3446,17 @@ impl V8JsRuntime {
         install_v8!(digital_credentials::install_digital_credentials_api_v8);
         install_v8!(document_pip::install_document_pip_api_v8);
         install_v8!(dom_parser::install_dom_parser_v8);
+        install_v8!(download_bindings::install_download_bindings_v8);
         install_v8!(element_internals::install_element_internals_bindings_v8);
         install_v8!(es2026_proposals::install_es2026_proposals_v8);
         install_v8!(eye_dropper::install_eye_dropper_bindings_v8);
+        install_v8!(file_input::install_file_input_bindings_v8);
+        install_v8!(filesystem_access::install_filesystem_access_v8);
         install_v8!(form_validation::install_form_validation_bindings_v8);
         install_v8!(gamepad::install_gamepad_bindings_v8);
         install_v8!(generic_sensor::install_generic_sensor_bindings_v8);
         install_v8!(highlight_api::install_highlight_api_bindings_v8);
+        install_v8!(idle_detection::install_idle_detection_bindings_v8);
         install_v8!(iframe_element::install_iframe_element_bindings_v8);
         install_v8!(inert::install_inert_api_v8);
         install_v8!(intl_bindings::install_intl_bindings_v8);
@@ -3437,16 +3464,20 @@ impl V8JsRuntime {
         install_v8!(local_font_access::install_local_font_access_api_v8);
         install_v8!(long_animation_frames::install_long_animation_frames_bindings_v8);
         install_v8!(media_capabilities::install_media_capabilities_bindings_v8);
+        install_v8!(media_capture::install_media_capture_bindings_v8);
         install_v8!(media_devices::install_media_devices_bindings_v8);
         install_v8!(media_session::install_media_session_bindings_v8);
         install_v8!(navigation_api::install_navigation_api_v8);
         install_v8!(navigator_bindings::install_navigator_bindings_v8);
+        install_v8!(network_log_bindings::install_network_log_bindings_v8);
         install_v8!(paint_worklet::install_paint_worklet_api_v8);
         install_v8!(permissions_policy::install_permissions_policy_bindings_v8);
+        install_v8!(pip_bindings::install_pip_bindings_v8);
         install_v8!(presentation_api::install_presentation_api_v8);
         install_v8!(reporting_api::install_reporting_api_bindings_v8);
         install_v8!(sanitizer::install_sanitizer_bindings_v8);
         install_v8!(scheduler::install_scheduler_api_v8);
+        install_v8!(screen_capture::install_screen_capture_bindings_v8);
         install_v8!(screen_orientation::install_screen_orientation_bindings_v8);
         install_v8!(scroll_snap_events::install_scroll_snap_events_bindings_v8);
         install_v8!(scroll_timeline::install_scroll_timeline_bindings_v8);
@@ -3455,6 +3486,7 @@ impl V8JsRuntime {
         install_v8!(shared_storage::install_shared_storage_v8);
         install_v8!(soft_navigation::install_soft_navigation_api_v8);
         install_v8!(speculation_rules::install_speculation_rules_api_v8);
+        install_v8!(speech::install_speech_bindings_v8);
         install_v8!(storage_manager::install_storage_manager_bindings_v8);
         install_v8!(surface_api::install_surface_api_protection_v8);
         install_v8!(svg::install_svg_bindings_v8);
@@ -3466,6 +3498,8 @@ impl V8JsRuntime {
         install_v8!(url_pattern::install_url_pattern_api_v8);
         install_v8!(video_pip::install_video_pip_api_v8);
         install_v8!(virtual_keyboard::install_virtual_keyboard_bindings_v8);
+        install_v8!(wake_lock::install_wake_lock_bindings_v8);
+        install_v8!(web_audio::install_web_audio_api_v8);
         install_v8!(webhid::install_webhid_bindings_v8);
         install_v8!(web_locks::install_web_locks_bindings_v8);
         install_v8!(web_midi::install_web_midi_api_v8);

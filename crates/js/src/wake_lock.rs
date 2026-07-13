@@ -87,6 +87,33 @@ pub fn install_wake_lock_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_wake_lock_bindings`] (Ph3 V8 migration S5-S7 batch 2):
+/// both natives go through the compat layer, the JS shim evaluates unchanged.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_wake_lock_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::into_v8_fn0;
+    use lumen_core::ext::JsRuntime as _;
+
+    let request = {
+        let p = get_provider();
+        into_v8_fn0(move || -> bool { p.acquire() })
+    };
+    rt.register_native("__lumen_wake_lock_request", request)?;
+
+    let release = {
+        let p = get_provider();
+        into_v8_fn0(move || {
+            p.release();
+        })
+    };
+    rt.register_native("__lumen_wake_lock_release", release)?;
+
+    rt.eval(WAKE_LOCK_SHIM)?;
+    Ok(())
+}
+
 /// JavaScript shim implementing W3C Screen Wake Lock Level 1 (Phase 1).
 ///
 /// Calls `__lumen_wake_lock_request` / `__lumen_wake_lock_release` to drive

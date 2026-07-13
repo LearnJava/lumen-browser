@@ -187,7 +187,7 @@ checklist after every merge.
 
 **S5-S7 ported/pending checklist** (2026-07-13, p1-v8-s57): of the 90 `install_*` call
 sites in `lib.rs::install_dom` (QuickJS), 85 take a single `ctx: &Ctx` argument with no
-extra state — of those, **68 are ported** (batch 1): each got a `#[cfg(feature =
+extra state — of those, **79 are ported** (batches 1-2): each got a `#[cfg(feature =
 "v8-backend")] pub(crate) fn install_X_v8(rt: &V8JsRuntime) -> JsResult<()>` sibling next
 to the rquickjs original (same JS shim(s), `rt.eval(...)` instead of `ctx.eval::<(),
 _>(...)`), wired via a `install_v8!` macro at the end of `V8JsRuntime::install_dom` —
@@ -197,7 +197,10 @@ for the rest. Side-fix: added a `DOMException` polyfill (`DOM_EXCEPTION_POLYFILL
 `v8_runtime.rs`, evaluated before `WEB_API_SHIM`) — quickjs-ng bundles this as a built-in
 (part of `Context::full()`'s extras), V8 has zero web-platform globals; without it,
 `class X extends DOMException` (used by `web_codecs` and dozens of `WEB_API_SHIM` call
-sites already ported in S3) throws `ReferenceError` the instant it's evaluated. 2399
+sites already ported in S3) throws `ReferenceError` the instant it's evaluated. Batch 2
+also added `V8JsRuntime::register_native` (registers an already-wrapped
+`into_v8_fnN` native as a global, for standalone modules that need `Function::new`-style
+natives without duplicating `install_dom`'s inline scope/store setup). 2467
 tests green (`cargo test -p lumen-js --features v8-backend`); full workspace clippy +
 scoped-test green.
 
@@ -215,11 +218,12 @@ surface_api, svg, tc39_proposals, temporal_api, topics_api, typed_om_api,
 ua_client_hints, url_pattern, video_pip, virtual_keyboard, webhid, web_locks, web_midi,
 webrtc_stub, webusb, webxr, window_management, xhr, web_codecs.
 
-Pending (batch 2/3, 22 — next session picks up here):
-- **Single `&ctx` arg, but has 1-5 `Function::new` natives** (need `reg!`-style compat
-  calls, not just `rt.eval`): download_bindings, filesystem_access, idle_detection,
-  network_log_bindings, speech, web_audio, file_input, pip_bindings, wake_lock,
-  media_capture, screen_capture.
+Ported (batch 2, 11): download_bindings, filesystem_access, idle_detection,
+network_log_bindings, speech, web_audio, file_input, pip_bindings, wake_lock,
+media_capture, screen_capture — each via `into_v8_fnN` + `register_native`, JS shims
+unchanged.
+
+Pending (batch 3, 5 — next session picks up here):
 - **Heavier native counts** (13-16 `Function::new`, still simpler than S8's canvas2d):
   video_bindings, audio_element.
 - **Extra state params beyond `&ctx`** (need new `V8JsRuntime` plumbing):

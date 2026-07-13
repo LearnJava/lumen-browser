@@ -77,6 +77,27 @@ pub fn install_pip_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_pip_bindings`] (Ph3 V8 migration S5-S7 batch 2): both
+/// natives go through the compat layer; `Opt<u32>` becomes `Option<u32>` (same
+/// "missing/null → None" semantics via the compat layer's `FromJsValue`).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_pip_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::into_v8_fn1;
+
+    let enter = into_v8_fn1(move |nid: u32| {
+        enqueue(PipRequest::Enter { nid });
+    });
+    rt.register_native("_lumen_pip_enter", enter)?;
+
+    let exit = into_v8_fn1(move |nid: Option<u32>| {
+        enqueue(PipRequest::Exit { nid: nid.unwrap_or(0) });
+    });
+    rt.register_native("_lumen_pip_exit", exit)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

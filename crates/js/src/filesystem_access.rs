@@ -405,6 +405,90 @@ pub(crate) fn install_filesystem_access(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_filesystem_access`] (Ph3 V8 migration S5-S7 batch 2):
+/// all eight natives go through the compat layer, the JS shim evaluates
+/// unchanged. Must be called after [`crate::file_input::install_file_input_bindings_v8`].
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_filesystem_access_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2};
+    use lumen_core::ext::JsRuntime as _;
+
+    let open_picker = into_v8_fn0(move || -> Option<String> {
+        let path = os_open_file_picker()?;
+        file_entry_json(&path)
+    });
+    rt.register_native("_lumen_show_open_file_picker", open_picker)?;
+
+    let save_picker = into_v8_fn1(move |suggested: String| -> Option<u32> {
+        let path = os_save_file_picker(&suggested)?;
+        Some(write_reg().lock().unwrap().allocate(path))
+    });
+    rt.register_native("_lumen_show_save_file_picker", save_picker)?;
+
+    let dir_picker = into_v8_fn0(move || -> Option<String> {
+        let path = os_dir_picker()?;
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("folder")
+            .to_string();
+        let id = dir_reg().lock().unwrap().allocate(path);
+        Some(format!(r#"{{"name":"{}","path_id":{}}}"#, json_escape(&name), id))
+    });
+    rt.register_native("_lumen_show_directory_picker", dir_picker)?;
+
+    let dir_entries = into_v8_fn1(move |path_id: u32| -> String {
+        let path_opt = dir_reg().lock().unwrap().get(path_id).cloned();
+        let Some(dir) = path_opt else { return "[]".to_string() };
+        let Ok(rd) = std::fs::read_dir(&dir) else { return "[]".to_string() };
+        let mut items = Vec::new();
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let kind = if entry.path().is_dir() { "directory" } else { "file" };
+            items.push(format!(r#"{{"name":"{}","kind":"{}"}}"#, json_escape(&name), kind));
+        }
+        format!("[{}]", items.join(","))
+    });
+    rt.register_native("_lumen_dir_entries", dir_entries)?;
+
+    let dir_get_file = into_v8_fn2(move |path_id: u32, name: String| -> Option<String> {
+        let dir = dir_reg().lock().unwrap().get(path_id).cloned()?;
+        let file_path = dir.join(&name);
+        if !file_path.is_file() {
+            return None;
+        }
+        file_entry_json(&file_path)
+    });
+    rt.register_native("_lumen_dir_get_file", dir_get_file)?;
+
+    let dir_get_subdir = into_v8_fn2(move |path_id: u32, name: String| -> Option<String> {
+        let parent = dir_reg().lock().unwrap().get(path_id).cloned()?;
+        let sub = parent.join(&name);
+        if !sub.is_dir() {
+            return None;
+        }
+        let sub_name = json_escape(&name);
+        let sub_id = dir_reg().lock().unwrap().allocate(sub);
+        Some(format!(r#"{{"name":"{}","path_id":{}}}"#, sub_name, sub_id))
+    });
+    rt.register_native("_lumen_dir_get_subdir", dir_get_subdir)?;
+
+    let writable_write_text = into_v8_fn2(move |handle_id: u32, data: String| -> bool {
+        write_reg().lock().unwrap().append_text(handle_id, &data)
+    });
+    rt.register_native("_lumen_writable_write_text", writable_write_text)?;
+
+    let writable_close = into_v8_fn1(move |handle_id: u32| -> bool {
+        write_reg().lock().unwrap().close(handle_id)
+    });
+    rt.register_native("_lumen_writable_close", writable_close)?;
+
+    rt.eval(FSAL_SHIM)?;
+    Ok(())
+}
+
 // ── JS shim ────────────────────────────────────────────────────────────────────
 
 /// Defines `FileSystemFileHandle`, `FileSystemDirectoryHandle`,
