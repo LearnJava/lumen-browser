@@ -1,4 +1,11 @@
-//! V8-based JS runtime (slice S1 — runtime skeleton).
+//! V8-based JS runtime (slices S1–S2).
+//!
+//! **S1** — runtime skeleton: `V8JsRuntime` handle, `V8Inner` thread-owned
+//! state, `v8_thread_main` loop, `impl JsRuntime`.
+//!
+//! **S2** — compat layer: `native_fn_store` in `V8Inner` keeps registered
+//! closures alive; `install_console_natives` proves typed closures register
+//! and call back from JS.  See `crate::v8_compat` for the full compat API.
 //!
 //! Mirrors the `QuickJsRuntime` thread-dispatch pattern: a dedicated OS thread
 //! owns the `v8::OwnedIsolate` (which is `!Send`); the handle exposes
@@ -9,7 +16,9 @@
 //!
 //! Feature-gated: compiled only when `v8-backend` is enabled.
 
+use crate::v8_compat::{OwnedNativeFn, into_v8_fn1, register_v8_native};
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
+use std::sync::Arc;
 use std::sync::{
     Once,
     mpsc::{SyncSender, Sender, sync_channel},
@@ -40,10 +49,20 @@ pub fn ensure_v8_platform() {
 ///
 /// Both `OwnedIsolate` and the `Global<Context>` are `!Send`; they are
 /// created in [`v8_thread_main`] and never leave it.
+///
+/// Fields are dropped in declaration order (Rust spec §8.1).  `isolate` is
+/// first so the isolate is disposed before the closures in `native_fn_store`
+/// are freed — no dangling-pointer access by V8 during teardown.
 struct V8Inner {
+    /// V8 isolate — disposed first on drop.
     isolate: v8::OwnedIsolate,
     /// Persistent handle to the main JS context.
     context: v8::Global<v8::Context>,
+    /// Keeps compat-layer native closures alive for the isolate's lifetime.
+    ///
+    /// Each entry is a `Box::into_raw(Box::new(f) as Box<Box<dyn V8NativeFn +
+    /// Send>>)` thin pointer.  Freed after `isolate` drops.
+    native_fn_store: Vec<OwnedNativeFn>,
 }
 
 // ── Command channel ───────────────────────────────────────────────────────────
@@ -90,7 +109,7 @@ fn v8_thread_main(
         v8::Global::new(scope, ctx)
     };
 
-    let mut inner = V8Inner { isolate, context };
+    let mut inner = V8Inner { isolate, context, native_fn_store: Vec::new() };
     let _ = init_tx.send(Ok(()));
 
     while let Ok(cmd) = cmd_rx.recv() {
@@ -171,6 +190,66 @@ impl Drop for V8JsRuntime {
         if let Some(handle) = self.js_thread.take() {
             let _ = handle.join();
         }
+    }
+}
+
+// ── S2: console native registration ──────────────────────────────────────────
+
+impl V8JsRuntime {
+    /// Register the three console natives (`_lumen_console_log`,
+    /// `_lumen_console_warn`, `_lumen_console_error`) as global JS functions.
+    ///
+    /// This is the S2 proof-of-concept that typed Rust closures can be
+    /// registered via the compat layer and called from JS with auto-converted
+    /// arguments.  S3 will extend this to all 184 `install_primitives` natives.
+    pub fn install_console_natives(
+        &self,
+        console_messages: Arc<std::sync::Mutex<Vec<(u8, String)>>>,
+    ) -> JsResult<()> {
+        self.run(move |inner| {
+            // Disjoint field borrows: scope borrows isolate, native_fn_store is separate.
+            let isolate = &mut inner.isolate;
+            let context_global = &inner.context;
+            let store = &mut inner.native_fn_store;
+
+            v8::scope!(let scope, isolate);
+            let ctx = v8::Local::new(scope, context_global);
+            let scope = &mut v8::ContextScope::new(scope, ctx);
+
+            // Local `reg!` macro that mirrors the rquickjs original in dom.rs.
+            // Arity 0 and 1 shown as proof; higher arities use into_v8_fn2..7.
+            macro_rules! reg {
+                ($name:expr, move || $body:expr) => {{
+                    let native = into_v8_fn0(move || { $body });
+                    register_v8_native(scope, ctx, store, $name, native)?;
+                }};
+                ($name:expr, move |$a:ident: $A:ty| $body:expr) => {{
+                    let native = into_v8_fn1(move |$a: $A| { $body });
+                    register_v8_native(scope, ctx, store, $name, native)?;
+                }};
+            }
+
+            // ── console ──────────────────────────────────────────────────────
+            {
+                let buf_log = Arc::clone(&console_messages);
+                reg!("_lumen_console_log", move |msg: String| {
+                    eprintln!("[JS] {msg}");
+                    buf_log.lock().unwrap().push((0, msg));
+                });
+                let buf_warn = Arc::clone(&console_messages);
+                reg!("_lumen_console_warn", move |msg: String| {
+                    eprintln!("[JS warn] {msg}");
+                    buf_warn.lock().unwrap().push((1, msg));
+                });
+                let buf_err = Arc::clone(&console_messages);
+                reg!("_lumen_console_error", move |msg: String| {
+                    eprintln!("[JS error] {msg}");
+                    buf_err.lock().unwrap().push((2, msg));
+                });
+            }
+
+            Ok(())
+        })
     }
 }
 
@@ -567,5 +646,56 @@ mod tests {
     fn resume_produces_functional_runtime() {
         let fresh = V8JsRuntime::resume(SuspendedHeap::default()).unwrap();
         assert_eq!(fresh.eval("6 * 7").unwrap(), JsValue::Number(42.0));
+    }
+
+    // ── S2: compat-layer tests ────────────────────────────────────────────────
+
+    #[test]
+    fn console_log_callable_from_js() {
+        use std::sync::{Arc, Mutex};
+        let msgs: Arc<Mutex<Vec<(u8, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let rt = rt();
+        rt.install_console_natives(Arc::clone(&msgs)).unwrap();
+        rt.eval("_lumen_console_log('hello')").unwrap();
+        let captured = msgs.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0], (0, "hello".to_string()));
+    }
+
+    #[test]
+    fn console_warn_and_error_callable_from_js() {
+        use std::sync::{Arc, Mutex};
+        let msgs: Arc<Mutex<Vec<(u8, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let rt = rt();
+        rt.install_console_natives(Arc::clone(&msgs)).unwrap();
+        rt.eval("_lumen_console_warn('w'); _lumen_console_error('e')").unwrap();
+        let captured = msgs.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0], (1, "w".to_string()));
+        assert_eq!(captured[1], (2, "e".to_string()));
+    }
+
+    #[test]
+    fn console_log_numeric_arg_coerced_to_string() {
+        use std::sync::{Arc, Mutex};
+        let msgs: Arc<Mutex<Vec<(u8, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let rt = rt();
+        rt.install_console_natives(Arc::clone(&msgs)).unwrap();
+        // JS passes 42 (a Number) to a native expecting String — coerced to "42".
+        rt.eval("_lumen_console_log(42)").unwrap();
+        let captured = msgs.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].1, "42");
+    }
+
+    #[test]
+    fn native_registered_after_eval_is_accessible() {
+        use std::sync::{Arc, Mutex};
+        let msgs: Arc<Mutex<Vec<(u8, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let rt = rt();
+        rt.install_console_natives(Arc::clone(&msgs)).unwrap();
+        // Calling the native inside a JS function defined after registration.
+        rt.eval("function f(x) { _lumen_console_log(x); } f('ok')").unwrap();
+        assert_eq!(msgs.lock().unwrap()[0].1, "ok");
     }
 }

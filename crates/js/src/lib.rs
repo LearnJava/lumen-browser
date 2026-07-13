@@ -121,7 +121,12 @@ pub mod attribution_reporting;
 pub mod pointer_capture;
 pub mod sw_worker;
 
-/// V8-based JS runtime (slice S1: runtime skeleton).
+/// V8 compat layer (slice S2): `IntoV8NativeFn`, `register_v8_native`, and
+/// helpers for registering typed Rust closures as V8 globals.
+#[cfg(feature = "v8-backend")]
+pub(crate) mod v8_compat;
+
+/// V8-based JS runtime (slices S1–S2: runtime skeleton + compat layer).
 ///
 /// Compiled only when the `v8-backend` feature is enabled. Provides
 /// `V8JsRuntime` as a drop-in replacement for `QuickJsRuntime` and exposes
