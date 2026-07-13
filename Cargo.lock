@@ -2004,6 +2004,7 @@ dependencies = [
  "serde",
  "serde_json",
  "windows-sys 0.52.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2020,6 +2021,7 @@ dependencies = [
  "lumen-layout",
  "lumen-paint",
  "winapi",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2029,6 +2031,7 @@ dependencies = [
  "lumen-core",
  "lumen-devtools",
  "lumen-driver",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2037,6 +2040,7 @@ version = "0.5.0"
 dependencies = [
  "lumen-core",
  "lumen-layout",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2044,17 +2048,22 @@ name = "lumen-core"
 version = "0.5.0"
 dependencies = [
  "serde",
+ "workspace-hack",
 ]
 
 [[package]]
 name = "lumen-css-parser"
 version = "0.5.0"
+dependencies = [
+ "workspace-hack",
+]
 
 [[package]]
 name = "lumen-devtools"
 version = "0.5.0"
 dependencies = [
  "lumen-core",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2064,6 +2073,7 @@ dependencies = [
  "bincode",
  "lumen-core",
  "serde",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2086,6 +2096,7 @@ dependencies = [
  "serde",
  "serde_json",
  "winit",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2097,6 +2108,7 @@ dependencies = [
  "icu_segmenter",
  "lumen-core",
  "unicode-bidi",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2105,6 +2117,7 @@ version = "0.5.0"
 dependencies = [
  "brotli-decompressor",
  "lumen-core",
+ "workspace-hack",
  "zune-inflate",
 ]
 
@@ -2114,6 +2127,7 @@ version = "0.5.0"
 dependencies = [
  "lumen-core",
  "lumen-dom",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2126,6 +2140,7 @@ dependencies = [
  "image-webp",
  "lumen-core",
  "png",
+ "workspace-hack",
  "zune-core",
  "zune-jpeg",
  "zune-png",
@@ -2138,6 +2153,7 @@ dependencies = [
  "bincode",
  "lumen-core",
  "serde",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2163,6 +2179,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2172,6 +2189,7 @@ dependencies = [
  "lumen-core",
  "lumen-storage",
  "rusqlite",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2183,6 +2201,7 @@ dependencies = [
  "lumen-dom",
  "lumen-html-parser",
  "lumen-image",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2193,6 +2212,7 @@ dependencies = [
  "lumen-driver",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2218,6 +2238,7 @@ dependencies = [
  "rustls",
  "sha2",
  "webpki-roots 0.26.11",
+ "workspace-hack",
  "x25519-dalek",
 ]
 
@@ -2240,6 +2261,7 @@ dependencies = [
  "tiny-skia",
  "wgpu",
  "winit",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2271,6 +2293,7 @@ dependencies = [
  "rodio",
  "serde_json",
  "winit",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2289,6 +2312,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "sha2",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -5027,6 +5051,49 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "arrayvec",
+ "bitflags 2.11.1",
+ "bytemuck",
+ "cc",
+ "cipher",
+ "crypto-common",
+ "digest",
+ "elliptic-curve",
+ "generic-array",
+ "getrandom 0.2.17",
+ "hashbrown 0.15.5",
+ "hmac",
+ "inout",
+ "lru",
+ "memchr",
+ "miniz_oxide",
+ "num-integer",
+ "num-traits",
+ "once_cell",
+ "proc-macro2",
+ "profiling",
+ "quote",
+ "rand_core 0.6.4",
+ "rgb",
+ "serde_core",
+ "sha2",
+ "simd-adler32",
+ "smallvec",
+ "stable_deref_trait",
+ "subtle",
+ "syn",
+ "thiserror 2.0.18",
+ "windows-sys 0.52.0",
+ "zerocopy",
+ "zeroize",
+ "zune-inflate",
+]
 
 [[package]]
 name = "writeable"

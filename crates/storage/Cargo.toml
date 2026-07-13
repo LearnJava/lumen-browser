@@ -36,6 +36,7 @@ hmac = "0.12"
 # Permanent (§5): OS CSPRNG for generating random key material (keys, salts, nonces).
 # Already in the dependency graph via lumen-js and lumen-network.
 getrandom = "0.2"
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 # Integration test only: serialise a real parsed `Document` to verify the

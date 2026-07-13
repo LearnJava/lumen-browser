@@ -122,7 +122,7 @@ C-исходники лежат в `~/.cargo/registry/src/...` — путь ст
 Риск: sccache должен находить `cl.exe`; если сборка идёт вне VS-окружения и `cc-rs` находит MSVC сам, обёртка может не сработать — тогда откатить.
 Источники: [cc crate docs](https://docs.rs/cc/latest/cc/), [sccache README](https://github.com/mozilla/sccache).
 
-### 3.4 🧪 cargo-hakari (workspace-hack) — убрать фич-трэшинг `-p`-сборок
+### 3.4 ✅ cargo-hakari (workspace-hack) — убрать фич-трэшинг `-p`-сборок
 
 Проектное правило «всегда `-p <crate>`» имеет цену: набор фич зависимостей резолвится **от того, что собираешь** ([cargo#4463](https://github.com/rust-lang/cargo/issues/4463)). Конкретно у нас: `-p lumen-driver` (paint = `backend-wgpu`) после `-p lumen-shell` (paint = `cpu-render,backend-femtovg,backend-wgpu`) перекомпилирует paint-стек, и наоборот — постоянная взаимная инвалидация в общем `target/`. То же между `clippy --workspace` (гейт) и дневными `-p`-сборками.
 
@@ -260,8 +260,9 @@ Cargo пайплайнит по `.rmeta`: правка **тела** функци
 
 Сделано также: **4.1 ✅** — BT-1 распространён на все 7 крейтов (§4.1, merge 2026-07-12), 22 интеграционных бинаря → 7. **4.2 ✅** — фич-диета wgpu (`dx12+wgsl+std`, дефолт-фичи off), −8 крейтов из графа (детали в §4.2, merge 2026-07-12).
 
-Следующая сессия, по порядку:
-1. **3.4 cargo-hakari** — отдельная ветка `p1-hakari`; новый крейт `workspace-hack` через `/lumen-new-crate` + обоснование зависимости по §5-политике. **Предусловие:** `cargo install cargo-hakari` (пишет в `~/.cargo/bin`, вне папки браузера — требует согласия пользователя). A/B-замер: `-p lumen-driver` сразу после `-p lumen-shell` (фич-трэшинг paint-стека) до/после.
+Сделано также: **3.4 ✅** — workspace-hack через cargo-hakari влит (§3.4, merge 2026-07-13): 55 унифицированных транзитивных зависимостей, `cargo hakari verify` зелёный; A/B shell→driver: только lumen-paint + lumen-driver пересобрались (7.92с), внешние dep не трогаются.
+
+Следующая сессия, по порядку: нет (§3.x закрыты, §4.x влиты). Если нужен дальнейший прирост — §4.4 linker=/clang (нет CI-гарантии) или nightly `-Zfeature-unification=workspace` (заменит hakari без крейта-хака).
 
 Памятка: после подтяжки main каждый старый worktree/target один раз пересоберёт мир (~19 мин, sccache-кэш под новые флаги наполняется заново) — это ожидаемо, не баг. Для пошаговой отладки теперь `--profile debugging`.
 
@@ -274,6 +275,7 @@ Cargo пайплайнит по `.rmeta`: правка **тела** функци
 | 2026-07-12 | 3.2 Defender + 3.5 fsutil (применены elevated) | 4.22–4.34с (без изм.) | 6.13с (без изм.) | 9м05с (тёплый sccache 92.8% hit; 1-й прогон свежего worktree 10м29с при 81.7%) | 3м47с первая (тёплый кэш) / 0.72с no-op / relink 2.80с | **Эффекта нет — база уже была с исключённым `D:\RustProjects\lumen-browser` и отключённым lastaccess/8dot3.** Worktree `build-speed-32-35`; первый check в worktree = 1м33с |
 | 2026-07-12 | 4.1 BT-1 на font/js/image/paint/network/layout/a11y | — | — | — | 1 `all`-бинарь на крейт (было 5/4/4/3/2/2/2) | 22 интеграционных бинаря → 7, −15 линковок. `cargo test --no-run` для a11y/network подтвердил единственный `Executable tests\all.rs`; полный S4-цикл по каждому крейту не гонялся (дорого, эффект структурно эквивалентен BT-1 driver 14×) |
 | 2026-07-12 | 4.2 фич-диета wgpu: `dx12+wgsl+std`, дефолт off | — | — | — | — | Структурный замер (`cargo tree -e no-dev`): 349→341 уникальных крейта, −8: ash, glow 0.16, gpu-alloc(+types), gpu-descriptor(+types), khronos-egl, spirv. `ash` — самый дорогой (Vulkan build.rs). Стоп-часный S3 не гонялся (дорого, per-flags холодный sccache шумит; эффект структурно очевиден — как в строке 4.1). `check -p lumen-paint --features backend-wgpu` / `lumen-shell` / `lumen-driver` / `lumen-js --features webgpu` — зелёные |
+| 2026-07-13 | 3.4 workspace-hack (cargo-hakari 0.9.38) | — | — | — | — | A/B shell→driver: `cargo check -p lumen-shell` (2м50с, первый холодный прогон в worktree); затем `cargo check -p lumen-driver` = **7.92с, только lumen-paint + lumen-driver пересобрались** (55 внешних dep унифицированы, не трогаются). `cargo hakari verify` зелёный. Конфиг: `x86_64-pc-windows-msvc`, resolver="3", dep-format-version="4". |
 
 Готча замера: `[env] SCCACHE_SERVER_PORT=4150` из `.cargo/config.toml` действует только на cargo-процессы — CLI-вызовы `sccache --show-stats`/`--zero-stats` без `SCCACHE_SERVER_PORT=4150` уходят на другой сервер (дефолтный порт) и показывают нули.
 

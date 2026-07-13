@@ -73,3 +73,4 @@ serde_json = "1.0"
 # rodio is the standard pure-Rust audio playback library; wraps cpal underneath.
 # Graduation: permanent if Lumen ships a native audio playback service.
 rodio = { version = "0.19", default-features = false, features = ["wav", "mp3", "flac", "vorbis"] }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
