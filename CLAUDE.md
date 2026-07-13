@@ -25,7 +25,7 @@ Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 
 | `CAPABILITIES.md` | **Source of truth for "what the browser can do right now"** (per-subsystem, ✅/🟡/⬜, verified against code). Read ONLY this for capability questions — not `docs/plan/*` or `STATUS-PN.md`. Update in the same commit as a feature merge. |
 | `README.md` | User-facing: install, commands, what to expect. |
 | `STATUS-P1.md` | P1 sprint: in-progress task, next items, recent merge. Read at session start if you are P1. |
-| `STATUS-P2.md` | P2 — **роль-резерв** (с 2026-06-18, задач нет; задачи переданы P1). Read only if reactivating P2. |
+| `STATUS-P2.md` | P2 — **реактивирована 2026-07-13** для задачи P2-wpt (WPT-интеграция через wptrunner+BiDi, `docs/tasks/p2-wpt-integration.md`, срезы S1–S8). Read at session start if you are P2. |
 | `STATUS-P3.md` | P3 sprint: in-progress task, next items, recent merge. Read at session start if you are P3. |
 | `STATUS-P4.md` | P4 sprint: CSS spec compliance. Read at session start if you are P4. |
 | `STATUS-P5.md` | P5 maintenance: code-health aliases + sweep workflow. Read at session start if you are P5. |
@@ -62,7 +62,7 @@ Full role definitions, workflows, collaboration rules, task tracking schema — 
 | Developer | Domain | Crates |
 |---|---|---|
 | **P1** | Feature development: any subsystem from roadmap (source → layout → paint → shell) | All crates (coordinated with P2/P4) |
-| **P2** | **Резерв (с 2026-06-18): задач нет, в активной ротации не участвует.** Все незакрытые задачи переданы P1 (`STATUS-P1.md` → «Унаследовано от P2»). Роль сохранена как запасной вариант на случай возврата к параллельной работе. | — |
+| **P2** | **Реактивирована 2026-07-13**: ведёт задачу P2-wpt (WPT-интеграция через официальный `wptrunner` + WebDriver BiDi, срезы S1–S8, см. `docs/tasks/p2-wpt-integration.md`). Прежде была резервом (с 2026-06-18) без задач. | `lumen-bidi-server` (S1 фикс), Python-тулинг `tests/wpt/` |
 | **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
 | **P5** | **Code health ONLY**: audit, workspace-clippy, stub/branch/docs/dep sweeps, safe mechanical cleanup | All crates (read-only except trivial clippy fixes in own crate + branch/worktree/SYMBOLS.md cleanup) |

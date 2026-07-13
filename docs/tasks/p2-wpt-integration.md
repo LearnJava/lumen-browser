@@ -1,12 +1,13 @@
-# P1-wpt-bidi — Web Platform Tests integration (official wptrunner over WebDriver BiDi)
+# P2-wpt-bidi — Web Platform Tests integration (official wptrunner over WebDriver BiDi)
 
 > **SPECULATIVE — not tracked in `ROADMAP.md` under this id.** `ROADMAP.md:131` has a stale
 > `P3-wpt` row (wrong owner — P3 is bug-fixes-only, see `docs/dev-roles.md`); fix the owner
-> column to `P1` in this task's first commit. Re-verify every fact below against code before
-> starting — this revision was grounded 2026-07-13, things drift.
+> column to `P2` in this task's first commit. Assigned to P2 (reactivated for this task —
+> 2026-07-13, see `STATUS-P2.md`). Re-verify every fact below against code before starting —
+> this revision was grounded 2026-07-13, things drift.
 
-**Developer:** P1
-**Branch:** `p1-wpt-bidi`
+**Developer:** P2
+**Branch:** `p2-wpt-bidi`
 **Size:** XXL — expect several merged slices (S1–S8 below), not one PR.
 **Crates:** `lumen-bidi-server` (possible fixes), `lumen-driver`/`lumen-shell` (possible fixes
 surfaced while proving S1); new Python tooling lives in `tests/wpt/`, not a Rust crate.
@@ -102,7 +103,7 @@ wptrunner + BiDi buys:
   anywhere in the repo — only the reserved path in `docs/plan/architecture.md:162`
   (`tests/wpt/  # Web Platform Tests subset`).
 - **`ROADMAP.md:131`** has a stale row: `P3-wpt | P3 | | planned | | | | WPT pass rate ≥ 60%` — wrong
-  owner (P3 = bug-fixes-only). Fix the owner column to `P1` in the first commit of this task.
+  owner (P3 = bug-fixes-only). Fix the owner column to `P2` in the first commit of this task.
 
 ## Architecture
 
@@ -153,7 +154,7 @@ Two artifacts we own; everything else is upstream wptrunner code, unmodified:
 - `docs/plan/architecture.md:162` — reserved `tests/wpt/` path.
 - `docs/plan/testing.md` — update the documented WPT scope/target once this lands (grep for
   current wording before editing — this file changes independently of this task).
-- `ROADMAP.md:131` — the row to fix (owner) and later flip to `done`.
+- `ROADMAP.md:131` — the row to fix (owner → P2) and later flip to `done`.
 - `graphic_tests/run.py` — for reference only, **not** the pattern to follow this time (that was
   the superseded design); it's still the right model for `KNOWN_DEBTORS`-style ratchet thinking if
   `.ini` expectations ever need a thin wrapper script.
@@ -233,7 +234,7 @@ option isn't lost — do not fold it into this task's scope.
 
 ## Definition of done (this task = S1–S7; S8 is a separate follow-up)
 
-- [ ] `ROADMAP.md:131` owner column fixed to `P1` (first commit).
+- [ ] `ROADMAP.md:131` owner column fixed to `P2` (first commit).
 - [ ] S1: `browsingContext.load` (or whatever signal wptrunner's navigate step actually waits on)
       reflects real engine load completion, proven by a timing test, not just code review.
 - [ ] wptrunner vendored + pinned; hash recorded in `tests/wpt/VENDOR.md`; Python setup documented
