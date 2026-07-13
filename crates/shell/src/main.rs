@@ -3135,6 +3135,7 @@ impl PageSource {
                 base: ResourceBase::Url("about:blank".to_owned()),
                 content_type: Some("text/html"),
                 cross_origin_isolated: false,
+                cache_control_no_store: false,
             }),
             PageSource::File(path) => {
                 let bytes = std::fs::read(path)?;
@@ -3143,6 +3144,7 @@ impl PageSource {
                     base: ResourceBase::File(path.clone()),
                     content_type: None,
                     cross_origin_isolated: false,
+                    cache_control_no_store: false,
                 })
             }
             PageSource::Url(url) => {
@@ -3178,6 +3180,7 @@ impl PageSource {
                     base: ResourceBase::Url(url.clone()),
                     content_type: Some("text/html"),
                     cross_origin_isolated,
+                    cache_control_no_store: cache_control_no_store(&resp_headers),
                 })
             }
             PageSource::Snapshot { html, base_url } => {
@@ -3187,6 +3190,7 @@ impl PageSource {
                     base: ResourceBase::Url(base_url.clone()),
                     content_type: Some("text/html"),
                     cross_origin_isolated: false,
+                    cache_control_no_store: false,
                 })
             }
             PageSource::Static { html, url } => {
@@ -3196,6 +3200,7 @@ impl PageSource {
                     base: ResourceBase::Url(url.clone()),
                     content_type: Some("text/html"),
                     cross_origin_isolated: false,
+                    cache_control_no_store: false,
                 })
             }
         }
@@ -3249,6 +3254,7 @@ impl PageSource {
             base: ResourceBase::Url(url.clone()),
             content_type: Some("text/html"),
             cross_origin_isolated,
+            cache_control_no_store: cache_control_no_store(&resp_headers),
         })
     }
 
@@ -3268,7 +3274,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -3283,6 +3289,21 @@ struct RawPage {
     /// `Cross-Origin-Embedder-Policy: require-corp` on this document, enabling
     /// `window.crossOriginIsolated` and unlocking SharedArrayBuffer / high-res timers.
     cross_origin_isolated: bool,
+    /// True when the response carried `Cache-Control: no-store`. Disqualifies
+    /// the page from a full bfcache freeze (HTML LS §8.6) — the shell falls
+    /// back to the existing HTML-snapshot bfcache path on navigate-away.
+    cache_control_no_store: bool,
+}
+
+/// Whether `resp_headers` carry `Cache-Control: no-store`, per RFC 9111 §5.2.
+///
+/// Extracted as a free function (rather than inline in `load_bytes`) so it is
+/// unit-testable without a network round-trip.
+fn cache_control_no_store(resp_headers: &[(String, String)]) -> bool {
+    resp_headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("cache-control"))
+        .is_some_and(|(_, v)| lumen_storage::http_cache::CacheControl::parse(v).no_store)
 }
 
 /// Режим запуска shell. Решается на основе CLI-аргументов в `parse_cli`.
@@ -4470,6 +4491,12 @@ struct LayoutSource {
     /// to restore the page without a network round-trip.
     #[allow(dead_code)]
     html_source: Option<String>,
+    /// `Cache-Control: no-store` on the response that produced this page.
+    /// Checked by [`Lumen::bfcache_eligible`] on navigate-away; `true` routes
+    /// the page to the HTML-snapshot bfcache fallback instead of a full
+    /// freeze. `false` for non-network sources (file/thaw/sidebar/hibernate
+    /// restore) — no header to check, so the page is treated as cacheable.
+    cache_control_no_store: bool,
 }
 
 /// Frozen state of a background tab — moved in/out of `Lumen` on tab switch.
@@ -5615,6 +5642,7 @@ fn render_bytes(
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
     target: lumen_core::ColorSpace,
+    cache_control_no_store: bool,
 ) -> Result<RenderedPage, Box<dyn Error>> {
     let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false)?;
     let display_list = paint_ordered(&parsed.layout);
@@ -5631,6 +5659,7 @@ fn render_bytes(
         document: Arc::clone(&parsed.document),
         stylesheet: Arc::new(parsed.stylesheet),
         html_source: Some(parsed.html_source),
+        cache_control_no_store,
     };
     Ok((
         LoadedPage {
@@ -9665,6 +9694,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         sw_worker_store,
                         cache_backend,
                         target,
+                        raw.cache_control_no_store,
                     )
                     .map_err(|e| e.to_string());
                     // Если event loop уже закрыт — Box (вместе с JS-хэндлом)
@@ -15794,12 +15824,19 @@ impl Lumen {
 
     /// Whether the current page may be stored as a full bfcache freeze.
     ///
-    /// `false` when the page has an open WebSocket/EventSource connection or a
-    /// registered `unload`/`beforeunload` handler ([`PersistentJs::has_bfcache_freeze_blocker`]).
-    /// `Cache-Control: no-store` is not yet plumbed through the navigation
-    /// pipeline — remains a TODO filter. Ineligible pages fall back to the
-    /// existing HTML-snapshot bfcache path (no regression).
+    /// `false` when the page has an open WebSocket/EventSource connection, a
+    /// registered `unload`/`beforeunload` handler ([`PersistentJs::has_bfcache_freeze_blocker`]),
+    /// or the response carried `Cache-Control: no-store` (HTML LS §8.6).
+    /// Ineligible pages fall back to the existing HTML-snapshot bfcache path
+    /// (no regression).
     fn bfcache_eligible(&self) -> bool {
+        let no_store = self
+            .layout_source
+            .as_ref()
+            .is_some_and(|ls| ls.cache_control_no_store);
+        if no_store {
+            return false;
+        }
         !route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
             j.has_bfcache_freeze_blocker()
         })
@@ -15823,6 +15860,9 @@ impl Lumen {
             document: Arc::clone(&doc_arc),
             stylesheet: Arc::new(stylesheet),
             html_source: None,
+            // The page was eligible for a full freeze (bfcache_eligible() was
+            // true when it was stored), so it was not no-store at that point.
+            cache_control_no_store: false,
         });
         #[cfg(feature = "quickjs")]
         {
@@ -17682,6 +17722,8 @@ impl Lumen {
             document: doc_arc,
             stylesheet: Arc::new(sheet),
             html_source: None,
+            // Sidebar panel, not the main navigable page — not bfcache-tracked.
+            cache_control_no_store: false,
         };
 
         let sidebar_vp = Size::new(
@@ -19054,6 +19096,14 @@ impl Lumen {
     ///
     /// On failure (serialise error, SQLite error) the snapshot is put back into
     /// `bg_tabs` and the tab stays at T2.
+    ///
+    /// This is also the T2→T3 bfcache degradation point (`docs/tasks/ph3-bfcache.md`
+    /// step 8): `snap` owns the tab's `bfcache: BfCache`, which may hold `Frozen`
+    /// entries (each carrying a full DOM byte blob). `bg_tabs.remove` moves `snap`
+    /// into this function; on the success path it is never re-inserted anywhere,
+    /// so it — and every `FrozenPage` inside its `bfcache` — is freed when this
+    /// function returns. No separate `degrade_bfcache_entries` pass is needed: the
+    /// whole per-tab state (bfcache included) is already released at T3.
     fn hibernate_bg_tab(&mut self, tab_id: usize) {
         let Some(snap) = self.bg_tabs.remove(&tab_id) else { return };
 
@@ -19215,6 +19265,10 @@ impl Lumen {
             document: Arc::clone(&document_arc),
             stylesheet: Arc::new(stylesheet),
             html_source: None,
+            // Tab hibernation (T3→T0) restore — original Cache-Control is not
+            // preserved across the hibernate/restore round-trip; treat as
+            // cacheable (matches the rest of this struct's restore paths).
+            cache_control_no_store: false,
         };
 
         // Re-run layout+paint with the current viewport (including zoom).
@@ -20507,6 +20561,32 @@ fn escape_js_string_char(ch: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Ph3 P3-bfcache: Cache-Control: no-store eligibility filter ──────────
+
+    #[test]
+    fn cache_control_no_store_detects_directive() {
+        let headers = vec![("Cache-Control".to_owned(), "no-store".to_owned())];
+        assert!(cache_control_no_store(&headers));
+    }
+
+    #[test]
+    fn cache_control_no_store_case_insensitive_header_name() {
+        let headers = vec![("cache-control".to_owned(), "no-store, max-age=0".to_owned())];
+        assert!(cache_control_no_store(&headers));
+    }
+
+    #[test]
+    fn cache_control_no_store_false_when_absent() {
+        let headers = vec![("Cache-Control".to_owned(), "max-age=3600, public".to_owned())];
+        assert!(!cache_control_no_store(&headers));
+    }
+
+    #[test]
+    fn cache_control_no_store_false_when_header_missing() {
+        let headers = vec![("Content-Type".to_owned(), "text/html".to_owned())];
+        assert!(!cache_control_no_store(&headers));
+    }
 
     // ── RP-2: live layout viewport tracks window size, minus chrome ─────────
 

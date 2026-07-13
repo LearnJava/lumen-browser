@@ -54,6 +54,31 @@ HTML-snapshot path — no regression. `Cache-Control: no-store` remains
 unimplemented (needs a `LayoutSource` headers field + navigation-pipeline
 plumbing, not yet present). 7 new unit tests in `dom.rs`.
 
+**2026-07-13 — Level 1 closed: `no-store`, restore benchmark, T2→T3
+degradation.** Remaining three DoD items landed:
+
+- `Cache-Control: no-store` now disqualifies a page from a full freeze.
+  `RawPage`/`LayoutSource` gained a `cache_control_no_store: bool` field
+  (mirrors the existing `cross_origin_isolated` plumbing), populated from the
+  response's `Cache-Control` header (`cache_control_no_store()`, reuses
+  `lumen_storage::http_cache::CacheControl::parse`) and checked first in
+  `bfcache_eligible()`.
+- `bfcache_restore_ms` benchmark added in `crates/bench/src/bfcache_restore.rs`:
+  freezes `samples/page.html` once, then repeatedly times
+  `Document::from_bytes()` + a full relayout (what `bfcache_thaw` actually
+  does today — JS heap resume is still gated on 10C.2). Printed by
+  `cargo run -p lumen-bench` and gated (P50 ≤ 50 ms) in `--ci` mode.
+- T2→T3 degradation turned out to already be satisfied: `hibernate_bg_tab()`
+  drops the whole per-tab `PageSnapshot` (including its `bfcache: BfCache`
+  and any `Frozen`/`FrozenPage` DOM blobs) when a background tab hibernates,
+  because the removed snapshot is never re-inserted on the success path. No
+  separate `degrade_bfcache_entries()` was needed — documented as an explicit
+  invariant on `hibernate_bg_tab`'s doc comment instead, so a future refactor
+  doesn't silently reintroduce unbounded per-tab bfcache growth.
+
+All Level 1 DoD boxes are now checked; `P3-bfcache` closes as `done` on the
+ROADMAP. Level 2 (JS heap survives the freeze) remains re-homed under `P3-v8`.
+
 ---
 
 ## Goal
@@ -293,8 +318,10 @@ need a `degrade_bfcache_entries(tab_id)` call-out. [PROPOSED]
 | `crates/js/src/dom.rs` | ~6944 | `_lumen_bfcache_blocked()` — WS/SSE/unload eligibility check (2026-07-13) |
 | `crates/shell/src/main.rs` | ~2451 | `PersistentJs::has_bfcache_freeze_blocker()` — trait method (2026-07-13) |
 | `crates/core/src/ext.rs` | 882 | `JsRuntime::pause/unpause/suspend/resume` — already present |
-| `crates/shell/src/tab_lifecycle/manager.rs` | — | Add `degrade_bfcache_entries()` [PROPOSED] |
-| `crates/storage/src/bfcache.rs` / `crates/shell/src/main.rs` (`LayoutSource`) | — | No `Cache-Control` capture yet — needed for `no-store` filter [PROPOSED] |
+| `crates/shell/src/main.rs` | 18694 | `hibernate_bg_tab()` — T2→T3 bfcache degradation (drops the whole `PageSnapshot`, `bfcache` included) — documented invariant (2026-07-13) |
+| `crates/shell/src/main.rs` | 3012 | `cache_control_no_store()` — free function, extracts `Cache-Control: no-store` from response headers (2026-07-13) |
+| `crates/shell/src/main.rs` | 15466 | `bfcache_eligible()` — now also checks `LayoutSource.cache_control_no_store` (2026-07-13) |
+| `crates/bench/src/bfcache_restore.rs` | — | `bfcache_restore_ms` benchmark — thaw-path timing (DOM decode + relayout) on `samples/page.html` (2026-07-13) |
 
 Lines marked **[PROPOSED]** do not exist yet; all others are real file:line refs.
 
@@ -411,12 +438,46 @@ Remaining (~2 sessions, see Steps 8–9):
       `window.onunload`/`onbeforeunload` property assignment checked directly.
 - [x] Open EventSource → ineligible. 2026-07-13: covered by the same
       `_lumen_bfcache_blocked()` check (`_sse_instances`, `readyState === OPEN`).
-- [ ] `Cache-Control: no-store` → ineligible. Not yet plumbed: `LayoutSource`
-      has no headers field and nothing captures `Cache-Control` per-navigation
-      today (see "Entry points" below for the gap). Left as a TODO on
-      `bfcache_eligible()`.
-- [ ] `bfcache_restore_ms` benchmark added; P50 ≤ 50 ms on `samples/page.html` (step 9).
-- [ ] T2→T3 degradation: `degrade_bfcache_entries(tab_id)` on tab hibernation (step 8).
+- [x] `Cache-Control: no-store` → ineligible. 2026-07-13: `RawPage` (and the
+      `PageSource::Url` fetch paths in `main.rs`) now capture the response's
+      `Cache-Control` header via the free function `cache_control_no_store()`
+      (reuses `lumen_storage::http_cache::CacheControl::parse`) and thread it
+      into a new `LayoutSource.cache_control_no_store` field through
+      `render_bytes()`. `bfcache_eligible()` checks it before the existing
+      WS/SSE/unload blocker query — `no-store` short-circuits straight to the
+      HTML-snapshot fallback.
+- [x] `bfcache_restore_ms` benchmark added; P50 ≤ 50 ms on `samples/page.html` (step 9).
+      2026-07-13: `crates/bench/src/bfcache_restore.rs` — freezes
+      `samples/page.html` once (`Document::to_bytes()`), then repeatedly times
+      `Document::from_bytes()` + a full relayout (`lumen_layout::layout_measured`),
+      mirroring what `Lumen::bfcache_thaw` actually does today (JS heap resume is
+      still gated on 10C.2, so thaw always re-layouts — no retained `LayoutBox`
+      to skip it with). Printed by the default `cargo run -p lumen-bench`
+      report and gated in `--ci` mode (`ci_gate::run_ci_gate`) alongside the
+      existing mean-total/peak-RSS checks. Lives in `lumen-bench` rather than
+      as a `Lumen`-level integration test because `lumen-shell` is a binary
+      crate (no `[lib]` target) and no test harness for a full `Lumen`
+      instance exists anywhere in the codebase — the DOM-deserialize +
+      relayout pair is the actual expensive part of a thaw and needs no shell
+      state to measure.
+- [x] T2→T3 degradation: on tab hibernation, `hibernate_bg_tab()`
+      (`main.rs`) already frees the tab's entire `PageSnapshot` — including its
+      `bfcache: BfCache` and any `Frozen`/`FrozenPage` DOM blobs inside it —
+      because `snap` (moved out of `bg_tabs` via `.remove()`) is never
+      re-inserted anywhere on the success path and is dropped when the
+      function returns. Verified 2026-07-13 by reading `hibernate_bg_tab()`
+      end to end: no reference to `snap` (or any of its fields) escapes the
+      function on the success path. A separate `degrade_bfcache_entries(tab_id)`
+      pass on `TabLifecycleManager` (which does not itself own any `BfCache` —
+      `bfcache` lives on `Lumen`/`PageSnapshot`, keyed per-tab) would only
+      duplicate work already done by this drop. Documented as an explicit
+      invariant on `hibernate_bg_tab`'s doc comment so a future refactor that
+      retains `snap` past the function (e.g. for a faster T3→T0 restore) does
+      not silently reintroduce unbounded per-tab bfcache memory growth.
+      Out of scope: `hibernate_bg_tab` also drops `snap.nav_back`/`nav_fwd`
+      (the tab's back/forward history), so a hibernated-then-restored tab
+      currently loses history beyond its current page — a real gap, but a
+      tab-hibernation concern, not a `P3-bfcache` one; not touched here.
 - [x] `cargo clippy -p lumen-shell -p lumen-js --all-targets -D warnings` clean.
 - [x] All existing back/forward shell tests pass.
 

@@ -741,9 +741,9 @@
     {
      "id": "P3-bfcache",
      "title": "Back/forward cache (bfcache)",
-     "status": "active",
+     "status": "done",
      "size": "M",
-     "note": "DOM freeze/thaw влит в main 2026-07-02 (ветка p1-ph3-bfcache удалена). DoD разбит на 2 уровня (2026-07-08, docs/tasks/ph3-bfcache.md). Уровень 1: eligibility-фильтры WS/SSE/unload сделаны 2026-07-13 (ветка p1-bfcache-eligibility, _lumen_bfcache_blocked в dom.rs + PersistentJs::has_bfcache_freeze_blocker); осталось — no-store, бенчмарк bfcache_restore_ms, деградация T2→T3 (~2 сессии); уровень 2 (JS-куча переживает заморозку) перенесён в P3-v8 (10C.2 заблокирован rquickjs)"
+     "note": "DOM freeze/thaw влит в main 2026-07-02 (ветка p1-ph3-bfcache удалена). DoD разбит на 2 уровня (2026-07-08, docs/tasks/ph3-bfcache.md). Уровень 1 ЗАКРЫТ 2026-07-13 (ветка p1-bfcache-level1-finish): eligibility-фильтры WS/SSE/unload (ветка p1-bfcache-eligibility, _lumen_bfcache_blocked в dom.rs + PersistentJs::has_bfcache_freeze_blocker) + Cache-Control: no-store (RawPage/LayoutSource.cache_control_no_store, cache_control_no_store() переиспользует lumen_storage::http_cache::CacheControl::parse) + бенчмарк bfcache_restore_ms (crates/bench/src/bfcache_restore.rs, P50 ≤ 50 мс, гейт в --ci) + деградация T2→T3 (hibernate_bg_tab уже дропает весь PageSnapshot вместе с bfcache — задокументировано как инвариант, отдельный degrade_bfcache_entries не нужен); уровень 2 (JS-куча переживает заморозку) перенесён в P3-v8 (10C.2 заблокирован rquickjs)"
     },
     {
      "id": "P3-navapi",

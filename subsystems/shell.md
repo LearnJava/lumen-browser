@@ -1,6 +1,26 @@
 # lumen-shell 🟡 (window + render + network)
 
 - **Done (V8 shell adapter — Ph3 `P3-v8` S4, 2026-07-13):** `#[cfg(feature = "v8")] struct V8PersistentJs` mirrors `QuickPersistentJs`, implementing every `PersistentJs` method. State-backed methods (`take_dom_dirty`, `take_navigate_request`, scroll/history/focus/fullscreen queues, etc.) delegate to new `V8JsRuntime` accessors added in `crates/js/src/v8_runtime.rs` (same field-per-accessor shape as `QuickJsRuntime`). Subsystems not yet ported to V8 (workers, canvas2d, view transitions, notifications — see `docs/tasks/ph3-v8-migration.md` slices S5–S11) use empty/no-op stubs and start returning real data once their slice lands. Both `Arc<dyn PersistentJs>` construction sites are mirrored: initial page load (`run_scripts_with_dom`) and bfcache thaw (`Lumen::thaw_from_bfcache`-equivalent branch). `quickjs` and `v8` features may both be compiled in (both native sets build), but the `quickjs` construction branch always returns/wins at each site — its `#[cfg]` guard is unconditional while the `v8` branch is gated `#[cfg(all(feature = "v8", not(feature = "quickjs")))]` — so exercising the V8 path requires `--no-default-features --features backend-femtovg,v8` (default already turns `quickjs` on). Side-fix: `backend_factory.rs`'s `create_wgpu` stub (compiled when `backend-wgpu` is off) was missing the `target_color_space` parameter the two call sites always pass — broke any `--no-default-features --features backend-femtovg,*` build regardless of JS engine; added the parameter (ignored) to match the real `create_wgpu` signature.
+- **Done (Ph3 `P3-bfcache` level 1 closed — `no-store`, restore benchmark,
+  T2→T3 degradation, 2026-07-13):** `RawPage`/`LayoutSource` gained
+  `cache_control_no_store: bool` (mirrors the existing `cross_origin_isolated`
+  plumbing), populated from the response's `Cache-Control` header via the
+  free function `cache_control_no_store()` (reuses
+  `lumen_storage::http_cache::CacheControl::parse`) and threaded through
+  `render_bytes()`. `bfcache_eligible()` checks it first — `no-store`
+  short-circuits straight to the HTML-snapshot fallback, before the existing
+  WS/SSE/unload blocker query. `hibernate_bg_tab()` (T2→T3) already frees the
+  tab's whole `PageSnapshot`, including its `bfcache: BfCache` and any
+  `Frozen`/`FrozenPage` DOM blobs, because the removed snapshot is never
+  re-inserted on the success path — documented as an explicit invariant on
+  its doc comment (no separate `degrade_bfcache_entries()` needed). New
+  `bfcache_restore_ms` benchmark (`crates/bench/src/bfcache_restore.rs`):
+  freezes `samples/page.html` once, then repeatedly times
+  `Document::from_bytes()` + a full relayout (what `bfcache_thaw` actually
+  does today — JS heap resume is still gated on 10C.2), gated P50 ≤ 50 ms in
+  `cargo run -p lumen-bench --ci`. All Level 1 DoD boxes now checked
+  (`docs/tasks/ph3-bfcache.md`); Level 2 (JS heap survives the freeze)
+  re-homed under `P3-v8`.
 - **Done (bfcache eligibility filters — WS/SSE/unload, Ph3 `P3-bfcache` level 1, 2026-07-13):**
   `bfcache_eligible()` (previously always `true`) now queries
   `PersistentJs::has_bfcache_freeze_blocker()` through `route_query_js`,
@@ -8,9 +28,7 @@
   `true`. `QuickPersistentJs` implements it via
   `eval_js_value("_lumen_bfcache_blocked()")` — see `subsystems/js.md` for the
   JS-side check. Default trait method returns `false` (no blockers) for
-  non-QuickJS runtimes. `Cache-Control: no-store` is still unimplemented
-  (`LayoutSource` has no headers field yet); the benchmark and T2→T3
-  degradation steps are separate, still open.
+  non-QuickJS runtimes.
 - **Done:** winit 0.30 with `ApplicationHandler` API. Three window modes: `lumen` (empty window 1024×720), `lumen <path.html>` (file → encoding → HTML → layout → paint), `lumen <http(s)://...>` (network via `HttpClient` → same stages). External CSS: `<link rel="stylesheet" href="...">` loaded from disk (relative to HTML file) or over network (relative to base URL). `ResourceBase` enum isolates relative URL resolution logic. Inter-Regular.ttf bundled via `include_bytes!`. Handlers for Resized + RedrawRequested.
 - **Done (fetch+decode `<img src>` + srcset/picture):** between HTML parse and layout, shell resolves image URLs via `lumen_layout::collect_image_requests(doc, viewport)` — same picker (`resolve_image_source`) as `BoxKind::Image { src }`. Downloads bytes (file:// or http via `HttpClient`), decodes via `lumen_image::decode` (PNG/JPEG sniff-dispatch). `fetch_and_decode_images(doc, base, sink, viewport) -> Vec<(String, lumen_image::Image)>`. Key in result Vec is the picked URL — always matches `DisplayCommand::DrawImage.src` including `<picture>`/`srcset` candidates. **Intrinsic dimensions (HTML5 §10 "mapped attributes"):** if `<img>` has neither `width` nor `height` attribute, both are set from decoded image as presentational hints via `apply_intrinsic_size`; author CSS overrides. Errors silently skipped with `eprintln!` — broken image doesn't crash the whole page, paint draws grey placeholder. `LoadedPage`/`ParsedPage` now carry `images: Vec<(String, lumen_image::Image)>`.
 - **Done (RP-5 external SVG rasterization, `svg_image.rs`, 2026-07-02):** `rasterize_svg(bytes, base, sink) -> Option<lumen_image::Image>` renders external SVG bytes by wrapping the markup in a minimal HTML document (`html,body{margin:0;padding:0;overflow:hidden}`) and running the same headless pipeline as `render_source_to_png`: `parse_and_layout` (deterministic, JS off, `content_type = text/html`, relative refs resolve against the image URL via `base`) → `paint_ordered` → `Renderer::render_to_image_cpu` at the intrinsic size. `svg_intrinsic_size` (CSS Images §5.1): root `<svg>` `width`/`height` (plain or `px`; `%`/units fall through) → `viewBox` w/h (comma- or space-separated) → 300×150; rounded, clamped 1..=4096; `attr_value` matches only standalone attribute names (whitespace-preceded — `stroke-width` never matches `width`). Wired into BOTH decode paths: `decode_image` (`<img>`, streaming + final) and `fetch_and_decode_background_images` (`background-image`), gated by `lumen_image::is_svg`. Does NOT call `IMAGE_CACHE.reset_new()` (an outer page render owns the cache). 6 unit tests. Deferred: re-raster at CSS box size, host `currentColor`. Implemented via Laguna M.1 (poolside) under P1 review (mixed programming); the bg-path wiring and final `svg_intrinsic_size` compile fixes are reviewer work.
