@@ -19518,9 +19518,45 @@ impl Lumen {
         /// the shell — same simplification `InProcessSession::check_wait_condition`
         /// uses headless): `NetworkIdle` falls back to `DocumentReady`, and
         /// `Stable` only checks that the selector currently matches an element.
+        ///
+        /// `DocumentReady` reads the real `document.readyState` from the JS
+        /// runtime (P2-wpt S1) rather than approximating via `self.layout_box`
+        /// — the layout box exists as soon as the *previous* page's box tree
+        /// is still around (it is not reset on ordinary navigation, only on
+        /// `reset_to_blank_tab`), so it was `true` immediately on repeat
+        /// navigations even before the new page finished loading.
+        ///
+        /// When a real JS context is available, also gated on
+        /// `self.nav_start.is_none()`: on the non-blocking streaming
+        /// navigation path (`reload`/`navigate_to` with a window already
+        /// open), `self.js_ctx` still holds the *previous* page's context
+        /// until `apply_loaded_page` installs the new one — reading
+        /// `document.readyState` without this gate would see the old page's
+        /// already-`"complete"` state and report ready immediately,
+        /// reproducing the exact bug this fixes. `nav_start` is set at the
+        /// start of every navigation and only cleared once
+        /// `apply_loaded_page` (which also installs the fresh JS context and
+        /// fires the real `load` event) has run — see `RenderDone` handling.
+        /// (`nav_start` is only cleared under `#[cfg(feature = "quickjs")]`,
+        /// so the gate is scoped to the branch that actually has a JS
+        /// context — the `layout_box` fallback below stays independent of it
+        /// for JS-less builds/tabs, matching the pre-S1 behavior there.)
         fn check_wait_condition(&self, cond: &WaitCondition) -> bool {
             match cond {
-                WaitCondition::DocumentReady | WaitCondition::NetworkIdle => self.layout_box.is_some(),
+                WaitCondition::DocumentReady | WaitCondition::NetworkIdle => {
+                    // ADR-016: eval через `route_query_js`, тот же паттерн, что
+                    // `WaitCondition::JsIdle` ниже.
+                    match route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                        j.eval_js_value("document.readyState")
+                    }) {
+                        Some(Ok(json)) => self.nav_start.is_none() && json == "\"complete\"",
+                        // No JS context at all (quickjs disabled, or a
+                        // JS-less blank tab) — fall back to the coarser
+                        // layout signal so `Wait` doesn't hang forever on a
+                        // readiness signal that will never arrive.
+                        _ => self.layout_box.is_some(),
+                    }
+                }
                 WaitCondition::Visible(selector) => {
                     let Some(lb) = self.layout_box.as_ref() else { return false };
                     let Some(source) = self.layout_source.as_ref() else { return false };

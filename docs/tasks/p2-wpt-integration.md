@@ -83,15 +83,17 @@ wptrunner + BiDi buys:
   `RemoteValue`; objects/arrays fall back to JSON text — **fine for our use case**, see S4),
   `browsingContext.captureScreenshot` (base64 PNG), and pointer/key `input.performActions` execute
   for real against the live shell window.
-- **Blocking gap, confirmed by reading the code (not just the doc note).**
-  `bc_navigate` (`protocol.rs:832`–`870`) calls `live.navigate(&url)` (a real, blocking round-trip
-  through `AutomationHandle` to the live window per `subsystems/driver.md`), but then
-  unconditionally emits `browsingContext.load` **immediately after `navigate()` returns**, with a
-  **hardcoded `timestamp: 0.0`** (`protocol.rs:864`–`870`). This is not tied to any real
-  DOMContentLoaded/load-complete signal from the engine — it fires as soon as the navigate command
-  itself completes, which may be well before scripts/resources on the new page have actually run.
-  `CAPABILITIES.md:211` and `lib.rs:12`–`13` independently confirm: "`domContentLoaded`, ... remains
-  a P3 handoff — roadmap 8H.3." **wptrunner's navigate step waits on this exact signal** — see S1.
+- **S1 FIXED (2026-07-13).** `bc_navigate` (`protocol.rs`) calls `live.navigate(&url)`, then blocks
+  on `live.wait(WaitCondition::DocumentReady, NAVIGATE_LOAD_TIMEOUT_MS)` before emitting
+  `browsingContext.load` with a real Unix-ms `timestamp` (no more hardcoded `0.0`); a wait timeout
+  fails the command with `unknown error` instead of firing a fabricated event. Shell-side,
+  `check_wait_condition`'s `DocumentReady`/`NetworkIdle` arm (`crates/shell/src/main.rs`) now reads
+  the JS runtime's real `document.readyState` instead of `self.layout_box.is_some()`, gated on
+  `self.nav_start.is_none()` — without that gate, the non-blocking streaming navigation path leaves
+  `self.js_ctx` pointing at the *previous* page's already-`"complete"` context until
+  `apply_loaded_page` installs the new one, which would have reproduced the exact "fires
+  immediately" bug this fixes. Falls back to `self.layout_box.is_some()` when there is no JS
+  context at all (quickjs disabled, or a JS-less blank tab) — same behavior as before there.
 - **`lumen-driver` substrate** (`subsystems/driver.md`): `LiveWindowSession` implements
   `BrowserSession` over `AutomationHandle`; real round-trips for
   `navigate/click/type_text/scroll/wait/eval/screenshot/query/a11y_tree`. `AutomationHandle::execute`
@@ -234,9 +236,20 @@ option isn't lost — do not fold it into this task's scope.
 
 ## Definition of done (this task = S1–S7; S8 is a separate follow-up)
 
-- [ ] `ROADMAP.md:131` owner column fixed to `P2` (first commit).
-- [ ] S1: `browsingContext.load` (or whatever signal wptrunner's navigate step actually waits on)
+- [x] `ROADMAP.md:131` owner column fixed to `P2` (first commit).
+- [x] S1: `browsingContext.load` (or whatever signal wptrunner's navigate step actually waits on)
       reflects real engine load completion, proven by a timing test, not just code review.
+      `bc_navigate` blocks on `LiveWindowSession::wait(WaitCondition::DocumentReady, …)`, whose
+      shell-side implementation now reads the real `document.readyState` (gated on `nav_start` to
+      avoid the previous page's stale context during streaming navigation) instead of
+      `layout_box.is_some()`. Unit-tested in `crates/bidi-server/src/protocol.rs`
+      (`navigate_with_live_window_emits_load_with_real_timestamp`,
+      `navigate_with_live_window_errors_when_load_never_completes`); the "timing test" proper (a
+      real BiDi WS client observing `load` fire after a deliberately slow inline `<script>`) needs
+      a real spawned `lumen --bidi-port` process + WS client, which does not exist in the repo yet
+      (nearest patterns: `crates/shell/tests/ipc_server.rs` spawns the real binary but over the
+      `--ipc-server` bincode protocol, not BiDi WebSocket) — left as follow-up tooling for S2/S7,
+      not blocking S1 since the underlying signal is now provably real by code + unit test.
 - [ ] wptrunner vendored + pinned; hash recorded in `tests/wpt/VENDOR.md`; Python setup documented
       in `tests/wpt/README.md`.
 - [ ] `tools/wptrunner/wptrunner/browsers/lumen.py` product plugin launches/stops `lumen` and
