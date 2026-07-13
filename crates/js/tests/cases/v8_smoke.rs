@@ -13,21 +13,15 @@
 //!   `CARGO_TARGET_DIR=C:\tmp\lumen-v8-target cargo test -p lumen-js --features v8-backend`
 #![cfg(feature = "v8-backend")]
 
-use std::sync::{Once, RwLock};
+use std::sync::RwLock;
 
-static V8_INIT: Once = Once::new();
 /// Guards concurrent test access — parallel reads are fine, init is exclusive.
 static PROCESS_LOCK: RwLock<()> = RwLock::new(());
 
+/// Delegate platform init to the shared path in `v8_runtime` so there is
+/// exactly one `V8::initialize_platform` call per process (S1 invariant).
 fn init_v8() {
-    V8_INIT.call_once(|| {
-        // Use unprotected platform (no security checks) — appropriate for
-        // a single-process test binary. Switch to new_default_platform for
-        // production once this integration is wired into lumen-shell.
-        let platform = v8::new_unprotected_default_platform(0, false).make_shared();
-        v8::V8::initialize_platform(platform);
-        v8::V8::initialize();
-    });
+    lumen_js::v8_runtime::ensure_v8_platform();
 }
 
 /// Smoke test: eval `1+1` → 2.0 inside a fresh isolate.
