@@ -112,6 +112,46 @@ pub fn drain_notifications(queue: &NotificationQueue) -> Vec<NotificationRequest
     }
 }
 
+/// V8 port of [`install_notifications_bindings`] (Ph3 V8 migration S5-S7 batch
+/// 3): the three natives capture a clone of `rt`'s queue (accessed via
+/// [`crate::v8_runtime::V8JsRuntime::notification_queue`]), the JS shim is
+/// unchanged. Must be called after the core DOM install.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_notifications_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    allow: bool,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn3};
+    use lumen_core::ext::JsRuntime as _;
+
+    let queue = rt.notification_queue();
+
+    let show = {
+        let q = Arc::clone(&queue);
+        into_v8_fn3(move |id: u32, title: String, body: String| -> bool {
+            match q.lock() {
+                Ok(mut queue) => {
+                    queue.push(NotificationRequest { id, title, body });
+                    true
+                }
+                Err(_) => false,
+            }
+        })
+    };
+    rt.register_native("_lumen_show_notification", show)?;
+
+    let close = into_v8_fn1(move |_id: u32| {});
+    rt.register_native("_lumen_notification_close", close)?;
+
+    let perm = if allow { "granted" } else { "denied" };
+    let request_permission = into_v8_fn0(move || -> String { perm.to_string() });
+    rt.register_native("_lumen_notification_request_permission", request_permission)?;
+
+    rt.eval(&format!("globalThis.__LUMEN_NOTIF_PERM = '{perm}';"))?;
+    rt.eval(NOTIFICATIONS_SHIM)?;
+    Ok(())
+}
+
 // ─── JavaScript shim ─────────────────────────────────────────────────────────
 
 const NOTIFICATIONS_SHIM: &str = r#"(function() {

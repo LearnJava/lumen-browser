@@ -185,6 +185,42 @@ pub fn install_broadcast_channel_bindings(
     Ok(())
 }
 
+/// V8 port of [`install_broadcast_channel_bindings`] (Ph3 V8 migration S5-S7
+/// batch 3): the three natives capture a clone of `rt`'s registry (accessed
+/// via [`crate::v8_runtime::V8JsRuntime::broadcast_registry`]), the JS shim is
+/// unchanged. Must be called after the core DOM install.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_broadcast_channel_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3};
+    use lumen_core::ext::JsRuntime as _;
+
+    let registry = rt.broadcast_registry();
+
+    let bc_register = {
+        let r = Arc::clone(&registry);
+        into_v8_fn1(move |name: String| -> u32 { register(&r, &name) })
+    };
+    rt.register_native("_lumen_bc_register", bc_register)?;
+
+    let bc_post = into_v8_fn3(move |id: u32, name: String, json: String| {
+        post(&name, id, &json);
+    });
+    rt.register_native("_lumen_bc_post", bc_post)?;
+
+    let bc_close = {
+        let r = Arc::clone(&registry);
+        into_v8_fn2(move |id: u32, name: String| {
+            close(&r, id, &name);
+        })
+    };
+    rt.register_native("_lumen_bc_close", bc_close)?;
+
+    rt.eval(BROADCAST_CHANNEL_SHIM)?;
+    Ok(())
+}
+
 // ─── BroadcastChannel JS class ──────────────────────────────────────────────────
 
 /// IIFE defining `globalThis.BroadcastChannel` and `_lumen_deliver_broadcast_messages`.

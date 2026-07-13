@@ -287,6 +287,207 @@ fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_video_bindings`] (Ph3 V8 migration S5-S7 batch 3):
+/// state is the process-global [`VideoGifStore`](crate::video_gif_store::VideoGifStore)
+/// (installed once via `set_video_gif_store`, backend-agnostic), so no new
+/// `V8JsRuntime` plumbing is needed — each native captures its own
+/// `get_video_gif_store()` clone exactly like the rquickjs original. The JS
+/// shim is unchanged.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_video_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3};
+    use lumen_core::ext::JsRuntime as _;
+
+    {
+        let store = get_video_gif_store();
+        let load = into_v8_fn2(move |nid: f64, src: String| {
+            if let Some(s) = &store {
+                s.pending_loads.lock().unwrap().push((nid as u32, src));
+            }
+        });
+        rt.register_native("__lumen_video_load", load)?;
+    }
+
+    {
+        let store = get_video_gif_store();
+        let ready = into_v8_fn1(move |nid: f64| -> bool {
+            store
+                .as_ref()
+                .map(|s| s.playback.lock().unwrap().contains_key(&(nid as u32)))
+                .unwrap_or(false)
+        });
+        rt.register_native("__lumen_video_ready", ready)?;
+    }
+
+    {
+        let store = get_video_gif_store();
+        let play = into_v8_fn2(move |nid: f64, now_ms: f64| {
+            if let Some(s) = &store
+                && let Some(e) = s.playback.lock().unwrap().get_mut(&(nid as u32))
+                && e.paused
+            {
+                e.play_epoch_ms = Some(now_ms as u64);
+                e.paused = false;
+            }
+        });
+        rt.register_native("__lumen_video_play", play)?;
+    }
+
+    {
+        let store = get_video_gif_store();
+        let pause = into_v8_fn2(move |nid: f64, now_ms: f64| {
+            if let Some(s) = &store
+                && let Some(e) = s.playback.lock().unwrap().get_mut(&(nid as u32))
+            {
+                e.freeze(now_ms as u64);
+                e.paused = true;
+            }
+        });
+        rt.register_native("__lumen_video_pause", pause)?;
+    }
+
+    {
+        let store = get_video_gif_store();
+        let seek = into_v8_fn3(move |nid: f64, secs: f64, now_ms: f64| {
+            if let Some(s) = &store
+                && let Some(e) = s.playback.lock().unwrap().get_mut(&(nid as u32))
+            {
+                let target_ms = (secs * 1000.0).max(0.0) as u64;
+                e.position_ms = target_ms;
+                if !e.paused {
+                    e.play_epoch_ms = Some(now_ms as u64);
+                }
+            }
+        });
+        rt.register_native("__lumen_video_seek", seek)?;
+    }
+
+    {
+        let store = get_video_gif_store();
+        let current_time = into_v8_fn2(move |nid: f64, now_ms: f64| -> f64 {
+            store
+                .as_ref()
+                .and_then(|s| {
+                    s.playback
+                        .lock()
+                        .unwrap()
+                        .get(&(nid as u32))
+                        .map(|e| e.current_ms(now_ms as u64) as f64 / 1000.0)
+                })
+                .unwrap_or(0.0)
+        });
+        rt.register_native("__lumen_video_current_time", current_time)?;
+    }
+
+    {
+        let store = get_video_gif_store();
+        let duration = into_v8_fn1(move |nid: f64| -> f64 {
+            store
+                .as_ref()
+                .and_then(|s| {
+                    s.playback
+                        .lock()
+                        .unwrap()
+                        .get(&(nid as u32))
+                        .map(|e| e.duration_secs())
+                })
+                .unwrap_or(f64::INFINITY)
+        });
+        rt.register_native("__lumen_video_duration", duration)?;
+    }
+
+    {
+        let store = get_video_gif_store();
+        let paused = into_v8_fn1(move |nid: f64| -> bool {
+            store
+                .as_ref()
+                .and_then(|s| s.playback.lock().unwrap().get(&(nid as u32)).map(|e| e.paused))
+                .unwrap_or(true)
+        });
+        rt.register_native("__lumen_video_paused", paused)?;
+    }
+
+    {
+        let store = get_video_gif_store();
+        let ended = into_v8_fn2(move |nid: f64, now_ms: f64| -> bool {
+            store
+                .as_ref()
+                .and_then(|s| {
+                    s.playback
+                        .lock()
+                        .unwrap()
+                        .get(&(nid as u32))
+                        .map(|e| e.is_ended(now_ms as u64))
+                })
+                .unwrap_or(false)
+        });
+        rt.register_native("__lumen_video_ended", ended)?;
+    }
+
+    {
+        let store = get_video_gif_store();
+        let width = into_v8_fn1(move |nid: f64| -> f64 {
+            store
+                .as_ref()
+                .and_then(|s| {
+                    s.playback
+                        .lock()
+                        .unwrap()
+                        .get(&(nid as u32))
+                        .map(|e| f64::from(e.width))
+                })
+                .unwrap_or(0.0)
+        });
+        rt.register_native("__lumen_video_width", width)?;
+    }
+
+    {
+        let store = get_video_gif_store();
+        let height = into_v8_fn1(move |nid: f64| -> f64 {
+            store
+                .as_ref()
+                .and_then(|s| {
+                    s.playback
+                        .lock()
+                        .unwrap()
+                        .get(&(nid as u32))
+                        .map(|e| f64::from(e.height))
+                })
+                .unwrap_or(0.0)
+        });
+        rt.register_native("__lumen_video_height", height)?;
+    }
+
+    {
+        let can_play_type = into_v8_fn1(move |mime: String| -> String {
+            let m = mime.trim().to_ascii_lowercase();
+            let base = m.split(';').next().unwrap_or("").trim();
+            if base == "image/gif" {
+                "maybe".to_string()
+            } else {
+                String::new()
+            }
+        });
+        rt.register_native("__lumen_video_can_play_type", can_play_type)?;
+    }
+
+    {
+        let store = get_text_track_store();
+        let texttracks_json = into_v8_fn1(move |nid: f64| -> String {
+            store
+                .as_ref()
+                .map(|s| s.tracks_json(nid as u32))
+                .unwrap_or_else(|| "[]".to_string())
+        });
+        rt.register_native("__lumen_texttracks_json", texttracks_json)?;
+    }
+
+    rt.eval(VIDEO_SHIM)?;
+    Ok(())
+}
+
 // ── JavaScript shim ───────────────────────────────────────────────────────────
 
 /// HTMLVideoElement Phase 1 shim.

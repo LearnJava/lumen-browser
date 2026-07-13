@@ -252,6 +252,12 @@ pub struct V8JsRuntime {
     deterministic: AtomicBool,
     /// Live SW execution threads keyed by `(origin, scope)`.
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
+    /// `BroadcastChannel` instances created on this page (WHATWG HTML §9.5).
+    /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
+    broadcast_channels: crate::broadcast_channel::BroadcastRegistry,
+    /// Pending OS notification requests queued by `new Notification(...)` in JS.
+    /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
+    pending_notifications: crate::notifications_bindings::NotificationQueue,
 }
 
 impl V8JsRuntime {
@@ -295,7 +301,44 @@ impl V8JsRuntime {
             pending_focus_requests: Arc::new(Mutex::new(Vec::new())),
             deterministic: AtomicBool::new(false),
             sw_worker_store: None,
+            broadcast_channels: Arc::new(Mutex::new(Vec::new())),
+            pending_notifications: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+
+    /// Shared handle to this runtime's `BroadcastChannel` registry, for the
+    /// natives registered by [`crate::broadcast_channel::install_broadcast_channel_bindings_v8`].
+    pub(crate) fn broadcast_registry(&self) -> crate::broadcast_channel::BroadcastRegistry {
+        Arc::clone(&self.broadcast_channels)
+    }
+
+    /// Deliver messages posted to this page's `BroadcastChannel` instances.
+    /// Mirrors [`crate::QuickJsRuntime::pump_broadcast_channels`].
+    pub fn pump_broadcast_channels(&self) {
+        let messages = crate::broadcast_channel::drain(&self.broadcast_channels);
+        if messages.is_empty() {
+            return;
+        }
+        let json = crate::build_worker_messages_json(&messages);
+        let script = format!(
+            "if(typeof _lumen_deliver_broadcast_messages==='function')\
+             _lumen_deliver_broadcast_messages({json})"
+        );
+        let _ = self.eval(&script);
+    }
+
+    /// Shared handle to this runtime's pending-notifications queue, for the
+    /// natives registered by [`crate::notifications_bindings::install_notifications_bindings_v8`].
+    pub(crate) fn notification_queue(&self) -> crate::notifications_bindings::NotificationQueue {
+        Arc::clone(&self.pending_notifications)
+    }
+
+    /// Drain all OS notification requests queued by `new Notification(...)` in JS.
+    /// Mirrors [`crate::QuickJsRuntime::take_notification_requests`].
+    pub fn take_notification_requests(
+        &self,
+    ) -> Vec<crate::notifications_bindings::NotificationRequest> {
+        crate::notifications_bindings::drain_notifications(&self.pending_notifications)
     }
 
     /// Consume any navigation request that JS placed via `location.href =` etc.
@@ -3432,9 +3475,11 @@ impl V8JsRuntime {
         }
         install_v8!(async_context::install_async_context_v8);
         install_v8!(attribution_reporting::install_attribution_reporting_api_v8);
+        install_v8!(audio_element::install_audio_element_bindings_v8);
         install_v8!(badging::install_badging_bindings_v8);
         install_v8!(battery_bindings::install_battery_bindings_v8);
         install_v8!(bluetooth::install_bluetooth_bindings_v8);
+        install_v8!(broadcast_channel::install_broadcast_channel_bindings_v8);
         install_v8!(close_watcher::install_close_watcher_v8);
         install_v8!(compute_pressure::install_compute_pressure_bindings_v8);
         install_v8!(content_index::install_content_index_api_v8);
@@ -3455,6 +3500,10 @@ impl V8JsRuntime {
         install_v8!(form_validation::install_form_validation_bindings_v8);
         install_v8!(gamepad::install_gamepad_bindings_v8);
         install_v8!(generic_sensor::install_generic_sensor_bindings_v8);
+        // Default: PERMISSION_DENIED (mirrors lib.rs::install_dom's hardcoded `None`).
+        if let Err(e) = crate::geolocation::install_geolocation_bindings_v8(self, None) {
+            eprintln!("v8: geolocation::install_geolocation_bindings_v8 failed: {e}");
+        }
         install_v8!(highlight_api::install_highlight_api_bindings_v8);
         install_v8!(idle_detection::install_idle_detection_bindings_v8);
         install_v8!(iframe_element::install_iframe_element_bindings_v8);
@@ -3470,6 +3519,11 @@ impl V8JsRuntime {
         install_v8!(navigation_api::install_navigation_api_v8);
         install_v8!(navigator_bindings::install_navigator_bindings_v8);
         install_v8!(network_log_bindings::install_network_log_bindings_v8);
+        // Default permission: "denied" (mirrors lib.rs::install_dom's hardcoded `false`).
+        if let Err(e) = crate::notifications_bindings::install_notifications_bindings_v8(self, false)
+        {
+            eprintln!("v8: notifications_bindings::install_notifications_bindings_v8 failed: {e}");
+        }
         install_v8!(paint_worklet::install_paint_worklet_api_v8);
         install_v8!(permissions_policy::install_permissions_policy_bindings_v8);
         install_v8!(pip_bindings::install_pip_bindings_v8);
@@ -3496,6 +3550,7 @@ impl V8JsRuntime {
         install_v8!(typed_om_api::install_typed_om_api_v8);
         install_v8!(ua_client_hints::install_ua_client_hints_bindings_v8);
         install_v8!(url_pattern::install_url_pattern_api_v8);
+        install_v8!(video_bindings::install_video_bindings_v8);
         install_v8!(video_pip::install_video_pip_api_v8);
         install_v8!(virtual_keyboard::install_virtual_keyboard_bindings_v8);
         install_v8!(wake_lock::install_wake_lock_bindings_v8);
