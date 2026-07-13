@@ -5068,6 +5068,65 @@ fn compute_layout(
     (dl, layout)
 }
 
+/// ADR-016 M4: incremental variant of [`relayout_page`] — uses
+/// [`lumen_layout::layout_mutation_incremental`] to skip geometry re-computation
+/// for subtrees whose [`lumen_layout::ComputedStyle`] is unchanged, while
+/// preserving full cascade and post-layout passes. `prev` is the previously
+/// laid-out tree stored in `Lumen::layout_box`.
+fn relayout_page_incremental(
+    src: &LayoutSource,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+    prev: &lumen_layout::LayoutBox,
+) -> (DisplayList, lumen_layout::LayoutBox) {
+    compute_layout_incremental(&src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts, prev)
+}
+
+/// ADR-016 M4: incremental variant of [`compute_layout`] — runs the full
+/// cascade but reuses geometry from `prev` for unchanged subtrees.
+///
+/// Same caller contract as [`compute_layout`]: thread-local interactive state
+/// must be set before the call and cleared afterwards.
+fn compute_layout_incremental(
+    document: &Mutex<Document>,
+    stylesheet: &lumen_css_parser::Stylesheet,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+    prev: &lumen_layout::LayoutBox,
+) -> (DisplayList, lumen_layout::LayoutBox) {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    if web_fonts.is_empty() {
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let doc = document.lock().unwrap();
+        let layout = lumen_layout::layout_mutation_incremental(
+            &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev,
+        );
+        drop(doc);
+        let dl = paint_ordered(&layout);
+        return (dl, layout);
+    }
+    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
+        .expect("MultiFontMeasurer из bundled Inter");
+    for wf in web_fonts {
+        measurer.register_family_with_ranges(
+            &wf.family,
+            wf.bytes.clone(),
+            wf.unicode_range.clone(),
+        );
+    }
+    let doc = document.lock().unwrap();
+    let layout = lumen_layout::layout_mutation_incremental(
+        &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev,
+    );
+    drop(doc);
+    let dl = paint_ordered(&layout);
+    (dl, layout)
+}
+
 /// CSS Containment L3 §4.4 (BB-4) — shell-событие: элемент с
 /// `content-visibility: auto` сменил skipped-состояние между layout-проходами.
 /// `skipped == true` — поддерево выпало из расширенного viewport и пропущено;
@@ -7192,6 +7251,45 @@ impl Lumen {
         }
     }
 
+    /// ADR-016 M4: incremental re-layout for rAF JS DOM mutations.
+    ///
+    /// Runs [`layout_mutation_incremental`] (full cascade + `graft_geometry` +
+    /// incremental geometry pass + post-layout passes) reusing the retained
+    /// `self.layout_box` as `prev`. Returns `true` on success and calls
+    /// [`Self::apply_relayout_result`] (updates `self.display_list` /
+    /// `self.layout_box` / scroll clamps). Returns `false` when no previous
+    /// layout is available (first load) or when `layout_source` / viewport are
+    /// not ready — the caller falls back to [`Self::relayout`].
+    ///
+    /// `self.layout_box` is **moved out** (not cloned) to avoid copying the
+    /// potentially large tree; `apply_relayout_result` moves the fresh tree
+    /// back in, so field is always `Some` after a successful call.
+    fn try_relayout_raf_incremental(&mut self) -> bool {
+        let Some(viewport) = self.relayout_viewport() else {
+            return false;
+        };
+        let Some(prev_lb) = self.layout_box.take() else {
+            return false;
+        };
+        let Some(src) = self.layout_source.as_ref() else {
+            self.layout_box = Some(prev_lb);
+            return false;
+        };
+        self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
+        self.engine_applied_generation = self.engine_job_generation;
+        lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
+        lumen_layout::set_forced_colors(self.a11y_store.forced_colors());
+        lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
+        lumen_layout::set_cv_relevant(self.cv_relevant.clone());
+        let (new_dl, new_lb) =
+            relayout_page_incremental(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb);
+        lumen_layout::clear_interactive_state();
+        lumen_layout::set_cv_scroll(0.0, 0.0);
+        lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+        self.apply_relayout_result(new_dl, new_lb, viewport);
+        true
+    }
+
     /// ADR-016 M2.2c-3: route the **async-safe rAF DOM-dirty flush** off the UI
     /// thread when the engine thread is enabled, falling back to the synchronous
     /// [`Self::relayout`] otherwise (the default, so behavior is byte-identical
@@ -7207,9 +7305,15 @@ impl Lumen {
     /// ([`Self::relayout_form`]). The `RedrawRequested` counterpart *does* read a
     /// layout product synchronously (Step 5 PerformancePaintTiming) and therefore
     /// uses the blocking [`Self::readback_relayout_job`] path instead.
+    ///
+    /// ADR-016 M4: tries the incremental path first ([`Self::try_relayout_raf_incremental`])
+    /// before falling back to the full [`Self::relayout`] (single-thread) or
+    /// [`Self::submit_relayout_job`] (engine thread).
     fn relayout_raf_dirty(&mut self) {
         if !self.submit_relayout_job() {
-            self.relayout();
+            if !self.try_relayout_raf_incremental() {
+                self.relayout();
+            }
         }
     }
 
@@ -7352,9 +7456,14 @@ impl Lumen {
     /// thread** (which owns the mutable `Document` + `js_ctx` under the flag) and
     /// blocks for exactly that one commit, applying it synchronously so Step 5 sees
     /// the current display list.
+    ///
+    /// ADR-016 M4: in the single-thread fallback path, tries the incremental layout
+    /// ([`Self::try_relayout_raf_incremental`]) before the full [`Self::relayout`].
     fn relayout_raf_dirty_readback(&mut self) {
         if !self.readback_relayout_job() {
-            self.relayout();
+            if !self.try_relayout_raf_incremental() {
+                self.relayout();
+            }
         }
     }
 

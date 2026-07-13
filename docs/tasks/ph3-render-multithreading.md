@@ -1609,6 +1609,32 @@ Sub-sliced like M0/M1/M2 (each independently shippable into `main`):
   Do not parallelize the full-tree pass — incrementality first, parallelism
   second.
 
+#### M4.0 — incremental layout wiring ✅ 2026-07-13 (branch `p1-mt-m4`)
+
+**What was done:**
+
+- **`layout_mutation_incremental`** added to `crates/engine/layout/src/box_tree.rs`:
+  full cascade via `layout_streaming_incremental` + `graft_geometry` (copies
+  geometry for unchanged-style subtrees, marks them `DirtyBits::CLEAN`) +
+  all post-layout passes in the same order as `layout_measured_hyp`
+  (`apply_first_line_pseudo_styles`, `apply_container_styles`,
+  `apply_anchor_positions`, `split_first_line_boxes`). Exported from `lib.rs`.
+- **Shell helpers** in `crates/shell/src/main.rs`:
+  `relayout_page_incremental` / `compute_layout_incremental` (incremental
+  variants of the existing full-layout helpers); `try_relayout_raf_incremental`
+  moves `self.layout_box` out as `prev`, calls `relayout_page_incremental`,
+  calls `apply_relayout_result` — no clone of the layout tree.
+- **`relayout_raf_dirty`** and **`relayout_raf_dirty_readback`** now try
+  `try_relayout_raf_incremental` in the single-thread fallback path before
+  the full `relayout()`. Engine-thread path unchanged (off-thread job
+  still uses `layout_measured_hyp` for now).
+- **2 new tests** in `crates/engine/layout/src/incremental.rs`:
+  `mutation_incremental_style_change_matches_full` and
+  `mutation_incremental_unchanged_dom_matches_full` — both pass (21 total).
+
+**Remaining (M4.1):** rayon over independent dirty subtrees — separate
+ROADMAP entry `P3-mt-m4-rayon`.
+
 ---
 
 ## Risks / gotchas
