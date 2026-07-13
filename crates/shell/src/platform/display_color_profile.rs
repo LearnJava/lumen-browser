@@ -7,24 +7,49 @@
 //!   on any error.
 //! - **Linux / macOS / other** — always `ColorSpace::Srgb` (no OS query yet).
 
-use lumen_core::ext::DisplayColorProfile;
-use lumen_core::ColorSpace;
-use std::sync::OnceLock;
-
 // ── Platform dispatch ──────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
 pub use windows_impl::PlatformDisplayColorProfile;
 
 #[cfg(not(target_os = "windows"))]
-pub use NullDisplayColorProfile as PlatformDisplayColorProfile;
+pub use null_impl::PlatformDisplayColorProfile;
+
+// ── Non-Windows implementation ─────────────────────────────────────────────────
+
+#[cfg(not(target_os = "windows"))]
+mod null_impl {
+    use lumen_core::ext::DisplayColorProfile;
+    use lumen_core::ColorSpace;
+
+    /// Linux / macOS display-color-profile provider: no OS ICC query yet,
+    /// always reports `ColorSpace::Srgb` (same semantics as
+    /// `NullDisplayColorProfile`).
+    #[derive(Debug, Clone, Default)]
+    pub struct PlatformDisplayColorProfile;
+
+    impl PlatformDisplayColorProfile {
+        /// Create the provider. No OS resources are acquired.
+        pub fn new() -> Self {
+            Self
+        }
+    }
+
+    impl DisplayColorProfile for PlatformDisplayColorProfile {
+        fn active_profile(&self) -> ColorSpace {
+            ColorSpace::Srgb
+        }
+    }
+}
 
 // ── Windows implementation ─────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::*;
+    use lumen_core::ext::DisplayColorProfile;
+    use lumen_core::ColorSpace;
     use std::ffi::c_void;
+    use std::sync::OnceLock;
 
     #[link(name = "gdi32")]
     unsafe extern "system" {
@@ -107,8 +132,8 @@ mod windows_impl {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use lumen_core::ext::NullDisplayColorProfile;
+    use lumen_core::ext::{DisplayColorProfile, NullDisplayColorProfile};
+    use lumen_core::ColorSpace;
 
     #[test]
     fn null_returns_srgb() {
