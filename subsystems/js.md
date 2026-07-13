@@ -306,10 +306,14 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
-- `rusty_v8` backend porting (S3–S12; S0 done 2026-07-13, S1 done 2026-07-13, S2 done 2026-07-13 — v8 v150.1.0
+- `rusty_v8` backend porting (S4–S12; S0/S1/S2 done 2026-07-13, S3 done 2026-07-13 — v8 v150.1.0
   optional dep под `v8-backend`; `V8JsRuntime`/`V8Inner`/`v8_thread_main` + `JsRuntime` trait impl
   + `v8_compat`: `into_v8_fnN` (arity 0..7) + `V8NativeFn` + `OwnedNativeFn` + trampoline +
-  `register_v8_native`; `install_console_natives` proof; 21 тест зелёный).
+  `register_v8_native` (+ `Vec<String>`/`Vec<u32>`/`Vec<f64>`/`Vec<u8>`/`u8` FromJsValue/IntoJsReturn
+  added in S3); `V8JsRuntime::install_dom` ports `dom::install_primitives` — 183/184 natives
+  byte-identical closure bodies, `WEB_API_SHIM` reused unchanged (`pub(crate)`), deterministic-seed
+  eval kept verbatim; `_lumen_drain_microtasks` is a no-op stub (V8 auto-runs its microtask queue,
+  unlike QuickJS's manual-drain model); 27 тест зелёный (v8_runtime). Shell wiring is S4.).
 
 ## Invariants
 
