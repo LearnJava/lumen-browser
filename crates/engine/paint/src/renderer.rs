@@ -1941,6 +1941,21 @@ fn image_mips_disabled() -> bool {
     })
 }
 
+/// `true`, если направленный сдвиг полосы скролл-композитора отключён
+/// (`LUMEN_NO_BAND_BIAS=1`): полоса рецентрируется симметрично (вьюпорт по
+/// центру), как до среза. По умолчанию **включён**: при промахе бо́льшая часть
+/// запаса полосы кладётся ПО ходу скролла, поэтому непрерывный скролл проходит
+/// дальше до следующего промаха (реже полная переросфинкция полосы). Меняет
+/// только ПОЛОЖЕНИЕ полосы, не её содержимое — пиксельно идентично симметрии.
+/// Диагностика: A/B скорости/p95 на одном бинарнике.
+fn band_bias_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_BAND_BIAS").is_ok_and(|v| v == "1")
+    })
+}
+
 impl Renderer {
     pub fn new(window: Arc<Window>, font_bytes: Vec<u8>, target_color_space: ColorSpace) -> Result<Self, Box<dyn Error>> {
         // Валидируем шрифт сразу, чтобы при битом файле не падать в первом кадре.
@@ -4990,7 +5005,31 @@ impl Renderer {
             // Промах: перерисовать полосу — один рендер контента. Верх полосы
             // выравнен на целый CSS px, чтобы blit был texel-точным при целых
             // scroll_y (при dpr=1).
-            let band_top_css = (scroll_y - margin_css).max(0.0).floor();
+            //
+            // Направленный сдвиг (срез 2026-07-13): полный запас полосы =
+            // `2*margin_css`. Симметрия кладёт вьюпорт по центру → промах после
+            // ~margin_css скролла в любую сторону. Скролл почти всегда
+            // непрерывен в одну сторону, поэтому кладём бо́льшую долю запаса ПО
+            // ходу движения: вьюпорт садится ближе к «хвостовому» краю полосы,
+            // а «ведущий» запас (по ходу) ~4× больше → следующий промах дальше.
+            // Направление берём из СТАРОЙ полосы (ещё не заменена): вьюпорт вышел
+            // за верх (`scroll_y < band_top`) ⇒ скролл вверх, иначе вниз. Первая
+            // полоса (полосы ещё нет) — вниз (типичный первый скролл). Это меняет
+            // только положение полосы, не её пиксели.
+            let band_top_css = if band_bias_disabled() {
+                (scroll_y - margin_css).max(0.0).floor()
+            } else {
+                let reserve_total = 2.0 * margin_css;
+                let reserve_trail = (reserve_total * 0.20).floor();
+                let reserve_lead = reserve_total - reserve_trail;
+                let scrolling_up = self
+                    .page_band
+                    .as_ref()
+                    .is_some_and(|b| scroll_y < b.band_top_css);
+                // top-запас = ведущий при скролле вверх, хвостовой при скролле вниз.
+                let top_margin = if scrolling_up { reserve_lead } else { reserve_trail };
+                (scroll_y - top_margin).max(0.0).floor()
+            };
             let recreate = self
                 .page_band
                 .as_ref()
