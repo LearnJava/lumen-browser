@@ -2761,6 +2761,292 @@ impl PersistentJs for QuickPersistentJs {
     }
 }
 
+/// V8-backed [`PersistentJs`] adapter (Ph3 V8 migration S4).
+///
+/// Mirrors [`QuickPersistentJs`] method-for-method. Methods backed by state
+/// wired in `install_dom` (S3 core DOM) delegate to `V8JsRuntime` accessors;
+/// methods for subsystems not yet ported to V8 (workers, canvas2d, view
+/// transitions, notifications, pointer capture, bfcache heap suspend — see
+/// `docs/tasks/ph3-v8-migration.md` slices S5–S11) use the trait's own
+/// default no-op/empty implementation or a local stub, and start returning
+/// real data once their slice lands.
+#[cfg(feature = "v8")]
+struct V8PersistentJs {
+    rt: lumen_js::v8_runtime::V8JsRuntime,
+}
+
+#[cfg(feature = "v8")]
+impl PersistentJs for V8PersistentJs {
+    fn eval_js(&self, script: &str) {
+        use lumen_core::ext::JsRuntime as _;
+        if let Err(e) = self.rt.eval(script)
+            && !matches!(e, lumen_core::JsError::NotImplemented)
+        {
+            eprintln!("JS event error: {e}");
+        }
+    }
+    fn eval_js_value(&self, script: &str) -> Result<String, String> {
+        use lumen_core::ext::JsRuntime as _;
+        self.rt
+            .eval(script)
+            .map(|v| v.to_json_string())
+            .map_err(|e| e.to_string())
+    }
+    fn take_navigate_request(&self) -> Option<JsNavigateRequest> {
+        self.rt.take_navigate_request().map(|r| match r {
+            lumen_js::NavigateRequest::Push(u)    => JsNavigateRequest::Push(u),
+            lumen_js::NavigateRequest::Replace(u) => JsNavigateRequest::Replace(u),
+            lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
+        })
+    }
+    fn take_nav_intercept_result(&self) -> Vec<(bool, bool)> {
+        self.rt.take_nav_intercept_result()
+    }
+    fn take_nav_updates(&self) -> Vec<(u8, String, String, String)> {
+        self.rt
+            .take_nav_updates()
+            .into_iter()
+            .map(|(a, url, key, data)| (a as u8, url, key, data))
+            .collect()
+    }
+    fn fire_navigate_success(&self) {
+        self.eval_js("if(typeof _lumen_fire_navigate_success==='function')_lumen_fire_navigate_success();");
+    }
+    fn fire_navigate_error(&self) {
+        self.eval_js("if(typeof _lumen_fire_navigate_error==='function')_lumen_fire_navigate_error();");
+    }
+    fn fire_current_entry_change(&self) {
+        self.eval_js("if(typeof _lumen_fire_currententrychange==='function')_lumen_fire_currententrychange();");
+    }
+    fn tick_timers(&self) {
+        self.eval_js("_lumen_tick_timers()");
+    }
+    fn take_timer_wakeup(&self) -> Option<f64> {
+        self.rt.take_timer_wakeup()
+    }
+    fn take_dom_dirty(&self) -> bool {
+        self.rt.take_dom_dirty()
+    }
+    fn run_animation_frame(&self, timestamp_ms: f64) {
+        self.eval_js(&format!("_lumen_run_raf_callbacks({timestamp_ms})"));
+    }
+    fn take_raf_pending(&self) -> bool {
+        self.rt.take_raf_pending()
+    }
+    fn has_raf_pending(&self) -> bool {
+        self.rt.has_raf_pending()
+    }
+    fn raf_pending_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.rt.raf_pending_flag())
+    }
+    fn dom_dirty_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.rt.dom_dirty_flag())
+    }
+    fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
+        self.rt.update_layout_rects(rects);
+    }
+    fn update_viewport_size(&self, width: f32, height: f32) {
+        self.rt.update_viewport_size(width, height);
+    }
+    fn deliver_layout_observers(&self) {
+        self.eval_js("_lumen_deliver_resize_observers();_lumen_deliver_intersection_observers();_lumen_deliver_canvas_css_resize();");
+    }
+    fn register_lazy_images(&self, pairs: &[(u32, &str)]) {
+        if pairs.is_empty() {
+            return;
+        }
+        let args = pairs
+            .iter()
+            .map(|(nid, url)| format!("[{nid},{}]", js_string_literal(url)))
+            .collect::<Vec<_>>()
+            .join(",");
+        self.eval_js(&format!("_lumen_init_lazy_images([{args}]);"));
+    }
+    fn deliver_lazy_images(&self) {
+        self.eval_js("_lumen_deliver_lazy_images();");
+    }
+    fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
+        self.rt.take_lazy_image_requests()
+    }
+    fn deliver_paint_timing(&self, name: &str, start_ms: f64) {
+        self.eval_js(&format!(
+            "_lumen_deliver_paint_entry({}, {start_ms})",
+            js_string_literal(name),
+        ));
+    }
+    fn deliver_nav_timing(&self, url: &str, duration_ms: f64) {
+        self.eval_js(&format!(
+            "_lumen_deliver_perf_entry('navigation', {}, 0.0, {duration_ms}, null)",
+            js_string_literal(url),
+        ));
+    }
+    fn deliver_lcp_entry(&self, element_id: u32, size: u32, start_ms: f64, render_time_ms: f64) {
+        self.eval_js(&format!(
+            "_lumen_deliver_lcp_entry({element_id}, {size}, {start_ms}, {render_time_ms})"
+        ));
+    }
+    fn deliver_layout_shift(&self, value: f64, had_input: bool) {
+        let had_input_js = if had_input { "true" } else { "false" };
+        self.eval_js(&format!(
+            "_lumen_deliver_layout_shift({}, 0, {had_input_js})",
+            value
+        ));
+    }
+    fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
+        self.rt.update_computed_styles(styles);
+    }
+    fn notify_dom_content_loaded(&self) {
+        self.eval_js("_lumen_apply_ready_state('interactive')");
+    }
+    fn notify_window_loaded(&self) {
+        self.eval_js("_lumen_apply_ready_state('complete')");
+    }
+    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool, reduced_motion: bool) {
+        let dark = if prefers_dark { "true" } else { "false" };
+        let rm = if reduced_motion { "true" } else { "false" };
+        self.eval_js(&format!(
+            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},{rm});"
+        ));
+    }
+    fn pump_websockets(&self) {
+        self.eval_js("if(typeof _lumen_pump_websockets==='function')_lumen_pump_websockets();");
+    }
+    fn pump_sse(&self) {
+        self.eval_js("if(typeof _lumen_pump_sse==='function')_lumen_pump_sse();");
+    }
+    // Worker/BroadcastChannel/SharedWorker registries are not wired for V8 yet
+    // (slice S10) — no-op until then.
+    fn pump_workers(&self) {}
+    fn pump_broadcast_channels(&self) {}
+    fn pump_shared_workers(&self) {}
+    fn take_notification_requests(&self) -> Vec<(String, String)> {
+        // Notifications bindings not ported to V8 yet (slice S5–S7).
+        Vec::new()
+    }
+    fn gc_collect(&self, dead_nids: &[u32]) {
+        if dead_nids.is_empty() {
+            return;
+        }
+        let arr = dead_nids
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        self.eval_js(&format!(
+            "if(typeof _lumen_gc_collect==='function')_lumen_gc_collect([{arr}]);"
+        ));
+    }
+    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32)> {
+        self.rt
+            .take_window_open_requests()
+            .into_iter()
+            .map(|r| (r.url, r.target, r.width, r.height))
+            .collect()
+    }
+    fn take_console_messages(&self) -> Vec<(u8, String)> {
+        self.rt.take_console_messages()
+    }
+    fn update_scroll_states(&self, states: HashMap<u32, [f32; 4]>) {
+        self.rt.update_scroll_states(states);
+    }
+    fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)> {
+        self.rt.take_scroll_requests()
+    }
+    fn take_history_url_updates(&self) -> Vec<(bool, String, String)> {
+        self.rt
+            .take_history_url_updates()
+            .into_iter()
+            .map(|u| match u {
+                lumen_js::HistoryUrlUpdate::Push { url, new_state_json } => {
+                    (true, url, new_state_json)
+                }
+                lumen_js::HistoryUrlUpdate::Replace { url, new_state_json } => {
+                    (false, url, new_state_json)
+                }
+            })
+            .collect()
+    }
+    fn take_history_traversals(&self) -> Vec<i32> {
+        self.rt.take_history_traversals()
+    }
+    fn fire_popstate(&self, state_json: &str, url: &str) {
+        // Escape url for embedding in a JS string literal (single-quoted).
+        let escaped = url.replace('\\', "\\\\").replace('\'', "\\'");
+        // state_json is already valid JSON — embed directly without quoting.
+        self.eval_js(&format!("_lumen_deliver_popstate({state_json}, '{escaped}')"));
+    }
+    fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
+        // Canvas 2D bindings not ported to V8 yet (slice S8).
+        Vec::new()
+    }
+    fn take_fullscreen_requests(&self) -> Vec<(bool, u32)> {
+        self.rt
+            .take_fullscreen_requests()
+            .into_iter()
+            .map(|r| match r {
+                lumen_js::FullscreenRequest::Enter { nid } => (true, nid),
+                lumen_js::FullscreenRequest::Exit => (false, 0),
+            })
+            .collect()
+    }
+    fn take_view_transition_events(&self) -> Vec<ViewTransitionEvent> {
+        // View Transitions bindings not ported to V8 yet (slice S5–S7).
+        Vec::new()
+    }
+    fn take_print_requests(&self) -> Vec<lumen_js::PrintRequest> {
+        self.rt.take_print_requests()
+    }
+    fn take_page_scroll_requests(&self) -> Vec<(f32, bool)> {
+        self.rt.take_page_scroll_requests()
+    }
+    fn set_page_scroll_y(&self, y: f32) {
+        self.rt.set_page_scroll_y(y)
+    }
+    fn run_gc_pass(&self, _level: u8) {
+        // V8 manages its own generational GC; no manual tuning hook is wired yet.
+    }
+    fn deliver_scroll_progress(&self, progress_y: f32, progress_x: f32) {
+        self.eval_js(&format!(
+            "if(typeof _lumen_deliver_scroll_progress==='function')_lumen_deliver_scroll_progress({progress_y},{progress_x});"
+        ));
+    }
+    fn fire_element_scroll(&self, nid: u32) {
+        self.eval_js(&format!(
+            "if(typeof _lumen_fire_scroll_on_element==='function')_lumen_fire_scroll_on_element({nid});"
+        ));
+    }
+    fn fire_window_scroll(&self) {
+        self.eval_js(
+            "if(typeof _lumen_fire_window_scroll_event==='function')_lumen_fire_window_scroll_event();"
+        );
+    }
+    fn pause_event_loop(&self) {
+        self.eval_js("_lumen_apply_visibility(true)");
+    }
+    fn unpause_event_loop(&self) {
+        self.eval_js("_lumen_apply_visibility(false)");
+    }
+    fn take_focus_requests(&self) -> Vec<Option<u32>> {
+        self.rt.take_focus_requests()
+    }
+    fn fire_dialog_close(&self, dialog_nid: u32, return_value: &str) {
+        let rv = return_value.replace('\\', r"\\").replace('"', r#"\""#);
+        self.eval_js(&format!(
+            "(function(){{var d=_lumen_make_element({dialog_nid});\
+             if(d&&typeof d.close==='function')d.close(\"{rv}\");}})();"
+        ));
+    }
+    fn notify_focus_changed(&self, nid: Option<u32>) {
+        let n = nid.map(|n| n as i64).unwrap_or(-1_i64);
+        self.eval_js(&format!(
+            "if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
+        ));
+    }
+    fn has_bfcache_freeze_blocker(&self) -> bool {
+        matches!(self.eval_js_value("_lumen_bfcache_blocked()"), Ok(ref v) if v == "true")
+    }
+}
+
 impl PageSource {
     fn from_arg(arg: Option<&str>) -> Self {
         match arg {
@@ -3927,7 +4213,7 @@ fn fetch_and_decode_images(
 
 /// Encode `s` as a JS string literal (double-quoted, with escaping).
 /// Used when building JS snippets from Rust strings (e.g., `_lumen_init_lazy_images`).
-#[cfg(feature = "quickjs")]
+#[cfg(any(feature = "quickjs", feature = "v8"))]
 fn js_string_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -5907,7 +6193,83 @@ fn run_scripts_with_dom(
         }
     }
 
-    #[cfg(not(feature = "quickjs"))]
+    // Ph3 V8 migration S4: mirrors the quickjs block above. Import maps and
+    // cookie-banner-dismiss are not wired for V8 yet (no `set_import_map` /
+    // `set_cookie_banner_dismiss` on `V8JsRuntime`) — module scripts fall back
+    // to `JsRuntime::eval_module`'s `NotImplemented` default until ESM lands.
+    // `not(feature = "quickjs")`: the quickjs block above returns unconditionally
+    // on both its match arms, so this block would be unreachable if both engine
+    // features were compiled in — quickjs takes priority until S12 cutover.
+    #[cfg(all(feature = "v8", not(feature = "quickjs")))]
+    {
+        use lumen_core::ext::JsRuntime as _;
+        match lumen_js::v8_runtime::V8JsRuntime::new() {
+            Ok(mut rt) => {
+                if deterministic {
+                    rt.set_deterministic_mode(true);
+                }
+                if let Some(store) = sw_worker_store {
+                    rt = rt.with_sw_worker_store(store);
+                }
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, None, cross_origin_isolated) {
+                    eprintln!("JS DOM init failed: {e}");
+                }
+                // Classic scripts run first (HTML LS §8.1.3 execution order).
+                for src in &scripts {
+                    match rt.eval(src) {
+                        Ok(_) => {}
+                        Err(lumen_core::JsError::NotImplemented) => {
+                            eprintln!(
+                                "script: engine=v8, выполнение пропущено ({} байт)",
+                                src.len()
+                            );
+                        }
+                        Err(e) => eprintln!("script error: {e}"),
+                    }
+                }
+                // Module scripts run after classic scripts (HTML LS §8.1.3.1 deferred).
+                for src in &module_scripts {
+                    match rt.eval_module(src) {
+                        Ok(()) => {}
+                        Err(lumen_core::JsError::NotImplemented) => {
+                            eprintln!(
+                                "module: engine=v8, выполнение пропущено ({} байт)",
+                                src.len()
+                            );
+                        }
+                        Err(e) => eprintln!("module error: {e}"),
+                    }
+                }
+                // Extension content scripts run last (after all page scripts).
+                for src in extra_scripts {
+                    match rt.eval(src) {
+                        Ok(_) => {}
+                        Err(lumen_core::JsError::NotImplemented) => {
+                            eprintln!(
+                                "extension: engine=v8, выполнение пропущено ({} байт)",
+                                src.len()
+                            );
+                        }
+                        Err(e) => eprintln!("extension script error: {e}"),
+                    }
+                }
+                let nav_req = rt.take_navigate_request().map(|r| match r {
+                    lumen_js::NavigateRequest::Push(u)    => JsNavigateRequest::Push(u),
+                    lumen_js::NavigateRequest::Replace(u) => JsNavigateRequest::Replace(u),
+                    lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
+                });
+                // Keep rt alive: return as PersistentJs so event handlers work after load.
+                let ctx: Arc<dyn PersistentJs> = Arc::new(V8PersistentJs { rt });
+                return (doc_arc, nav_req, Some(ctx));
+            }
+            Err(e) => {
+                eprintln!("V8 init failed: {e}");
+                return (doc_arc, None, None);
+            }
+        }
+    }
+
+    #[cfg(not(any(feature = "quickjs", feature = "v8")))]
     {
         let _ = page_url;
         let _ = fetch_provider;
@@ -15499,7 +15861,54 @@ impl Lumen {
                 }
             }
         }
-        #[cfg(not(feature = "quickjs"))]
+        // Ph3 V8 migration S4: mirrors the quickjs block above. Cookie-banner
+        // dismiss is not wired for V8 yet (no `set_cookie_banner_dismiss` on
+        // `V8JsRuntime`). `not(feature = "quickjs")`: unlike the classic-load
+        // site above, both blocks here call `set_js_ctx` without returning, so
+        // if both engine features were compiled in this block would silently
+        // clobber the quickjs context set just above — quickjs takes priority
+        // until S12 cutover.
+        #[cfg(all(feature = "v8", not(feature = "quickjs")))]
+        {
+            match lumen_js::v8_runtime::V8JsRuntime::new() {
+                Ok(rt) => {
+                    if self.deterministic {
+                        rt.set_deterministic_mode(true);
+                    }
+                    let ls_store = self
+                        .source
+                        .origin_str()
+                        .and_then(|o| self.ls_storage.get(&o).cloned());
+                    let idb_backend = self.idb_dir.as_deref().and_then(|d| idb_store_for_url(url, Some(d)));
+                    let fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> = None;
+                    let ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>> = None;
+                    let sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>> = None;
+                    let sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>> = None;
+                    let cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>> = None;
+                    if let Err(e) = rt.install_dom(
+                        Arc::clone(&doc_arc),
+                        url,
+                        fetch_provider,
+                        ws_provider,
+                        sse_provider,
+                        ls_store,
+                        idb_backend,
+                        sw_backend,
+                        cache_backend,
+                        None,
+                        false,
+                    ) {
+                        eprintln!("bfcache thaw: JS DOM init failed: {e}");
+                    }
+                    self.set_js_ctx(Some(Arc::new(V8PersistentJs { rt }) as Arc<dyn PersistentJs>));
+                }
+                Err(e) => {
+                    eprintln!("bfcache thaw: V8 init failed: {e}");
+                    self.set_js_ctx(None);
+                }
+            }
+        }
+        #[cfg(not(any(feature = "quickjs", feature = "v8")))]
         {
             self.set_js_ctx(None);
         }

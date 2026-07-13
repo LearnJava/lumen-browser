@@ -293,6 +293,132 @@ impl V8JsRuntime {
         self
     }
 
+    /// Returns `true` if JS mutated the DOM since the last call, clearing the flag.
+    /// Mirrors [`crate::QuickJsRuntime::take_dom_dirty`].
+    pub fn take_dom_dirty(&self) -> bool {
+        self.dom_dirty.swap(false, Ordering::Relaxed)
+    }
+
+    /// Returns `true` if `requestAnimationFrame` was called since the last call,
+    /// clearing the flag. Mirrors [`crate::QuickJsRuntime::take_raf_pending`].
+    pub fn take_raf_pending(&self) -> bool {
+        self.raf_pending.swap(false, Ordering::Relaxed)
+    }
+
+    /// Non-consuming peek: `true` if rAF callbacks are queued.
+    /// Mirrors [`crate::QuickJsRuntime::has_raf_pending`].
+    pub fn has_raf_pending(&self) -> bool {
+        self.raf_pending.load(Ordering::Relaxed)
+    }
+
+    /// ADR-016 M2.3: shared, lock-free handle to the rAF-pending flag.
+    /// Mirrors [`crate::QuickJsRuntime::raf_pending_flag`].
+    pub fn raf_pending_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.raf_pending)
+    }
+
+    /// ADR-016 M2.3: shared, lock-free handle to the DOM-dirty flag.
+    /// Mirrors [`crate::QuickJsRuntime::dom_dirty_flag`].
+    pub fn dom_dirty_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.dom_dirty)
+    }
+
+    /// Replace the layout bounding-rect table with a fresh snapshot.
+    /// Mirrors [`crate::QuickJsRuntime::update_layout_rects`].
+    pub fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
+        *self.layout_rects.lock().unwrap_or_else(|e| e.into_inner()) = rects;
+    }
+
+    /// Update the current viewport dimensions.
+    /// Mirrors [`crate::QuickJsRuntime::update_viewport_size`].
+    pub fn update_viewport_size(&self, width: f32, height: f32) {
+        *self.viewport_size.lock().unwrap_or_else(|e| e.into_inner()) = [width, height];
+    }
+
+    /// Drain lazy image load requests queued by JS.
+    /// Mirrors [`crate::QuickJsRuntime::take_lazy_image_requests`].
+    pub fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
+        std::mem::take(&mut *self.lazy_img_requests.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Replace the scroll-state table with a fresh snapshot from the layout tree.
+    /// Mirrors [`crate::QuickJsRuntime::update_scroll_states`].
+    pub fn update_scroll_states(&self, states: HashMap<u32, [f32; 4]>) {
+        *self.scroll_states.lock().unwrap_or_else(|e| e.into_inner()) = states;
+    }
+
+    /// Drain JS-initiated scroll requests queued by `_lumen_request_scroll`.
+    /// Mirrors [`crate::QuickJsRuntime::take_scroll_requests`].
+    pub fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)> {
+        std::mem::take(&mut *self.pending_scrolls.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain JS page-level scroll requests from `window.scrollTo/scrollBy`.
+    /// Mirrors [`crate::QuickJsRuntime::take_page_scroll_requests`].
+    pub fn take_page_scroll_requests(&self) -> Vec<(f32, bool)> {
+        std::mem::take(&mut *self.pending_page_scrolls.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Update the page scroll Y exposed to JS `window.scrollY`/`pageYOffset`.
+    /// Mirrors [`crate::QuickJsRuntime::set_page_scroll_y`].
+    pub fn set_page_scroll_y(&self, y: f32) {
+        *self.page_scroll_y.lock().unwrap_or_else(|e| e.into_inner()) = y;
+    }
+
+    /// Push a fresh snapshot of computed CSS styles into the JS runtime.
+    /// Mirrors [`crate::QuickJsRuntime::update_computed_styles`].
+    pub fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
+        *self.computed_styles.lock().unwrap_or_else(|e| e.into_inner()) = styles;
+    }
+
+    /// Drain all popup window requests queued by JS `window.open(...)`.
+    /// Mirrors [`crate::QuickJsRuntime::take_window_open_requests`].
+    pub fn take_window_open_requests(&self) -> Vec<PopupRequest> {
+        std::mem::take(&mut *self.window_open_requests.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain all `console.log/warn/error` messages queued since the last call.
+    /// Mirrors [`crate::QuickJsRuntime::take_console_messages`].
+    pub fn take_console_messages(&self) -> Vec<(u8, String)> {
+        std::mem::take(&mut *self.console_messages.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain `history.pushState`/`history.replaceState` URL-update notifications.
+    /// Mirrors [`crate::QuickJsRuntime::take_history_url_updates`].
+    pub fn take_history_url_updates(&self) -> Vec<HistoryUrlUpdate> {
+        std::mem::take(&mut *self.pending_history_url_updates.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain all `history.go(n)`/back/forward traversal deltas queued by JS.
+    /// Mirrors [`crate::QuickJsRuntime::take_history_traversals`].
+    pub fn take_history_traversals(&self) -> Vec<i32> {
+        std::mem::take(&mut *self.pending_history_traversals.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain all Navigation API update requests queued by `_lumen_navigation_request`.
+    /// Mirrors [`crate::QuickJsRuntime::take_nav_updates`].
+    pub fn take_nav_updates(&self) -> Vec<crate::dom::NavUpdate> {
+        std::mem::take(&mut *self.pending_navigation_updates.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain `NavigateEvent` intercept results queued during event dispatch.
+    /// Mirrors [`crate::QuickJsRuntime::take_nav_intercept_result`].
+    pub fn take_nav_intercept_result(&self) -> Vec<(bool, bool)> {
+        std::mem::take(&mut *self.pending_nav_intercepted.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain all fullscreen requests queued by `element.requestFullscreen()`/`exitFullscreen()`.
+    /// Mirrors [`crate::QuickJsRuntime::take_fullscreen_requests`].
+    pub fn take_fullscreen_requests(&self) -> Vec<FullscreenRequest> {
+        std::mem::take(&mut *self.fullscreen_requests.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain JS dialog focus requests queued by `_lumen_request_focus`/`_lumen_request_blur`.
+    /// Mirrors [`crate::QuickJsRuntime::take_focus_requests`].
+    pub fn take_focus_requests(&self) -> Vec<Option<u32>> {
+        std::mem::take(&mut *self.pending_focus_requests.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
     /// Dispatch `f` to the JS thread, blocking until it completes.
     ///
     /// # Safety

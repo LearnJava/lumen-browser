@@ -609,9 +609,9 @@
       {
        "id": "P3-v8-s4",
        "title": "V8 S4: shell-адаптер",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "S4: V8PersistentJs в шелле (~50 методов, механически), ветка конструирования; запуск с --features backend-femtovg,v8 интерактивно"
+       "note": "S4 ЗАКРЫТ 2026-07-13 (branch p1-v8-s4): V8PersistentJs зеркалит QuickPersistentJs (все методы PersistentJs; state-backed делегируют новым аксессорам V8JsRuntime, неportированные подсистемы — workers/canvas2d/view transitions/notifications — no-op стабы); обе точки конструирования (initial load + bfcache thaw) зеркалятся; quickjs приоритетнее v8 на этапе компиляции при одновременном включении обеих фич; попутный фикс create_wgpu-стаба (не хватало target_color_space — ломало любую сборку без backend-wgpu); cargo run --features backend-femtovg,v8 -- --dump-layout зелёный на samples/page.html; полный workspace clippy + scoped-test зелёные"
       },
       {
        "id": "P3-v8-s57",
