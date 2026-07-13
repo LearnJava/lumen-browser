@@ -7310,10 +7310,8 @@ impl Lumen {
     /// before falling back to the full [`Self::relayout`] (single-thread) or
     /// [`Self::submit_relayout_job`] (engine thread).
     fn relayout_raf_dirty(&mut self) {
-        if !self.submit_relayout_job() {
-            if !self.try_relayout_raf_incremental() {
-                self.relayout();
-            }
+        if !self.submit_relayout_job() && !self.try_relayout_raf_incremental() {
+            self.relayout();
         }
     }
 
@@ -7460,10 +7458,8 @@ impl Lumen {
     /// ADR-016 M4: in the single-thread fallback path, tries the incremental layout
     /// ([`Self::try_relayout_raf_incremental`]) before the full [`Self::relayout`].
     fn relayout_raf_dirty_readback(&mut self) {
-        if !self.readback_relayout_job() {
-            if !self.try_relayout_raf_incremental() {
-                self.relayout();
-            }
+        if !self.readback_relayout_job() && !self.try_relayout_raf_incremental() {
+            self.relayout();
         }
     }
 
