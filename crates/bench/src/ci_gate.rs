@@ -6,6 +6,8 @@
 //!
 //! - Mean total pipeline time < 200 ms
 //! - Peak RSS across all 3 runs < 512 MB
+//! - bfcache restore P50 (`bfcache_restore` module) < 50 ms on
+//!   `samples/page.html` (Ph3 `P3-bfcache` DoD step 9)
 //!
 //! Exits 0 on pass, 1 on failure. Prints a brief summary to stdout so CI
 //! logs can show the exact numbers that caused a regression.
@@ -15,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use lumen_core::geom::Size;
 
+use crate::bfcache_restore;
 use crate::util::{extract_style_blocks, get_rss_bytes};
 
 const HEAVY_HTML: &[u8] = include_bytes!("../../../samples/heavy.html");
@@ -63,6 +66,9 @@ pub fn run_ci_gate() -> bool {
     let time_ok = mean_total <= MEAN_TOTAL_LIMIT;
     let rss_ok = peak_rss <= PEAK_RSS_LIMIT;
 
+    let bfcache_p50_ms = bfcache_restore::median_restore_ms(&measurer);
+    let bfcache_ok = bfcache_p50_ms <= bfcache_restore::P50_LIMIT.as_secs_f64() * 1000.0;
+
     println!();
     println!(
         "mean_total: {:.2}ms  (limit {}ms)  {}",
@@ -76,9 +82,15 @@ pub fn run_ci_gate() -> bool {
         PEAK_RSS_LIMIT / (1024 * 1024),
         if rss_ok { "OK" } else { "EXCEEDED" },
     );
+    println!(
+        "bfcache_restore_p50: {:.2}ms  (limit {}ms)  {}",
+        bfcache_p50_ms,
+        bfcache_restore::P50_LIMIT.as_millis(),
+        if bfcache_ok { "OK" } else { "EXCEEDED" },
+    );
     println!();
 
-    let passed = time_ok && rss_ok;
+    let passed = time_ok && rss_ok && bfcache_ok;
     if passed {
         println!("PASS");
     } else {
@@ -94,6 +106,12 @@ pub fn run_ci_gate() -> bool {
                 "FAIL: peak_rss {}MB exceeds limit {}MB",
                 peak_rss / (1024 * 1024),
                 PEAK_RSS_LIMIT / (1024 * 1024),
+            );
+        }
+        if !bfcache_ok {
+            println!(
+                "FAIL: bfcache_restore_p50 {bfcache_p50_ms:.2}ms exceeds limit {}ms",
+                bfcache_restore::P50_LIMIT.as_millis(),
             );
         }
     }

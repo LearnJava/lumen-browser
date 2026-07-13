@@ -24,6 +24,7 @@
 //! и графики прикрутим, если упрёмся в необходимость различать шумовые
 //! изменения < 5 %.
 
+mod bfcache_restore;
 mod ci_gate;
 mod util;
 
@@ -70,6 +71,8 @@ fn main() {
     run_bench("page ", PAGE_HTML, PAGE_CSS, iters, &measurer);
     println!();
     run_bench("heavy", HEAVY_HTML, "", iters, &measurer);
+    println!();
+    bfcache_restore::run_bfcache_bench(iters, &measurer);
 }
 
 /// Run a full bench cycle for one page and print results.
