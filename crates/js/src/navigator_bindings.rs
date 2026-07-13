@@ -122,6 +122,17 @@ pub fn install_navigator_bindings_with(
     Ok(())
 }
 
+/// V8 port of [`install_navigator_bindings`] (Ph3 V8 migration S5-S7): identical JS
+/// shim, evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_navigator_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(&build_navigator_shim(&current_navigator_profile()))?;
+    Ok(())
+}
+
 /// Render a JS array literal from a locale list, falling back to `["en-US"]`
 /// when empty. Each entry is JSON-escaped to stay injection-safe.
 fn languages_literal(languages: &[String]) -> String {

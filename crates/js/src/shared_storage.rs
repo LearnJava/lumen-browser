@@ -38,6 +38,15 @@ pub fn install_shared_storage(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_shared_storage`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_shared_storage_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(SHARED_STORAGE_SHIM)?;
+    Ok(())
+}
+
 const SHARED_STORAGE_SHIM: &str = r#"(function(global) {
   'use strict';
 

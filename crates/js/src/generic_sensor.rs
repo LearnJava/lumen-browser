@@ -18,6 +18,15 @@ pub fn install_generic_sensor_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_generic_sensor_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_generic_sensor_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(GENERIC_SENSOR_SHIM)?;
+    Ok(())
+}
+
 const GENERIC_SENSOR_SHIM: &str = r#"
 (function() {
   // ── Minimal EventTarget mixin ──────────────────────────────────────────────

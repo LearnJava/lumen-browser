@@ -16,6 +16,15 @@ pub fn install_web_locks_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_web_locks_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_web_locks_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(WEB_LOCKS_SHIM)?;
+    Ok(())
+}
+
 /// JavaScript shim implementing W3C Web Locks Level 1 (Phase 0).
 const WEB_LOCKS_SHIM: &str = r#"(function() {
   'use strict';

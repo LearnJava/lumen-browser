@@ -33,6 +33,15 @@ pub fn install_tc39_proposals(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_tc39_proposals`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_tc39_proposals_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(TC39_PROPOSALS_SHIM)?;
+    Ok(())
+}
+
 /// The combined shim script. Each feature section is gated by a native check.
 const TC39_PROPOSALS_SHIM: &str = r#"(function(global) {
   'use strict';

@@ -27,6 +27,16 @@ pub fn install_es2026_proposals(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_es2026_proposals`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_es2026_proposals_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(FLOAT16_SHIM)?;
+    rt.eval(DISPOSABLE_STACK_SHIM)?;
+    Ok(())
+}
+
 /// Float16Array + Math.f16round + DataView.getFloat16/setFloat16 shim.
 const FLOAT16_SHIM: &str = r#"(function() {
   'use strict';

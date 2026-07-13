@@ -183,7 +183,52 @@ checklist after every merge.
 | ✅ S2 | **Compat layer** | `into_v8_fnN` free fns (arities 0..7) + `V8NativeFn` object-safe trait + `OwnedNativeFn` RAII + trampoline + `register_v8_native`; `reg!` macro в `v8_runtime.rs`; 3 console natives как proof; 4 новых теста. ЗАКРЫТ 2026-07-13 (p1-v8-s2). | typed Rust closure registers and is callable from JS with auto-converted args | Medium — **this slice de-risks everything after it** |
 | ✅ S3 | **Core DOM** | Port `install_primitives` (184 `reg!` natives, `dom.rs:401`) via compat layer; eval `WEB_API_SHIM` unchanged; `V8JsRuntime::install_dom` with same signature as QuickJS version. ЗАКРЫТ 2026-07-13 (p1-v8-s3): 183/184 natives ported (see subsystems/js.md), `_lumen_drain_microtasks` a no-op stub (V8 auto-runs its microtask queue), 27 тестов зелёные. | `document.querySelector`, `_lumen_tick_timers`, `window.location.href` work; `samples/page.html` renders under `--features v8-backend` e2e | Medium |
 | ✅ S4 | **Shell adapter** | `v8 = ["dep:lumen-js", "lumen-js/v8-backend"]` in shell `Cargo.toml`; `#[cfg(feature = "v8")] struct V8PersistentJs` mirroring `QuickPersistentJs` (~50 methods, mechanical); construction branch at `main.rs:4934`. ЗАКРЫТ 2026-07-13 (p1-v8-s4): `V8PersistentJs` implements all `PersistentJs` methods (state-backed ones delegate to `V8JsRuntime`; subsystems not yet ported to V8 — workers, canvas2d, view transitions, notifications — use empty/no-op stubs per slice table above). Both construction sites (initial load + bfcache thaw) mirrored; `quickjs` takes priority at compile time when both features are enabled (see `crates/shell/Cargo.toml` comment). | `cargo run -p lumen-shell --no-default-features --features backend-femtovg,v8 -- samples/page.html` interactive | Low |
-| ☐ S5–S7 | **Simple-module batches** | ~90 modules with plain `Function::new` registrations, batches of ~30, via compat layer. Same transformation each — parallel subagents appropriate here. Keep a ported/pending checklist in this file | `cargo test -p lumen-js --features v8-backend` after each batch | Low |
+| 🟡 S5–S7 | **Simple-module batches** | ~90 modules, batches of ~30, via compat layer. Same transformation each — parallel subagents appropriate here. Keep a ported/pending checklist in this file | `cargo test -p lumen-js --features v8-backend` after each batch | Low |
+
+**S5-S7 ported/pending checklist** (2026-07-13, p1-v8-s57): of the 90 `install_*` call
+sites in `lib.rs::install_dom` (QuickJS), 85 take a single `ctx: &Ctx` argument with no
+extra state — of those, **68 are ported** (batch 1): each got a `#[cfg(feature =
+"v8-backend")] pub(crate) fn install_X_v8(rt: &V8JsRuntime) -> JsResult<()>` sibling next
+to the rquickjs original (same JS shim(s), `rt.eval(...)` instead of `ctx.eval::<(),
+_>(...)`), wired via a `install_v8!` macro at the end of `V8JsRuntime::install_dom` —
+**best-effort** (logs + continues on error), mirroring `lib.rs`'s `if let Err(e) = X {
+eprintln!(...) }` orchestration, so one broken/partial module can't abort DOM bootstrap
+for the rest. Side-fix: added a `DOMException` polyfill (`DOM_EXCEPTION_POLYFILL` in
+`v8_runtime.rs`, evaluated before `WEB_API_SHIM`) — quickjs-ng bundles this as a built-in
+(part of `Context::full()`'s extras), V8 has zero web-platform globals; without it,
+`class X extends DOMException` (used by `web_codecs` and dozens of `WEB_API_SHIM` call
+sites already ported in S3) throws `ReferenceError` the instant it's evaluated. 2399
+tests green (`cargo test -p lumen-js --features v8-backend`); full workspace clippy +
+scoped-test green.
+
+Ported (batch 1, 68): async_context, attribution_reporting, badging, battery_bindings,
+bluetooth, close_watcher, compute_pressure, content_index, credentials, csp,
+css_properties_values_api, decorators, device_sensors, digital_credentials,
+document_pip, dom_parser, element_internals, es2026_proposals, eye_dropper,
+form_validation, gamepad, generic_sensor, highlight_api, iframe_element, inert,
+intl_bindings, launch_handler, local_font_access, long_animation_frames,
+media_capabilities, media_devices, media_session, navigation_api, navigator_bindings,
+paint_worklet, permissions_policy, presentation_api, reporting_api, sanitizer,
+scheduler, screen_orientation, scroll_snap_events, scroll_timeline, serial,
+shape_detection, shared_storage, soft_navigation, speculation_rules, storage_manager,
+surface_api, svg, tc39_proposals, temporal_api, topics_api, typed_om_api,
+ua_client_hints, url_pattern, video_pip, virtual_keyboard, webhid, web_locks, web_midi,
+webrtc_stub, webusb, webxr, window_management, xhr, web_codecs.
+
+Pending (batch 2/3, 22 — next session picks up here):
+- **Single `&ctx` arg, but has 1-5 `Function::new` natives** (need `reg!`-style compat
+  calls, not just `rt.eval`): download_bindings, filesystem_access, idle_detection,
+  network_log_bindings, speech, web_audio, file_input, pip_bindings, wake_lock,
+  media_capture, screen_capture.
+- **Heavier native counts** (13-16 `Function::new`, still simpler than S8's canvas2d):
+  video_bindings, audio_element.
+- **Extra state params beyond `&ctx`** (need new `V8JsRuntime` plumbing):
+  geolocation (`fake_coords`), broadcast_channel, notifications_bindings — worker,
+  shared_worker, webgl_canvas, audio_bindings also take extra params but are already
+  covered by S8/S9/S10 below.
+- **Reserved for later hand-port slices, not S5-S7**: canvas2d, offscreen_canvas,
+  webgl_canvas (→ S8); webassembly, webgpu (→ S9); worker, shared_worker, sw_worker (→
+  S10).
 | ☐ S8 | **canvas2d + webgl_canvas** | Hand-port (hot path, 85 rquickjs mentions; pixel queues via `flush_canvas_updates`) | canvas graphic tests pass under v8 feature | Medium |
 | ☐ S9 | **wasm + webgpu** | `Persistent<Function>` GC roots → `v8::Global<Function>`; keep the `wasm::clear_registry()` teardown pattern (`lib.rs:401`) | wasm + webgpu test suites green (note: webgpu test flaky under load — rerun before blaming the port) | Medium |
 | ☐ S10 | **worker + shared_worker + sw_worker** | Per-thread `Runtime`+`Context` (`worker.rs:293`) → per-thread `OwnedIsolate`; same channel protocol | worker tests green | Medium |
