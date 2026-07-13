@@ -318,15 +318,22 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
-- `rusty_v8` backend porting (S5–S12; S0/S1/S2/S3/S4 done 2026-07-13 — v8 v150.1.0
-  optional dep под `v8-backend`; `V8JsRuntime`/`V8Inner`/`v8_thread_main` + `JsRuntime` trait impl
-  + `v8_compat`: `into_v8_fnN` (arity 0..7) + `V8NativeFn` + `OwnedNativeFn` + trampoline +
+- `rusty_v8` backend porting (S6/S7 + rest of S5, S8–S12 remain; S0/S1/S2/S3/S4 done
+  2026-07-13, S5-S7 batch 1/3 done 2026-07-13 — v8 v150.1.0 optional dep под `v8-backend`;
+  `V8JsRuntime`/`V8Inner`/`v8_thread_main` + `JsRuntime` trait impl + `v8_compat`:
+  `into_v8_fnN` (arity 0..7) + `V8NativeFn` + `OwnedNativeFn` + trampoline +
   `register_v8_native` (+ `Vec<String>`/`Vec<u32>`/`Vec<f64>`/`Vec<u8>`/`u8` FromJsValue/IntoJsReturn
   added in S3); `V8JsRuntime::install_dom` ports `dom::install_primitives` — 183/184 natives
   byte-identical closure bodies, `WEB_API_SHIM` reused unchanged (`pub(crate)`), deterministic-seed
   eval kept verbatim; `_lumen_drain_microtasks` is a no-op stub (V8 auto-runs its microtask queue,
-  unlike QuickJS's manual-drain model); 27 тест зелёный (v8_runtime). Shell wiring (`V8PersistentJs`,
-  `crates/shell` `v8` feature) done in S4 — see `subsystems/shell.md`).
+  unlike QuickJS's manual-drain model). Shell wiring (`V8PersistentJs`, `crates/shell` `v8`
+  feature) done in S4 — see `subsystems/shell.md`. S5-S7 batch 1 (p1-v8-s57): 68 of 90
+  simple `install_*` modules ported (each a `install_X_v8(rt: &V8JsRuntime)` sibling next
+  to the rquickjs original, wired best-effort — logs and continues on error, mirroring
+  `lib.rs`'s orchestration — via an `install_v8!` macro at the end of `install_dom`); added a
+  `DOM_EXCEPTION_POLYFILL` (V8 has no web-platform globals at all — quickjs-ng bundles
+  `DOMException` as a built-in, so this gap was silently latent since S3). 2399 tests green
+  (v8_runtime + module tests); ported/pending checklist in `docs/tasks/ph3-v8-migration.md`.
 
 ## Invariants
 

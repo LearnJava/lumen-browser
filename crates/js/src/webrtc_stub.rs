@@ -28,6 +28,15 @@ pub fn install_webrtc_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     ctx.eval::<(), _>(WEBRTC_SHIM)
 }
 
+/// V8 port of [`install_webrtc_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_webrtc_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(WEBRTC_SHIM)?;
+    Ok(())
+}
+
 /// JavaScript shim implementing a WebRTC mDNS-only stub.
 ///
 /// Candidate format: `candidate:1 1 UDP 2122262783 <uuid>.local <port> typ host`

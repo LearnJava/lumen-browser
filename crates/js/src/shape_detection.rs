@@ -10,6 +10,15 @@ pub fn install_shape_detection_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// V8 port of [`install_shape_detection_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_shape_detection_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(SHAPE_DETECTION_SHIM)?;
+    Ok(())
+}
+
 /// JavaScript shim: Shape Detection API (Phase 0 - always returns empty arrays)
 const SHAPE_DETECTION_SHIM: &str = r#"
 (function() {

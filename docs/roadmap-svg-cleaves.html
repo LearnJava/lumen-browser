@@ -544,6 +544,11 @@
      "bugs": [
       "BUG-125"
      ]
+    },
+    {
+     "id": "P2-wpt",
+     "title": "WPT pass rate ≥ 60% (docs/tasks/p2-wpt-integration.md)",
+     "status": "planned"
     }
    ],
    "date": "app v0.5.0"
@@ -600,7 +605,7 @@
        "title": "V8 S5–S7: батчи простых модулей",
        "status": "planned",
        "size": "L",
-       "note": "S5–S7: ~90 простых модулей батчами по ~30 через compat-слой; чеклист ported/pending в брифе; параллельные субагенты уместны"
+       "note": "PARTIAL (2026-07-13, branch p1-v8-s57, батч 1/3): из 90 install_* портированы 68 (все simple `&ctx`-only модули без natives или с ≤2 тривиальными шимами) — install_X_v8 рядом с rquickjs-оригиналом, wiring в install_dom через install_v8! (best-effort: логирует и продолжает, как lib.rs). Попутный фикс: DOMException-полифилл в V8 (quickjs-ng даёт его как встроенный, у V8 веб-платформенных глобалов нет вообще — без него web_codecs и уже портированный в S3 WEB_API_SHIM падают ReferenceError). 2399 тестов lumen-js --features v8-backend зелёные; полный workspace clippy + scoped-test зелёные. Чеклист ported/pending — docs/tasks/ph3-v8-migration.md. Остаток (22): 11 модулей с 1-5 natives (download_bindings, filesystem_access, idle_detection, network_log_bindings, speech, web_audio, file_input, pip_bindings, wake_lock, media_capture, screen_capture) + video_bindings/audio_element (13-16 natives) + 3 с доп. параметрами (geolocation, broadcast_channel, notifications_bindings)"
       },
       {
        "id": "P3-v8-s8",
@@ -711,11 +716,6 @@
      "title": "Расширения (минимальный формат)",
      "status": "done",
      "note": "реализовано (сверка с кодом 2026-07-02): расширения Phase 0 (MV3-subset: manifest.json loader + content_scripts + chrome.runtime стаб) — shell/extensions"
-    },
-    {
-     "id": "P3-wpt",
-     "title": "WPT pass rate ≥ 60%",
-     "status": "planned"
     },
     {
      "id": "P3-ai",
