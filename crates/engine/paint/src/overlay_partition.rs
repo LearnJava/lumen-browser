@@ -7,7 +7,8 @@
 //! stay pinned to the viewport as the page scrolls: `position:sticky` and
 //! `position:fixed`. Such content is rastered into the band at its seat-time
 //! on-screen position and then dragged along by the wholesale shift, instead of
-//! staying put. This is why `LUMEN_SCROLL_BLIT` is off by default.
+//! staying put. This is what M3.2.1c (this module) solves: it was the last blocker
+//! before `LUMEN_SCROLL_BLIT` could default on (M3.2.1c-7).
 //!
 //! M3.2.1c splits this **overlay** content out of the band: the band is rastered
 //! *without* it, and it is redrawn per frame on top of the presented band so its

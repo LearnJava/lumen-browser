@@ -539,8 +539,8 @@ pub struct FemtovgBackend {
     /// band-sized surface shifted by the scroll delta (`Blit`, no display-list
     /// re-execution — the scroll win, M3.2.1b-2) and re-rastering the whole
     /// viewport-plus-overscan band (`Repaint`). Read once from `LUMEN_SCROLL_BLIT`
-    /// at construction; `false` (default) keeps the direct-to-screen path
-    /// byte-identical. When on, the on-screen output still equals the direct path
+    /// at construction; on by default (M3.2.1c-7), kill-switch `=0`.
+    /// When on, the on-screen output still equals the direct path
     /// at any scroll — including sticky/fixed content — because the content pass
     /// gets a uniform `+src` prepend that `present_content_band` undoes.
     scroll_blit: bool,
