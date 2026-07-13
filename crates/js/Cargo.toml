@@ -78,6 +78,11 @@ ctr = "0.9"
 # Lightweight JSON parser; reuses serde which is already in the workspace.
 serde_json = "1.0"
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+# Permanent #5 (§5): V8 JS engine (rusty_v8). Optional dep behind `v8-backend` feature.
+# Off-by-default until S12 cutover; main never breaks. V8 pre-built binaries are
+# downloaded by v8's build.rs from GitHub releases on first build.
+# Windows MSVC: use_custom_libcxx must NOT be enabled (MSVC uses its own CRT).
+v8 = { version = "150.1.0", optional = true, default-features = false }
 
 [features]
 # Реальный WebGPU-бэкенд (U-4c, Stage 1): включает wgpu-устройство в lumen-paint и
@@ -85,5 +90,7 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # настоящую информацию об адаптере и валидацию WGSL. Без фичи navigator.gpu остаётся
 # чистым in-memory JS-шимом (Phase 0). Включается shell-фичей `quickjs`.
 webgpu = ["lumen-paint/backend-wgpu"]
+# V8 JS backend (rusty_v8). Replaces QuickJS at S12 cutover. Off by default until then.
+v8-backend = ["dep:v8"]
 
 [dev-dependencies]

@@ -178,7 +178,7 @@ checklist after every merge.
 
 | # | Slice | Content | DoD | Risk |
 |---|---|---|---|---|
-| ☐ S0 | **Build spike** | `v8` as optional dep under `[features] v8-backend` in `crates/js/Cargo.toml`; one smoke test: init platform, create isolate, eval `1+1`. **No porting until this is green.** Record crate version + binary size delta here. | `cargo test -p lumen-js --features v8-backend` green on MSVC; sccache interplay documented | **High** — this is the go/no-go gate |
+| ✅ S0 | **Build spike** | `v8` as optional dep under `[features] v8-backend` in `crates/js/Cargo.toml`; one smoke test: init platform, create isolate, eval `1+1`. **No porting until this is green.** Record crate version + binary size delta here. | `cargo test -p lumen-js --features v8-backend` green on MSVC; sccache interplay documented | **High** — this is the go/no-go gate |
 | ☐ S1 | **Runtime skeleton** | `crates/js/src/v8_runtime.rs`: `V8JsRuntime` (handle), `V8Inner` (thread-owned isolate+context), `V8Command`, `v8_thread_main`, `run()` dispatcher; `impl JsRuntime`: `eval`, `set_global`, `get_global`, `call_function`, `engine_name`→`"v8"`; `from_v8`/`to_v8` ⇄ `JsValue` converters | mirror test suite `tests/v8_eval.rs` green | Medium (`HandleScope` lifetimes in the dispatcher) |
 | ☐ S2 | **Compat layer** | Own `IntoJsFn` trait (arities 0..7, arg conversion via `JsValue` helpers) + `reg!`-twin macro over V8 replicating rquickjs `Function::new` ergonomics; port the 3 console natives as proof | a typed Rust closure registers and is callable from JS with auto-converted args | Medium — **this slice de-risks everything after it** |
 | ☐ S3 | **Core DOM** | Port `install_primitives` (184 `reg!` natives, `dom.rs:401`) via compat layer; eval `WEB_API_SHIM` unchanged; `V8JsRuntime::install_dom` with same signature as QuickJS version | `document.querySelector`, `_lumen_tick_timers`, `window.location.href` work; `samples/page.html` renders under `--features v8-backend` e2e | Medium |
@@ -202,7 +202,41 @@ checklist after every merge.
 
 ## Findings log (append per slice)
 
-*(empty — S0 not started)*
+### S0 — Build spike (2026-07-13, branch p1-v8-s0)
+
+**v8 crate version:** 150.1.0 (rusty_v8). `cargo check -p lumen-js --features v8-backend` ✅.
+
+**Two smoke tests pass:** `v8_eval_one_plus_one` (eval `1+1` → 2.0) and `v8_string_round_trip`.
+
+**Windows MSVC gotchas found and solved:**
+
+1. **Symlink privilege (ERROR_PRIVILEGE_NOT_HELD, code 1314).** v8's `build.rs` creates a
+   `gn_root` symlink when the cargo target dir and cargo registry are on different drives
+   (project on `D:\`, registry on `C:\`). Symlinks on Windows require
+   `SeCreateSymbolicLinkPrivilege` (Developer Mode or admin).
+   **Workaround:** set `CARGO_TARGET_DIR` to any path on `C:\` before building/testing,
+   e.g. `CARGO_TARGET_DIR=C:\tmp\lumen-v8-target`. The v8 pre-built `.lib` (~150 MB) is
+   then downloaded to that dir on first build.
+
+2. **CRT conflict: rust-lld + rquickjs + v8 (LNK2019 `__declspec(dllimport) _wassert`).**
+   `rquickjs_sys` is compiled as C with DLL-import CRT annotations (`/MD`); `v8` additionally
+   links `msvcprt.lib`. `rust-lld` (our default linker) cannot resolve DLL imports for ucrt
+   symbols in this mixed configuration (no `ucrtbase.lib` import library present).
+   **Workaround:** run tests with the MSVC linker via a wrapper:
+   ```
+   RUSTFLAGS="-Clinker=C:\tmp\msvc-link.bat" CARGO_TARGET_DIR=C:\tmp\lumen-v8-target \
+     cargo test -p lumen-js --features v8-backend
+   ```
+   where `msvc-link.bat` calls the MSVC `link.exe` from BuildTools.
+   **Permanent fix (planned S12):** rquickjs is removed; only v8 remains → no CRT conflict.
+   A simpler interim fix if needed before S12: make rquickjs optional under `quickjs-backend`
+   feature so the v8 test binary never links it.
+
+**sccache interplay:** sccache caches v8 build output normally. The 150 MB `rusty_v8.lib`
+is not rebuilt unless the v8 crate version changes. First-build download takes ~30 s on
+a fast connection.
+
+**Go/No-Go verdict: GO.** v8 150.1.0 builds and runs on Windows MSVC x86_64. Porting can begin.
 
 ---
 
