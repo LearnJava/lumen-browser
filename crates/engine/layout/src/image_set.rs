@@ -162,10 +162,9 @@ fn parse_resolution_token(s: &str) -> Option<f32> {
         (n, 2.54_f32 / 96.0)
     } else if let Some(n) = lower.strip_suffix("dpi") {
         (n, 1.0_f32 / 96.0)
-    } else if let Some(n) = lower.strip_suffix('x') {
-        (n, 1.0_f32)
     } else {
-        return None;
+        let n = lower.strip_suffix('x')?;
+        (n, 1.0_f32)
     };
     let v: f32 = num_str.trim().parse().ok()?;
     Some(v * factor)

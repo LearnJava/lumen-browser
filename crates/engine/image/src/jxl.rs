@@ -9,7 +9,7 @@ use core::fmt;
 const JXL_NAKED_MAGIC: [u8; 2] = [0xFF, 0x0A];
 
 /// JPEG XL ISOBMFF container signature (box type).
-const JXL_ISOBMFF_BOX_TYPE: [u8; 4] = [b'j', b'x', b'l', b' '];
+const JXL_ISOBMFF_BOX_TYPE: [u8; 4] = *b"jxl ";
 
 /// Error decoding a JPEG XL image.
 #[derive(Debug, Clone, PartialEq, Eq)]
