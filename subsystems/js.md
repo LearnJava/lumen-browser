@@ -1,7 +1,9 @@
 # lumen-js
 
-Crate providing the `JsRuntime` implementation backed by QuickJS via `rquickjs` v0.11.
-Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
+Crate providing the `JsRuntime` implementation. **V8 (`rusty_v8` 150.1.0) is the default engine
+as of Ph3-v8-migration S12a (2026-07-14, ADR-018)** — QuickJS (`rquickjs` v0.11) remains available
+as an explicit `--features quickjs` rollback until the full `rquickjs` removal (S12b,
+`docs/tasks/ph3-v8-migration.md`).
 
 > **Coverage note (2026-07-02):** the code wires **~90 Web-API modules**; this file curates
 > only the highlights with implementation detail. For the full shipped-API list use
@@ -457,7 +459,14 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   `v8_runtime::tests::suspend_*`/`resume_*`, covering number/string/array/object
   round-trip and closure-drop-without-poisoning-siblings), all green; clippy clean
   on v8-backend and the default (QuickJS-only) build. Ported/pending checklist in
-  `docs/tasks/ph3-v8-migration.md`.
+  `docs/tasks/ph3-v8-migration.md`. S12a (p1-v8-s12, 2026-07-14, ADR-018): `lumen-shell`'s
+  `default` feature flipped from `quickjs` to `v8` — this crate itself is unchanged (the
+  V8 port was already complete through S11); the flip lives entirely in
+  `crates/shell/Cargo.toml` + ~80 broadened `#[cfg(any(feature = "quickjs", feature =
+  "v8"))]` gates in shell code for generic (non engine-specific) JS-enabled plumbing.
+  Full `rquickjs` removal from this crate (`QuickJsRuntime`, ~380 dual `install_*`
+  bindings, `__lum_args__`) is S12b, not yet started — `rquickjs` is still a real
+  dependency and `QuickJsRuntime` still the fallback engine behind `--features quickjs`.
 
 ## Invariants
 

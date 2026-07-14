@@ -1,5 +1,17 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Done (V8 cutover — Ph3-v8-migration S12a, 2026-07-14, ADR-018):** `default` feature
+  flipped from `quickjs` to `v8` in `crates/shell/Cargo.toml` — a default `cargo build`/
+  `cargo run -p lumen-shell` now runs V8, not QuickJS (supersedes the "default already
+  turns `quickjs` on" note in the S4 bullet below; `quickjs` is now the non-default, opt-in
+  rollback feature — pass `--features quickjs` to get it back, it still wins over `v8` at
+  compile time when both are enabled). ~80 `#[cfg(feature = "quickjs")]` gates across
+  `main.rs`/`config.rs`/`platform/file_dialog.rs`/`tab_lifecycle/hibernate.rs` were never
+  engine-specific (clipboard/audio/wake-lock/screen-capture/fingerprint providers,
+  engine-agnostic shell↔JS drains) — broadened to `#[cfg(any(feature = "quickjs", feature =
+  "v8"))]` so they keep working under the new default instead of silently no-op'ing under
+  V8. Full removal of `rquickjs`/`QuickJsRuntime`/`QuickPersistentJs` is a separate,
+  larger follow-up slice (S12b, `docs/tasks/ph3-v8-migration.md`) — not done here.
 - **Done (V8 shell adapter — Ph3 `P3-v8` S4, 2026-07-13):** `#[cfg(feature = "v8")] struct V8PersistentJs` mirrors `QuickPersistentJs`, implementing every `PersistentJs` method. State-backed methods (`take_dom_dirty`, `take_navigate_request`, scroll/history/focus/fullscreen queues, etc.) delegate to new `V8JsRuntime` accessors added in `crates/js/src/v8_runtime.rs` (same field-per-accessor shape as `QuickJsRuntime`). Subsystems not yet ported to V8 (workers, canvas2d, view transitions, notifications — see `docs/tasks/ph3-v8-migration.md` slices S5–S11) use empty/no-op stubs and start returning real data once their slice lands. Both `Arc<dyn PersistentJs>` construction sites are mirrored: initial page load (`run_scripts_with_dom`) and bfcache thaw (`Lumen::thaw_from_bfcache`-equivalent branch). `quickjs` and `v8` features may both be compiled in (both native sets build), but the `quickjs` construction branch always returns/wins at each site — its `#[cfg]` guard is unconditional while the `v8` branch is gated `#[cfg(all(feature = "v8", not(feature = "quickjs")))]` — so exercising the V8 path requires `--no-default-features --features backend-femtovg,v8` (default already turns `quickjs` on). Side-fix: `backend_factory.rs`'s `create_wgpu` stub (compiled when `backend-wgpu` is off) was missing the `target_color_space` parameter the two call sites always pass — broke any `--no-default-features --features backend-femtovg,*` build regardless of JS engine; added the parameter (ignored) to match the real `create_wgpu` signature.
 - **Done (Ph3 `P3-bfcache` level 1 closed — `no-store`, restore benchmark,
   T2→T3 degradation, 2026-07-13):** `RawPage`/`LayoutSource` gained
