@@ -1,8 +1,17 @@
 # BUG-170
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-06-16
 **Компонент:** shell + font (font-display, FOUT)
 **Приоритет:** высокий (−~0.5–2.4 с с критического пути первого paint на тяжёлых страницах)
+
+## Резолюция
+
+Реализовано по плану ниже: `parse_and_layout` больше не блокируется на сетевых
+`@font-face`. `load_font_faces` разделяет `local()`-источники (сразу в первом layout)
+и `url()`-источники (фоновая догрузка). Фоновый поток шлёт `LoadEvent::FontLoaded`
+(`crates/shell/src/main.rs:164`), обработчик (`main.rs:9608`) регистрирует шрифт и
+делает relayout (FOUT-swap). Подтверждено кодом: `pending_web_fonts`,
+`relayout_with_web_fonts`, обработчик `LoadEvent::FontLoaded` — всё на месте.
 
 ## Корень
 

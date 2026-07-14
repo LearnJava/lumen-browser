@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-14",
  "counts": {
-  "open": 23,
-  "fixed": 229,
+  "open": 24,
+  "fixed": 230,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 252,
+ "total_bugs": 254,
  "phases": [
   {
    "id": "P0",
@@ -253,7 +253,7 @@
     {
      "id": "P1-wgpu-default",
      "title": "Ph-wgpu-default: перенос + флип дефолта",
-     "status": "active",
+     "status": "done",
      "size": "XL",
      "note": "Перенос perf/reliability-наработок из постоянной эксперимент-ветки `p1-exp-wgpu-only` (никогда не вливается) в main с сохранением femtovg, затем флип дефолтного рендер-бэкенда на wgpu; бриф `docs/tasks/ph-wgpu-default.md`. Фаза 2 (перенос) + Фаза 3 (флип дефолта, `P1-wgpu-flip`) + BUG-276 + `P1-wgpu-vkgl` — все влиты. Ф0 (`P1-wgpu-ph0`) закрыта СВЕРКОЙ 2026-07-14: устаревшую `p1-wgpu-cross-platform` вливать не нужно, её полезный след уже в main через `p1-wgpu-vkgl` + `p1-linux-scroll-perf`",
      "bugs": [
@@ -3113,12 +3113,26 @@
    "date": null,
    "debtor": false
   },
-  "BUG-276": {
+  "BUG-275": {
    "status": "open",
-   "title": "`LUMEN_BACKEND=wgpu python graphic_tests/run.py --only 00` (впервые прогнанный вообще, набор всегда неявно проверял только femtovg) — `TEST-00 FAIL 4.85%` (femt…",
-   "component": "paint (WgpuBackend) или graphic_tests capture/calibration — не разделено",
+   "title": "`WGPU_BACKEND=vulkan` на Intel Iris Plus (Windows 10) — окно презентует целиком белым, хотя рендер по всем наблюдаемым признакам исправен (реальный адаптер, кад…",
+   "component": "paint (`Renderer::new_async`, выбор wgpu-бэкенда)",
    "date": null,
    "debtor": false
+  },
+  "BUG-276": {
+   "status": "fixed",
+   "title": "`LUMEN_BACKEND=wgpu` не проходил даже калибровочный TEST-00 (4.85% против эталона Edge, диф в полосе `y:684-718`) — набор графических тестов никогда не гонялся…",
+   "component": "paint (`WgpuBackend`/`renderer.rs`)",
+   "date": "2026-07-13",
+   "debtor": false
+  },
+  "BUG-277": {
+   "status": "open",
+   "title": "Установленный wgpu-базлайн (не регрессия): первый полный прогон `LUMEN_BACKEND=wgpu graphic_tests/run.py --continue-on-fail` после фикса BUG-276 — 65 PASS · 38…",
+   "component": "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg",
+   "date": null,
+   "debtor": true
   },
   "BUG-278": {
    "status": "fixed",
@@ -3402,6 +3416,12 @@
   ],
   "paint (WgpuBackend) / shell (event loop, wgpu-путь)": [
    "BUG-274"
+  ],
+  "paint (`Renderer::new_async`, выбор wgpu-бэкенда)": [
+   "BUG-275"
+  ],
+  "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg": [
+   "BUG-277"
   ],
   "paint (build)": [
    "BUG-235"
