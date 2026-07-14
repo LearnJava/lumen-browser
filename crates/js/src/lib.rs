@@ -1207,13 +1207,6 @@ impl QuickJsRuntime {
                 eprintln!("Sanitizer bindings init failed: {}", e);
             }
 
-            // Install Device Orientation and Device Motion APIs (W3C Device Orientation L2/L3) — pure JS implementation.
-            // Phase 0: DeviceOrientationEvent and DeviceMotionEvent with default values {0,0,0};
-            // requestPermission() always resolves to 'granted'.
-            if let Err(e) = device_sensors::install_device_sensors_bindings(&ctx) {
-                eprintln!("Device Sensors bindings init failed: {}", e);
-            }
-
             // Install Eye Dropper API (W3C Color WG) — pure JS implementation with native binding stub.
             // Phase 0: EyeDropper.open() returns Promise<{sRGBHex}> with AbortSignal support.
             // Platform integration (P3) implements _lumen_eye_dropper_open for each OS.

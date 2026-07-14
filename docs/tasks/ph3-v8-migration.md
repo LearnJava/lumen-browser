@@ -892,6 +892,31 @@ lumen-js --lib` (full suite) - 2317/2317 green; `cargo clippy -p lumen-js --all-
 warnings` clean on both default and `v8-backend` features; `cargo check -p lumen-shell` (default)
 green.
 
+### S12b-12 — `device_sensors.rs` (2026-07-14, branch p1-v8-s12b-12-device-sensors)
+
+Twelfth slice, selected via the same systematic method: comparing `fn install_*_bindings(` defining
+sites across `crates/js/src/*.rs` against `fn install_*_bindings_v8(` sites gives 52 remaining
+candidates (post S12b-11); sorted by file size, `serial.rs` (151 lines) and
+`scroll_snap_events.rs` (179 lines) skipped as already-known traps (S12b-10 findings).
+`device_sensors.rs` (202 lines) is clean: zero `dom.rs`/`lib.rs` hits for `DeviceOrientationEvent`,
+`DeviceMotionEvent`, or the file stem outside its own module. Pure JS-shim `eval` (no native
+bindings), the Device Orientation Event L2/L3 Phase 0 stub (`DeviceOrientationEvent`/
+`DeviceMotionEvent` classes with zeroed defaults, `requestPermission()` always resolves
+`'granted'`). Unlike S12b-10/11, this module's own top-of-file doc comment was already `//!` (no
+conversion needed). Deleted the rquickjs `install_device_sensors_bindings` fn + its
+`use rquickjs::Ctx`; gated the shim `const` behind `#[cfg(feature = "v8-backend")]` since it's now
+only referenced from the v8 path. The original test helper used a **full** `QuickJsRuntime::install_dom`
+(not a bare context + manual shim like S12b-11's DOMException stub) because the shim's classes
+`extend Event`, which only exists after the `dom.rs` DOM-core JS is evaluated — ported the helper
+1:1 to `V8JsRuntime::install_dom` (same `Document`/`about:blank` args), confirmed via
+`v8_runtime.rs`'s own `runtime_with_dom` test helper that `install_dom` is the right call and that
+it already wires `install_device_sensors_bindings_v8` (ported earlier, S5-S7). 6 tests ported
+1:1 (gated `#[cfg(all(test, feature = "v8-backend"))]`); dropped the call site in `lib.rs`'s
+`QuickJsRuntime::install_dom`. `cargo test -p lumen-js --features v8-backend device_sensors` -
+6/6 green; default-feature `cargo test -p lumen-js --lib` (full suite) - 2311/2311 green; `cargo
+clippy -p lumen-js --all-targets -- -D warnings` clean on both default and `v8-backend` features;
+`cargo check -p lumen-shell` (default) green.
+
 ---
 
 ## Risks (Rev 2)
