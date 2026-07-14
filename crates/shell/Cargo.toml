@@ -15,18 +15,23 @@ path = "src/main.rs"
 # Phase 2 defaults: femtovg primary + wgpu fallback (ADR-010 RB-9).
 # Both must be in default so that #[cfg(feature = "backend-*")] guards in
 # backend_factory.rs compile the real backends, not the stub error paths.
-default = ["backend-femtovg", "backend-wgpu", "quickjs"]
+# Ph3 S12 cutover (ADR-018): V8 replaces QuickJS as the default JS engine.
+default = ["backend-femtovg", "backend-wgpu", "v8"]
 
-# Enable QuickJS JavaScript engine (rquickjs). Without this feature the shell
-# falls back to NullJsRuntime which silently ignores all inline scripts.
+# Enable QuickJS JavaScript engine (rquickjs). Kept as an opt-in rollback path
+# after the S12 cutover (`docs/tasks/ph3-v8-migration.md`); full removal of the
+# rquickjs implementation is deferred to the follow-up S12b slice. Without
+# either `quickjs` or `v8` the shell falls back to `NullJsRuntime`, which
+# silently ignores all inline scripts.
 quickjs = ["dep:lumen-js", "lumen-js/webgpu"]
 
 # Enable the V8 JavaScript engine (rusty_v8), Ph3 V8 migration (docs/tasks/ph3-v8-migration.md).
-# Off by default until the S12 cutover. `quickjs` and `v8` may both be compiled
-# in at once (both sets of natives build), but only one engine actually runs:
-# `quickjs` takes priority at compile time via #[cfg] guards in main.rs. To
-# exercise the V8 path, disable the default `quickjs` feature:
-# cargo run -p lumen-shell --no-default-features --features backend-femtovg,v8
+# Default engine as of the S12 cutover (ADR-018). `quickjs` and `v8` may both be
+# compiled in at once (both sets of natives build), but only one engine actually
+# runs: `quickjs` takes priority at compile time over `v8` via #[cfg] guards in
+# main.rs, so the (non-default) `quickjs` feature is only useful for A/B rollback
+# testing: `cargo run -p lumen-shell --features quickjs` (with default `v8` still on,
+# quickjs wins) or `--no-default-features --features backend-femtovg,backend-wgpu,quickjs`.
 v8 = ["dep:lumen-js", "lumen-js/v8-backend"]
 
 # femtovg rendering backend — Phase 2 default (ADR-010 RB-9).
@@ -34,7 +39,7 @@ backend-femtovg = ["lumen-paint/backend-femtovg"]
 
 # wgpu rendering backend — Phase 1 / Phase 2 fallback (ADR-010 §Migration path).
 # Use when femtovg is unavailable or LUMEN_BACKEND=wgpu is set.
-# cargo run -p lumen-shell --no-default-features --features backend-wgpu,quickjs
+# cargo run -p lumen-shell --no-default-features --features backend-wgpu,v8
 backend-wgpu = ["lumen-paint/backend-wgpu"]
 
 [dependencies]

@@ -98,7 +98,7 @@ use std::collections::HashMap;
 use lumen_layout::{LayoutBox, Mat4, PaintOrder, SnapContainer, StackingTree, TransitionScheduler};
 use lumen_layout::{StartingStyleTracker, compute_style_from_declarations, resolve_starting_style};
 use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scroll_container_at, find_snap_target, set_scroll_position};
-#[cfg(feature = "quickjs")]
+#[cfg(any(feature = "quickjs", feature = "v8"))]
 use lumen_layout::collect_computed_styles;
 use lumen_layout::style::{ComputedStyle, ScrollBehavior};
 use lumen_layout::computed_style_to_map;
@@ -617,14 +617,14 @@ fn run_window_mode(
 
     // Wire navigator.clipboard to the OS clipboard (task #26). Process-global,
     // installed once; the JS bindings _lumen_clipboard_read/_write forward here.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     lumen_js::set_clipboard_provider(std::sync::Arc::new(
         platform::clipboard::PlatformClipboard,
     ));
 
     // Wire navigator.mediaDevices.getUserMedia({audio}) to the platform audio
     // capture backend (PH3-3). Process-global; installed before any JS context starts.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     lumen_js::set_audio_capture_provider(std::sync::Arc::new(
         platform::audio_capture::PlatformAudioCapture,
     ));
@@ -642,52 +642,52 @@ fn run_window_mode(
 
     // Wire HTMLAudioElement play/pause/seek to the platform audio playback
     // backend (PH3-11). Process-global; installed before any JS context starts.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     lumen_js::set_audio_playback_provider(std::sync::Arc::new(
         platform::audio_player::PlatformAudioPlayer::new(),
     ));
 
     // Wire Screen Wake Lock API to the platform backend (PH3-13).
     // Prevents the display from sleeping while JS holds an active WakeLockSentinel.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     lumen_js::set_wake_lock_provider(std::sync::Arc::new(
         platform::wake_lock::PlatformWakeLock::new(),
     ));
 
     // Wire Screen Capture API to the platform backend (PH3-17).
     // Enables navigator.mediaDevices.getDisplayMedia() to capture the primary monitor.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     lumen_js::set_screen_capture_provider(std::sync::Arc::new(
         platform::screen_capture::PlatformScreenCapture,
     ));
 
     // Wire HTMLVideoElement GIF playback store (PH3-12).
     // The same Arc is shared with JS native bindings and the shell's render tick.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     let video_gif_store = {
         let store = std::sync::Arc::new(lumen_js::VideoGifStore::default());
         lumen_js::set_video_gif_store(store.clone());
         store
     };
-    #[cfg(not(feature = "quickjs"))]
+    #[cfg(not(any(feature = "quickjs", feature = "v8")))]
     let video_gif_store: std::sync::Arc<lumen_js::VideoGifStore> =
         std::sync::Arc::new(lumen_js::VideoGifStore::default());
 
     // Wire the TextTrack store (P3-webvtt slice 4) — mirrors parsed `<track>`
     // cues into the JS `video.textTracks` API. Same Arc shared with bindings.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     let text_track_store = {
         let store = std::sync::Arc::new(lumen_js::TextTrackStore::default());
         lumen_js::set_text_track_store(store.clone());
         store
     };
-    #[cfg(not(feature = "quickjs"))]
+    #[cfg(not(any(feature = "quickjs", feature = "v8")))]
     let text_track_store: std::sync::Arc<lumen_js::TextTrackStore> =
         std::sync::Arc::new(lumen_js::TextTrackStore::default());
 
     // Apply the fingerprint profile's navigator/screen/timezone values (9F.1).
     // Process-global; consumed by lumen_js when each page's JS context spins up.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     config::global().install_navigator();
 
     // Install + enable the process-global ad-block filter (consulted by every
@@ -2017,7 +2017,7 @@ impl NavEntry {
 
 /// Навигационный запрос от JS (location.href=, assign, replace, reload).
 /// Хранится в `Lumen::pending_js_navigate` и выполняется в `about_to_wait`.
-#[cfg_attr(not(feature = "quickjs"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "quickjs", feature = "v8")), allow(dead_code))]
 enum JsNavigateRequest {
     /// Перейти на URL, добавить запись в историю.
     Push(String),
@@ -4696,7 +4696,7 @@ fn parse_and_layout(
     );
     // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     if let Some(js) = &js_ctx {
         js.notify_dom_content_loaded();
     }
@@ -4747,7 +4747,7 @@ fn parse_and_layout(
     // drawImage(imgElement, …) can read the pixels. Collect nid→url from DOM
     // (same traversal fetch_and_decode_images used), join with decoded images by
     // URL, and push RGBA8 buffers into img_bitmap_store on the JS thread.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     if let Some(js) = &js_ctx {
         let img_reqs = {
             let d = doc_arc.lock().unwrap();
@@ -5112,14 +5112,14 @@ fn find_video_source(lb: &LayoutBox) -> Option<(String, String)> {
 /// `NodeId → [x, y, width, height]` (border-box, viewport-relative CSS px).
 /// Используется JS-runtime-ом для `getBoundingClientRect` / `ResizeObserver`
 /// / `IntersectionObserver`.
-#[cfg(feature = "quickjs")]
+#[cfg(any(feature = "quickjs", feature = "v8"))]
 fn collect_layout_rects(lb: &LayoutBox) -> HashMap<u32, [f32; 4]> {
     let mut map = HashMap::new();
     collect_layout_rects_rec(lb, &mut map);
     map
 }
 
-#[cfg(feature = "quickjs")]
+#[cfg(any(feature = "quickjs", feature = "v8"))]
 fn collect_layout_rects_rec(lb: &LayoutBox, map: &mut HashMap<u32, [f32; 4]>) {
     let r = &lb.rect;
     map.insert(lb.node.index() as u32, [r.x, r.y, r.width, r.height]);
@@ -5990,12 +5990,12 @@ fn collect_inline_scripts(
 /// Collect the first `<script type="importmap">` import map from the document.
 ///
 /// Returns the parsed ImportMap if found, or None if not present or invalid JSON.
-#[cfg(feature = "quickjs")]
+#[cfg(any(feature = "quickjs", feature = "v8"))]
 fn collect_import_map(doc: &Document) -> Option<lumen_js::esm::ImportMap> {
     collect_import_map_impl(doc, doc.root())
 }
 
-#[cfg(feature = "quickjs")]
+#[cfg(any(feature = "quickjs", feature = "v8"))]
 fn collect_import_map_impl(
     doc: &Document,
     id: NodeId,
@@ -6139,7 +6139,7 @@ fn run_scripts_with_dom(
     // document order, including fetched external `<script src>` bodies (BUG-164).
     // Import map must be captured before `doc` moves into the Arc and applied
     // to the runtime before any module evaluation (HTML LS §8.1.6.2).
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     let import_map = collect_import_map(&doc);
 
     let doc_arc = Arc::new(Mutex::new(doc));
@@ -7474,7 +7474,7 @@ impl Lumen {
             // User cancelled — no event fired (HTML LS §4.10.5.1.16.3 step 3).
             return;
         }
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         if self.js_present {
             // Register each path with an opaque token before delivering to JS.
             // JS never receives raw filesystem paths — only tokens.
@@ -7489,7 +7489,7 @@ impl Lumen {
             let script = format!("_lumen_deliver_file_list({}, {})", id.index(), json);
             route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
-        #[cfg(not(feature = "quickjs"))]
+        #[cfg(not(any(feature = "quickjs", feature = "v8")))]
         let _ = entries;
     }
 
@@ -7994,7 +7994,7 @@ impl Lumen {
         self.scroll_x = clamp_scroll(self.scroll_x, self.max_scroll_x());
         // Notify JS observers about the new layout geometry (ResizeObserver /
         // IntersectionObserver / getBoundingClientRect).
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         {
             // Lazy-load requests drained while `self` is borrowed immutably;
             // fetched after the borrow ends (fetch needs `&mut self`).
@@ -8285,7 +8285,7 @@ impl Lumen {
     /// requests for images that entered the lazy-load proximity margin.
     /// Fetched images are registered in the renderer immediately so the next
     /// repaint (already requested by `relayout`) shows them.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     fn fetch_and_register_lazy_images(&mut self, requests: Vec<(u32, String)>) {
         let base = match &self.source {
             PageSource::File(p) => ResourceBase::File(p.clone()),
@@ -8722,7 +8722,7 @@ impl Lumen {
                 // the three owned-arg void calls go through `route_task_js`; the
                 // `self.js_present` gate keeps the geometry collection JS-gated
                 // (byte-identical with the flag off).
-                #[cfg(feature = "quickjs")]
+                #[cfg(any(feature = "quickjs", feature = "v8"))]
                 if self.js_present
                     && let Some(lb_ref) = self.layout_box.as_ref()
                 {
@@ -8800,7 +8800,7 @@ impl Lumen {
                 // is a fire-and-forget void: under the flag (`LUMEN_ENGINE_THREAD=1`) it
                 // goes off-UI-thread; flag-off (default) stays byte-identical to the old
                 // direct `js.deliver_nav_timing(...)`.
-                #[cfg(feature = "quickjs")]
+                #[cfg(any(feature = "quickjs", feature = "v8"))]
                 {
                     let nav_start = self.nav_start.take();
                     if let (true, Some(start), Some(url)) =
@@ -9337,7 +9337,7 @@ impl Lumen {
         // `Send + 'static`); гейт `self.js_present` держит сбор геометрии
         // JS-гейтнутым — байт-идентично флаг-офф (`route_query_js(…, Some(js), …)` =
         // синхронный вызов по UI-хэндлу).
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         let initial_lazy_reqs: Vec<(u32, String)> = if self.js_present {
             let owned_pairs: Vec<(u32, String)> =
                 page.lazy_pairs.iter().map(|(n, u)| (*n, u.clone())).collect();
@@ -9372,7 +9372,7 @@ impl Lumen {
         } else {
             Vec::new()
         };
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         if !initial_lazy_reqs.is_empty() {
             self.fetch_and_register_lazy_images(initial_lazy_reqs);
             // Images were registered after the request_redraw above — request
@@ -9393,12 +9393,12 @@ impl Lumen {
         // синхронного чтения результата следом; под флагом (`LUMEN_ENGINE_THREAD=1`)
         // уходят off-UI-thread одним `task` (порядок сохранён), без флага (по
         // умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично прежнему.
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
             js.notify_window_loaded();
             js.fire_page_lifecycle("pageshow", pageshow_persisted);
         });
-        #[cfg(not(feature = "quickjs"))]
+        #[cfg(not(any(feature = "quickjs", feature = "v8")))]
         let _ = pageshow_persisted;
 
         // Rebuild accessibility tree and push to OS platform bridge (O-5).
@@ -9721,7 +9721,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // ADR-016 M2.2c-2d (20): same conversion as the reload path above —
                         // `self.js_present` gate + `route_task_js`, `nav_start` still taken
                         // unconditionally. Flag-off byte-identical; flag-on off-UI-thread.
-                        #[cfg(feature = "quickjs")]
+                        #[cfg(any(feature = "quickjs", feature = "v8"))]
                         {
                             let nav_start = self.nav_start.take();
                             if let (true, Some(start), Some(url)) =
@@ -10091,7 +10091,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // навигации. Под флагом — `query` после pump-`task`; без флага —
         // байт-идентично прежнему `js.take_history_url_updates()`; `None` →
         // `unwrap_or_default` = пустой дренаж (как ветка `js_ctx == None`).
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         {
             let updates = self.drain_query_js(|j| j.take_history_url_updates()).unwrap_or_default();
             for (is_push, url, new_state_json) in updates {
@@ -10129,7 +10129,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // `route_query_js` — те же гарантии (query после pump-`task` под флагом;
         // байт-идентично `js_ctx.map(take_history_traversals)` без него), `None` →
         // пустой дренаж. Собираем до `&mut self`-мутаций (`navigate_by`).
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         {
             let traversals = self.drain_query_js(|j| j.take_history_traversals()).unwrap_or_default();
             for delta in traversals {
@@ -10179,7 +10179,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // ── Navigation API: drain queued navigation requests ─────────────────
         // Shell is the single authority for `navigation.navigate()` / `back()` /
         // `forward()` / `traverseTo()`. Each entry is `(action_code, url, key, data)`.
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         {
             // ADR-016 M2.2c-2c (остаток): nav-update drain через `route_query_js`
             // (тот же паттерн, что nav/timer в `about_to_wait`). Под флагом —
@@ -10473,7 +10473,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
         // Fullscreen API: apply OS fullscreen on requestFullscreen() / exitFullscreen().
         // ADR-016 M2.2d: value-drain через `route_query_js`.
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         for (enter, nid) in self.drain_query_js(|j| j.take_fullscreen_requests()).unwrap_or_default()
         {
             self.fullscreen_nid = if enter { Some(nid) } else { None };
@@ -10503,7 +10503,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // JS calls requestPointerLock() / exitPointerLock() → queues a grab change
         // → shell applies it here via winit.  Locked falls back to Confined on
         // platforms (e.g. Wayland) that don't support true cursor lock.
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         if let (Some(grab), Some(window)) = (
             lumen_js::pointer_lock::take_pending_grab(),
             self.window.as_ref(),
@@ -10537,7 +10537,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
         // Print API: window.print() exports current document as PDF (W-2).
         // ADR-016 M2.2d: value-drain через `route_query_js`.
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         for req in self.drain_query_js(|j| j.take_print_requests()).unwrap_or_default()
         {
             self.handle_print_request(&req);
@@ -10546,7 +10546,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Dialog focus management (HTML LS §6.6.3): apply focus changes requested by
         // showModal() / close() in JS via _lumen_request_focus / _lumen_request_blur.
         // ADR-016 M2.2d: value-drain через `route_query_js`.
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         {
             let focus_reqs = self.drain_query_js(|j| j.take_focus_requests()).unwrap_or_default();
             if !focus_reqs.is_empty() {
@@ -10570,7 +10570,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
         // CSS View Transitions API: drain snapshot/animation events from JS.
         // ADR-016 M2.2d: value-drain через `route_query_js`.
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         {
             let events = self.drain_query_js(|j| j.take_view_transition_events()).unwrap_or_default();
             for event in events {
@@ -10628,7 +10628,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // write-back-`task` встаёт в очередь **после** него (read-after-write порядок
         // сохранён); без флага (по умолчанию) — прежние синхронные `js.<method>()`,
         // байт-идентично.
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         {
             let scroll_reqs = self.drain_query_js(|j| j.take_scroll_requests()).unwrap_or_default();
             if !scroll_reqs.is_empty()
@@ -10674,7 +10674,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Smooth requests go through the rAF-based animation; instant ones set
         // scroll_y directly (CSS Scroll Behavior L1 §3).
         // ADR-016 M2.2d: value-drain через `route_query_js`.
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         for (target_y, smooth) in self.drain_query_js(|j| j.take_page_scroll_requests()).unwrap_or_default()
         {
             if smooth {
@@ -10772,7 +10772,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         _device_id: DeviceId,
         event: DeviceEvent,
     ) {
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event
             && lumen_js::pointer_lock::is_pointer_locked()
             && let Some(nid) = lumen_js::pointer_lock::get_locked_element_nid()
@@ -10823,7 +10823,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // and `document.pictureInPictureElement` clears. ADR-016
                     // M2.2c-2d: fire-and-forget void eval через маршрутизатор —
                     // под флагом off-UI-thread, без флага байт-идентично.
-                    #[cfg(feature = "quickjs")]
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
                     route_eval_js(
                         self.engine_thread.as_ref(),
                         self.js_ctx.as_ref(),
@@ -10989,7 +10989,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
                 // HTML5 DnD (PH3-9): activate drag after threshold; fire drag/dragover.
-                #[cfg(feature = "quickjs")]
+                #[cfg(any(feature = "quickjs", feature = "v8"))]
                 {
                     struct DndMoveEvents {
                         src: u32,
@@ -11109,7 +11109,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 // Pointer Lock: skip normal hover/mousemove dispatch while locked.
                 // Raw movement deltas arrive via device_event → _lumen_dispatch_locked_mousemove.
-                #[cfg(feature = "quickjs")]
+                #[cfg(any(feature = "quickjs", feature = "v8"))]
                 if lumen_js::pointer_lock::is_pointer_locked() {
                     return;
                 }
@@ -11133,7 +11133,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             .map(|r| r.node)
                     };
                     if new_hovered != self.hovered_nid {
-                        #[cfg(feature = "quickjs")]
+                        #[cfg(any(feature = "quickjs", feature = "v8"))]
                         let old_nid = self.hovered_nid;
                         self.hovered_nid = new_hovered;
                         // ADR-016 M2.2b-5: :hover restyle is async-safe (no
@@ -11142,7 +11142,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.relayout_chrome();
                         self.request_redraw();
                         // Dispatch hover-change events per W3C UI Events §17.5 / Pointer Events L2 §10.
-                        #[cfg(feature = "quickjs")]
+                        #[cfg(any(feature = "quickjs", feature = "v8"))]
                         {
                             // Leave events on the element losing hover.
                             if let Some(old) = old_nid {
@@ -11209,7 +11209,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
                 // B-7: Active resize — update element width/height as mouse moves.
-                #[cfg(feature = "quickjs")]
+                #[cfg(any(feature = "quickjs", feature = "v8"))]
                 if let Some((node_id, start_x, start_y)) = self.resize_active {
                     let dpr = self
                         .renderer
@@ -11226,7 +11226,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // результата следом; под флагом (`LUMEN_ENGINE_THREAD=1`) уходит
                     // off-UI-thread одним `task`, без флага (по умолчанию) — синхронный
                     // вызов по UI-хэндлу, байт-идентично прежнему `js.eval_js`.
-                    #[cfg(feature = "quickjs")]
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
                     route_eval_js(
                         self.engine_thread.as_ref(),
                         self.js_ctx.as_ref(),
@@ -11242,7 +11242,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Clear hover state when cursor leaves the window.
                 if self.hovered_nid.is_some() {
                     // Dispatch leave events before clearing hovered state.
-                    #[cfg(feature = "quickjs")]
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let Some(old) = self.hovered_nid {
                         let nid = old.index() as u32;
                         self.js_pointer_event(nid, "pointerout",   0.0, 0.0, 0, 0);
@@ -11412,7 +11412,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Fire mousedown + pointerdown on the hovered DOM element.
                     // Per W3C UI Events §17.6 + Pointer Events L2 §10 — fires before
                     // any default action (click). Only when cursor is over page content.
-                    #[cfg(feature = "quickjs")]
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let Some(hov) = self.hovered_nid {
                         let nid = hov.index() as u32;
                         self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
@@ -11422,7 +11422,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // HTML5 DnD (PH3-9 / HTML LS §9.3.3): start candidate when the
                     // pressed element is draggable.  Drag does not activate until the
                     // cursor moves ≥ DND_THRESHOLD px (handled in CursorMoved).
-                    #[cfg(feature = "quickjs")]
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let Some(hov) = self.hovered_nid
                         && let Some(ls) = self.layout_source.as_ref() {
                         let doc = ls.document.lock().unwrap();
@@ -12459,7 +12459,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                     // Fire mouseup + pointerup on the hovered DOM element.
                     // Per W3C UI Events §17.6 + Pointer Events L2 §10.
-                    #[cfg(feature = "quickjs")]
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let (Some(hov), Some(pos)) = (self.hovered_nid, self.cursor_position) {
                         let dpr = self.renderer.as_ref()
                             .map_or(1.0_f32, |r| r.scale_factor() as f32).max(1e-6);
@@ -12493,7 +12493,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
                     // HTML5 DnD (PH3-9): fire drop + dragend on release.
-                    #[cfg(feature = "quickjs")]
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let Some(dnd) = self.dnd_state.take() && dnd.active {
                         let dpr = self
                             .renderer
@@ -12737,7 +12737,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             // ADR-016 M2.2c-2d: fire-and-forget window 'scroll'
                             // event via route_task_js — off-UI-thread under
                             // LUMEN_ENGINE_THREAD=1, byte-identical sync call when off.
-                            #[cfg(feature = "quickjs")]
+                            #[cfg(any(feature = "quickjs", feature = "v8"))]
                             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                                 j.fire_window_scroll();
                             });
@@ -12868,7 +12868,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // (off-UI-thread under LUMEN_ENGINE_THREAD=1, byte-identical sync
                 // call when off); scroll_y is read into a local before routing so
                 // the closure does not re-borrow `self`.
-                #[cfg(feature = "quickjs")]
+                #[cfg(any(feature = "quickjs", feature = "v8"))]
                 {
                     let scroll_y = self.scroll_y;
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
@@ -13119,7 +13119,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // flags must only latch when a JS context exists — byte-identical to
                 // the former `if let Some(js)`); the actual paint-timing calls are
                 // fire-and-forget void, routed off-UI-thread under the flag.
-                #[cfg(feature = "quickjs")]
+                #[cfg(any(feature = "quickjs", feature = "v8"))]
                 if self.js_present {
                     let has_content = !self.display_list.is_empty();
                     if has_content && !self.first_paint_delivered {
@@ -14131,7 +14131,7 @@ impl Lumen {
     /// Return the current keyboard modifier flags as a bitmask.
     ///
     /// Bit layout: bit0=ctrl, bit1=shift, bit2=alt, bit3=meta (super).
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     fn mod_flags(&self) -> u8 {
         (self.modifiers.control_key() as u8)
             | ((self.modifiers.shift_key()  as u8) << 1)
@@ -14144,7 +14144,7 @@ impl Lumen {
     /// `button` = which button (0=left, 1=middle, 2=right).
     /// `buttons` = bitmask of currently-held buttons.
     /// Coordinates are CSS viewport pixels.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     fn js_mouse_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32, button: u8, buttons: u8) {
         let script = format!(
             "_lumen_dispatch_mouse_event({}, '{}', {}, {}, {}, {}, {})",
@@ -14160,7 +14160,7 @@ impl Lumen {
     ///
     /// Always uses pointerId=1, pointerType='mouse', isPrimary=true (mouse input).
     /// Non-bubbling types (`pointerenter`/`pointerleave`) have `bubbles:false` per spec.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     fn js_pointer_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32, button: u8, buttons: u8) {
         let script = format!(
             "_lumen_dispatch_pointer_event({}, '{}', {}, {}, {}, {}, {})",
@@ -14177,7 +14177,7 @@ impl Lumen {
     /// Calls the JS shim `_lumen_dispatch_drag_event` (defined in `lumen-js::dom`)
     /// with an empty `DataTransfer` (`data_json = "{}"`).  No-op when there is
     /// no JS context.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     fn js_drag_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32) {
         let script = format!(
             "_lumen_dispatch_drag_event({}, '{}', {}, {}, '{{}}')",
@@ -14191,7 +14191,7 @@ impl Lumen {
     ///
     /// Calls `_lumen_dispatch_capture_event` (W3C Pointer Events L3 §4.1).
     /// These events do not bubble per spec.  No-op when there is no JS context.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     fn js_capture_event(&self, nid: u32, event_type: &str) {
         let script = format!("_lumen_dispatch_capture_event({}, '{}')", nid, event_type);
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
@@ -14211,7 +14211,7 @@ impl Lumen {
         let hit = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         if let Some(result) = hit.as_ref() {
             // Pointer Events L3 §4.1: if a pointer capture is active, redirect
             // pointermove (and all pointer events) to the captured element.
@@ -14228,7 +14228,7 @@ impl Lumen {
             self.js_pointer_event(ptr_nid, "pointermove", x_css, y_css, 0, 0);
             self.js_mouse_event(hit_nid, "mousemove", x_css, y_css, 0, 0);
         }
-        #[cfg(not(feature = "quickjs"))]
+        #[cfg(not(any(feature = "quickjs", feature = "v8")))]
         let _ = hit;
     }
 
@@ -14684,7 +14684,7 @@ impl Lumen {
                 // Fire HTML5 §4.11.1 `toggle` event on the <details> element.
                 // ADR-016 M2.2c-2d: fire-and-forget `toggle` event через
                 // маршрутизатор — под флагом off-UI-thread, без флага байт-идентично.
-                #[cfg(feature = "quickjs")]
+                #[cfg(any(feature = "quickjs", feature = "v8"))]
                 route_eval_js(
                     self.engine_thread.as_ref(),
                     self.js_ctx.as_ref(),
@@ -15120,7 +15120,7 @@ impl Lumen {
         // Pointer Lock API (W3C Pointer Lock L2 §6.7): Escape releases pointer lock.
         // Must be processed before fullscreen so a locked pointer in fullscreen exits
         // lock first, letting a second Escape then exit fullscreen.
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         if lumen_js::pointer_lock::is_pointer_locked()
             && code == KeyCode::Escape
             && self.modifiers.is_empty()
@@ -15163,7 +15163,7 @@ impl Lumen {
             // ADR-016 M2.2c-2d: fire-and-forget void eval через маршрутизатор — под
             // флагом off-UI-thread, без флага (по умолчанию) байт-идентично прежнему
             // `js.eval_js(…)` (при отсутствующем хэндле — no-op, как прежний `if let`).
-            #[cfg(feature = "quickjs")]
+            #[cfg(any(feature = "quickjs", feature = "v8"))]
             route_eval_js(
                 self.engine_thread.as_ref(),
                 self.js_ctx.as_ref(),
@@ -15224,7 +15224,7 @@ impl Lumen {
             // умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично. Гейт заменён
             // с `if let Some(js)` на `is_some()`, чтобы editing-host detection и eval
             // выполнялись только при наличии JS-контекста (как прежде).
-            #[cfg(feature = "quickjs")]
+            #[cfg(any(feature = "quickjs", feature = "v8"))]
             if self.js_present {
                 // Check contenteditable by reading the DOM directly (eval_js returns ()).
                 let editing_host = src
@@ -15600,7 +15600,7 @@ impl Lumen {
     ///
     /// Called when the a11y panel closes so `prefers-reduced-motion` MQLs fire.
     fn deliver_a11y_media_changes(&self) {
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         {
             let w = self.viewport_width_css();
             let h = self.viewport_height_css();
@@ -16419,7 +16419,7 @@ impl Lumen {
     /// multi-step traversal that crosses a full-document boundary yet lands on a
     /// same-document entry of a different document fires `popstate` without
     /// re-rendering that document (the remaining cross-document unification).
-    #[cfg_attr(not(feature = "quickjs"), allow(dead_code))]
+    #[cfg_attr(not(any(feature = "quickjs", feature = "v8")), allow(dead_code))]
     fn navigate_by(&mut self, delta: i32) {
         if delta == 0 {
             return;
@@ -16498,7 +16498,7 @@ impl Lumen {
     /// Backs the JS `navigation.traverseTo(key)` call.  If `key` matches the
     /// current entry no traversal occurs.  Unknown keys are silently ignored
     /// per the Navigation API specification.
-    #[cfg_attr(not(feature = "quickjs"), allow(dead_code))]
+    #[cfg_attr(not(any(feature = "quickjs", feature = "v8")), allow(dead_code))]
     fn navigate_to_key(&mut self, key: &str) {
         if key == self.current_nav_key {
             return;
@@ -17316,7 +17316,7 @@ impl Lumen {
         // dispatch — `_lumen_dispatch_mouse_event('click', …)` fire-and-forget via
         // `route_eval_js`, then `take_navigate_request` ordered after via
         // `route_query_js`; byte-identical off-flag.
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         {
             let script = format!(
                 "_lumen_dispatch_mouse_event({}, 'click', 0, 0, 0, 1, 0)",
@@ -17390,7 +17390,7 @@ impl Lumen {
                 }
                 // ADR-016 M2.2c-2d: fire-and-forget `toggle` event через
                 // маршрутизатор — под флагом off-UI-thread, без флага байт-идентично.
-                #[cfg(feature = "quickjs")]
+                #[cfg(any(feature = "quickjs", feature = "v8"))]
                 route_eval_js(
                     self.engine_thread.as_ref(),
                     self.js_ctx.as_ref(),
@@ -19312,7 +19312,7 @@ impl Lumen {
         // query bounding rects immediately (mirrors the fresh-load path).
         // ADR-016 M2.2c-2d: routed off-thread through `route_task_js`, same as the
         // fresh-load seed above (`self.js_present` gate → byte-identical off).
-        #[cfg(feature = "quickjs")]
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
         if self.js_present
             && let Some(lb_ref) = self.layout_box.as_ref()
         {

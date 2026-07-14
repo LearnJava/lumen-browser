@@ -10,7 +10,7 @@
 // Fields are read only inside the quickjs delivery path; allow dead_code when
 // the quickjs feature is disabled so clippy stays clean on all configurations.
 #[derive(Debug, Clone)]
-#[cfg_attr(not(feature = "quickjs"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "quickjs", feature = "v8")), allow(dead_code))]
 pub struct FilePickerEntry {
     /// Filename without directory component (e.g. `"photo.jpg"`).
     pub name: String,
@@ -48,7 +48,7 @@ pub fn open_file_dialog(_accept: &str, multiple: bool) -> Vec<FilePickerEntry> {
 /// Phase 1 format: shell registers each path via `lumen_js::file_input::register_file_token`
 /// before calling this, and passes the resulting tokens here.  JS receives tokens only —
 /// never raw file system paths.
-#[cfg(feature = "quickjs")]
+#[cfg(any(feature = "quickjs", feature = "v8"))]
 pub fn entries_to_json_with_tokens(entries: &[FilePickerEntry], tokens: &[u64]) -> String {
     let items: Vec<String> = entries
         .iter()
@@ -67,7 +67,7 @@ pub fn entries_to_json_with_tokens(entries: &[FilePickerEntry], tokens: &[u64]) 
     format!("[{}]", items.join(","))
 }
 
-#[cfg(feature = "quickjs")]
+#[cfg(any(feature = "quickjs", feature = "v8"))]
 fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -143,7 +143,7 @@ fn entry_from_path(path: &str) -> FilePickerEntry {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[cfg(feature = "quickjs")]
+#[cfg(any(feature = "quickjs", feature = "v8"))]
 mod tests {
     use super::*;
 

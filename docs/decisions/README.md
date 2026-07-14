@@ -15,7 +15,7 @@ For new decisions use [TEMPLATE.md](TEMPLATE.md). Numbering is sequential; do no
 | [ADR-001](ADR-001-custom-rendering-engine.md) | Custom rendering engine (not a browser wrapper) | Accepted | 2026-05-01 |
 | [ADR-002](ADR-002-dependency-policy.md) | Two-tier dependency policy (permanent + provisional) | Accepted | 2026-05-15 |
 | [ADR-003](ADR-003-sqlite-storage.md) | SQLite for all persistent browser storage | Accepted | 2026-05-20 |
-| [ADR-004](ADR-004-js-runtime.md) | rquickjs (QuickJS) as Phase 0 JS engine, rusty_v8 for v1.0+ | Accepted | 2026-05-20 |
+| [ADR-004](ADR-004-js-runtime.md) | rquickjs (QuickJS) as Phase 0 JS engine, rusty_v8 for v1.0+ | Superseded by ADR-018 | 2026-05-20 |
 | [ADR-005](ADR-005-image-decoding.md) | zune-jpeg + zune-png as provisional image decoders | Accepted | 2026-05-22 |
 | [ADR-006](ADR-006-automation-api.md) | Automation API as a first-class engine surface (BrowserSession trait, in-process + MCP + WebDriver BiDi) | Accepted | 2026-05-27 |
 | [ADR-007](ADR-007-anti-detection-stack.md) | Anti-detection as a privacy stack, not a circumvention tool (TLS/HTTP/surface fingerprint defaults; no CAPTCHA-solver, no IP rotation) | Accepted | 2026-05-27 |
@@ -29,3 +29,4 @@ For new decisions use [TEMPLATE.md](TEMPLATE.md). Numbering is sequential; do no
 | [ADR-015](ADR-015-swappable-chrome-view.md) | Swappable chrome — `ChromeView` abstraction supporting native + web (engine-rendered HTML) backends behind a `BrowserController` contract; A-vs-B winner deliberately deferred | Accepted | 2026-06-25 |
 | [ADR-016](ADR-016-multithreaded-render-pipeline.md) | Multithreaded render pipeline — render/compositor thread, snapshot message passing, staged M0–M4 plan (culling/zoom-transform → render thread → engine off main → tiles → parallel layout) | Accepted | 2026-07-09 |
 | [ADR-017](ADR-017-wgpu-default-backend.md) | wgpu as default render backend — probe-based API selection (Vulkan→GL→DX12 on Windows), femtovg retained as explicit override and init-failure fallback; supersedes ADR-010 closing note | Accepted | 2026-07-13 |
+| [ADR-018](ADR-018-v8-cutover.md) | V8 (rusty_v8) replaces QuickJS as the default JS engine (Ph3-v8-migration S12a); `quickjs` kept as opt-in rollback until `rquickjs` removal (S12b); supersedes ADR-004 | Accepted | 2026-07-14 |

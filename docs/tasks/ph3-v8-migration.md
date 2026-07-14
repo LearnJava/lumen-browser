@@ -22,12 +22,9 @@
 
 ## Status
 
-**Not started.** Sequencing recommendation from the 2026-07-02 audit still holds:
-**do the render-parity fixes first (RP-5/6/7, BUG-267/268), V8 second.** Most
-«renders unlike Edge» defects are not JS-engine problems and are far cheaper
-(M/L vs XL). But V8 is the *only* fix for heavy SPAs (github.com never finished
-rendering in 280 s — the stall is JS execution, QuickJS has no JIT) and the
-single biggest remaining lever for «open arbitrary sites like Edge».
+**S0–S12a done (2026-07-14).** V8 is now `lumen-shell`'s default JS engine (ADR-018). Remaining:
+**S12b** — remove `rquickjs` entirely (tracked as its own XL slice, see the table below; true scope is
+117/130 files under `crates/js/src`, not a single session).
 
 **Interim mitigation (optional, independent of V8):** a hard JS execution
 budget/watchdog so pages like github.com fail gracefully (stop script, render
@@ -242,7 +239,8 @@ S10) — these take extra params too but are covered by their own slices below.
 | ✅ S9 | **wasm + webgpu** | `Persistent<Function>` GC roots → `v8::Global<Function>`; keep the `wasm::clear_registry()` teardown pattern (`lib.rs:401`) | wasm + webgpu test suites green (note: webgpu test flaky under load — rerun before blaming the port) | Medium |
 | ✅ S10 | **worker + shared_worker + sw_worker** | Per-thread `Runtime`+`Context` (`worker.rs:293`) → per-thread `OwnedIsolate`; same channel protocol | worker tests green | Medium |
 | ✅ S11 | **suspend/resume (partial 10C.2)** | `suspend()`: enumerate own globals set by page scripts, serialize *data* via `v8::ValueSerializer` into `SuspendedHeap.compressed` (zstd, ≤5 MB); `resume()`: `ValueDeserializer` restore. **Closures are NOT serializable (F1) — the re-run-scripts fallback at `main.rs:14599` stays.** Optional: pure-JS-shim startup snapshot (F2), only if cheap. ЗАКРЫТ 2026-07-14 (branch p1-v8-s11). | `window.__test = 42` survives suspend→resume ✅ | Low |
-| ☐ S12 | **Cutover + cleanup** | shell default `quickjs` → `v8`; remove `rquickjs` dep + `quickjs-backend` code; kill `__lum_args__` workaround; ADR-004 → Superseded, write `ADR-015-v8-migration.md`; `CAPABILITIES.md` JS row → V8; `navigator.userAgent` → `'Lumen/1.0.0'` (`dom.rs:5916`, version-bump commit only); React 18 CRA demo loads without JS errors (via `take_console_messages`) | `rquickjs` gone from `Cargo.lock`; full graphic-test run green | Medium (the flag-flip exposes everything at once) |
+| ✅ S12a | **Cutover: default flip + gate cleanup** | shell default `quickjs` → `v8` (`crates/shell/Cargo.toml`); broaden the ~80 generic (non engine-specific) `#[cfg(feature = "quickjs")]` gates to `any(feature = "quickjs", feature = "v8")`; ADR-004 → Superseded, write `ADR-018-v8-cutover.md`; `CAPABILITIES.md` JS row → V8-default. ЗАКРЫТ 2026-07-14 (branch p1-v8-s12). | full graphic-test run green (141/141) | Medium — done |
+| ☐ S12b | **Cutover: rquickjs removal** | Remove `rquickjs` dep + all QuickJS-specific code (`QuickJsRuntime`, `QuickPersistentJs`, ~380 dual `install_*` bindings across 117 files in `crates/js/src`, `dom.rs` original `install_primitives`); kill `__lum_args__` workaround (`lib.rs:2126`); remove the `quickjs` Cargo feature; simplify the broadened `any(quickjs, v8)` gates back to unconditional. `navigator.userAgent` → `'Lumen/1.0.0'` (`dom.rs:5916`, version-bump commit only, unrelated to this slice) | `rquickjs` gone from `Cargo.lock`; `cargo test -p lumen-js`/`lumen-shell` green with only the `v8` feature in the dependency graph | High — the true scope of "remove rquickjs" (117/130 files reference it, `dom.rs` is 26.7k lines with a full parallel implementation); size this as its own multi-session effort, not a single slice |
 
 ### Session protocol for a fresh session picking this up
 
@@ -542,6 +540,78 @@ No shell-level (`main.rs:14599` `restore_js_context`) integration test was
 added — that path is exercised end-to-end by the pre-existing QuickJS
 hibernation tests and is out of scope for this slice (DoD is the
 `JsRuntime::suspend`/`resume` trait pair, not full tab-lifecycle wiring).
+
+### S12a — Cutover: default flip + gate cleanup (2026-07-14, branch p1-v8-s12)
+
+Flipped `crates/shell/Cargo.toml`'s `default` from `["backend-femtovg", "backend-wgpu", "quickjs"]` to
+`[..., "v8"]`. The migration brief's original S12 conflated two very different sizes of work under one
+line — measuring the actual code before touching it found `rquickjs` (not `optional` in
+`crates/js/Cargo.toml`) referenced in **117 of 130** files under `crates/js/src` (`dom.rs` alone is 26.7k
+lines, with a full parallel QuickJS+V8 implementation per binding module from S3–S11), and **89**
+`#[cfg(feature = "quickjs")]` occurrences in `crates/shell/src/main.rs` alone, of which only **7** paired
+with an actual engine-specific `#[cfg(feature = "v8"...)]` alternative. Splitting S12 into S12a (this
+slice: default flip + make the shell behave correctly under the new default) and S12b (full `rquickjs`
+deletion, tracked separately, XL) was the only way to land a working default-V8 shell in one session
+without a half-finished deletion sweep on `main`.
+
+**The ~82 other `quickjs`-gated blocks were never "QuickJS-engine-specific"** — they were "is a JS engine
+compiled in at all" gates that happened to only name `quickjs` because it predated `v8` as a feature (e.g.
+process-global provider wiring: `lumen_js::set_clipboard_provider`/`set_audio_capture_provider`/
+`set_wake_lock_provider`/`set_screen_capture_provider`/`set_video_gif_store`/`set_text_track_store`/
+`config::global().install_navigator()`, none of which are gated inside `lumen-js` itself; and dozens of
+engine-agnostic shell↔JS drains — layout-rect delivery, history/nav-traversal drains, pointer lock, HTML5
+DnD, print requests, focus requests, view-transition/scroll-progress drains — all calling only
+`PersistentJs` trait methods or `route_eval_js`/`route_task_js`, which both `QuickPersistentJs` and
+`V8PersistentJs` implement). Left this way, flipping the default would have **silently regressed** all of
+the above under V8 (clipboard/audio/wake-lock/screen-capture/fingerprint-spoofing would simply not wire up;
+video-GIF and text-track stores would go unregistered). Fix: broadened these ~82 gates (73 in `main.rs`,
+3 in `config.rs`, 4 in `platform/file_dialog.rs`, 1 in `tab_lifecycle/hibernate.rs`) to
+`#[cfg(any(feature = "quickjs", feature = "v8"))]` (and the `not(...)`/`cfg_attr` variants), via a small
+Python script that skipped any block whose next few lines mentioned `QuickJsRuntime`/`QuickPersistentJs` by
+name (the genuinely engine-specific construction sites — `QuickPersistentJs`'s own struct/impl and the two
+`match lumen_js::QuickJsRuntime::new() { ... }` blocks — correctly stayed `quickjs`-only, since their
+`#[cfg(all(feature = "v8", not(feature = "quickjs")))]` siblings already exist from S4/S4-era work). Found
+2 more files this way that `grep -rl 'feature = "quickjs"' crates/` outside `main.rs` turned up
+(`config.rs`, `platform/file_dialog.rs`, `tab_lifecycle/hibernate.rs`) plus 2 real compile errors from
+symbols whose own *definitions* (not just call sites) were still `quickjs`-gated
+(`platform::file_dialog::entries_to_json_with_tokens`, `config::FingerprintProfile::install_navigator`) —
+both fixed the same way.
+
+**`lumen-driver`'s `WinitSession::eval()`** (headless automation one-shot eval) was intentionally **not**
+touched — it hard-codes `lumen_js::QuickJsRuntime::new()` directly behind its own separate `quickjs` Cargo
+feature (`crates/driver/Cargo.toml`), and `lumen-driver` has no `v8` feature at all. This is a real,
+pre-existing gap (automation `eval()` still requires `--features quickjs` on the driver crate regardless of
+the shell's new default), left as a known follow-up — out of scope here (automation/testing surface, not
+default interactive browsing).
+
+**Verification**: `cargo check -p lumen-shell` (default = v8) and `cargo build -p lumen-shell --profile
+dev-release` (default) both green — no rust-lld/CRT linker conflict against the combined
+rquickjs+v8 dependency graph (the S0 finding's workaround was never needed for a full `lumen-shell` link,
+only for a specific `cargo test` invocation apparently no longer hit by S1+). `cargo clippy -p lumen-shell
+--all-targets -- -D warnings` clean. `cargo test -p lumen-shell` (dev-release): 1547 + 1 tests green. Full
+graphic-test suite (`LUMEN_PROFILE=dev-release python graphic_tests/run.py --continue-on-fail`) against the
+new v8-default binary: 141/141 green (first attempt hit the known TEST-00 gdigrab-capture-race flake — all
+141 FAILed with "no crop offset"; a bare re-run passed clean, no code involved).
+
+**React 18 CRA DoD item — partially verified, 2 pre-existing bugs found and filed, not fixed here**:
+downloaded the real `react@18`/`react-dom@18` UMD production builds (`unpkg.com`) and built a self-contained
+smoke-test page. First attempt (bare `React`/`ReactDOM` identifiers, as real `<script>`-tag usage would be)
+hit [BUG-280](../../bugs/BUG-280-OPEN.md) (`window` is a plain object, not the real global object — already
+filed, P2 in progress) — rewrote the test to reference `window.React`/`window.ReactDOM` explicitly (what an
+actually-bundled CRA build's webpack closures would do, since they never rely on the browser's bare-global
+machinery) to isolate a *different* bug: `ReactDOM.createRoot(...).render(...)` throws inside react-dom's
+event-delegation bootstrap (`Cannot read properties of undefined (reading '_reactListening<rnd>')`).
+Root-caused via a DOM-shape diagnostic to `document.nodeType === undefined` (should be `9`),
+`element.ownerDocument === document` → `false` (identity mismatch), `document.documentElement.tagName ===
+"#document"` (should be `"HTML"`), `element.namespaceURI === undefined` (should be the XHTML namespace) —
+filed as [BUG-281](../../bugs/BUG-281-OPEN.md). **Confirmed cross-engine**: rebuilt with
+`--no-default-features --features backend-femtovg,backend-wgpu,quickjs` and re-ran both diagnostics — byte-
+identical symptoms under QuickJS, proving neither bug is caused by or specific to this cutover; both are
+pre-existing `WEB_API_SHIM` gaps. V8 itself ran the React 18 bundle's own code (classes, hooks, closures)
+without any JS-*language*-level error — every failure was a DOM-shim property/identity gap, not a JS-engine
+gap. DoD item stands only partially met: "V8 executes a real React 18 bundle correctly" — yes; "a React 18
+app fully mounts with no errors" — no, blocked on BUG-280/BUG-281, tracked as follow-up work independent of
+S12b.
 
 ---
 
