@@ -7436,6 +7436,39 @@ mod tests {
         assert!(!crate::evaluate_container_condition("style(--gap: 1px 2px)", &ctx));
     }
 
+    #[test]
+    fn style_query_var_chain_resolves() {
+        // Container's `--gap` references `--base` via var() — resolved before compare.
+        let ctx = style_ctx(&[("--base", "8px"), ("--gap", "var(--base)")]);
+        assert!(crate::evaluate_container_condition("style(--gap: 8px)", &ctx));
+    }
+
+    #[test]
+    fn style_query_var_chain_mismatch() {
+        let ctx = style_ctx(&[("--base", "8px"), ("--gap", "var(--base)")]);
+        assert!(!crate::evaluate_container_condition("style(--gap: 4px)", &ctx));
+    }
+
+    #[test]
+    fn style_query_var_unresolved_reference_is_false() {
+        // `--gap` references an undeclared custom property with no fallback.
+        let ctx = style_ctx(&[("--gap", "var(--missing)")]);
+        assert!(!crate::evaluate_container_condition("style(--gap: 8px)", &ctx));
+    }
+
+    #[test]
+    fn style_query_var_boolean_form_resolves() {
+        let ctx = style_ctx(&[("--base", "dark"), ("--theme", "var(--base)")]);
+        assert!(crate::evaluate_container_condition("style(--theme)", &ctx));
+    }
+
+    #[test]
+    fn style_query_var_fallback_used() {
+        // `--gap` references an undeclared property, but with a fallback value.
+        let ctx = style_ctx(&[("--gap", "var(--missing, 8px)")]);
+        assert!(crate::evaluate_container_condition("style(--gap: 8px)", &ctx));
+    }
+
     // ── CSS Container Queries L1 ──────────────────────────────────────────
 
     /// @container (min-width) — rule applies when container is wide enough.
@@ -7489,6 +7522,25 @@ mod tests {
         assert!(
             p.rect.height < 1.0,
             "container style(--theme: dark) should NOT apply with --theme: light, got height={}",
+            p.rect.height,
+        );
+    }
+
+    /// @container style(--prop: value) — matches when the container's custom
+    /// property is declared via `var()` chained to another custom property.
+    #[test]
+    fn container_style_query_var_chain_applies() {
+        let root = lay_measured(
+            "<div><p></p></div>",
+            "div { container-type: size; width: 200px; height: 100px; --base: dark; --theme: var(--base); }
+             @container style(--theme: dark) { p { height: 40px; } }",
+            400.0,
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            (p.rect.height - 40.0).abs() < 0.5,
+            "container style(--theme: dark) should apply via var() chain, got height={}",
             p.rect.height,
         );
     }
