@@ -881,12 +881,6 @@ impl QuickJsRuntime {
                 eprintln!("WebSerial bindings init failed: {}", e);
             }
 
-            // Install Compute Pressure API (W3C Compute Pressure L1) — after DOM/navigator.
-            // Phase 0: PressureObserver registers callback but never fires; knownSources()=['cpu'].
-            if let Err(e) = compute_pressure::install_compute_pressure_bindings(&ctx) {
-                eprintln!("Compute Pressure API init failed: {}", e);
-            }
-
             // Install CSP violation event class (W3C CSP Level 3 §7.8) — after DOM/document.
             // Phase 0: SecurityPolicyViolationEvent class + _lumen_dispatch_csp_violation helper.
             // Phase 1: shell calls _lumen_fire_csp_violation for actual enforcement.

@@ -791,6 +791,29 @@ default-feature `cargo test -p lumen-js shape_detection` — 0 tests (module is 
 expected); `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both default and
 `v8-backend` features.
 
+### S12b-8 — `compute_pressure.rs` (2026-07-14, branch p1-v8-s12b-8-compute-pressure)
+
+Eighth slice, first one selected via the systematic method instead of ad-hoc scanning: cross-
+referenced `lib.rs`'s `install_*_bindings` call list against `v8_runtime.rs`'s `install_*_v8` list
+(`comm -12` on the two sorted name sets) to get the 52 modules that are already fully v8-ported
+with their rquickjs path still present — as opposed to modules like `webtransport.rs`/`contacts.rs`
+that turned out to have **no call site at all** (dead code, never wired into either runtime, out of
+scope for this slice type). Picked the smallest candidate with zero `dom.rs` cross-references
+(`compute_pressure`: 174 lines, 0 `dom.rs` hits) from that 52, skipping the S8-S10 stateful/hot
+group (canvas2d, webgpu, worker, webassembly, webcodecs) per the plan's explicit ordering. Same
+shape as S12b-1..5: pure JS-shim `eval`, no native state, local `mod tests` built a bare
+`rquickjs::{Context, Runtime}`. Deleted the rquickjs `install_compute_pressure_bindings` fn + its
+`use rquickjs::Ctx` + the 5-test rquickjs-`Context`-based `mod tests`; ported equivalent coverage
+as 5 new tests against `V8JsRuntime` + `install_compute_pressure_bindings_v8` (gated
+`#[cfg(all(test, feature = "v8-backend"))]`, `with_compute_pressure` single-helper pattern);
+dropped the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `COMPUTE_PRESSURE_SHIM` const
+gated `#[cfg(feature = "v8-backend")]`. Converted the leftover top-of-file `///` doc comment to
+`//!` module-level doc (clippy `empty_line_after_doc_comments` fires once the `///` block is no
+longer immediately followed by the item it documented). `cargo test -p lumen-js --features
+v8-backend compute_pressure` — 5/5 green; default-feature `cargo test -p lumen-js
+compute_pressure` — 0 tests; `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both
+default and `v8-backend` features.
+
 ---
 
 ## Risks (Rev 2)
