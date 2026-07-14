@@ -3685,6 +3685,10 @@ pub struct ContainerContext {
     pub names: Vec<String>,
     /// Custom properties (`--*`) контейнера — для style() queries (CSS Containment L3 §4).
     pub custom_props: HashMap<String, String>,
+    /// Container's own computed style, serialized the same way as
+    /// `window.getComputedStyle()` (`selector_query::computed_style_to_map`) —
+    /// used to resolve `style()` queries against standard (non-custom) properties.
+    pub style_props: HashMap<String, String>,
 }
 
 /// Evaluates a raw @container condition string against a `ContainerContext`.
@@ -3701,9 +3705,19 @@ pub struct ContainerContext {
 /// against its own `custom_props` map before comparison — e.g. a container with
 /// `--base: 8px; --gap: var(--base);` matches `style(--gap: 8px)` — mirroring how
 /// `var()` is substituted when a custom property is consumed elsewhere in the cascade.
+/// Standard (non-custom) properties are compared against the container's own
+/// computed style (`ctx.style_props`, same serialization as `getComputedStyle()`):
+/// `style(display: flex)` matches a container computed to `display: flex`. The
+/// comparison is case-insensitive after the same whitespace/comma normalization
+/// used for custom properties, so it works for keyword and length values whose
+/// author-written form matches the serialized form (`style(width: 100px)` against
+/// a computed `100px`); it does not parse/canonicalize values (e.g. `style(color: red)`
+/// won't match a computed `rgb(255, 0, 0)`).
 /// Phase 0 limitations:
 /// - Only a single declaration inside `style()` (no comma-separated list).
-/// - Only custom properties (`--*`) are recognized; other names return false.
+/// - Boolean form (`style(--prop)` without a value) still only recognizes custom
+///   properties; boolean form on a standard property name returns false.
+/// - `state()` container queries are not supported.
 ///
 /// Unknown features → false (safe fallback).
 pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> bool {
@@ -3735,16 +3749,21 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
             }
             return false;
         }
-        // Declaration form: `style(--prop: value)`
+        // Declaration form: `style(--prop: value)` or `style(prop: value)`
         if let Some((name, value)) = inner.split_once(':') {
             let name = name.trim();
+            let want = normalize_style_value(value);
             if name.starts_with("--") {
-                let want = normalize_style_value(value);
                 return resolve_container_custom_prop(ctx, name)
                     .map(|v| normalize_style_value(&v))
                     == Some(want);
             }
-            return false;
+            // Standard property: compare against the container's own computed
+            // style (case-insensitive — CSS keywords are ASCII case-insensitive).
+            return ctx
+                .style_props
+                .get(&name.to_ascii_lowercase())
+                .is_some_and(|v| normalize_style_value(v).eq_ignore_ascii_case(&want));
         }
         return false;
     }
