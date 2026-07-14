@@ -240,7 +240,7 @@ webgl_canvas (→ S8); webassembly, webgpu (→ S9); worker, shared_worker, sw_w
 S10) — these take extra params too but are covered by their own slices below.
 | ✅ S8 | **canvas2d + webgl_canvas** | Hand-port (hot path, 85 rquickjs mentions; pixel queues via `flush_canvas_updates`) | canvas graphic tests pass under v8 feature | Medium |
 | ✅ S9 | **wasm + webgpu** | `Persistent<Function>` GC roots → `v8::Global<Function>`; keep the `wasm::clear_registry()` teardown pattern (`lib.rs:401`) | wasm + webgpu test suites green (note: webgpu test flaky under load — rerun before blaming the port) | Medium |
-| ☐ S10 | **worker + shared_worker + sw_worker** | Per-thread `Runtime`+`Context` (`worker.rs:293`) → per-thread `OwnedIsolate`; same channel protocol | worker tests green | Medium |
+| ✅ S10 | **worker + shared_worker + sw_worker** | Per-thread `Runtime`+`Context` (`worker.rs:293`) → per-thread `OwnedIsolate`; same channel protocol | worker tests green | Medium |
 | ☐ S11 | **suspend/resume (partial 10C.2)** | `suspend()`: enumerate own globals set by page scripts, serialize *data* via `v8::ValueSerializer` into `SuspendedHeap.compressed` (zstd, ≤5 MB); `resume()`: `ValueDeserializer` restore. **Closures are NOT serializable (F1) — the re-run-scripts fallback at `main.rs:14599` stays.** Optional: pure-JS-shim startup snapshot (F2), only if cheap | `tests/v8_snapshot.rs`: `window.__test = 42` survives suspend→resume | Low |
 | ☐ S12 | **Cutover + cleanup** | shell default `quickjs` → `v8`; remove `rquickjs` dep + `quickjs-backend` code; kill `__lum_args__` workaround; ADR-004 → Superseded, write `ADR-015-v8-migration.md`; `CAPABILITIES.md` JS row → V8; `navigator.userAgent` → `'Lumen/1.0.0'` (`dom.rs:5916`, version-bump commit only); React 18 CRA demo loads without JS errors (via `take_console_messages`) | `rquickjs` gone from `Cargo.lock`; full graphic-test run green | Medium (the flag-flip exposes everything at once) |
 
@@ -399,6 +399,84 @@ GC-root mechanism resurrects and invokes correctly at runtime, not merely
 compiles. `webgpu::tests_v8` adds one shim-smoke test (`navigator.gpu` exists).
 `offscreen_canvas`/`worker`/`shared_worker`/`sw_worker` remain unported, per
 the S8 note and the S10 slice below.
+
+### S10 — worker + shared_worker + sw_worker (2026-07-14, branch p1-v8-s10)
+
+All three modules spawn a dedicated OS thread per instance holding an
+engine-owned JS context — QuickJS's version hand-rolls a bare
+`Runtime::new()`/`Context::full()` per thread. The V8 port does **not**
+hand-roll a second bare-isolate construct: each thread just constructs a
+full `V8JsRuntime::new()` (which already spawns exactly the "one Isolate per
+thread" pattern from the S1 threading model) and calls its public `eval`/
+`set_global`/`register_native` methods directly — reusing 100% of the
+tested S1-S9 machinery instead of duplicating scope/dispatch plumbing. The
+outer `std::thread` this creates (one for the worker's own message loop,
+plus `V8JsRuntime`'s own internal JS thread) is one thread more per worker
+than the QuickJS version, an accepted cost for the risk reduction.
+
+All natives across the three modules are plain `String`/`u32`/`bool`/
+`Option<String>` — no `Function` arguments, no `i64`/`BigInt` — **except**
+`worker.rs`'s `atob`/`btoa`, which must throw a JS `TypeError` on invalid
+input (WHATWG Infra §forgiving-base64); the generic `into_v8_fnN` compat
+layer has no error/throw variant, so these two go through
+`crate::v8_compat::V8NativeFnScoped` (the S9 scoped-native mechanism),
+mirroring `wasm_compile_native_v8`'s reasoning. `shared_worker.rs`'s and
+`sw_worker.rs`'s `atob`/`btoa` (or cache-native equivalents) don't throw and
+use the plain path.
+
+`WorkerHandle`/`WorkerRegistry`/`WorkerMessageQueue`/`WorkerBlobStore`/
+`WorkerInMsg` (worker.rs), `SharedWorkerThread`/`SwInMsg`/
+`SharedWorkerOutbox` (shared_worker.rs), and `SwWorkerHandle`/
+`SwFetchRequest` (sw_worker.rs, from `lumen_core::ext`) are all
+engine-agnostic already (plain channel/JSON plumbing) and reused unchanged
+by both backends. `WORKER_SHIM`/`SHARED_WORKER_SHIM` (main-thread classes)
+and the worker-thread global-scope shims are pure JS; the QuickJS originals
+were refactored to extract these into `worker_global_shim(id)`/
+`sw_globals_shim(scope_str)` free functions so both engines eval identical
+JS (mechanical extraction, no behavior change — verified by the full
+existing QuickJS suite staying green).
+
+`shared_worker.rs` gets a **separate** `HUB_V8` registry (own
+identity-keyed thread map), mirroring S9's `wasm::v8_bridge` rationale: only
+one engine actually runs per browser process, but a dual-compiled binary
+must never let a V8 page's `SharedWorker` connect to an already-running
+QuickJS-backed thread (or vice versa) just because they share an identity
+key.
+
+`sw_worker.rs` needed **no** `flush_jobs`/`execute_pending_job` equivalent
+— V8's microtask queue auto-runs (`MicrotasksPolicy::kAuto`, per the S3
+slice notes), so a `Promise` chain started by `_sw_fire_fetch`/
+`_sw_fire_event` (e.g. `respondWith(caches.match(...))`) fully drains by the
+time `V8JsRuntime::eval` returns. Verified empirically:
+`tests_v8::v8_sw_responds_from_cache` reads `_sw_resp_body__` immediately
+after firing the fetch event, no manual pump, and passes — the QuickJS
+version's `flush_jobs(&rt)` step is not needed under V8.
+
+`offscreen_canvas.rs` is **not** installed inside a V8-backed dedicated
+worker thread (same known gap as S8: `offscreen_canvas.rs` has no V8 port).
+A worker script referencing `OffscreenCanvas` sees `undefined`;
+`_deserializeTransfers`'s `typeof
+_lumen_offscreen_canvas_from_image_data !== 'undefined'` guard already
+degrades gracefully (passes the raw, non-deserialized data through) since
+that check was already in the shared/reused JS shim.
+
+`V8PersistentJs::pump_workers`/`pump_shared_workers` (previously no-op
+stubs in `crates/shell/src/main.rs`, explicitly waiting on S10) now delegate
+to `V8JsRuntime::pump_workers`/`pump_shared_workers` — new methods mirroring
+`QuickJsRuntime`'s of the same name. The pre-existing
+`_lumen_sw_activate_script` native (wired in S3's core-DOM block, before
+this slice existed) previously called the QuickJS-only `spawn_sw_worker`
+regardless of which engine was active — a cross-engine reuse quirk that
+predates S10. It now calls `spawn_sw_worker_v8`, so a V8-backend page's
+Service Worker actually runs on V8 end-to-end.
+
+**Verification**: `cargo test -p lumen-js --features v8-backend` — 2413 lib
+tests (2402 + 11 new: 4 `worker::tests_v8`, 3 `shared_worker::tests_v8`, 3
+`sw_worker::tests_v8`), all green; default (QuickJS) suite stays green
+(2372 tests, unaffected by the `b64_encode`/`worker_global_shim`/
+`sw_globals_shim` extraction refactors). `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` and the default
+(QuickJS-only) build both clean.
 
 ---
 

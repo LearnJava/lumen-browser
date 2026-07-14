@@ -624,9 +624,9 @@
       {
        "id": "P3-v8-s10",
        "title": "V8 S10: workers",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "S10: worker/shared_worker/sw_worker — per-thread Runtime+Context → per-thread OwnedIsolate, тот же канальный протокол"
+       "note": "S10 ЗАКРЫТ 2026-07-14 (branch p1-v8-s10): worker/shared_worker/sw_worker — каждый поток строит полный V8JsRuntime::new() вместо голого isolate (переиспользует S1-S9 машинерию целиком); все нативы простые (String/u32/bool/Option<String>), кроме worker.rs atob/btoa (throw на невалидный ввод через V8NativeFnScoped, как в S9); shared_worker получил отдельный реестр HUB_V8 (та же причина, что wasm::v8_bridge в S9); sw_worker не требует flush_jobs — микротаски V8 автопрогоняются (подтверждено тестом v8_sw_responds_from_cache); _lumen_sw_activate_script теперь зовёт spawn_sw_worker_v8; V8PersistentJs::pump_workers/pump_shared_workers перестали быть no-op-заглушками. cargo test -p lumen-js --features v8-backend 2413 (2402+11 новых tests_v8) зелёные; default-сборка 2372 не задета; clippy чист на обеих"
       },
       {
        "id": "P3-v8-s11",

@@ -2765,10 +2765,11 @@ impl PersistentJs for QuickPersistentJs {
 ///
 /// Mirrors [`QuickPersistentJs`] method-for-method. Methods backed by state
 /// wired in `install_dom` (S3 core DOM) delegate to `V8JsRuntime` accessors;
-/// methods for subsystems not yet ported to V8 (workers, view transitions,
-/// pointer capture, bfcache heap suspend — see `docs/tasks/ph3-v8-migration.md`
-/// slices S9–S11) use the trait's own default no-op/empty implementation or a
-/// local stub, and start returning real data once their slice lands.
+/// methods for subsystems not yet ported to V8 (view transitions, pointer
+/// capture, bfcache heap suspend — see `docs/tasks/ph3-v8-migration.md`
+/// slices S11) use the trait's own default no-op/empty implementation or a
+/// local stub, and start returning real data once their slice lands. Workers
+/// (dedicated + shared + service) were wired in S10.
 #[cfg(feature = "v8")]
 struct V8PersistentJs {
     rt: lumen_js::v8_runtime::V8JsRuntime,
@@ -2913,9 +2914,12 @@ impl PersistentJs for V8PersistentJs {
     fn pump_sse(&self) {
         self.eval_js("if(typeof _lumen_pump_sse==='function')_lumen_pump_sse();");
     }
-    // Worker/SharedWorker registries are not wired for V8 yet (slice S10) — no-op until then.
-    fn pump_workers(&self) {}
-    fn pump_shared_workers(&self) {}
+    fn pump_workers(&self) {
+        self.rt.pump_workers();
+    }
+    fn pump_shared_workers(&self) {
+        self.rt.pump_shared_workers();
+    }
     fn pump_broadcast_channels(&self) {
         self.rt.pump_broadcast_channels();
     }
