@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-14",
  "counts": {
-  "open": 23,
+  "open": 24,
   "fixed": 228,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 251,
+ "total_bugs": 252,
  "phases": [
   {
    "id": "P0",
@@ -273,7 +273,7 @@
      "title": "Ph-wgpu-default: перенос + флип дефолта",
      "status": "active",
      "size": "XL",
-     "note": "Перенос perf/reliability-наработок из постоянной эксперимент-ветки `p1-exp-wgpu-only` (никогда не вливается) в main с сохранением femtovg, затем флип дефолтного рендер-бэкенда на wgpu; бриф `docs/tasks/ph-wgpu-default.md`. **Фаза 2 ЦЕЛИКОМ влита в main 2026-07-13** (6 отдельных срезов + батч cherry-pick, merge 70306beb): backend_probe, skip-frame, структурный хэш, scroll-патч, font-metrics, box-фильтр+prefetch, bbox-scissor, viewport-cull, скролл-композитор полоса+blit, fast-scroll, static/animated split, bbox-backdrop, VRAM-гигиена, mip-цепочка, градиент-маски из пула — всё под LUMEN_NO_*. Остаток — дочерние задачи ниже (vkgl→bug276→flip; ph0 ждёт Linux)",
+     "note": "Перенос perf/reliability-наработок из постоянной эксперимент-ветки `p1-exp-wgpu-only` (никогда не вливается) в main с сохранением femtovg, затем флип дефолтного рендер-бэкенда на wgpu; бриф `docs/tasks/ph-wgpu-default.md`. Фаза 2 (перенос) + Фаза 3 (флип дефолта, `P1-wgpu-flip`) + BUG-276 + `P1-wgpu-vkgl` — все влиты. Ф0 (`P1-wgpu-ph0`) закрыта СВЕРКОЙ 2026-07-14: устаревшую `p1-wgpu-cross-platform` вливать не нужно, её полезный след уже в main через `p1-wgpu-vkgl` + `p1-linux-scroll-perf`",
      "bugs": [
       "BUG-276"
      ],
@@ -288,9 +288,9 @@
       {
        "id": "P1-wgpu-ph0",
        "title": "Ph-wgpu-default Ф0: влить cross-platform базу",
-       "status": "active",
+       "status": "done",
        "size": "S",
-       "note": "Фаза 0: довести и влить `p1-wgpu-cross-platform` (per-target wgpu-фичи dx12/vulkan/metal); ЗАБЛОКИРОВАНО внешним отчётом Linux-сессии (docs/tasks/linux-wgpu-validation.md, smoke+scroll на реальной машине); без этого wgpu-дефолт на Linux не находит адаптер"
+       "note": "СВЕРКА 2026-07-14: `p1-wgpu-cross-platform` устарела и никогда не вливается (см. шапку docs/tasks/linux-scroll-perf.md) — per-target wgpu-фичи (dx12/vulkan/gles/metal) уже влиты через `P1-wgpu-vkgl`, а Linux Vulkan-валидация (smoke+scroll PASS, Intel HD 530/Iris) и дальнейший скролл-перф сделаны отдельным треком `p1-linux-scroll-perf` (уже влит в main, worktree удалён; итоги — docs/tasks/linux-wgpu-validation.md + docs/tasks/linux-scroll-perf.md). Вливать `p1-wgpu-cross-platform` не нужно"
       },
       {
        "id": "P1-wgpu-vkgl",
@@ -649,16 +649,26 @@
       {
        "id": "P3-v8-s11",
        "title": "V8 S11: suspend/resume",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "S11: suspend/resume (частичный 10C.2) — ValueSerializer для data-глобалей (zstd ≤5МБ); замыкания несериализуемы (F1) — re-run-scripts fallback остаётся"
+       "note": "S11 ЗАКРЫТ 2026-07-14 (branch p1-v8-s11): suspend() снимает baseline-набор ключей globalThis сразу после Context::new (до install_dom/скриптов), диффует с живым global-объектом на момент suspend, каждое значение-кандидат пробно клонируется через ValueSerializer в изоляции (замыкания бросают DataCloneError — F1, тихо отбрасываются, не портят соседние ключи), затем финальный wrapper-объект сериализуется целиком в SuspendedHeap.compressed (zstd-обёртка через существующий heap_snapshot). resume() — ValueDeserializer восстанавливает wrapper и копирует его own-properties на голый global(). re-run-scripts fallback (main.rs:14599) остаётся для замыканий. cargo test -p lumen-js --features v8-backend 2419 (2413+6 новых) зелёные, clippy чист на v8-backend и дефолтной сборке"
       },
       {
        "id": "P3-v8-s12",
-       "title": "V8 S12: cutover + cleanup",
-       "status": "planned",
+       "title": "V8 S12a: default flip + cleanup gates",
+       "status": "done",
        "size": "M",
-       "note": "S12: дефолт shell quickjs→v8; выпилить rquickjs + __lum_args__; ADR-004→Superseded, ADR-015; React 18 CRA грузится без JS-ошибок; полный графтест-прогон"
+       "note": "S12a ЗАКРЫТ 2026-07-14 (branch p1-v8-s12): shell-дефолт quickjs→v8 (Cargo.toml); ~80 общих `#[cfg(feature=\"quickjs\")]`-гейтов (не engine-specific — clipboard/audio/wake-lock/screen-capture/fingerprint/video-gif/text-track providers + весь shell↔JS дренаж) расширены до `any(quickjs,v8)` в main.rs/config.rs/file_dialog.rs/hibernate.rs; ADR-004→Superseded, ADR-018 написан; CAPABILITIES.md обновлён; полный графтест-прогон зелёный (141/141). Полное удаление rquickjs (`__lum_args__`, QuickJsRuntime, ~380 дублей install_*, ~117 файлов) вынесено в S12b — истинный масштаб оказался XL, не M (см. ADR-018). Побочно найдены и заведены BUG-281 (React 18 mount падает на document.nodeType/ownerDocument/documentElement/namespaceURI — кросс-движковый, не регрессия)"
+      },
+      {
+       "id": "P3-v8-s12b",
+       "title": "V8 S12b: rquickjs removal",
+       "status": "planned",
+       "size": "XL",
+       "note": "Удалить rquickjs целиком: QuickJsRuntime/QuickPersistentJs, ~380 install_* дублей в crates/js/src (117 файлов, dom.rs 26.7k строк), __lum_args__ (lib.rs:2126), quickjs Cargo-фича из shell/Cargo.toml, rquickjs из crates/js/Cargo.toml; упростить `any(quickjs,v8)`-гейты обратно в безусловные. DoD: rquickjs отсутствует в Cargo.lock",
+       "bugs": [
+        "BUG-281"
+       ]
       }
      ]
     },
@@ -3084,6 +3094,13 @@
    "status": "open",
    "title": "`window` — плоский JS-объект-литерал, не настоящий global object движка (см. BUG-233) — свойства, назначенные через `window.x = ...`/`self.x = ...` (в т.ч. `tes…",
    "component": "js (JS environment bootstrap)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-281": {
+   "status": "open",
+   "title": "React 18 (UMD prod build) падает на `ReactDOM.createRoot(...).render(...)` с `Cannot read properties of undefined (reading '_reactListening<rnd>')` — до рендера…",
+   "component": "js (`WEB_API_SHIM`, `document`/`Element` shape)",
    "date": null,
    "debtor": false
   }
