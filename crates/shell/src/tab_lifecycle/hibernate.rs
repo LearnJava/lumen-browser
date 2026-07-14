@@ -130,7 +130,7 @@ pub(crate) fn restore_js_context(
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during
     // re-execution observe the standard lifecycle on the restored page.
-    #[cfg(feature = "quickjs")]
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
     if let Some(js) = &js_ctx {
         js.notify_dom_content_loaded();
     }
