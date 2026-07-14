@@ -3477,6 +3477,26 @@ pub trait AiBackend: Send + Sync {
     /// Returns an empty string on error rather than `Result` so the caller
     /// can display it inline ("(no response)") without error-handling boiler.
     fn query(&self, prompt: &str) -> String;
+
+    /// Embed `text` into a dense vector for semantic similarity search (§12.5, §12.8).
+    ///
+    /// Returns an empty vector when embeddings are unavailable (e.g. `NullAiBackend`,
+    /// or a real backend whose embedding model failed to load) — callers must treat
+    /// an empty vector as "no embedding", not as a zero vector to compare against.
+    /// Default impl returns an empty vector so existing `AiBackend` implementations
+    /// keep compiling without change.
+    fn embed(&self, _text: &str) -> Vec<f32> {
+        Vec::new()
+    }
+
+    /// Summarise `text` into a short human-readable blurb (§12.8 semantic bookmarks).
+    ///
+    /// Returns an empty string when summarisation is unavailable. Default impl
+    /// returns an empty string so existing `AiBackend` implementations keep
+    /// compiling without change.
+    fn summarise(&self, _text: &str) -> String {
+        String::new()
+    }
 }
 
 /// Null AI backend — always returns an informational stub.
@@ -3510,6 +3530,18 @@ mod ai_backend_tests {
         let r1 = b.query("what is 2+2?");
         let r2 = b.query("");
         assert_eq!(r1, r2, "NullAiBackend should return same stub regardless of input");
+    }
+
+    #[test]
+    fn null_backend_embed_returns_empty() {
+        let b = NullAiBackend;
+        assert!(b.embed("some text").is_empty());
+    }
+
+    #[test]
+    fn null_backend_summarise_returns_empty() {
+        let b = NullAiBackend;
+        assert!(b.summarise("some text").is_empty());
     }
 }
 

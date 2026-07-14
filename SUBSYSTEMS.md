@@ -29,4 +29,5 @@ Updated with every plan-item commit. For ground truth — `git log --oneline` + 
 | lumen-devtools | ✅ WebSocket + CDP минимум | [subsystems/devtools.md](subsystems/devtools.md) |
 | lumen-bench | ✅ pipeline benchmark | [subsystems/bench.md](subsystems/bench.md) |
 | lumen-canvas | ✅ Canvas 2D CPU rasterizer (Phase 0) | [subsystems/canvas.md](subsystems/canvas.md) |
+| lumen-ai | ⬜ crate skeleton only (feature-flagged, not in default bundle) | [subsystems/ai.md](subsystems/ai.md) |
 | Infrastructure | workspace + test counts + dep policy | [subsystems/infra.md](subsystems/infra.md) |

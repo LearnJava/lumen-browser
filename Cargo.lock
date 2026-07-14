@@ -2108,6 +2108,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-ai"
+version = "0.5.0"
+dependencies = [
+ "lumen-core",
+ "serde_json",
+ "workspace-hack",
+]
+
+[[package]]
 name = "lumen-bench"
 version = "0.5.0"
 dependencies = [
@@ -2374,6 +2383,7 @@ version = "0.5.0"
 dependencies = [
  "cpal",
  "lumen-a11y",
+ "lumen-ai",
  "lumen-bidi-server",
  "lumen-core",
  "lumen-css-parser",
