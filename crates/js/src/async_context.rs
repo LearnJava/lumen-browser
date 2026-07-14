@@ -22,20 +22,13 @@
 //! * `AsyncContext.Snapshot.wrap` is provided for manual propagation where
 //!   the automatic one does not reach.
 
-use rquickjs::Ctx;
-
-/// Install the `AsyncContext` global (Variable + Snapshot) into the context.
+/// V8 port of the former rquickjs `install_async_context` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-2): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Must run after the DOM shim so `Promise` is already in its final shape:
 /// the shim patches `Promise.prototype.then` for microtask propagation.
 /// No-ops if `AsyncContext` is already defined. Pure JS, no native bindings.
-pub fn install_async_context(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(ASYNC_CONTEXT_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_async_context`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_async_context_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -44,6 +37,7 @@ pub(crate) fn install_async_context_v8(rt: &crate::v8_runtime::V8JsRuntime) -> l
 }
 
 /// The AsyncContext shim script. See module docs for scope and limitations.
+#[cfg(feature = "v8-backend")]
 const ASYNC_CONTEXT_SHIM: &str = r#"(function(global) {
   'use strict';
 
@@ -178,63 +172,54 @@ const ASYNC_CONTEXT_SHIM: &str = r#"(function(global) {
 })(globalThis);
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Runtime};
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn setup() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            super::install_async_context(&ctx).unwrap();
-        });
-        (rt, ctx)
+    fn setup() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        install_async_context_v8(&rt).unwrap();
+        rt
     }
 
     #[test]
     fn async_context_globals_exist() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let v: bool = ctx
-                .eval(
-                    "typeof AsyncContext === 'object' \
-                     && typeof AsyncContext.Variable === 'function' \
-                     && typeof AsyncContext.Snapshot === 'function' \
-                     && typeof AsyncContext.Snapshot.wrap === 'function'",
-                )
-                .unwrap();
-            assert!(v, "AsyncContext.Variable / Snapshot must be installed");
-        });
-        drop(ctx);
-        drop(rt);
+        let rt = setup();
+        let v = rt
+            .eval(
+                "typeof AsyncContext === 'object' \
+                 && typeof AsyncContext.Variable === 'function' \
+                 && typeof AsyncContext.Snapshot === 'function' \
+                 && typeof AsyncContext.Snapshot.wrap === 'function'",
+            )
+            .unwrap();
+        assert_eq!(v, JsValue::Bool(true), "AsyncContext.Variable / Snapshot must be installed");
     }
 
     #[test]
     fn variable_run_sets_value_and_restores_default() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let result: String = ctx
-                .eval(
-                    r#"
+        let rt = setup();
+        let result = rt
+            .eval(
+                r#"
           var v = new AsyncContext.Variable({ name: 'reqId', defaultValue: 'none' });
           var inside = v.run('r-42', function() { return v.get(); });
           JSON.stringify({ name: v.name, inside: inside, outside: v.get() })
         "#,
-                )
-                .unwrap();
-            assert_eq!(result, r#"{"name":"reqId","inside":"r-42","outside":"none"}"#);
-        });
-        drop(ctx);
-        drop(rt);
+            )
+            .unwrap();
+        assert_eq!(result, JsValue::String(r#"{"name":"reqId","inside":"r-42","outside":"none"}"#.to_string()));
     }
 
     #[test]
     fn nested_run_shadows_and_restores() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let result: String = ctx
-                .eval(
-                    r#"
+        let rt = setup();
+        let result = rt
+            .eval(
+                r#"
           var a = new AsyncContext.Variable({ defaultValue: 0 });
           var b = new AsyncContext.Variable({ defaultValue: 0 });
           var log = [];
@@ -249,21 +234,17 @@ mod tests {
           log.push(a.get(), b.get());
           JSON.stringify(log)
         "#,
-                )
-                .unwrap();
-            assert_eq!(result, "[1,2,3,2,1,0,0,0]");
-        });
-        drop(ctx);
-        drop(rt);
+            )
+            .unwrap();
+        assert_eq!(result, JsValue::String("[1,2,3,2,1,0,0,0]".to_string()));
     }
 
     #[test]
     fn run_restores_mapping_on_throw() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let result: String = ctx
-                .eval(
-                    r#"
+        let rt = setup();
+        let result = rt
+            .eval(
+                r#"
           var v = new AsyncContext.Variable({ defaultValue: 'def' });
           var caught = '';
           try {
@@ -271,41 +252,33 @@ mod tests {
           } catch (e) { caught = e.message; }
           JSON.stringify({ caught: caught, after: v.get() })
         "#,
-                )
-                .unwrap();
-            assert_eq!(result, r#"{"caught":"boom","after":"def"}"#);
-        });
-        drop(ctx);
-        drop(rt);
+            )
+            .unwrap();
+        assert_eq!(result, JsValue::String(r#"{"caught":"boom","after":"def"}"#.to_string()));
     }
 
     #[test]
     fn snapshot_restores_captured_context() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let result: String = ctx
-                .eval(
-                    r#"
+        let rt = setup();
+        let result = rt
+            .eval(
+                r#"
           var v = new AsyncContext.Variable({ defaultValue: 'outer' });
           var snap = v.run('captured', function() { return new AsyncContext.Snapshot(); });
           var viaSnap = snap.run(function() { return v.get(); });
           JSON.stringify({ viaSnap: viaSnap, direct: v.get() })
         "#,
-                )
-                .unwrap();
-            assert_eq!(result, r#"{"viaSnap":"captured","direct":"outer"}"#);
-        });
-        drop(ctx);
-        drop(rt);
+            )
+            .unwrap();
+        assert_eq!(result, JsValue::String(r#"{"viaSnap":"captured","direct":"outer"}"#.to_string()));
     }
 
     #[test]
     fn snapshot_wrap_binds_context_and_passes_args() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let result: String = ctx
-                .eval(
-                    r#"
+        let rt = setup();
+        let result = rt
+            .eval(
+                r#"
           var v = new AsyncContext.Variable({ defaultValue: 'none' });
           var wrapped = v.run('bound', function() {
             return AsyncContext.Snapshot.wrap(function(x, y) {
@@ -314,20 +287,16 @@ mod tests {
           });
           JSON.stringify({ out: wrapped(2, 3), after: v.get() })
         "#,
-                )
-                .unwrap();
-            assert_eq!(result, r#"{"out":"bound:5","after":"none"}"#);
-        });
-        drop(ctx);
-        drop(rt);
+            )
+            .unwrap();
+        assert_eq!(result, JsValue::String(r#"{"out":"bound:5","after":"none"}"#.to_string()));
     }
 
     #[test]
     fn context_propagates_through_promise_then() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
+        let rt = setup();
+        rt.eval(
+            r#"
           globalThis.__observed = [];
           var v = new AsyncContext.Variable({ defaultValue: 'default' });
           v.run('in-chain', function() {
@@ -337,26 +306,20 @@ mod tests {
           });
           Promise.resolve().then(function() { __observed.push('outside:' + v.get()); });
         "#,
-            )
-            .unwrap();
-            // Drain the microtask queue so the reactions actually run.
-            while ctx.execute_pending_job() {}
-            let result: String = ctx.eval("JSON.stringify(__observed)").unwrap();
-            assert_eq!(
-                result,
-                r#"["in-chain:1","outside:default","in-chain:2"]"#
-            );
-        });
-        drop(ctx);
-        drop(rt);
+        )
+        .unwrap();
+        let result = rt.eval("JSON.stringify(__observed)").unwrap();
+        assert_eq!(
+            result,
+            JsValue::String(r#"["in-chain:1","outside:default","in-chain:2"]"#.to_string())
+        );
     }
 
     #[test]
     fn promise_catch_and_finally_propagate_context() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
+        let rt = setup();
+        rt.eval(
+            r#"
           globalThis.__observed = [];
           var v = new AsyncContext.Variable({ defaultValue: 'default' });
           v.run('ctx', function() {
@@ -365,13 +328,9 @@ mod tests {
               .finally(function() { __observed.push('finally:' + v.get()); });
           });
         "#,
-            )
-            .unwrap();
-            while ctx.execute_pending_job() {}
-            let result: String = ctx.eval("JSON.stringify(__observed)").unwrap();
-            assert_eq!(result, r#"["catch:ctx","finally:ctx"]"#);
-        });
-        drop(ctx);
-        drop(rt);
+        )
+        .unwrap();
+        let result = rt.eval("JSON.stringify(__observed)").unwrap();
+        assert_eq!(result, JsValue::String(r#"["catch:ctx","finally:ctx"]"#.to_string()));
     }
 }

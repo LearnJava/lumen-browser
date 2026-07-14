@@ -1119,13 +1119,6 @@ impl QuickJsRuntime {
                 eprintln!("ES2026 proposals shim init failed: {}", e);
             }
 
-            // Install AsyncContext (TC39 Stage 2.7) Phase 0 — AsyncContext.Variable +
-            // AsyncContext.Snapshot; patches Promise.prototype.then for microtask
-            // propagation, so it must run after the DOM shim (queueMicrotask).
-            if let Err(e) = async_context::install_async_context(&ctx) {
-                eprintln!("AsyncContext shim init failed: {}", e);
-            }
-
             // Install TC39 Decorators (Stage 3) Phase 0 — `@decorator` source
             // transformer (`__lumen_transform_decorators`, used by the eval entry
             // points) + Symbol.ClassDecorator / Symbol.MethodDecorator symbols.

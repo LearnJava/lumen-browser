@@ -690,6 +690,21 @@ module is v8-only now). Repeat this exact shape for the remaining ~83 S5–S7 mo
 thread-local/shared native state (e.g. `canvas2d.rs`) will need extra care porting that state
 setup into the v8-side test harness.
 
+### S12b-2 — `async_context.rs` (2026-07-14, branch p1-v8-s12b-2-async-context)
+
+Second slice, same shape as S12b-1: `async_context.rs` is pure JS-shim `eval` (no native
+bindings, no state beyond the shim's own closures), the AsyncContext.Variable/Snapshot Phase 0
+polyfill. Deleted the rquickjs `install_async_context` fn + `use rquickjs::Ctx` + its 8-test
+`rquickjs::{Context, Runtime}`-based `mod tests`; ported equivalent coverage as 8 new tests
+against `V8JsRuntime` + `install_async_context_v8` directly (gated `#[cfg(all(test, feature =
+"v8-backend"))]`); dropped the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. Two tests
+(`context_propagates_through_promise_then`, `promise_catch_and_finally_propagate_context`) relied
+on rquickjs's manual `ctx.execute_pending_job()` microtask pump — dropped, since V8 auto-runs its
+microtask queue (per S3's `_lumen_drain_microtasks` no-op note); both pass unchanged otherwise.
+`cargo test -p lumen-js --features v8-backend async_context` — 8/8 green; default-feature
+`cargo test -p lumen-js async_context` — 0 tests (module is v8-only now, as expected). Repeat for
+the remaining ~82 S5–S7 modules.
+
 ---
 
 ## Risks (Rev 2)
