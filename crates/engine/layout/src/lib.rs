@@ -7446,6 +7446,36 @@ mod tests {
     }
 
     #[test]
+    fn style_query_color_keyword_matches_computed_rgb() {
+        // Container's computed style is already serialized as `rgb(...)`
+        // (getComputedStyle form); the query uses the author's keyword.
+        let ctx = style_ctx_with_style_props(&[], &[("color", "rgb(255, 0, 0)")]);
+        assert!(crate::evaluate_container_condition("style(color: red)", &ctx));
+    }
+
+    #[test]
+    fn style_query_color_hex_matches_computed_rgb() {
+        let ctx = style_ctx_with_style_props(&[], &[("background-color", "rgb(0, 0, 255)")]);
+        assert!(crate::evaluate_container_condition(
+            "style(background-color: #0000ff)",
+            &ctx
+        ));
+    }
+
+    #[test]
+    fn style_query_color_mismatch_returns_false() {
+        let ctx = style_ctx_with_style_props(&[], &[("color", "rgb(255, 0, 0)")]);
+        assert!(!crate::evaluate_container_condition("style(color: blue)", &ctx));
+    }
+
+    #[test]
+    fn style_query_non_color_value_mismatch_still_returns_false() {
+        // A non-color, non-matching value must not be coerced into matching.
+        let ctx = style_ctx_with_style_props(&[], &[("display", "flex")]);
+        assert!(!crate::evaluate_container_condition("style(display: grid)", &ctx));
+    }
+
+    #[test]
     fn style_query_value_internal_whitespace_normalized() {
         // Container declares `1px  2px` (two spaces); query uses a single space.
         let ctx = style_ctx(&[("--gap", "1px  2px")]);

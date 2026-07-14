@@ -3711,8 +3711,10 @@ pub struct ContainerContext {
 /// comparison is case-insensitive after the same whitespace/comma normalization
 /// used for custom properties, so it works for keyword and length values whose
 /// author-written form matches the serialized form (`style(width: 100px)` against
-/// a computed `100px`); it does not parse/canonicalize values (e.g. `style(color: red)`
-/// won't match a computed `rgb(255, 0, 0)`).
+/// a computed `100px`); if that normalized comparison fails, both sides are also
+/// tried as CSS colors (`style_query_value_matches`), so `style(color: red)`
+/// matches a computed `rgb(255, 0, 0)` — other value types (lengths in
+/// mismatched units, etc.) still require the serialized form to match textually.
 /// Phase 0 limitations:
 /// - Only a single declaration inside `style()` (no comma-separated list).
 /// - Boolean form (`style(--prop)` without a value) still only recognizes custom
@@ -3763,7 +3765,7 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
             return ctx
                 .style_props
                 .get(&name.to_ascii_lowercase())
-                .is_some_and(|v| normalize_style_value(v).eq_ignore_ascii_case(&want));
+                .is_some_and(|v| style_query_value_matches(v, &want));
         }
         return false;
     }
@@ -3843,6 +3845,26 @@ fn normalize_style_value(s: &str) -> String {
         out.push(ch);
     }
     out
+}
+
+/// Compares a container's serialized computed-style value against a `style()`
+/// query's declared value for a standard (non-custom) property.
+///
+/// First tries the normalized token comparison (`normalize_style_value`,
+/// case-insensitive). If that fails, falls back to parsing both sides as CSS
+/// colors and comparing the resolved RGBA channels — so `style(color: red)`
+/// matches a container computed to `color: rgb(255, 0, 0)` even though the
+/// author's keyword and the serialized function notation differ textually
+/// (CSS Color L4 §4, equivalent color notations denote the same color).
+/// `want` must already be normalized by the caller.
+fn style_query_value_matches(computed: &str, want: &str) -> bool {
+    if normalize_style_value(computed).eq_ignore_ascii_case(want) {
+        return true;
+    }
+    match (parse_color(computed), parse_color(want)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// Parses a CSS length value to pixels (px / em not supported — just px for Phase 0).
