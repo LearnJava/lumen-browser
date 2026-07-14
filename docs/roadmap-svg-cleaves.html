@@ -55,7 +55,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-14",
+ "generated": "2026-07-15",
  "counts": {
   "open": 24,
   "fixed": 230,
@@ -732,6 +732,13 @@
          "status": "done",
          "size": "S",
          "note": "Влит в main (branch p1-v8-s12b-12-device-sensors, 7f20deea): rquickjs-путь Device Orientation/Motion API удалён, тесты портированы на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-13",
+         "title": "S12b-13: Document Picture-in-Picture API",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-13-document-pip, 9fb02a37): rquickjs-путь Document Picture-in-Picture API удалён, 7 тестов (жили в dom.rs::mod tests) портированы в document_pip.rs на V8JsRuntime"
         }
        ]
       }
@@ -742,7 +749,7 @@
      "title": "Многопоточный рендер-конвейер (ADR-016)",
      "status": "done",
      "size": "XL",
-     "note": "ADR-016 (мандат пользователя 2026-07-09): многопоточный рендер-конвейер; бриф docs/tasks/ph3-render-multithreading.md; M0, M1, M2.0–M2.2d СДЕЛАНЫ и влиты в main 2026-07-11 (см. бриф); ниже — остаток",
+     "note": "ADR-016 (мандат пользователя 2026-07-09): многопоточный рендер-конвейер; бриф docs/tasks/ph3-render-multithreading.md; ЗАКРЫТ 2026-07-15 (сверка с кодом): все под-задачи M0–M4.1 сделаны и влиты (последняя — M4.1 rayon, 2026-07-13), брифовый план заканчивается на M4.1 — остатка нет",
      "tasks": [
       {
        "id": "P3-mt-m22d",
@@ -864,7 +871,7 @@
      "id": "P3-varfonts",
      "title": "Variable fonts axes runtime (font-variation-settings)",
      "status": "done",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): fvar/gvar/avar/HVAR/MVAR + apply_variations в CPU/wgpu (variation.rs); дошить — проводка в живое окно femtovg (BUG-109, сейчас дефолт-instance)",
+     "note": "ЗАКРЫТ (сверка с кодом 2026-07-15): проводка в живое femtovg-окно готова — varied_text.rs::build_varied_text_paths() + femtovg_backend::draw_varied_text() рисуют варьируемый текст через lumen-font outlines; BUG-109 FIXED 2026-06-23",
      "bugs": [
       "BUG-109"
      ]
@@ -958,8 +965,8 @@
     {
      "id": "P3-contentvis",
      "title": "CSS content-visibility + contain-intrinsic-size",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): content-visibility hidden/auto работают (skip + ratchet); дошить — применение contain-intrinsic-size как размер-хинта в layout"
+     "status": "done",
+     "note": "ЗАКРЫТ (сверка с кодом 2026-07-15): contain-intrinsic-size уже читается и применяется как размер-хинт — box_tree.rs::contained_content_height()/size_contained() читают style.contain_intrinsic_width/height при contain:size и content-visibility:hidden/auto-skipped; тесты contain_intrinsic_size_* зелёные"
     },
     {
      "id": "P3-fragmentation",
