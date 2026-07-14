@@ -1214,13 +1214,6 @@ impl QuickJsRuntime {
                 eprintln!("Eye Dropper API init failed: {}", e);
             }
 
-            // Install Document Picture-in-Picture API (W3C Document PiP §4) — pure JS implementation.
-            // Phase 0: documentPictureInPicture.requestWindow() creates a PiP window overlay.
-            // Shell integration (P3) registers the window via _lumen_pip_request_window.
-            if let Err(e) = document_pip::install_document_pip_api(&ctx) {
-                eprintln!("Document Picture-in-Picture API init failed: {}", e);
-            }
-
             // Install MediaRecorder API stub (W3C MediaStream Recording L2) — pure JS implementation.
             // Phase 0: MediaRecorder state machine (inactive/recording/paused), mimeType reflection,
             // ondataavailable fires empty Blob on stop. BlobEvent class. isTypeSupported() → false.
