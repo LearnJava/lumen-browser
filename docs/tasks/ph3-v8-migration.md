@@ -771,6 +771,26 @@ the S12b-6 candidate for exactly this reason; `speculation_rules.rs` has zero re
 `dom.rs` and was safe. Modules with nonzero `dom.rs` hits need their `dom.rs` test(s) ported or
 justified as part of the same slice, not treated as out of scope.
 
+### S12b-7 — `shape_detection.rs` (2026-07-14, branch p1-v8-s12b-7-shape-detection)
+
+Seventh slice, same shape as S12b-1..6: `shape_detection.rs` is pure JS-shim `eval` (no native
+bindings), the Shape Detection API Phase 0 stub (`FaceDetector`/`BarcodeDetector`/`TextDetector`
+classes, `detect()` always resolves `[]`, `BarcodeDetector.getSupportedFormats()` → `[]`). Its
+local `mod tests` was a variant not seen in S12b-1..6: instead of a bare `rquickjs::{Context,
+Runtime}`, it built a full `QuickJsRuntime` via `install_dom(...)` and asserted through that —
+still safe to delete since it's a self-contained local suite, not one of `dom.rs`'s tests (zero
+`shape_detection` hits in `dom.rs`, confirmed via the S12b-6 selection method). Deleted the
+rquickjs `install_shape_detection_bindings` fn + its `use rquickjs::Ctx` + the 7-test
+`QuickJsRuntime`-based `mod tests`; ported equivalent coverage as 7 new tests against
+`V8JsRuntime` + `install_shape_detection_bindings_v8` directly (gated `#[cfg(all(test, feature =
+"v8-backend"))]`, matching the `with_badging`-style single-helper pattern from S12b-1); dropped
+the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `SHAPE_DETECTION_SHIM` const also
+gated `#[cfg(feature = "v8-backend")]` since nothing else references it once the rquickjs install
+fn is gone. `cargo test -p lumen-js --features v8-backend shape_detection` — 7/7 green;
+default-feature `cargo test -p lumen-js shape_detection` — 0 tests (module is v8-only now, as
+expected); `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both default and
+`v8-backend` features.
+
 ---
 
 ## Risks (Rev 2)

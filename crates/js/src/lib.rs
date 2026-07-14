@@ -1220,13 +1220,6 @@ impl QuickJsRuntime {
                 eprintln!("Sanitizer bindings init failed: {}", e);
             }
 
-            // Install Shape Detection API (W3C Shape Detection API §3–4) — pure JS implementation.
-            // Phase 0: FaceDetector, BarcodeDetector, TextDetector all return empty arrays.
-            // No actual detection is performed.
-            if let Err(e) = shape_detection::install_shape_detection_bindings(&ctx) {
-                eprintln!("Shape Detection bindings init failed: {}", e);
-            }
-
             // Install Device Orientation and Device Motion APIs (W3C Device Orientation L2/L3) — pure JS implementation.
             // Phase 0: DeviceOrientationEvent and DeviceMotionEvent with default values {0,0,0};
             // requestPermission() always resolves to 'granted'.
