@@ -335,7 +335,7 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   `lumen-bidi-server`/`tests/wpt` scope.
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
-- `rusty_v8` backend porting (S10–S12 remain; S0/S1/S2/S3/S4/S5-S7/S8/S9 done
+- `rusty_v8` backend porting (S11–S12 remain; S0/S1/S2/S3/S4/S5-S7/S8/S9/S10 done
   2026-07-13 — v8 v150.1.0 optional dep под `v8-backend`;
   `V8JsRuntime`/`V8Inner`/`v8_thread_main` + `JsRuntime` trait impl + `v8_compat`:
   `into_v8_fnN` (arity 0..7) + `V8NativeFn` + `OwnedNativeFn` + trampoline +
@@ -410,8 +410,35 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   round-trip (reusing `tests::IMPORT64_WASM`'s bytes) proving the `Global<Function>`
   actually resurrects and invokes at runtime, not merely compiles (no display-list
   equivalent exists for wasm to verify against, unlike S8's canvas diff).
-  `offscreen_canvas`/`worker`/`shared_worker`/`sw_worker` remain unported (S10). Ported/pending
-  checklist in `docs/tasks/ph3-v8-migration.md`.
+  `offscreen_canvas`/`worker`/`shared_worker`/`sw_worker` remain unported (S10). S10
+  (p1-v8-s10, 2026-07-14): worker + shared_worker + sw_worker. Each thread constructs a
+  full `V8JsRuntime::new()` instead of a bare isolate (reuses the S1-S9 machinery
+  wholesale rather than hand-rolling a second bare-isolate construct) — one extra OS
+  thread per worker vs QuickJS, accepted for the risk reduction. All natives are plain
+  `String`/`u32`/`bool`/`Option<String>` except `worker.rs`'s `atob`/`btoa`, which throw
+  on invalid input and go through `V8NativeFnScoped` (same mechanism as S9's
+  `wasm_compile_native_v8`); `shared_worker`/`sw_worker`'s equivalents don't throw and use
+  the plain `into_v8_fnN` path. `WorkerHandle`/`WorkerRegistry`/`SharedWorkerThread`/
+  `SwWorkerHandle` etc. are engine-agnostic and reused unchanged by both backends;
+  `WORKER_SHIM`/`SHARED_WORKER_SHIM`/worker-global-scope JS extracted into shared
+  `worker_global_shim`/`sw_globals_shim` functions so both engines eval identical JS.
+  `shared_worker.rs` gets a separate `HUB_V8` identity-keyed registry (mirrors S9's
+  `wasm::v8_bridge` cross-backend-collision rationale). `sw_worker.rs` needs no
+  `flush_jobs` equivalent — V8's microtask queue auto-runs, verified by
+  `tests_v8::v8_sw_responds_from_cache` resolving a `respondWith(caches.match(...))`
+  chain immediately after firing the fetch event with no manual pump.
+  `_lumen_sw_activate_script` (wired since S3, previously always spawning a
+  QuickJS-backed SW thread regardless of the calling page's engine) now calls
+  `spawn_sw_worker_v8`. `V8PersistentJs::pump_workers`/`pump_shared_workers` (shell,
+  previously no-op stubs explicitly waiting on this slice) now delegate to
+  `V8JsRuntime::pump_workers`/`pump_shared_workers`. `offscreen_canvas.rs` still has no
+  V8 port (same known gap as S8) — a V8-backed dedicated worker referencing
+  `OffscreenCanvas` sees `undefined`, degrading gracefully via the existing
+  `_deserializeTransfers` typeof-guard. Verification: `cargo test -p lumen-js --features
+  v8-backend` — 2413 lib tests (2402 + 11 new `tests_v8`: 4 worker + 3 shared_worker + 3
+  sw_worker), all green; default (QuickJS) suite unaffected (2372 tests) by the shim
+  extraction refactors; clippy clean on both. Ported/pending checklist in
+  `docs/tasks/ph3-v8-migration.md`.
 
 ## Invariants
 

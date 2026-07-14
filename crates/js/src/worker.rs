@@ -23,6 +23,15 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
+#[cfg(feature = "v8-backend")]
+use crate::v8_compat::{into_v8_fn1, into_v8_fn2};
+#[cfg(feature = "v8-backend")]
+use crate::v8_runtime::V8JsRuntime;
+#[cfg(feature = "v8-backend")]
+use lumen_core::JsResult;
+#[cfg(feature = "v8-backend")]
+use lumen_core::ext::JsRuntime as _;
+
 // ─── message types ────────────────────────────────────────────────────────────
 
 /// Message sent from the main JS thread to a worker thread.
@@ -229,6 +238,24 @@ fn b64_decode(encoded: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Encode bytes as standard base64 (RFC 4648 §4). Shared by the QuickJS
+/// `btoa` native above and its V8 twin in [`btoa_native_v8`].
+fn b64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(CHARS[(n >> 18) as usize] as char);
+        out.push(CHARS[((n >> 12) & 0x3F) as usize] as char);
+        out.push(if chunk.len() > 1 { CHARS[((n >> 6) & 0x3F) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { CHARS[(n & 0x3F) as usize] as char } else { '=' });
+    }
+    out
+}
+
 /// Minimal percent-decoder for `data:` URL content fields.
 ///
 /// Decodes `%XX` sequences; passes everything else through as-is.
@@ -392,24 +419,25 @@ fn install_worker_globals(
         if s.chars().any(|c| c as u32 > 255) {
             return Err(rquickjs::Error::Exception);
         }
-        const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let bytes: Vec<u8> = s.chars().map(|c| c as u8).collect();
-        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-        for chunk in bytes.chunks(3) {
-            let b0 = chunk[0] as u32;
-            let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-            let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-            let n = (b0 << 16) | (b1 << 8) | b2;
-            out.push(CHARS[(n >> 18) as usize] as char);
-            out.push(CHARS[((n >> 12) & 0x3F) as usize] as char);
-            out.push(if chunk.len() > 1 { CHARS[((n >> 6) & 0x3F) as usize] as char } else { '=' });
-            out.push(if chunk.len() > 2 { CHARS[(n & 0x3F) as usize] as char } else { '=' });
-        }
-        Ok(out)
+        Ok(b64_encode(&bytes))
     });
 
     // Install the remaining worker global environment via JS.
-    let init = format!(
+    ctx.eval::<(), _>(worker_global_shim(worker_id).as_str())
+}
+
+/// Build the worker-thread global-scope shim source for a given worker id.
+///
+/// Pure JS (no engine-specific bits) — shared by [`install_worker_globals`]
+/// (QuickJS) and [`install_worker_globals_v8`] (V8). Provides `self`,
+/// `postMessage`, `onmessage`, `addEventListener`, `removeEventListener`,
+/// `_lumen_worker_dispatch_message`, `console`, `importScripts` (data: +
+/// blob: URLs), `setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`
+/// (minimal stubs), `queueMicrotask`. `atob`/`btoa` are installed separately
+/// as natives (both engines) since they need Rust-side base64 codecs.
+fn worker_global_shim(worker_id: u32) -> String {
+    format!(
         r#"(function(wid) {{
   var _msgListeners = [];
   var _onmessage = null;
@@ -534,9 +562,7 @@ fn install_worker_globals(
   }};
 
 }})({worker_id});"#
-    );
-
-    ctx.eval::<(), _>(init.as_str())
+    )
 }
 
 // ─── Worker JS class (evaluated in the main-thread JS context) ───────────────
@@ -733,6 +759,265 @@ const WORKER_SHIM: &str = r#"(function() {
   };
 })();
 "#;
+
+// ─── V8 backend port (Ph3 V8 migration S10) ──────────────────────────────────
+//
+// Each Worker thread gets its own dedicated `V8JsRuntime` (own OS thread +
+// `v8::OwnedIsolate`, per the S1 threading model) instead of a bare
+// `rquickjs::Runtime`/`Context` — `V8JsRuntime::new()` already spawns exactly
+// the "one Isolate per thread" pattern the QuickJS worker hand-rolls, so this
+// port reuses it wholesale rather than hand-rolling a second bare-isolate
+// construct. `WorkerHandle`/`WorkerRegistry`/`WorkerMessageQueue`/
+// `WorkerBlobStore`/`WorkerInMsg` and the `spawn_worker`/`post_to_worker`/
+// `terminate_worker`/`drain_messages` free functions above are all
+// engine-agnostic already (plain channel/JSON plumbing) and are reused as-is.
+// `WORKER_SHIM` (the main-thread `Worker` class) and `worker_global_shim`
+// (the worker-thread global scope) are pure JS, also reused unchanged.
+
+/// V8 port of [`install_worker_bindings`].
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_worker_bindings_v8(
+    rt: &V8JsRuntime,
+    registry: &WorkerRegistry,
+    queue: &WorkerMessageQueue,
+    next_id: &Arc<Mutex<u32>>,
+    blob_store: &WorkerBlobStore,
+) -> JsResult<()> {
+    // _lumen_create_worker(script: String) → u32
+    {
+        let reg = Arc::clone(registry);
+        let q = Arc::clone(queue);
+        let nid = Arc::clone(next_id);
+        let bs = Arc::clone(blob_store);
+        rt.register_native(
+            "_lumen_create_worker",
+            into_v8_fn1(move |script: String| -> u32 {
+                spawn_worker_v8(&reg, &q, &nid, &bs, script)
+            }),
+        )?;
+    }
+
+    // _lumen_worker_post(id: u32, json: String)
+    {
+        let reg = Arc::clone(registry);
+        rt.register_native(
+            "_lumen_worker_post",
+            into_v8_fn2(move |id: u32, json: String| {
+                post_to_worker(&reg, id, json);
+            }),
+        )?;
+    }
+
+    // _lumen_worker_terminate(id: u32)
+    {
+        let reg = Arc::clone(registry);
+        rt.register_native(
+            "_lumen_worker_terminate",
+            into_v8_fn1(move |id: u32| {
+                terminate_worker(&reg, id);
+            }),
+        )?;
+    }
+
+    // _lumen_register_worker_blob(url: String, text: String)
+    {
+        let bs = Arc::clone(blob_store);
+        rt.register_native(
+            "_lumen_register_worker_blob",
+            into_v8_fn2(move |url: String, text: String| {
+                bs.lock().unwrap().insert(url, text);
+            }),
+        )?;
+    }
+
+    rt.eval(WORKER_SHIM)?;
+    Ok(())
+}
+
+/// V8 twin of [`spawn_worker`]: spawns a worker thread backed by its own
+/// [`V8JsRuntime`] instead of a bare `rquickjs::Runtime`.
+#[cfg(feature = "v8-backend")]
+fn spawn_worker_v8(
+    registry: &WorkerRegistry,
+    queue: &WorkerMessageQueue,
+    next_id: &Arc<Mutex<u32>>,
+    blob_store: &WorkerBlobStore,
+    script: String,
+) -> u32 {
+    let id = {
+        let mut n = next_id.lock().unwrap();
+        let id = *n;
+        *n += 1;
+        id
+    };
+
+    let (tx, rx) = mpsc::channel::<WorkerInMsg>();
+    let reply = Arc::clone(queue);
+    let store = Arc::clone(blob_store);
+
+    let handle = thread::Builder::new()
+        .name(format!("lumen-worker-v8-{id}"))
+        .spawn(move || run_worker_thread_v8(id, script, rx, reply, store))
+        .expect("failed to spawn Web Worker thread (v8)");
+
+    registry
+        .lock()
+        .unwrap()
+        .insert(id, WorkerHandle { tx, _thread: handle });
+    id
+}
+
+/// V8 twin of [`run_worker_thread`]. Each worker owns a full [`V8JsRuntime`]
+/// (dedicated OS thread + isolate) — there is no additional cross-thread
+/// dispatch needed, so this outer thread just owns the runtime handle and
+/// pumps `WorkerInMsg`.
+///
+/// `OffscreenCanvas` is NOT installed here (unlike the QuickJS worker
+/// thread): `offscreen_canvas.rs` has no V8 port yet — same known gap noted
+/// for S8's canvas2d/webgl_canvas slice. A V8-backed worker script that
+/// references `OffscreenCanvas` sees `undefined`; `worker_global_shim`'s
+/// `_deserializeTransfers` already guards on `typeof
+/// _lumen_offscreen_canvas_from_image_data !== 'undefined'` and degrades to
+/// passing the raw (un-deserialized) data through.
+#[cfg(feature = "v8-backend")]
+fn run_worker_thread_v8(
+    id: u32,
+    script: String,
+    rx: Receiver<WorkerInMsg>,
+    reply: Arc<Mutex<Vec<(u32, String)>>>,
+    blob_store: WorkerBlobStore,
+) {
+    let rt = match V8JsRuntime::new() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[worker-{id}] v8 runtime init failed: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = install_worker_globals_v8(&rt, id, Arc::clone(&reply), Arc::clone(&blob_store)) {
+        eprintln!("[worker-{id}] v8 globals install failed: {e:?}");
+        return;
+    }
+
+    if let Err(e) = rt.eval(&script) {
+        eprintln!("[worker-{id}] v8 script error: {e:?}");
+        // Continue: worker may still receive messages if the error was partial.
+    }
+
+    // Message loop: continue for Post; Terminate or channel-close exits.
+    while let Ok(WorkerInMsg::Post(json)) = rx.recv() {
+        if rt.set_global("_lw_msg__", lumen_core::JsValue::String(json)).is_ok() {
+            let _ = rt.eval(
+                "if(typeof _lumen_worker_dispatch_message==='function')\
+                 {_lumen_worker_dispatch_message(JSON.parse(_lw_msg__));\
+                  if(typeof _lumen_flush_timers==='function')_lumen_flush_timers();}",
+            );
+        }
+    }
+    // `rt` drops here: `V8JsRuntime::drop` sends `Shutdown` to its own JS
+    // thread and joins it, mirroring the implicit `Runtime`/`Context` drop
+    // at the end of `run_worker_thread`.
+}
+
+/// V8 port of [`install_worker_globals`]. Registers the same natives
+/// (`_lumen_worker_post_reply`, `_lumen_worker_console_log`,
+/// `_lumen_import_scripts_resolve`, `atob`, `btoa`) and evaluates the same
+/// [`worker_global_shim`] JS used by the QuickJS worker thread.
+///
+/// `atob`/`btoa` go through [`crate::v8_compat::V8NativeFnScoped`] (raw scope
+/// access) rather than the plain `into_v8_fnN` path, because they must throw
+/// a JS exception on invalid input (WHATWG Infra §forgiving-base64) — the
+/// generic compat layer's `IntoJsReturn` has no error/throw variant (same
+/// reasoning as `wasm_compile_native_v8` in S9).
+#[cfg(feature = "v8-backend")]
+fn install_worker_globals_v8(
+    rt: &V8JsRuntime,
+    worker_id: u32,
+    reply: Arc<Mutex<Vec<(u32, String)>>>,
+    blob_store: WorkerBlobStore,
+) -> JsResult<()> {
+    rt.register_native(
+        "_lumen_worker_post_reply",
+        into_v8_fn1(move |json: String| {
+            reply.lock().unwrap().push((worker_id, json));
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_worker_console_log",
+        into_v8_fn1(move |msg: String| {
+            eprintln!("[worker-{worker_id}] {msg}");
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_import_scripts_resolve",
+        into_v8_fn1(move |url: String| -> Option<String> { resolve_import_url(&url, &blob_store) }),
+    )?;
+
+    rt.register_native_scoped("atob", Box::new(atob_native_v8))?;
+    rt.register_native_scoped("btoa", Box::new(btoa_native_v8))?;
+
+    rt.eval(&worker_global_shim(worker_id))?;
+    Ok(())
+}
+
+/// `atob(str)` — V8 scoped native; throws a `TypeError` on invalid base64
+/// input, matching the QuickJS `atob` native's `Err(rquickjs::Error::Exception)`.
+#[cfg(feature = "v8-backend")]
+fn atob_native_v8(
+    scope: &mut v8::PinScope,
+    args: &v8::FunctionCallbackArguments,
+    rv: &mut v8::ReturnValue,
+) {
+    let encoded = args
+        .get(0)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    match b64_decode(&encoded).and_then(|b| String::from_utf8(b).ok()) {
+        Some(s) => {
+            if let Some(v) = v8::String::new(scope, &s) {
+                rv.set(v.into());
+            }
+        }
+        None => throw_type_error(scope, "atob: invalid base64 input"),
+    }
+}
+
+/// `btoa(str)` — V8 scoped native; throws a `TypeError` for characters
+/// outside Latin-1 (U+00FF), matching the QuickJS `btoa` native.
+#[cfg(feature = "v8-backend")]
+fn btoa_native_v8(
+    scope: &mut v8::PinScope,
+    args: &v8::FunctionCallbackArguments,
+    rv: &mut v8::ReturnValue,
+) {
+    let s = args
+        .get(0)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    if s.chars().any(|c| c as u32 > 255) {
+        throw_type_error(scope, "btoa: string contains characters outside Latin-1");
+        return;
+    }
+    let bytes: Vec<u8> = s.chars().map(|c| c as u8).collect();
+    if let Some(v) = v8::String::new(scope, &b64_encode(&bytes)) {
+        rv.set(v.into());
+    }
+}
+
+/// Schedule a JS `TypeError` on `scope`. Mirrors `webassembly.rs`'s
+/// same-named helper for the S9 scoped natives.
+#[cfg(feature = "v8-backend")]
+fn throw_type_error(scope: &mut v8::PinScope, msg: &str) {
+    if let Some(s) = v8::String::new(scope, msg) {
+        let exc = v8::Exception::type_error(scope, s);
+        scope.throw_exception(exc);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1102,6 +1387,106 @@ mod tests {
         let msgs = drain_messages(&queue);
         assert_eq!(msgs.len(), 1, "expected one reply");
         assert_eq!(msgs[0].1, "21");
+
+        terminate_worker(&reg, worker_id);
+    }
+}
+
+/// V8-backend counterpart of the [`tests`] module above (Ph3 V8 migration
+/// S10). Covers the same risk points as the QuickJS suite: shim install,
+/// `atob`/`btoa` (the only natives needing the scoped/throwing mechanism),
+/// and an end-to-end `spawn_worker_v8` → postMessage round trip proving the
+/// whole per-worker `V8JsRuntime` thread actually runs.
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use super::*;
+
+    fn make_store() -> WorkerBlobStore {
+        Arc::new(Mutex::new(HashMap::new()))
+    }
+
+    #[test]
+    fn v8_worker_shim_installs_without_error() {
+        let rt = V8JsRuntime::new().unwrap();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+        install_worker_bindings_v8(&rt, &reg, &queue, &nid, &make_store()).unwrap();
+        let result = rt.eval("typeof Worker === 'function'").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn v8_worker_globals_have_atob_btoa() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), make_store()).unwrap();
+
+        let decoded = rt.eval("atob('aGVsbG8=')").unwrap();
+        assert_eq!(decoded, lumen_core::JsValue::String("hello".into()));
+        let encoded = rt.eval("btoa('hello')").unwrap();
+        assert_eq!(encoded, lumen_core::JsValue::String("aGVsbG8=".into()));
+    }
+
+    #[test]
+    fn v8_atob_throws_on_invalid_input() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), make_store()).unwrap();
+
+        let ok = rt
+            .eval("(function(){try{atob('!!!');return false;}catch(e){return e instanceof TypeError;}})()")
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn v8_worker_end_to_end_postmessage() {
+        use std::time::Duration;
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+
+        // Worker echoes its received message doubled.
+        let script = "onmessage = function(e) { postMessage(e.data * 2); };".to_string();
+        let worker_id = spawn_worker_v8(&reg, &queue, &nid, &store, script);
+
+        post_to_worker(&reg, worker_id, "21".to_string());
+        std::thread::sleep(Duration::from_millis(300));
+
+        let msgs = drain_messages(&queue);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].0, worker_id);
+        assert_eq!(msgs[0].1, "42");
+
+        terminate_worker(&reg, worker_id);
+    }
+
+    #[test]
+    fn v8_worker_import_scripts_via_data_url() {
+        use std::time::Duration;
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+
+        // base64 of "function add(a,b){return a+b;}" =
+        // ZnVuY3Rpb24gYWRkKGEsYil7cmV0dXJuIGErYjt9
+        let script = concat!(
+            "importScripts('data:text/javascript;base64,",
+            "ZnVuY3Rpb24gYWRkKGEsYil7cmV0dXJuIGErYjt9",
+            "');onmessage = function(e) { postMessage(add(e.data, 8)); };",
+        )
+        .to_string();
+        let worker_id = spawn_worker_v8(&reg, &queue, &nid, &store, script);
+
+        post_to_worker(&reg, worker_id, "34".to_string());
+        std::thread::sleep(Duration::from_millis(300));
+
+        let msgs = drain_messages(&queue);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].1, "42");
 
         terminate_worker(&reg, worker_id);
     }

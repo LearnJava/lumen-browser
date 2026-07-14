@@ -269,6 +269,23 @@ pub struct V8JsRuntime {
     /// Pending OS notification requests queued by `new Notification(...)` in JS.
     /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
     pending_notifications: crate::notifications_bindings::NotificationQueue,
+    /// Live dedicated-`Worker` threads spawned by this page (Ph3 V8 migration
+    /// S10). Mirrors [`crate::QuickJsRuntime`]'s `workers` field.
+    workers: crate::worker::WorkerRegistry,
+    /// Outbound queue drained by [`Self::pump_workers`]. Mirrors
+    /// [`crate::QuickJsRuntime`]'s `worker_messages` field.
+    worker_messages: crate::worker::WorkerMessageQueue,
+    /// Next `Worker` id to assign. Mirrors [`crate::QuickJsRuntime`]'s
+    /// `worker_next_id` field.
+    worker_next_id: Arc<Mutex<u32>>,
+    /// Blob URL → script text, mirrored from `URL.createObjectURL` for
+    /// `importScripts()`. Mirrors [`crate::QuickJsRuntime`]'s
+    /// `worker_blob_store` field.
+    worker_blob_store: crate::worker::WorkerBlobStore,
+    /// Outbound queue for this page's `SharedWorker` client ports, drained by
+    /// [`Self::pump_shared_workers`]. Mirrors [`crate::QuickJsRuntime`]'s
+    /// `shared_worker_outbox` field.
+    shared_worker_outbox: crate::shared_worker::SharedWorkerOutbox,
 }
 
 impl V8JsRuntime {
@@ -314,6 +331,11 @@ impl V8JsRuntime {
             sw_worker_store: None,
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
+            workers: Arc::new(Mutex::new(HashMap::new())),
+            worker_messages: Arc::new(Mutex::new(Vec::new())),
+            worker_next_id: Arc::new(Mutex::new(0)),
+            worker_blob_store: Arc::new(Mutex::new(HashMap::new())),
+            shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -334,6 +356,38 @@ impl V8JsRuntime {
         let script = format!(
             "if(typeof _lumen_deliver_broadcast_messages==='function')\
              _lumen_deliver_broadcast_messages({json})"
+        );
+        let _ = self.eval(&script);
+    }
+
+    /// Deliver messages posted by worker threads to their `Worker` JS
+    /// instances (Ph3 V8 migration S10). Mirrors
+    /// [`crate::QuickJsRuntime::pump_workers`].
+    pub fn pump_workers(&self) {
+        let messages = crate::worker::drain_messages(&self.worker_messages);
+        if messages.is_empty() {
+            return;
+        }
+        let json = crate::build_worker_messages_json(&messages);
+        let script = format!(
+            "if(typeof _lumen_deliver_worker_messages==='function')\
+             _lumen_deliver_worker_messages({json})"
+        );
+        let _ = self.eval(&script);
+    }
+
+    /// Deliver messages posted by `SharedWorker` threads to this page's
+    /// ports (Ph3 V8 migration S10). Mirrors
+    /// [`crate::QuickJsRuntime::pump_shared_workers`].
+    pub fn pump_shared_workers(&self) {
+        let messages = crate::shared_worker::drain_messages(&self.shared_worker_outbox);
+        if messages.is_empty() {
+            return;
+        }
+        let json = crate::build_worker_messages_json(&messages);
+        let script = format!(
+            "if(typeof _lumen_deliver_shared_worker_messages==='function')\
+             _lumen_deliver_shared_worker_messages({json})"
         );
         let _ = self.eval(&script);
     }
@@ -1286,13 +1340,15 @@ impl V8JsRuntime {
 
         // _lumen_sw_activate_script(origin, scope, script_text) — PH3-20: SW fetch interception.
         // Called from the _sw_run_lifecycle JS shim when a SW finishes the activate phase.
-        // Spawns a dedicated QuickJS thread for the SW and registers it in sw_worker_store.
+        // Spawns a dedicated V8 thread for the SW (Ph3 V8 migration S10 —
+        // `spawn_sw_worker_v8`, replacing the QuickJS-only `spawn_sw_worker` this
+        // call site used before S10 landed) and registers it in sw_worker_store.
         {
             let sws = sw_worker_store.clone();
             let cbe_sw = cache_backend.clone();
             reg!("_lumen_sw_activate_script", move |origin: String, scope: String, text: String| {
                 if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
-                    let handle = crate::sw_worker::spawn_sw_worker(
+                    let handle = crate::sw_worker::spawn_sw_worker_v8(
                         origin.clone(),
                         scope.clone(),
                         text,
@@ -3619,6 +3675,26 @@ impl V8JsRuntime {
         // orchestration as S8's canvas2d/webgl_canvas above).
         install_v8!(webassembly::install_webassembly_bindings_v8);
         install_v8!(webgpu::install_webgpu_bindings_v8);
+        // Ph3 V8 migration S10: worker + shared_worker (hand-port — extra
+        // per-runtime state beyond `&ctx`, same shape as S5-S7 batch 3's
+        // geolocation/broadcast_channel/notifications_bindings, so called
+        // directly rather than through the `install_v8!` macro). Service
+        // Worker activation (`_lumen_sw_activate_script`) is already wired
+        // above in the S3 core-native block, via `spawn_sw_worker_v8`.
+        if let Err(e) = crate::worker::install_worker_bindings_v8(
+            self,
+            &self.workers,
+            &self.worker_messages,
+            &self.worker_next_id,
+            &self.worker_blob_store,
+        ) {
+            eprintln!("v8: worker::install_worker_bindings_v8 failed: {e}");
+        }
+        if let Err(e) =
+            crate::shared_worker::install_shared_worker_bindings_v8(self, &self.shared_worker_outbox)
+        {
+            eprintln!("v8: shared_worker::install_shared_worker_bindings_v8 failed: {e}");
+        }
         Ok(())
     }
 }

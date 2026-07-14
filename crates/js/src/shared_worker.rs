@@ -33,6 +33,15 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
+#[cfg(feature = "v8-backend")]
+use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3};
+#[cfg(feature = "v8-backend")]
+use crate::v8_runtime::V8JsRuntime;
+#[cfg(feature = "v8-backend")]
+use lumen_core::JsResult;
+#[cfg(feature = "v8-backend")]
+use lumen_core::ext::JsRuntime as _;
+
 // ─── shared types ───────────────────────────────────────────────────────────────
 
 /// Outbound queue owned by a single `QuickJsRuntime` (page / context).
@@ -502,6 +511,213 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
 })();
 "#;
 
+// ─── V8 backend port (Ph3 V8 migration S10) ──────────────────────────────────
+//
+// Mirrors `worker.rs`'s V8 port: each shared-worker thread owns a full
+// `V8JsRuntime` (its own OS thread + isolate) instead of a bare
+// `rquickjs::Runtime`/`Context`. `SwInMsg`/`SharedWorkerThread` are reused
+// unchanged (plain channel plumbing, no engine-specific types). A **separate**
+// `HUB_V8` keeps V8-backed shared-worker threads out of the QuickJS `HUB`'s
+// identity-key namespace — same rationale as S9's `wasm::v8_bridge` keeping
+// its own instance registry: only one engine actually runs per browser
+// process, but a dual-compiled binary must never let a V8 page's
+// `SharedWorker` connect to an already-running QuickJS-backed thread (or
+// vice versa) just because they share an identity key.
+
+/// Process-global registry of live V8-backed shared workers. Twin of [`HUB`].
+#[cfg(feature = "v8-backend")]
+static HUB_V8: OnceLock<Mutex<HashMap<String, SharedWorkerThread>>> = OnceLock::new();
+
+#[cfg(feature = "v8-backend")]
+fn hub_v8() -> &'static Mutex<HashMap<String, SharedWorkerThread>> {
+    HUB_V8.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// V8 twin of [`connect_shared_worker`].
+#[cfg(feature = "v8-backend")]
+fn connect_shared_worker_v8(key: String, script: String, outbox: SharedWorkerOutbox) -> u32 {
+    let port_id = PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut map = hub_v8().lock().unwrap();
+
+    let spawn = |key: String, script: String| -> SharedWorkerThread {
+        let (tx, rx) = mpsc::channel::<SwInMsg>();
+        let thread = thread::Builder::new()
+            .name(format!("lumen-shared-worker-v8-{key}"))
+            .spawn(move || run_shared_worker_thread_v8(script, rx))
+            .expect("failed to spawn SharedWorker thread (v8)");
+        SharedWorkerThread { tx, _thread: thread }
+    };
+
+    let entry = map
+        .entry(key.clone())
+        .or_insert_with(|| spawn(key.clone(), script.clone()));
+
+    let connect = SwInMsg::Connect { port_id, outbox: Arc::clone(&outbox) };
+    if entry.tx.send(connect).is_err() {
+        let fresh = spawn(key.clone(), script);
+        let _ = fresh.tx.send(SwInMsg::Connect { port_id, outbox });
+        *entry = fresh;
+    }
+    port_id
+}
+
+/// V8 twin of [`post_to_shared_worker`].
+#[cfg(feature = "v8-backend")]
+fn post_to_shared_worker_v8(key: &str, port_id: u32, json: String) {
+    if let Some(t) = hub_v8().lock().unwrap().get(key) {
+        let _ = t.tx.send(SwInMsg::Post { port_id, json });
+    }
+}
+
+/// V8 twin of [`close_shared_worker_port`].
+#[cfg(feature = "v8-backend")]
+fn close_shared_worker_port_v8(key: &str, port_id: u32) {
+    if let Some(t) = hub_v8().lock().unwrap().get(key) {
+        let _ = t.tx.send(SwInMsg::Close { port_id });
+    }
+}
+
+/// V8 port of [`install_shared_worker_bindings`].
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_shared_worker_bindings_v8(
+    rt: &V8JsRuntime,
+    outbox: &SharedWorkerOutbox,
+) -> JsResult<()> {
+    {
+        let out = Arc::clone(outbox);
+        rt.register_native(
+            "_lumen_sw_connect",
+            into_v8_fn2(move |key: String, script: String| -> u32 {
+                connect_shared_worker_v8(key, script, Arc::clone(&out))
+            }),
+        )?;
+    }
+
+    rt.register_native(
+        "_lumen_sw_post",
+        into_v8_fn3(move |key: String, port_id: u32, json: String| {
+            post_to_shared_worker_v8(&key, port_id, json);
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_sw_close",
+        into_v8_fn2(move |key: String, port_id: u32| {
+            close_shared_worker_port_v8(&key, port_id);
+        }),
+    )?;
+
+    rt.eval(SHARED_WORKER_SHIM)?;
+    Ok(())
+}
+
+/// V8 twin of [`run_shared_worker_thread`].
+#[cfg(feature = "v8-backend")]
+fn run_shared_worker_thread_v8(script: String, rx: Receiver<SwInMsg>) {
+    let rt = match V8JsRuntime::new() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[shared-worker] v8 runtime init failed: {e}");
+            return;
+        }
+    };
+
+    let ports: Arc<Mutex<HashMap<u32, SharedWorkerOutbox>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    if let Err(e) = install_shared_worker_globals_v8(&rt, Arc::clone(&ports)) {
+        eprintln!("[shared-worker] v8 globals install failed: {e:?}");
+        return;
+    }
+
+    if let Err(e) = rt.eval(&script) {
+        eprintln!("[shared-worker] v8 script error: {e:?}");
+        // Continue: the worker may still service connections if the error was partial.
+    }
+
+    while let Ok(msg) = rx.recv() {
+        match msg {
+            SwInMsg::Connect { port_id, outbox } => {
+                ports.lock().unwrap().insert(port_id, outbox);
+                let _ = rt.eval(&format!(
+                    "if(typeof _lumen_sw_dispatch_connect==='function')\
+                     {{_lumen_sw_dispatch_connect({port_id});\
+                      if(typeof _lumen_flush_timers==='function')_lumen_flush_timers();}}"
+                ));
+            }
+            SwInMsg::Post { port_id, json } => {
+                if rt
+                    .set_global("_sw_msg__", lumen_core::JsValue::String(json))
+                    .is_ok()
+                {
+                    let _ = rt.eval(&format!(
+                        "if(typeof _lumen_sw_dispatch_port_message==='function')\
+                         {{_lumen_sw_dispatch_port_message({port_id},JSON.parse(_sw_msg__));\
+                          if(typeof _lumen_flush_timers==='function')_lumen_flush_timers();}}"
+                    ));
+                }
+            }
+            SwInMsg::Close { port_id } => {
+                ports.lock().unwrap().remove(&port_id);
+                let _ = rt.eval(&format!(
+                    "if(typeof _lumen_sw_dispatch_port_close==='function')\
+                     _lumen_sw_dispatch_port_close({port_id});"
+                ));
+            }
+        }
+    }
+    // `rt` drops here: `V8JsRuntime::drop` sends `Shutdown` and joins its thread.
+}
+
+/// V8 port of [`install_shared_worker_globals`]. Registers
+/// `_lumen_sw_port_reply` / `_lumen_sw_console_log` (both plain
+/// String/u32 natives — no scoped mechanism needed, unlike `worker.rs`'s
+/// throwing `atob`/`btoa`) and evaluates the same
+/// [`SHARED_WORKER_GLOBAL_SHIM`] JS used by the QuickJS shared-worker thread.
+#[cfg(feature = "v8-backend")]
+fn install_shared_worker_globals_v8(
+    rt: &V8JsRuntime,
+    ports: Arc<Mutex<HashMap<u32, SharedWorkerOutbox>>>,
+) -> JsResult<()> {
+    rt.register_native(
+        "_lumen_sw_port_reply",
+        into_v8_fn2(move |port_id: u32, json: String| {
+            if let Some(outbox) = ports.lock().unwrap().get(&port_id) {
+                outbox.lock().unwrap().push((port_id, json));
+            }
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_sw_console_log",
+        into_v8_fn1(move |msg: String| {
+            eprintln!("[shared-worker] {msg}");
+        }),
+    )?;
+
+    rt.eval(SHARED_WORKER_GLOBAL_SHIM)?;
+    Ok(())
+}
+
+/// Percent-encode the few characters that break a `data:` URL passed inline
+/// in an `eval` string (spaces, `+`, `%`, `&`, `#`). Shared by [`tests`] and
+/// [`tests_v8`].
+#[cfg(test)]
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b' ' => out.push_str("%20"),
+            b'+' => out.push_str("%2B"),
+            b'%' => out.push_str("%25"),
+            b'&' => out.push_str("%26"),
+            b'#' => out.push_str("%23"),
+            b'\'' => out.push_str("%27"),
+            _ => out.push(b as char),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,22 +855,103 @@ mod tests {
         assert_eq!(drained.len(), 1);
         assert!(drain_messages(&outbox).is_empty());
     }
+}
 
-    /// Percent-encode the few characters that break a `data:` URL passed inline
-    /// in an `eval` string (spaces, `+`, `%`, `&`, `#`).
-    fn urlencode(s: &str) -> String {
-        let mut out = String::with_capacity(s.len());
-        for b in s.bytes() {
-            match b {
-                b' ' => out.push_str("%20"),
-                b'+' => out.push_str("%2B"),
-                b'%' => out.push_str("%25"),
-                b'&' => out.push_str("%26"),
-                b'#' => out.push_str("%23"),
-                b'\'' => out.push_str("%27"),
-                _ => out.push(b as char),
-            }
+/// V8-backend counterpart of the [`tests`] module above (Ph3 V8 migration
+/// S10). Covers the shim install and the two behaviors specific to shared
+/// workers: identity-keyed thread reuse (two clients share one worker) and
+/// isolation across distinct names — both exercised end-to-end through a
+/// real `V8JsRuntime` per client and per worker thread.
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use super::*;
+    use lumen_core::JsValue;
+
+    fn as_num(v: &JsValue) -> f64 {
+        match v {
+            JsValue::Number(n) => *n,
+            JsValue::Bool(b) => i32::from(*b) as f64,
+            _ => f64::NAN,
         }
-        out
+    }
+
+    fn runtime_with_shared_worker() -> (V8JsRuntime, SharedWorkerOutbox) {
+        let rt = V8JsRuntime::new().unwrap();
+        let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
+        install_shared_worker_bindings_v8(&rt, &outbox).unwrap();
+        (rt, outbox)
+    }
+
+    /// Pump `rt`'s outbox until `count_expr` evaluates to `>= expected`, or the
+    /// budget is exhausted (worker threads are async; give them time).
+    fn pump_until(rt: &V8JsRuntime, outbox: &SharedWorkerOutbox, count_expr: &str, expected: f64) {
+        for _ in 0..400 {
+            let msgs = drain_messages(outbox);
+            if !msgs.is_empty() {
+                let json = crate::build_worker_messages_json(&msgs);
+                let _ = rt.eval(&format!(
+                    "if(typeof _lumen_deliver_shared_worker_messages==='function')\
+                     _lumen_deliver_shared_worker_messages({json})"
+                ));
+            }
+            let n = rt.eval(count_expr).map(|v| as_num(&v)).unwrap_or(0.0);
+            if n >= expected {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn v8_shared_worker_class_exists() {
+        let (rt, _outbox) = runtime_with_shared_worker();
+        assert_eq!(
+            rt.eval("typeof SharedWorker === 'function'").unwrap(),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn v8_connect_event_and_echo() {
+        let (rt, outbox) = runtime_with_shared_worker();
+        let script = "onconnect=function(e){var p=e.ports[0];\
+            p.onmessage=function(ev){p.postMessage('echo:'+ev.data);};};";
+        let data_url = format!("data:text/javascript,{}", urlencode(script));
+        rt.eval(&format!(
+            "globalThis.__got=null;\
+             var w=new SharedWorker('{data_url}','v8-echo-1');\
+             w.port.onmessage=function(ev){{globalThis.__got=ev.data;}};\
+             w.port.postMessage('hello');"
+        ))
+        .unwrap();
+
+        pump_until(&rt, &outbox, "globalThis.__got===null?0:1", 1.0);
+        assert_eq!(
+            rt.eval("String(globalThis.__got)").unwrap(),
+            JsValue::String("echo:hello".into())
+        );
+    }
+
+    #[test]
+    fn v8_two_clients_share_one_worker() {
+        let (rt, outbox) = runtime_with_shared_worker();
+        let script = "var n=0;onconnect=function(e){var p=e.ports[0];\
+            p.onmessage=function(){n+=1;p.postMessage(n);};};";
+        let data_url = format!("data:text/javascript,{}", urlencode(script));
+        rt.eval(&format!(
+            "globalThis.__a=0;globalThis.__b=0;\
+             globalThis.__a2=new SharedWorker('{data_url}','v8-shared-counter');\
+             globalThis.__b2=new SharedWorker('{data_url}','v8-shared-counter');\
+             __a2.port.onmessage=function(ev){{globalThis.__a=ev.data;}};\
+             __b2.port.onmessage=function(ev){{globalThis.__b=ev.data;}};\
+             __a2.port.postMessage(0);"
+        ))
+        .unwrap();
+        pump_until(&rt, &outbox, "globalThis.__a", 1.0);
+        rt.eval("__b2.port.postMessage(0);").unwrap();
+        pump_until(&rt, &outbox, "globalThis.__b", 2.0);
+
+        assert_eq!(as_num(&rt.eval("globalThis.__a").unwrap()), 1.0);
+        assert_eq!(as_num(&rt.eval("globalThis.__b").unwrap()), 2.0);
     }
 }
