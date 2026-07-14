@@ -705,6 +705,19 @@ microtask queue (per S3's `_lumen_drain_microtasks` no-op note); both pass uncha
 `cargo test -p lumen-js async_context` — 0 tests (module is v8-only now, as expected). Repeat for
 the remaining ~82 S5–S7 modules.
 
+### S12b-3 — `digital_credentials.rs` (2026-07-14, branch p1-v8-s12b-3-digital-credentials)
+
+Third slice, same shape as S12b-1/S12b-2: `digital_credentials.rs` is pure JS-shim `eval` (no
+native bindings), the Digital Credentials API Phase 0 stub (`DigitalCredential` class +
+`navigator.credentials.get({digital:...})` rejection hook). Deleted the rquickjs
+`install_digital_credentials_api` fn + `use rquickjs::Ctx` + its 4-test
+`rquickjs::{Context, Runtime}`-based `mod tests`; ported equivalent coverage as 4 new tests
+against `V8JsRuntime` + `install_digital_credentials_api_v8` directly (gated `#[cfg(all(test,
+feature = "v8-backend"))]`); dropped the call site in `lib.rs`'s `QuickJsRuntime::install_dom`.
+`cargo test -p lumen-js --features v8-backend digital_credentials` — 4/4 green; default-feature
+`cargo test -p lumen-js digital_credentials` — 0 tests (module is v8-only now, as expected).
+Repeat for the remaining ~81 S5–S7 modules.
+
 ---
 
 ## Risks (Rev 2)
