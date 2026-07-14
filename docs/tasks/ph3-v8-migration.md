@@ -625,7 +625,7 @@ event-delegation bootstrap (`Cannot read properties of undefined (reading '_reac
 Root-caused via a DOM-shape diagnostic to `document.nodeType === undefined` (should be `9`),
 `element.ownerDocument === document` → `false` (identity mismatch), `document.documentElement.tagName ===
 "#document"` (should be `"HTML"`), `element.namespaceURI === undefined` (should be the XHTML namespace) —
-filed as [BUG-281](../../bugs/BUG-281-OPEN.md). **Confirmed cross-engine**: rebuilt with
+filed as [BUG-281](../../bugs/BUG-281-FIXED.md) (fixed 2026-07-14, see the bug file). **Confirmed cross-engine**: rebuilt with
 `--no-default-features --features backend-femtovg,backend-wgpu,quickjs` and re-ran both diagnostics — byte-
 identical symptoms under QuickJS, proving neither bug is caused by or specific to this cutover; both are
 pre-existing `WEB_API_SHIM` gaps. V8 itself ran the React 18 bundle's own code (classes, hooks, closures)

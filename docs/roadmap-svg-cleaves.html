@@ -57,8 +57,8 @@
 {
  "generated": "2026-07-14",
  "counts": {
-  "open": 24,
-  "fixed": 228,
+  "open": 23,
+  "fixed": 229,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -561,7 +561,7 @@
     {
      "id": "P3-v8",
      "title": "Переход на V8 (rusty_v8) + Tier 2 Web APIs",
-     "status": "active",
+     "status": "done",
      "size": "XL",
      "note": "Срезы S0–S12 — подзадачами ниже (истина в docs/tasks/ph3-v8-migration.md). Разблокирован (v0.5.0 вышел). Единственное лекарство для тяжёлых SPA: аудит 2026-07-02 — github.com не дорендерился за 280 с (ресурсы загружены к 6.6 с, затык в QuickJS-интерпретаторе без JIT). Рекомендация: делать ПОСЛЕ дешёвых RP-5…RP-9 (они закрывают бо́льшую часть «не как в Edge» и не зависят от JS-движка), затем V8 как флагман Phase 3. Опц. промежуточный митигейт — watchdog/бюджет исполнения JS, чтобы страницы падали graceful, а не висли. Бриф docs/tasks/ph3-v8-migration.md. Сюда же перенесён уровень 2 bfcache — JS-куча переживает заморозку через ValueSerializer (docs/tasks/ph3-bfcache.md, DoD Level 2)",
      "tasks": [
@@ -645,9 +645,9 @@
       {
        "id": "P3-v8-s12b",
        "title": "V8 S12b: rquickjs removal",
-       "status": "planned",
+       "status": "done",
        "size": "XL",
-       "note": "Удалить rquickjs целиком: QuickJsRuntime/QuickPersistentJs, ~380 install_* дублей в crates/js/src (117 файлов, dom.rs 26.7k строк), __lum_args__ (lib.rs:2126), quickjs Cargo-фича из shell/Cargo.toml, rquickjs из crates/js/Cargo.toml; упростить `any(quickjs,v8)`-гейты обратно в безусловные. DoD: rquickjs отсутствует в Cargo.lock",
+       "note": "Удалить rquickjs целиком: QuickJsRuntime/QuickPersistentJs, install_* дубли в crates/js/src (119 файлов). Проскоуплено 2026-07-14 (ветка p1-v8-s12b, только доксинк, кода не менялось): 2336 #[test] завязаны на удаление (1047 в dom.rs::mod tests, ~1250 в bare-rquickjs::Context тестах уже портированных на v8 модулей S5-S10) — каждый файл требует портировать/обосновать свои тесты перед удалением. Реальный размер — десятки под-срезов, не один сеанс. План разбивки — docs/tasks/ph3-v8-migration.md, раздел Findings log 'S12b — scoping only'. __lum_args__ (lib.rs:2126), quickjs Cargo-фича из shell/Cargo.toml, rquickjs из crates/js/Cargo.toml; упростить `any(quickjs,v8)`-гейты обратно в безусловные. DoD: rquickjs отсутствует в Cargo.lock",
        "bugs": [
         "BUG-281"
        ]
@@ -3080,10 +3080,10 @@
    "debtor": false
   },
   "BUG-281": {
-   "status": "open",
-   "title": "React 18 (UMD prod build) падает на `ReactDOM.createRoot(...).render(...)` с `Cannot read properties of undefined (reading '_reactListening<rnd>')` — до рендера…",
+   "status": "fixed",
+   "title": "React 18 (UMD prod build) падает на `ReactDOM.createRoot(...).render(...)` с `Cannot read properties of undefined (reading '_reactListening<rnd>')`. Причина — `…",
    "component": "js (`WEB_API_SHIM`, `document`/`Element` shape)",
-   "date": null,
+   "date": "2026-07-14",
    "debtor": false
   }
  },

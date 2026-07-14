@@ -1,6 +1,6 @@
 # BUG-281 — `document`/`Element` DOM-tree shape gaps break React 18 mount (`document.nodeType`, `ownerDocument` identity, `documentElement.tagName`, `namespaceURI`)
 
-**Статус:** OPEN — blocks the Ph3-v8-migration S12 DoD item "React 18 CRA demo loads without JS errors"
+**Статус:** FIXED 2026-07-14
 **Компонент:** js (`crates/js/src/dom.rs`, `WEB_API_SHIM` — the `document`/`Element`/`Node` JS shim, engine-agnostic)
 **Найден:** Ph3-v8-migration S12 (`docs/tasks/ph3-v8-migration.md`), while verifying the S12 DoD item
 "React 18 CRA demo loads without JS errors" against a real React 18 UMD production build.
@@ -64,3 +64,32 @@ Fix `Document`/`Element` construction in `WEB_API_SHIM` so that: `document.nodeT
 `element.ownerDocument` returns the same `document` object by reference (not a fresh wrapper per call), and
 `element.namespaceURI` resolves to `"http://www.w3.org/1999/xhtml"` for HTML-namespace elements (`null` or
 the correct namespace for foreign elements/SVG). Re-run the React 18 smoke repro above afterward.
+
+## Фикс
+
+Added `Document::document_element()` (`crates/engine/dom/src/lib.rs`) — walks root → `<html>`, the
+actual DOM root element, distinct from `Document::root()` (the `Document` node itself). `body()` now
+reuses it instead of duplicating the walk.
+
+New natives `_lumen_get_html_element` and `_lumen_get_namespace_uri` registered identically in both
+`crates/js/src/dom.rs` (QuickJS) and `crates/js/src/v8_runtime.rs` (V8) — the JS-side `WEB_API_SHIM`
+text is shared between engines, so only the JS shim itself needed a single edit:
+
+- `document.nodeType` → `9`; `document.nodeName` → `'#document'`; `document.ownerDocument` → `null`.
+- `document.documentElement` now calls `_lumen_get_html_element()` and returns the real `<html>` element
+  (`tagName === 'HTML'`) instead of re-wrapping the `Document` node itself.
+- `element.namespaceURI` — new getter, backed by `_lumen_get_namespace_uri(nid)`, maps `Namespace` (already
+  tracked per-element in `lumen_dom::QualName`) to its spec URI; `null` for non-element nodes (text/comment).
+- `element.ownerDocument` — new getter returning the same `document` object by reference. Defined via
+  `Object.defineProperty(_obj, 'ownerDocument', { enumerable: false, ... })`, **not** as an object-literal
+  getter: `document` is already reachable from any element via `documentElement`/`body`, so an *enumerable*
+  back-reference makes every node object cyclic (`element → document → documentElement → element → ...`)
+  and blows the stack in `lib.rs`'s `from_rq` (`eval()`'s return-value serializer, which walks all own
+  enumerable properties with no cycle guard) — caught via `cargo test -p lumen-js` regressing 8 tests that
+  return a DOM node from `eval()` (e.g. `document.body.appendChild(p)`). Matches the codebase's existing
+  convention for other back/lateral-reference getters (`parentElement`, `children`, `shadowRoot`), which
+  are already defined the same non-enumerable way for the same reason.
+
+5 new regression tests in `crates/js/src/dom.rs` (`bug_281_*`), one per repro-table row. Full
+`cargo test -p lumen-js` (2365 tests) and `cargo clippy -p lumen-js --all-targets -- -D warnings` pass
+under both default (QuickJS) and `--features v8-backend` feature sets.
