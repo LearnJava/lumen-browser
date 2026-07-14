@@ -3697,9 +3697,12 @@ pub struct ContainerContext {
 /// whitespace collapse to a single space and whitespace around commas is removed,
 /// so `style(--gap: 1px 2px)` matches a container declaring `--gap: 1px  2px` or
 /// `--gap:1px 2px` (CSS Custom Properties L1 §2 «computed value is the specified
-/// value with whitespace trimmed»). Phase 0 limitations:
+/// value with whitespace trimmed»). The container's declared value is `var()`-expanded
+/// against its own `custom_props` map before comparison — e.g. a container with
+/// `--base: 8px; --gap: var(--base);` matches `style(--gap: 8px)` — mirroring how
+/// `var()` is substituted when a custom property is consumed elsewhere in the cascade.
+/// Phase 0 limitations:
 /// - Only a single declaration inside `style()` (no comma-separated list).
-/// - No `var()` substitution inside the query value.
 /// - Only custom properties (`--*`) are recognized; other names return false.
 ///
 /// Unknown features → false (safe fallback).
@@ -3728,7 +3731,7 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
         if !inner.contains(':') {
             let name = inner.trim();
             if name.starts_with("--") {
-                return ctx.custom_props.get(name).is_some_and(|v| !v.trim().is_empty());
+                return resolve_container_custom_prop(ctx, name).is_some_and(|v| !v.trim().is_empty());
             }
             return false;
         }
@@ -3737,10 +3740,8 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
             let name = name.trim();
             if name.starts_with("--") {
                 let want = normalize_style_value(value);
-                return ctx
-                    .custom_props
-                    .get(name)
-                    .map(|v| normalize_style_value(v))
+                return resolve_container_custom_prop(ctx, name)
+                    .map(|v| normalize_style_value(&v))
                     == Some(want);
             }
             return false;
@@ -3771,6 +3772,17 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
         ("height", Some(v))     => ctx.height.is_some_and(|h| (h - v).abs() < 0.5),
         _ => false,
     }
+}
+
+/// Resolves a container's custom property for a `style()` query: looks up `name`
+/// in `ctx.custom_props` and expands any `var()` references against that same map
+/// (CSS Variables L1 §3), so a chain like `--base: 8px; --gap: var(--base);`
+/// resolves `--gap` to `8px` before comparison. Returns `None` if the property is
+/// absent or its `var()` chain fails to resolve (unknown reference, no fallback,
+/// or recursion past `VAR_EXPAND_MAX_DEPTH`).
+fn resolve_container_custom_prop(ctx: &ContainerContext, name: &str) -> Option<String> {
+    let raw = ctx.custom_props.get(name)?;
+    expand_vars(raw, &ctx.custom_props, 0)
 }
 
 /// Normalizes a custom-property value for `style()` query comparison.
