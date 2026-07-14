@@ -3,15 +3,9 @@
 //! Phase 0 stub: DeviceOrientationEvent and DeviceMotionEvent with default values.
 //! requestPermission() always resolves to 'granted'.
 
-use rquickjs::Ctx;
-
-pub fn install_device_sensors_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(DEVICE_SENSORS_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_device_sensors_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_device_sensors_bindings` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-12): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_device_sensors_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -20,6 +14,7 @@ pub(crate) fn install_device_sensors_bindings_v8(rt: &crate::v8_runtime::V8JsRun
 }
 
 /// JavaScript shim: Device Orientation & Motion APIs (Phase 0 - default values)
+#[cfg(feature = "v8-backend")]
 const DEVICE_SENSORS_SHIM: &str = r#"
 (function() {
   // DeviceOrientationEvent class
@@ -125,78 +120,82 @@ const DEVICE_SENSORS_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use lumen_core::JsRuntime as _;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
     use lumen_dom::Document;
     use std::sync::{Arc, Mutex};
 
-    fn make_rt() -> crate::QuickJsRuntime {
-        let rt = crate::QuickJsRuntime::new().unwrap();
+    fn with_device_sensors(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
         rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, false)
             .unwrap();
-        rt
+        f(&rt);
     }
 
     #[test]
     fn device_orientation_event_class_exists() {
-        let rt = make_rt();
-        match rt.eval("typeof DeviceOrientationEvent === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("DeviceOrientationEvent class check failed: {other:?}"),
-        }
+        with_device_sensors(|rt| {
+            let ok = rt.eval("typeof DeviceOrientationEvent === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn device_motion_event_class_exists() {
-        let rt = make_rt();
-        match rt.eval("typeof DeviceMotionEvent === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("DeviceMotionEvent class check failed: {other:?}"),
-        }
+        with_device_sensors(|rt| {
+            let ok = rt.eval("typeof DeviceMotionEvent === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn device_orientation_has_default_values() {
-        let rt = make_rt();
-        match rt.eval(
-            r#"const evt = new DeviceOrientationEvent('deviceorientation', {});
-               evt.alpha === 0 && evt.beta === 0 && evt.gamma === 0 && evt.absolute === false"#,
-        ) {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("DeviceOrientationEvent defaults check failed: {other:?}"),
-        }
+        with_device_sensors(|rt| {
+            let ok = rt
+                .eval(
+                    r#"const evt = new DeviceOrientationEvent('deviceorientation', {});
+                       evt.alpha === 0 && evt.beta === 0 && evt.gamma === 0 && evt.absolute === false"#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn device_motion_has_default_values() {
-        let rt = make_rt();
-        match rt.eval(
-            r#"const evt = new DeviceMotionEvent('devicemotion', {});
-               evt.acceleration && evt.accelerationIncludingGravity && evt.rotationRate &&
-               evt.acceleration.x === 0 && evt.interval === 0"#,
-        ) {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("DeviceMotionEvent defaults check failed: {other:?}"),
-        }
+        with_device_sensors(|rt| {
+            let ok = rt
+                .eval(
+                    r#"const evt = new DeviceMotionEvent('devicemotion', {});
+                       evt.acceleration && evt.accelerationIncludingGravity && evt.rotationRate &&
+                       evt.acceleration.x === 0 && evt.interval === 0"#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn device_orientation_has_request_permission() {
-        let rt = make_rt();
-        match rt.eval("typeof DeviceOrientationEvent.requestPermission === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("requestPermission method check failed: {other:?}"),
-        }
+        with_device_sensors(|rt| {
+            let ok = rt
+                .eval("typeof DeviceOrientationEvent.requestPermission === 'function'")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn device_motion_has_request_permission() {
-        let rt = make_rt();
-        match rt.eval("typeof DeviceMotionEvent.requestPermission === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("requestPermission method check failed: {other:?}"),
-        }
+        with_device_sensors(|rt| {
+            let ok = rt
+                .eval("typeof DeviceMotionEvent.requestPermission === 'function'")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 }
