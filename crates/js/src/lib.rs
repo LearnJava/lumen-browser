@@ -1453,14 +1453,6 @@ impl QuickJsRuntime {
                 eprintln!("Topics API init failed: {}", e);
             }
 
-            // Privacy Sandbox Attribution Reporting API — window.attributionReporting +
-            // attributionsrc IDL attribute on <a>/<img>/<script>.
-            // Phase 0: registerSource/registerTrigger → Promise<undefined> no-ops.
-            // Phase 1: wire _lumen_attribution_register_source/_lumen_attribution_register_trigger.
-            if let Err(e) = attribution_reporting::install_attribution_reporting_api(&ctx) {
-                eprintln!("Attribution Reporting API init failed: {}", e);
-            }
-
             // W3C Pointer Events Level 3 §4.1 — pointer capture native bindings.
             // _lumen_set_capture_state(nid) / _lumen_release_capture_state()
             // Called by JS setPointerCapture/releasePointerCapture on Element.
