@@ -149,7 +149,7 @@ FIXED/DEBTOR → `done`, IN PROGRESS → `active`), CSS-тиров (см. выш
 | P3-woff2 | P3 | | done | | | | WebFonts WOFF2 |
 | P3-ext | P3 | | done | | | реализовано (сверка с кодом 2026-07-02): расширения Phase 0 (MV3-subset: manifest.json loader + content_scripts + chrome.runtime стаб) — shell/extensions | Расширения (минимальный формат) |
 | P2-wpt | P2 | | planned | | | | WPT pass rate ≥ 60% (docs/tasks/p2-wpt-integration.md) |
-| P3-ai | P3 | | planned | | | | Опциональный AI-модуль (lumen-ai, семантический поиск/RAG) |
+| P3-ai | P3 | | active | XL | | Step 1 влит 2026-07-15 (branch p1-ph3-ai-module): крейт lumen-ai (feature-flagged, не в default), AiBackend.embed()/summarise() default-impl, ADR-019 (Ollama HTTP первым, candle отложен). Остаток — Step 2-7 по docs/tasks/ph3-ai-module.md: embedding-бэкенд, RAG, semantic bookmarks, omnibox @ai. Step 3 (semantic search) заблокирован отсутствующим HNSW-индексом в lumen-knowledge — план допускает mock-интерфейс на старте | Опциональный AI-модуль (lumen-ai, семантический поиск/RAG) |
 | P3-ws | P3 | | done | | | P3-ws ✅ 2026-06-25 (in-flight fetch abort + SSE non-blocking reconnect + WS sub-protocol/wasClean/state-machine + e2e suite; deep zero-poll WS push = optional shell refinement) | WebSockets + SSE + Fetch API + AbortController |
 | P3-auth | P3 | | done | | | | HTTP auth (Basic + Digest) |
 | P3-safebrowse | P3 | | done | | | | Safe Browsing equivalent |

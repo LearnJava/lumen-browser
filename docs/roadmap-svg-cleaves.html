@@ -820,7 +820,9 @@
     {
      "id": "P3-ai",
      "title": "Опциональный AI-модуль (lumen-ai, семантический поиск/RAG)",
-     "status": "planned"
+     "status": "active",
+     "size": "XL",
+     "note": "Step 1 влит 2026-07-15 (branch p1-ph3-ai-module): крейт lumen-ai (feature-flagged, не в default), AiBackend.embed()/summarise() default-impl, ADR-019 (Ollama HTTP первым, candle отложен). Остаток — Step 2-7 по docs/tasks/ph3-ai-module.md: embedding-бэкенд, RAG, semantic bookmarks, omnibox @ai. Step 3 (semantic search) заблокирован отсутствующим HNSW-индексом в lumen-knowledge — план допускает mock-интерфейс на старте"
     },
     {
      "id": "P3-ws",
