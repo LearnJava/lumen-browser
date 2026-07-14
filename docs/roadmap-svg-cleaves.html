@@ -648,8 +648,35 @@
        "status": "done",
        "size": "XL",
        "note": "Удалить rquickjs целиком: QuickJsRuntime/QuickPersistentJs, install_* дубли в crates/js/src (119 файлов). Проскоуплено 2026-07-14 (ветка p1-v8-s12b, только доксинк, кода не менялось): 2336 #[test] завязаны на удаление (1047 в dom.rs::mod tests, ~1250 в bare-rquickjs::Context тестах уже портированных на v8 модулей S5-S10) — каждый файл требует портировать/обосновать свои тесты перед удалением. Реальный размер — десятки под-срезов, не один сеанс. План разбивки — docs/tasks/ph3-v8-migration.md, раздел Findings log 'S12b — scoping only'. __lum_args__ (lib.rs:2126), quickjs Cargo-фича из shell/Cargo.toml, rquickjs из crates/js/Cargo.toml; упростить `any(quickjs,v8)`-гейты обратно в безусловные. DoD: rquickjs отсутствует в Cargo.lock",
-       "bugs": [
-        "BUG-281"
+       "tasks": [
+        {
+         "id": "P3-v8-s12b-1",
+         "title": "S12b-1: Badging API",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-1-badging, 45fa0843): rquickjs install_* для Badging API удалён, тесты портированы на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-2",
+         "title": "S12b-2: AsyncContext",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-2-async-context, c2b5b915): rquickjs-путь AsyncContext удалён, тесты портированы на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-3",
+         "title": "S12b-3: Digital Credentials API",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-3-digital-credentials, 2515f43b): rquickjs-путь Digital Credentials API удалён, тесты портированы на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-4",
+         "title": "S12b-4: Battery Status API",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-4-battery-bindings, fc549e3e): rquickjs-путь Battery Status API удалён, тесты портированы на V8JsRuntime"
+        }
        ]
       }
      ]
@@ -3144,6 +3171,9 @@
   "js (JS environment bootstrap)": [
    "BUG-280"
   ],
+  "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
+   "BUG-281"
+  ],
   "js (live DOM bindings)": [
    "BUG-279"
   ],
@@ -3427,7 +3457,7 @@ const BLBL={open:'OPEN',inprogress:'IN PROGRESS',fixed:'FIXED',wontfix:'WONTFIX'
 const DATA=JSON.parse(document.getElementById('roadmap-data').textContent);
 const NS='http://www.w3.org/2000/svg';
 
-let q='',hideFixed=true,hideDone=false,phaseSel='P2';
+let q='',hideFixed=true,hideDone=false,phaseSel='P3';
 const mt=s=>!q||(s||'').toLowerCase().includes(q);
 const svg=document.getElementById('g');
 function s(tag,a,txt){const e=document.createElementNS(NS,tag);for(const k in(a||{}))e.setAttribute(k,a[k]);if(txt!=null)e.textContent=txt;return e;}
@@ -3515,7 +3545,7 @@ function buildLegend(){const L=document.getElementById('legend');
   ['open','inprogress','fixed','wontfix'].forEach(k=>L.append(sp(dot(BC[k]),BLBL[k])));
   const z=document.createElement('span');z.textContent='● задача  ◆ баг-лист';L.append(z);}
 function buildPhaseSel(){const sel=document.getElementById('phase');const o=document.createElement('option');o.value='all';o.textContent='все';sel.append(o);
-  DATA.phases.forEach(p=>{const op=document.createElement('option');op.value=p.id;op.textContent=p.id+' — '+p.title.replace(/^Фаза \d+ — /,'');sel.append(op);});sel.value='P2';}
+  DATA.phases.forEach(p=>{const op=document.createElement('option');op.value=p.id;op.textContent=p.id+' — '+p.title.replace(/^Фаза \d+ — /,'');sel.append(op);});sel.value='P3';}
 document.getElementById('stat').textContent=`${DATA.generated} · багов ${DATA.total_bugs} (open ${DATA.counts.open})`;
 buildLegend();buildPhaseSel();
 document.getElementById('q').addEventListener('input',e=>{q=e.target.value.trim().toLowerCase();render();});
