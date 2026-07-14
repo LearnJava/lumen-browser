@@ -1235,13 +1235,6 @@ impl QuickJsRuntime {
                 eprintln!("MediaRecorder API init failed: {}", e);
             }
 
-            // Install Media Capabilities API (W3C Media Capabilities §5) — after DOM/navigator.
-            // Phase 0: navigator.mediaCapabilities singleton; decodingInfo/encodingInfo always
-            // return supported=true, smooth=true, powerEfficient=false.
-            if let Err(e) = media_capabilities::install_media_capabilities_bindings(&ctx) {
-                eprintln!("Media Capabilities API init failed: {}", e);
-            }
-
             // Install Virtual Keyboard API (W3C VK API) — after navigator.
             // Phase 0: geometry stubs + geometrychange event infrastructure.
             if let Err(e) = virtual_keyboard::install_virtual_keyboard_bindings(&ctx) {

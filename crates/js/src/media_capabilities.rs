@@ -1,17 +1,12 @@
-/// Media Capabilities API (W3C Media Capabilities §5)
-/// Phase 0: navigator.mediaCapabilities singleton.
-/// decodingInfo(config) → Promise<{supported:true, smooth:true, powerEfficient:false}>.
-/// encodingInfo(config) → Promise<{supported:true, smooth:true, powerEfficient:false}>.
-use rquickjs::Ctx;
+//! Media Capabilities API (W3C Media Capabilities §5)
+//!
+//! Phase 0: `navigator.mediaCapabilities` singleton.
+//! `decodingInfo(config)` -> `Promise<{supported:true, smooth:true, powerEfficient:false}>`.
+//! `encodingInfo(config)` -> `Promise<{supported:true, smooth:true, powerEfficient:false}>`.
 
-/// Install Media Capabilities API bindings into the JS context.
-pub fn install_media_capabilities_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(MEDIA_CAPABILITIES_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_media_capabilities_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_media_capabilities_bindings` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-11): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_media_capabilities_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -19,6 +14,7 @@ pub(crate) fn install_media_capabilities_bindings_v8(rt: &crate::v8_runtime::V8J
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const MEDIA_CAPABILITIES_SHIM: &str = r#"
 (function() {
   // MediaCapabilitiesInfo — result object returned by decodingInfo / encodingInfo
@@ -71,54 +67,48 @@ const MEDIA_CAPABILITIES_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_media_capabilities(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                function DOMException(message, name) {
-                  Error.call(this, message);
-                  this.message = message;
-                  this.name = name || 'Error';
-                }
-                DOMException.prototype = Object.create(Error.prototype);
-                DOMException.prototype.constructor = DOMException;
-                globalThis.DOMException = DOMException;
-                "#,
-            )
-            .unwrap();
-            install_media_capabilities_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_media_capabilities(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            var window = globalThis;
+            var navigator = {};
+            function DOMException(message, name) {
+              Error.call(this, message);
+              this.message = message;
+              this.name = name || 'Error';
+            }
+            DOMException.prototype = Object.create(Error.prototype);
+            DOMException.prototype.constructor = DOMException;
+            globalThis.DOMException = DOMException;
+            "#,
+        )
+        .unwrap();
+        install_media_capabilities_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn media_capabilities_on_navigator() {
-        with_media_capabilities(|ctx| {
-            let ok: bool = ctx
+        with_media_capabilities(|rt| {
+            let ok = rt
                 .eval("typeof navigator.mediaCapabilities === 'object' && navigator.mediaCapabilities !== null")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn decoding_info_returns_promise() {
-        with_media_capabilities(|ctx| {
-            let ok: bool = ctx
+        with_media_capabilities(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     navigator.mediaCapabilities.decodingInfo({
@@ -128,14 +118,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn encoding_info_returns_promise() {
-        with_media_capabilities(|ctx| {
-            let ok: bool = ctx
+        with_media_capabilities(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     navigator.mediaCapabilities.encodingInfo({
@@ -145,7 +135,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
@@ -153,8 +143,8 @@ mod tests {
     fn decoding_info_result_fields() {
         // Verify MediaCapabilitiesInfo constructor and field values directly.
         // Can't use .then() in sync tests — microtask queue not flushed.
-        with_media_capabilities(|ctx| {
-            let ok: bool = ctx
+        with_media_capabilities(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var info = new window.MediaCapabilitiesInfo(true, true, false);
@@ -162,7 +152,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
@@ -170,8 +160,8 @@ mod tests {
     fn encoding_info_result_fields() {
         // Verify MediaCapabilitiesInfo constructor returns correct Phase 0 values.
         // Can't use .then() in sync tests — microtask queue not flushed.
-        with_media_capabilities(|ctx| {
-            let ok: bool = ctx
+        with_media_capabilities(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var info = new window.MediaCapabilitiesInfo(true, true, false);
@@ -179,7 +169,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

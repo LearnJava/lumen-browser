@@ -871,6 +871,27 @@ topics_api` - 6/6 green; default-feature `cargo test -p lumen-js --lib` (full su
 green; `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both default and
 `v8-backend` features; `cargo check -p lumen-shell` (default) green.
 
+### S12b-11 — `media_capabilities.rs` (2026-07-14, branch p1-v8-s12b-11-media-capabilities)
+
+Eleventh slice, selected via the same systematic method: `comm -12` on `lib.rs`'s `install_*` call
+list vs `v8_runtime.rs`'s `install_*_v8` list gives 80 remaining candidates (post S12b-10); sorted
+by file size, `document_pip.rs`/`typed_om_api.rs`/`serial.rs`/`scroll_snap_events.rs` skipped as
+already-known traps (S12b-6/S12b-9/S12b-10 findings). `media_capabilities.rs` (185 lines) is clean:
+zero `dom.rs` hits for the file stem, `MediaCapabilities`, `decodingInfo`, or `encodingInfo`. Pure
+JS-shim `eval` (no native bindings), the Media Capabilities API (W3C §5) Phase 0 stub
+(`navigator.mediaCapabilities.decodingInfo`/`encodingInfo` always resolve
+`{supported:true, smooth:true, powerEfficient:false}`). Deleted the rquickjs
+`install_media_capabilities_bindings` fn + its `use rquickjs::Ctx` + the 5-test
+`rquickjs::{Context, Runtime}`-based `mod tests`; ported equivalent coverage as 5 new tests against
+`V8JsRuntime` + `install_media_capabilities_bindings_v8` directly (gated
+`#[cfg(all(test, feature = "v8-backend"))]`, `with_media_capabilities` single-helper pattern);
+dropped the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. Top-of-file `///` doc comment
+converted to `//!` module-level doc (same pattern as S12b-5/S12b-8/S12b-10). `cargo test -p
+lumen-js --features v8-backend media_capabilities` - 5/5 green; default-feature `cargo test -p
+lumen-js --lib` (full suite) - 2317/2317 green; `cargo clippy -p lumen-js --all-targets -- -D
+warnings` clean on both default and `v8-backend` features; `cargo check -p lumen-shell` (default)
+green.
+
 ---
 
 ## Risks (Rev 2)
