@@ -730,6 +730,22 @@ dropped the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -
 --features v8-backend battery` — 5/5 green; default-feature `cargo test -p lumen-js battery` — 0
 tests (module is v8-only now, as expected). Repeat for the remaining ~80 S5–S7 modules.
 
+### S12b-5 — `attribution_reporting.rs` (2026-07-14, branch p1-v8-s12b-5-attribution-reporting)
+
+Fifth slice, same shape as S12b-1/2/3/4: `attribution_reporting.rs` is pure JS-shim `eval` (no
+native bindings), the Privacy Sandbox Attribution Reporting API Phase 0 stub
+(`window.attributionReporting.registerSource`/`registerTrigger` no-ops + `attributionSrc` IDL
+attribute on `HTMLAnchorElement`/`HTMLImageElement`/`HTMLScriptElement`). Deleted the rquickjs
+`install_attribution_reporting_api` fn + `use rquickjs::Ctx` + its 8-test `rquickjs::{Context,
+Runtime}`-based `mod tests`; ported equivalent coverage as 8 new tests against `V8JsRuntime` +
+`install_attribution_reporting_api_v8` directly (gated `#[cfg(all(test, feature =
+"v8-backend"))]`); dropped the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. Module-level
+doc comment converted from `///` to `//!` (an empty line after a `///` block with no trailing item
+next to it trips clippy's `empty_line_after_doc_comments` once the `use rquickjs::Ctx` line that
+used to sit right after it is gone). `cargo test -p lumen-js --features v8-backend
+attribution_reporting` — 8/8 green; default-feature build has zero `attribution_reporting` tests
+left (module is v8-only now, as expected). Repeat for the remaining ~79 S5–S7 modules.
+
 ---
 
 ## Risks (Rev 2)
