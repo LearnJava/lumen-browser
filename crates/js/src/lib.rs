@@ -922,13 +922,6 @@ impl QuickJsRuntime {
                 eprintln!("Video Picture-in-Picture API init failed: {}", e);
             }
 
-            // Wire the native PiP hooks (`_lumen_pip_enter` / `_lumen_pip_exit`)
-            // the shim above calls — shell drains them to open/close the real
-            // OS-level floating window (CC-7). After video_pip so the shim exists.
-            if let Err(e) = pip_bindings::install_pip_bindings(&ctx) {
-                eprintln!("PiP bindings init failed: {}", e);
-            }
-
             // Install HTMLAudioElement stubs (HTML spec §4.8.10) — after DOM/video.
             if let Err(e) = audio_element::install_audio_element_bindings(&ctx) {
                 eprintln!("Audio element bindings init failed: {}", e);

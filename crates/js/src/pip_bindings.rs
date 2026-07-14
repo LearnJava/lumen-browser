@@ -15,8 +15,6 @@
 //! `static` the shell owns the draining of — no extra `Arc` threaded through the
 //! already-large `install_primitives` signature.
 
-use rquickjs::function::Opt;
-use rquickjs::{Ctx, Function};
 use std::sync::{Mutex, OnceLock};
 
 /// A picture-in-picture request emitted by the JS PiP API, awaiting the shell.
@@ -57,29 +55,16 @@ pub fn take_pip_requests() -> Vec<PipRequest> {
     std::mem::take(&mut *queue().lock().unwrap())
 }
 
-/// Install the `_lumen_pip_enter(nid)` / `_lumen_pip_exit(nid)` native bindings.
+/// Install the `_lumen_pip_enter(nid)` / `_lumen_pip_exit(nid)` native bindings
+/// (Ph3 V8 migration S5-S7 batch 2, rquickjs path removed in S12b-9): both
+/// natives go through the compat layer; `Opt<u32>` becomes `Option<u32>` (same
+/// "missing/null → None" semantics via the compat layer's `FromJsValue`).
 ///
 /// Must be called after [`video_pip::install_video_pip_api`] so the JS shim that
 /// calls these hooks is already present (registration order is otherwise
 /// irrelevant — the shim guards each call with `typeof === 'function'`).
 ///
 /// [`video_pip::install_video_pip_api`]: crate::video_pip::install_video_pip_api
-pub fn install_pip_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
-    let enter = Function::new(ctx.clone(), move |nid: u32| {
-        enqueue(PipRequest::Enter { nid });
-    })?;
-    ctx.globals().set("_lumen_pip_enter", enter)?;
-
-    let exit = Function::new(ctx.clone(), move |nid: Opt<u32>| {
-        enqueue(PipRequest::Exit { nid: nid.0.unwrap_or(0) });
-    })?;
-    ctx.globals().set("_lumen_pip_exit", exit)?;
-    Ok(())
-}
-
-/// V8 port of [`install_pip_bindings`] (Ph3 V8 migration S5-S7 batch 2): both
-/// natives go through the compat layer; `Opt<u32>` becomes `Option<u32>` (same
-/// "missing/null → None" semantics via the compat layer's `FromJsValue`).
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_pip_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -98,21 +83,27 @@ pub(crate) fn install_pip_bindings_v8(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
-    use std::sync::MutexGuard;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
 
     /// Serializes tests: the request queue is process-global, so parallel tests
     /// would otherwise observe each other's enqueues.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Acquire the serialization lock and drain any leftover queue state.
-    fn guard() -> MutexGuard<'static, ()> {
+    fn guard() -> std::sync::MutexGuard<'static, ()> {
         let g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ = take_pip_requests();
         g
+    }
+
+    fn with_pip_bindings(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        install_pip_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
@@ -128,28 +119,22 @@ mod tests {
     #[test]
     fn install_registers_both_hooks() {
         let _g = guard();
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            install_pip_bindings(&ctx).unwrap();
-            let ok: bool = ctx
+        with_pip_bindings(|rt| {
+            let ok = rt
                 .eval(
                     "typeof _lumen_pip_enter === 'function' && \
                      typeof _lumen_pip_exit === 'function'",
                 )
                 .unwrap();
-            assert!(ok, "both PiP hooks must be installed");
+            assert_eq!(ok, lumen_core::JsValue::Bool(true), "both PiP hooks must be installed");
         });
     }
 
     #[test]
     fn js_enter_call_reaches_queue() {
         let _g = guard();
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            install_pip_bindings(&ctx).unwrap();
-            ctx.eval::<(), _>("_lumen_pip_enter(42);").unwrap();
+        with_pip_bindings(|rt| {
+            rt.eval("_lumen_pip_enter(42);").unwrap();
         });
         let reqs = take_pip_requests();
         assert_eq!(reqs, vec![PipRequest::Enter { nid: 42 }]);
@@ -158,13 +143,10 @@ mod tests {
     #[test]
     fn js_exit_call_tolerates_missing_arg() {
         let _g = guard();
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            install_pip_bindings(&ctx).unwrap();
+        with_pip_bindings(|rt| {
             // Exit may be called with or without an explicit node id.
-            ctx.eval::<(), _>("_lumen_pip_exit();").unwrap();
-            ctx.eval::<(), _>("_lumen_pip_exit(7);").unwrap();
+            rt.eval("_lumen_pip_exit();").unwrap();
+            rt.eval("_lumen_pip_exit(7);").unwrap();
         });
         let reqs = take_pip_requests();
         assert_eq!(
