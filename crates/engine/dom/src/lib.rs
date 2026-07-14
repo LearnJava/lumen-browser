@@ -1135,12 +1135,21 @@ impl Document {
         .and_then(|n| n.get_attr("href"))
     }
 
+    /// Returns the document's root element `NodeId` — the `<html>` element that is
+    /// a direct child of the document node. This is DOM's `document.documentElement`,
+    /// distinct from `root()` which is the `Document` node itself (`NodeType.DOCUMENT_NODE`).
+    /// Returns `None` for documents that have no `<html>` child (e.g. a document under
+    /// construction before the parser has inserted the root element).
+    pub fn document_element(&self) -> Option<NodeId> {
+        self.get(self.root).children.iter().copied().find(|&c| {
+            matches!(&self.get(c).data, NodeData::Element { name, .. } if name.local == "html")
+        })
+    }
+
     /// Returns the `<body>` element's `NodeId`, walking root → `<html>` → `<body>`.
     /// Returns `None` for documents that have no `<html>` or no `<body>` child.
     pub fn body(&self) -> Option<NodeId> {
-        let html = self.get(self.root).children.iter().copied().find(|&c| {
-            matches!(&self.get(c).data, NodeData::Element { name, .. } if name.local == "html")
-        })?;
+        let html = self.document_element()?;
         self.get(html).children.iter().copied().find(|&c| {
             matches!(&self.get(c).data, NodeData::Element { name, .. } if name.local == "body")
         })

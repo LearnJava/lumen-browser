@@ -502,6 +502,13 @@ fn install_primitives(
             let doc = d.lock().unwrap();
             find_element_by_tag(&doc, "body").map(|n| n.index() as u32)
         });
+        // BUG-281: `document.documentElement` — the `<html>` element, distinct from
+        // `_lumen_get_document_root` (the `Document` node itself, `nodeType === 9`).
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_html_element", move || -> Option<u32> {
+            let doc = d.lock().unwrap();
+            doc.document_element().map(|n| n.index() as u32)
+        });
         let d = Arc::clone(&doc);
         reg!("_lumen_get_document_title", move || -> String {
             let doc = d.lock().unwrap();
@@ -640,6 +647,18 @@ fn install_primitives(
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 matches!(doc.get(nid).data, NodeData::Text(_))
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_get_namespace_uri",
+            move |node_id: u32| -> Option<String> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                match &doc.get(nid).data {
+                    NodeData::Element { name, .. } => Some(namespace_uri(name.namespace).to_string()),
+                    _ => None,
+                }
             }
         );
         let d = Arc::clone(&doc);
@@ -3016,6 +3035,21 @@ fn find_element_by_tag(doc: &Document, tag: &str) -> Option<NodeId> {
     })
 }
 
+/// DOM LS §4.9.1 `Node.namespaceURI` value for a given `Namespace`. Backs
+/// `_lumen_get_namespace_uri` (BUG-281): react-dom's root-creation path checks
+/// `element.namespaceURI` before mounting, and the shim previously left it
+/// `undefined` for every element.
+fn namespace_uri(ns: Namespace) -> &'static str {
+    match ns {
+        Namespace::Html => "http://www.w3.org/1999/xhtml",
+        Namespace::Svg => "http://www.w3.org/2000/svg",
+        Namespace::MathMl => "http://www.w3.org/1998/Math/MathML",
+        Namespace::Xml => "http://www.w3.org/XML/1998/namespace",
+        Namespace::XmlNs => "http://www.w3.org/2000/xmlns/",
+        Namespace::XLink => "http://www.w3.org/1999/xlink",
+    }
+}
+
 fn find_first_matching(
     doc: &Document,
     start: NodeId,
@@ -4506,6 +4540,9 @@ function _lumen_make_element(nid) {
         get tagName()        { return _lumen_get_tag_name(nid); },
         get nodeName()       { return _lumen_get_tag_name(nid); },
         get nodeType()       { return _lumen_is_text_node(nid) ? 3 : 1; },
+        // DOM LS §4.9.1: XHTML namespace for HTML elements, `null` for non-element nodes
+        // (text/comment). react-dom's root-listening bootstrap (BUG-281) reads this.
+        get namespaceURI()   { return _lumen_u2n(_lumen_get_namespace_uri(nid)); },
         get id()             { var v = _lumen_u2n(_lumen_get_attr(nid, 'id'));    return v !== null ? v : ''; },
         set id(v)            { _lumen_set_attr(nid, 'id', String(v)); },
         get className()      { var v = _lumen_u2n(_lumen_get_attr(nid, 'class')); return v !== null ? v : ''; },
@@ -5365,6 +5402,19 @@ function _lumen_make_element(nid) {
             }
         };
     }
+    // DOM LS §4.4: `ownerDocument` must be the same `document` object by reference
+    // for every node — react-dom's container-identity check (BUG-281) compares
+    // `element.ownerDocument === document`. Defined non-enumerable (matching real
+    // engines, where it lives on the prototype rather than as an own property):
+    // `document` itself is reachable from any element via `documentElement`/`body`,
+    // so an *enumerable* back-reference here would make every node object cyclic and
+    // blow up code that walks own-enumerable properties (e.g. `eval()`'s return-value
+    // serialization in lib.rs's `from_rq`).
+    Object.defineProperty(_obj, 'ownerDocument', {
+        get: function() { return document; },
+        enumerable: false,
+        configurable: true,
+    });
     return _obj;
 }
 
@@ -5718,6 +5768,11 @@ var _doc_ready_state = 'loading';
 var __dom_node_warned = false;
 
 var document = {
+    // DOM LS §4.5: `Document.nodeType` is always `Node.DOCUMENT_NODE` (9). react-dom's
+    // root-creation path (BUG-281) checks this before mounting.
+    get nodeType()   { return 9; },
+    get nodeName()   { return '#document'; },
+    get ownerDocument() { return null; },
     get title()  { return _lumen_get_document_title(); },
     set title(v) { _lumen_set_document_title(String(v)); },
     get cookie()  { return _lumen_cookie_get(); },
@@ -5726,7 +5781,12 @@ var document = {
         var bid = _lumen_u2n(_lumen_get_body());
         return bid !== null ? _lumen_make_element(bid) : null;
     },
-    get documentElement() { return _lumen_make_element(_lumen_root_nid); },
+    // BUG-281: must return the `<html>` element, not the `Document` node itself
+    // (react-dom's container-identity checks fail if `tagName` reads `#document`).
+    get documentElement() {
+        var hid = _lumen_u2n(_lumen_get_html_element());
+        return hid !== null ? _lumen_make_element(hid) : null;
+    },
     getElementById:    function(id)  {
         var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
         return n !== null ? _lumen_make_element(n) : null;
@@ -25818,6 +25878,50 @@ mod tests {
         // Check basic style property
         let r2 = rt.eval("typeof document.documentElement.style === 'object'").unwrap();
         assert_eq!(r2, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-281: document/element DOM-tree shape gaps broke react-dom's root-identity
+    // checks (`document.nodeType`, `documentElement.tagName`, `ownerDocument` identity,
+    // `namespaceURI`). Each assertion below mirrors one row of the bug's repro table.
+    #[test]
+    fn bug_281_document_node_type_is_document_node() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("document.nodeType === 9").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn bug_281_document_element_is_html_not_document() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("document.documentElement.tagName === 'HTML'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn bug_281_element_owner_document_identity() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("document.getElementById('main').ownerDocument === document")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn bug_281_element_namespace_uri_is_xhtml() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("document.getElementById('main').namespaceURI === 'http://www.w3.org/1999/xhtml'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn bug_281_text_node_namespace_uri_is_null() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("document.getElementsByTagName('title')[0].firstChild.namespaceURI === null")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
     #[test]

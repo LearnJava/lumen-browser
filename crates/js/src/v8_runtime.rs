@@ -979,6 +979,13 @@ impl V8JsRuntime {
             let doc = d.lock().unwrap();
             find_element_by_tag(&doc, "body").map(|n| n.index() as u32)
         });
+        // BUG-281: `document.documentElement` — the `<html>` element, distinct from
+        // `_lumen_get_document_root` (the `Document` node itself, `nodeType === 9`).
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_html_element", move || -> Option<u32> {
+            let doc = d.lock().unwrap();
+            doc.document_element().map(|n| n.index() as u32)
+        });
         let d = Arc::clone(&doc);
         reg!("_lumen_get_document_title", move || -> String {
             let doc = d.lock().unwrap();
@@ -1117,6 +1124,18 @@ impl V8JsRuntime {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 matches!(doc.get(nid).data, NodeData::Text(_))
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_get_namespace_uri",
+            move |node_id: u32| -> Option<String> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                match &doc.get(nid).data {
+                    NodeData::Element { name, .. } => Some(namespace_uri(name.namespace).to_string()),
+                    _ => None,
+                }
             }
         );
         let d = Arc::clone(&doc);
@@ -3852,6 +3871,19 @@ fn find_element_by_tag(doc: &lumen_dom::Document, tag: &str) -> Option<lumen_dom
             .map(|n| n.local.eq_ignore_ascii_case(tag))
             .unwrap_or(false)
     })
+}
+
+/// Mirrors `dom::namespace_uri`. DOM LS §4.9.1 `Node.namespaceURI` value for a
+/// given `Namespace`. Backs `_lumen_get_namespace_uri` (BUG-281).
+fn namespace_uri(ns: Namespace) -> &'static str {
+    match ns {
+        Namespace::Html => "http://www.w3.org/1999/xhtml",
+        Namespace::Svg => "http://www.w3.org/2000/svg",
+        Namespace::MathMl => "http://www.w3.org/1998/Math/MathML",
+        Namespace::Xml => "http://www.w3.org/XML/1998/namespace",
+        Namespace::XmlNs => "http://www.w3.org/2000/xmlns/",
+        Namespace::XLink => "http://www.w3.org/1999/xlink",
+    }
 }
 
 /// Mirrors `dom::find_first_matching`.
