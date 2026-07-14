@@ -917,6 +917,34 @@ it already wires `install_device_sensors_bindings_v8` (ported earlier, S5-S7). 6
 clippy -p lumen-js --all-targets -- -D warnings` clean on both default and `v8-backend` features;
 `cargo check -p lumen-shell` (default) green.
 
+### S12b-13 — `document_pip.rs` (2026-07-14, branch p1-v8-s12b-13-document-pip)
+
+Thirteenth slice, same systematic selection: comparing `install_*_bindings(` defining sites
+(taking a `Ctx` param) against `install_*_bindings_v8(` sites across `crates/js/src/*.rs` gives
+the remaining candidates; sorted by file size, `typed_om_api.rs` (148 lines, S12b-9's rejected
+candidate — breaks 10 `dom.rs::css_typed_om_*` tests) skipped, along with the known traps
+`serial.rs`/`scroll_snap_events.rs`. `document_pip.rs` (131 lines) is clean by the file-stem
+method, but its 7 own tests live inside `dom.rs`'s big `mod tests` (not in the module's own file,
+unlike S12b-1..12) — named `document_pip_*`, using the rquickjs-based `runtime_with_dom` helper
+(`dom.rs:12896`). Ported all 7 1:1 into `document_pip.rs` itself (gated
+`#[cfg(all(test, feature = "v8-backend"))]`) via a local `with_document_pip` helper that mirrors
+S12b-12's device_sensors pattern: bare `V8JsRuntime::new()` + full `install_dom` (the shim's
+classes `extend EventTarget`/`Event`, which only exist after `dom.rs`'s DOM-core JS runs — same
+reason S12b-12 needed the full install, not a bare context). Deleted the rquickjs
+`install_document_pip_api` fn, gated `DOCUMENT_PIP_SHIM` behind `#[cfg(feature = "v8-backend")]`
+(only referenced from the v8 path now), and dropped the call site in `lib.rs`'s
+`QuickJsRuntime::install_dom`. Found one incidental casualty: `dom.rs`'s own
+`event_target_dependent_apis_installed` regression test (BUG-067/070, checks that several
+`extends EventTarget` shims all install correctly on the rquickjs path) asserted
+`typeof documentPictureInPicture === 'object'` — since document_pip no longer installs on the
+rquickjs path, removed that clause (and updated the preceding comment's module list); the same
+assertion now lives in `document_pip.rs`'s own ported tests, so coverage isn't lost, just
+relocated. `cargo test -p lumen-js --features v8-backend document_pip` - 7/7 green; default-feature
+`cargo test -p lumen-js --lib` (full suite) - 2304/2304 green (2311 − 7 moved tests); `cargo clippy
+-p lumen-js --all-targets -- -D warnings` clean on both default and `v8-backend` features (one
+`empty_line_after_doc_comments` trigger fixed — same pattern as S12b-5/8/10/12, module doc
+converted to `//!`); `cargo check -p lumen-shell` (default) green.
+
 ---
 
 ## Risks (Rev 2)
