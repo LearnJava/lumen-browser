@@ -746,6 +746,31 @@ used to sit right after it is gone). `cargo test -p lumen-js --features v8-backe
 attribution_reporting` — 8/8 green; default-feature build has zero `attribution_reporting` tests
 left (module is v8-only now, as expected). Repeat for the remaining ~79 S5–S7 modules.
 
+### S12b-6 — `speculation_rules.rs` (2026-07-14, branch p1-v8-s12b-6-speculation-rules)
+
+Sixth slice, same shape as S12b-1..5: `speculation_rules.rs` is pure JS-shim `eval` (no native
+bindings), the Speculation Rules API Phase 0 stub (`document.prerendering`,
+`document.getSpeculationRules()` → `[]`, `onprerenderingchange`,
+`_lumen_deliver_speculation_rules` no-op hook). Deleted the rquickjs `install_speculation_rules_api`
+fn + `use rquickjs::Ctx` + its 4-test `rquickjs::{Context, Runtime}`-based `mod tests`; ported
+equivalent coverage as 4 new tests against `V8JsRuntime` + `install_speculation_rules_api_v8`
+directly (gated `#[cfg(all(test, feature = "v8-backend"))]`); dropped the call site in `lib.rs`'s
+`QuickJsRuntime::install_dom`. `SPECULATION_RULES_SHIM` const also gated `#[cfg(feature =
+"v8-backend")]` since nothing else references it once the rquickjs install fn is gone.
+`cargo test -p lumen-js --features v8-backend speculation_rules` — 4/4 green; default-feature
+`cargo test -p lumen-js speculation_rules` — 0 tests (module is v8-only now, as expected).
+
+**Selection method note** (useful for the next ~78 slices): before picking a module, grep
+`crates/js/src/dom.rs` for the module's name — `dom.rs`'s own 1047-test `mod tests` suite runs
+through `runtime_with_dom()` → `QuickJsRuntime`, and a handful of modules (e.g. `document_pip.rs`,
+whose shim classes are exercised by 7 tests named `document_pip_*` in `dom.rs`) are indirectly
+tested there by name even though the module itself has zero `#[cfg(test)]` code. Deleting such a
+module's rquickjs install fn silently breaks those `dom.rs` tests (the shim stops being installed
+under `QuickJsRuntime`) without touching the module file at all. `document_pip.rs` was rejected as
+the S12b-6 candidate for exactly this reason; `speculation_rules.rs` has zero references in
+`dom.rs` and was safe. Modules with nonzero `dom.rs` hits need their `dom.rs` test(s) ported or
+justified as part of the same slice, not treated as out of scope.
+
 ---
 
 ## Risks (Rev 2)

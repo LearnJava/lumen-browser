@@ -1121,12 +1121,6 @@ impl QuickJsRuntime {
                 eprintln!("Decorator shim init failed: {}", e);
             }
 
-            // Install Speculation Rules API Phase 0 — document.prerendering,
-            // document.getSpeculationRules(), _lumen_deliver_speculation_rules hook.
-            if let Err(e) = speculation_rules::install_speculation_rules_api(&ctx) {
-                eprintln!("Speculation Rules API init failed: {}", e);
-            }
-
             // Install Soft Navigation Timing API — PerformanceSoftNavigationEntry,
             // _lumen_deliver_soft_nav(url, startTime, durationMs) binding.
             if let Err(e) = soft_navigation::install_soft_navigation_api(&ctx) {
