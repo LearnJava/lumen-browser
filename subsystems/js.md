@@ -335,8 +335,8 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   `lumen-bidi-server`/`tests/wpt` scope.
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
-- `rusty_v8` backend porting (S11–S12 remain; S0/S1/S2/S3/S4/S5-S7/S8/S9/S10 done
-  2026-07-13 — v8 v150.1.0 optional dep под `v8-backend`;
+- `rusty_v8` backend porting (S12 remains; S0/S1/S2/S3/S4/S5-S7/S8/S9/S10/S11 done
+  2026-07-13/14 — v8 v150.1.0 optional dep под `v8-backend`;
   `V8JsRuntime`/`V8Inner`/`v8_thread_main` + `JsRuntime` trait impl + `v8_compat`:
   `into_v8_fnN` (arity 0..7) + `V8NativeFn` + `OwnedNativeFn` + trampoline +
   `register_v8_native` (+ `Vec<String>`/`Vec<u32>`/`Vec<f64>`/`Vec<u8>`/`u8` FromJsValue/IntoJsReturn
@@ -437,7 +437,26 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   `_deserializeTransfers` typeof-guard. Verification: `cargo test -p lumen-js --features
   v8-backend` — 2413 lib tests (2402 + 11 new `tests_v8`: 4 worker + 3 shared_worker + 3
   sw_worker), all green; default (QuickJS) suite unaffected (2372 tests) by the shim
-  extraction refactors; clippy clean on both. Ported/pending checklist in
+  extraction refactors; clippy clean on both. S11 (p1-v8-s11, 2026-07-14):
+  `V8JsRuntime::suspend`/`resume` — unlike `QuickJsRuntime` (`capture_raw_heap` still a
+  stub, blocked on native-function bindings `JS_ReadObject` can't reconstruct),
+  V8's port implements a real, if partial, round-trip via `v8::ValueSerializer`/
+  `ValueDeserializer`. `V8Inner` gained `baseline_globals: HashSet<String>` — the
+  global object's own-enumerable keys snapshotted once in `v8_thread_main` right
+  after `Context::new`, before `install_dom`/any script runs. `suspend()` diffs the
+  live global against that baseline (so DOM natives and ECMAScript built-ins are
+  never candidates), structured-clone-probes each new key's value in isolation
+  (a throwing probe — `DataCloneError`, F1 closures — is dropped without voiding
+  sibling keys), then serializes the surviving keys as one wrapper object into
+  `SuspendedHeap.compressed` via the existing `heap_snapshot` zlib framing.
+  `resume()` deserializes the wrapper and copies its own-properties onto a fresh
+  bare runtime's global object. Closures remain unrestorable (F1) — the
+  re-run-scripts fallback (`main.rs:14599`) stays the closure-recovery path; this
+  slice only closes the *data*-globals half of task 10C.2. Verification: `cargo
+  test -p lumen-js --features v8-backend` — 2419 lib tests (2413 + 6 new
+  `v8_runtime::tests::suspend_*`/`resume_*`, covering number/string/array/object
+  round-trip and closure-drop-without-poisoning-siblings), all green; clippy clean
+  on v8-backend and the default (QuickJS-only) build. Ported/pending checklist in
   `docs/tasks/ph3-v8-migration.md`.
 
 ## Invariants

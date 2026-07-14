@@ -241,7 +241,7 @@ S10) — these take extra params too but are covered by their own slices below.
 | ✅ S8 | **canvas2d + webgl_canvas** | Hand-port (hot path, 85 rquickjs mentions; pixel queues via `flush_canvas_updates`) | canvas graphic tests pass under v8 feature | Medium |
 | ✅ S9 | **wasm + webgpu** | `Persistent<Function>` GC roots → `v8::Global<Function>`; keep the `wasm::clear_registry()` teardown pattern (`lib.rs:401`) | wasm + webgpu test suites green (note: webgpu test flaky under load — rerun before blaming the port) | Medium |
 | ✅ S10 | **worker + shared_worker + sw_worker** | Per-thread `Runtime`+`Context` (`worker.rs:293`) → per-thread `OwnedIsolate`; same channel protocol | worker tests green | Medium |
-| ☐ S11 | **suspend/resume (partial 10C.2)** | `suspend()`: enumerate own globals set by page scripts, serialize *data* via `v8::ValueSerializer` into `SuspendedHeap.compressed` (zstd, ≤5 MB); `resume()`: `ValueDeserializer` restore. **Closures are NOT serializable (F1) — the re-run-scripts fallback at `main.rs:14599` stays.** Optional: pure-JS-shim startup snapshot (F2), only if cheap | `tests/v8_snapshot.rs`: `window.__test = 42` survives suspend→resume | Low |
+| ✅ S11 | **suspend/resume (partial 10C.2)** | `suspend()`: enumerate own globals set by page scripts, serialize *data* via `v8::ValueSerializer` into `SuspendedHeap.compressed` (zstd, ≤5 MB); `resume()`: `ValueDeserializer` restore. **Closures are NOT serializable (F1) — the re-run-scripts fallback at `main.rs:14599` stays.** Optional: pure-JS-shim startup snapshot (F2), only if cheap. ЗАКРЫТ 2026-07-14 (branch p1-v8-s11). | `window.__test = 42` survives suspend→resume ✅ | Low |
 | ☐ S12 | **Cutover + cleanup** | shell default `quickjs` → `v8`; remove `rquickjs` dep + `quickjs-backend` code; kill `__lum_args__` workaround; ADR-004 → Superseded, write `ADR-015-v8-migration.md`; `CAPABILITIES.md` JS row → V8; `navigator.userAgent` → `'Lumen/1.0.0'` (`dom.rs:5916`, version-bump commit only); React 18 CRA demo loads without JS errors (via `take_console_messages`) | `rquickjs` gone from `Cargo.lock`; full graphic-test run green | Medium (the flag-flip exposes everything at once) |
 
 ### Session protocol for a fresh session picking this up
@@ -477,6 +477,71 @@ tests (2402 + 11 new: 4 `worker::tests_v8`, 3 `shared_worker::tests_v8`, 3
 `sw_globals_shim` extraction refactors). `cargo clippy -p lumen-js
 --all-targets --features v8-backend -- -D warnings` and the default
 (QuickJS-only) build both clean.
+
+### S11 — suspend/resume, partial 10C.2 (2026-07-14, branch p1-v8-s11)
+
+Implemented directly against the raw `v8::ValueSerializer`/`ValueDeserializer`
+FFI wrapper (`v8` crate 150.1.0) — no higher-level structured-clone helper
+exists in this crate version. Both need the `ValueSerializerHelper`/
+`ValueDeserializerHelper` extension traits imported (`write_header`/
+`write_value`/`read_header`/`read_value` are trait methods, not inherent on
+`ValueSerializer`/`ValueDeserializer` — not obvious from the type signatures
+alone, `rustc` suggests the fix directly).
+
+**Baseline-diff approach** (not a full heap walk — F2 already ruled that out
+for snapshots, and a full walk would also re-capture every DOM native as
+"page data"): `V8Inner` gained a `baseline_globals: HashSet<String>` snapshot
+of the global object's own-enumerable-non-symbol keys, taken once in
+`v8_thread_main` right after `Context::new` — before `install_dom` or any
+script runs. `suspend()` re-enumerates the live global object and only
+considers keys **absent** from that baseline: this is what keeps
+`Object`/`Array`/etc. (and, if `install_dom` ran, the ~380 DOM natives) out of
+the capture without an allow-list — only genuinely new bindings are
+candidates.
+
+**Per-value probe before commit**: each candidate value is
+structured-clone-tested in isolation (`ValueSerializer::write_value` inside a
+scratch `TryCatch`) before being copied into the wrapper object that gets the
+real, final serialize pass. This is deliberately two-pass rather than
+one-shot-and-hope: F1 says closures throw `DataCloneError`, and a single
+throwing value partway through a combined-object serialize would have voided
+every sibling key already written into the same `ValueSerializer` byte
+stream. Testing each value alone first means a page global that happens to be
+a function (or holds one internally, e.g. `{ onClick: function(){} }`) is
+dropped without taking down `__test`/`__state`/other plain-data siblings —
+verified directly by `suspend_drops_closures_but_keeps_sibling_data`.
+`LumenValueSerializerImpl`/`LumenValueDeserializerImpl` both use only the
+required/default trait methods (`throw_data_clone_error` schedules a JS
+`Error` via `Exception::error`, same pattern as the existing
+`Exception::type_error` use in `v8_compat.rs`); no `is_host_object`/
+`write_host_object` override is needed since nothing here ever serializes a
+host object.
+
+**Everything stays inline inside the existing `with_tc!` macro body** (no
+extracted `fn foo(tc: &mut ...)` helper) — the concrete pinned-scope type
+`with_tc!` produces (`PinnedRef<TryCatch<'scope,'obj,P>>`, three lifetime/type
+parameters resolved via the crate's internal `NewTryCatch` associated-type
+machinery) has no clean spelling from outside the macro invocation; every
+other `JsRuntime` method in this file (`eval`/`set_global`/`get_global`/
+`call_function`) follows the same inline-only convention already, this just
+extends it.
+
+`compress_heap(&[])` is **not** the empty byte vector — it always frames a
+4-byte `HEAP_MAGIC` + zlib-stream header, so `SuspendedHeap::is_empty()` is
+never a valid check for "suspend captured nothing"; assert on `resume()`
+behavior instead (`typeof __anything === 'undefined'`), not on
+`heap.compressed.len()`.
+
+**Verification**: `cargo test -p lumen-js --features v8-backend` — 2419 lib
+tests (2413 + 6 new `v8_runtime::tests::suspend_*`/`resume_*`), all green,
+covering number/string/array/plain-object round-trip, closure-drop-without-
+poisoning-siblings, and the empty-snapshot/empty-capture paths; 68 integration
+tests unaffected. `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` and the default (QuickJS-only) build both clean.
+No shell-level (`main.rs:14599` `restore_js_context`) integration test was
+added — that path is exercised end-to-end by the pre-existing QuickJS
+hibernation tests and is out of scope for this slice (DoD is the
+`JsRuntime::suspend`/`resume` trait pair, not full tab-lifecycle wiring).
 
 ---
 

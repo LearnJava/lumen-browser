@@ -19,6 +19,7 @@
 use crate::dom::{
     FullscreenRequest, HistoryUrlUpdate, NavAction, NavigateRequest, PopupRequest, PrintRequest,
 };
+use crate::heap_snapshot;
 use crate::v8_compat::{
     OwnedNativeFn, into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4, into_v8_fn5,
     register_v8_native,
@@ -32,6 +33,7 @@ use lumen_dom::{
 };
 use lumen_layout::{matches_selector, query_all};
 use std::collections::HashMap;
+use v8::{ValueDeserializerHelper, ValueSerializerHelper};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::sync::{
@@ -82,6 +84,13 @@ struct V8Inner {
     /// alive for the isolate's lifetime. Twin of `native_fn_store` for natives
     /// that need raw scope/argument access (the WASM host-import bridge).
     native_fn_store_scoped: Vec<crate::v8_compat::OwnedNativeFnScoped>,
+    /// Own-enumerable global property names present right after context
+    /// creation, before any `install_dom`/native registration or page script
+    /// runs (Ph3 V8 migration S11 — `suspend`/`resume`). `suspend()` diffs the
+    /// live global object against this set so only globals *added later* (by
+    /// natives or page scripts) are considered for serialization — ECMAScript
+    /// built-ins (`Object`, `Array`, …) are never candidates.
+    baseline_globals: std::collections::HashSet<String>,
 }
 
 // ── Command channel ───────────────────────────────────────────────────────────
@@ -169,12 +178,30 @@ fn v8_thread_main(
     let mut isolate = v8::Isolate::new(Default::default());
     // Create the context inside a short-lived HandleScope so the scope's borrow
     // of `isolate` ends before we move `isolate` into `V8Inner`.
-    let context = {
+    let (context, baseline_globals) = {
         // scope! pins the HandleScope and gives scope: &mut PinnedRef<HandleScope<'_, ()>>
         v8::scope!(let scope, &mut isolate);
         let ctx = v8::Context::new(scope, Default::default());
+        // Snapshot the bare context's own global keys (S11) before entering it
+        // for anything else — this is the baseline `suspend()` diffs against.
+        let baseline = {
+            let ctx_scope = &mut v8::ContextScope::new(scope, ctx);
+            let global = ctx.global(ctx_scope);
+            let mut names = std::collections::HashSet::new();
+            if let Some(own_props) = global.get_own_property_names(ctx_scope, Default::default())
+            {
+                for i in 0..own_props.length() {
+                    if let Some(key) = own_props.get_index(ctx_scope, i)
+                        && let Some(s) = key.to_string(ctx_scope)
+                    {
+                        names.insert(s.to_rust_string_lossy(ctx_scope));
+                    }
+                }
+            }
+            names
+        };
         // scope deref-coerces to &Isolate via PinnedRef<HandleScope<'_,()>> → Isolate
-        v8::Global::new(scope, ctx)
+        (v8::Global::new(scope, ctx), baseline)
     };
 
     let mut inner = V8Inner {
@@ -182,6 +209,7 @@ fn v8_thread_main(
         context,
         native_fn_store: Vec::new(),
         native_fn_store_scoped: Vec::new(),
+        baseline_globals,
     };
     let _ = init_tx.send(Ok(()));
 
@@ -4026,14 +4054,148 @@ impl JsRuntime for V8JsRuntime {
     }
 
     fn suspend(&mut self) -> JsResult<SuspendedHeap> {
-        // S11 will implement real ValueSerializer-based serialisation.
-        Ok(SuspendedHeap::default())
+        let raw = self.run(|inner| -> Vec<u8> {
+            let baseline = inner.baseline_globals.clone();
+            with_tc!(inner, |tc, ctx| {
+                let global = ctx.global(tc);
+                let Some(own_props) = global.get_own_property_names(tc, Default::default())
+                else {
+                    return Vec::new();
+                };
+                // Structured-clone each candidate value in isolation first, so a
+                // non-cloneable one (a `Function`, mainly — F1 in the migration
+                // brief) is dropped instead of poisoning the whole capture.
+                let wrapper = v8::Object::new(tc);
+                let mut has_any = false;
+                for i in 0..own_props.length() {
+                    let Some(key) = own_props.get_index(tc, i) else {
+                        continue;
+                    };
+                    let Some(key_str) = key.to_string(tc) else {
+                        continue;
+                    };
+                    let key_str = key_str.to_rust_string_lossy(tc);
+                    if baseline.contains(&key_str) {
+                        continue;
+                    }
+                    let Some(val) = global.get(tc, key) else {
+                        if tc.has_caught() {
+                            tc.reset();
+                        }
+                        continue;
+                    };
+                    if tc.has_caught() {
+                        // A getter on this global threw (e.g. a native binding
+                        // with side effects) — skip it, don't poison later keys.
+                        tc.reset();
+                        continue;
+                    }
+                    let probe = v8::ValueSerializer::new(tc, Box::new(LumenValueSerializerImpl));
+                    probe.write_header();
+                    let wrote = probe.write_value(ctx, val);
+                    if tc.has_caught() {
+                        tc.reset();
+                        continue;
+                    }
+                    if wrote == Some(true) {
+                        wrapper.set(tc, key, val);
+                        has_any = true;
+                    }
+                }
+                if !has_any {
+                    return Vec::new();
+                }
+                // Every value in `wrapper` already round-tripped individually
+                // above, so this final pass is expected to succeed; handle
+                // failure defensively rather than assume it.
+                let serializer = v8::ValueSerializer::new(tc, Box::new(LumenValueSerializerImpl));
+                serializer.write_header();
+                let wrote = serializer.write_value(ctx, wrapper.into());
+                if tc.has_caught() {
+                    tc.reset();
+                    return Vec::new();
+                }
+                match wrote {
+                    Some(true) => serializer.release(),
+                    _ => Vec::new(),
+                }
+            })
+        });
+        match heap_snapshot::compress_heap(&raw) {
+            Ok(heap) => Ok(heap),
+            // Over the per-tab cap: skip heap persistence, same policy as the
+            // QuickJS backend (`QuickJsRuntime::suspend`) — never block
+            // hibernation on a large heap.
+            Err(heap_snapshot::HeapSnapshotError::TooLarge { .. }) => Ok(SuspendedHeap::default()),
+            Err(e) => Err(JsError::Runtime(e.to_string())),
+        }
     }
 
-    fn resume(_snapshot: SuspendedHeap) -> JsResult<Self> {
-        Self::new()
+    fn resume(snapshot: SuspendedHeap) -> JsResult<Self> {
+        let raw = heap_snapshot::decompress_heap(&snapshot)
+            .map_err(|e| JsError::Runtime(e.to_string()))?;
+        let rt = Self::new()?;
+        if raw.is_empty() {
+            return Ok(rt);
+        }
+        rt.run(|inner| -> JsResult<()> {
+            with_tc!(inner, |tc, ctx| {
+                let deserializer =
+                    v8::ValueDeserializer::new(tc, Box::new(LumenValueDeserializerImpl), &raw);
+                if deserializer.read_header(ctx) != Some(true) {
+                    return Err(JsError::Runtime("suspended heap: corrupt header".into()));
+                }
+                let value = deserializer.read_value(ctx).ok_or_else(|| {
+                    JsError::Runtime("suspended heap: failed to deserialize".into())
+                })?;
+                let Ok(obj) = v8::Local::<v8::Object>::try_from(value) else {
+                    // Nothing (or a non-object root) was captured — nothing to restore.
+                    return Ok(());
+                };
+                let own_props = obj.get_own_property_names(tc, Default::default()).ok_or_else(
+                    || JsError::Runtime("suspended heap: get_own_property_names failed".into()),
+                )?;
+                let global = ctx.global(tc);
+                for i in 0..own_props.length() {
+                    let Some(key) = own_props.get_index(tc, i) else {
+                        continue;
+                    };
+                    let Some(val) = obj.get(tc, key) else {
+                        continue;
+                    };
+                    global.set(tc, key, val);
+                }
+                Ok(())
+            })
+        })?;
+        Ok(rt)
     }
 }
+
+/// [`v8::ValueSerializerImpl`] with no custom host-object support: any
+/// non-cloneable value (a `Function`, mainly — F1 in the migration brief)
+/// throws `DataCloneError` via V8's default clone algorithm, which the
+/// `suspend()` loop catches (`TryCatch::has_caught`) and skips per candidate
+/// value.
+struct LumenValueSerializerImpl;
+
+impl v8::ValueSerializerImpl for LumenValueSerializerImpl {
+    fn throw_data_clone_error<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        message: v8::Local<'s, v8::String>,
+    ) {
+        let exc = v8::Exception::error(scope, message);
+        scope.throw_exception(exc);
+    }
+}
+
+/// [`v8::ValueDeserializerImpl`] with all defaults — `resume()` only ever
+/// reads plain data (no host objects), so `read_host_object` is never
+/// actually invoked.
+struct LumenValueDeserializerImpl;
+
+impl v8::ValueDeserializerImpl for LumenValueDeserializerImpl {}
 
 // ── Value converters ──────────────────────────────────────────────────────────
 
@@ -4441,5 +4603,93 @@ mod tests {
         }
         // Consumed — a second read returns None.
         assert!(rt.take_navigate_request().is_none());
+    }
+
+    // ── S11: suspend/resume (partial 10C.2) ───────────────────────────────────
+
+    #[test]
+    fn suspend_resume_round_trips_data_global() {
+        let mut rt = rt();
+        rt.eval("globalThis.__test = 42").unwrap();
+        let heap = rt.suspend().unwrap();
+        let resumed = V8JsRuntime::resume(heap).unwrap();
+        assert_eq!(resumed.get_global("__test").unwrap(), JsValue::Number(42.0));
+    }
+
+    #[test]
+    fn suspend_resume_round_trips_string_and_array() {
+        let mut rt = rt();
+        rt.eval(r#"globalThis.__name = "lumen"; globalThis.__items = [1, 2, 3];"#)
+            .unwrap();
+        let heap = rt.suspend().unwrap();
+        let resumed = V8JsRuntime::resume(heap).unwrap();
+        assert_eq!(
+            resumed.get_global("__name").unwrap(),
+            JsValue::String("lumen".into())
+        );
+        assert_eq!(
+            resumed.eval("__items[0] + __items[1] + __items[2]").unwrap(),
+            JsValue::Number(6.0)
+        );
+    }
+
+    #[test]
+    fn suspend_resume_round_trips_plain_object() {
+        let mut rt = rt();
+        rt.eval("globalThis.__state = { count: 7, label: 'ok' }")
+            .unwrap();
+        let heap = rt.suspend().unwrap();
+        let resumed = V8JsRuntime::resume(heap).unwrap();
+        assert_eq!(
+            resumed.eval("__state.count").unwrap(),
+            JsValue::Number(7.0)
+        );
+        assert_eq!(
+            resumed.eval("__state.label").unwrap(),
+            JsValue::String("ok".into())
+        );
+    }
+
+    #[test]
+    fn suspend_drops_closures_but_keeps_sibling_data() {
+        // F1: closures are not structured-cloneable. A function-valued global
+        // must not abort the whole capture — sibling data globals still
+        // round-trip, and the function is simply absent afterwards.
+        let mut rt = rt();
+        rt.eval("globalThis.__fn = function() { return 1; }; globalThis.__ok = 'kept';")
+            .unwrap();
+        let heap = rt.suspend().unwrap();
+        let resumed = V8JsRuntime::resume(heap).unwrap();
+        assert_eq!(
+            resumed.get_global("__ok").unwrap(),
+            JsValue::String("kept".into())
+        );
+        // The restored runtime never had `__fn` installed — reading it back
+        // yields `undefined`, not the original function.
+        assert_eq!(resumed.eval("typeof __fn").unwrap(), JsValue::String("undefined".into()));
+    }
+
+    #[test]
+    fn suspend_without_page_globals_restores_nothing() {
+        // No page script ran — only baseline (built-in) globals exist, so
+        // there is nothing new to capture. `compress_heap` always frames a
+        // non-empty zlib stream (magic + header), even over empty input, so
+        // the round-trip behavior is asserted instead of raw byte length.
+        let mut rt = rt();
+        let heap = rt.suspend().unwrap();
+        let resumed = V8JsRuntime::resume(heap).unwrap();
+        assert_eq!(
+            resumed.eval("typeof __anything").unwrap(),
+            JsValue::String("undefined".into())
+        );
+    }
+
+    #[test]
+    fn resume_of_empty_snapshot_yields_fresh_runtime() {
+        let resumed = V8JsRuntime::resume(SuspendedHeap::default()).unwrap();
+        assert_eq!(
+            resumed.eval("typeof __anything").unwrap(),
+            JsValue::String("undefined".into())
+        );
     }
 }
