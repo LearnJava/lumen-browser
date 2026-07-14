@@ -10406,6 +10406,7 @@ fn apply_container_inner(
             height: content_h,
             names: b.style.container_name.clone(),
             custom_props: b.style.custom_props.clone(),
+            style_props: crate::selector_query::computed_style_to_map(&b.style),
         };
         // Re-apply container rules to all direct + indirect descendants.
         for child in &mut b.children {

@@ -541,7 +541,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `container-type` / `container-name` | ✅ | |
 | `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
 | Container query units (`cq*`) | ✅ | cqw/cqh/cqi/cqb/cqmin/cqmax 2026-05-25 |
-| Style queries `style(--prop[: value])` | 🟡 | Phase 0 2026-07-02: single declaration, custom props only; value compare normalizes whitespace/commas 2026-07-12; `var()` chain resolved against container's own custom props 2026-07-15; non-custom props, `state()` ⬜ |
+| Style queries `style(prop[: value])` | 🟡 | Phase 0 2026-07-02: single declaration only; value compare normalizes whitespace/commas 2026-07-12; `var()` chain resolved against container's own custom props 2026-07-15; non-custom (standard) properties resolved against container's computed style 2026-07-15 (keyword/length string match, no value canonicalization — `color: red` won't match computed `rgb(...)`); boolean form still custom-props-only; `state()` ⬜ |
 
 ### [T3] Counters & Lists (rendering)
 

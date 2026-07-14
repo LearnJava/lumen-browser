@@ -7336,15 +7336,27 @@ mod tests {
     // ── CSS Container Style Queries (Phase 0) ──────────────────────────────
 
     fn style_ctx(props: &[(&str, &str)]) -> crate::ContainerContext {
-        let mut map = std::collections::HashMap::new();
-        for (k, v) in props {
-            map.insert(k.to_string(), v.to_string());
+        style_ctx_with_style_props(props, &[])
+    }
+
+    fn style_ctx_with_style_props(
+        custom_props: &[(&str, &str)],
+        style_props: &[(&str, &str)],
+    ) -> crate::ContainerContext {
+        let mut custom = std::collections::HashMap::new();
+        for (k, v) in custom_props {
+            custom.insert(k.to_string(), v.to_string());
+        }
+        let mut style = std::collections::HashMap::new();
+        for (k, v) in style_props {
+            style.insert(k.to_string(), v.to_string());
         }
         crate::ContainerContext {
             width: 200.0,
             height: Some(100.0),
             names: vec![],
-            custom_props: map,
+            custom_props: custom,
+            style_props: style,
         }
     }
 
@@ -7403,9 +7415,34 @@ mod tests {
     }
 
     #[test]
-    fn style_query_non_custom_property_returns_false() {
+    fn style_query_non_custom_property_unset_returns_false() {
         let ctx = style_ctx(&[]);
         assert!(!crate::evaluate_container_condition("style(width: 100px)", &ctx));
+    }
+
+    #[test]
+    fn style_query_non_custom_property_matches() {
+        let ctx = style_ctx_with_style_props(&[], &[("display", "flex")]);
+        assert!(crate::evaluate_container_condition("style(display: flex)", &ctx));
+    }
+
+    #[test]
+    fn style_query_non_custom_property_mismatch_returns_false() {
+        let ctx = style_ctx_with_style_props(&[], &[("display", "flex")]);
+        assert!(!crate::evaluate_container_condition("style(display: block)", &ctx));
+    }
+
+    #[test]
+    fn style_query_non_custom_property_keyword_case_insensitive() {
+        let ctx = style_ctx_with_style_props(&[], &[("display", "flex")]);
+        assert!(crate::evaluate_container_condition("style(display: FLEX)", &ctx));
+    }
+
+    #[test]
+    fn style_query_non_custom_property_boolean_form_returns_false() {
+        // Boolean `style(prop)` form is only recognized for custom properties.
+        let ctx = style_ctx_with_style_props(&[], &[("display", "flex")]);
+        assert!(!crate::evaluate_container_condition("style(display)", &ctx));
     }
 
     #[test]
@@ -7522,6 +7559,44 @@ mod tests {
         assert!(
             p.rect.height < 1.0,
             "container style(--theme: dark) should NOT apply with --theme: light, got height={}",
+            p.rect.height,
+        );
+    }
+
+    /// @container style(prop: value) — standard (non-custom) property, resolved
+    /// against the container's own computed style.
+    #[test]
+    fn container_style_query_standard_property_applies() {
+        let root = lay_measured(
+            "<div><p></p></div>",
+            "div { container-type: size; width: 200px; height: 100px; position: relative; }
+             @container style(position: relative) { p { height: 40px; } }",
+            400.0,
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            (p.rect.height - 40.0).abs() < 0.5,
+            "container style(position: relative) should apply, got height={}",
+            p.rect.height,
+        );
+    }
+
+    /// @container style(prop: value) — standard property query does not apply
+    /// when the container's computed value differs.
+    #[test]
+    fn container_style_query_standard_property_not_applies() {
+        let root = lay_measured(
+            "<div><p></p></div>",
+            "div { container-type: size; width: 200px; height: 100px; position: static; }
+             @container style(position: relative) { p { height: 40px; } }",
+            400.0,
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            p.rect.height < 1.0,
+            "container style(position: relative) should NOT apply with position:static, got height={}",
             p.rect.height,
         );
     }
