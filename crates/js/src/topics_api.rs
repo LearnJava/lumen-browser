@@ -1,33 +1,24 @@
-/// Topics API stub (Privacy Sandbox Topics API).
-///
-/// Exposes `document.browsingTopics()` and `DeprecatedTopicsButton` as defined
-/// by the Privacy Sandbox Topics API proposal.
-///
-/// Phase 0 scope (no real topic observation):
-/// - `document.browsingTopics([options])` → `Promise<[]>` — empty array; no
-///   topics stored or returned (observer isolation Phase 0).
-/// - `document.browsingTopics({skipObservation: true})` → `Promise<[]>` —
-///   same in Phase 0.
-/// - `HTMLButtonElement` with `browsingtopics` attribute (deprecated form —
-///   `<button browsingtopics>`) — attribute presence accessible via `hasAttribute`.
-///   `DeprecatedTopicsButton` — global alias for `HTMLButtonElement` that exposes
-///   a static `browsingTopics()` method returning `Promise<[]>`.
-///
-/// Phase 1: wire `_lumen_topics_get_topics` native hook to retrieve genuinely
-/// observed topics from a privacy-preserving per-origin store.
-use rquickjs::Ctx;
+//! Topics API stub (Privacy Sandbox Topics API).
+//!
+//! Exposes `document.browsingTopics()` and `DeprecatedTopicsButton` as defined
+//! by the Privacy Sandbox Topics API proposal.
+//!
+//! Phase 0 scope (no real topic observation):
+//! - `document.browsingTopics([options])` → `Promise<[]>` — empty array; no
+//!   topics stored or returned (observer isolation Phase 0).
+//! - `document.browsingTopics({skipObservation: true})` → `Promise<[]>` —
+//!   same in Phase 0.
+//! - `HTMLButtonElement` with `browsingtopics` attribute (deprecated form —
+//!   `<button browsingtopics>`) — attribute presence accessible via `hasAttribute`.
+//!   `DeprecatedTopicsButton` — global alias for `HTMLButtonElement` that exposes
+//!   a static `browsingTopics()` method returning `Promise<[]>`.
+//!
+//! Phase 1: wire `_lumen_topics_get_topics` native hook to retrieve genuinely
+//! observed topics from a privacy-preserving per-origin store.
 
-/// Install Topics API bindings into the JS context.
-///
-/// Must run after the DOM shim so that `document`, `Promise`, and
-/// `HTMLButtonElement` are available.
-pub fn install_topics_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(TOPICS_API_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_topics_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_topics_api` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-10): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_topics_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -35,6 +26,7 @@ pub(crate) fn install_topics_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lume
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const TOPICS_API_SHIM: &str = r#"
 (function(global) {
   'use strict';
@@ -65,114 +57,88 @@ const TOPICS_API_SHIM: &str = r#"
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_topics_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            // Minimal DOM shim: document object.
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                if (typeof globalThis.document === 'undefined') {
-                  globalThis.document = {};
-                }
-                "#,
-            )
-            .unwrap();
-            install_topics_api(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_topics_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            var window = globalThis;
+            if (typeof globalThis.document === 'undefined') {
+              globalThis.document = {};
+            }
+            "#,
+        )
+        .unwrap();
+        install_topics_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn browsing_topics_method_exists_on_document() {
-        with_topics_api(|ctx| {
-            let ok: bool = ctx
+        with_topics_api(|rt| {
+            let ok = rt
                 .eval("typeof document.browsingTopics === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn browsing_topics_returns_empty_array() {
-        with_topics_api(|ctx| {
-            ctx.eval::<(), _>(
+        with_topics_api(|rt| {
+            rt.eval(
                 "var __result = null; document.browsingTopics().then(function(v) { __result = v; });",
             )
             .unwrap();
-            loop {
-                if !ctx.execute_pending_job() {
-                    break;
-                }
-            }
-            let ok: bool = ctx
+            let ok = rt
                 .eval("Array.isArray(__result) && __result.length === 0")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn browsing_topics_with_skip_observation_resolves_empty() {
-        with_topics_api(|ctx| {
-            ctx.eval::<(), _>(
+        with_topics_api(|rt| {
+            rt.eval(
                 "var __r2 = null; document.browsingTopics({ skipObservation: true }).then(function(v) { __r2 = v; });",
             )
             .unwrap();
-            loop {
-                if !ctx.execute_pending_job() {
-                    break;
-                }
-            }
-            let ok: bool = ctx.eval("Array.isArray(__r2) && __r2.length === 0").unwrap();
-            assert!(ok);
+            let ok = rt.eval("Array.isArray(__r2) && __r2.length === 0").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn deprecated_topics_button_class_exists() {
-        with_topics_api(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof DeprecatedTopicsButton === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_topics_api(|rt| {
+            let ok = rt.eval("typeof DeprecatedTopicsButton === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn deprecated_topics_button_static_method_returns_empty_array() {
-        with_topics_api(|ctx| {
-            ctx.eval::<(), _>(
+        with_topics_api(|rt| {
+            rt.eval(
                 "var __dtb = null; DeprecatedTopicsButton.browsingTopics().then(function(v) { __dtb = v; });",
             )
             .unwrap();
-            loop {
-                if !ctx.execute_pending_job() {
-                    break;
-                }
-            }
-            let ok: bool = ctx
-                .eval("Array.isArray(__dtb) && __dtb.length === 0")
-                .unwrap();
-            assert!(ok);
+            let ok = rt.eval("Array.isArray(__dtb) && __dtb.length === 0").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn deprecated_topics_button_constructor_throws() {
-        with_topics_api(|ctx| {
-            let ok: bool = ctx
+        with_topics_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var threw = false;
@@ -181,7 +147,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

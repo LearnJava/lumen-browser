@@ -844,6 +844,33 @@ lumen-js --features v8-backend pip_bindings` — 4/4 green; default-feature `car
 green; `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both default and
 `v8-backend` features; `cargo check -p lumen-shell` (default) green.
 
+### S12b-10 - `topics_api.rs` (2026-07-14, branch p1-v8-s12b-10-topics-api)
+
+Tenth slice, selected via the systematic method: `comm -12` on `lib.rs`'s `install_*` call list vs
+`v8_runtime.rs`'s `install_*_v8` list gives 81 remaining fully-v8-ported candidates (post S12b-9);
+sorted by file size, `document_pip.rs` (131 lines) and `typed_om_api.rs` (148 lines) skipped as
+known traps (S12b-6/S12b-9 findings), `serial.rs` (151 lines) newly disqualified - its file-stem
+hits `dom.rs`'s `event_target_dependent_apis_installed` test (`typeof navigator.serial ===
+'object'`), and `scroll_snap_events.rs` (179 lines) also disqualified - its `fire_snap_changing`/
+`fire_snap_changed` `QuickJsRuntime` methods are exercised directly by 2 `dom.rs` tests
+(`fire_snap_changing_dispatches_event`, `fire_snap_changed_exposes_snap_targets`), a trap shape not
+caught by grepping class names alone (checked `lib.rs`'s `pub fn fire_*`/`take_*` methods against
+the candidate list, confirmed no other remaining candidate has a corresponding `QuickJsRuntime`
+method). `topics_api.rs` (187 lines) is clean: zero `dom.rs` hits for the file stem,
+`browsingTopics`, or `DeprecatedTopicsButton`. Pure JS-shim `eval` (no native bindings), the Privacy
+Sandbox Topics API Phase 0 stub (`document.browsingTopics()` -> `Promise<[]>`,
+`DeprecatedTopicsButton` surrogate class for `<button browsingtopics>`). Deleted the rquickjs
+`install_topics_api` fn + its `use rquickjs::Ctx` + the 6-test `rquickjs::{Context, Runtime}`-based
+`mod tests`; ported equivalent coverage as 6 new tests against `V8JsRuntime` +
+`install_topics_api_v8` directly (gated `#[cfg(all(test, feature = "v8-backend"))]`,
+`with_topics_api` single-helper pattern); dropped the call site in `lib.rs`'s
+`QuickJsRuntime::install_dom`. Top-of-file `///` doc comment converted to `//!` module-level doc
+(same `empty_line_after_doc_comments` clippy trigger as S12b-5/S12b-8, since the `use rquickjs::Ctx`
+line that used to sit right after it is gone). `cargo test -p lumen-js --features v8-backend
+topics_api` - 6/6 green; default-feature `cargo test -p lumen-js --lib` (full suite) - 2322/2322
+green; `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both default and
+`v8-backend` features; `cargo check -p lumen-shell` (default) green.
+
 ---
 
 ## Risks (Rev 2)
