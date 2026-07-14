@@ -42,6 +42,11 @@ backend-femtovg = ["lumen-paint/backend-femtovg"]
 # cargo run -p lumen-shell --no-default-features --features backend-wgpu,v8
 backend-wgpu = ["lumen-paint/backend-wgpu"]
 
+# Optional local AI layer (§12.5, §12.8; docs/tasks/ph3-ai-module.md, ADR-019).
+# NOT in default — the basic bundle stays exactly as-is (NullAiBackend, no
+# lumen-ai compiled in). Enable with --features ai.
+ai = ["dep:lumen-ai"]
+
 [dependencies]
 lumen-core.workspace = true
 # PH1-4: IPC to the out-of-process network service (NetworkServiceHandle, --network-service).
@@ -52,6 +57,8 @@ lumen-a11y.workspace = true
 lumen-devtools.workspace = true
 lumen-knowledge.workspace = true
 lumen-storage.workspace = true
+# Optional local AI layer (feature "ai"), see docs/tasks/ph3-ai-module.md + ADR-019.
+lumen-ai = { workspace = true, optional = true }
 lumen-js = { workspace = true, optional = true }
 lumen-network.workspace = true
 lumen-html-parser.workspace = true

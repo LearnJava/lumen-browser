@@ -1,0 +1,23 @@
+[package]
+name = "lumen-ai"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: optional local AI layer — embeddings, summarisation, RAG over own history/notes (§12.5, §12.8)"
+
+[features]
+default = []
+# Ollama HTTP backend (127.0.0.1:11434). No extra Rust deps beyond serde_json —
+# talks plain HTTP over std::net::TcpStream (see ADR-019).
+ollama = []
+
+[dependencies]
+lumen-core.workspace = true
+# Why this dependency (serde_json): JSON (de)serialization for the Ollama
+# `/api/embeddings` and `/api/generate` request/response bodies. Already a
+# permanent workspace dependency (crates/js, crates/driver, crates/mcp) —
+# reused here, not newly graduated.
+serde_json = "1.0"
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
