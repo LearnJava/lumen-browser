@@ -24,7 +24,28 @@
 
 **S0–S12a done (2026-07-14).** V8 is now `lumen-shell`'s default JS engine (ADR-018). Remaining:
 **S12b** — remove `rquickjs` entirely (tracked as its own XL slice, see the table below; true scope is
-117/130 files under `crates/js/src`, not a single session).
+117/130 files under `crates/js/src`, not a single session). **Re-scoped 2026-07-14 (branch
+p1-v8-s12b, scoping-only session, no code deleted)** — measured, not a single session even by S12a's
+own estimate: **2336 `#[test]` fns live in files that touch rquickjs**, of which **1047 are in
+`dom.rs`'s own `mod tests` (lines 12796–26677, ~13.9k lines) constructing `QuickJsRuntime` directly** —
+this is the real DOM behavioral suite, no v8-side equivalent exists yet. The remaining ~1250+ tests are
+scattered across the 84+22+... already-v8-ported modules (S5–S10) as **per-module `#[cfg(test)]` blocks
+that construct a bare `rquickjs::{Context, Runtime}` and call the module's rquickjs-only `install_*`
+directly** (e.g. `canvas2d.rs` 31, `webgpu.rs` 29, `worker.rs` 26, `offscreen_canvas.rs` 22,
+`webgl_bindings.rs` 21, `tc39_proposals.rs` 51, `subtle_crypto.rs` 39, `filesystem_access.rs` 33,
+`temporal_api.rs` 30) — these test the rquickjs *binding/wiring* layer, separate from
+`v8_runtime.rs`'s own 33 tests which only smoke-test the v8 side. **Deleting rquickjs code is gated on
+deleting-or-porting every one of these tests** — rquickjs is a hard (non-optional) dependency of
+`crates/js`, so `QuickJsRuntime` and every rquickjs-based `install_*`/test fn compiles unconditionally
+regardless of feature flags today; there is no cfg fence to hide behind. Recommended path (not yet
+started): treat each already-v8-ported module as its own small S12b sub-slice (delete the module's
+rquickjs `install_*` fn + its bare-`rquickjs::Context` tests, drop the call from
+`QuickJsRuntime::install_dom` in `lib.rs`, verify shared pure-Rust logic — if any — is still reachable
+from `v8_runtime.rs`'s existing native wrappers) — dozens of small, mechanically-similar, independently
+mergeable slices; save `dom.rs`'s 1047-test monolith for last, itself probably needing a further split
+by DOM sub-area (cache ~14648–14959, websocket ~15396–16150, storage ~16526, IndexedDB ~19220,
+fetch/XHR ~19617–19791, ...). No code changed in this session — see the S12b finding log entry below
+for the full breakdown before picking up implementation.
 
 **Interim mitigation (optional, independent of V8):** a hard JS execution
 budget/watchdog so pages like github.com fail gracefully (stop script, render
@@ -240,7 +261,7 @@ S10) — these take extra params too but are covered by their own slices below.
 | ✅ S10 | **worker + shared_worker + sw_worker** | Per-thread `Runtime`+`Context` (`worker.rs:293`) → per-thread `OwnedIsolate`; same channel protocol | worker tests green | Medium |
 | ✅ S11 | **suspend/resume (partial 10C.2)** | `suspend()`: enumerate own globals set by page scripts, serialize *data* via `v8::ValueSerializer` into `SuspendedHeap.compressed` (zstd, ≤5 MB); `resume()`: `ValueDeserializer` restore. **Closures are NOT serializable (F1) — the re-run-scripts fallback at `main.rs:14599` stays.** Optional: pure-JS-shim startup snapshot (F2), only if cheap. ЗАКРЫТ 2026-07-14 (branch p1-v8-s11). | `window.__test = 42` survives suspend→resume ✅ | Low |
 | ✅ S12a | **Cutover: default flip + gate cleanup** | shell default `quickjs` → `v8` (`crates/shell/Cargo.toml`); broaden the ~80 generic (non engine-specific) `#[cfg(feature = "quickjs")]` gates to `any(feature = "quickjs", feature = "v8")`; ADR-004 → Superseded, write `ADR-018-v8-cutover.md`; `CAPABILITIES.md` JS row → V8-default. ЗАКРЫТ 2026-07-14 (branch p1-v8-s12). | full graphic-test run green (141/141) | Medium — done |
-| ☐ S12b | **Cutover: rquickjs removal** | Remove `rquickjs` dep + all QuickJS-specific code (`QuickJsRuntime`, `QuickPersistentJs`, ~380 dual `install_*` bindings across 117 files in `crates/js/src`, `dom.rs` original `install_primitives`); kill `__lum_args__` workaround (`lib.rs:2126`); remove the `quickjs` Cargo feature; simplify the broadened `any(quickjs, v8)` gates back to unconditional. `navigator.userAgent` → `'Lumen/1.0.0'` (`dom.rs:5916`, version-bump commit only, unrelated to this slice) | `rquickjs` gone from `Cargo.lock`; `cargo test -p lumen-js`/`lumen-shell` green with only the `v8` feature in the dependency graph | High — the true scope of "remove rquickjs" (117/130 files reference it, `dom.rs` is 26.7k lines with a full parallel implementation); size this as its own multi-session effort, not a single slice |
+| ☐ S12b | **Cutover: rquickjs removal** | Remove `rquickjs` dep + all QuickJS-specific code (`QuickJsRuntime`, `QuickPersistentJs`, ~380 dual `install_*` bindings across 117 files in `crates/js/src`, `dom.rs` original `install_primitives`); kill `__lum_args__` workaround (`lib.rs:2126`); remove the `quickjs` Cargo feature; simplify the broadened `any(quickjs, v8)` gates back to unconditional. `navigator.userAgent` → `'Lumen/1.0.0'` (`dom.rs:5916`, version-bump commit only, unrelated to this slice) | `rquickjs` gone from `Cargo.lock`; `cargo test -p lumen-js`/`lumen-shell` green with only the `v8` feature in the dependency graph | High — measured 2026-07-14 (branch p1-v8-s12b, scoping only): 119 files, **2336 `#[test]` fns gated on this deletion** (1047 in `dom.rs`'s own suite, ~1250 more as per-module bare-`rquickjs::Context` tests in the already-v8-ported S5–S10 modules); every file's deletion requires porting-or-justifying its own tests first — genuinely dozens of sub-slices, not "a multi-session effort" but a multi-*week* one; see Findings log "S12b — scoping only" entry for the proposed breakdown |
 
 ### Session protocol for a fresh session picking this up
 
@@ -612,6 +633,45 @@ without any JS-*language*-level error — every failure was a DOM-shim property/
 gap. DoD item stands only partially met: "V8 executes a real React 18 bundle correctly" — yes; "a React 18
 app fully mounts with no errors" — no, blocked on BUG-280/BUG-281, tracked as follow-up work independent of
 S12b.
+
+### S12b — scoping only, no code deleted (2026-07-14, branch p1-v8-s12b)
+
+Measured the real deletion surface before touching anything, per S12a's own warning that "the true
+scope... size this as its own multi-session effort." It's bigger than that note implied:
+
+- `crates/js` has **no `quickjs` feature at all** — `rquickjs` is a hard, non-optional dependency
+  (`crates/js/Cargo.toml:36`). The `quickjs`/`v8` features that got flipped in S12a live one level up,
+  in `crates/shell/Cargo.toml`, and only select which runtime struct the *shell* constructs.
+  `QuickJsRuntime` and every rquickjs-based binding in `crates/js` compile unconditionally today,
+  regardless of any feature flag — `cargo test -p lumen-js` (no flags) already runs the full rquickjs
+  suite; `cargo test -p lumen-js --features v8-backend` is a separate, additive run, not a replacement.
+- `grep -rl 'rquickjs\|QuickJs\|quickjs'` over `crates/js/src` → **119 files** (close to the S12a note's
+  117/130). Two heaviest: `dom.rs` (26677 lines) and `v8_runtime.rs` (4695 lines, the v8-side mirror).
+- **2336 `#[test]` fns total** across those 119 files. **1047 live in `dom.rs`'s `mod tests`**
+  (lines 12796–26677 — more than half the file), each built on a `runtime_with_*(...) -> QuickJsRuntime`
+  helper calling `QuickJsRuntime::new()`. This is the actual DOM-behavior regression suite (events,
+  forms, storage, IDB, fetch/XHR, cache, websockets, history, scroll...) — `v8_runtime.rs` has no
+  equivalent (only 33 tests total, all smoke-level).
+- The other ~1250 tests sit in the individual already-v8-ported module files (S5–S10's 84+ modules),
+  each with its own small `#[cfg(test)] mod tests` that builds a bare `rquickjs::{Context, Runtime}`
+  (not `QuickJsRuntime`) and calls that module's rquickjs-only `install_*` directly — e.g. `canvas2d.rs`
+  31 tests via `rquickjs::{Context, Runtime}` + `install_canvas2d_bindings`, similarly `webgpu.rs` (29),
+  `worker.rs` (26), `offscreen_canvas.rs` (22), `tc39_proposals.rs` (51), `subtle_crypto.rs` (39),
+  `filesystem_access.rs` (33), `temporal_api.rs` (30). These test the rquickjs binding/wiring layer
+  specifically — separate from whatever integration coverage the graphic-test suite gives the v8 side.
+- **Net conclusion**: rquickjs cannot be removed file-by-file for free — every deletion is gated on
+  deciding the fate of that file's own rquickjs-based tests (port to `V8JsRuntime`/v8 compat types, or
+  delete with a documented equivalent-coverage justification per CLAUDE.md's "tests not weakened" bar).
+  Nothing was deleted this session — this is a scoping pass only, to avoid the "half-finished deletion
+  sweep" S12a explicitly flagged as the failure mode to avoid.
+- **Proposed slice breakdown for follow-up sessions** (not started): one small S12b-N slice per
+  already-v8-ported module (mechanically similar: delete the rquickjs `install_*` fn + its local
+  `rquickjs::Context`-based tests, drop the call site in `lib.rs`'s `QuickJsRuntime::install_dom`,
+  confirm any pure-Rust logic the module shares with `v8_runtime.rs`'s native wrappers stays reachable),
+  batched by module group (S5–S7's 84 simple modules first, S8–S10's stateful hot modules next); save
+  `dom.rs`'s 1047-test monolith for a dedicated final slice (or slices split by DOM sub-area — line
+  ranges noted above), since it has no v8-side test equivalent to port against yet and needs the most
+  careful triage.
 
 ---
 
