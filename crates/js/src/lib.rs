@@ -1144,12 +1144,6 @@ impl QuickJsRuntime {
                 eprintln!("Content Index API init failed: {}", e);
             }
 
-            // Install Digital Credentials API Phase 0 — DigitalCredential class,
-            // navigator.credentials.get({digital:...}) → NotSupportedError.
-            if let Err(e) = digital_credentials::install_digital_credentials_api(&ctx) {
-                eprintln!("Digital Credentials API init failed: {}", e);
-            }
-
             // Install URL Pattern API (WHATWG URLPattern §3) — pure JS implementation.
             // Provides new URLPattern({pathname, search, hash, hostname}) with .test() and .exec().
             if let Err(e) = url_pattern::install_url_pattern_api(&ctx) {

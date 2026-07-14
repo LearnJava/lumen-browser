@@ -10,19 +10,9 @@
 //! Phase 1: native binding `_lumen_digital_credential_get(requestJson)` for
 //! OS wallet integration (Android Credential Manager / iOS AuthenticationServices).
 
-use rquickjs::Ctx;
-
-/// Install Digital Credentials API stubs into the JS context.
-///
-/// Must run after the credentials shim so that the `container.get()` path
-/// is already wired (this module monkey-patches the `options.digital` branch).
-pub fn install_digital_credentials_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(DIGITAL_CREDENTIALS_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_digital_credentials_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_digital_credentials_api` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-3): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_digital_credentials_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -30,6 +20,7 @@ pub(crate) fn install_digital_credentials_api_v8(rt: &crate::v8_runtime::V8JsRun
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const DIGITAL_CREDENTIALS_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -73,20 +64,16 @@ const DIGITAL_CREDENTIALS_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install_prereqs(ctx: &rquickjs::Ctx) {
-        // Minimal credentials stub
-        ctx.eval::<(), _>(
+    fn with_digital_credentials(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
             r#"
             if (typeof DOMException === 'undefined') {
                 function DOMException(msg, name) {
@@ -107,64 +94,61 @@ mod tests {
             "#,
         )
         .unwrap();
-        install_digital_credentials_api(ctx).unwrap();
+        install_digital_credentials_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn digital_credential_class_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx.eval("typeof DigitalCredential === 'function'").unwrap();
-            assert!(ok);
+        with_digital_credentials(|rt| {
+            let ok = rt.eval("typeof DigitalCredential === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn digital_credential_constructor_throws() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx
+        with_digital_credentials(|rt| {
+            let ok = rt
                 .eval(
                     r#"
-                    var threw = false;
-                    try { new DigitalCredential(); } catch(e) { threw = e instanceof TypeError; }
-                    threw
+                    (function() {
+                        var threw = false;
+                        try { new DigitalCredential(); } catch(e) { threw = e instanceof TypeError; }
+                        return threw;
+                    })()
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn credentials_get_digital_returns_rejected_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
+        with_digital_credentials(|rt| {
             // The returned value must be a Promise (which is pre-rejected)
-            let ok: bool = ctx
+            let ok = rt
                 .eval(
                     r#"
-                    var p = navigator.credentials.get({ digital: { providers: [] } });
-                    p instanceof Promise
+                    (function() {
+                        var p = navigator.credentials.get({ digital: { providers: [] } });
+                        return p instanceof Promise;
+                    })()
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn digital_credential_get_binding_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx
+        with_digital_credentials(|rt| {
+            let ok = rt
                 .eval("typeof _lumen_digital_credential_get === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }
