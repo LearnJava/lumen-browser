@@ -814,6 +814,36 @@ v8-backend compute_pressure` — 5/5 green; default-feature `cargo test -p lumen
 compute_pressure` — 0 tests; `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both
 default and `v8-backend` features.
 
+### S12b-9 — `pip_bindings.rs` (2026-07-14, branch p1-v8-s12b-9-typed-om)
+
+Ninth slice. First candidate picked (`typed_om_api.rs`, 148 lines, `comm -12` shows it fully
+v8-ported) turned out to be a trap of exactly the kind S12b-6's note warned about: the file itself
+has zero `dom.rs` references, but its *class names* (`CSSStyleValue`/`CSSUnitValue`/etc.) are
+exercised by 12 tests in `dom.rs`'s own suite named `css_typed_om_*` — the S12b-6 selection method
+(grep `dom.rs` for the module's file-stem) misses this because the dom.rs test names use the
+feature name, not the file name. Deleting the rquickjs install call site broke 10 of those 12 tests
+(`cargo test -p lumen-js typed_om` — 10 failed) before this was caught; reverted `typed_om_api.rs`
+and `lib.rs` in full and picked a different module rather than untangling `dom.rs`'s monolith
+mid-slice (that triage is explicitly deferred to `dom.rs`'s own dedicated final slice per the
+breakdown note). Lesson for future slices: cross-check `dom.rs` against the candidate's exported
+JS class/API names (`grep -oE '(function|class) [A-Z][A-Za-z0-9_]*'` on the candidate file), not
+just the file stem.
+
+Picked `pip_bindings.rs` (175 lines) instead: native `_lumen_pip_enter`/`_lumen_pip_exit` hooks
+(process-global `Vec<PipRequest>` queue the shell drains each tick to drive the OS PiP window),
+already fully v8-ported (`into_v8_fn1` + `register_native`, S5-S7 batch 2). Zero `dom.rs` hits for
+either its native names or `PipRequest`. Deleted the rquickjs `install_pip_bindings` fn + its
+`use rquickjs::{function::Opt, Ctx, Function}` + the 4-test `rquickjs::{Context, Runtime}`-based
+`mod tests`; ported equivalent coverage as 4 new tests against `V8JsRuntime` +
+`install_pip_bindings_v8` (gated `#[cfg(all(test, feature = "v8-backend"))]`, `with_pip_bindings`
+single-helper pattern); dropped the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. The
+process-global queue (`enqueue`/`take_pip_requests`/`PipRequest`) stays unconditional — the shell
+(`crates/shell/src/main.rs:10524`) drains it regardless of which JS engine is active. `cargo test -p
+lumen-js --features v8-backend pip_bindings` — 4/4 green; default-feature `cargo test -p lumen-js
+--lib` (full suite, not just a name filter, to catch `dom.rs` cross-references this time) — 2328/2328
+green; `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both default and
+`v8-backend` features; `cargo check -p lumen-shell` (default) green.
+
 ---
 
 ## Risks (Rev 2)
