@@ -673,6 +673,23 @@ scope... size this as its own multi-session effort." It's bigger than that note 
   ranges noted above), since it has no v8-side test equivalent to port against yet and needs the most
   careful triage.
 
+### S12b-1 — `badging.rs` (2026-07-14, branch p1-v8-s12b-1-badging)
+
+First concrete slice of the breakdown above, used as a template for the remaining S5–S7 simple
+modules. `badging.rs` had no native state (pure JS-shim `eval`), making it the smallest clean
+example: deleted the rquickjs `install_badging_bindings` fn + its `use rquickjs::Ctx` + its
+4-test `rquickjs::Context`-based `mod tests`; ported equivalent coverage as 4 new tests against
+`V8JsRuntime` + `install_badging_bindings_v8` directly (gated `#[cfg(all(test, feature =
+"v8-backend"))]`, since that's the only cfg under which the v8 install fn and `BADGING_SHIM`
+const compile); dropped the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `pub mod
+badging;` stays (still holds the live v8-side fn). Net effect: badging is no longer installed
+under the (already non-default) QuickJS runtime — accepted, matches this slice pattern's intent
+per the "Proposed slice breakdown" note above. `cargo test -p lumen-js --features v8-backend
+badging` — 4/4 green; default-feature `cargo test -p lumen-js badging` — 0 tests (as expected,
+module is v8-only now). Repeat this exact shape for the remaining ~83 S5–S7 modules; modules with
+thread-local/shared native state (e.g. `canvas2d.rs`) will need extra care porting that state
+setup into the v8-side test harness.
+
 ---
 
 ## Risks (Rev 2)
