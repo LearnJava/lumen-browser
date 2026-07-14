@@ -600,6 +600,111 @@ impl Drop for OwnedNativeFn {
     }
 }
 
+// ── Scoped native functions (Ph3 V8 migration S9) ───────────────────────────
+//
+// The `JsValue`-based `V8NativeFn` above cannot carry a JS `Function` argument
+// or hold a live `v8::Global<Function>` GC root — `JsValue` has no function
+// variant (`v8_to_jsvalue` collapses functions to `Null`). `V8NativeFnScoped`
+// gives a native raw access to the call scope and `FunctionCallbackArguments`
+// instead, so it can read `Local<Function>` handles and mint `Global`s from
+// them. Used only by the WASM host-import bridge (`crate::wasm::v8_bridge`) —
+// every other native goes through the ergonomic `into_v8_fnN` path above.
+
+/// Object-safe trait for natives needing raw V8 scope/argument access.
+pub(crate) trait V8NativeFnScoped: Send + 'static {
+    /// Invoke the native function with the live call scope, raw arguments and
+    /// return-value slot (mirrors V8's own `FunctionCallback` shape).
+    fn call_scoped(
+        &self,
+        scope: &mut v8::PinScope,
+        args: &v8::FunctionCallbackArguments,
+        rv: &mut v8::ReturnValue,
+    );
+}
+
+impl<F> V8NativeFnScoped for F
+where
+    F: Fn(&mut v8::PinScope, &v8::FunctionCallbackArguments, &mut v8::ReturnValue)
+        + Send
+        + 'static,
+{
+    fn call_scoped(
+        &self,
+        scope: &mut v8::PinScope,
+        args: &v8::FunctionCallbackArguments,
+        rv: &mut v8::ReturnValue,
+    ) {
+        self(scope, args, rv)
+    }
+}
+
+/// Owns a double-boxed `V8NativeFnScoped + Send` allocated for `v8::External`.
+/// Twin of [`OwnedNativeFn`] for the scoped trait object.
+pub(crate) struct OwnedNativeFnScoped(pub *mut Box<dyn V8NativeFnScoped + Send>);
+
+// SAFETY: the pointer was created from `Box<Box<dyn V8NativeFnScoped + Send>>`,
+// and `dyn V8NativeFnScoped + Send` is `Send`.
+unsafe impl Send for OwnedNativeFnScoped {}
+
+impl Drop for OwnedNativeFnScoped {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: created by Box::into_raw(Box::new(f))
+            unsafe {
+                drop(Box::from_raw(self.0));
+            }
+        }
+    }
+}
+
+/// Universal V8 trampoline for scoped natives — mirrors [`native_fn_trampoline`]
+/// but hands the closure the live scope/arguments/return-value directly instead
+/// of pre-converting arguments to `JsValue`.
+pub(crate) fn native_fn_trampoline_scoped(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let data: v8::Local<v8::Value> = args.data();
+    let ext: v8::Local<v8::External> = match data.try_into() {
+        Ok(e) => e,
+        Err(_) => return, // should never happen
+    };
+    // SAFETY: pointer was stored by `register_v8_native_scoped` from a
+    // `Box::into_raw` call. It is kept alive in `V8Inner::native_fn_store_scoped`
+    // for the lifetime of the isolate.
+    let fn_ref: &dyn V8NativeFnScoped =
+        unsafe { &**(ext.value() as *const Box<dyn V8NativeFnScoped + Send>) };
+    fn_ref.call_scoped(scope, &args, &mut rv);
+}
+
+/// Register one scoped native (see [`V8NativeFnScoped`]) as a global JS function `name`.
+///
+/// `store` must be `V8Inner::native_fn_store_scoped`; it keeps the closure
+/// alive for the isolate's lifetime, mirroring [`register_v8_native`].
+pub(crate) fn register_v8_native_scoped(
+    scope: &mut v8::PinScope<'_, '_>,
+    ctx: v8::Local<'_, v8::Context>,
+    store: &mut Vec<OwnedNativeFnScoped>,
+    name: &str,
+    f: Box<dyn V8NativeFnScoped + Send>,
+) -> JsResult<()> {
+    let outer: Box<Box<dyn V8NativeFnScoped + Send>> = Box::new(f);
+    let thin_ptr: *mut Box<dyn V8NativeFnScoped + Send> = Box::into_raw(outer);
+    store.push(OwnedNativeFnScoped(thin_ptr));
+
+    let ext = v8::External::new(scope, thin_ptr as *mut c_void);
+    let func = v8::Function::builder(native_fn_trampoline_scoped)
+        .data(ext.into())
+        .build(scope)
+        .ok_or_else(|| JsError::Runtime(format!("V8: failed to create function '{name}'")))?;
+
+    let key = v8::String::new(scope, name)
+        .ok_or_else(|| JsError::Runtime(format!("V8: OOM creating key '{name}'")))?;
+    ctx.global(scope).set(scope, key.into(), func.into());
+    Ok(())
+}
+
 // ── V8 value conversion helpers ─────────────────────────────────────────────
 
 /// Convert a `v8::Local<Value>` to `JsValue` (best-effort; complex types → Null).

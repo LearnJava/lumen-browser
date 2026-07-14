@@ -239,7 +239,7 @@ above). S5-S7 is now fully closed (84/84 simple modules ported).
 webgl_canvas (→ S8); webassembly, webgpu (→ S9); worker, shared_worker, sw_worker (→
 S10) — these take extra params too but are covered by their own slices below.
 | ✅ S8 | **canvas2d + webgl_canvas** | Hand-port (hot path, 85 rquickjs mentions; pixel queues via `flush_canvas_updates`) | canvas graphic tests pass under v8 feature | Medium |
-| ☐ S9 | **wasm + webgpu** | `Persistent<Function>` GC roots → `v8::Global<Function>`; keep the `wasm::clear_registry()` teardown pattern (`lib.rs:401`) | wasm + webgpu test suites green (note: webgpu test flaky under load — rerun before blaming the port) | Medium |
+| ✅ S9 | **wasm + webgpu** | `Persistent<Function>` GC roots → `v8::Global<Function>`; keep the `wasm::clear_registry()` teardown pattern (`lib.rs:401`) | wasm + webgpu test suites green (note: webgpu test flaky under load — rerun before blaming the port) | Medium |
 | ☐ S10 | **worker + shared_worker + sw_worker** | Per-thread `Runtime`+`Context` (`worker.rs:293`) → per-thread `OwnedIsolate`; same channel protocol | worker tests green | Medium |
 | ☐ S11 | **suspend/resume (partial 10C.2)** | `suspend()`: enumerate own globals set by page scripts, serialize *data* via `v8::ValueSerializer` into `SuspendedHeap.compressed` (zstd, ≤5 MB); `resume()`: `ValueDeserializer` restore. **Closures are NOT serializable (F1) — the re-run-scripts fallback at `main.rs:14599` stays.** Optional: pure-JS-shim startup snapshot (F2), only if cheap | `tests/v8_snapshot.rs`: `window.__test = 42` survives suspend→resume | Low |
 | ☐ S12 | **Cutover + cleanup** | shell default `quickjs` → `v8`; remove `rquickjs` dep + `quickjs-backend` code; kill `__lum_args__` workaround; ADR-004 → Superseded, write `ADR-015-v8-migration.md`; `CAPABILITIES.md` JS row → V8; `navigator.userAgent` → `'Lumen/1.0.0'` (`dom.rs:5916`, version-bump commit only); React 18 CRA demo loads without JS errors (via `take_console_messages`) | `rquickjs` gone from `Cargo.lock`; full graphic-test run green | Medium (the flag-flip exposes everything at once) |
@@ -340,6 +340,65 @@ produced a display list **byte-for-byte identical** to the default (QuickJS)
 build's dump — same 6 `DrawImage src="canvas:N"` entries at identical
 coordinates, confirming `getContext('2d')`, `fillRect`, `arc`, path
 fill/stroke, and `drawImage` all execute correctly through the V8 bindings.
+
+### S9 — wasm + webgpu (2026-07-14, branch p1-v8-s9)
+
+`webgpu.rs` confirmed S8's prediction: zero `Persistent` usage, so
+`install_webgpu_bindings_v8` ports unchanged through the ergonomic
+`into_v8_fnN` compat layer (every native is `f64`/`u32`/`String`/`bool`/
+`Vec<u8>`); without the `webgpu` Cargo feature it's just `rt.eval(WEBGPU_SHIM)`
+— zero natives, mirroring `webgl_canvas`'s S8 shim-eval pattern.
+
+`webassembly.rs` is the actual GC-root slice. The generic `V8NativeFn`/
+`JsValue` compat layer cannot carry a JS `Function` (arrays/functions collapse
+to `JsValue::Null` in `v8_to_jsvalue`), so a new parallel mechanism was added:
+`v8_compat::V8NativeFnScoped` — a second, object-safe native trait giving raw
+`(scope, FunctionCallbackArguments, ReturnValue)` access instead of the
+`JsValue` abstraction, with its own trampoline (`native_fn_trampoline_scoped`)
+and store (`V8Inner::native_fn_store_scoped`, twin of `native_fn_store`).
+`V8JsRuntime::register_native_scoped` mirrors `register_native`. Used for the
+5 wasm natives that need it: `__lumen_wasm_compile` (throws `CompileError` on
+decode failure — `IntoJsReturn` has no error variant), `__lumen_wasm_instantiate`
+(captures the JS import-function array as `Vec<v8::Global<v8::Function>>`),
+`__lumen_wasm_call` (may re-enter a host import mid-call, needs a live scope
+to invoke the stored `Global`), and `__lumen_wasm_global_get`/`_set` (need
+exact `BigInt` for `i64`, which `f64`-only `FromJsValue`/`IntoJsReturn` would
+truncate past 2^53).
+
+`wasm::v8_bridge` (new submodule of `wasm/mod.rs`, `#[cfg(feature =
+"v8-backend")]`) is a **separate** thread-local instance registry from the
+QuickJS one — module ids are shared via the existing (backend-agnostic)
+`with_module`/`REGISTRY.modules`, but V8 instances get their own
+`next_instance`/`instances` map, so the two backends never collide on ids even
+if both features are compiled into the same binary. `JsHost` there implements
+`HostImports` by resurrecting a `v8::Local<Function>` from the stored `Global`
+via `v8::Local::new(scope, &global)` and calling it with `Function::call` —
+confirmed this actually resurrects and invokes correctly (not just compiles)
+via a dedicated test, not just a display-list diff (no display-list equivalent
+exists for wasm).
+
+`crate::wasm::v8_bridge::clear_registry()` is wired into `v8_thread_main`'s
+teardown (right before `inner` drops), mirroring `lib.rs:447`'s
+`wasm::clear_registry()` call for QuickJS. Unlike QuickJS, V8's `Global::drop`
+safely no-ops on an already-disposed isolate (checks `isolate_liveness`) — so
+this isn't a correctness requirement to avoid an abort like the QuickJS
+`gc_obj_list` assertion (BUG-222), but it is still the correct, leak-free
+teardown order (releases the persistent handle while the isolate can still
+process the reset).
+
+**Verification**: `cargo test -p lumen-js --features v8-backend` — 2402 lib
+unit tests (2399 existing + 3 new `tests_v8` modules) + 68 integration tests,
+all green; same with `--features v8-backend,webgpu` added. `cargo clippy -p
+lumen-js --all-targets --features v8-backend[,webgpu] -- -D warnings` clean on
+both combinations, and on the default (QuickJS-only) build. The 2 new
+`webassembly::tests_v8` tests are the load-bearing proof for this slice: one
+exported-call round-trip, and one host-import round-trip reusing the same WASM
+bytes as `tests::webassembly_i64_import_arg_and_result_use_bigint` — the
+`i64`/`BigInt` host-import test specifically proves the `v8::Global<Function>`
+GC-root mechanism resurrects and invokes correctly at runtime, not merely
+compiles. `webgpu::tests_v8` adds one shim-smoke test (`navigator.gpu` exists).
+`offscreen_canvas`/`worker`/`shared_worker`/`sw_worker` remain unported, per
+the S8 note and the S10 slice below.
 
 ---
 

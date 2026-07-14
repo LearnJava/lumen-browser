@@ -635,9 +635,9 @@
       {
        "id": "P3-v8-s9",
        "title": "V8 S9: wasm + webgpu",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "S9: wasm + webgpu — Persistent<Function> GC-корни → v8::Global<Function>, паттерн wasm::clear_registry() сохранить; webgpu-тест флачит под нагрузкой — ре-ран"
+       "note": "S9 ЗАКРЫТ 2026-07-14 (branch p1-v8-s9): wasm — новый V8NativeFnScoped compat-механизм (v8_compat.rs) для натив, которым нужен сырой scope (Function-аргументы не выразить через JsValue): __lumen_wasm_compile/instantiate/call/global_get/global_set; host-импорты хранятся как Vec<v8::Global<v8::Function>> в отдельном thread-local реестре wasm::v8_bridge (модули общие через with_module, инстансы раздельны); webgpu — 0 натив без Persistent (подтверждён прогноз S8), порт через into_v8_fnN без изменений. cargo test -p lumen-js --features v8-backend 2402+68 зелёные (+3 новых теста tests_v8, включая host-import i64/BigInt round-trip доказывающий что Global<Function> реально резолвится и вызывается); clippy чист на v8-backend[,webgpu] и дефолтной сборке"
       },
       {
        "id": "P3-v8-s10",

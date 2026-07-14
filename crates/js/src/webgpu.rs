@@ -1355,6 +1355,407 @@ const WEBGPU_SHIM: &str = r#"(function() {
 })();
 "#;
 
+/// V8 port of [`install_webgpu_bindings`] (Ph3 V8 migration S9).
+///
+/// The natives here carry no `Persistent`/`Global` GC roots (confirmed by the
+/// S8 slice's finding that WebGPU is a plain data/handle bridge — every arg
+/// and return type is `f64`/`u32`/`String`/`bool`/`Vec<u8>`, all already
+/// covered by `v8_compat`'s `FromJsValue`/`IntoJsReturn`), so this ports
+/// through the ergonomic `into_v8_fnN` compat layer unchanged, mirroring
+/// `webgl_canvas`'s S8 `rt.eval(WEBGL_SHIM)` pattern for the shim itself.
+/// Without the `webgpu` Cargo feature (default), `navigator.gpu` stays a pure
+/// in-memory JS shim (Phase 0) under V8 too — no natives are registered.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_webgpu_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+
+    #[cfg(feature = "webgpu")]
+    install_webgpu_natives_v8(rt)?;
+    rt.eval(WEBGPU_SHIM)?;
+    Ok(())
+}
+
+/// Registers the real wgpu-backed `_lumen_webgpu_*` bridge natives. V8 twin of
+/// [`install_webgpu_natives`] — see that function's per-native doc comments
+/// for the wire protocol (JSON-encoded op lists, opaque numeric handles).
+#[cfg(all(feature = "v8-backend", feature = "webgpu"))]
+fn install_webgpu_natives_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4};
+    use lumen_paint::webgpu_compute;
+
+    rt.register_native(
+        "_lumen_webgpu_adapter_info",
+        into_v8_fn0(|| -> String {
+            match webgpu_compute::adapter_info() {
+                Some(i) => serde_json::json!({
+                    "vendor": i.vendor,
+                    "architecture": i.architecture,
+                    "device": i.device,
+                    "description": i.description,
+                })
+                .to_string(),
+                None => String::new(),
+            }
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_validate_shader",
+        into_v8_fn1(|code: String| -> String { webgpu_compute::validate_wgsl(&code).unwrap_or_default() }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_buffer_create",
+        into_v8_fn3(|size: f64, usage: u32, mapped: bool| -> f64 {
+            webgpu_compute::buffer_create(size as u64, usage, mapped).unwrap_or(0) as f64
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_buffer_write",
+        into_v8_fn3(|id: f64, offset: f64, data: Vec<u8>| -> bool {
+            webgpu_compute::buffer_write(id as u64, offset as u64, &data)
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_buffer_read",
+        into_v8_fn3(|id: f64, offset: f64, size: f64| -> Option<Vec<u8>> {
+            webgpu_compute::buffer_read(id as u64, offset as u64, size as u64)
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_buffer_destroy",
+        into_v8_fn1(|id: f64| {
+            webgpu_compute::buffer_destroy(id as u64);
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_shader_create",
+        into_v8_fn1(|code: String| -> f64 { webgpu_compute::shader_create(&code).unwrap_or(0) as f64 }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_compute_pipeline_create",
+        into_v8_fn2(|shader: f64, entry: String| -> f64 {
+            webgpu_compute::compute_pipeline_create(shader as u64, &entry).unwrap_or(0) as f64
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_pipeline_bind_group_layout",
+        into_v8_fn2(|pipeline: f64, group: u32| -> f64 {
+            webgpu_compute::pipeline_bind_group_layout(pipeline as u64, group).unwrap_or(0) as f64
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_bind_group_create",
+        into_v8_fn2(|layout: f64, entries: String| -> f64 {
+            webgpu_bind_group_create_impl(layout, &entries)
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_compute_pipeline_destroy",
+        into_v8_fn1(|id: f64| {
+            webgpu_compute::compute_pipeline_destroy(id as u64);
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_texture_create",
+        into_v8_fn4(|width: f64, height: f64, format: String, usage: u32| -> f64 {
+            webgpu_compute::texture_create(width as u32, height as u32, &format, usage).unwrap_or(0) as f64
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_texture_destroy",
+        into_v8_fn1(|id: f64| {
+            webgpu_compute::texture_destroy(id as u64);
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_render_pipeline_create",
+        into_v8_fn1(|config: String| -> f64 { webgpu_render_pipeline_create_impl(&config) }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_render_pipeline_bind_group_layout",
+        into_v8_fn2(|pipeline: f64, group: u32| -> f64 {
+            webgpu_compute::render_pipeline_bind_group_layout(pipeline as u64, group).unwrap_or(0) as f64
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_render_pipeline_destroy",
+        into_v8_fn1(|id: f64| {
+            webgpu_compute::render_pipeline_destroy(id as u64);
+        }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_submit",
+        into_v8_fn1(|ops_json: String| -> bool { webgpu_submit_impl(&ops_json) }),
+    )?;
+
+    rt.register_native(
+        "_lumen_webgpu_canvas_present",
+        into_v8_fn2(|nid: u32, texture: f64| -> bool {
+            let Some((w, h, rgba)) = webgpu_compute::texture_read_rgba(texture as u64) else {
+                return false;
+            };
+            crate::canvas2d::present_rgba(nid, w, h, &rgba);
+            true
+        }),
+    )?;
+
+    Ok(())
+}
+
+/// Shared JSON-decode body for `_lumen_webgpu_bind_group_create`, factored
+/// out of the closure so both backends' `entries` parsing logic can stay
+/// byte-for-byte identical to [`install_webgpu_natives`]'s inline closure.
+#[cfg(all(feature = "v8-backend", feature = "webgpu"))]
+fn webgpu_bind_group_create_impl(layout: f64, entries: &str) -> f64 {
+    use lumen_paint::webgpu_compute;
+
+    let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(entries) else {
+        return 0.0;
+    };
+    let mut decoded = Vec::with_capacity(parsed.len());
+    for e in &parsed {
+        let u = |k: &str| e.get(k).and_then(serde_json::Value::as_u64);
+        let (Some(binding), Some(buffer)) = (u("binding"), u("buffer")) else {
+            return 0.0;
+        };
+        decoded.push(webgpu_compute::BufferBindEntry {
+            binding: binding as u32,
+            buffer,
+            offset: u("offset").unwrap_or(0),
+            size: u("size").unwrap_or(0),
+        });
+    }
+    webgpu_compute::bind_group_create(layout as u64, &decoded).unwrap_or(0) as f64
+}
+
+/// Shared JSON-decode body for `_lumen_webgpu_render_pipeline_create`. Twin
+/// of [`webgpu_bind_group_create_impl`] — see [`install_webgpu_natives`]'s
+/// inline closure for the field-by-field rationale.
+#[cfg(all(feature = "v8-backend", feature = "webgpu"))]
+fn webgpu_render_pipeline_create_impl(config: &str) -> f64 {
+    use lumen_paint::webgpu_compute;
+
+    let Ok(cfg) = serde_json::from_str::<serde_json::Value>(config) else {
+        return 0.0;
+    };
+    let u = |k: &str| cfg.get(k).and_then(serde_json::Value::as_u64);
+    let s = |k: &str| cfg.get(k).and_then(serde_json::Value::as_str).unwrap_or("");
+    let (Some(vs), Some(fs)) = (u("vs"), u("fs")) else {
+        return 0.0;
+    };
+    let mut buffers = Vec::new();
+    if let Some(bufs) = cfg.get("buffers").and_then(serde_json::Value::as_array) {
+        for b in bufs {
+            let mut attributes = Vec::new();
+            if let Some(attrs) = b.get("attributes").and_then(serde_json::Value::as_array) {
+                for a in attrs {
+                    let Some(fmt) = a.get("format").and_then(serde_json::Value::as_str) else {
+                        return 0.0;
+                    };
+                    attributes.push(webgpu_compute::VertexAttr {
+                        format: fmt.to_string(),
+                        offset: a.get("offset").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                        shader_location: a
+                            .get("shaderLocation")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0) as u32,
+                    });
+                }
+            }
+            buffers.push(webgpu_compute::VertexBufferLayout {
+                array_stride: b.get("arrayStride").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                instance_step: b.get("instance").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                attributes,
+            });
+        }
+    }
+    webgpu_compute::render_pipeline_create(vs, s("vsEntry"), fs, s("fsEntry"), s("format"), s("topology"), &buffers)
+        .unwrap_or(0) as f64
+}
+
+/// Shared JSON-decode body for `_lumen_webgpu_submit`. Twin of
+/// [`webgpu_bind_group_create_impl`] — see [`install_webgpu_natives`]'s
+/// inline closure for the per-op-kind field rationale.
+#[cfg(all(feature = "v8-backend", feature = "webgpu"))]
+fn webgpu_submit_impl(ops_json: &str) -> bool {
+    use lumen_paint::webgpu_compute;
+
+    let Ok(ops) = serde_json::from_str::<Vec<serde_json::Value>>(ops_json) else {
+        return false;
+    };
+    let mut decoded = Vec::with_capacity(ops.len());
+    for op in &ops {
+        let kind = op.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        match kind {
+            "copyB2B" => {
+                let f = |k: &str| op.get(k).and_then(serde_json::Value::as_u64);
+                let (Some(src), Some(src_offset), Some(dst), Some(dst_offset), Some(size)) =
+                    (f("src"), f("srcOffset"), f("dst"), f("dstOffset"), f("size"))
+                else {
+                    return false;
+                };
+                decoded.push(webgpu_compute::GpuOp::CopyBufferToBuffer {
+                    src,
+                    src_offset,
+                    dst,
+                    dst_offset,
+                    size,
+                });
+            }
+            "computePass" => {
+                let Some(cmds) = op.get("cmds").and_then(|v| v.as_array()) else {
+                    return false;
+                };
+                let mut commands = Vec::with_capacity(cmds.len());
+                for c in cmds {
+                    let ck = c.get("c").and_then(|v| v.as_str()).unwrap_or("");
+                    match ck {
+                        "setPipeline" => {
+                            let Some(p) = c.get("pipeline").and_then(serde_json::Value::as_u64) else {
+                                return false;
+                            };
+                            commands.push(webgpu_compute::ComputeCmd::SetPipeline(p));
+                        }
+                        "setBindGroup" => {
+                            let (Some(index), Some(bind_group)) = (
+                                c.get("index").and_then(serde_json::Value::as_u64),
+                                c.get("bindGroup").and_then(serde_json::Value::as_u64),
+                            ) else {
+                                return false;
+                            };
+                            commands.push(webgpu_compute::ComputeCmd::SetBindGroup {
+                                index: index as u32,
+                                bind_group,
+                            });
+                        }
+                        "dispatch" => {
+                            let g = |k: &str| {
+                                c.get(k).and_then(serde_json::Value::as_u64).unwrap_or(1) as u32
+                            };
+                            commands.push(webgpu_compute::ComputeCmd::Dispatch {
+                                x: g("x"),
+                                y: g("y"),
+                                z: g("z"),
+                            });
+                        }
+                        _ => return false,
+                    }
+                }
+                decoded.push(webgpu_compute::GpuOp::ComputePass { commands });
+            }
+            "renderPass" => {
+                let f = |k: &str| op.get(k).and_then(serde_json::Value::as_u64);
+                let Some(color_texture) = f("colorTexture") else {
+                    return false;
+                };
+                let clear = op.get("clear").and_then(|c| c.as_array()).map(|arr| {
+                    let g = |i: usize| arr.get(i).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                    [g(0), g(1), g(2), g(3)]
+                });
+                let Some(cmds) = op.get("cmds").and_then(|v| v.as_array()) else {
+                    return false;
+                };
+                let mut commands = Vec::with_capacity(cmds.len());
+                for c in cmds {
+                    let ck = c.get("c").and_then(|v| v.as_str()).unwrap_or("");
+                    let cu = |k: &str| c.get(k).and_then(serde_json::Value::as_u64);
+                    let ci = |k: &str| c.get(k).and_then(serde_json::Value::as_i64);
+                    match ck {
+                        "setPipeline" => {
+                            let Some(p) = cu("pipeline") else { return false };
+                            commands.push(webgpu_compute::RenderCmd::SetPipeline(p));
+                        }
+                        "setBindGroup" => {
+                            let (Some(index), Some(bind_group)) = (cu("index"), cu("bindGroup")) else {
+                                return false;
+                            };
+                            commands.push(webgpu_compute::RenderCmd::SetBindGroup {
+                                index: index as u32,
+                                bind_group,
+                            });
+                        }
+                        "setVertexBuffer" => {
+                            let Some(buffer) = cu("buffer") else { return false };
+                            commands.push(webgpu_compute::RenderCmd::SetVertexBuffer {
+                                slot: cu("slot").unwrap_or(0) as u32,
+                                buffer,
+                                offset: cu("offset").unwrap_or(0),
+                                size: cu("size").unwrap_or(0),
+                            });
+                        }
+                        "setIndexBuffer" => {
+                            let Some(buffer) = cu("buffer") else { return false };
+                            commands.push(webgpu_compute::RenderCmd::SetIndexBuffer {
+                                buffer,
+                                format_u16: c.get("u16").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                                offset: cu("offset").unwrap_or(0),
+                                size: cu("size").unwrap_or(0),
+                            });
+                        }
+                        "draw" => {
+                            commands.push(webgpu_compute::RenderCmd::Draw {
+                                vertex_count: cu("vertexCount").unwrap_or(0) as u32,
+                                instance_count: cu("instanceCount").unwrap_or(1) as u32,
+                                first_vertex: cu("firstVertex").unwrap_or(0) as u32,
+                                first_instance: cu("firstInstance").unwrap_or(0) as u32,
+                            });
+                        }
+                        "drawIndexed" => {
+                            commands.push(webgpu_compute::RenderCmd::DrawIndexed {
+                                index_count: cu("indexCount").unwrap_or(0) as u32,
+                                instance_count: cu("instanceCount").unwrap_or(1) as u32,
+                                first_index: cu("firstIndex").unwrap_or(0) as u32,
+                                base_vertex: ci("baseVertex").unwrap_or(0) as i32,
+                                first_instance: cu("firstInstance").unwrap_or(0) as u32,
+                            });
+                        }
+                        _ => return false,
+                    }
+                }
+                decoded.push(webgpu_compute::GpuOp::RenderPass {
+                    color_texture,
+                    clear,
+                    commands,
+                });
+            }
+            "copyTexToBuf" => {
+                let f = |k: &str| op.get(k).and_then(serde_json::Value::as_u64);
+                let (Some(texture), Some(buffer)) = (f("texture"), f("buffer")) else {
+                    return false;
+                };
+                decoded.push(webgpu_compute::GpuOp::CopyTextureToBuffer {
+                    texture,
+                    buffer,
+                    buffer_offset: f("bufferOffset").unwrap_or(0),
+                    bytes_per_row: f("bytesPerRow").unwrap_or(0) as u32,
+                    rows_per_image: f("rowsPerImage").unwrap_or(1) as u32,
+                    width: f("width").unwrap_or(1) as u32,
+                    height: f("height").unwrap_or(1) as u32,
+                });
+            }
+            _ => return false,
+        }
+    }
+    webgpu_compute::submit(&decoded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2077,5 +2478,26 @@ mod tests {
                 .unwrap();
             assert!(green, "real GPU render must fill the triangle green");
         });
+    }
+}
+
+/// V8-backend counterpart of the [`tests`] module above (Ph3 V8 migration
+/// S9). WebGPU carries no GC roots (see [`install_webgpu_bindings_v8`]'s doc
+/// comment), so this is a plain shim-installation smoke test — the harder S9
+/// risk (GC roots) is covered by `webassembly::tests_v8` instead.
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::{JsRuntime, JsValue};
+
+    #[test]
+    fn v8_navigator_gpu_exists() {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("globalThis.navigator = globalThis.navigator || {};").unwrap();
+        super::install_webgpu_bindings_v8(&rt).unwrap();
+        let ok = rt
+            .eval("typeof navigator.gpu !== 'undefined' && typeof navigator.gpu.requestAdapter === 'function'")
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 }

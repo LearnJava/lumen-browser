@@ -508,5 +508,342 @@ fn result_count(ft: &FuncType) -> usize {
     ft.results.len()
 }
 
+// ── V8 backend bridge (Ph3 V8 migration S9) ─────────────────────────────────
+//
+// QuickJS host imports are `rquickjs::Persistent<Function>`, restored from a
+// live `Ctx` at call time (see [`JsHost`] above). V8 has no `Persistent`;
+// its GC-root equivalent is `v8::Global<v8::Function>`, converted back to a
+// `v8::Local` via `v8::Local::new(scope, &global)` whenever a live scope is
+// available — which it always is here, since every entry point below runs
+// inside a native function dispatched through `V8Inner::run`, which owns the
+// scope for the call's whole duration.
+//
+// This is a separate thread-local registry from [`REGISTRY`] above: instance
+// ids are not shared between the two backends (compiled `Module`s *are*
+// shared, via [`with_module`], since `Module` carries no backend-specific
+// state). In practice only one backend runs per JS thread, but keeping the
+// instance stores fully separate avoids any cross-backend id confusion if
+// both features are ever compiled into the same binary.
+#[cfg(feature = "v8-backend")]
+pub(crate) mod v8_bridge {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    use super::interp::{HostImports, Instance, Trap};
+    use super::parser::{ImportKind, Module};
+    use super::value::{ValType, Value};
+    use super::{f64_to_value, with_module};
+
+    /// A live V8-backed instance plus the JS functions resolving its imports
+    /// (in func-import order). V8 twin of [`super::InstanceEntry`].
+    struct InstanceEntry {
+        instance: Instance,
+        host_funcs: Vec<v8::Global<v8::Function>>,
+    }
+
+    /// Thread-local store of live V8-backed instances.
+    #[derive(Default)]
+    struct Registry {
+        next_instance: u32,
+        instances: HashMap<u32, InstanceEntry>,
+    }
+
+    thread_local! {
+        static REGISTRY: RefCell<Registry> = RefCell::new(Registry::default());
+    }
+
+    /// Drop all live V8-backed instances on this thread, releasing the
+    /// `v8::Global` JS handles held for function imports.
+    ///
+    /// Must be called before the owning V8 isolate is disposed (mirrors
+    /// [`super::clear_registry`]'s QuickJS teardown discipline) so the
+    /// persistent handles are released while the isolate can still process
+    /// the reset — see `v8_runtime.rs::v8_thread_main`.
+    pub(crate) fn clear_registry() {
+        REGISTRY.with(|r| r.borrow_mut().instances.clear());
+    }
+
+    /// Bridge implementing [`HostImports`] by calling stored JS functions
+    /// through a live V8 scope.
+    struct JsHost<'a, 's, 'i> {
+        scope: &'a mut v8::PinScope<'s, 'i>,
+        funcs: &'a [v8::Global<v8::Function>],
+        module: Rc<Module>,
+    }
+
+    impl<'a, 's, 'i> HostImports for JsHost<'a, 's, 'i> {
+        fn call_host(&mut self, import_index: usize, args: &[Value]) -> Result<Vec<Value>, Trap> {
+            let global = self
+                .funcs
+                .get(import_index)
+                .ok_or_else(|| Trap(format!("unresolved import {import_index}")))?;
+            let func = v8::Local::new(self.scope, global);
+            let recv: v8::Local<v8::Value> = v8::undefined(self.scope).into();
+            let call_args: Vec<v8::Local<v8::Value>> = args
+                .iter()
+                .map(|v| wasm_value_to_v8(self.scope, *v))
+                .collect();
+            let ret = func
+                .call(self.scope, recv, &call_args)
+                .ok_or_else(|| Trap("import call threw".into()))?;
+
+            let rtypes = self
+                .module
+                .func_type(import_index as u32)
+                .map(|t| t.results.clone())
+                .unwrap_or_default();
+            match rtypes.first() {
+                None => Ok(Vec::new()),
+                // An `i64` result is read back exactly from a returned `BigInt`.
+                Some(ValType::I64) => Ok(vec![Value::I64(v8_value_to_i64(self.scope, ret))]),
+                Some(ty) => Ok(vec![f64_to_value(*ty, v8_value_to_f64(self.scope, ret))]),
+            }
+        }
+    }
+
+    /// Instantiate a compiled module against V8-backed host imports. V8 twin
+    /// of [`super::instantiate`].
+    pub(crate) fn instantiate(
+        scope: &mut v8::PinScope,
+        module_id: u32,
+        host_funcs: Vec<v8::Global<v8::Function>>,
+        imported_globals: Vec<f64>,
+    ) -> Result<u32, String> {
+        let module = with_module(module_id, Rc::clone).ok_or("unknown module")?;
+
+        let mut g_iter = imported_globals.into_iter();
+        let mut typed_globals: Vec<Value> = Vec::new();
+        for imp in &module.imports {
+            if let ImportKind::Global { ty, .. } = imp.kind {
+                let raw = g_iter.next().unwrap_or(0.0);
+                typed_globals.push(f64_to_value(ty, raw));
+            }
+        }
+
+        let mut instance = Instance::new(module.clone(), typed_globals)?;
+        {
+            let mut host = JsHost {
+                scope,
+                funcs: &host_funcs,
+                module: module.clone(),
+            };
+            instance.run_start(&mut host).map_err(|t| t.0)?;
+        }
+
+        Ok(REGISTRY.with(|r| {
+            let mut r = r.borrow_mut();
+            let id = r.next_instance;
+            r.next_instance += 1;
+            r.instances.insert(
+                id,
+                InstanceEntry {
+                    instance,
+                    host_funcs,
+                },
+            );
+            id
+        }))
+    }
+
+    /// Call an exported function on a V8-backed instance. V8 twin of
+    /// [`super::call_typed`].
+    pub(crate) fn call_typed(
+        scope: &mut v8::PinScope,
+        instance_id: u32,
+        func_idx: u32,
+        args: &[Value],
+    ) -> Result<Vec<Value>, String> {
+        // Take the entry out so re-entrant calls into a *different* instance
+        // work; re-entry into the same instance returns an error.
+        let mut entry = REGISTRY
+            .with(|r| r.borrow_mut().instances.remove(&instance_id))
+            .ok_or("unknown or busy instance")?;
+
+        let module = entry.instance.module.clone();
+        let result = {
+            let mut host = JsHost {
+                scope,
+                funcs: &entry.host_funcs,
+                module: module.clone(),
+            };
+            entry.instance.invoke(func_idx, args, &mut host, 0)
+        };
+
+        REGISTRY.with(|r| {
+            r.borrow_mut().instances.insert(instance_id, entry);
+        });
+
+        result.map_err(|t| t.0)
+    }
+
+    /// Parameter/result types of an exported function, for a V8-backed instance.
+    /// V8 twin of [`super::func_signature`].
+    pub(crate) fn func_signature(
+        instance_id: u32,
+        func_idx: u32,
+    ) -> Option<(Vec<ValType>, Vec<ValType>)> {
+        REGISTRY.with(|r| {
+            let r = r.borrow();
+            let e = r.instances.get(&instance_id)?;
+            let ft = e.instance.module.func_type(func_idx)?;
+            Some((ft.params.clone(), ft.results.clone()))
+        })
+    }
+
+    /// Current memory size (64 KiB pages) of a V8-backed instance.
+    pub(crate) fn mem_size(instance_id: u32) -> u32 {
+        REGISTRY.with(|r| {
+            r.borrow()
+                .instances
+                .get(&instance_id)
+                .map(|e| e.instance.mem_pages())
+                .unwrap_or(0)
+        })
+    }
+
+    /// Grow a V8-backed instance's memory by `delta` pages.
+    pub(crate) fn mem_grow(instance_id: u32, delta: u32) -> i32 {
+        REGISTRY.with(|r| {
+            r.borrow_mut()
+                .instances
+                .get_mut(&instance_id)
+                .map(|e| e.instance.mem_grow(delta))
+                .unwrap_or(-1)
+        })
+    }
+
+    /// Copy `len` bytes of a V8-backed instance's linear memory at `offset`.
+    pub(crate) fn mem_read(instance_id: u32, offset: u32, len: u32) -> Vec<u8> {
+        REGISTRY.with(|r| {
+            let r = r.borrow();
+            let Some(e) = r.instances.get(&instance_id) else {
+                return Vec::new();
+            };
+            let start = offset as usize;
+            let end = start.saturating_add(len as usize).min(e.instance.memory.len());
+            if start >= e.instance.memory.len() {
+                Vec::new()
+            } else {
+                e.instance.memory[start..end].to_vec()
+            }
+        })
+    }
+
+    /// Write `bytes` into a V8-backed instance's linear memory at `offset`.
+    pub(crate) fn mem_write(instance_id: u32, offset: u32, bytes: &[u8]) -> bool {
+        REGISTRY.with(|r| {
+            let mut r = r.borrow_mut();
+            let Some(e) = r.instances.get_mut(&instance_id) else {
+                return false;
+            };
+            let start = offset as usize;
+            let end = start.saturating_add(bytes.len());
+            if end > e.instance.memory.len() {
+                return false;
+            }
+            e.instance.memory[start..end].copy_from_slice(bytes);
+            true
+        })
+    }
+
+    /// Full linear-memory snapshot of a V8-backed instance.
+    pub(crate) fn mem_read_all(instance_id: u32) -> Vec<u8> {
+        REGISTRY.with(|r| {
+            r.borrow()
+                .instances
+                .get(&instance_id)
+                .map(|e| e.instance.memory.clone())
+                .unwrap_or_default()
+        })
+    }
+
+    /// Read an exported global's current value on a V8-backed instance.
+    pub(crate) fn global_value(instance_id: u32, index: u32) -> Option<Value> {
+        REGISTRY.with(|r| {
+            r.borrow()
+                .instances
+                .get(&instance_id)
+                .and_then(|e| e.instance.globals.get(index as usize).copied())
+        })
+    }
+
+    /// Set a mutable exported global on a V8-backed instance.
+    pub(crate) fn global_set_value(instance_id: u32, index: u32, v: Value) -> bool {
+        REGISTRY.with(|r| {
+            let mut r = r.borrow_mut();
+            let Some(e) = r.instances.get_mut(&instance_id) else {
+                return false;
+            };
+            let idx = index as usize;
+            if idx >= e.instance.globals.len()
+                || !e.instance.global_mut.get(idx).copied().unwrap_or(false)
+            {
+                return false;
+            }
+            let ty = e.instance.globals[idx].val_type();
+            e.instance.globals[idx] = super::coerce_value(ty, v);
+            true
+        })
+    }
+
+    /// Convert a runtime WASM value to the V8 value carried across the
+    /// boundary. Mirrors [`super::wasm_value_to_js`]: `i64` becomes a JS
+    /// `BigInt`, everything else a `Number`.
+    pub(crate) fn wasm_value_to_v8<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        v: Value,
+    ) -> v8::Local<'s, v8::Value> {
+        match v {
+            Value::I32(x) => v8::Number::new(scope, f64::from(x)).into(),
+            Value::I64(x) => v8::BigInt::new_from_i64(scope, x).into(),
+            Value::F32(x) => v8::Number::new(scope, f64::from(x)).into(),
+            Value::F64(x) => v8::Number::new(scope, x).into(),
+            Value::FuncRef(r) | Value::ExternRef(r) => {
+                v8::Number::new(scope, r.map(f64::from).unwrap_or(-1.0)).into()
+            }
+            // v128 has no JS Number/BigInt mapping; surface 0 rather than throw.
+            Value::V128(_) => v8::Number::new(scope, 0.0).into(),
+        }
+    }
+
+    /// Read a V8 value as `i64`, accepting a `BigInt` exactly and falling
+    /// back to numeric truncation for a plain `Number`. Mirrors
+    /// [`super::js_value_to_i64`].
+    fn v8_value_to_i64(scope: &mut v8::PinScope, v: v8::Local<v8::Value>) -> i64 {
+        if v.is_big_int()
+            && let Ok(b) = v8::Local::<v8::BigInt>::try_from(v)
+        {
+            return b.i64_value().0;
+        }
+        v8_value_to_f64(scope, v) as i64
+    }
+
+    /// Read a V8 value as `f64`, tolerating a `BigInt` (down-converted).
+    /// Mirrors [`super::js_value_to_f64`].
+    fn v8_value_to_f64(scope: &mut v8::PinScope, v: v8::Local<v8::Value>) -> f64 {
+        if v.is_big_int()
+            && let Ok(b) = v8::Local::<v8::BigInt>::try_from(v)
+        {
+            return b.i64_value().0 as f64;
+        }
+        v.number_value(scope).unwrap_or(0.0)
+    }
+
+    /// Coerce an incoming V8 value to a typed WASM value for `ty`. Mirrors
+    /// [`super::js_value_to_wasm`]: an `i64` parameter accepts a `BigInt`
+    /// exactly and tolerates a plain `Number`; other types read as `f64`.
+    pub(crate) fn v8_value_to_wasm(
+        scope: &mut v8::PinScope,
+        v: v8::Local<v8::Value>,
+        ty: ValType,
+    ) -> Value {
+        match ty {
+            ValType::I64 => Value::I64(v8_value_to_i64(scope, v)),
+            _ => f64_to_value(ty, v8_value_to_f64(scope, v)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;
