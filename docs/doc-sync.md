@@ -19,7 +19,7 @@ Do not re-read a whole file to make a small update — use `grep -n` to find the
 | Architectural decision | `docs/decisions/ADR-NNN.md` | new file from TEMPLATE.md; update `docs/decisions/README.md` index |
 | Known gotcha found/fixed | `CLAUDE.md` → "Known gotchas" | append/remove the bullet |
 | New public API (`pub fn/struct`) | `SYMBOLS.md` | regenerate: `python scripts/gen_symbols.py` |
-| Roadmap structure (phase/task) or bug status change | `ROADMAP.md` (structure + bug↔task links) → regenerate | edit `ROADMAP.md` if a phase/task/link changed (one task = one line, `grep "| U-6 " ROADMAP.md`), then run `python scripts/gen_roadmap.py` — it re-pulls live bug status from `BUGS.md` and inlines data into `docs/roadmap-*.html`. Bug-only status changes need just the script (no ROADMAP.md edit). |
+| Roadmap structure (phase/task) or bug/CSS-module status change | `ROADMAP.md` (structure + bug↔task links) → regenerate | edit `ROADMAP.md` if a phase/task/link changed (one task = one line, `grep "| U-6 " ROADMAP.md`), then run `python scripts/gen_roadmap.py` — it re-pulls live bug status from `BUGS.md` and live CSS-module status from `CSS-SPECS.md` (rows `css-specs-t0`…`t4`), then inlines data into `docs/roadmap-*.html`. Bug-only or CSS-module-only status changes need just the script (no ROADMAP.md edit). |
 
 ---
 
