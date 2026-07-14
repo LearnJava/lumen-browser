@@ -10,18 +10,9 @@
 //! `_lumen_deliver_speculation_rules(json)` native binding for Phase 1 to implement
 //! resource hints.
 
-use rquickjs::Ctx;
-
-/// Install the Speculation Rules API stubs into the JS context.
-///
-/// Call after the DOM shim so that `document` and `EventTarget` are already defined.
-pub fn install_speculation_rules_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(SPECULATION_RULES_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_speculation_rules_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_speculation_rules_api` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-6): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_speculation_rules_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -29,6 +20,7 @@ pub(crate) fn install_speculation_rules_api_v8(rt: &crate::v8_runtime::V8JsRunti
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const SPECULATION_RULES_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -74,19 +66,16 @@ const SPECULATION_RULES_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install_prereqs(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn with_speculation_rules_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
             r#"
             if (typeof document === 'undefined') {
                 var document = { _listeners: {} };
@@ -97,25 +86,22 @@ mod tests {
             "#,
         )
         .unwrap();
-        install_speculation_rules_api(ctx).unwrap();
+        install_speculation_rules_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn document_prerendering_is_false() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx.eval("document.prerendering === false").unwrap();
-            assert!(ok);
+        with_speculation_rules_api(|rt| {
+            let ok = rt.eval("document.prerendering === false").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn document_get_speculation_rules_returns_empty() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx
+        with_speculation_rules_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     typeof document.getSpeculationRules === 'function'
@@ -124,16 +110,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn deliver_speculation_rules_is_noop() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx
+        with_speculation_rules_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     typeof globalThis._lumen_deliver_speculation_rules === 'function'
@@ -141,16 +125,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn onprerenderingchange_property() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx
+        with_speculation_rules_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     document.onprerenderingchange === null
@@ -159,7 +141,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }
