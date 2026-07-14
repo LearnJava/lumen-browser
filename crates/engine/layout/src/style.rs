@@ -3712,9 +3712,12 @@ pub struct ContainerContext {
 /// used for custom properties, so it works for keyword and length values whose
 /// author-written form matches the serialized form (`style(width: 100px)` against
 /// a computed `100px`); if that normalized comparison fails, both sides are also
-/// tried as CSS colors (`style_query_value_matches`), so `style(color: red)`
-/// matches a computed `rgb(255, 0, 0)` — other value types (lengths in
-/// mismatched units, etc.) still require the serialized form to match textually.
+/// tried as CSS colors and as absolute-unit lengths (`style_query_value_matches`),
+/// so `style(color: red)` matches a computed `rgb(255, 0, 0)` and
+/// `style(border-width: 2pt)` matches a computed `2.6667px`. Relative lengths
+/// (`em`, `%`, viewport/container units) still require the serialized form to
+/// match textually — resolving them needs font-size/viewport context that
+/// `ContainerContext` doesn't carry.
 /// Phase 0 limitations:
 /// - Only a single declaration inside `style()` (no comma-separated list).
 /// - Boolean form (`style(--prop)` without a value) still only recognizes custom
@@ -3851,20 +3854,32 @@ fn normalize_style_value(s: &str) -> String {
 /// query's declared value for a standard (non-custom) property.
 ///
 /// First tries the normalized token comparison (`normalize_style_value`,
-/// case-insensitive). If that fails, falls back to parsing both sides as CSS
-/// colors and comparing the resolved RGBA channels — so `style(color: red)`
-/// matches a container computed to `color: rgb(255, 0, 0)` even though the
-/// author's keyword and the serialized function notation differ textually
-/// (CSS Color L4 §4, equivalent color notations denote the same color).
+/// case-insensitive). If that fails, falls back to two context-free
+/// canonicalizations, tried in order:
+/// 1. CSS colors: both sides parsed and compared by resolved RGBA channels —
+///    so `style(color: red)` matches a container computed to
+///    `color: rgb(255, 0, 0)` (CSS Color L4 §4, equivalent notations denote
+///    the same color).
+/// 2. Absolute CSS lengths: both sides parsed via `parse_length` and compared
+///    as px when *both* resolve to `Length::Px` — so `style(border-width: 2pt)`
+///    matches a computed `2.6667px` (CSS Values L3 §5.2, absolute units are a
+///    fixed ratio to px, no layout context needed). Relative units (`em`,
+///    `%`, viewport/container units) are deliberately excluded: `ContainerContext`
+///    carries no font-size/viewport to resolve them, and treating an
+///    unresolved relative unit as a raw px number would produce false matches.
+///
 /// `want` must already be normalized by the caller.
 fn style_query_value_matches(computed: &str, want: &str) -> bool {
     if normalize_style_value(computed).eq_ignore_ascii_case(want) {
         return true;
     }
-    match (parse_color(computed), parse_color(want)) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
+    if let (Some(a), Some(b)) = (parse_color(computed), parse_color(want)) {
+        return a == b;
     }
+    if let (Some(Length::Px(a)), Some(Length::Px(b))) = (parse_length(computed), parse_length(want)) {
+        return (a - b).abs() < 0.01;
+    }
+    false
 }
 
 /// Parses a CSS length value to pixels (px / em not supported — just px for Phase 0).

@@ -7476,6 +7476,36 @@ mod tests {
     }
 
     #[test]
+    fn style_query_length_pt_matches_computed_px() {
+        // Container's computed style is serialized in px; the query uses `pt`.
+        let ctx = style_ctx_with_style_props(&[], &[("border-top-width", "2.6667px")]);
+        assert!(crate::evaluate_container_condition(
+            "style(border-top-width: 2pt)",
+            &ctx
+        ));
+    }
+
+    #[test]
+    fn style_query_length_in_matches_computed_px() {
+        let ctx = style_ctx_with_style_props(&[], &[("width", "96px")]);
+        assert!(crate::evaluate_container_condition("style(width: 1in)", &ctx));
+    }
+
+    #[test]
+    fn style_query_length_mismatch_returns_false() {
+        let ctx = style_ctx_with_style_props(&[], &[("width", "96px")]);
+        assert!(!crate::evaluate_container_condition("style(width: 2in)", &ctx));
+    }
+
+    #[test]
+    fn style_query_length_relative_unit_not_canonicalized() {
+        // `em` needs font-size context ContainerContext doesn't carry — must
+        // fall back to textual comparison, not be coerced into a false match.
+        let ctx = style_ctx_with_style_props(&[], &[("width", "16px")]);
+        assert!(!crate::evaluate_container_condition("style(width: 1em)", &ctx));
+    }
+
+    #[test]
     fn style_query_value_internal_whitespace_normalized() {
         // Container declares `1px  2px` (two spaces); query uses a single space.
         let ctx = style_ctx(&[("--gap", "1px  2px")]);
