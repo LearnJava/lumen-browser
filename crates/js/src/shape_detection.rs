@@ -3,15 +3,9 @@
 //! Phase 0 stub: FaceDetector, BarcodeDetector, TextDetector all return empty arrays.
 //! No actual detection is performed.
 
-use rquickjs::Ctx;
-
-pub fn install_shape_detection_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(SHAPE_DETECTION_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_shape_detection_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_shape_detection_bindings` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-7): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_shape_detection_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -20,6 +14,7 @@ pub(crate) fn install_shape_detection_bindings_v8(rt: &crate::v8_runtime::V8JsRu
 }
 
 /// JavaScript shim: Shape Detection API (Phase 0 - always returns empty arrays)
+#[cfg(feature = "v8-backend")]
 const SHAPE_DETECTION_SHIM: &str = r#"
 (function() {
   // FaceDetector stub
@@ -90,80 +85,81 @@ const SHAPE_DETECTION_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use lumen_core::JsRuntime as _;
-    use lumen_dom::Document;
-    use std::sync::{Arc, Mutex};
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_rt() -> crate::QuickJsRuntime {
-        let rt = crate::QuickJsRuntime::new().unwrap();
-        let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, false)
-            .unwrap();
-        rt
+    fn with_shape_detection(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("var window = globalThis;").unwrap();
+        install_shape_detection_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn face_detector_class_exists() {
-        let rt = make_rt();
-        match rt.eval("typeof FaceDetector === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("FaceDetector class check failed: {other:?}"),
-        }
+        with_shape_detection(|rt| {
+            let ok = rt.eval("typeof FaceDetector === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn barcode_detector_class_exists() {
-        let rt = make_rt();
-        match rt.eval("typeof BarcodeDetector === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("BarcodeDetector class check failed: {other:?}"),
-        }
+        with_shape_detection(|rt| {
+            let ok = rt.eval("typeof BarcodeDetector === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn text_detector_class_exists() {
-        let rt = make_rt();
-        match rt.eval("typeof TextDetector === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("TextDetector class check failed: {other:?}"),
-        }
+        with_shape_detection(|rt| {
+            let ok = rt.eval("typeof TextDetector === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn face_detector_has_detect_method() {
-        let rt = make_rt();
-        match rt.eval("typeof new FaceDetector().detect === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("FaceDetector detect method check failed: {other:?}"),
-        }
+        with_shape_detection(|rt| {
+            let ok = rt
+                .eval("typeof new FaceDetector().detect === 'function'")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn barcode_detector_has_detect_method() {
-        let rt = make_rt();
-        match rt.eval("typeof new BarcodeDetector().detect === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("BarcodeDetector detect method check failed: {other:?}"),
-        }
+        with_shape_detection(|rt| {
+            let ok = rt
+                .eval("typeof new BarcodeDetector().detect === 'function'")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn barcode_detector_has_get_supported_formats() {
-        let rt = make_rt();
-        match rt.eval("typeof BarcodeDetector.getSupportedFormats === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("BarcodeDetector getSupportedFormats check failed: {other:?}"),
-        }
+        with_shape_detection(|rt| {
+            let ok = rt
+                .eval("typeof BarcodeDetector.getSupportedFormats === 'function'")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn text_detector_has_detect_method() {
-        let rt = make_rt();
-        match rt.eval("typeof new TextDetector().detect === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("TextDetector detect method check failed: {other:?}"),
-        }
+        with_shape_detection(|rt| {
+            let ok = rt
+                .eval("typeof new TextDetector().detect === 'function'")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 }
