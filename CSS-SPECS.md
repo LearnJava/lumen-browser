@@ -692,33 +692,33 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | # | Property / Feature | Effort | Blocker |
 |---|-------------------|--------|---------|
 | 1 | `var()` full recursive substitution | ✅ | expand_vars() recursive + @property + env() + 40 unit tests + graphic test 50; 2026-05-29 |
-| 2 | `transition` interpolation (per-frame lerp) | M | easing functions |
-| 3 | `@keyframes` AnimationScheduler::tick wiring | L | transitions done |
-| 4 | CSS Nesting — nested rule parser | L | none |
-| 5 | `position: sticky` layout + scroll listener | M | none |
+| 2 | `transition` interpolation (per-frame lerp) | ✅ | done — CAPABILITIES.md: animations/transitions scheduling with timing-function interpolation |
+| 3 | `@keyframes` AnimationScheduler::tick wiring | ✅ | done — same slice as #2 |
+| 4 | CSS Nesting — nested rule parser | ✅ | done — `crates/engine/css-parser/src/parser.rs` |
+| 5 | `position: sticky` layout + scroll listener | 🟡 | partial — offsets computed (`box_tree.rs`), scroll wiring is shell-side only (CAPABILITIES.md) |
 | 6 | `z-index` stacking context paint ordering | ✅ | StackingTree+PaintOrder wired in shell; build_display_list_ordered_with_anim 2026-05-23 |
 | 7 | `float` + `clear` layout algorithm | ✅ | FloatContext + FloatSide/ClearSide + 10 tests 2026-05-22 |
-| 8 | `list-style-type` marker rendering | S | none |
+| 8 | `list-style-type` marker rendering | ✅ | done — `MarkerBox` in `box_tree.rs` |
 | 9 | `@layer` cascade ordering | ✅ | done 2026-05-22 |
 | 10 | `:is()` / `:where()` / `:has()` matching | M | none |
-| 11 | `@media` resize hook re-evaluation | S | shell event |
-| 12 | `filter` GPU offscreen pass | L | wgpu pipeline |
-| 13 | `clip-path` basic shapes (inset/circle/ellipse/polygon) | M | none |
+| 11 | `@media` resize hook re-evaluation | S | shell event — JS `matchMedia` shim still not wired (CAPABILITIES.md) |
+| 12 | `filter` GPU offscreen pass | ✅ | done — GPU color-matrix + Gaussian blur (CAPABILITIES.md) |
+| 13 | `clip-path` basic shapes (inset/circle/ellipse/polygon) | ✅ | done (bbox approximation; exact polygon clip still ⬜, tracked separately in CAPABILITIES.md) |
 | 14 | `mix-blend-mode` + `background-blend-mode` | ✅ | 17 GPU blend modes + comma-list cycling 2026-05-27 |
-| 15 | `::first-letter` / `::first-line` line split | M | inline layout |
-| 16 | `::marker` rendering | S | float/list |
+| 15 | `::first-letter` / `::first-line` line split | ✅ | done — drop-cap float (CAPABILITIES.md) |
+| 16 | `::marker` rendering | ✅ | done — `MarkerBox` in `box_tree.rs` |
 | 17 | `conic-gradient()` | ✅ | ParsedGradient::Conic + DrawConicGradient + WGSL kind=2 + 9 tests + graphic test 40 2026-05-24 |
 | 18 | Multiple backgrounds | ✅ | BackgroundLayer struct + Vec<BackgroundLayer> in ComputedStyle + parse_single_bg_layer + cycling shorthand + 6 tests + graphic test 45 2026-05-26 |
 | 19 | `grid-template-areas` named placement | ✅ | GridLine::Named + find_named_area + resolve_named_lines 2026-05-22 |
-| 20 | `@font-face` actual file loading | L | network/P3 |
-| 21 | `min-content` / `max-content` / `fit-content` | L | layout engine |
-| 22 | `overflow: scroll` scrollable containers | L | shell scroll |
+| 20 | `@font-face` actual file loading | ✅ | done — `font-display: swap` (PH3-19), async fetch off critical path (CAPABILITIES.md) |
+| 21 | `min-content` / `max-content` / `fit-content` | ✅ | done (CAPABILITIES.md) |
+| 22 | `overflow: scroll` scrollable containers | ✅ | done — scroll-container handling in `box_tree.rs` |
 | 23 | `border-radius` elliptical (rx≠ry) | ✅ | border_{corner}_radius_y + RRectVertex radii_x/y + WGSL sdf_rrect elliptical SDF + 12 tests + graphic test 36 2026-05-24 |
-| 24 | `column-rule` rendering | S | paint |
+| 24 | `column-rule` rendering | ✅ | done — multi-column `column-rule` (CAPABILITIES.md) |
 | 25 | `line-height` leading in line box | ✅ | half_leading=(line_h-em)/2 в apply_inline_vertical_align + ascent_px() в TextMeasurer + 4 тесты 2026-05-24 |
-| 26 | Scroll snap shell integration | M | scroll event |
-| 27 | `@container` 2nd-pass execution | L | container-type done |
-| 28 | `backdrop-filter` GPU compositing pass | L | wgpu pipeline |
-| 29 | `writing-mode: vertical-*` axis swap | L | layout engine |
-| 30 | `subgrid` track inheritance | XL | grid engine |
+| 26 | Scroll snap shell integration | ✅ | done — scroll-snap fields wired in `style.rs`/`lib.rs` |
+| 27 | `@container` 2nd-pass execution | L | container-type done; general `@layer`/`@scope`/`@container` cascade wiring in css-parser still ⬜ per CAPABILITIES.md — needs P4 verification, not re-marked done here |
+| 28 | `backdrop-filter` GPU compositing pass | ✅ | done — LRU cache (CAPABILITIES.md) |
+| 29 | `writing-mode: vertical-*` axis swap | ✅ | done — `vertical-rl/lr` (CAPABILITIES.md) |
+| 30 | `subgrid` track inheritance | ✅ | done — `SubgridContext`/`SUBGRID_COL_CTX`/`SUBGRID_ROW_CTX` in `box_tree.rs` (was stale-flagged as "algorithm stub" in CAPABILITIES.md, fixed same sweep) |
 | 48 | `linear()` easing function | ✅ | TimingFunction::LinearStops + parse_linear_easing_stops + linear_stops_progress 2026-05-24 |
