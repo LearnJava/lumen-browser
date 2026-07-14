@@ -1420,13 +1420,6 @@ impl QuickJsRuntime {
                 eprintln!("Idle Detection API init failed: {}", e);
             }
 
-            // Privacy Sandbox Topics API — document.browsingTopics() + DeprecatedTopicsButton.
-            // Phase 0: browsingTopics() → Promise<[]>; no topic observation or storage.
-            // Phase 1: wire _lumen_topics_get_topics native hook to per-origin topic store.
-            if let Err(e) = topics_api::install_topics_api(&ctx) {
-                eprintln!("Topics API init failed: {}", e);
-            }
-
             // W3C Pointer Events Level 3 §4.1 — pointer capture native bindings.
             // _lumen_set_capture_state(nid) / _lumen_release_capture_state()
             // Called by JS setPointerCapture/releasePointerCapture on Element.
