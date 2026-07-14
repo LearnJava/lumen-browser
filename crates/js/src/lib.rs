@@ -803,11 +803,6 @@ impl QuickJsRuntime {
                 eprintln!("Highlight API bindings init failed: {}", e);
             }
 
-            // Install Battery Status API disable (ADR-007 Layer 4, 9D.4) — after DOM.
-            if let Err(e) = battery_bindings::install_battery_bindings(&ctx) {
-                eprintln!("Battery bindings init failed: {}", e);
-            }
-
             // Install navigator/screen/timezone normalization (ADR-007 Layer 4, 9D.6) — after DOM.
             if let Err(e) = navigator_bindings::install_navigator_bindings(&ctx) {
                 eprintln!("Navigator bindings init failed: {}", e);
