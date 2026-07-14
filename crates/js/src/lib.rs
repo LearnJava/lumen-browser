@@ -892,13 +892,6 @@ impl QuickJsRuntime {
                 eprintln!("Compute Pressure API init failed: {}", e);
             }
 
-            // Install Badging API (W3C Badging API) — after DOM/navigator.
-            // Phase 0: navigator.setAppBadge/clearAppBadge are no-ops; _lumen_set_app_badge hook
-            // prepared for OS integration in shell Phase 1.
-            if let Err(e) = badging::install_badging_bindings(&ctx) {
-                eprintln!("Badging API init failed: {}", e);
-            }
-
             // Install CSP violation event class (W3C CSP Level 3 §7.8) — after DOM/document.
             // Phase 0: SecurityPolicyViolationEvent class + _lumen_dispatch_csp_violation helper.
             // Phase 1: shell calls _lumen_fire_csp_violation for actual enforcement.
