@@ -718,6 +718,18 @@ feature = "v8-backend"))]`); dropped the call site in `lib.rs`'s `QuickJsRuntime
 `cargo test -p lumen-js digital_credentials` — 0 tests (module is v8-only now, as expected).
 Repeat for the remaining ~81 S5–S7 modules.
 
+### S12b-4 — `battery_bindings.rs` (2026-07-14, branch p1-v8-s12b-4-battery-bindings)
+
+Fourth slice, same shape as S12b-1/2/3: `battery_bindings.rs` is pure JS-shim `eval` (no native
+bindings), the Battery Status API disable stub (ADR-007 Layer 4, 9D.4 — `navigator.getBattery`
+replaced with a rejected-Promise shim to prevent fingerprinting). Deleted the rquickjs
+`install_battery_bindings` fn + `use rquickjs::Ctx` + its 5-test `rquickjs::{Context,
+Runtime}`-based `mod tests`; ported equivalent coverage as 5 new tests against `V8JsRuntime` +
+`install_battery_bindings_v8` directly (gated `#[cfg(all(test, feature = "v8-backend"))]`);
+dropped the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-js
+--features v8-backend battery` — 5/5 green; default-feature `cargo test -p lumen-js battery` — 0
+tests (module is v8-only now, as expected). Repeat for the remaining ~80 S5–S7 modules.
+
 ---
 
 ## Risks (Rev 2)
