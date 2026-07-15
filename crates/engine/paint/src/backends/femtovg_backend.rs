@@ -486,10 +486,30 @@ pub struct FemtovgBackend {
     /// `release_layer` in `composite_blend_layer` — it is never GPU-sampled,
     /// only used as a render target and read back via `screenshot()`.
     blend_layer_stack: Vec<BlendLayerEntry>,
-    /// One-off CPU-composited blend result images queued for deletion after
-    /// the next flush (created via `create_image` from raw pixels — wrong
-    /// shape for the render-target `layer_pool`).
+    /// Overflow/resize-retirement queue for both `blend_layer_stack`'s own
+    /// images and `blend_result_pool` entries evicted on a size mismatch —
+    /// deleting an ImageId mid-frame is unsafe while queued draw commands
+    /// may still reference it, so retirement always waits for the next flush.
     blend_layer_pending_delete: Vec<femtovg::ImageId>,
+    /// BUG-272 (item 5): pool of reusable CPU-composited blend-result images.
+    /// `composite_blend_layer` used to `create_image` (fresh GPU upload) on
+    /// every Pop and queue it for after-flush deletion — a frame with several
+    /// simultaneous blend-mode layers accumulated one full-framebuffer upload
+    /// per layer, held alive until the frame's flush. Unlike `layer_pool`,
+    /// these images ARE GPU-sampled (`Paint::image`, same function) so pooled
+    /// slots use plain `PREMULTIPLIED` (as `create_image` did), not
+    /// `offscreen_layer_image_flags()` — `FLIP_Y` is a render-target-only
+    /// concern and would flip a directly-sampled image. Slots are refreshed
+    /// in place via `update_image` instead of being reallocated; this is safe
+    /// because `composite_blend_layer` always starts with `canvas.flush()`,
+    /// which executes any earlier blend layer's pending `fill_path` (and thus
+    /// its read of the pooled image) before this call overwrites the slot.
+    blend_result_pool: Vec<femtovg::ImageId>,
+    /// Device-pixel size `blend_result_pool` images were created for; a
+    /// mismatch (window resize) retires pooled images via the pending-delete
+    /// queue. `usize` to match `backdrop_w`/`backdrop_h` (image-buffer
+    /// dimensions), unlike `layer_pool_size`'s `u32` (framebuffer size).
+    blend_result_pool_size: (usize, usize),
     /// Offscreen opacity group layer stack (BUG-133). Each entry holds an
     /// offscreen ImageId that subtree draws render into; PopOpacity composites
     /// it once with the group alpha (CSS Color L3 §3.2: opacity is atomic —
@@ -1405,6 +1425,8 @@ impl FemtovgBackend {
             mask_layer_stack: Vec::new(),
             blend_layer_stack: Vec::new(),
             blend_layer_pending_delete: Vec::new(),
+            blend_result_pool: Vec::new(),
+            blend_result_pool_size: (0, 0),
             backdrop_filter_layer_stack: Vec::new(),
             backdrop_filter_pending_delete: Vec::new(),
             clip_stack: Vec::new(),
@@ -1577,6 +1599,36 @@ impl FemtovgBackend {
             self.content_band_pool.push(id);
         } else {
             self.filter_layer_pending_delete.push(id);
+        }
+    }
+
+    /// BUG-272 (item 5): take a `blend_result_pool` image sized `w × h`,
+    /// creating one only when the pool is empty or the pooled size no longer
+    /// matches. The caller must fully overwrite the returned image (via
+    /// `canvas.update_image`) before sampling it — a reused slot holds a
+    /// previous blend layer's pixels.
+    fn acquire_blend_result_image(&mut self, w: usize, h: usize) -> Option<femtovg::ImageId> {
+        if self.blend_result_pool_size != (w, h) {
+            self.blend_layer_pending_delete.append(&mut self.blend_result_pool);
+            self.blend_result_pool_size = (w, h);
+        }
+        self.blend_result_pool.pop()
+    }
+
+    /// Returns a blend-result image acquired via
+    /// [`Self::acquire_blend_result_image`] to the pool for reuse. Overflow
+    /// beyond the cap or a since-resized pool is retired via the
+    /// after-flush pending-delete queue.
+    fn release_blend_result_image(&mut self, id: femtovg::ImageId, w: usize, h: usize) {
+        /// Blend layers rarely nest more than a couple deep; matches the cap
+        /// `release_layer` uses for the render-target `layer_pool`.
+        const MAX_POOLED_BLEND_RESULTS: usize = 4;
+        if self.blend_result_pool_size == (w, h)
+            && self.blend_result_pool.len() < MAX_POOLED_BLEND_RESULTS
+        {
+            self.blend_result_pool.push(id);
+        } else {
+            self.blend_layer_pending_delete.push(id);
         }
     }
 
@@ -2617,7 +2669,21 @@ impl FemtovgBackend {
                 .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
                 .collect();
             let img_ref = imgref::ImgRef::new(&pixels, backdrop_w, backdrop_h);
-            if let Ok(result_id) = self.canvas.create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED) {
+            // BUG-272 (item 5): reuse a pooled image via `update_image` instead
+            // of `create_image`-ing a fresh GPU upload on every Pop (see
+            // `blend_result_pool`). Fall back to a fresh upload if the pooled
+            // slot fails to update (e.g. driver-level image loss).
+            let result_id = match self.acquire_blend_result_image(backdrop_w, backdrop_h) {
+                Some(id) => match self.canvas.update_image(id, img_ref, 0, 0) {
+                    Ok(()) => Some(id),
+                    Err(_) => {
+                        self.blend_layer_pending_delete.push(id);
+                        self.canvas.create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED).ok()
+                    }
+                },
+                None => self.canvas.create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED).ok(),
+            };
+            if let Some(result_id) = result_id {
                 self.canvas.save();
                 self.canvas.reset_transform();
                 // Source operation: replace dest pixels with the blended result image.
@@ -2629,7 +2695,7 @@ impl FemtovgBackend {
                 path.rect(0.0, 0.0, css_w, css_h);
                 self.canvas.fill_path(&path, &paint);
                 self.canvas.restore();
-                self.blend_layer_pending_delete.push(result_id);
+                self.release_blend_result_image(result_id, backdrop_w, backdrop_h);
             }
         }
         // BUG-272: src_image_id came from acquire_layer() — recycle it
