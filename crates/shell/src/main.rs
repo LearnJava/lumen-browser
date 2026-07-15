@@ -18650,6 +18650,14 @@ impl Lumen {
     /// Шаг 1.6 «Update the rendering»: если при скролле пропущенный
     /// `content-visibility: auto` узел вошёл в расширенный viewport —
     /// ratchet в `cv_relevant` + relayout (его содержимое выкладывается).
+    ///
+    /// BUG-286: routed through [`Self::relayout_raf_dirty`] (not the direct
+    /// synchronous [`Self::relayout`]) so this scroll-time trigger gets the
+    /// same off-UI-thread treatment as the other `RedrawRequested` relayout
+    /// sites once `LUMEN_ENGINE_THREAD=1` — this was the one caller still
+    /// calling `relayout()` directly. No behavior change on the default
+    /// (flag-off) build: `relayout_raf_dirty()` falls back to the same
+    /// incremental-then-full sequence.
     fn maybe_expand_cv_relevant(&mut self) {
         if self.cv_skipped.is_empty() {
             return;
@@ -18666,7 +18674,7 @@ impl Lumen {
             return;
         }
         self.cv_relevant.extend(newly);
-        self.relayout();
+        self.relayout_raf_dirty();
     }
 
     /// Дренировать очередь [`ContentVisibilityChange`] событий.
