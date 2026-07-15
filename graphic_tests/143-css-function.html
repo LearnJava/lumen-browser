@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<!-- CSS Functions and Mixins L1 — @function declares an author-defined
+     custom function, invoked as --name(<args>) from any property value.
+     Phase 0 slice: positional argument binding (incl. defaults), local
+     --x: ...; declarations, and result: substitution are wired end-to-end
+     in layout (calc()/var() reused for evaluation). Conditional group
+     rules inside the body (@media/@container) and returns type-checking
+     are deferred. Each cell below exercises one call pattern; the
+     resulting box width/color is fully deterministic if evaluation is
+     correct. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @function --double(--x) { result: calc(var(--x) * 2); }
+  @function --pick(--c: royalblue) { result: var(--c); }
+  @function --clamped(--min, --val, --max) {
+    --c: clamp(var(--min), var(--val), var(--max));
+    result: var(--c);
+  }
+
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; padding: 4px; box-sizing: border-box; }
+
+  .cell { height: 80px; }
+
+  /* Direct call with an explicit argument, overriding the parameter default. */
+  .c-explicit { width: 160px; background: --pick(crimson); }
+  /* Zero-argument call — falls back to the parameter's declared default. */
+  .c-default  { width: 160px; background: --pick(); }
+  /* calc() inside result: — width doubles the supplied argument. */
+  .c-width    { width: --double(50px); background: seagreen; }
+  /* Call reached indirectly through a custom-property chain. */
+  .c-chain    { --gap: --double(60px); width: var(--gap); background: darkorange; }
+  /* Local --c: ...; declaration feeding result: (clamp value > max). */
+  .c-local    { width: --clamped(10px, 300px, 200px); background: steelblue; }
+  /* Same function, value within [min,max] this time. */
+  .c-multi    { width: --clamped(10px, 40px, 200px); background: mediumpurple; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="cell c-explicit"></div>
+  <div class="cell c-default"></div>
+  <div class="cell c-width"></div>
+  <div class="cell c-chain"></div>
+  <div class="cell c-local"></div>
+  <div class="cell c-multi"></div>
+</div>
+</body>
+</html>

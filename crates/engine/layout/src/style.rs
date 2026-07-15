@@ -28,7 +28,7 @@ use lumen_core::geom::Size;
 use lumen_core::ColorSpace;
 use lumen_css_parser::{
     parse_inline_style, AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector,
-    Declaration, DirArg, MediaContext, PropertyRule, PseudoClass, PseudoElementKind, SimpleSelector, Specificity,
+    Declaration, DirArg, FunctionRule, MediaContext, PropertyRule, PseudoClass, PseudoElementKind, SimpleSelector, Specificity,
     Stylesheet, SUPPORTED_PROPERTIES,
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
@@ -6882,6 +6882,40 @@ pub fn compute_style(
         } else {
             decl
         };
+        // CSS Functions and Mixins L1: expand `--name(<args>)` custom function
+        // calls before applying. `var(` is resolved first (against the same
+        // `style.custom_props` `apply_declaration` would use) so a call reached
+        // indirectly through a custom property (`--gap: --double(5px); width:
+        // var(--gap);`) is visible to the call-site scanner, not just direct
+        // calls (`width: --double(5px);`). Gated on `function_rules` being
+        // non-empty — pages without `@function` pay nothing extra here, and
+        // `apply_declaration`'s own `var()` pass below is then a no-op.
+        let func_buf;
+        let effective_decl: &Declaration = if !sheet.function_rules.is_empty()
+            && effective_decl.value.contains("--")
+        {
+            let pre = if effective_decl.value.contains("var(") {
+                match expand_vars(&effective_decl.value, &style.custom_props, 0) {
+                    Some(v) => v,
+                    None => continue,
+                }
+            } else {
+                effective_decl.value.clone()
+            };
+            match expand_custom_functions(&pre, &sheet.function_rules, &style.custom_props, 0) {
+                Some(v) => {
+                    func_buf = Declaration {
+                        property: effective_decl.property.clone(),
+                        value: v,
+                        important: effective_decl.important,
+                    };
+                    &func_buf
+                }
+                None => continue,
+            }
+        } else {
+            effective_decl
+        };
         apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, is_quirks, dark_mode);
     }
 
@@ -11765,6 +11799,156 @@ fn expand_vars(value: &str, custom: &HashMap<String, String>, depth: u32) -> Opt
     };
     let combined = format!("{prefix}{resolved}{after_close}");
     expand_vars(&combined, custom, depth + 1)
+}
+
+/// Recursion guard for `--name(args)` custom function call expansion
+/// (CSS Functions and Mixins L1). Kept smaller than `VAR_EXPAND_MAX_DEPTH`
+/// because each call additionally recurses through parameter binding.
+const FUNCTION_CALL_MAX_DEPTH: u32 = 16;
+
+/// CSS Functions and Mixins L1: recursively expands `--name(<args>)` custom
+/// function calls in `value` against `functions` (the stylesheet's parsed
+/// `@function` rules) and `custom` (the element's resolved custom
+/// properties, used as the outer scope for `var()` inside argument
+/// expressions). Positional arguments bind to the function's declared
+/// parameters (a missing trailing argument falls back to that parameter's
+/// default, if any); the function's local `--x: ...;` declarations are
+/// applied in order to build a local scope, then the `result:` descriptor
+/// is expanded against that scope and spliced in place of the call.
+///
+/// Returns `None` (property invalid at computed-value time, mirroring
+/// `var()` with no fallback) when: the called name doesn't match any
+/// `@function` rule, an argument is missing with no default, the function
+/// has no `result` descriptor, or recursion exceeds `FUNCTION_CALL_MAX_DEPTH`
+/// (cycle guard, e.g. `--a() { result: --b(); }` / `--b() { result: --a(); }`).
+///
+/// Deferred (CSS Functions and Mixins L1, not yet implemented): `returns`
+/// type-checking, conditional group rules inside the function body
+/// (`@media`, `@container`), named/keyword arguments.
+fn expand_custom_functions(
+    value: &str,
+    functions: &[FunctionRule],
+    custom: &HashMap<String, String>,
+    depth: u32,
+) -> Option<String> {
+    if depth > FUNCTION_CALL_MAX_DEPTH {
+        return None;
+    }
+    let Some((start, name_end)) = find_custom_function_call(value) else {
+        return Some(value.to_string());
+    };
+    let name = &value[start..name_end];
+    let after_open = &value[name_end + 1..]; // skip '('
+    let (args_str, after_close) = parse_balanced_to_close(after_open)?;
+    let func = functions.iter().find(|f| f.name == name)?;
+    let args = split_call_args(args_str);
+
+    let mut local: HashMap<String, String> = custom.clone();
+    for (i, param) in func.parameters.iter().enumerate() {
+        let raw_arg = match args.get(i) {
+            Some(a) => a.trim().to_string(),
+            None => param.default.clone()?,
+        };
+        let expanded_arg = expand_vars(&raw_arg, custom, depth + 1)
+            .and_then(|v| expand_custom_functions(&v, functions, custom, depth + 1))?;
+        local.insert(param.name.clone(), expanded_arg);
+    }
+
+    let mut result_raw: Option<&str> = None;
+    for decl in &func.declarations {
+        if decl.property.eq_ignore_ascii_case("result") {
+            result_raw = Some(decl.value.as_str());
+            continue;
+        }
+        if let Some(local_name) = decl.property.strip_prefix("--") {
+            let v = expand_vars(&decl.value, &local, depth + 1)
+                .and_then(|v| expand_custom_functions(&v, functions, &local, depth + 1))?;
+            local.insert(format!("--{local_name}"), v);
+        }
+    }
+    let resolved = expand_vars(result_raw?, &local, depth + 1)
+        .and_then(|v| expand_custom_functions(&v, functions, &local, depth + 1))?;
+
+    let combined = format!("{}{}{}", &value[..start], resolved, after_close);
+    expand_custom_functions(&combined, functions, custom, depth + 1)
+}
+
+/// Finds the first `--<ident>(` call-site (CSS Functions and Mixins L1
+/// function-token grammar: no whitespace between the name and `(`) outside
+/// quoted strings. Returns `(name_start, name_end)` where `name_end` is the
+/// index of the opening `(`.
+fn find_custom_function_call(s: &str) -> Option<(usize, usize)> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_string: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match in_string {
+            Some(q) => {
+                if b == q {
+                    in_string = None;
+                }
+                i += 1;
+            }
+            None => match b {
+                b'"' | b'\'' => {
+                    in_string = Some(b);
+                    i += 1;
+                }
+                b'-' if i + 1 < bytes.len() && bytes[i + 1] == b'-' => {
+                    let start = i;
+                    let mut j = i + 2;
+                    while j < bytes.len()
+                        && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'-' || bytes[j] == b'_')
+                    {
+                        j += 1;
+                    }
+                    if j > start + 2 && j < bytes.len() && bytes[j] == b'(' {
+                        return Some((start, j));
+                    }
+                    i = j.max(i + 1);
+                }
+                _ => i += 1,
+            },
+        }
+    }
+    None
+}
+
+/// Splits `--name(<here>)` call arguments on top-level commas (nested
+/// parens and quoted strings are not split points). An all-whitespace `s`
+/// (zero-argument call, `--foo()`) yields an empty `Vec` rather than one
+/// blank element.
+fn split_call_args(s: &str) -> Vec<&str> {
+    if s.trim().is_empty() {
+        return Vec::new();
+    }
+    let bytes = s.as_bytes();
+    let mut depth = 0u32;
+    let mut in_string: Option<u8> = None;
+    let mut start = 0usize;
+    let mut out = Vec::new();
+    for (i, &b) in bytes.iter().enumerate() {
+        match in_string {
+            Some(q) => {
+                if b == q {
+                    in_string = None;
+                }
+            }
+            None => match b {
+                b'"' | b'\'' => in_string = Some(b),
+                b'(' => depth += 1,
+                b')' => depth = depth.saturating_sub(1),
+                b',' if depth == 0 => {
+                    out.push(s[start..i].trim());
+                    start = i + 1;
+                }
+                _ => {}
+            },
+        }
+    }
+    out.push(s[start..].trim());
+    out
 }
 
 /// Раскрывает все `env(name [<index>...]?, fallback?)` в value.
@@ -31669,6 +31853,97 @@ mod tests {
         assert_eq!(c.r, 255, "red component");
         assert_eq!(c.g, 0,   "green component");
         assert_eq!(c.b, 0,   "blue component");
+    }
+
+    #[test]
+    fn css_function_direct_call_resolves() {
+        // CSS Functions and Mixins L1 — a direct call in a property value
+        // (`width: --double(10px);`) should bind the positional argument and
+        // resolve `result:` via calc().
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@function --double(--x) { result: calc(var(--x) * 2); } \
+             .box { width: --double(10px); }",
+            &[0],
+        );
+        let w = s.width.expect("width should be set");
+        assert_eq!(w.resolve(16.0, None, Size::new(800.0, 600.0)), Some(20.0));
+    }
+
+    #[test]
+    fn css_function_default_parameter_used_when_arg_omitted() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@function --pad(--n: 5px) { result: var(--n); } \
+             .box { margin-left: --pad(); }",
+            &[0],
+        );
+        assert_eq!(s.margin_left, LengthOrAuto::Length(Length::Px(5.0)));
+    }
+
+    #[test]
+    fn css_function_call_through_custom_property_chain_resolves() {
+        // A call reached indirectly through `var()` — the author computed a
+        // custom property from a function call, then referenced it — must
+        // resolve the same as a direct call.
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@function --double(--x) { result: calc(var(--x) * 2); } \
+             .box { --gap: --double(10px); width: var(--gap); }",
+            &[0],
+        );
+        let w = s.width.expect("width should be set");
+        assert_eq!(w.resolve(16.0, None, Size::new(800.0, 600.0)), Some(20.0));
+    }
+
+    #[test]
+    fn css_function_local_declaration_feeds_result() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@function --clamped(--min, --val, --max) { \
+                 --c: clamp(var(--min), var(--val), var(--max)); \
+                 result: var(--c); \
+             } \
+             .box { width: --clamped(10px, 5px, 50px); }",
+            &[0],
+        );
+        let w = s.width.expect("width should be set");
+        assert_eq!(w.resolve(16.0, None, Size::new(800.0, 600.0)), Some(10.0));
+    }
+
+    #[test]
+    fn css_function_missing_required_argument_invalidates_declaration() {
+        // No default for `--x` and no argument supplied → invalid at
+        // computed-value time, same treatment as an unresolvable `var()`.
+        // `width` must stay unset (initial/inherited), not panic or use 0.
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@function --double(--x) { result: calc(var(--x) * 2); } \
+             .box { width: --double(); }",
+            &[0],
+        );
+        assert_eq!(s.width, None);
+    }
+
+    #[test]
+    fn css_function_unknown_call_invalidates_declaration() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            ".box { width: --not-defined(10px); }",
+            &[0],
+        );
+        assert_eq!(s.width, None);
+    }
+
+    #[test]
+    fn css_function_self_recursion_invalidates_instead_of_hanging() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@function --loop(--x) { result: --loop(var(--x)); } \
+             .box { width: --loop(10px); }",
+            &[0],
+        );
+        assert_eq!(s.width, None);
     }
 
 }

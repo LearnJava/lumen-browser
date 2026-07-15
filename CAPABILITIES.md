@@ -46,9 +46,9 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 - Parses selectors + **untyped string declarations**; typed values + cascade live in `lumen-layout/style.rs` (~139 properties wired end-to-end — see CSS-SPECS.md).
 - ✅ Selectors L3 full set + L4: attribute operators (`= ~= |= ^= $= *=`, case flag), structural pseudo, form/UI-state pseudo (DOM-attr-based), `:nth-*(of …)`, `:not/:is/:where`, `:has` (in layout).
 - ✅ `:lang/:dir/:link/:visited(always false)/:scope/:target`; interactive pseudo (`:hover/:focus`) parsed as always-false (runtime state applied in layout).
-- ✅ `!important` extraction; at-rules parsed+stored: `@media` (cascade-integrated), `@font-face`, `@import`, `@property`, `@layer`, `@supports` (typed `evaluate()` — incl. `selector()`, `font-tech()`/`font-format()` matched against lumen-font capabilities), `@keyframes`, `@scope`, `@container`, `@color-profile` (`ColorProfileRule`).
+- ✅ `!important` extraction; at-rules parsed+stored: `@media` (cascade-integrated), `@font-face`, `@import`, `@property`, `@layer`, `@supports` (typed `evaluate()` — incl. `selector()`, `font-tech()`/`font-format()` matched against lumen-font capabilities), `@keyframes`, `@scope`, `@container`, `@color-profile` (`ColorProfileRule`), `@function` (`FunctionRule`, call-site evaluation wired in layout — see CSS-SPECS.md).
 - ⬜ Namespace prefixes; cascade wiring for `@layer`/`@scope`/`@container`.
-- ~292 tests.
+- ~299 tests.
 
 ### lumen-encoding (`crates/engine/encoding`)
 - ✅ Decoders: Windows-1251, KOI8-R, CP866, UTF-16 LE/BE (surrogates), UTF-8; BOM strip; `from_label` (WHATWG aliases).
@@ -73,7 +73,7 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 - ✅ SVG layout pass (viewBox, rect/circle/ellipse/line/path, `<use>` with cycle detection); `<text>` with `text-anchor`/`dominant-baseline` (presentation attribute **and** CSS property — CSS overrides the attribute and inherits from `<g>`); vertical writing modes (`vertical-rl/lr`).
 - ✅ Replaced: `<img>` (picture/srcset picker), `<iframe>` placeholder.
 - ✅ Cascade: specificity + `!important`, RTL selector matching, all CSS3 structural + L4 form/UI pseudo, `:has()`, `::before/::after` (string content), `::first-line/::first-letter` (drop-cap float), `initial-letter` (size/sink drop cap, Phase 0).
-- ✅ Values: `calc/min/max/clamp` + math fns, `var()`, `@property` registration, viewport units, intrinsic sizing (`min/max/fit-content`).
+- ✅ Values: `calc/min/max/clamp` + math fns, `var()`, `@property` registration, viewport units, intrinsic sizing (`min/max/fit-content`); `@function` custom-function calls (`--name(<args>)`, positional args + defaults, local decls, `result:` — direct calls and calls reached through a custom-property chain both resolve; `returns` typing deferred).
 - ✅ Forced Colors Mode (CSS Color Adjust L1 §3): a11y-panel preference forces the system palette element-aware (LinkText/ButtonText/GrayText/Field), clears shadows, drops non-`url()` background images, honours `forced-color-adjust: auto|none|preserve-parent-color`; drives `@media (forced-colors: active)`. JS `matchMedia` shim not yet wired.
 - ✅ Animations/transitions scheduling (`@keyframes` interpolation, timing functions, transform/gradient/filter interpolation; `background:<color>` shorthand in keyframes); `content-visibility: auto` skip; Shadow DOM flat-tree integration.
 - ✅ Scroll-Driven Animations L1: `animation-timeline: scroll()|view()|<named>` drives animation progress from scroll/viewport position (not the clock) — opacity/transform/animated `background-color`/`color` all composite in the live window (BUG-231, 2026-06-23). Remaining deviation vs Edge is font-parity/sub-pixel only (BUG-127, KNOWN_DEBTOR).

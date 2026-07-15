@@ -231,6 +231,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('140', '140-placeholder-pseudo.html', 0.5, 'P4 ::placeholder pseudo-element (CSS Pseudo-Elements L4 §4.10): input::placeholder { color } без правила и с правилом(-ями), опционально opacity. Swatch-боксы показывают резолвленный цвет (как в 66-selection-pseudo — реальный текст не сравнивается, только solid-цвет)'),
     ('141', '141-backface-visibility.html', 0.5, 'P4 backface-visibility culling (CSS Transforms L2 §5.1): rotateY(180deg)/rotateX(180deg) + backface-visibility:hidden прячет бокс (виден фон контейнера); rotateY(0deg) или backface-visibility:visible (default) — бокс остаётся виден. Только solid-боксы, без перекрытий'),
     ('142', '142-color-profile.html', 0.5, 'P4 @color-profile + color(--name c1 c2 c3) (CSS Color L5 §4): именованный custom-профиль, реальная ICC-трансформация отложена — каналы трактуются как sRGB напрямую, каждый swatch должен совпасть с эквивалентным sRGB-цветом'),
+    ('143', '143-css-function.html', 0.5, 'P4 @function (CSS Functions and Mixins L1): именованная custom-функция --name(<args>), вызванная из property value. Покрывает прямой вызов с явным аргументом, нулевой вызов (default-параметр), calc() внутри result:, вызов через custom-property цепочку (var()), локальную --x: ...; декларацию, feeding result: через clamp(). Только solid-боксы, геометрия/цвет полностью детерминированы вычислением функции'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---

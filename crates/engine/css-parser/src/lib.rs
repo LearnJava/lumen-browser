@@ -19,7 +19,7 @@ pub mod parser;
 pub use parser::{
     parse, parse_inline_style, parse_selector_list, parse_media_query, parse_supports_condition, AttrOp, AttrSelector, ColorScheme,
     ColorProfileRule, Combinator, CompoundSelector, ComplexSelector, ContainerRule, CounterStyleRule, Declaration,
-    DirArg, FontFaceRule, FontFaceSource, FontFaceSourceKind, FontPaletteValuesRule, ImportRule, Keyframe, KeyframesRule,
+    DirArg, FontFaceRule, FontFaceSource, FontFaceSourceKind, FontPaletteValuesRule, FunctionParameter, FunctionRule, ImportRule, Keyframe, KeyframesRule,
     LayerRule, MediaCondition, MediaContext, MediaContrast, MediaFeature, MediaHover, MediaInvertedColors, MediaOrientation, MediaPointer, MediaQuery,
     MediaReducedData, MediaReducedTransparency, MediaScripting,
     MediaQueryClause, MediaRule, NthSpec, PageRule, PropertyRule, PseudoClass, PseudoElementKind, RelativeSelector,

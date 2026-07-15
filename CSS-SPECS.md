@@ -114,7 +114,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Env Variables L1 | [css-env-1](https://www.w3.org/TR/css-env-1/) | ✅ | `env()` + fallback + nested `calc(env(...)+...)` implemented in `style.rs:8798` (`expand_env_vars`); `safe-area-inset-*` returns fallback when not set | **#51** |
 | CSS Selectors L5 | [selectors-5](https://www.w3.org/TR/selectors-5/) | ✅ | `:nth-child(An+B of S)` selector filter implemented in `style.rs:6464` + `css-parser` parser; 4 layout tests | **#52** |
 | CSS Nesting (scope) | [css-scoping-1](https://www.w3.org/TR/css-scoping-1/) | 🟡 | @scope root matching ✅ (P1 2026-06-03); limit/inner-scope — Phase 2 | **#53** |
-| CSS Functions & Mixins | [css-mixins-1](https://www.w3.org/TR/css-mixins-1/) | ⬜ | @function rule | **#54** |
+| CSS Functions & Mixins | [css-mixins-1](https://www.w3.org/TR/css-mixins-1/) | 🟡 | `@function` rule parsed+stored; call-site evaluation (positional args/defaults, local decls, `result:`) wired end-to-end in style.rs; `returns` typing + conditional group rules deferred — see [T3] At-Rules below | **#54** |
 | Scroll-driven Animations | [scroll-animations-1](https://www.w3.org/TR/scroll-animations-1/) | ✅ | scroll-timeline-name/axis, view-timeline-name/axis, animation-timeline (auto/scroll()/view()/named); collect_named_* walks layout tree; P4 2026-06-10 | **#55** |
 | CSS Anchor Positioning | [css-anchor-position-1](https://www.w3.org/TR/css-anchor-position-1/) | 🟡 | algorithm stub ready (P1 2026-06-03): AnchorRegistry, collect_anchors, resolve_anchor_function, resolve_inset_area; CSS wiring pending (P4) | **#56** |
 | CSS View Transitions L1 | [css-view-transitions-1](https://www.w3.org/TR/css-view-transitions-1/) | 🟡 | `document.startViewTransition` JS API + 300 ms cross-fade ✅ 2026-06-03; `view-transition-name` ✅ P4 2026-06-10 (ComputedStyle field + parsing + collect_view_transition_names); `::view-transition-*` pseudos ⬜ Phase 3 | **#57** |
@@ -610,7 +610,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@font-palette-values` | 🟡 | parsed (name + font-family + base-palette + override-colors); matched by name/family in compute_style; rendering deferred with COLR |
 | `@counter-style` | ✅ | CSS Counter Styles L3; `parse_counter_style_rule` (parser.rs:2336) |
 | `@scope` | ✅ | `parse_scope_rule` (parser.rs:2346) applied in cascade loop (style.rs:6357) |
-| `@function` | ⬜ | CSS Functions & Mixins |
+| `@function` | 🟡 | CSS Functions and Mixins L1; `<name>(<params>) [returns <type>]?` parsed+stored (`FunctionRule`, css-parser); `<name>(<args>)` call sites in property values resolved end-to-end (positional args + defaults, local `--x:` decls, `result:` via `calc()`/`var()`) in layout (`expand_custom_functions`, style.rs); deferred: `returns` type-checking, conditional group rules in body, named args (p4-css-function 2026-07-15, test 143) |
 
 ### [T3] Units & Values
 
