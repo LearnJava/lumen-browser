@@ -28,11 +28,22 @@ Full step-by-step plan — [`docs/tasks/ph3-ai-module.md`](../docs/tasks/ph3-ai-
 - No actual embedding/generation logic yet — the crate is an empty skeleton
   (smoke test only).
 
+### Step 2 — `EmbeddingBackend` trait + `OllamaEmbeddingBackend` (2026-07-15)
+- `crates/ai/src/embedding.rs` (gated behind the `ollama` Cargo feature):
+  `EmbeddingBackend` trait (`embed(&self, text) -> Result<Vec<f32>, EmbeddingError>`)
+  + `OllamaEmbeddingBackend`, which frames a `POST /api/embeddings` request by
+  hand over `std::net::TcpStream` (no `reqwest`/`hyper`) and parses the JSON
+  `{"embedding": [...]}` response with `serde_json`.
+- `OllamaEmbeddingBackend` also implements `lumen_core::ext::AiBackend`:
+  `embed` delegates to `EmbeddingBackend::embed` (empty vector on error, per
+  the trait's documented contract); `query` returns an empty string —
+  chat/generation is `GenerationBackend`'s job (Step 4), not yet implemented.
+- Tests mock the Ollama endpoint with a local `TcpListener` (no real Ollama
+  process required): happy path, malformed JSON, and missing-field response
+  shapes.
+
 ## Deferred
 
-- Step 2 — `EmbeddingBackend` trait + `OllamaEmbeddingBackend`
-  (`POST 127.0.0.1:11434/api/embeddings` over a hand-rolled HTTP/1.1
-  `TcpStream` client, no `reqwest`/`hyper` — see ADR-019).
 - Step 3 — semantic search over history/notes. **Blocked on an HNSW index in
   `lumen-knowledge`, which does not exist yet** (the brief's referenced
   prerequisite doc `p2-knowledge-stemmer-hnsw.md` is absent from the repo).
