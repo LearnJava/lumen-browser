@@ -35,12 +35,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/a11y/src/roles.rs:266` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
 `crates/engine/a11y/src/roles.rs:349` **fn** `implicit_role` — Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5
 
-## lumen-ai  (4 symbols)
+## lumen-ai  (8 symbols)
 
-`crates/ai/src/embedding.rs:19` **trait** `EmbeddingBackend` — Produces a dense embedding vector for a piece of text (§12.5, §12.8)
-`crates/ai/src/embedding.rs:27` **enum** `EmbeddingError` — Failure to embed text via an [`EmbeddingBackend`]
-`crates/ai/src/embedding.rs:53` **struct** `OllamaEmbeddingBackend` — Embedding backend that talks to a local Ollama daemon over plain HTTP
-`crates/ai/src/embedding.rs:61` **fn** `new` — New backend targeting the default Ollama port (11434) with `model`
+`crates/ai/src/embedding.rs:21` **trait** `EmbeddingBackend` — Produces a dense embedding vector for a piece of text (§12.5, §12.8)
+`crates/ai/src/embedding.rs:29` **enum** `EmbeddingError` — Failure to embed text via an [`EmbeddingBackend`]
+`crates/ai/src/embedding.rs:55` **struct** `OllamaEmbeddingBackend` — Embedding backend that talks to a local Ollama daemon over plain HTTP
+`crates/ai/src/embedding.rs:63` **fn** `new` — New backend targeting the default Ollama port (11434) with `model`
+`crates/ai/src/generation.rs:22` **trait** `GenerationBackend` — Produces free-form text from a prompt plus optional retrieved context
+`crates/ai/src/generation.rs:31` **enum** `GenerationError` — Failure to generate text via a [`GenerationBackend`]
+`crates/ai/src/generation.rs:57` **struct** `OllamaGenerationBackend` — Generation backend that talks to a local Ollama daemon over plain HTTP
+`crates/ai/src/generation.rs:65` **fn** `new` — New backend targeting the default Ollama port (11434) with `model`
 
 ## lumen-bench  (5 symbols)
 
@@ -5436,4 +5440,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5362 symbols in 23 crates*
+*Total: 5366 symbols in 23 crates*

@@ -42,15 +42,34 @@ Full step-by-step plan — [`docs/tasks/ph3-ai-module.md`](../docs/tasks/ph3-ai-
   process required): happy path, malformed JSON, and missing-field response
   shapes.
 
+### Step 3 — semantic search over history/notes (2026-07-15)
+- `SemanticIndex` (`crates/knowledge/src/semantic.rs`) — see
+  [`subsystems/knowledge.md`](knowledge.md) §Done for the full description
+  (mock/linear-scan nearest-neighbour index, `DefaultKnowledgeStore::search_semantic`).
+  `lumen-knowledge` does not depend on `lumen-ai`; callers embed text via
+  `lumen_ai::embedding::EmbeddingBackend` themselves.
+
+### Step 4 — `GenerationBackend` trait + `OllamaGenerationBackend` (2026-07-15)
+- `crates/ai/src/generation.rs` (gated behind the `ollama` Cargo feature):
+  `GenerationBackend` trait (`generate(&self, prompt, context) -> Result<String, GenerationError>`)
+  + `OllamaGenerationBackend`, which frames a `POST /api/generate` request
+  the same way `OllamaEmbeddingBackend` does — hand-rolled `TcpStream`
+  HTTP/1.1 framing, now shared via `crates/ai/src/http.rs`
+  (`http_response_body`, factored out of `embedding.rs` in this step).
+- `OllamaGenerationBackend` implements `lumen_core::ext::AiBackend`:
+  `summarise` delegates via a `"summarise: ..."`-prefixed prompt, `query`
+  delegates via `generate(prompt, "")`; both default to an empty string on
+  error, per the trait's documented contract. `embed` is not implemented
+  (uses the trait's default empty-vector impl) — this backend is
+  generation-only.
+- Tests mock the Ollama endpoint the same way Step 2 does: response
+  parsing, malformed-JSON/missing-field rejection, `AiBackend::summarise`/
+  `query` delegation and empty-string error fallback.
+- Does not wire a real backend into `Lumen::ai_backend`/`AiPanel` — that is
+  Step 5 (`RagEngine`).
+
 ## Deferred
 
-- Step 3 — semantic search over history/notes. **Blocked on an HNSW index in
-  `lumen-knowledge`, which does not exist yet** (the brief's referenced
-  prerequisite doc `p2-knowledge-stemmer-hnsw.md` is absent from the repo).
-  Per the brief's Step 0, proceed with a mock/linear-scan search interface
-  first and swap in a real HNSW index later — do not implement HNSW as part
-  of this crate.
-- Step 4 — `GenerationBackend` trait + `OllamaGenerationBackend` (summarisation).
 - Step 5 — `RagEngine`, wired into `AiPanel::submit`.
 - Step 6 — semantic bookmarks: `Bookmarks` schema extension
   (`summary`/`embedding` nullable columns), auto-summarise + embed on save.
