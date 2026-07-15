@@ -3721,11 +3721,15 @@ pub struct ContainerContext {
 /// tried as CSS colors and as lengths (`style_query_value_matches`), so
 /// `style(color: red)` matches a computed `rgb(255, 0, 0)`, `style(border-width:
 /// 2pt)` matches a computed `2.6667px`, and relative lengths (`em`, `%`,
-/// viewport units) resolve against the container's own `font_size`/`width`/
-/// `viewport` (`style(width: 1em)` matches a computed `16px` on a container
-/// whose font-size is `16px`) — the same basis `cq*` units use, since a
-/// `style()` query's declared value is evaluated as if specified on the
-/// container element itself (CSS Containment L3 §4).
+/// viewport units) resolve against the container's own `font_size`/`viewport`
+/// (`style(width: 1em)` matches a computed `16px` on a container whose
+/// font-size is `16px`) — the same `em`/viewport basis `cq*` units use,
+/// since a `style()` query's declared value is evaluated as if specified on
+/// the container element itself (CSS Containment L3 §4). The `%` basis is
+/// picked per queried property by `style_query_percent_basis` — the
+/// container's width by default, but its own font-size for `line-height` and
+/// its own (resolved) height for `height`/`top`/`bottom`/`min-height`/
+/// `max-height`.
 /// Boolean form (`style(--prop)` / `style(prop)` without a value) is true when the
 /// container has any value for that property — for custom properties this checks
 /// `custom_props`, for standard properties `style_props` (a standard property never
@@ -3740,10 +3744,13 @@ pub struct ContainerContext {
 /// - `state()` container queries: not a Lumen gap — the CSS Containment L3
 ///   spec itself removed/deferred state query features, so there is nothing
 ///   to implement against.
-/// - `%` in a `style()` value always resolves against the container's own
-///   width, regardless of which property is being queried (the honest
-///   per-property percentage basis — e.g. `line-height`'s is font-size —
-///   needs more context than `ContainerContext` carries).
+/// - Vertical box-model properties (`margin-top`/`margin-bottom`/
+///   `padding-top`/`padding-bottom`) resolve `%` against the container's
+///   width per CSS2.1 §8.3/§10.3 (correct — the containing block width is
+///   the basis for *all four* margin/padding sides), but `height`-basis
+///   properties (`height`/`top`/`bottom`) fall back to the container's width
+///   when its own height is auto, since `ContainerContext` has no separate
+///   "containing block height" for the container itself.
 ///
 /// Unknown features → false (safe fallback).
 pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> bool {
@@ -3858,10 +3865,11 @@ fn evaluate_style_feature(feature: &str, ctx: &ContainerContext) -> bool {
         }
         // Standard property: compare against the container's own computed
         // style (case-insensitive — CSS keywords are ASCII case-insensitive).
+        let name_lower = name.to_ascii_lowercase();
         return ctx
             .style_props
-            .get(&name.to_ascii_lowercase())
-            .is_some_and(|v| style_query_value_matches(v, &want, ctx));
+            .get(&name_lower)
+            .is_some_and(|v| style_query_value_matches(v, &want, &name_lower, ctx));
     }
     false
 }
@@ -3929,17 +3937,20 @@ fn normalize_style_value(s: &str) -> String {
 ///    `color: rgb(255, 0, 0)` (CSS Color L4 §4, equivalent notations denote
 ///    the same color).
 /// 2. CSS lengths: both sides parsed via `parse_length`, then resolved to px
-///    using `ctx` as the basis — `ctx.font_size` for `em`, `ctx.width` for
-///    `%`, `ctx.viewport` for `vw`/`vh`/`vmin`/`vmax` (CSS Values L3 §5.2/§6.1;
-///    absolute units like `pt` resolve independent of any basis) — so
-///    `style(border-width: 2pt)` matches a computed `2.6667px`, and
-///    `style(width: 1em)` matches a computed `16px` on a container whose
-///    font-size is `16px`. Values that need layout context beyond `ctx`
-///    (`min-content`, unresolved `cq*` outside a re-layout pass) don't
-///    resolve and fall through to the textual comparison's `false`.
+///    using `ctx` as the basis — `ctx.font_size` for `em`, `ctx.viewport` for
+///    `vw`/`vh`/`vmin`/`vmax` (CSS Values L3 §5.2/§6.1; absolute units like
+///    `pt` resolve independent of any basis) — so `style(border-width: 2pt)`
+///    matches a computed `2.6667px`, and `style(width: 1em)` matches a
+///    computed `16px` on a container whose font-size is `16px`. The `%`
+///    basis is picked per `prop_name` by `style_query_percent_basis` — e.g.
+///    `line-height`'s is the container's own font-size, not its width.
+///    Values that need layout context beyond `ctx` (`min-content`, unresolved
+///    `cq*` outside a re-layout pass) don't resolve and fall through to the
+///    textual comparison's `false`.
 ///
-/// `want` must already be normalized by the caller.
-fn style_query_value_matches(computed: &str, want: &str, ctx: &ContainerContext) -> bool {
+/// `want` must already be normalized by the caller. `prop_name` must already
+/// be lowercased by the caller.
+fn style_query_value_matches(computed: &str, want: &str, prop_name: &str, ctx: &ContainerContext) -> bool {
     if normalize_style_value(computed).eq_ignore_ascii_case(want) {
         return true;
     }
@@ -3947,7 +3958,7 @@ fn style_query_value_matches(computed: &str, want: &str, ctx: &ContainerContext)
         return a == b;
     }
     if let (Some(a), Some(b)) = (parse_length(computed), parse_length(want)) {
-        let basis = Some(ctx.width);
+        let basis = Some(style_query_percent_basis(prop_name, ctx));
         if let (Some(pa), Some(pb)) = (
             a.resolve(ctx.font_size, basis, ctx.viewport),
             b.resolve(ctx.font_size, basis, ctx.viewport),
@@ -3956,6 +3967,34 @@ fn style_query_value_matches(computed: &str, want: &str, ctx: &ContainerContext)
         }
     }
     false
+}
+
+/// Picks the `%` reference basis (in px) for a `style()` query's declared
+/// value, based on which standard property is being queried — CSS Values L3
+/// §5.2's «the percentage is calculated with respect to X» is per-property,
+/// not a single container size. Mirrors the handful of properties whose
+/// basis differs from the common "containing block width" default:
+/// - `line-height`: the element's own font-size (CSS Inline L3 §4.6.2),
+///   which for a `style()` query is the container's own `font_size`.
+/// - Vertical box-model properties (`height`, `top`/`bottom`, vertical
+///   `min-`/`max-height`): the containing block's height (CSS2.1 §10.5)
+///   — approximated here by the container's own resolved `height` when
+///   definite, falling back to its width (this file's prior behavior) when
+///   the container's height is auto, since Lumen's `ContainerContext` has no
+///   separate notion of "containing block height" for the container itself.
+///
+/// Every other property (including `margin-top`/`margin-bottom`/
+/// `padding-top`/`padding-bottom`, which CSS2.1 §8.3/§10.3 defines against
+/// the containing block *width* despite being vertical) falls back to the
+/// container's width, unchanged from before this function existed.
+fn style_query_percent_basis(prop_name: &str, ctx: &ContainerContext) -> f32 {
+    match prop_name {
+        "line-height" => ctx.font_size,
+        "height" | "min-height" | "max-height" | "top" | "bottom" => {
+            ctx.height.unwrap_or(ctx.width)
+        }
+        _ => ctx.width,
+    }
 }
 
 /// Parses a CSS length value to pixels (px / em not supported — just px for Phase 0).
