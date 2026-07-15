@@ -13,7 +13,11 @@
 //! `@history <query>` — FTS-поиск по истории; `@notes <query>` — поиск по
 //! пользовательским заметкам (§12.2); `@read-later <query>` — поиск по списку
 //! «прочитать позже» (§12.3); `@tabs <query>` — поиск по открытым вкладкам
-//! (§12.4); без префикса — prefix-match по search_history + FTS по умолчанию.
+//! (§12.4); `@bookmarks <query>` — поиск по закладкам, с cosine-similarity
+//! ранжированием при наличии AI-эмбеддинга (§12.8); `@ai <query>` — RAG-ответ
+//! через `lumen-ai` `RagEngine` (§12.5), либо hint-строка если модуль не
+//! собран (`--features ai`); без префикса — prefix-match по search_history +
+//! FTS по умолчанию.
 
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{DisplayCommand, DisplayList};
@@ -64,6 +68,13 @@ pub enum OmniboxPrefix {
     ReadLater,
     /// `@tabs <query>` — поиск по открытым вкладкам (§12.4, заголовок + URL).
     Tabs,
+    /// `@bookmarks <query>` — поиск по закладкам (§12.8): подстрочное
+    /// совпадение title/url/тегов, при наличии AI-эмбеддинга результат
+    /// дополнительно ранжируется по cosine-similarity к запросу.
+    Bookmarks,
+    /// `@ai <query>` — RAG-ответ через `lumen-ai` `RagEngine` (§12.5), либо
+    /// hint-строка «AI module not enabled» если крейт не собран (`--features ai`).
+    Ai,
     /// Обычный ввод: URL или поисковый запрос.
     Plain,
 }
@@ -85,6 +96,10 @@ pub fn parse_omnibox_prefix(input: &str) -> (OmniboxPrefix, &str) {
         (OmniboxPrefix::ReadLater, rest.trim_start())
     } else if let Some(rest) = s.strip_prefix("@tabs") {
         (OmniboxPrefix::Tabs, rest.trim_start())
+    } else if let Some(rest) = s.strip_prefix("@bookmarks") {
+        (OmniboxPrefix::Bookmarks, rest.trim_start())
+    } else if let Some(rest) = s.strip_prefix("@ai") {
+        (OmniboxPrefix::Ai, rest.trim_start())
     } else {
         (OmniboxPrefix::Plain, s)
     }
@@ -153,6 +168,29 @@ pub enum OmniboxSuggestion {
         /// `switch-tab:<id>` — committed value, переключает на вкладку.
         switch_value: String,
     },
+    /// Результат поиска по закладкам (§12.8, `@bookmarks <query>`).
+    ///
+    /// При выборе `commit_value()` возвращает `url` → обычная навигация.
+    Bookmark {
+        /// Заголовок закладки (может быть пустым → показываем URL).
+        title: String,
+        /// URL закладки.
+        url: String,
+        /// AI-саммари страницы, если вычислено (см. `Bookmarks::set_semantic`),
+        /// иначе пустая строка — `sub_label()` подставит URL.
+        snippet: String,
+    },
+    /// Единственная строка ответа на `@ai <query>` (§12.5).
+    ///
+    /// При выборе `commit_value()` возвращает sentinel `"ai-answer:noop"`
+    /// (перехватывается в `handle_omnibox_commit` — навигация не нужна, весь
+    /// ответ уже показан в самой строке dropdown).
+    Ai {
+        /// RAG-ответ (`RagEngine::answer`), fallback-текст `NullAiBackend`
+        /// если Ollama недоступен (ADR-019), либо hint «AI module not
+        /// enabled» под `#[cfg(not(feature = "ai"))]`.
+        answer: String,
+    },
 }
 
 impl OmniboxSuggestion {
@@ -167,6 +205,8 @@ impl OmniboxSuggestion {
             OmniboxSuggestion::SearchQuery { query, .. } => query,
             OmniboxSuggestion::ReadLater { url, .. } => url,
             OmniboxSuggestion::Tab { switch_value, .. } => switch_value,
+            OmniboxSuggestion::Bookmark { url, .. } => url,
+            OmniboxSuggestion::Ai { .. } => "ai-answer:noop",
         }
     }
 
@@ -179,9 +219,11 @@ impl OmniboxSuggestion {
             OmniboxSuggestion::Note { selection, .. } => selection,
             OmniboxSuggestion::SearchQuery { query, .. } => query,
             OmniboxSuggestion::ReadLater { title, url, .. }
-            | OmniboxSuggestion::Tab { title, url, .. } => {
+            | OmniboxSuggestion::Tab { title, url, .. }
+            | OmniboxSuggestion::Bookmark { title, url, .. } => {
                 if title.is_empty() { url } else { title }
             }
+            OmniboxSuggestion::Ai { answer } => answer,
         }
     }
 
@@ -191,6 +233,8 @@ impl OmniboxSuggestion {
     /// SearchQuery: пустая строка (вся информация в label).
     /// ReadLater: сниппет если непуст, иначе URL.
     /// Tab: URL открытой страницы.
+    /// Bookmark: AI-саммари если вычислено, иначе URL.
+    /// Ai: пустая строка (весь ответ уже в label).
     pub fn sub_label(&self) -> &str {
         match self {
             OmniboxSuggestion::HistoryFts { snippet, url, .. } => {
@@ -204,6 +248,10 @@ impl OmniboxSuggestion {
                 if !snippet.is_empty() { snippet } else { url }
             }
             OmniboxSuggestion::Tab { url, .. } => url,
+            OmniboxSuggestion::Bookmark { snippet, url, .. } => {
+                if !snippet.is_empty() { snippet } else { url }
+            }
+            OmniboxSuggestion::Ai { .. } => "",
         }
     }
 
@@ -219,6 +267,8 @@ impl OmniboxSuggestion {
             OmniboxSuggestion::SearchQuery { .. } => "запрос".to_string(),
             OmniboxSuggestion::ReadLater { .. } => "позже".to_string(),
             OmniboxSuggestion::Tab { .. } => "вкладка".to_string(),
+            OmniboxSuggestion::Bookmark { .. } => "закладка".to_string(),
+            OmniboxSuggestion::Ai { .. } => "ai".to_string(),
         }
     }
 
@@ -229,6 +279,8 @@ impl OmniboxSuggestion {
             OmniboxSuggestion::SearchQuery { .. } => ITEM_TAG,
             OmniboxSuggestion::ReadLater { .. } => Color { r: 120, g: 90, b: 180, a: 255 },
             OmniboxSuggestion::Tab { .. } => Color { r: 60, g: 150, b: 170, a: 255 },
+            OmniboxSuggestion::Bookmark { .. } => Color { r: 200, g: 160, b: 40, a: 255 },
+            OmniboxSuggestion::Ai { .. } => Color { r: 150, g: 70, b: 200, a: 255 },
         }
     }
 }
@@ -915,6 +967,69 @@ mod tests {
         assert_eq!(s.commit_value(), "switch-tab:42");
         assert_eq!(s.label(), "GitHub");
         assert_eq!(s.sub_label(), "https://github.com/");
+    }
+
+    // ── @bookmarks prefix ────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_prefix_bookmarks() {
+        let (prefix, q) = parse_omnibox_prefix("@bookmarks rust");
+        assert_eq!(prefix, OmniboxPrefix::Bookmarks);
+        assert_eq!(q, "rust");
+    }
+
+    #[test]
+    fn parse_prefix_bookmarks_empty_query() {
+        let (prefix, q) = parse_omnibox_prefix("@bookmarks");
+        assert_eq!(prefix, OmniboxPrefix::Bookmarks);
+        assert_eq!(q, "");
+    }
+
+    #[test]
+    fn bookmark_suggestion_commit_value_is_url() {
+        let s = OmniboxSuggestion::Bookmark {
+            title: "Rust".into(),
+            url: "https://rust-lang.org/".into(),
+            snippet: "a systems programming language".into(),
+        };
+        assert_eq!(s.commit_value(), "https://rust-lang.org/");
+        assert_eq!(s.label(), "Rust");
+        assert_eq!(s.sub_label(), "a systems programming language");
+    }
+
+    #[test]
+    fn bookmark_suggestion_label_and_sub_label_fall_back_to_url() {
+        let s = OmniboxSuggestion::Bookmark {
+            title: String::new(),
+            url: "https://example.com/x".into(),
+            snippet: String::new(),
+        };
+        assert_eq!(s.label(), "https://example.com/x");
+        assert_eq!(s.sub_label(), "https://example.com/x");
+    }
+
+    // ── @ai prefix ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_prefix_ai() {
+        let (prefix, q) = parse_omnibox_prefix("@ai what did I read about rust?");
+        assert_eq!(prefix, OmniboxPrefix::Ai);
+        assert_eq!(q, "what did I read about rust?");
+    }
+
+    #[test]
+    fn parse_prefix_ai_empty_query() {
+        let (prefix, q) = parse_omnibox_prefix("@ai");
+        assert_eq!(prefix, OmniboxPrefix::Ai);
+        assert_eq!(q, "");
+    }
+
+    #[test]
+    fn ai_suggestion_commit_value_is_noop_sentinel() {
+        let s = OmniboxSuggestion::Ai { answer: "Rust is a systems language.".into() };
+        assert_eq!(s.commit_value(), "ai-answer:noop");
+        assert_eq!(s.label(), "Rust is a systems language.");
+        assert_eq!(s.sub_label(), "");
     }
 
     fn make_note_suggestion(note_id: i64) -> OmniboxSuggestion {

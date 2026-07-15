@@ -16790,6 +16790,13 @@ impl Lumen {
             return;
         }
 
+        // `ai-answer:noop` — committing an `@ai` answer row is a no-op (§12.5):
+        // the RAG answer is already fully shown in the dropdown row itself,
+        // there is no URL to navigate to.
+        if value.trim() == "ai-answer:noop" {
+            return;
+        }
+
         // `about:settings` — open the browser settings overlay (task D-7).
         if value.trim() == "about:settings" {
             self.open_settings_panel();
@@ -16972,6 +16979,65 @@ impl Lumen {
                     if suggestions.len() >= 8 {
                         break;
                     }
+                }
+            }
+            OmniboxPrefix::Bookmarks => {
+                // @bookmarks <query> — подстрочный поиск по закладкам §12.8
+                // (title/url/теги), case-insensitive. При наличии AI-эмбеддинга
+                // запроса результат дополняется cosine-similarity ранжированием
+                // поверх текстовых совпадений (не заменяет их — closes the loop
+                // for bookmarks that don't textually match but are related).
+                if let Ok(bookmarks) = self.bookmarks.list_all() {
+                    let needle = query.to_lowercase();
+                    let query_embedding = if query.is_empty() {
+                        Vec::new()
+                    } else {
+                        self.ai_backend.embed(query)
+                    };
+                    // Score: text matches always outrank pure-semantic ones (base
+                    // 1.0 + similarity as tie-break); semantic-only matches keep
+                    // their raw similarity so they still sort by relevance.
+                    let mut scored: Vec<(f32, &lumen_storage::bookmarks::Bookmark)> = bookmarks
+                        .iter()
+                        .filter_map(|b| {
+                            let text_match = needle.is_empty()
+                                || b.title.to_lowercase().contains(&needle)
+                                || b.url.to_lowercase().contains(&needle)
+                                || b.tags.iter().any(|t| t.to_lowercase().contains(&needle));
+                            let similarity = if !query_embedding.is_empty()
+                                && let Some(emb) = &b.embedding
+                            {
+                                lumen_storage::bookmarks::cosine_similarity(
+                                    &query_embedding,
+                                    &lumen_storage::bookmarks::embedding_from_bytes(emb),
+                                )
+                            } else {
+                                0.0
+                            };
+                            if !text_match && similarity <= 0.5 {
+                                return None;
+                            }
+                            let score = if text_match { 1.0 + similarity } else { similarity };
+                            Some((score, b))
+                        })
+                        .collect();
+                    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    for (_, b) in scored.into_iter().take(7) {
+                        suggestions.push(OmniboxSuggestion::Bookmark {
+                            title: b.title.clone(),
+                            url: b.url.clone(),
+                            snippet: b.summary.clone().unwrap_or_default(),
+                        });
+                    }
+                }
+            }
+            OmniboxPrefix::Ai => {
+                // @ai <query> — единственная строка: RAG-ответ (§12.5) под
+                // `--features ai`, либо статичный hint под её отсутствие
+                // (см. `Self::ai_answer_for`, обе ветки cfg-gated). Пустой
+                // запрос — ни одной строки, как у остальных префиксов.
+                if !query.is_empty() {
+                    suggestions.push(OmniboxSuggestion::Ai { answer: self.ai_answer_for(query) });
                 }
             }
             OmniboxPrefix::Plain => {
@@ -18265,6 +18331,11 @@ impl Lumen {
     ///
     /// No-op when the current page has no URL (e.g. blank tab). The active tab
     /// title is used when available, otherwise the URL stands in as the title.
+    ///
+    /// Also populates the AI summary/embedding (§12.8, Step 6) via
+    /// [`Self::ai_backend`]: with the default [`lumen_core::NullAiBackend`]
+    /// `summarise`/`embed` return empty, so `set_semantic` is simply skipped —
+    /// no `feature = "ai"` gate needed here.
     fn bookmark_current_page(&mut self) {
         let url = self.current_display_url().to_owned();
         if url.is_empty() {
@@ -18282,9 +18353,78 @@ impl Lumen {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         let _ = self.bookmarks.add(&url, &title, "", &[], "", now);
+        let summary = self.ai_backend.summarise(&self.current_page_text());
+        if !summary.is_empty() {
+            let embedding = self.ai_backend.embed(&summary);
+            let embedding_bytes = (!embedding.is_empty())
+                .then(|| lumen_storage::bookmarks::embedding_to_bytes(&embedding));
+            let _ = self
+                .bookmarks
+                .set_semantic(&url, Some(&summary), embedding_bytes.as_deref());
+        }
         if self.bookmark_panel.visible {
             self.refresh_bookmarks();
         }
+    }
+
+    /// Concatenated visible text of the current page, for AI summarisation
+    /// (§12.8). Empty string when there's no layout tree yet.
+    fn current_page_text(&self) -> String {
+        let Some(lb) = &self.layout_box else {
+            return String::new();
+        };
+        lumen_layout::collect_visible_text(lb)
+            .into_iter()
+            .map(|f| f.text)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Answer an `@ai <query>` omnibox prompt (§12.5, Step 7).
+    ///
+    /// Grounds the answer in bookmark embeddings (§12.8) — the only
+    /// `DefaultKnowledgeStore`-populatable data this shell has today; wiring a
+    /// real browsing-history population path is deferred (see
+    /// `subsystems/ai.md` §Deferred, needs its own task brief). Rebuilds an
+    /// in-memory `DefaultKnowledgeStore` per query rather than caching one on
+    /// `Lumen`, mirroring `query_omnibox_suggestions`'s existing synchronous
+    /// per-keystroke `@bookmarks` embed call.
+    #[cfg(feature = "ai")]
+    fn ai_answer_for(&self, query: &str) -> String {
+        use lumen_ai::embedding::OllamaEmbeddingBackend;
+        use lumen_ai::generation::OllamaGenerationBackend;
+        use lumen_ai::rag::RagEngine;
+        use lumen_knowledge::DefaultKnowledgeStore;
+
+        let Ok(store) = DefaultKnowledgeStore::open_in_memory() else {
+            return self.ai_backend.query(query);
+        };
+        if let Ok(bookmarks) = self.bookmarks.list_all() {
+            for b in bookmarks {
+                if let Some(embedding) = &b.embedding {
+                    store.index_semantic(
+                        b.id,
+                        &b.url,
+                        &b.title,
+                        lumen_storage::bookmarks::embedding_from_bytes(embedding),
+                    );
+                }
+            }
+        }
+        let embedding_backend = OllamaEmbeddingBackend::new("nomic-embed-text");
+        let generation_backend = OllamaGenerationBackend::new("phi3:mini");
+        let answer = RagEngine::new(5).answer(query, &store, &embedding_backend, &generation_backend);
+        // Ollama unreachable/erroring → fall back to the NullAiBackend stub
+        // message, matching ADR-019's documented degrade-not-error contract.
+        if answer.is_empty() { self.ai_backend.query(query) } else { answer }
+    }
+
+    /// `--features ai` not compiled in: static hint row, no `lumen-ai` calls.
+    #[cfg(not(feature = "ai"))]
+    fn ai_answer_for(&self, _query: &str) -> String {
+        "AI module not enabled — rebuild with `cargo build --features ai` \
+         (requires a local Ollama daemon, see ADR-019)."
+            .to_owned()
     }
 
     /// Top-left anchor of the bookmark panel overlay (just under the tab bar).

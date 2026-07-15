@@ -76,10 +76,10 @@
 
 **Реализация:**
 - Отдельный крейт `lumen-ai`, под Cargo feature-флагом `ai`. По умолчанию **выключен** в bundle (бинарь Lumen без AI меньше и проще).
-- Backend через HTTP API уже установленной Ollama (если есть) — нулевая интеграция, дёшево. Альтернатива: встроенный llama.cpp через FFI — это потенциально **5-е exception** в §5 с обоснованием. Решение откладываем до момента включения модуля.
-- Эмбеддинги (`bge-small`, `nomic-embed-text` или подобное) предвычисляются при индексации страницы (§12.1) если модуль включён.
-- Векторный store: HNSW-индекс в `lumen-knowledge` — приближённый ближайший сосед за O(log N).
-- UI: команда `@ai` в omnibox или отдельная панель «Ask Lumen».
+- Backend: HTTP API уже установленной Ollama (`127.0.0.1:11434`) — решение принято, см. [ADR-019](../decisions/ADR-019-ai-module-embedding-backend.md). `candle` (in-process) остаётся будущей опцией за отдельным Cargo feature, не реализован в этом срезе.
+- Эмбеддинги (`nomic-embed-text` для embedding, `phi3:mini` для generation) считаются по запросу (не предвычисляются при индексации §12.1 — нет population-пути из реальной истории, см. `subsystems/ai.md` §Deferred).
+- Векторный store: пока linear-scan заглушка (`SemanticIndex` в `lumen-knowledge`) вместо HNSW — приближённый ближайший сосед за O(log N) остаётся будущей работой (`p2-knowledge-stemmer-hnsw.md`).
+- UI: команда `@ai` в omnibox (`docs/tasks/ph3-ai-module.md` Step 7, реализовано) — грундится только на эмбеддингах закладок (§12.8), не на истории/заметках. Отдельная панель «Ask Lumen» (`AiPanel`) существует, но пока использует `NullAiBackend` без RAG (не подключена к `RagEngine`).
 - Capability `local-ai` для плагинов: WASM-плагин может запросить эмбеддинг или генерацию через Lumen-runtime, никаких сетевых вызовов.
 
 **Фаза:** 3+. Не критичная, но потенциально killer-feature. Phase 0-2 работает без AI.

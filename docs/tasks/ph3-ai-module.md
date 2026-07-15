@@ -10,24 +10,28 @@
 
 ## Status
 
-In progress. Optional feature, disabled in the default bundle. Step 1 (crate
-skeleton, `AiBackend::embed`/`summarise`), Step 2 (`EmbeddingBackend` +
-`OllamaEmbeddingBackend`), Step 3 (`SemanticIndex` linear-scan +
-`DefaultKnowledgeStore::search_semantic`), Step 4 (`GenerationBackend` +
-`OllamaGenerationBackend`, `AiBackend::summarise`/`query` delegation), and
-Step 5 (`RagEngine::answer` — embed prompt, retrieve nearest semantic-index
-entries, generate a grounded response) are merged — see `subsystems/ai.md`
-§Done and `subsystems/knowledge.md`. Step 3 used the mock/linear-scan
-interface Step 0 allows (the referenced HNSW prerequisite doc still does not
-exist); a real ANN index is a drop-in replacement for `SemanticIndex` later.
-Step 5 does **not** wire `RagEngine` into `Lumen::ai_backend`/`AiPanel`:
-nothing in `crates/shell` constructs a `DefaultKnowledgeStore` or populates
-its semantic index from real browsing history yet (the shell uses the
-individual `HistoryFts`/`Notes`/`ReadLater` stores directly, not the
-`DefaultKnowledgeStore` facade) — wiring a panel to `RagEngine` today would
-always retrieve zero context. That wiring now depends on Step 6 (which adds
-the first real embedding-population path, for bookmarks) landing first, or
-on extending Step 6 to also populate history embeddings. Step 7 not started.
+All 7 steps merged (2026-07-15). Optional feature, disabled in the default
+bundle. See `subsystems/ai.md` §Done for the full per-step breakdown and
+§Deferred for what's intentionally still open:
+
+- Steps 1-5: crate skeleton, `EmbeddingBackend`/`OllamaEmbeddingBackend`,
+  `SemanticIndex` linear-scan + `DefaultKnowledgeStore::search_semantic`,
+  `GenerationBackend`/`OllamaGenerationBackend`, `RagEngine::answer`.
+- Step 6: semantic bookmarks (`Bookmark.summary`/`.embedding`, auto-populated
+  on Ctrl+D, `@bookmarks` omnibox prefix with cosine-similarity re-ranking).
+- Step 7: `@ai` omnibox prefix, routed through `RagEngine::answer` grounded
+  in bookmark embeddings (the only populated `DefaultKnowledgeStore` data
+  source today), falling back to the `NullAiBackend` stub text when Ollama
+  isn't reachable (ADR-019), or a static hint when `--features ai` is off.
+
+**Intentionally still open** (not part of any step's spec as written — see
+`subsystems/ai.md` §Deferred for why):
+- `Lumen::ai_backend`/`AiPanel` still always uses `NullAiBackend` — never
+  wired to a real `RagEngine`. Needs a design for populating
+  `DefaultKnowledgeStore` from real browsing history/notes, which no step so
+  far has specified; needs its own task brief.
+- `SemanticIndex` is still the Step 3 linear-scan mock, not a real HNSW index
+  (tracked separately in `p2-knowledge-stemmer-hnsw.md`).
 
 ---
 
@@ -269,27 +273,50 @@ All items below marked **(proposed)** do not exist yet.
   Step 5 for the full rationale. Revisit this wiring once Step 6 (or an
   extension of it) adds a real embedding-population path.
 
-### Step 6 — Semantic bookmarks (`§12.8`)
+### Step 6 — Semantic bookmarks (`§12.8`) ✅ (merged)
 
-- Extend `crates/storage/src/bookmarks.rs:36` (`Bookmark` struct):
-  - Add `pub summary: Option<String>` and `pub embedding: Option<Vec<u8>>` (f32 blob).
-  - SQL schema: `ALTER TABLE bookmarks ADD COLUMN summary TEXT` and
-    `ALTER TABLE bookmarks ADD COLUMN embedding BLOB` (both nullable; applied on first
-    open via `IF NOT EXISTS` check or schema version). Existing rows stay valid.
-- Extend `Bookmarks::save(url, title, folder, tags, summary, embedding)` to accept the
-  new fields (or add a `set_semantic(id, summary, embedding)` method).
-- In `lumen-shell`, when the user adds a bookmark for a loaded page (`Ctrl+D` or
-  equivalent) and `#[cfg(feature = "ai")]`:
-  - Extract the visible page text (already available via DOM).
-  - Call `AiBackend::summarise(text)` → store as `summary`.
-  - Call `AiBackend::embed(summary)` → store as `embedding` blob.
-- Omnibox `@bookmarks` query: if `ai` feature is active and an embedding is available
-  for the query term, perform cosine-similarity ranking alongside BM25.
-- Fallback (no `ai`): save with `summary = None`, `embedding = None`; tag-based search
-  unchanged.
-- Tests:
-  - `bookmarks.rs` unit: save with non-null summary/embedding → get round-trips correctly.
-  - `bookmarks.rs` unit: save without summary/embedding (basic mode) → no schema error.
+- `Bookmark` struct (`crates/storage/src/bookmarks.rs`) gained
+  `pub summary: Option<String>` and `pub embedding: Option<Vec<u8>>` (f32 LE blob,
+  see `embedding_to_bytes`/`embedding_from_bytes`). Fresh databases get both
+  columns via `CREATE TABLE IF NOT EXISTS`; pre-Step-6 on-disk databases are
+  migrated in place by `migrate_semantic_columns` (checks `PRAGMA table_info`,
+  runs `ALTER TABLE ... ADD COLUMN` only for columns still missing).
+- Added `Bookmarks::set_semantic(url, summary, embedding)` rather than widening
+  `add`'s signature (that method is named `add`, not `save`, and already has 6
+  positional params — a 7th/8th would be error-prone at call sites). `add`
+  leaves `summary`/`embedding` untouched on both insert (NULL default) and
+  update-on-conflict, so re-bookmarking an already-summarised URL doesn't wipe
+  its semantic data.
+- `Lumen::bookmark_current_page` (Ctrl+D, `crates/shell/src/main.rs`) extracts
+  visible page text via `lumen_layout::collect_visible_text`, calls
+  `self.ai_backend.summarise(..)` then `.embed(summary)`, and stores the result
+  via `set_semantic`. **Not `#[cfg(feature = "ai")]`-gated**: `ai_backend` is an
+  unconditionally-present `Box<dyn AiBackend>` field (default
+  `NullAiBackend`, same as the existing `AiPanel` query call site), and
+  `NullAiBackend::summarise`/`embed` already return empty — which this code
+  treats as "skip `set_semantic`" — so the fallback described below falls out
+  naturally without a cfg gate.
+- Omnibox `@bookmarks <query>` (new `OmniboxPrefix`/`OmniboxSuggestion` variant
+  in `crates/shell/src/address_bar.rs`, wired in `Lumen::query_omnibox_suggestions`):
+  no `@bookmarks` prefix or FTS5 table existed yet for bookmarks (unlike
+  `@history`/`@notes`/`@read-later`), so this step adds substring matching
+  over title/url/tags (same pattern as the existing `@tabs` prefix, not BM25)
+  as the text-match component, combined with cosine-similarity over stored
+  embeddings when a query embedding is available. Score = `1.0 + similarity`
+  for text matches (always outrank pure-semantic hits) or raw `similarity` for
+  semantic-only hits (bookmarks that don't textually match but are related);
+  results sorted descending, top 7.
+- Fallback (no `ai` / no embeddings): `NullAiBackend::embed` returns `[]`, so
+  `query_embedding` is empty and every candidate's `similarity` is `0.0` —
+  ranking degrades to plain substring search, tag-based search unchanged.
+- Tests: `crates/storage/src/bookmarks.rs` — `set_semantic` round-trips
+  summary+embedding; bookmark without semantic fields has no schema error;
+  `set_semantic` on a missing url is a no-op; `embedding_to_bytes`/`_from_bytes`
+  round-trip; `cosine_similarity` (identical/orthogonal/mismatched-length);
+  `migrate_semantic_columns` against a hand-built pre-Step-6 schema.
+  `crates/shell/src/address_bar.rs` — `@bookmarks` prefix parsing,
+  `Bookmark` suggestion commit/label/sub_label (incl. empty-title/snippet
+  fallback to url).
 
 ### Step 7 — Omnibox `@ai` prefix
 

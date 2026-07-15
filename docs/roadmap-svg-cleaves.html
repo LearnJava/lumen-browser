@@ -57,8 +57,8 @@
 {
  "generated": "2026-07-15",
  "counts": {
-  "open": 28,
-  "fixed": 231,
+  "open": 27,
+  "fixed": 232,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -820,9 +820,9 @@
     {
      "id": "P3-ai",
      "title": "Опциональный AI-модуль (lumen-ai, семантический поиск/RAG)",
-     "status": "active",
+     "status": "done",
      "size": "XL",
-     "note": "Step 1 влит 2026-07-15 (branch p1-ph3-ai-module): крейт lumen-ai (feature-flagged, не в default), AiBackend.embed()/summarise() default-impl, ADR-019 (Ollama HTTP первым, candle отложен). Step 2 влит 2026-07-15 (branch p1-ai-embedding-backend): EmbeddingBackend trait + OllamaEmbeddingBackend (crates/ai/src/embedding.rs, feature `ollama`), AiBackend::embed делегирует. Step 3 влит 2026-07-15 (branch p1-ai-semantic-search): SemanticIndex — in-memory linear-scan заглушка HNSW (crates/knowledge/src/semantic.rs) + DefaultKnowledgeStore::index_semantic/search_semantic (не в трейте KnowledgeStore). Step 4 влит 2026-07-15 (branch p1-ph3-ai-summarisation): GenerationBackend trait + OllamaGenerationBackend (crates/ai/src/generation.rs, feature `ollama`, POST /api/generate), AiBackend::summarise/query делегируют; общий HTTP-парсинг вынесен в crates/ai/src/http.rs (переиспользуется embedding.rs). Step 5 влит 2026-07-15 (branch p1-ph3-ai-rag-engine): RagEngine::answer (crates/ai/src/rag.rs) — embed prompt → DefaultKnowledgeStore::search_semantic → generate(prompt, context); lumen-ai получил зависимость на lumen-knowledge (без цикла). В AiPanel/Lumen::ai_backend не подключён: в shell нигде не создаётся DefaultKnowledgeStore и нечем населять semantic-индекс реальной историей — подключение отложено до Step 6 (или его расширения). Остаток — Step 6-7 по docs/tasks/ph3-ai-module.md: semantic bookmarks, omnibox @ai"
+     "note": "Steps 1-6 см. историю (branches p1-ph3-ai-module, p1-ai-embedding-backend, p1-ai-semantic-search, p1-ph3-ai-summarisation, p1-ph3-ai-rag-engine, p1-ph3-ai-semantic-bookmarks). Step 7 влит 2026-07-15 (branch p1-ai-omnibox): omnibox `@ai <query>` (address_bar.rs OmniboxPrefix::Ai/OmniboxSuggestion::Ai, commit-sentinel `ai-answer:noop`) — под `--features ai` роутится через RagEngine::answer(query, DefaultKnowledgeStore, OllamaEmbeddingBackend, OllamaGenerationBackend), knowledge store населяется на лету из эмбеддингов закладок (единственный существующий population-путь, Step 6); пустой ответ (Ollama недоступна) → фоллбэк на NullAiBackend-заглушку (ADR-019). Без `ai` — статичный hint-текст. `ai` feature теперь также включает `lumen-ai/ollama` (иначе RagEngine недоступен). Lumen::ai_backend/AiPanel по-прежнему не подключены к реальному RagEngine и реальный HNSW не сделан — задокументировано как открытое в subsystems/ai.md §Deferred, отдельные задачи"
     },
     {
      "id": "P3-ws",
@@ -881,7 +881,8 @@
     {
      "id": "P3-color",
      "title": "Color management + Display P3 / Rec2020 / ICC",
-     "status": "active"
+     "status": "done",
+     "note": "ДОКСИНК 2026-07-15 (код уже был в main, статус не был обновлён): Step 1 влит 2026-06-27 (`c486539c`, DisplayColorProfile trait + Windows GDI `GetICMProfileA` → `Lumen::target_color_space()`); Step 2 влит (`ff18c93a`, target ICC transform + `ColorFloat::to_display`); Step 3 влит (`72a7dfaa`, ColorSpace в GradientStop); Steps 4-6 влиты 2026-06-27 (`510b0e6d`, target-aware image decode + wgpu wide-gamut swap-chain `Rgba16Float` + colour-managed clear); Step 7 (femtovg 8-bit limitation) задокументирован в CAPABILITIES.md. sRGB-путь не регрессит (проверено graphic_tests/128-icc-color-management.html, pixel-identical к Edge)"
     },
     {
      "id": "P3-print",
@@ -3238,10 +3239,10 @@
    "debtor": true
   },
   "BUG-283": {
-   "status": "open",
+   "status": "fixed",
    "title": "Краш процесса (`memory allocation of 906238016744 bytes failed`) на https://lenta.ru через ~7с после старта, сразу после подгрузки кастомных `@font-face`. Причи…",
    "component": "font (`Rasterizer::rasterize`)",
-   "date": null,
+   "date": "2026-07-15",
    "debtor": false
   },
   "BUG-284": {
