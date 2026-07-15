@@ -9,7 +9,9 @@
 //!     title       TEXT NOT NULL DEFAULT '',
 //!     folder      TEXT NOT NULL DEFAULT '',  -- путь типа /Work/Projects
 //!     created_at  INTEGER NOT NULL,           -- Unix timestamp
-//!     note        TEXT NOT NULL DEFAULT ''   -- пользовательская заметка
+//!     note        TEXT NOT NULL DEFAULT '',  -- пользовательская заметка
+//!     summary     TEXT,                       -- AI-саммари страницы (NULL = нет)
+//!     embedding   BLOB                        -- AI-эмбеддинг summary, f32 LE (NULL = нет)
 //! );
 //! CREATE TABLE bookmark_tags (
 //!     bookmark_id INTEGER NOT NULL,
@@ -41,6 +43,13 @@ pub struct Bookmark {
     pub created_at: i64,
     pub note: String,
     pub tags: Vec<String>,
+    /// AI-саммари содержимого страницы (§12.8). `None` если AI-модуль не
+    /// настроен или саммари ещё не вычислено — не путать с пустой строкой.
+    pub summary: Option<String>,
+    /// AI-эмбеддинг [`Self::summary`] — f32-вектор, little-endian байты
+    /// (см. [`embedding_to_bytes`]/[`embedding_from_bytes`]). `None` в паре с
+    /// `summary: None`.
+    pub embedding: Option<Vec<u8>>,
 }
 
 pub struct Bookmarks {
@@ -78,7 +87,9 @@ impl Bookmarks {
                 title      TEXT NOT NULL DEFAULT '',
                 folder     TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                note       TEXT NOT NULL DEFAULT ''
+                note       TEXT NOT NULL DEFAULT '',
+                summary    TEXT,
+                embedding  BLOB
             );
             CREATE TABLE IF NOT EXISTS bookmark_tags (
                 bookmark_id INTEGER NOT NULL,
@@ -91,6 +102,7 @@ impl Bookmarks {
             "#,
         )
         .map_err(|e| Error::Storage(format!("bookmarks init: {e}")))?;
+        migrate_semantic_columns(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -166,7 +178,8 @@ impl Bookmarks {
             .map_err(|_| Error::Storage("bookmarks mutex poisoned".into()))?;
         let row = conn
             .query_row(
-                "SELECT id, url, title, folder, created_at, note FROM bookmarks WHERE url = ?1",
+                "SELECT id, url, title, folder, created_at, note, summary, embedding
+                 FROM bookmarks WHERE url = ?1",
                 params![url],
                 |r| {
                     Ok((
@@ -176,12 +189,14 @@ impl Bookmarks {
                         r.get::<_, String>(3)?,
                         r.get::<_, i64>(4)?,
                         r.get::<_, String>(5)?,
+                        r.get::<_, Option<String>>(6)?,
+                        r.get::<_, Option<Vec<u8>>>(7)?,
                     ))
                 },
             )
             .optional()
             .map_err(|e| Error::Storage(format!("bookmarks get: {e}")))?;
-        let Some((id, url, title, folder, created_at, note)) = row else {
+        let Some((id, url, title, folder, created_at, note, summary, embedding)) = row else {
             return Ok(None);
         };
         let tags = fetch_tags(&conn, id)?;
@@ -193,7 +208,29 @@ impl Bookmarks {
             created_at,
             note,
             tags,
+            summary,
+            embedding,
         }))
+    }
+
+    /// Записать AI-саммари и эмбеддинг для закладки (§12.8, Step 6). No-op,
+    /// если закладки с таким `url` нет. `None`/`None` очищает оба поля.
+    pub fn set_semantic(
+        &self,
+        url: &str,
+        summary: Option<&str>,
+        embedding: Option<&[u8]>,
+    ) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("bookmarks mutex poisoned".into()))?;
+        conn.execute(
+            "UPDATE bookmarks SET summary = ?2, embedding = ?3 WHERE url = ?1",
+            params![url, summary, embedding],
+        )
+        .map_err(|e| Error::Storage(format!("bookmarks set_semantic: {e}")))?;
+        Ok(())
     }
 
     /// Удалить закладку (вместе с тегами благодаря ON DELETE CASCADE).
@@ -218,7 +255,7 @@ impl Bookmarks {
             .map_err(|_| Error::Storage("bookmarks mutex poisoned".into()))?;
         list_with_query(
             &conn,
-            "SELECT id, url, title, folder, created_at, note FROM bookmarks
+            "SELECT id, url, title, folder, created_at, note, summary, embedding FROM bookmarks
              ORDER BY folder ASC, created_at DESC",
             params![],
         )
@@ -250,7 +287,7 @@ impl Bookmarks {
             .map_err(|_| Error::Storage("bookmarks mutex poisoned".into()))?;
         list_with_query(
             &conn,
-            "SELECT id, url, title, folder, created_at, note FROM bookmarks
+            "SELECT id, url, title, folder, created_at, note, summary, embedding FROM bookmarks
              WHERE folder = ?1 ORDER BY created_at DESC",
             params![folder],
         )
@@ -264,7 +301,7 @@ impl Bookmarks {
             .map_err(|_| Error::Storage("bookmarks mutex poisoned".into()))?;
         list_with_query(
             &conn,
-            "SELECT b.id, b.url, b.title, b.folder, b.created_at, b.note
+            "SELECT b.id, b.url, b.title, b.folder, b.created_at, b.note, b.summary, b.embedding
              FROM bookmarks b
              JOIN bookmark_tags t ON t.bookmark_id = b.id
              WHERE t.tag = ?1
@@ -326,6 +363,63 @@ impl Bookmarks {
     }
 }
 
+/// Adds `summary`/`embedding` columns to a `bookmarks` table created before
+/// Step 6 (§12.8). `CREATE TABLE IF NOT EXISTS` above only covers fresh
+/// databases — existing on-disk files need an explicit `ALTER TABLE`.
+fn migrate_semantic_columns(conn: &Connection) -> Result<()> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(bookmarks)")
+        .map_err(|e| Error::Storage(format!("bookmarks migrate prepare: {e}")))?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(|e| Error::Storage(format!("bookmarks migrate query: {e}")))?;
+    let mut columns: HashSet<String> = HashSet::new();
+    for r in rows {
+        columns.insert(r.map_err(|e| Error::Storage(format!("bookmarks migrate row: {e}")))?);
+    }
+    drop(stmt);
+    if !columns.contains("summary") {
+        conn.execute("ALTER TABLE bookmarks ADD COLUMN summary TEXT", [])
+            .map_err(|e| Error::Storage(format!("bookmarks migrate add summary: {e}")))?;
+    }
+    if !columns.contains("embedding") {
+        conn.execute("ALTER TABLE bookmarks ADD COLUMN embedding BLOB", [])
+            .map_err(|e| Error::Storage(format!("bookmarks migrate add embedding: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Serialises an embedding vector to little-endian bytes for BLOB storage.
+/// Paired with [`embedding_from_bytes`]; see [`Bookmark::embedding`].
+pub fn embedding_to_bytes(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+/// Deserialises bytes produced by [`embedding_to_bytes`] back into an `f32` vector.
+/// A trailing partial `f32` (byte count not a multiple of 4) is dropped.
+pub fn embedding_from_bytes(b: &[u8]) -> Vec<f32> {
+    b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// Cosine similarity between two embeddings, for semantic-bookmark ranking
+/// (§12.8, Step 6). Returns `0.0` for empty/mismatched-length inputs or when
+/// either vector has zero norm, so callers can treat it as "no match"
+/// without a separate validity check.
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.is_empty() || a.len() != b.len() {
+        return 0.0;
+    }
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let norm_a = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b = b.iter().map(|y| y * y).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    dot / (norm_a * norm_b)
+}
+
 fn fetch_tags(conn: &Connection, bookmark_id: i64) -> Result<Vec<String>> {
     let mut stmt = conn
         .prepare_cached(
@@ -359,12 +453,14 @@ fn list_with_query(
                 r.get::<_, String>(3)?,
                 r.get::<_, i64>(4)?,
                 r.get::<_, String>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<Vec<u8>>>(7)?,
             ))
         })
         .map_err(|e| Error::Storage(format!("bookmarks list query: {e}")))?;
     let mut out = Vec::new();
     for r in rows {
-        let (id, url, title, folder, created_at, note) =
+        let (id, url, title, folder, created_at, note, summary, embedding) =
             r.map_err(|e| Error::Storage(format!("bookmarks list row: {e}")))?;
         let tags = fetch_tags(conn, id)?;
         out.push(Bookmark {
@@ -375,6 +471,8 @@ fn list_with_query(
             created_at,
             note,
             tags,
+            summary,
+            embedding,
         });
     }
     Ok(out)
@@ -600,5 +698,86 @@ mod tests {
     fn delete_missing_noop() {
         let b = make();
         b.delete("https://nope/").unwrap();
+    }
+
+    // ── Semantic fields (§12.8, Step 6) ─────────────────────────────────────
+
+    #[test]
+    fn bookmark_without_semantic_fields_has_no_schema_error() {
+        let b = make();
+        b.add("https://y/", "Y", "", &[], "", 100).unwrap();
+        let got = b.get("https://y/").unwrap().unwrap();
+        assert!(got.summary.is_none());
+        assert!(got.embedding.is_none());
+    }
+
+    #[test]
+    fn set_semantic_round_trips_summary_and_embedding() {
+        let b = make();
+        b.add("https://x/", "X", "", &[], "", 100).unwrap();
+        let emb = embedding_to_bytes(&[0.1, 0.2, 0.3]);
+        b.set_semantic("https://x/", Some("a short summary"), Some(&emb))
+            .unwrap();
+        let got = b.get("https://x/").unwrap().unwrap();
+        assert_eq!(got.summary.as_deref(), Some("a short summary"));
+        assert_eq!(
+            embedding_from_bytes(got.embedding.as_deref().unwrap()),
+            vec![0.1, 0.2, 0.3]
+        );
+    }
+
+    #[test]
+    fn set_semantic_missing_url_noop() {
+        let b = make();
+        b.set_semantic("https://nope/", Some("s"), None).unwrap();
+        assert_eq!(b.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn embedding_bytes_roundtrip() {
+        let v = vec![1.0f32, -2.5, 0.0, 3.75];
+        let bytes = embedding_to_bytes(&v);
+        assert_eq!(bytes.len(), v.len() * 4);
+        assert_eq!(embedding_from_bytes(&bytes), v);
+    }
+
+    #[test]
+    fn cosine_similarity_identical_vectors_is_one() {
+        let v = vec![1.0, 2.0, 3.0];
+        assert!((cosine_similarity(&v, &v) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal_is_zero() {
+        assert_eq!(cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]), 0.0);
+    }
+
+    #[test]
+    fn cosine_similarity_mismatched_length_is_zero() {
+        assert_eq!(cosine_similarity(&[1.0, 2.0], &[1.0]), 0.0);
+    }
+
+    #[test]
+    fn migrate_adds_missing_columns_to_legacy_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE bookmarks (
+                id INTEGER PRIMARY KEY,
+                url TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL DEFAULT '',
+                folder TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                note TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        migrate_semantic_columns(&conn).unwrap();
+        // Re-running on an already-migrated schema must not error.
+        migrate_semantic_columns(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO bookmarks (url, created_at, summary, embedding) VALUES (?1, 1, ?2, ?3)",
+            params!["https://z/", "sum", vec![1u8, 2, 3, 4]],
+        )
+        .unwrap();
     }
 }
