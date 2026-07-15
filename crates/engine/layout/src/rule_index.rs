@@ -4,9 +4,16 @@
 //! because the candidate set is always a superset of the matching rules.
 //!
 //! See `docs/tasks/p1-selector-rule-index.md` for the performance rationale.
+//!
+//! BUG-284: [`RuleIndex::build`] is generic over any `&[Rule]` slice, so
+//! `compute_style` also builds (and thread-locally caches) one index per
+//! `@layer`/`@media`/`@supports` block instead of brute-force scanning their
+//! rules for every node. Real-world stylesheets often put the bulk of their
+//! rules inside `@media` breakpoints, which made the un-indexed fallback the
+//! dominant cascade cost (observed: ~1.1ms/node, ~1.3s for a ~1100-node page).
 
 use std::collections::HashMap;
-use lumen_css_parser::{CompoundSelector, PseudoClass, SimpleSelector, Stylesheet};
+use lumen_css_parser::{CompoundSelector, PseudoClass, Rule, SimpleSelector, Stylesheet};
 
 /// Opaque index into `Stylesheet.rules`.
 type RuleIdx = usize;
@@ -108,8 +115,20 @@ impl RuleIndex {
     /// O(rules × selectors_per_rule). Called at most once per stylesheet per
     /// layout pass thanks to the thread-local cache in `compute_style`.
     pub fn build(sheet: &Stylesheet) -> Self {
+        Self::build_from_rules(&sheet.rules)
+    }
+
+    /// Builds an index over an arbitrary rule slice — the top-level `rules` of
+    /// a [`Stylesheet`], or the `rules` of a single `@layer`/`@media`/`@supports`
+    /// block (BUG-284). `RuleIdx` values index into the same slice the caller
+    /// passed in, so callers must keep using that slice (not `sheet.rules`)
+    /// when resolving a returned candidate.
+    ///
+    /// O(rules × selectors_per_rule). Called at most once per block per
+    /// layout pass thanks to the thread-local cache in `compute_style`.
+    pub fn build_from_rules(rules: &[Rule]) -> Self {
         let mut idx = Self::empty();
-        for (rule_idx, rule) in sheet.rules.iter().enumerate() {
+        for (rule_idx, rule) in rules.iter().enumerate() {
             for sel in &rule.selectors {
                 match subject_key(subject(sel)) {
                     SubjectKey::Id(id) => {
