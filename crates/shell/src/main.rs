@@ -16974,6 +16974,56 @@ impl Lumen {
                     }
                 }
             }
+            OmniboxPrefix::Bookmarks => {
+                // @bookmarks <query> — подстрочный поиск по закладкам §12.8
+                // (title/url/теги), case-insensitive. При наличии AI-эмбеддинга
+                // запроса результат дополняется cosine-similarity ранжированием
+                // поверх текстовых совпадений (не заменяет их — closes the loop
+                // for bookmarks that don't textually match but are related).
+                if let Ok(bookmarks) = self.bookmarks.list_all() {
+                    let needle = query.to_lowercase();
+                    let query_embedding = if query.is_empty() {
+                        Vec::new()
+                    } else {
+                        self.ai_backend.embed(query)
+                    };
+                    // Score: text matches always outrank pure-semantic ones (base
+                    // 1.0 + similarity as tie-break); semantic-only matches keep
+                    // their raw similarity so they still sort by relevance.
+                    let mut scored: Vec<(f32, &lumen_storage::bookmarks::Bookmark)> = bookmarks
+                        .iter()
+                        .filter_map(|b| {
+                            let text_match = needle.is_empty()
+                                || b.title.to_lowercase().contains(&needle)
+                                || b.url.to_lowercase().contains(&needle)
+                                || b.tags.iter().any(|t| t.to_lowercase().contains(&needle));
+                            let similarity = if !query_embedding.is_empty()
+                                && let Some(emb) = &b.embedding
+                            {
+                                lumen_storage::bookmarks::cosine_similarity(
+                                    &query_embedding,
+                                    &lumen_storage::bookmarks::embedding_from_bytes(emb),
+                                )
+                            } else {
+                                0.0
+                            };
+                            if !text_match && similarity <= 0.5 {
+                                return None;
+                            }
+                            let score = if text_match { 1.0 + similarity } else { similarity };
+                            Some((score, b))
+                        })
+                        .collect();
+                    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    for (_, b) in scored.into_iter().take(7) {
+                        suggestions.push(OmniboxSuggestion::Bookmark {
+                            title: b.title.clone(),
+                            url: b.url.clone(),
+                            snippet: b.summary.clone().unwrap_or_default(),
+                        });
+                    }
+                }
+            }
             OmniboxPrefix::Plain => {
                 // prefix-match по search_history (до 4 строк).
                 if let Ok(queries) = self.search_history.prefix_match(query, 4) {
@@ -18265,6 +18315,11 @@ impl Lumen {
     ///
     /// No-op when the current page has no URL (e.g. blank tab). The active tab
     /// title is used when available, otherwise the URL stands in as the title.
+    ///
+    /// Also populates the AI summary/embedding (§12.8, Step 6) via
+    /// [`Self::ai_backend`]: with the default [`lumen_core::NullAiBackend`]
+    /// `summarise`/`embed` return empty, so `set_semantic` is simply skipped —
+    /// no `feature = "ai"` gate needed here.
     fn bookmark_current_page(&mut self) {
         let url = self.current_display_url().to_owned();
         if url.is_empty() {
@@ -18282,9 +18337,31 @@ impl Lumen {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         let _ = self.bookmarks.add(&url, &title, "", &[], "", now);
+        let summary = self.ai_backend.summarise(&self.current_page_text());
+        if !summary.is_empty() {
+            let embedding = self.ai_backend.embed(&summary);
+            let embedding_bytes = (!embedding.is_empty())
+                .then(|| lumen_storage::bookmarks::embedding_to_bytes(&embedding));
+            let _ = self
+                .bookmarks
+                .set_semantic(&url, Some(&summary), embedding_bytes.as_deref());
+        }
         if self.bookmark_panel.visible {
             self.refresh_bookmarks();
         }
+    }
+
+    /// Concatenated visible text of the current page, for AI summarisation
+    /// (§12.8). Empty string when there's no layout tree yet.
+    fn current_page_text(&self) -> String {
+        let Some(lb) = &self.layout_box else {
+            return String::new();
+        };
+        lumen_layout::collect_visible_text(lb)
+            .into_iter()
+            .map(|f| f.text)
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// Top-left anchor of the bookmark panel overlay (just under the tab bar).
