@@ -76,36 +76,73 @@ complex in &rule.selectors { matches_complex(...) } }` — полный пере
 5. `@scope`/`@container` **не тронуты** (остаются brute-force) — типично
    меньше правил, ниже риск/выгода не оправдывает расширение скоупа фикса.
 
+## Дополнение (тот же день): переиспользование `ComputedStyle` между проходами
+
+`precompute_counters` и `build_box` — два ПОЛНЫХ отдельных document-order
+прохода по дереву, и оба вызывают `compute_style` для каждого узла с
+идентичными аргументами (тот же `doc`/`sheet`/`viewport`/`dark_mode`, та же
+цепочка `inherited` — оба обхода в одном порядке через `flat.children_of`).
+`precompute_counters` всегда выполняется первым и передаёт `CounterMap` в
+`build_box` — второй проход буквально пересчитывал то, что первый уже знал.
+
+Фикс: `CounterMap` получил кэш `styles: HashMap<NodeId, ComputedStyle>`,
+заполняемый в `precompute_counters::walk` (`map.styles.insert(id,
+style.clone())`), и метод `style_for(id)`. `build_box` теперь читает оттуда
+(`counters.style_for(id).cloned().unwrap_or_else(|| compute_style(...))` —
+fallback на случай узла, для которого кэша нет, например корневой
+`NodeData::Document`, который `walk` не обсчитывает).
+
+Проверены все 3 точки входа (`layout_measured_hyp`, `layout`,
+`layout_streaming_incremental`) — везде `precompute_counters` вызывается
+непосредственно перед `build_box` с теми же аргументами, так что кэш валиден
+для каждого текущего вызывающего.
+
+Результат на ria.ru: `build_box` 613мс → 524мс (~15%, меньше, чем ожидалось —
+значит доля именно `compute_style` внутри `build_box` уже не доминирует после
+основного фикса выше; остальное — построение box-дерева, resolve картинок и
+т.д.). `cargo test -p lumen-layout` 3189/3189; точечные graphic-тесты на
+counters/quotes/list-markers (32, 97, 117) дали ИДЕНТИЧНЫЕ проценты diff, что
+и самый первый прогон на main до всех правок — визуальных регрессий нет.
+
 ## Результат
 
-| | до | после |
-|---|---|---|
-| `build_box` (cascade) | 1274 мс | 613 мс |
-| `precompute_counters` | 1054 мс | 465 мс |
-| relayout итого | ~2.4 с | ~1.15 с |
-| relayout-штормов подряд | 6× (~13.6с фриз) | 0 |
+| | до | после фикса 1 (индексация) | после фикса 2 (кэш стилей) |
+|---|---|---|---|
+| `build_box` (cascade) | 1274 мс | 613 мс | 524 мс |
+| `precompute_counters` | 1054 мс | 465 мс | ~465–589 мс (без изменений, ожидаемо — это единственный проход, который теперь реально считает каскад) |
+| relayout итого | ~2.4 с | ~1.15 с | ~1.0–1.1 с |
+| relayout-штормов подряд | 6× (~13.6с фриз) | 0 | 0 |
 
-Побочный эффект: при более быстром каскаде первая пачка асинхронных
+Побочный эффект фикса 1: при более быстром каскаде первая пачка асинхронных
 DOM-мутаций (картинки, рекламные скрипты) укладывается в один relayout —
 штормы из нескольких relayout подряд перестали воспроизводиться в этом
 сценарии (не гасились искусственно, а перестали возникать).
 
 ## Тесты
 
-`cargo test -p lumen-layout --lib` — 3189/3189 зелёных (индексация @media/
-@layer/@supports не сломала каскад). `cargo clippy -p lumen-layout
---all-targets -- -D warnings` — чисто.
+`cargo test -p lumen-layout --lib` — 3189/3189 зелёных (обе правки: индексация
+@media/@layer/@supports + кэш стилей между precompute_counters/build_box).
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` — чисто.
 
-`graphic_tests/run.py --continue-on-fail` (dev-release): 39 FAIL + 38 DEBTOR —
-**«Дельта vs предыдущий прогон: Изменений нет»** — идентично эталонному
-прогону на main до фикса (предсуществующий фон, не регрессия от этого
-изменения).
+`graphic_tests/run.py --continue-on-fail` (dev-release, фикс 1): 39 FAIL + 38
+DEBTOR — **«Дельта vs предыдущий прогон: Изменений нет»** — идентично
+эталонному прогону на main до фикса (предсуществующий фон, не регрессия).
+
+`graphic_tests/run.py --only 32/97/117` (фикс 2, counters/quotes/list-markers
+— самая чувствительная к кэшу область): проценты diff **идентичны** самому
+первому прогону на main до всех правок этой задачи.
 
 ## Остаток
 
-`build_box`/`precompute_counters` всё ещё ~0.6мс/узел — заметно быстрее, но
-не «мгновенно». Возможные дальнейшие цели (не в этой задаче): убрать
-дублирующий полный cascade-проход в `precompute_counters` (он уже вызывает
-тот же `compute_style`, что и `build_box`, — де-факто два полных прохода по
-дереву на один relayout); индексация `@scope`/`@container`, если найдутся
-реальные сайты с существенным числом правил там.
+`build_box`/`precompute_counters` всё ещё ~0.4–0.5мс/узел — заметно быстрее
+(~2.2× от исходных ~2.4с), но не «мгновенно». `precompute_counters` остаётся
+единственным полным document-order проходом, вызывающим настоящий каскад
+(`compute_style` + `compute_pseudo_element_style` для before/after каждого
+элемента) — дальнейший выигрыш потребовал бы либо ускорения самого
+`compute_style`/`matches_complex` (per-node overhead помимо кандидатного
+поиска: аллокации `Vec`/`BTreeSet`, сборка `node_classes`), либо
+архитектурного слияния counter-прохода и build_box в один (рискованно —
+`content: counter(...)` должен видеть пост-reset/increment значение СВОЕГО
+же узла, что и является причиной текущего two-pass дизайна). Также:
+индексация `@scope`/`@container`, если найдутся реальные сайты с
+существенным числом правил там.

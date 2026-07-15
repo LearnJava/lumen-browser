@@ -67,6 +67,12 @@ pub struct CounterMap {
     /// `open-quote` / `close-quote` item in that slot's `content` (in order).
     /// `no-open-quote` / `no-close-quote` adjust depth but emit no entry.
     quotes: HashMap<(NodeId, QuoteSlot), Vec<usize>>,
+    /// BUG-284: `NodeId` → the `ComputedStyle` this traversal already computed
+    /// for it. `build_box` walks the same document in the same order with the
+    /// same `inherited` chain (pure function of doc/sheet/viewport/dark_mode),
+    /// so its own `compute_style(id, ...)` call would recompute an identical
+    /// result — reusing this cache skips a second full cascade pass per node.
+    styles: HashMap<NodeId, ComputedStyle>,
 }
 
 impl CounterMap {
@@ -79,6 +85,12 @@ impl CounterMap {
     /// generated content. Empty slice when the slot has no quote items.
     pub fn quote_depths(&self, id: NodeId, slot: QuoteSlot) -> &[usize] {
         self.quotes.get(&(id, slot)).map_or(&[][..], |v| v.as_slice())
+    }
+
+    /// Returns the `ComputedStyle` this map's traversal computed for `id`, if
+    /// any (BUG-284 cascade-reuse cache — see the `styles` field).
+    pub fn style_for(&self, id: NodeId) -> Option<&ComputedStyle> {
+        self.styles.get(&id)
     }
 }
 
@@ -224,6 +236,10 @@ fn walk(
     }
 
     let style = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
+    // BUG-284: cache so `build_box`'s own `compute_style(id, ...)` call (same
+    // doc/sheet/viewport/dark_mode, same `inherited` chain) can reuse this
+    // result instead of recomputing an identical cascade.
+    map.styles.insert(id, style.clone());
 
     // CSS Lists L3 §4: counter-reset first, then counter-increment, then counter-set.
     ctx.apply_reset(&style.counter_reset);
