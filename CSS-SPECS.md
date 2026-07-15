@@ -643,7 +643,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `direction` | 🟡 | ltr/rtl; fragment mirroring ✅; UBA ⬜ |
 | `writing-mode` | 🟡 | parsed; vertical-rl/lr layout ⬜ |
-| `text-orientation` | 🟡 | parsed; glyph rotation ⬜ |
+| `text-orientation` | 🟡 | parsed; glyph rotation on CPU rasterizer ✅ (Срез 1), wgpu ✅ (Срез 2), femtovg ⬜ |
 | `unicode-bidi` | 🟡 | parsed; full bidi ⬜ |
 
 ### [T4] Shapes & Motion Path

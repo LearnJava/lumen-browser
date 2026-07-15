@@ -8,6 +8,7 @@ use lumen_layout::{
     BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, GradientStop, ObjectFit,
     ObjectPosition,
 };
+use lumen_layout::style::TextOrientation;
 use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
 use crate::gradient_math::{atan2_det, resolve_stop_positions, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
@@ -453,7 +454,7 @@ pub(crate) fn rasterize_cpu(
             }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, tab_size, font_weight, font_style,
-                font_features, ..
+                font_features, text_orientation, ..
             } => {
                 // Text uses the bundled Inter face only; family is ignored on
                 // the CPU path (no FontProvider here), weight/style are
@@ -463,7 +464,7 @@ pub(crate) fn rasterize_cpu(
                 if let Some(ink) = rasterize_text(
                     &mut layer.pm, rect, text, *font_size, color,
                     *tab_size, clip_rect.as_ref(), font_weight.0, *font_style,
-                    font_features,
+                    font_features, *text_orientation,
                 )? {
                     layer.mark(ink);
                 }
@@ -2573,6 +2574,68 @@ fn load_bundled_face(features: &[([u8; 4], u32)]) -> Option<CpuFace<'static>> {
     })
 }
 
+/// Ph3 writing-mode vertical, Срез 1 — render `text` rotated 90° clockwise
+/// (CSS Writing Modes L4 §4, `text-orientation: sideways`/`mixed`).
+///
+/// Renders the run horizontally into a full-canvas-sized local buffer via
+/// [`rasterize_text`] with the origin at `(0, 0)` and no clip, then
+/// composites that buffer onto `pixmap` rotated 90° CW around the local
+/// origin and translated so the rotated run's top-left lands at `rect`'s
+/// layout-assigned column position — `dest = (-y, x) + rect.xy`. This makes
+/// the run flow top→bottom starting at `rect`, matching
+/// `wrap_inline_run_vertical`'s column placement, without duplicating the
+/// glyph-shaping/blit loop.
+///
+/// A run whose horizontal advance would exceed the canvas width is truncated
+/// by the local render's own bounds check (same as the unrotated path) —
+/// real pages wrap vertical runs to the viewport well within that bound.
+#[allow(clippy::too_many_arguments)]
+fn rasterize_text_rotated(
+    pixmap: &mut tiny_skia::Pixmap,
+    rect: &Rect,
+    text: &str,
+    font_size: f32,
+    color: &Color,
+    tab_size: f32,
+    clip: Option<&Rect>,
+    font_weight: u16,
+    font_style: lumen_layout::FontStyle,
+    font_features: &[([u8; 4], u32)],
+) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
+    let width = pixmap.width();
+    let height = pixmap.height();
+    let mut local = tiny_skia::Pixmap::new(width, height)
+        .ok_or("Failed to create rotated-text layer")?;
+    let local_rect = Rect { x: 0.0, y: 0.0, width: rect.width, height: rect.height };
+    let Some((l, t, r, b)) = rasterize_text(
+        &mut local, &local_rect, text, font_size, color, tab_size, None, font_weight,
+        font_style, font_features, None,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    let transform = tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x, rect.y);
+    let clip_mask = build_clip_mask(width, height, clip.copied());
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    pixmap.draw_pixmap(0, 0, local.as_ref(), &paint, transform, clip_mask.as_ref());
+
+    let rotate = |x: f32, y: f32| (-y + rect.x, x + rect.y);
+    let corners = [rotate(l, t), rotate(r, t), rotate(r, b), rotate(l, b)];
+    let (mut dl, mut dt, mut dr, mut db) = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for (x, y) in corners {
+        dl = dl.min(x);
+        dt = dt.min(y);
+        dr = dr.max(x);
+        db = db.max(y);
+    }
+    Ok(Some((dl, dt, dr, db)))
+}
+
 /// Render a `DrawText` run with the bundled Inter face, compositing each
 /// glyph's coverage onto `pixmap`.
 ///
@@ -2595,6 +2658,10 @@ fn load_bundled_face(features: &[([u8; 4], u32)]) -> Option<CpuFace<'static>> {
 /// horizontal offset (fake bold) and a non-`Normal` `font_style` by shearing
 /// the glyph outline (fake italic). Both leave advances untouched — layout
 /// metrics must not change.
+///
+/// `text_orientation: Some(Sideways | Mixed)` delegates to
+/// [`rasterize_text_rotated`] instead (Ph3 writing-mode vertical, Срез 1);
+/// `Upright` and `None` render horizontally as before.
 #[allow(clippy::too_many_arguments)]
 fn rasterize_text(
     pixmap: &mut tiny_skia::Pixmap,
@@ -2607,9 +2674,23 @@ fn rasterize_text(
     font_weight: u16,
     font_style: lumen_layout::FontStyle,
     font_features: &[([u8; 4], u32)],
+    text_orientation: Option<TextOrientation>,
 ) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
     if text.is_empty() || font_size <= 0.0 || color.a == 0 {
         return Ok(None);
+    }
+    // Ph3 writing-mode vertical, Срез 1: `Sideways`/`Mixed` rotate the whole
+    // run 90° CW (per-glyph CJK-vs-Latin split is Срез 3). `Upright` and the
+    // horizontal (`None`) case fall through to the existing unrotated path —
+    // `Upright`'s per-glyph vertical advance is a separate follow-up.
+    if matches!(
+        text_orientation,
+        Some(TextOrientation::Sideways | TextOrientation::Mixed)
+    ) {
+        return rasterize_text_rotated(
+            pixmap, rect, text, font_size, color, tab_size, clip, font_weight, font_style,
+            font_features,
+        );
     }
     let Some(face) = load_bundled_face(font_features) else {
         return Ok(None);
@@ -3194,6 +3275,64 @@ mod tests {
             }
         }
         assert!(inked, "DrawText produced no blue ink");
+    }
+
+    /// Ph3 writing-mode vertical, Срез 1: `text_orientation: Sideways` rotates
+    /// the run 90° CW — its ink bounding box should come out taller than wide,
+    /// the opposite aspect ratio of the same run drawn horizontally (`None`)
+    /// at the same `rect`.
+    #[test]
+    fn draw_text_sideways_rotates_ink_bbox() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let make_cmds = |orientation: Option<TextOrientation>| {
+            vec![DisplayCommand::DrawText {
+                rect: rect(4.0, 4.0, 120.0, 40.0),
+                text: "Hi".to_string(),
+                font_size: 32.0,
+                color: blue,
+                font_family: Vec::new(),
+                font_weight: lumen_layout::FontWeight::default(),
+                font_style: lumen_layout::FontStyle::default(),
+                font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 0.0,
+                highlight_name: None,
+                text_orientation: orientation,
+            }]
+        };
+        let ink_bbox = |img: &Image| -> (u32, u32, u32, u32) {
+            let (mut l, mut t, mut r, mut b) = (img.width, img.height, 0u32, 0u32);
+            for y in 0..img.height {
+                for x in 0..img.width {
+                    let (pr, pg, pb, _) = px(img, x, y);
+                    if pb > pr && pb > pg {
+                        l = l.min(x);
+                        t = t.min(y);
+                        r = r.max(x);
+                        b = b.max(y);
+                    }
+                }
+            }
+            (l, t, r, b)
+        };
+
+        let horizontal =
+            rasterize_cpu(160, 160, &make_cmds(None), &[], 0.0, 0.0).expect("rasterize");
+        let sideways = rasterize_cpu(
+            160, 160, &make_cmds(Some(TextOrientation::Sideways)), &[], 0.0, 0.0,
+        )
+        .expect("rasterize");
+
+        let (hl, ht, hr, hb) = ink_bbox(&horizontal);
+        let (sl, st, sr, sb) = ink_bbox(&sideways);
+        assert!(hr > hl && hb > ht, "horizontal run produced no ink");
+        assert!(sr > sl && sb > st, "sideways run produced no ink");
+
+        let (h_w, h_h) = (hr - hl, hb - ht);
+        let (s_w, s_h) = (sr - sl, sb - st);
+        assert!(h_w > h_h, "horizontal run should be wider than tall (w={h_w} h={h_h})");
+        assert!(s_h > s_w, "sideways run should be taller than wide (w={s_w} h={s_h})");
     }
 
     /// Empty text is a no-op: the background stays pure white.
