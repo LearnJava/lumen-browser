@@ -606,7 +606,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@keyframes` | 🟡 | parsed; scheduler ⬜ |
 | `@layer` | ✅ | parsed; cascade ordering ✅ |
 | `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
-| `@color-profile` | ⬜ | CSS Color L5 |
+| `@color-profile` | 🟡 | CSS Color L5 §4; parsed+stored (`ColorProfileRule`, css-parser); `color(--name c1 c2 c3)` recognized in `parse_css_color_fn` (style.rs); real ICC transform + declared-name validation deferred (p4-color-profile 2026-07-15, test 142, KNOWN_DEBTOR BUG-282) |
 | `@font-palette-values` | 🟡 | parsed (name + font-family + base-palette + override-colors); matched by name/family in compute_style; rendering deferred with COLR |
 | `@counter-style` | ✅ | CSS Counter Styles L3; `parse_counter_style_rule` (parser.rs:2336) |
 | `@scope` | ✅ | `parse_scope_rule` (parser.rs:2346) applied in cascade loop (style.rs:6357) |
@@ -681,7 +681,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `color-mix()` | ✅ | parse_color_mix() 2026-06-08 |
 | `color-contrast()` | ✅ | `parse_color_contrast` (style.rs); WCAG 2.1 ratio pick; `to AA/AA-large/AAA/AAA-large`/`<number>` targets 2026-07-05 |
 | Relative color syntax `oklch(from ...)` | ✅ | `parse_relative_color` + `relative_origin_channels` (srgb/hsl/lab/lch/oklab/oklch), style.rs:19917 (p4-relative-color 2026-06-13) |
-| `@color-profile` | ⬜ | |
+| `@color-profile` | 🟡 | parsed+stored + `color(--name ...)` recognized; real ICC transform deferred (p4-color-profile 2026-07-15, see T3 At-Rules table above) |
 
 ---
 

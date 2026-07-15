@@ -19797,6 +19797,11 @@ fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Option<CssColor> {
 /// представимы на sRGB-экране, поэтому гамут-маппятся в sRGB сразу при разборе
 /// и хранятся как `ColorFloat { space: Srgb }` с gamma-encoded каналами.
 ///
+/// CSS Color L5 §4 — `--<dashed-ident>` первым токеном ссылается на
+/// `@color-profile`-профиль. Реальная ICC-трансформация и проверка, что имя
+/// действительно объявлено, отложены (см. `ColorProfileRule` в css-parser);
+/// каналы трактуются как уже sRGB, аналогично ветке `srgb`.
+///
 /// Каналы: unitless float или % (100% = 1.0). Слэш — разделитель alpha.
 fn parse_css_color_fn(s: &str) -> Option<ColorFloat> {
     let lower = s.to_ascii_lowercase();
@@ -19818,6 +19823,14 @@ fn parse_css_color_fn(s: &str) -> Option<ColorFloat> {
         "srgb" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::Srgb }),
         "display-p3" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::DisplayP3 }),
         "rec2020" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::Rec2020 }),
+        // CSS Color L5 §4 — `color(--name c1 c2 c3)` referencing an
+        // `@color-profile`-declared custom profile. Real ICC-based transform
+        // (and existence validation against the declared profile name) is
+        // deferred — channels are treated as already-encoded sRGB, same as
+        // the `srgb` branch above.
+        space if space.starts_with("--") => {
+            Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::Srgb })
+        }
         other => {
             let (lr, lg, lb) = predefined_to_srgb_linear(other, c1, c2, c3)?;
             Some(ColorFloat {
@@ -31387,6 +31400,23 @@ mod tests {
     fn color_fn_unknown_space_is_none() {
         // Unknown predefined space → whole color() is invalid.
         assert!(parse_css_color_legacy("color(foobar 1 2 3)", false).is_none());
+    }
+
+    // ── color() custom `@color-profile` reference (CSS Color L5 §4) ────────────
+
+    #[test]
+    fn color_fn_custom_profile_channels_pass_through_as_srgb() {
+        // Real ICC transform is deferred — channels are treated as sRGB directly.
+        let c = color_fn_srgb("color(--swop5c 1 0.5 0)");
+        assert_eq!(c.r, 255);
+        assert!(c.g >= 127 && c.g <= 128, "g={}", c.g);
+        assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn color_fn_custom_profile_alpha() {
+        let c = color_fn_srgb("color(--swop5c 0 0 0 / 0.5)");
+        assert!(c.a >= 127 && c.a <= 128, "alpha={}", c.a);
     }
 
     // ── ColorFloat.to_display (ph3-color-management Step 2) ────────────────────

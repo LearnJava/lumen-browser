@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<!-- CSS Color L5 §4 — @color-profile declares a named custom colour profile;
+     color(--name c1 c2 c3) references it. Lumen's real ICC-based transform is
+     deferred (Phase 0 slice): channels are treated as already-encoded sRGB,
+     so each swatch below should render identically to the plain sRGB colour
+     with the same channel values. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @color-profile --swop5c { src: url("swop5c.icc"); rendering-intent: relative-colorimetric; }
+  @color-profile --display-p3-like { src: url("display-p3-like.icc"); }
+
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; padding: 4px; box-sizing: border-box; }
+
+  .cell { width: 156px; height: 80px; }
+
+  .c-profile-red   { background: color(--swop5c 1 0 0); }
+  .c-profile-green { background: color(--swop5c 0 1 0); }
+  .c-profile-blue  { background: color(--swop5c 0 0 1); }
+  .c-profile-grey  { background: color(--swop5c 0.5 0.5 0.5); }
+  .c-profile-white { background: color(--display-p3-like 1 1 1); }
+  .c-profile-black { background: color(--display-p3-like 0 0 0); }
+  .c-profile-alpha { background: color(--swop5c 1 0 0 / 0.5); }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="cell c-profile-red"></div>
+  <div class="cell c-profile-green"></div>
+  <div class="cell c-profile-blue"></div>
+  <div class="cell c-profile-grey"></div>
+  <div class="cell c-profile-white"></div>
+  <div class="cell c-profile-black"></div>
+  <div class="cell c-profile-alpha"></div>
+</div>
+</body>
+</html>
