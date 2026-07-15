@@ -2191,11 +2191,21 @@ fn parse_media_feature(s: &str) -> MediaCondition {
 struct Parser<'a> {
     input: &'a str,
     pos: usize,
+    /// At-rules, всплывающие из тела top-level conditional-group rule (сейчас
+    /// только `@container`), которые должны попасть в stylesheet-уровневые
+    /// коллекции, но не могут быть возвращены через одиночный `AtRuleOutcome`
+    /// из [`Self::parse_at_rule`]. [`Self::parse_stylesheet`] опустошает буфер
+    /// после каждого top-level `@`-правила.
+    bubbled: Vec<AtRuleOutcome>,
 }
 
 impl<'a> Parser<'a> {
     fn new(input: &'a str) -> Self {
-        Self { input, pos: 0 }
+        Self {
+            input,
+            pos: 0,
+            bubbled: Vec::new(),
+        }
     }
 
     fn peek(&self) -> Option<char> {
@@ -2265,43 +2275,56 @@ impl<'a> Parser<'a> {
             self.skip_ws_and_comments();
             match self.peek() {
                 None => break,
-                Some('@') => match self.parse_at_rule() {
-                    AtRuleOutcome::Property(p) => properties.push(p),
-                    AtRuleOutcome::Media(m) => media_rules.push(m),
-                    AtRuleOutcome::Import(i) => imports.push(i),
-                    AtRuleOutcome::FontFace(f) => font_faces.push(f),
-                    AtRuleOutcome::FontPaletteValues(fp) => font_palette_values.push(fp),
-                    AtRuleOutcome::ColorProfile(cp) => color_profiles.push(cp),
-                    AtRuleOutcome::Function(f) => function_rules.push(f),
-                    AtRuleOutcome::LayerNames(names) => {
-                        for n in names {
-                            if !layer_order.iter().any(|e| e == &n) {
-                                layer_order.push(n);
+                Some('@') => {
+                    let primary = self.parse_at_rule();
+                    // Primary-outcome + at-rules, всплывшие из тела top-level
+                    // conditional-group rule (сейчас @container) через `bubbled`.
+                    let mut outcomes = std::mem::take(&mut self.bubbled);
+                    outcomes.insert(0, primary);
+                    for outcome in outcomes {
+                        match outcome {
+                            AtRuleOutcome::Property(p) => properties.push(p),
+                            AtRuleOutcome::Media(m) => media_rules.push(m),
+                            AtRuleOutcome::Import(i) => imports.push(i),
+                            AtRuleOutcome::FontFace(f) => font_faces.push(f),
+                            AtRuleOutcome::FontPaletteValues(fp) => {
+                                font_palette_values.push(fp)
                             }
+                            AtRuleOutcome::ColorProfile(cp) => color_profiles.push(cp),
+                            AtRuleOutcome::Function(f) => function_rules.push(f),
+                            AtRuleOutcome::LayerNames(names) => {
+                                for n in names {
+                                    if !layer_order.iter().any(|e| e == &n) {
+                                        layer_order.push(n);
+                                    }
+                                }
+                            }
+                            AtRuleOutcome::LayerBlock { name, rules: lr } => {
+                                let resolved_name = name.unwrap_or_else(|| {
+                                    anon_counter += 1;
+                                    format!("__anon_{anon_counter}__")
+                                });
+                                if !layer_order.iter().any(|e| e == &resolved_name) {
+                                    layer_order.push(resolved_name.clone());
+                                }
+                                layers.push(LayerRule {
+                                    name: resolved_name,
+                                    rules: lr,
+                                });
+                            }
+                            AtRuleOutcome::Supports(s) => supports_rules.push(s),
+                            AtRuleOutcome::Keyframes(k) => keyframes.push(k),
+                            AtRuleOutcome::CounterStyle(c) => counter_styles.push(c),
+                            AtRuleOutcome::Page(p) => page_rules.push(p),
+                            AtRuleOutcome::Scope(s) => scope_rules.push(s),
+                            AtRuleOutcome::StartingStyle(s) => {
+                                starting_style_rules.push(s)
+                            }
+                            AtRuleOutcome::Container(c) => container_rules.push(c),
+                            AtRuleOutcome::None => {}
                         }
                     }
-                    AtRuleOutcome::LayerBlock { name, rules: lr } => {
-                        let resolved_name = name.unwrap_or_else(|| {
-                            anon_counter += 1;
-                            format!("__anon_{anon_counter}__")
-                        });
-                        if !layer_order.iter().any(|e| e == &resolved_name) {
-                            layer_order.push(resolved_name.clone());
-                        }
-                        layers.push(LayerRule {
-                            name: resolved_name,
-                            rules: lr,
-                        });
-                    }
-                    AtRuleOutcome::Supports(s) => supports_rules.push(s),
-                    AtRuleOutcome::Keyframes(k) => keyframes.push(k),
-                    AtRuleOutcome::CounterStyle(c) => counter_styles.push(c),
-                    AtRuleOutcome::Page(p) => page_rules.push(p),
-                    AtRuleOutcome::Scope(s) => scope_rules.push(s),
-                    AtRuleOutcome::StartingStyle(s) => starting_style_rules.push(s),
-                    AtRuleOutcome::Container(c) => container_rules.push(c),
-                    AtRuleOutcome::None => {}
-                },
+                }
                 Some(_) => {
                     let before = self.pos;
                     if let Some((rule, nested, nested_at)) = self.parse_rule() {
@@ -2330,6 +2353,7 @@ impl<'a> Parser<'a> {
                                     layers.push(LayerRule { name: resolved, rules: lr });
                                 }
                                 AtRuleOutcome::Container(c) => container_rules.push(c),
+                                AtRuleOutcome::Scope(s) => scope_rules.push(s),
                                 _ => {}
                             }
                         }
@@ -3055,7 +3079,13 @@ impl<'a> Parser<'a> {
     /// Парсит `@scope (<root>) [to (<limit>)] { rules }` — CSS Cascade L6.
     /// Root и limit — сырые строки селекторов (без обрамляющих `(`/`)`).
     /// Без `(<root>)` — implicit scope (root = пустая строка).
-    fn parse_scope_rule(&mut self) -> Option<ScopeRule> {
+    /// Парсит прелюдию `@scope` — `(<root>)? [to (<limit>)]?` (CSS Cascade L6 §3).
+    /// Возвращает сырой селектор корня (`String`; пустая строка = отсутствует
+    /// `(<root>)`, implicit `:scope`) и опциональный сырой селектор limit из
+    /// `to (<limit>)`. Курсор остаётся на первом токене после прелюдии (обычно
+    /// `{`). Общий код для [`Self::parse_scope_rule`] (top-level) и ветки
+    /// `@scope` в [`Self::parse_nested_at_rule`] (nested).
+    fn parse_scope_prelude(&mut self) -> (String, Option<String>) {
         self.skip_ws_and_comments();
         let mut root = String::new();
         let mut limit: Option<String> = None;
@@ -3117,6 +3147,11 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        (root, limit)
+    }
+
+    fn parse_scope_rule(&mut self) -> Option<ScopeRule> {
+        let (root, limit) = self.parse_scope_prelude();
         self.skip_ws_and_comments();
         if self.peek() != Some('{') {
             return None;
@@ -3152,13 +3187,17 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Парсит `@container <name>? <condition> { rules }` — CSS Containment L3 §3.
-    /// Name — опциональный CSS-ident перед условием. Condition — балансированная
-    /// строка до `{` (хранится сырой). Rules — обычные правила внутри.
-    fn parse_container_rule(&mut self) -> Option<ContainerRule> {
+    /// Парсит прелюдию `@container` — `<name>? <condition>` (CSS Containment L3
+    /// §3). Имя — опциональный CSS-ident перед условием (только если дальше не
+    /// `(` и не `style(`). Condition — сырая балансированная строка до `{`.
+    /// Курсор остаётся на `{`. Возвращает `None`, если `{` не найден (структура
+    /// нарушена). Общий код для [`Self::parse_container_rule`] (top-level) и
+    /// ветки `@container` в [`Self::parse_nested_at_rule`] (nested).
+    fn parse_container_prelude(&mut self) -> Option<(Option<String>, String)> {
         self.skip_ws_and_comments();
         // Опциональное имя: CSS-ident **только если** дальше не `(` —
-        // если сразу `(`, это начало condition без имени.
+        // если сразу `(`, это начало condition без имени. `style(...)` — тоже
+        // condition, а не имя.
         let name = if self.peek() != Some('(') && !self.starts_with_keyword("style") {
             self.parse_ident()
         } else {
@@ -3182,30 +3221,21 @@ impl<'a> Parser<'a> {
             return None;
         }
         let condition = self.input[cond_start..self.pos].trim().to_string();
+        Some((name, condition))
+    }
+
+    /// Парсит `@container <name>? <condition> { rules }` — CSS Containment L3 §3.
+    /// Name — опциональный CSS-ident перед условием. Condition — балансированная
+    /// строка до `{` (хранится сырой). Rules — обычные правила внутри. Вложенные
+    /// at-rules в теле (`@media`, `@supports`, `@layer`, `@container`, `@scope`)
+    /// парсятся рекурсивно и всплывают в stylesheet через [`Self::bubbled`]
+    /// (плоская модель — container-condition к ним не привязывается, как и для
+    /// at-rule-in-at-rule в [`Self::parse_declaration_block_with_nesting`]).
+    fn parse_container_rule(&mut self) -> Option<ContainerRule> {
+        let (name, condition) = self.parse_container_prelude()?;
         self.consume(); // '{'
-        let mut rules = Vec::new();
-        loop {
-            self.skip_ws_and_comments();
-            match self.peek() {
-                None => break,
-                Some('}') => {
-                    self.consume();
-                    break;
-                }
-                Some('@') => {
-                    self.skip_at_rule();
-                }
-                Some(_) => {
-                    let before = self.pos;
-                    if let Some((rule, nested, _)) = self.parse_rule() {
-                        rules.push(rule);
-                        rules.extend(nested);
-                    } else if self.pos == before {
-                        self.consume();
-                    }
-                }
-            }
-        }
+        let (rules, bubbled) = self.parse_bare_group_body();
+        self.bubbled.extend(bubbled);
         Some(ContainerRule {
             name,
             condition,
@@ -3554,10 +3584,79 @@ impl<'a> Parser<'a> {
         (rules, sub_at)
     }
 
+    /// Парсит тело group at-rule (`@container`/`@media`/…), которое не вложено
+    /// ни в какое qualified-правило (`parent_sels` пуст) — то есть ведёт себя
+    /// как обычный rule-list stylesheet-уровня: bare-объявления здесь
+    /// невалидны (нет селектора, к которому их привязать), поэтому любой
+    /// не-`@`-токен — это обычное qualified-правило с произвольным селектором
+    /// (включая голый type-селектор вроде `p`, который CSS Nesting L1 §4
+    /// запрещает как неоднозначный только внутри уже открытого style-правила).
+    /// Вложенные at-rules всплывают отдельным `Vec` (плоская модель). Курсор
+    /// должен стоять сразу после `{`, потребляет закрывающую `}`.
+    fn parse_bare_group_body(&mut self) -> (Vec<Rule>, Vec<AtRuleOutcome>) {
+        let mut rules = Vec::new();
+        let mut at_rules = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    at_rules.extend(self.parse_nested_at_rule(&[]));
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    if let Some((rule, nested, nested_at)) = self.parse_rule() {
+                        rules.push(rule);
+                        rules.extend(nested);
+                        at_rules.extend(nested_at);
+                    } else if self.pos == before {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        (rules, at_rules)
+    }
+
+    /// Парсит тело nested conditional-group at-rule (после уже consume-нутого
+    /// `{`) с полной рекурсией CSS Nesting L1 §5: bare-декларации сворачиваются
+    /// в синтетическое правило с селекторами `parent_sels`, вложенные правила
+    /// добавляются следом, вложенные at-rules возвращаются отдельным `Vec`
+    /// (всплывают на stylesheet-уровень). Общий код для веток `@media` /
+    /// `@supports` / `@layer` / `@container` / `@scope` в
+    /// [`Self::parse_nested_at_rule`]. Курсор должен стоять сразу после `{`.
+    /// Пустой `parent_sels` означает, что мы на самом деле не вложены ни в
+    /// какое qualified-правило (например, `@media` внутри `@container` на
+    /// stylesheet-уровне) — тогда делегирует в [`Self::parse_bare_group_body`],
+    /// у которой другая грамматика тела (rule-list, а не declarations+nesting).
+    fn parse_nested_group_body(
+        &mut self,
+        parent_sels: &[ComplexSelector],
+    ) -> (Vec<Rule>, Vec<AtRuleOutcome>) {
+        if parent_sels.is_empty() {
+            return self.parse_bare_group_body();
+        }
+        let (decls, inner_rules, inner_at) =
+            self.parse_declaration_block_with_nesting(parent_sels);
+        let mut rules = Vec::new();
+        if !decls.is_empty() {
+            rules.push(Rule {
+                selectors: parent_sels.to_vec(),
+                declarations: decls,
+            });
+        }
+        rules.extend(inner_rules);
+        (rules, inner_at)
+    }
+
     /// CSS Nesting L1 §5: nested at-rule inside a qualified rule.
     /// Example: `.parent { @media (min-width: 800px) { color: red; } }`
     /// expands to: `@media (min-width: 800px) { .parent { color: red; } }`.
-    /// Supports `@media`, `@supports`, `@layer`, `@container`.
+    /// Supports `@media`, `@supports`, `@layer`, `@container`, `@scope`.
     fn parse_nested_at_rule(&mut self, parent_sels: &[ComplexSelector]) -> Vec<AtRuleOutcome> {
         let start = self.pos;
         self.consume(); // '@'
@@ -3578,13 +3677,7 @@ impl<'a> Parser<'a> {
             let query_str = self.input[query_start..self.pos].trim();
             let query = parse_media_query(query_str);
             self.consume(); // '{'
-            let (decls, inner_rules, inner_at) =
-                self.parse_declaration_block_with_nesting(parent_sels);
-            let mut rules = Vec::new();
-            if !decls.is_empty() {
-                rules.push(Rule { selectors: parent_sels.to_vec(), declarations: decls });
-            }
-            rules.extend(inner_rules);
+            let (rules, inner_at) = self.parse_nested_group_body(parent_sels);
             let mut outcomes = vec![AtRuleOutcome::Media(MediaRule { query, rules })];
             outcomes.extend(inner_at);
             return outcomes;
@@ -3609,13 +3702,7 @@ impl<'a> Parser<'a> {
             let cond_str = self.input[cond_start..self.pos].trim();
             let condition = parse_supports_condition(cond_str);
             self.consume(); // '{'
-            let (decls, inner_rules, inner_at) =
-                self.parse_declaration_block_with_nesting(parent_sels);
-            let mut rules = Vec::new();
-            if !decls.is_empty() {
-                rules.push(Rule { selectors: parent_sels.to_vec(), declarations: decls });
-            }
-            rules.extend(inner_rules);
+            let (rules, inner_at) = self.parse_nested_group_body(parent_sels);
             let mut outcomes =
                 vec![AtRuleOutcome::Supports(SupportsRule { condition, rules })];
             outcomes.extend(inner_at);
@@ -3644,13 +3731,7 @@ impl<'a> Parser<'a> {
                 Some(prelude.to_string())
             };
             self.consume(); // '{'
-            let (decls, inner_rules, inner_at) =
-                self.parse_declaration_block_with_nesting(parent_sels);
-            let mut rules = Vec::new();
-            if !decls.is_empty() {
-                rules.push(Rule { selectors: parent_sels.to_vec(), declarations: decls });
-            }
-            rules.extend(inner_rules);
+            let (rules, inner_at) = self.parse_nested_group_body(parent_sels);
             let mut outcomes =
                 vec![AtRuleOutcome::LayerBlock { name: layer_name, rules }];
             outcomes.extend(inner_at);
@@ -3658,35 +3739,35 @@ impl<'a> Parser<'a> {
         }
 
         if name.eq_ignore_ascii_case("container") {
-            let cond_start = self.pos;
-            let mut depth: i32 = 0;
-            while let Some(c) = self.peek() {
-                if c == '(' {
-                    depth += 1;
-                } else if c == ')' {
-                    depth -= 1;
-                } else if c == '{' && depth == 0 {
-                    break;
-                }
-                self.consume();
-            }
-            if self.peek() != Some('{') {
+            // CSS Containment L3 §3: опциональное имя перед condition — тот же
+            // разбор прелюдии, что и для top-level `@container`.
+            let Some((cont_name, condition)) = self.parse_container_prelude() else {
                 return vec![];
-            }
-            let condition = self.input[cond_start..self.pos].trim().to_string();
+            };
             self.consume(); // '{'
-            let (decls, inner_rules, inner_at) =
-                self.parse_declaration_block_with_nesting(parent_sels);
-            let mut rules = Vec::new();
-            if !decls.is_empty() {
-                rules.push(Rule { selectors: parent_sels.to_vec(), declarations: decls });
-            }
-            rules.extend(inner_rules);
+            let (rules, inner_at) = self.parse_nested_group_body(parent_sels);
             let mut outcomes = vec![AtRuleOutcome::Container(ContainerRule {
-                name: None,
+                name: cont_name,
                 condition,
                 rules,
             })];
+            outcomes.extend(inner_at);
+            return outcomes;
+        }
+
+        if name.eq_ignore_ascii_case("scope") {
+            // CSS Cascade L6 §3: `@scope (<root>)? [to (<limit>)]?` вложенный в
+            // qualified-правило. Прелюдия — тот же разбор, что и для top-level
+            // `@scope`; тело — рекурсивный declaration-block с `parent_sels`.
+            let (root, limit) = self.parse_scope_prelude();
+            self.skip_ws_and_comments();
+            if self.peek() != Some('{') {
+                return vec![];
+            }
+            self.consume(); // '{'
+            let (rules, inner_at) = self.parse_nested_group_body(parent_sels);
+            let mut outcomes =
+                vec![AtRuleOutcome::Scope(ScopeRule { root, limit, rules })];
             outcomes.extend(inner_at);
             return outcomes;
         }
@@ -6953,6 +7034,101 @@ mod tests {
         let s = parse("@container (min-width: 200px) and (max-width: 600px) { p { } }");
         let c = &s.container_rules[0];
         assert!(c.condition.contains("and"));
+    }
+
+    // ── Nested at-rules (2nd pass): @scope / @container внутри тела ──
+
+    #[test]
+    fn nested_scope_inside_rule() {
+        // CSS Cascade L6 §3 + Nesting L1 §5: `@scope` внутри qualified-правила
+        // всплывает на stylesheet-уровень как ScopeRule; декларации сворачиваются
+        // в правило с родительским селектором.
+        let s = parse(".card { color: black; @scope (.x) to (.y) { color: red; } }");
+        assert_eq!(s.scope_rules.len(), 1);
+        let sc = &s.scope_rules[0];
+        assert_eq!(sc.root, ".x");
+        assert_eq!(sc.limit.as_deref(), Some(".y"));
+        assert_eq!(sc.rules.len(), 1);
+        // Bare-декларация `color: red` привязана к родителю `.card`.
+        assert_eq!(sc.rules[0].declarations[0].property, "color");
+    }
+
+    #[test]
+    fn nested_scope_implicit_root() {
+        // `@scope { ... }` без `(<root>)` — implicit `:scope`, root пустой.
+        let s = parse(".box { @scope { .inner { color: blue; } } }");
+        assert_eq!(s.scope_rules.len(), 1);
+        let sc = &s.scope_rules[0];
+        assert!(sc.root.is_empty());
+        assert_eq!(sc.limit, None);
+        assert_eq!(sc.rules.len(), 1);
+    }
+
+    #[test]
+    fn nested_container_parses_name() {
+        // Вложенный `@container <name> (...)` должен разбирать имя, а не хардкодить None.
+        let s = parse(".card { @container sidebar (min-width: 200px) { color: green; } }");
+        assert_eq!(s.container_rules.len(), 1);
+        let c = &s.container_rules[0];
+        assert_eq!(c.name.as_deref(), Some("sidebar"));
+        assert!(c.condition.contains("min-width"));
+        assert_eq!(c.rules.len(), 1);
+    }
+
+    #[test]
+    fn nested_container_anonymous() {
+        // Вложенный `@container (...)` без имени — name == None.
+        let s = parse(".card { @container (min-width: 300px) { color: red; } }");
+        let c = &s.container_rules[0];
+        assert_eq!(c.name, None);
+        assert_eq!(c.rules.len(), 1);
+    }
+
+    #[test]
+    fn top_level_container_with_nested_media() {
+        // CSS Containment L3 §3: top-level `@container` рекурсирует во вложенный
+        // `@media` — тот всплывает на stylesheet-уровень (плоская модель).
+        let s = parse("@container (min-width: 300px) { @media (min-width: 500px) { p { color: red; } } }");
+        assert_eq!(s.container_rules.len(), 1);
+        // Вложенный @media более не выбрасывается.
+        assert_eq!(s.media_rules.len(), 1);
+        assert_eq!(s.media_rules[0].rules.len(), 1);
+    }
+
+    #[test]
+    fn top_level_container_with_nested_scope() {
+        // Top-level `@container` c вложенным `@scope` — scope всплывает.
+        let s = parse("@container sidebar (min-width: 200px) { @scope (.x) { h1 { color: red; } } }");
+        assert_eq!(s.container_rules[0].name.as_deref(), Some("sidebar"));
+        assert_eq!(s.scope_rules.len(), 1);
+        assert_eq!(s.scope_rules[0].root, ".x");
+    }
+
+    #[test]
+    fn top_level_container_named_direct_rules_still_work() {
+        // Регрессия: тело top-level @container с type-селекторами не должно
+        // ломаться от новой обработки nested at-rules.
+        let s = parse("@container sidebar (min-width: 200px) { h1 { color: blue; } p { color: green; } }");
+        let c = &s.container_rules[0];
+        assert_eq!(c.name.as_deref(), Some("sidebar"));
+        assert_eq!(c.rules.len(), 2);
+    }
+
+    #[test]
+    fn top_level_container_with_nested_supports_and_layer() {
+        // Регрессия: голый type-селектор (`p`) внутри `@supports`/`@layer`,
+        // вложенных в `@container`, не должен теряться — та же bare-group-body
+        // грамматика, что и для `@media` (см. `top_level_container_with_nested_media`).
+        let s = parse(
+            "@container (min-width: 300px) { \
+                @supports (display: grid) { p { color: red; } } \
+                @layer base { h1 { color: blue; } } \
+            }",
+        );
+        assert_eq!(s.supports_rules.len(), 1);
+        assert_eq!(s.supports_rules[0].rules.len(), 1);
+        assert_eq!(s.layers.len(), 1);
+        assert_eq!(s.layers[0].rules.len(), 1);
     }
 
     // ── Media Queries L4 §3.2: not / only / prefers-color-scheme ──
