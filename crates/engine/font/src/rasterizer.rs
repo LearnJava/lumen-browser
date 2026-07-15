@@ -67,11 +67,24 @@ impl Rasterizer {
         let y_min = (glyph.bbox.y_min as f32 * scale - pad).floor() as i32;
         let x_max = (glyph.bbox.x_max as f32 * scale + pad).ceil() as i32;
         let y_max = (glyph.bbox.y_max as f32 * scale + pad).ceil() as i32;
-        let width = (x_max - x_min) as u32;
-        let height = (y_max - y_min) as u32;
-        if width == 0 || height == 0 {
+        // BUG-283: a corrupt/inverted glyph bbox (x_max < x_min or y_max <
+        // y_min) makes `x_max - x_min` negative; casting that straight to
+        // `u32` wraps it near `u32::MAX` and the pixel buffer allocation
+        // below aborts the process. An upper bound also guards against a
+        // valid but extreme bbox/pixel_size combination requesting a
+        // runaway allocation — no legitimate glyph bitmap approaches it.
+        const MAX_GLYPH_DIM: i32 = 8192;
+        let width_i32 = x_max - x_min;
+        let height_i32 = y_max - y_min;
+        if width_i32 <= 0
+            || height_i32 <= 0
+            || width_i32 > MAX_GLYPH_DIM
+            || height_i32 > MAX_GLYPH_DIM
+        {
             return None;
         }
+        let width = width_i32 as u32;
+        let height = height_i32 as u32;
 
         let mut edges: Vec<Edge> = Vec::new();
         for contour in contours {
@@ -402,5 +415,65 @@ mod tests {
         assert_eq!(bm.height, 18);
         // Центр квадрата полностью заполнен.
         assert!(coverage_at(&bm, 9, 9) > 240);
+    }
+
+    /// BUG-283: инвертированный bbox (x_max < x_min) раньше заворачивал
+    /// `width` в число, близкое к `u32::MAX`, и валил процесс на
+    /// `vec![0u8; width * height]`. Должен просто вернуть `None`.
+    #[test]
+    fn inverted_bbox_returns_none_instead_of_crashing() {
+        let glyph = Glyph {
+            bbox: BoundingBox {
+                x_min: 100,
+                y_min: 0,
+                x_max: 0,
+                y_max: 100,
+            },
+            outline: Outline::Simple(vec![Contour {
+                points: vec![pt(0, 0, true), pt(100, 0, true), pt(50, 100, true)],
+            }]),
+        };
+        assert!(Rasterizer::new(100.0, 100).rasterize(&glyph).is_none());
+    }
+
+    /// Тот же класс бага по оси Y (y_max < y_min).
+    #[test]
+    fn inverted_bbox_y_axis_returns_none() {
+        let glyph = Glyph {
+            bbox: BoundingBox {
+                x_min: 0,
+                y_min: 100,
+                x_max: 100,
+                y_max: 0,
+            },
+            outline: Outline::Simple(vec![Contour {
+                points: vec![pt(0, 0, true), pt(100, 0, true), pt(50, 100, true)],
+            }]),
+        };
+        assert!(Rasterizer::new(100.0, 100).rasterize(&glyph).is_none());
+    }
+
+    /// Корректный, но экстремальный bbox/pixel_size не должен запрашивать
+    /// неограниченный буфер — верхняя граница возвращает `None`.
+    #[test]
+    fn oversized_bbox_returns_none_instead_of_huge_allocation() {
+        let glyph = Glyph {
+            bbox: BoundingBox {
+                x_min: 0,
+                y_min: 0,
+                x_max: 1000,
+                y_max: 1000,
+            },
+            outline: Outline::Simple(vec![Contour {
+                points: vec![
+                    pt(0, 0, true),
+                    pt(1000, 0, true),
+                    pt(1000, 1000, true),
+                    pt(0, 1000, true),
+                ],
+            }]),
+        };
+        // units_per_em=1000, pixel_size=100000 → scale 100 → bitmap ~100000×100000.
+        assert!(Rasterizer::new(100_000.0, 1000).rasterize(&glyph).is_none());
     }
 }

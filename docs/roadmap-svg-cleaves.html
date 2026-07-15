@@ -58,11 +58,11 @@
  "generated": "2026-07-15",
  "counts": {
   "open": 27,
-  "fixed": 231,
+  "fixed": 232,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 258,
+ "total_bugs": 259,
  "phases": [
   {
    "id": "P0",
@@ -3239,10 +3239,10 @@
    "debtor": true
   },
   "BUG-283": {
-   "status": "open",
+   "status": "fixed",
    "title": "Краш процесса (`memory allocation of 906238016744 bytes failed`) на https://lenta.ru через ~7с после старта, сразу после подгрузки кастомных `@font-face`. Причи…",
    "component": "font (`Rasterizer::rasterize`)",
-   "date": null,
+   "date": "2026-07-15",
    "debtor": false
   },
   "BUG-284": {
@@ -3258,6 +3258,13 @@
    "component": "shell (`main.rs`, `maybe_expand_cv_relevant`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-287": {
+   "status": "open",
+   "title": "Полный `graphic_tests/run.py --continue-on-fail` на чистом `main` (после мержа `p3-cascade-perf`) даёт 43 FAIL (13 из них — регрессия хуже KNOWN_DEBTORS baselin…",
+   "component": "неизвестен (layout/paint?)",
+   "date": null,
+   "debtor": true
   }
  },
  "unlinked": {
@@ -3609,6 +3616,9 @@
   "test/snapshot": [
    "BUG-118",
    "BUG-149"
+  ],
+  "неизвестен (layout/paint?)": [
+   "BUG-287"
   ]
  }
 }
