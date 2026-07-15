@@ -18,7 +18,8 @@
 
 ## In progress
 
-_(none)_ — последняя задача p4-css-function влита 2026-07-15.
+In progress: position: sticky — %/em/rem insets resolution   branch: p4-sticky-insets
+Next step: resolve top/right/bottom/left via Length::resolve(em, Some(cb), viewport) in collect_sticky_rec   crates/engine/layout/src/lib.rs:566-576
 
 <!-- формат строки в работе:
 In progress: <task>   branch: p4-<task>
