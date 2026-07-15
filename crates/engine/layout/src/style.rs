@@ -33,6 +33,43 @@ use lumen_css_parser::{
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
 
+/// BUG-284: cascade-wide rule index — the top-level [`RuleIndex`] plus one
+/// per-block index for every `@layer`/`@media`/`@supports` block, in the same
+/// order as `Stylesheet.layers`/`media_rules`/`supports_rules`.
+///
+/// Before this, only the top-level `rules` were indexed; the `@layer`/`@media`/
+/// `@supports` loops in `compute_style` brute-force scanned every rule in
+/// every block for every node. Real-world stylesheets often put the bulk of
+/// their rules inside `@media` breakpoints, which made that brute-force scan
+/// the dominant cascade cost (observed: ~1.1ms/node on a page with ~1100
+/// styled nodes and ~3000 rules, most inside `@media`).
+struct CascadeIndex {
+    rules: RuleIndex,
+    layers: Vec<RuleIndex>,
+    media: Vec<RuleIndex>,
+    supports: Vec<RuleIndex>,
+}
+
+impl CascadeIndex {
+    fn empty() -> Self {
+        Self {
+            rules: RuleIndex::empty(),
+            layers: Vec::new(),
+            media: Vec::new(),
+            supports: Vec::new(),
+        }
+    }
+
+    fn build(sheet: &Stylesheet) -> Self {
+        Self {
+            rules: RuleIndex::build(sheet),
+            layers: sheet.layers.iter().map(|l| RuleIndex::build_from_rules(&l.rules)).collect(),
+            media: sheet.media_rules.iter().map(|m| RuleIndex::build_from_rules(&m.rules)).collect(),
+            supports: sheet.supports_rules.iter().map(|s| RuleIndex::build_from_rules(&s.rules)).collect(),
+        }
+    }
+}
+
 thread_local! {
     /// Per-thread rule-index cache. Keyed by (sheet pointer, rules count) to
     /// detect stylesheet changes between layout passes. Rebuilt only when the
@@ -41,8 +78,8 @@ thread_local! {
     /// SAFETY: raw-pointer keys are vulnerable to address reuse across sessions
     /// (freed sheet → new session → same address). Call `invalidate_rule_idx_cache`
     /// at the start of every layout pass to prevent stale hits.
-    static RULE_IDX_CACHE: RefCell<(usize, usize, RuleIndex)> =
-        RefCell::new((0, 0, RuleIndex::empty()));
+    static RULE_IDX_CACHE: RefCell<(usize, usize, CascadeIndex)> =
+        RefCell::new((0, 0, CascadeIndex::empty()));
 }
 
 /// Invalidate the thread-local rule-index cache.
@@ -6491,11 +6528,11 @@ pub fn compute_style(
     RULE_IDX_CACHE.with(|cell| {
         let mut cached = cell.borrow_mut();
         if cached.0 != sheet_ptr || cached.1 != sheet_rules_len {
-            *cached = (sheet_ptr, sheet_rules_len, RuleIndex::build(sheet));
+            *cached = (sheet_ptr, sheet_rules_len, CascadeIndex::build(sheet));
         }
     });
     let cands = RULE_IDX_CACHE.with(|cell| {
-        cell.borrow().2.candidates(node_tag, node_id, &node_classes)
+        cell.borrow().2.rules.candidates(node_tag, node_id, &node_classes)
     });
 
     for &rule_idx in &cands {
@@ -6526,11 +6563,18 @@ pub fn compute_style(
     let layer_rule_base = sheet.rules.len()
         + sheet.media_rules.iter().map(|m| m.rules.len()).sum::<usize>();
     let mut layer_rule_offset = 0usize;
-    for layer_rule in &sheet.layers {
+    for (layer_i, layer_rule) in sheet.layers.iter().enumerate() {
         let layer_idx = sheet.layer_order.iter()
             .position(|n| n == &layer_rule.name)
             .unwrap_or(0) as i32;
-        for (rule_idx, rule) in layer_rule.rules.iter().enumerate() {
+        // BUG-284: candidate pre-filter (was a brute-force scan of every rule
+        // in the layer for every node — dominant cascade cost on stylesheets
+        // that put most rules inside layers/media/supports blocks).
+        let layer_cands = RULE_IDX_CACHE.with(|cell| {
+            cell.borrow().2.layers[layer_i].candidates(node_tag, node_id, &node_classes)
+        });
+        for rule_idx in layer_cands {
+            let rule = &layer_rule.rules[rule_idx];
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if matches_complex(complex, doc, node) {
@@ -6560,12 +6604,18 @@ pub fn compute_style(
     // обычных) — это известное ограничение.
     let media_ctx = media_context_from_viewport(viewport, dark_mode);
     let mut next_rule_idx = sheet.rules.len();
-    for media in &sheet.media_rules {
+    for (media_i, media) in sheet.media_rules.iter().enumerate() {
         if !media.query.matches(&media_ctx) {
             next_rule_idx += media.rules.len();
             continue;
         }
-        for rule in &media.rules {
+        // BUG-284: candidate pre-filter (see @layer above) — real-world
+        // stylesheets often put the bulk of their rules inside @media blocks.
+        let media_cands = RULE_IDX_CACHE.with(|cell| {
+            cell.borrow().2.media[media_i].candidates(node_tag, node_id, &node_classes)
+        });
+        for rule_idx in media_cands {
+            let rule = &media.rules[rule_idx];
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if matches_complex(complex, doc, node) {
@@ -6577,23 +6627,28 @@ pub fn compute_style(
                 }
             }
             if let Some(spec) = best {
+                let global_rule_idx = next_rule_idx + rule_idx;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, next_rule_idx, decl_idx, decl));
+                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl));
                 }
             }
-            next_rule_idx += 1;
         }
+        next_rule_idx += media.rules.len();
     }
     // CSS Conditional Rules L3 §2 — `@supports`: evaluate condition against
     // Lumen's supported-properties list; include contained rules only when
     // condition is true (same ordering semantics as @media).
-    for supports in &sheet.supports_rules {
+    for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
         if !supports.condition.evaluate(SUPPORTED_PROPERTIES) {
             next_rule_idx += supports.rules.len();
             continue;
         }
-        for rule in &supports.rules {
+        let supports_cands = RULE_IDX_CACHE.with(|cell| {
+            cell.borrow().2.supports[supports_i].candidates(node_tag, node_id, &node_classes)
+        });
+        for rule_idx in supports_cands {
+            let rule = &supports.rules[rule_idx];
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if matches_complex(complex, doc, node) {
@@ -6605,13 +6660,14 @@ pub fn compute_style(
                 }
             }
             if let Some(spec) = best {
+                let global_rule_idx = next_rule_idx + rule_idx;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, next_rule_idx, decl_idx, decl));
+                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl));
                 }
             }
-            next_rule_idx += 1;
         }
+        next_rule_idx += supports.rules.len();
     }
     // CSS Cascade L6 §5 — @scope rules: apply only when node is in scope.
     for scope_rule in &sheet.scope_rules {
@@ -7401,8 +7457,32 @@ pub fn compute_pseudo_element_style(
     style.quotes = parent.quotes.clone();
 
     // Собираем matching declarations из всех правил.
+    //
+    // BUG-284: candidate pre-filter via the same thread-local `CascadeIndex` as
+    // `compute_style` (subject-key bucketing is agnostic to `::before`/`::after`
+    // being appended to the subject compound, so the same index is valid here).
+    // This function runs for *every* element for both "before" and "after" —
+    // unlike `compute_style`, it was never indexed at all, making it one of the
+    // largest un-indexed cascade costs on stylesheets with many `@media` rules.
     let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
-    for (rule_idx, rule) in sheet.rules.iter().enumerate() {
+    let node_data = doc.get(node);
+    let node_tag = node_data.element_name().map_or("", |q| q.local.as_str());
+    let node_id = node_data.get_attr("id");
+    let class_attr = node_data.get_attr("class").unwrap_or("");
+    let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
+    let sheet_ptr = sheet as *const Stylesheet as usize;
+    let sheet_rules_len = sheet.rules.len();
+    RULE_IDX_CACHE.with(|cell| {
+        let mut cached = cell.borrow_mut();
+        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len {
+            *cached = (sheet_ptr, sheet_rules_len, CascadeIndex::build(sheet));
+        }
+    });
+    let cands = RULE_IDX_CACHE.with(|cell| {
+        cell.borrow().2.rules.candidates(node_tag, node_id, &node_classes)
+    });
+    for rule_idx in cands {
+        let rule = &sheet.rules[rule_idx];
         let mut best: Option<Specificity> = None;
         for complex in &rule.selectors {
             if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
@@ -7421,12 +7501,16 @@ pub fn compute_pseudo_element_style(
 
     let media_ctx = media_context_from_viewport(viewport, dark_mode);
     let mut next_rule_idx = sheet.rules.len();
-    for media in &sheet.media_rules {
+    for (media_i, media) in sheet.media_rules.iter().enumerate() {
         if !media.query.matches(&media_ctx) {
             next_rule_idx += media.rules.len();
             continue;
         }
-        for rule in &media.rules {
+        let media_cands = RULE_IDX_CACHE.with(|cell| {
+            cell.borrow().2.media[media_i].candidates(node_tag, node_id, &node_classes)
+        });
+        for rule_idx in media_cands {
+            let rule = &media.rules[rule_idx];
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
@@ -7437,20 +7521,25 @@ pub fn compute_pseudo_element_style(
                 }
             }
             if let Some(spec) = best {
+                let global_rule_idx = next_rule_idx + rule_idx;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    matched.push((decl.important, spec, next_rule_idx, decl_idx, decl));
+                    matched.push((decl.important, spec, global_rule_idx, decl_idx, decl));
                 }
             }
-            next_rule_idx += 1;
         }
+        next_rule_idx += media.rules.len();
     }
     // CSS Conditional Rules L3 §2 — @supports in pseudo-element context.
-    for supports in &sheet.supports_rules {
+    for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
         if !supports.condition.evaluate(SUPPORTED_PROPERTIES) {
             next_rule_idx += supports.rules.len();
             continue;
         }
-        for rule in &supports.rules {
+        let supports_cands = RULE_IDX_CACHE.with(|cell| {
+            cell.borrow().2.supports[supports_i].candidates(node_tag, node_id, &node_classes)
+        });
+        for rule_idx in supports_cands {
+            let rule = &supports.rules[rule_idx];
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
@@ -7461,12 +7550,13 @@ pub fn compute_pseudo_element_style(
                 }
             }
             if let Some(spec) = best {
+                let global_rule_idx = next_rule_idx + rule_idx;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    matched.push((decl.important, spec, next_rule_idx, decl_idx, decl));
+                    matched.push((decl.important, spec, global_rule_idx, decl_idx, decl));
                 }
             }
-            next_rule_idx += 1;
         }
+        next_rule_idx += supports.rules.len();
     }
 
     if matched.is_empty() {
