@@ -1,58 +1,58 @@
-1	ROADMAP.md:152
-2	ROADMAP.md:162
-3	ROADMAP.md:180
-4	ROADMAP.md:192
-5	ROADMAP.md:193
-6	ROADMAP.md:209
-7	ROADMAP.md:210
-8	ROADMAP.md:213
-9	BUGS.md:288
-10	BUGS.md:289
-11	BUGS.md:290
-12	BUGS.md:291
-13	BUGS.md:293
-14	BUGS.md:296
-15	ROADMAP.md:157
-16	CAPABILITIES.md:173
-17	docs/tasks/ph3-ai-module.md:199
-18	docs/tasks/ph3-ai-module.md:207
-19	docs/tasks/ph3-ai-module.md:215
-20	docs/tasks/ph3-ai-module.md:223
-21	docs/tasks/ph3-ai-module.md:233
-22	docs/tasks/ph3-ai-module.md:255
-23	ROADMAP.md:125
-24	ROADMAP.md:171
-25	ROADMAP.md:178
-26	ROADMAP.md:187
-27	ROADMAP.md:194
-28	ROADMAP.md:197
-29	ROADMAP.md:203
-30	ROADMAP.md:205
-31	ROADMAP.md:206
-32	ROADMAP.md:215
-33	ROADMAP.md:226
-34	ROADMAP.md:227
-35	ROADMAP.md:229
-36	ROADMAP.md:230
-37	CSS-SPECS.md:73
-38	CSS-SPECS.md:98
-39	CSS-SPECS.md:271
-40	CSS-SPECS.md:602
-41	CSS-SPECS.md:606
-42	docs/tasks/p2-wpt-integration.md:224
-43	docs/tasks/p2-wpt-integration.md:229
-44	docs/plan/knowledge.md:104
-45	docs/plan/knowledge.md:132
-46	docs/plan/knowledge.md:236
-47	docs/plan/knowledge.md:237
-48	CAPABILITIES.md:116
-49	CAPABILITIES.md:122
-50	CAPABILITIES.md:136
-51	CAPABILITIES.md:137
-52	CAPABILITIES.md:138
-53	CAPABILITIES.md:149
-54	CAPABILITIES.md:161
-55	CAPABILITIES.md:168
-56	CAPABILITIES.md:180
-57	CAPABILITIES.md:203
-58	CAPABILITIES.md:207
+ROADMAP.md:152
+ROADMAP.md:162
+ROADMAP.md:180
+ROADMAP.md:192
+ROADMAP.md:193
+ROADMAP.md:209
+ROADMAP.md:210
+ROADMAP.md:213
+BUGS.md:288
+BUGS.md:289
+BUGS.md:290
+BUGS.md:291
+BUGS.md:293
+BUGS.md:296
+ROADMAP.md:157
+CAPABILITIES.md:173
+docs/tasks/ph3-ai-module.md:199
+docs/tasks/ph3-ai-module.md:207
+docs/tasks/ph3-ai-module.md:215
+docs/tasks/ph3-ai-module.md:223
+docs/tasks/ph3-ai-module.md:233
+docs/tasks/ph3-ai-module.md:255
+ROADMAP.md:125
+ROADMAP.md:171
+ROADMAP.md:178
+ROADMAP.md:187
+ROADMAP.md:194
+ROADMAP.md:197
+ROADMAP.md:203
+ROADMAP.md:205
+ROADMAP.md:206
+ROADMAP.md:215
+ROADMAP.md:226
+ROADMAP.md:227
+ROADMAP.md:229
+ROADMAP.md:230
+CSS-SPECS.md:73
+CSS-SPECS.md:98
+CSS-SPECS.md:271
+CSS-SPECS.md:602
+CSS-SPECS.md:606
+docs/tasks/p2-wpt-integration.md:224
+docs/tasks/p2-wpt-integration.md:229
+docs/plan/knowledge.md:104
+docs/plan/knowledge.md:132
+docs/plan/knowledge.md:236
+docs/plan/knowledge.md:237
+CAPABILITIES.md:116
+CAPABILITIES.md:122
+CAPABILITIES.md:136
+CAPABILITIES.md:137
+CAPABILITIES.md:138
+CAPABILITIES.md:149
+CAPABILITIES.md:161
+CAPABILITIES.md:168
+CAPABILITIES.md:180
+CAPABILITIES.md:203
+CAPABILITIES.md:207
