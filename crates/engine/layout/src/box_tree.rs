@@ -3746,7 +3746,14 @@ fn build_box(
     registry: &CounterStyleRegistry,
     dark_mode: bool,
 ) -> LayoutBox {
-    let mut style = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
+    // BUG-284: `precompute_counters` already ran a full document-order cascade
+    // pass over this exact tree (same `inherited` chain, same sheet/viewport/
+    // dark_mode) to resolve counter-reset/increment/set — reuse its cached
+    // result instead of paying for an identical `compute_style` call again.
+    let mut style = counters
+        .style_for(id)
+        .cloned()
+        .unwrap_or_else(|| compute_style(doc, id, sheet, inherited, viewport, dark_mode));
 
     let kind = match &doc.get(id).data {
         // Shadow root nodes are infrastructure — never rendered directly.
