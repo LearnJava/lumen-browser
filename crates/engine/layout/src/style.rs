@@ -3695,6 +3695,19 @@ pub struct ContainerContext {
     /// Viewport size — the `vw`/`vh`/`vmin`/`vmax` basis when resolving
     /// relative units in a `style()` query's declared value.
     pub viewport: Size,
+    /// Height of the *container's own* containing block (its immediate
+    /// parent's content box) — the CSS2.1 §10.5 basis for resolving `%` in
+    /// the container's own `height`/`top`/`bottom`/`min-height`/
+    /// `max-height` during a `style()` query. Distinct from `height` above,
+    /// which is the container's own (already-resolved) content height
+    /// exposed to descendants for `(min-height: …)`-style size queries.
+    /// Always a concrete pixel value: by the time `ContainerContext` is
+    /// built, the whole tree has already been laid out to definite rects,
+    /// so this doesn't distinguish an explicitly-sized parent from one whose
+    /// own height was itself content-derived (CSS2.1 §10.5's "if the height
+    /// of the containing block is not specified explicitly… the percentage
+    /// value computes to auto" is not modeled here).
+    pub own_containing_block_height: f32,
 }
 
 /// Evaluates a raw @container condition string against a `ContainerContext`.
@@ -3728,8 +3741,8 @@ pub struct ContainerContext {
 /// the container element itself (CSS Containment L3 §4). The `%` basis is
 /// picked per queried property by `style_query_percent_basis` — the
 /// container's width by default, but its own font-size for `line-height` and
-/// its own (resolved) height for `height`/`top`/`bottom`/`min-height`/
-/// `max-height`.
+/// its own containing block's height for `height`/`top`/`bottom`/
+/// `min-height`/`max-height`.
 /// Boolean form (`style(--prop)` / `style(prop)` without a value) is true when the
 /// container has any value for that property — for custom properties this checks
 /// `custom_props`, for standard properties `style_props` (a standard property never
@@ -3747,10 +3760,16 @@ pub struct ContainerContext {
 /// - Vertical box-model properties (`margin-top`/`margin-bottom`/
 ///   `padding-top`/`padding-bottom`) resolve `%` against the container's
 ///   width per CSS2.1 §8.3/§10.3 (correct — the containing block width is
-///   the basis for *all four* margin/padding sides), but `height`-basis
-///   properties (`height`/`top`/`bottom`) fall back to the container's width
-///   when its own height is auto, since `ContainerContext` has no separate
-///   "containing block height" for the container itself.
+///   the basis for *all four* margin/padding sides).
+/// - `height`/`top`/`bottom`/`min-height`/`max-height` resolve `%` against
+///   `ContainerContext::own_containing_block_height` — the container's own
+///   immediate parent's content height, correctly distinct from the
+///   container's own size or width (see that field's doc). The one
+///   remaining approximation: this value is always treated as definite,
+///   since Lumen's post-layout box tree no longer distinguishes a parent
+///   whose height was explicitly specified from one whose height was itself
+///   content-derived (CSS2.1 §10.5 would compute the `%` as `auto` in the
+///   latter case).
 ///
 /// Unknown features → false (safe fallback).
 pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> bool {
@@ -3977,11 +3996,11 @@ fn style_query_value_matches(computed: &str, want: &str, prop_name: &str, ctx: &
 /// - `line-height`: the element's own font-size (CSS Inline L3 §4.6.2),
 ///   which for a `style()` query is the container's own `font_size`.
 /// - Vertical box-model properties (`height`, `top`/`bottom`, vertical
-///   `min-`/`max-height`): the containing block's height (CSS2.1 §10.5)
-///   — approximated here by the container's own resolved `height` when
-///   definite, falling back to its width (this file's prior behavior) when
-///   the container's height is auto, since Lumen's `ContainerContext` has no
-///   separate notion of "containing block height" for the container itself.
+///   `min-`/`max-height`): the *container's own* containing block's height
+///   (CSS2.1 §10.5) — `ctx.own_containing_block_height`, i.e. the height of
+///   the container's parent content box, not the container's own height
+///   (`ctx.height` is a different quantity: the container's own resolved
+///   size, exposed to descendants for `(min-height: …)`-style size queries).
 ///
 /// Every other property (including `margin-top`/`margin-bottom`/
 /// `padding-top`/`padding-bottom`, which CSS2.1 §8.3/§10.3 defines against
@@ -3991,7 +4010,7 @@ fn style_query_percent_basis(prop_name: &str, ctx: &ContainerContext) -> f32 {
     match prop_name {
         "line-height" => ctx.font_size,
         "height" | "min-height" | "max-height" | "top" | "bottom" => {
-            ctx.height.unwrap_or(ctx.width)
+            ctx.own_containing_block_height
         }
         _ => ctx.width,
     }
