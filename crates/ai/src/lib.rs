@@ -12,12 +12,14 @@ pub mod embedding;
 pub mod generation;
 #[cfg(feature = "ollama")]
 mod http;
+#[cfg(feature = "ollama")]
+pub mod rag;
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn smoke() {
-        // Crate compiles and links against lumen-core. RAG engine lands in
-        // docs/tasks/ph3-ai-module.md Step 5+.
+        // Crate compiles and links against lumen-core. Semantic-bookmark
+        // (Step 6) and omnibox `@ai` (Step 7) wiring land next.
     }
 }

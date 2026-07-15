@@ -2140,6 +2140,7 @@ name = "lumen-ai"
 version = "0.5.0"
 dependencies = [
  "lumen-core",
+ "lumen-knowledge",
  "serde_json",
  "workspace-hack",
 ]

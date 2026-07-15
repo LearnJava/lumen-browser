@@ -13,14 +13,21 @@
 In progress. Optional feature, disabled in the default bundle. Step 1 (crate
 skeleton, `AiBackend::embed`/`summarise`), Step 2 (`EmbeddingBackend` +
 `OllamaEmbeddingBackend`), Step 3 (`SemanticIndex` linear-scan +
-`DefaultKnowledgeStore::search_semantic`), and Step 4 (`GenerationBackend` +
-`OllamaGenerationBackend`, `AiBackend::summarise`/`query` delegation) are
-merged — see `subsystems/ai.md` §Done and `subsystems/knowledge.md`. Step 3
-used the mock/linear-scan interface Step 0 allows (the referenced HNSW
-prerequisite doc still does not exist); a real ANN index is a drop-in
-replacement for `SemanticIndex` later. Step 4 does not yet wire a real
-backend into `Lumen::ai_backend`/`AiPanel` — that lands with Step 5 (RAG
-engine). Steps 5-7 not started.
+`DefaultKnowledgeStore::search_semantic`), Step 4 (`GenerationBackend` +
+`OllamaGenerationBackend`, `AiBackend::summarise`/`query` delegation), and
+Step 5 (`RagEngine::answer` — embed prompt, retrieve nearest semantic-index
+entries, generate a grounded response) are merged — see `subsystems/ai.md`
+§Done and `subsystems/knowledge.md`. Step 3 used the mock/linear-scan
+interface Step 0 allows (the referenced HNSW prerequisite doc still does not
+exist); a real ANN index is a drop-in replacement for `SemanticIndex` later.
+Step 5 does **not** wire `RagEngine` into `Lumen::ai_backend`/`AiPanel`:
+nothing in `crates/shell` constructs a `DefaultKnowledgeStore` or populates
+its semantic index from real browsing history yet (the shell uses the
+individual `HistoryFts`/`Notes`/`ReadLater` stores directly, not the
+`DefaultKnowledgeStore` facade) — wiring a panel to `RagEngine` today would
+always retrieve zero context. That wiring now depends on Step 6 (which adds
+the first real embedding-population path, for bookmarks) landing first, or
+on extending Step 6 to also populate history embeddings. Step 7 not started.
 
 ---
 
@@ -177,7 +184,7 @@ All items below marked **(proposed)** do not exist yet.
 | `crates/lumen-ai/` | — | New crate **(proposed)** |
 | `crates/lumen-ai/src/embedding.rs` | — | `EmbeddingBackend` trait + impls **(proposed)** |
 | `crates/lumen-ai/src/generation.rs` | — | `GenerationBackend` trait **(proposed)** |
-| `crates/lumen-ai/src/rag.rs` | — | RAG engine over HNSW + KnowledgeStore **(proposed)** |
+| `RagEngine` | [`crates/ai/src/rag.rs`](../../crates/ai/src/rag.rs) | RAG engine over `DefaultKnowledgeStore::search_semantic` — done (Step 5) |
 | `crates/lumen-ai/src/ollama.rs` | — | Ollama HTTP client impl **(proposed)** |
 | `Bookmarks` struct | [`crates/storage/src/bookmarks.rs:36`](../../crates/storage/src/bookmarks.rs) | Add `summary`, `embedding` fields **(proposed)** |
 | `DefaultKnowledgeStore` | [`crates/knowledge/src/store.rs:33`](../../crates/knowledge/src/store.rs) | Add `embed_on_index` hook **(proposed)** |
@@ -237,15 +244,30 @@ All items below marked **(proposed)** do not exist yet.
   parsing, malformed-JSON/missing-field rejection, `AiBackend::summarise`/
   `query` delegation and their empty-string error fallback.
 
-### Step 5 — RAG engine
+### Step 5 — RAG engine ✅ (merged)
 
-- Implement `RagEngine` in `crates/lumen-ai/src/rag.rs`:
-  - `fn answer(prompt, knowledge_store, embedding_backend, generation_backend) -> String`
-  - Embed the prompt → query HNSW → retrieve top-K chunks from `KnowledgeStore` →
-    build context string → call `GenerationBackend::generate(prompt, context)`.
-- Wire into `AiPanel::submit`: under `#[cfg(feature = "ai")]`, pass the RAG-augmented
-  response instead of the bare `NullAiBackend::query` stub.
-- Integration test: end-to-end with a mock `EmbeddingBackend` + `GenerationBackend`.
+- `RagEngine` implemented in `crates/ai/src/rag.rs` (crate path is
+  `crates/ai`, package `lumen-ai` — the doc's `crates/lumen-ai/` above
+  predates that naming):
+  - `RagEngine::new(top_k)` + `fn answer(&self, prompt, knowledge_store,
+    embedding_backend, generation_backend) -> String`.
+  - Embeds the prompt → `DefaultKnowledgeStore::search_semantic` (the
+    `SemanticIndex` linear-scan placeholder from Step 3, standing in for
+    HNSW) → builds a `"- title (url)"` context string from the hits → calls
+    `GenerationBackend::generate(prompt, context)`.
+- `lumen-ai` gained a new dependency on `lumen-knowledge` (no cycle) to call
+  `DefaultKnowledgeStore::search_semantic` directly.
+- Integration-style tests with fixed-vector/echo-context mock
+  `EmbeddingBackend`/`GenerationBackend`: grounds response in nearest hit,
+  limits context to `top_k`, falls back to empty context on embedding
+  failure or empty index.
+- **Not done in this step:** wiring `RagEngine` into `AiPanel::submit`.
+  `crates/shell` does not construct a `DefaultKnowledgeStore` anywhere (it
+  uses `HistoryFts`/`Notes`/`ReadLater` directly) and nothing populates a
+  semantic index from real history yet, so a panel wired to `RagEngine`
+  today would always retrieve empty context — see `subsystems/ai.md` §Done
+  Step 5 for the full rationale. Revisit this wiring once Step 6 (or an
+  extension of it) adds a real embedding-population path.
 
 ### Step 6 — Semantic bookmarks (`§12.8`)
 
