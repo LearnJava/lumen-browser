@@ -5,6 +5,8 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+use crate::http::http_response_body;
+
 /// Default Ollama HTTP API port (`127.0.0.1:11434`).
 const DEFAULT_OLLAMA_PORT: u16 = 11434;
 
@@ -108,15 +110,6 @@ impl lumen_core::ext::AiBackend for OllamaEmbeddingBackend {
     fn embed(&self, text: &str) -> Vec<f32> {
         EmbeddingBackend::embed(self, text).unwrap_or_default()
     }
-}
-
-/// Split a raw HTTP/1.1 response into its body, skipping the status line and headers.
-fn http_response_body(response: &[u8]) -> Option<&[u8]> {
-    let marker = b"\r\n\r\n";
-    response
-        .windows(marker.len())
-        .position(|w| w == marker)
-        .map(|i| &response[i + marker.len()..])
 }
 
 /// Parse an Ollama `/api/embeddings` response body: `{"embedding": [f32, ...]}`.

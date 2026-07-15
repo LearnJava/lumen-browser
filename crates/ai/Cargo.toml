@@ -15,6 +15,13 @@ ollama = []
 
 [dependencies]
 lumen-core.workspace = true
+# Why this dependency (internal workspace crate, not external): RagEngine
+# (Step 5, docs/tasks/ph3-ai-module.md) retrieves top-K semantically similar
+# history entries via `lumen_knowledge::DefaultKnowledgeStore::search_semantic`
+# — per the architecture diagram in that task doc, `lumen-ai` consumes the
+# HNSW/semantic index from `lumen-knowledge` rather than duplicating it.
+# `lumen-knowledge` does not depend on `lumen-ai` — no cycle.
+lumen-knowledge.workspace = true
 # Why this dependency (serde_json): JSON (de)serialization for the Ollama
 # `/api/embeddings` and `/api/generate` request/response bodies. Already a
 # permanent workspace dependency (crates/js, crates/driver, crates/mcp) —
