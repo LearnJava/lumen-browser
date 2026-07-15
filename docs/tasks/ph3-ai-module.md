@@ -12,12 +12,15 @@
 
 In progress. Optional feature, disabled in the default bundle. Step 1 (crate
 skeleton, `AiBackend::embed`/`summarise`), Step 2 (`EmbeddingBackend` +
-`OllamaEmbeddingBackend`) and Step 3 (`SemanticIndex` linear-scan +
-`DefaultKnowledgeStore::search_semantic`) are merged — see `subsystems/ai.md`
-§Done and `subsystems/knowledge.md`. Step 3 used the mock/linear-scan
-interface Step 0 allows (the referenced HNSW prerequisite doc still does not
-exist); a real ANN index is a drop-in replacement for `SemanticIndex` later.
-Steps 4-7 not started.
+`OllamaEmbeddingBackend`), Step 3 (`SemanticIndex` linear-scan +
+`DefaultKnowledgeStore::search_semantic`), and Step 4 (`GenerationBackend` +
+`OllamaGenerationBackend`, `AiBackend::summarise`/`query` delegation) are
+merged — see `subsystems/ai.md` §Done and `subsystems/knowledge.md`. Step 3
+used the mock/linear-scan interface Step 0 allows (the referenced HNSW
+prerequisite doc still does not exist); a real ANN index is a drop-in
+replacement for `SemanticIndex` later. Step 4 does not yet wire a real
+backend into `Lumen::ai_backend`/`AiPanel` — that lands with Step 5 (RAG
+engine). Steps 5-7 not started.
 
 ---
 
@@ -218,13 +221,21 @@ All items below marked **(proposed)** do not exist yet.
   calls `HnswIndex::nearest(query_vec, limit)` and returns `KnowledgeHistoryHit`s.
 - Test: index 10 synthetic entries, embed a query, assert top hit is the closest entry.
 
-### Step 4 — Summarisation
+### Step 4 — Summarisation ✅ (merged)
 
-- Define `GenerationBackend` trait in `crates/lumen-ai/src/generation.rs`.
-- Implement `OllamaGenerationBackend` calling `POST localhost:11434/api/generate`
-  (`model: "phi3:mini"` or configurable, with a `summarise:` system prompt).
-- Implement `AiBackend::summarise` by delegating.
-- Unit test: mock the HTTP endpoint; assert non-empty string returned.
+- `GenerationBackend` trait defined in `crates/ai/src/generation.rs`
+  (`fn generate(&self, prompt: &str, context: &str) -> Result<String, GenerationError>`).
+- `OllamaGenerationBackend` calls `POST 127.0.0.1:11434/api/generate`
+  (`model` configurable via `OllamaGenerationBackend::new`, e.g. `"phi3:mini"`),
+  reusing the hand-rolled `TcpStream` HTTP/1.1 framing factored out to
+  `crates/ai/src/http.rs` (shared with `OllamaEmbeddingBackend`).
+- `AiBackend::summarise` delegates via a `"summarise: ..."`-prefixed prompt;
+  `AiBackend::query` delegates via `GenerationBackend::generate(prompt, "")`.
+  Both default to an empty string on error, matching the trait's documented
+  "no answer available" contract.
+- Unit tests (mock HTTP server, `crates/ai/src/generation.rs`): response
+  parsing, malformed-JSON/missing-field rejection, `AiBackend::summarise`/
+  `query` delegation and their empty-string error fallback.
 
 ### Step 5 — RAG engine
 

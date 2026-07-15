@@ -8,12 +8,16 @@
 
 #[cfg(feature = "ollama")]
 pub mod embedding;
+#[cfg(feature = "ollama")]
+pub mod generation;
+#[cfg(feature = "ollama")]
+mod http;
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn smoke() {
-        // Crate compiles and links against lumen-core. Generation backend +
-        // RAG engine land in docs/tasks/ph3-ai-module.md Step 4+.
+        // Crate compiles and links against lumen-core. RAG engine lands in
+        // docs/tasks/ph3-ai-module.md Step 5+.
     }
 }
