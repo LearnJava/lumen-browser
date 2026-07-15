@@ -159,7 +159,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `inherit` | ✅ | |
 | `initial` | ✅ | |
 | `unset` | ✅ | inherit if inheritable, else initial |
-| `revert` | 🟡 | parsed; UA stylesheet revert ⬜ |
+| `revert` | ✅ | rolls back to `ua_baseline` snapshot (UA-hints + presentational-hints, no User origin distinct from UA) taken in `compute_style` before the matched-declaration cascade; 7 tests (P4 2026-07-15) |
 | `revert-layer` | ✅ | CSS Cascade L5 §6.4.6; pre-pass in compute_style drops winning layer; 5 tests; test 98 (P4 2026-06-13) |
 
 ### [T0] Box Model

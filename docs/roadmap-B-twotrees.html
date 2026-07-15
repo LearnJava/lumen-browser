@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-15",
  "counts": {
-  "open": 24,
-  "fixed": 230,
+  "open": 26,
+  "fixed": 231,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 254,
+ "total_bugs": 257,
  "phases": [
   {
    "id": "P0",
@@ -1428,7 +1428,7 @@
        "id": "css-specs-t4",
        "title": "CSS модули — Tier 4 (Advanced/future)",
        "status": "active",
-       "note": "7✅ 13🟡 1⬜ 0🚫 из 21 модулей CSS-SPECS.md (Tier 4)"
+       "note": "7✅ 14🟡 0⬜ 0🚫 из 21 модулей CSS-SPECS.md (Tier 4)"
       }
      ]
     }
@@ -3247,6 +3247,27 @@
    "component": "js (`WEB_API_SHIM`, `document`/`Element` shape)",
    "date": "2026-07-14",
    "debtor": false
+  },
+  "BUG-282": {
+   "status": "open",
+   "title": "TEST-142: Lumen рендерит спек-корректные swatch-цвета для `color(--name c1 c2 c3)` (каналы трактуются как sRGB, реальная ICC-трансформация отложена); Edge не по…",
+   "component": "layout / css-parser (`@color-profile`, `color()`)",
+   "date": null,
+   "debtor": true
+  },
+  "BUG-283": {
+   "status": "open",
+   "title": "Краш процесса (`memory allocation of 906238016744 bytes failed`) на https://lenta.ru через ~7с после старта, сразу после подгрузки кастомных `@font-face`. Причи…",
+   "component": "font (`Rasterizer::rasterize`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-284": {
+   "status": "fixed",
+   "title": "Браузер практически непригоден на реальных сайтах (https://ria.ru): каждый relayout стоил ~2.4с и вызывался повторно (6× подряд, ~13.6с полного зависания UI-пот…",
+   "component": "layout (`style.rs` cascade, `rule_index.rs`)",
+   "date": "2026-07-15",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3281,6 +3302,9 @@
    "BUG-060",
    "BUG-128",
    "BUG-160"
+  ],
+  "font (`Rasterizer::rasterize`)": [
+   "BUG-283"
   ],
   "html-parser": [
    "BUG-021"
@@ -3393,6 +3417,12 @@
    "BUG-236",
    "BUG-237",
    "BUG-241"
+  ],
+  "layout (`style.rs` cascade, `rule_index.rs`)": [
+   "BUG-284"
+  ],
+  "layout / css-parser (`@color-profile`, `color()`)": [
+   "BUG-282"
   ],
   "layout+paint": [
    "BUG-005",

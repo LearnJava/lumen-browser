@@ -500,7 +500,7 @@ fn is_details_element(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> bool 
     )
 }
 
-// ─── Sticky-position algorithm stub ──────────────────────────────────────────
+// ─── Sticky-position algorithm ────────────────────────────────────────────────
 // CSS: position: sticky — P4 wires insets from ComputedStyle (top/right/bottom/left);
 //                         P3 wires scroll_x/scroll_y from shell scroll state.
 
@@ -509,25 +509,22 @@ fn is_details_element(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> bool 
 /// P3 integration: call `collect_sticky_boxes()` after every re-layout, then at
 /// each scroll event call `compute_sticky_offset()` per entry and apply the
 /// returned `(dx, dy)` translate to the element's paint transform.
-///
-/// P4 integration: `top/right/bottom/left` currently hold only `Length::Px`
-/// values extracted via `LengthOrAuto::to_px_opt()`.  After P4 resolves em/%
-/// insets inside `box_tree::lay_out_block()`, replace the field values with the
-/// resolved px quantities before returning the tree.
 #[derive(Debug, Clone)]
 pub struct StickyBox {
     /// DOM node that owns this sticky element.
     pub node: lumen_dom::NodeId,
     /// Border-box rectangle as placed by normal flow, in CSS px (document-relative).
     pub static_rect: lumen_core::geom::Rect,
-    /// CSS `top` inset in px.  `None` when the property is `auto` or a
-    /// non-`px` unit (em, %, rem, …) that `to_px_opt()` cannot resolve.
+    /// CSS `top` inset in px, resolved against `em`/`rem`/the containing block's
+    /// height/viewport as applicable. `None` when the property is `auto` or an
+    /// intrinsic-sizing keyword (not valid for offsets, but defensively handled).
     pub top: Option<f32>,
-    /// CSS `bottom` inset in px.  `None` when auto/non-px.
+    /// CSS `bottom` inset in px. `None` when auto.
     pub bottom: Option<f32>,
-    /// CSS `left` inset in px.  `None` when auto/non-px.
+    /// CSS `left` inset in px, resolved against the containing block's width.
+    /// `None` when auto.
     pub left: Option<f32>,
-    /// CSS `right` inset in px.  `None` when auto/non-px.
+    /// CSS `right` inset in px. `None` when auto.
     pub right: Option<f32>,
     /// Border-box of the nearest block/flow-root ancestor — the sticky
     /// *containing block*.  The element cannot scroll visually past its edges.
@@ -540,19 +537,23 @@ pub struct StickyBox {
 /// none` subtrees (`BoxKind::Skip`) are omitted.  `containing_rect` in each
 /// entry is the border-box of the nearest block or flow-root ancestor.
 ///
+/// `viewport` is the layout viewport size, needed to resolve `vh`/`vw`/`vmin`/
+/// `vmax` insets; pass the same `Size` used for the preceding layout pass.
+///
 /// Deduplicates by NodeId: the layout engine may produce both a `Block` wrapper
 /// and a `FlowRoot` inner box for the same element (e.g. when sticky creates a
 /// new BFC).  Only the first box seen (outermost, document-order) is recorded.
-pub fn collect_sticky_boxes(root: &LayoutBox) -> Vec<StickyBox> {
+pub fn collect_sticky_boxes(root: &LayoutBox, viewport: lumen_core::geom::Size) -> Vec<StickyBox> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    collect_sticky_rec(root, root.rect, &mut seen, &mut out);
+    collect_sticky_rec(root, root.rect, viewport, &mut seen, &mut out);
     out
 }
 
 fn collect_sticky_rec(
     b: &LayoutBox,
     containing_rect: lumen_core::geom::Rect,
+    viewport: lumen_core::geom::Size,
     seen: &mut std::collections::HashSet<lumen_dom::NodeId>,
     out: &mut Vec<StickyBox>,
 ) {
@@ -564,13 +565,16 @@ fn collect_sticky_rec(
     }
 
     if matches!(b.style.position, Position::Sticky) && seen.insert(b.node) {
+        let em = b.style.font_size;
         out.push(StickyBox {
             node: b.node,
             static_rect: b.rect,
-            top: b.style.top.to_px_opt(),
-            bottom: b.style.bottom.to_px_opt(),
-            left: b.style.left.to_px_opt(),
-            right: b.style.right.to_px_opt(),
+            // top/bottom percentages resolve against the containing block's height;
+            // left/right against its width (CSS Position L3 §9.4.1).
+            top: b.style.top.resolve(em, containing_rect.height, viewport),
+            bottom: b.style.bottom.resolve(em, containing_rect.height, viewport),
+            left: b.style.left.resolve(em, containing_rect.width, viewport),
+            right: b.style.right.resolve(em, containing_rect.width, viewport),
             containing_rect,
         });
     }
@@ -583,7 +587,7 @@ fn collect_sticky_rec(
     };
 
     for child in &b.children {
-        collect_sticky_rec(child, next_cb, seen, out);
+        collect_sticky_rec(child, next_cb, viewport, seen, out);
     }
 }
 
@@ -8595,8 +8599,11 @@ mod tests {
     }
 
     #[test]
-    fn css_revert_treated_like_unset_in_phase0() {
-        // Phase 0: revert == unset. Тест дублирует css_unset_*.
+    fn css_revert_falls_back_to_inherited_without_ua_hint() {
+        // `color` has no UA-stylesheet hint on `<p>`, so `revert` rolls back to
+        // the same value `unset` would give: the inherited value. Cases where
+        // `revert` differs from `unset` (a UA hint applies) are covered in
+        // `style.rs`'s `revert_*_ua_hint_*` tests.
         let c1 = lay_get_p_color(
             "<div><p>x</p></div>",
             "div { color: red; } p { color: blue; color: revert; }",
@@ -16733,7 +16740,7 @@ mod tests {
     #[test]
     fn collect_sticky_boxes_empty_document() {
         let root = lay_full("<p>no sticky</p>", "");
-        let stickies = collect_sticky_boxes(&root);
+        let stickies = collect_sticky_boxes(&root, Size::new(800.0, 600.0));
         assert_eq!(stickies.len(), 0, "expected no sticky boxes");
     }
 
@@ -16743,7 +16750,7 @@ mod tests {
             "<div id=\"s\">sticky</div>",
             "#s { position: sticky; top: 0px; }",
         );
-        let stickies = collect_sticky_boxes(&root);
+        let stickies = collect_sticky_boxes(&root, Size::new(800.0, 600.0));
         assert_eq!(stickies.len(), 1, "expected one sticky box");
         let sb = &stickies[0];
         assert_eq!(sb.top, Some(0.0));
@@ -16758,22 +16765,40 @@ mod tests {
             "<div id=\"s\">sticky</div>",
             "#s { position: sticky; top: 16px; bottom: 8px; }",
         );
-        let stickies = collect_sticky_boxes(&root);
+        let stickies = collect_sticky_boxes(&root, Size::new(800.0, 600.0));
         assert_eq!(stickies.len(), 1);
         assert_eq!(stickies[0].top, Some(16.0));
         assert_eq!(stickies[0].bottom, Some(8.0));
     }
 
     #[test]
-    fn collect_sticky_boxes_non_px_inset_is_none() {
-        // Em and percent insets cannot be resolved post-layout → None.
+    fn collect_sticky_boxes_em_inset_resolved() {
+        // Default font-size is 16px → `top: 1em` resolves to 16px.
         let root = lay_full(
             "<div id=\"s\">sticky</div>",
             "#s { position: sticky; top: 1em; }",
         );
-        let stickies = collect_sticky_boxes(&root);
+        let stickies = collect_sticky_boxes(&root, Size::new(800.0, 600.0));
         assert_eq!(stickies.len(), 1);
-        assert_eq!(stickies[0].top, None, "em unit should yield None");
+        assert_eq!(stickies[0].top, Some(16.0), "1em at default font-size should resolve to 16px");
+    }
+
+    #[test]
+    fn collect_sticky_boxes_percent_inset_resolved() {
+        // Containing block is the viewport-height flow root; `top: 10%` resolves
+        // against its content-box height.
+        let root = lay_full(
+            "<div id=\"s\">sticky</div>",
+            "#s { position: sticky; top: 10%; }",
+        );
+        let stickies = collect_sticky_boxes(&root, Size::new(800.0, 600.0));
+        assert_eq!(stickies.len(), 1);
+        let sb = &stickies[0];
+        assert_eq!(
+            sb.top,
+            Some(sb.containing_rect.height * 0.10),
+            "10% should resolve against the containing block height"
+        );
     }
 
     // ─── CSS Scroll Snap tests ────────────────────────────────────────────────

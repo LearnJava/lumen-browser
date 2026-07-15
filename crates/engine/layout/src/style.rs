@@ -2400,11 +2400,13 @@ pub enum AnimationTimeline {
 /// - `Inherit` — взять computed value родителя.
 /// - `Initial` — взять initial value свойства из спецификации.
 /// - `Unset` — для inherited-свойств = `Inherit`, для non-inherited = `Initial`.
-/// - `Revert` — откатиться к значению предыдущего origin (UA → User → Author).
-///   В Phase 0 UA / User origin отделены не полностью (только UA-hints для
-///   italic/bold семантических тегов), поэтому `Revert` трактуется как
-///   `Unset`. Это упрощение и редкие edge case-ы оно «не покажет правильно»,
-///   но для типичного CSS-кода работает идентично.
+/// - `Revert` — откатиться к значению, которое было бы у свойства без
+///   author/user-правил, то есть к UA-стилю для этого элемента (User origin
+///   в Lumen не выделен отдельно от UA). Источник — снэпшот `ComputedStyle`,
+///   снятый в `compute_style` сразу после `ua_*`/`apply_ua_*`/presentational-hint
+///   пассов и до применения matched-деклараций (`ua_baseline`). Если у
+///   свойства нет UA-хинта, снэпшот совпадает с обычным inherited/initial —
+///   тогда `Revert` ведёт себя как `Unset`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CssWideKeyword {
     Inherit,
@@ -4134,7 +4136,7 @@ pub fn apply_container_rules(
                     } else {
                         decl
                     };
-                    apply_declaration(style, effective_decl, em, viewport, pw, &inherited, is_quirks, dark_mode);
+                    apply_declaration(style, effective_decl, em, viewport, pw, &inherited, &inherited, is_quirks, dark_mode);
                 }
             }
         }
@@ -6839,13 +6841,21 @@ pub fn compute_style(
         });
     }
 
+    // CSS Cascade L4 §7.4 — `revert` откатывается к значению «как если бы
+    // author/user-правил не было». `style` прямо здесь уже содержит ровно
+    // это: наследуемые поля скопированы из `inherited`, а все `ua_*`/
+    // `apply_ua_*`/presentational-hint пассы выше (§ «UA stylesheet» /
+    // «HTML presentational hints») отработали, но ни одна matched-декларация
+    // ещё не применена. Снэпшот уходит в `apply_declaration` → `apply_css_wide_keyword`.
+    let ua_baseline = style.clone();
+
     // Pre-pass: применяем font-size раньше, потому что em/% других свойств
     // считаются относительно computed font-size этого же элемента, а em для
     // самого font-size — относительно inherited (родительского) font-size.
     let parent_fs = inherited.font_size;
     let is_quirks = doc.mode() == DocumentMode::Quirks;
     for (_, _, _, _, _, _, decl) in &matched {
-        apply_font_size(&mut style, decl, parent_fs, viewport, is_quirks);
+        apply_font_size(&mut style, decl, parent_fs, ua_baseline.font_size, viewport, is_quirks);
     }
 
     // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные
@@ -6854,7 +6864,7 @@ pub fn compute_style(
     // резолвятся отдельным post-pass в конце compute_style).
     for (_, _, _, _, _, _, decl) in &matched {
         if decl.property.eq_ignore_ascii_case("color-scheme") {
-            apply_declaration(&mut style, decl, parent_fs, viewport, FontWeight::NORMAL, inherited, is_quirks, dark_mode);
+            apply_declaration(&mut style, decl, parent_fs, viewport, FontWeight::NORMAL, inherited, &ua_baseline, is_quirks, dark_mode);
         }
     }
 
@@ -6972,7 +6982,7 @@ pub fn compute_style(
         } else {
             effective_decl
         };
-        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, is_quirks, dark_mode);
+        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, &ua_baseline, is_quirks, dark_mode);
     }
 
     // CSS Color 4 §6.2 — post-pass: resolve any CssColor::System variants in
@@ -7327,7 +7337,7 @@ pub fn compute_style_from_declarations(decls: &[Declaration], viewport: Size) ->
     let inherited = ComputedStyle::root();
     let mut style = inherited.clone();
     for decl in decls {
-        apply_declaration(&mut style, decl, 16.0, viewport, FontWeight::NORMAL, &inherited, false, false);
+        apply_declaration(&mut style, decl, 16.0, viewport, FontWeight::NORMAL, &inherited, &inherited, false, false);
     }
     style
 }
@@ -7573,7 +7583,7 @@ pub fn compute_pseudo_element_style(
     let parent_fs = parent.font_size;
     let is_quirks = doc.mode() == DocumentMode::Quirks;
     for (_, _, _, _, decl) in &matched {
-        apply_font_size(&mut style, decl, parent_fs, viewport, is_quirks);
+        apply_font_size(&mut style, decl, parent_fs, parent_fs, viewport, is_quirks);
     }
     let em_basis = style.font_size;
     let parent_weight = parent.font_weight;
@@ -7594,7 +7604,7 @@ pub fn compute_pseudo_element_style(
         } else {
             decl
         };
-        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, parent, is_quirks, dark_mode);
+        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, parent, parent, is_quirks, dark_mode);
     }
 
     // ::before/::after require content: to render; ::first-letter/::first-line do not.
@@ -8185,6 +8195,17 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // Runtime-only: атрибут `popover` декларирует тип, но не открытое
         // состояние. Phase 0 без Popover API runtime — всегда `false`.
         PseudoClass::PopoverOpen => doc.get(node).get_attr("data-lumen-popover-open").is_some(),
+        // CSS Selectors L4 §17.4 `:state(name)` — WHATWG HTML §4.13.2
+        // `ElementInternals.states` (`CustomStateSet`). Runtime-only, same
+        // sentinel-attribute pattern as `:fullscreen`/`:modal`: the JS shim
+        // (`CustomStateSet.add`/`delete`/`clear`) reflects each active state
+        // into a `data-lumen-state-<name>` attribute on the host element via
+        // `_lumen_set_attr`/`_lumen_remove_attr` — layout never calls into
+        // the JS engine during matching.
+        PseudoClass::State(name) => doc
+            .get(node)
+            .get_attr(&format!("data-lumen-state-{name}"))
+            .is_some(),
         // CSS Selectors L4 §11.4 time-dimensional pseudo-classes —
         // `:current` / `:past` / `:future` matches на active / elapsed /
         // upcoming моменты в timed-text потоке (WebVTT cue rendering при
@@ -9621,7 +9642,7 @@ fn apply_svg_presentational_hints(
             value: val.to_string(),
             important: false,
         };
-        apply_declaration(style, &decl, em_basis, viewport, parent_weight, inherited, is_quirks, false);
+        apply_declaration(style, &decl, em_basis, viewport, parent_weight, inherited, inherited, is_quirks, false);
     }
 }
 
@@ -12346,6 +12367,7 @@ fn apply_declaration(
     viewport: Size,
     parent_font_weight: FontWeight,
     inherited: &ComputedStyle,
+    ua_baseline: &ComputedStyle,
     is_quirks: bool,
     dark_mode: bool,
 ) {
@@ -12399,7 +12421,7 @@ fn apply_declaration(
     // случая, когда font-size попал в main-pass через невидимую генерик
     // декларацию (no-op, font-size уже выставлен).
     if let Some(kw) = parse_css_wide_keyword(val) {
-        apply_css_wide_keyword(style, prop, kw, inherited);
+        apply_css_wide_keyword(style, prop, kw, inherited, ua_baseline);
         return;
     }
     match prop {
@@ -16055,9 +16077,12 @@ fn apply_grid_area_shorthand(val: &str, style: &mut ComputedStyle) {
 /// - `Inherit` — всегда родительский computed value (для любого свойства).
 /// - `Initial` — всегда initial value свойства из спецификации
 ///   (берётся из `ComputedStyle::root()`).
-/// - `Unset` / `Revert` — для inherited-свойств работает как `Inherit`,
-///   для non-inherited как `Initial`. `Revert` в Phase 0 ≡ `Unset`
-///   (UA / User origin не отделены чётко, только UA-hints для italic/bold).
+/// - `Unset` — для inherited-свойств работает как `Inherit`, для
+///   non-inherited как `Initial`.
+/// - `Revert` — откат к `ua_baseline` (значение свойства, каким оно было бы
+///   без author/user-правил — см. `CssWideKeyword` doc). Для свойств без
+///   UA-хинта `ua_baseline` совпадает с `inherited`/`init`, так что итог
+///   идентичен `Unset`.
 ///
 /// Per-property список синхронизирован с `apply_declaration` и `compute_style`-init —
 /// неизвестные имена молча игнорируются.
@@ -16066,13 +16091,19 @@ fn apply_css_wide_keyword(
     prop: &str,
     kw: CssWideKeyword,
     inherited: &ComputedStyle,
+    ua_baseline: &ComputedStyle,
 ) {
     use CssWideKeyword::{Inherit, Revert, Unset};
-    // Initial-значения как у root документа. ComputedStyle::root() выделяет
-    // несколько Vec/HashMap, но эта функция вызывается только при обнаружении
-    // CSS-wide-keyword в декларации — редкий путь, накладные расходы
-    // незаметны на типичной странице.
-    let init = ComputedStyle::root();
+    // Initial-значения как у root документа — кроме `Revert`, где ролью
+    // «non-inherited fallback» играет UA-снэпшот. ComputedStyle::root()
+    // выделяет несколько Vec/HashMap, но эта функция вызывается только при
+    // обнаружении CSS-wide-keyword в декларации — редкий путь, накладные
+    // расходы незаметны на типичной странице.
+    let init = if kw == Revert { ua_baseline.clone() } else { ComputedStyle::root() };
+    // Для `Revert` «родительское» значение тоже берётся из UA-снэпшота —
+    // это покрывает и inherited-свойства, которые UA-хинты трогают
+    // (font-style/font-weight/color/white-space/line-height и т.д.).
+    let inherited: &ComputedStyle = if kw == Revert { ua_baseline } else { inherited };
 
     // Helper «inherited property»: Inherit/Unset/Revert → inherited, Initial → init.
     let inh = matches!(kw, Inherit | Unset | Revert);
@@ -19278,10 +19309,16 @@ fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext 
 /// Обрабатывает также `font`-shorthand (BUG-114): в pre-pass резолвится только
 /// `<font-size>`-компонент; остальные longhand-ы (style/variant/weight/stretch/
 /// line-height/family) применяются в main-pass — арм `"font" =>`.
+///
+/// `ua_baseline_fs` — `font-size` из UA-снэпшота (см. `compute_style`), источник
+/// для `revert`: элементы вроде `<small>`/`<sub>`/`<sup>`/`<h1>`–`<h6>` получают
+/// UA-хинт на font-size (`ua_font_size_factor`/`apply_ua_heading_style`) до этого
+/// pre-pass-а, так что `revert` должен откатываться к нему, а не к голому `parent_fs`.
 fn apply_font_size(
     style: &mut ComputedStyle,
     decl: &Declaration,
     parent_fs: f32,
+    ua_baseline_fs: f32,
     viewport: Size,
     is_quirks: bool,
 ) {
@@ -19295,13 +19332,14 @@ fn apply_font_size(
         return;
     }
     let val = decl.value.as_str();
-    // CSS Cascade L4 §7: CSS-wide keywords. font-size — inherited;
-    // unset == inherit; revert == unset (Phase 0 без чёткой UA-origin границы).
+    // CSS Cascade L4 §7: CSS-wide keywords. font-size — inherited; unset ==
+    // inherit; revert rolls back to the UA-hinted value (falls back to
+    // `parent_fs` when the element has no font-size UA hint, since
+    // `ua_baseline_fs` then equals `parent_fs` anyway).
     if let Some(kw) = parse_css_wide_keyword(val) {
         style.font_size = match kw {
-            CssWideKeyword::Inherit
-            | CssWideKeyword::Unset
-            | CssWideKeyword::Revert => parent_fs,
+            CssWideKeyword::Inherit | CssWideKeyword::Unset => parent_fs,
+            CssWideKeyword::Revert => ua_baseline_fs,
             CssWideKeyword::Initial => ROOT_FONT_SIZE,
         };
         return;
@@ -25523,6 +25561,95 @@ mod tests {
         );
     }
 
+    // ─── revert (CSS Cascade L4 §7.4) ────────────────────────────────────────
+
+    #[test]
+    fn revert_non_inherited_without_ua_hint_falls_to_initial() {
+        // No UA rule for `background-color` on `<p>` → `revert` behaves like
+        // `unset`/`initial`: falls to the property's initial value (None).
+        let s = cascade_at(
+            "<p>x</p>",
+            "p { background-color: yellow; background-color: revert; }",
+            &[0],
+        );
+        assert_eq!(s.background_color, None);
+    }
+
+    #[test]
+    fn revert_inherited_without_ua_hint_falls_to_inherited() {
+        // No UA rule for `color` on `<p>` → `revert` behaves like `unset`:
+        // falls to the inherited value (blue from <body>).
+        let s = cascade_at(
+            "<p>x</p>",
+            "body { color: blue; } p { color: red; color: revert; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn revert_non_inherited_ua_hint_restores_ua_value() {
+        // `display` has a real UA default per element (`default_display`):
+        // `<span>` → inline. `revert` must roll back to that UA value, NOT to
+        // the CSS initial value (`Block` in this engine's `ComputedStyle::root()`)
+        // the way `unset`/`initial` would.
+        let s = cascade_at(
+            "<span>x</span>",
+            "span { display: block; display: revert; }",
+            &[0],
+        );
+        assert_eq!(s.display, Display::Inline);
+    }
+
+    #[test]
+    fn revert_non_inherited_no_ua_hint_matches_unset() {
+        // Control case: `unset` on the same property/element stays at the
+        // engine's non-inherited fallback (`Block`), confirming `revert` above
+        // is genuinely different, not an artifact of the test setup.
+        let s = cascade_at("<span>x</span>", "span { display: unset; }", &[0]);
+        assert_eq!(s.display, Display::Block);
+    }
+
+    #[test]
+    fn revert_inherited_ua_hint_restores_ua_value() {
+        // `font-style` has a UA hint for `<em>` (`ua_font_style` → Italic).
+        // An author rule sets it to `normal`, then `revert` — must roll back to
+        // Italic (the UA value), not to the parent's inherited `Normal`.
+        let s = cascade_at(
+            "<em>x</em>",
+            "em { font-style: normal; font-style: revert; }",
+            &[0],
+        );
+        assert_eq!(s.font_style, FontStyle::Italic);
+    }
+
+    #[test]
+    fn revert_inherited_ua_hint_no_hint_element_falls_to_inherited() {
+        // Control case: on an element with no `font-style` UA hint (`<p>`),
+        // `revert` behaves like `unset` — falls to the parent's inherited value.
+        let s = cascade_at(
+            "<p>x</p>",
+            "p { font-style: italic; font-style: revert; }",
+            &[0],
+        );
+        assert_eq!(s.font_style, FontStyle::Normal);
+    }
+
+    #[test]
+    fn revert_font_size_restores_ua_hinted_factor() {
+        // `<small>` gets a UA hint of 0.83× parent font-size
+        // (`ua_font_size_factor`). `font-size: revert` must roll back to that
+        // scaled value, not to the raw (unscaled) parent font-size the way
+        // `unset` would — exercises the `apply_font_size` pre-pass fix, not
+        // just the generic `apply_css_wide_keyword` path.
+        let s = cascade_at(
+            "<small>x</small>",
+            "body { font-size: 20px; } small { font-size: 12px; font-size: revert; }",
+            &[0],
+        );
+        assert!((s.font_size - 20.0 * 0.83).abs() < 1e-4, "font_size={}", s.font_size);
+    }
+
     // === animation shorthand parsing (CSS Animations L1 §4) ===
 
     fn shorthand(val: &str) -> ComputedStyle {
@@ -25780,7 +25907,7 @@ mod tests {
             value: "2s ease-in-out 0.5s 2 alternate forwards paused fade".to_string(),
             important: false,
         };
-        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false, false);
+        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, &inherited, false, false);
         assert_eq!(s.animation_names, vec!["fade".to_string()]);
         assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
         assert!((s.animation_delays[0] - 0.5).abs() < 1e-4);
@@ -25806,7 +25933,7 @@ mod tests {
         let mut s = ComputedStyle::root();
         let decl = Declaration { property: prop.to_string(), value: val.to_string(), important: false };
         let vp = Size::new(800.0, 600.0);
-        apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &ComputedStyle::root(), false, false);
+        apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &ComputedStyle::root(), &ComputedStyle::root(), false, false);
         s
     }
 
@@ -25853,7 +25980,7 @@ mod tests {
             value: "inherit".to_string(),
             important: false,
         };
-        apply_declaration(&mut child, &inherit, 16.0, vp, FontWeight::NORMAL, &parent, false, false);
+        apply_declaration(&mut child, &inherit, 16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false);
         assert_eq!(child.svg_clip_rule, FillRule::EvenOdd);
 
         let mut child2 = ComputedStyle::root();
@@ -25863,7 +25990,7 @@ mod tests {
             value: "initial".to_string(),
             important: false,
         };
-        apply_declaration(&mut child2, &initial, 16.0, vp, FontWeight::NORMAL, &parent, false, false);
+        apply_declaration(&mut child2, &initial, 16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false);
         assert_eq!(child2.svg_clip_rule, FillRule::NonZero);
     }
 
@@ -25926,7 +26053,7 @@ mod tests {
             important: false,
         };
         let vp = Size::new(800.0, 600.0);
-        apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &parent, false, false);
+        apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false);
         assert_eq!(s.paint_order, parent.paint_order);
     }
 
@@ -25985,12 +26112,12 @@ mod tests {
         apply_declaration(
             &mut s,
             &Declaration { property: "text-anchor".into(), value: "unset".into(), important: false },
-            16.0, vp, FontWeight::NORMAL, &parent, false, false,
+            16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false,
         );
         apply_declaration(
             &mut s,
             &Declaration { property: "dominant-baseline".into(), value: "unset".into(), important: false },
-            16.0, vp, FontWeight::NORMAL, &parent, false, false,
+            16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false,
         );
         assert_eq!(s.text_anchor, Some(SvgTextAnchor::End));
         assert_eq!(s.dominant_baseline, Some(SvgDominantBaseline::Middle));
@@ -26007,7 +26134,7 @@ mod tests {
         apply_declaration(
             &mut s,
             &Declaration { property: "text-anchor".into(), value: "initial".into(), important: false },
-            16.0, vp, FontWeight::NORMAL, &parent, false, false,
+            16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false,
         );
         assert_eq!(s.text_anchor, None);
     }
@@ -26058,7 +26185,7 @@ mod tests {
         apply_declaration(
             &mut s,
             &Declaration { property: "baseline-shift".into(), value: "unset".into(), important: false },
-            16.0, vp, FontWeight::NORMAL, &parent, false, false,
+            16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false,
         );
         assert_eq!(s.baseline_shift, SvgBaselineShift::Baseline);
         // `inherit` explicitly pulls the parent value.
@@ -26066,7 +26193,7 @@ mod tests {
         apply_declaration(
             &mut s2,
             &Declaration { property: "baseline-shift".into(), value: "inherit".into(), important: false },
-            16.0, vp, FontWeight::NORMAL, &parent, false, false,
+            16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false,
         );
         assert_eq!(s2.baseline_shift, SvgBaselineShift::Super);
     }
@@ -26296,7 +26423,7 @@ mod tests {
             value: "transform 0.4s ease-in-out 0.1s".to_string(),
             important: false,
         };
-        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false, false);
+        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, &inherited, false, false);
         assert_eq!(s.transition_properties, vec!["transform".to_string()]);
         assert!((s.transition_durations[0] - 0.4).abs() < 1e-4);
         assert!((s.transition_delays[0] - 0.1).abs() < 1e-4);
@@ -30919,9 +31046,9 @@ mod tests {
         let vp = Size::new(800.0, 600.0);
         let root = ComputedStyle::root();
         let hidden = Declaration { property: "backface-visibility".to_string(), value: "hidden".to_string(), important: false };
-        apply_declaration(&mut s, &hidden, 16.0, vp, FontWeight::NORMAL, &root, false, false);
+        apply_declaration(&mut s, &hidden, 16.0, vp, FontWeight::NORMAL, &root, &root, false, false);
         let bogus = Declaration { property: "backface-visibility".to_string(), value: "translucent".to_string(), important: false };
-        apply_declaration(&mut s, &bogus, 16.0, vp, FontWeight::NORMAL, &root, false, false);
+        apply_declaration(&mut s, &bogus, 16.0, vp, FontWeight::NORMAL, &root, &root, false, false);
         assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
     }
 
@@ -31051,6 +31178,45 @@ mod tests {
         let root = ComputedStyle::root();
         let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_ne!(style.color.r, 255, ":modal rule must NOT apply without sentinel attr");
+    }
+
+    #[test]
+    fn state_pseudo_matches_sentinel_attr() {
+        // :state(open) matches when the JS CustomStateSet reflects the
+        // active state into `data-lumen-state-open` on the host element.
+        let html = r#"<my-el id="el" data-lumen-state-open="">x</my-el>"#;
+        let css = r#":state(open) { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let el = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
+        assert_eq!(style.color.r, 255, ":state(open) rule should apply when sentinel attr present");
+    }
+
+    #[test]
+    fn state_pseudo_does_not_match_without_sentinel_attr() {
+        let html = r#"<my-el id="el">x</my-el>"#;
+        let css = r#":state(open) { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let el = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
+        assert_ne!(style.color.r, 255, ":state(open) must NOT apply without sentinel attr");
+    }
+
+    #[test]
+    fn state_pseudo_distinguishes_state_names() {
+        // Sentinel attr для одного state-имени не должен матчить другое.
+        let html = r#"<my-el id="el" data-lumen-state-collapsed="">x</my-el>"#;
+        let css = r#":state(open) { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let el = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
+        assert_ne!(style.color.r, 255, ":state(open) must not match a differently-named state attr");
     }
 
     #[test]
