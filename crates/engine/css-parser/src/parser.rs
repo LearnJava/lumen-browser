@@ -886,6 +886,27 @@ pub struct Stylesheet {
     /// parse+store. Matching against `font-palette` property and CPAL index
     /// resolution happen in layout (`resolve_font_palette_for_family`).
     pub font_palette_values: Vec<FontPaletteValuesRule>,
+    /// CSS Color L5 §4 — `@color-profile --name { src: ...; rendering-intent: ...; }`.
+    /// Phase 0: parse+store. Matching against `color(--name ...)` and used-value
+    /// resolution happen in layout (`resolve_color_profile`); real ICC transform
+    /// is deferred — channels are treated as already-sRGB.
+    pub color_profiles: Vec<ColorProfileRule>,
+}
+
+/// `@color-profile --name { src: url(...); rendering-intent: ...; }` — CSS
+/// Color L5 §4. Declares a named custom colour profile referenced from
+/// `color(--name c1 c2 c3)`. Phase 0: descriptors are parsed and stored;
+/// actual ICC-based colour transform is deferred (layout treats the profile's
+/// channels as already-sRGB once a matching name is found).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ColorProfileRule {
+    /// Dashed-ident name, e.g. `--swop5c`. Used to match `color(--name ...)` values.
+    pub name: String,
+    /// `src` descriptor — URL of the ICC profile resource (loading deferred).
+    pub src: Option<String>,
+    /// `rendering-intent` descriptor — one of `relative-colorimetric` (default),
+    /// `absolute-colorimetric`, `perceptual`, `saturation`.
+    pub rendering_intent: Option<String>,
 }
 
 /// `@font-palette-values --name { font-family: ...; base-palette: N; override-colors: ... }`
@@ -1521,6 +1542,7 @@ enum AtRuleOutcome {
     Scope(ScopeRule),
     StartingStyle(StartingStyleRule),
     Container(ContainerRule),
+    ColorProfile(ColorProfileRule),
     None,
 }
 
@@ -2199,6 +2221,7 @@ impl<'a> Parser<'a> {
         let mut scope_rules: Vec<ScopeRule> = Vec::new();
         let mut starting_style_rules: Vec<StartingStyleRule> = Vec::new();
         let mut container_rules: Vec<ContainerRule> = Vec::new();
+        let mut color_profiles: Vec<ColorProfileRule> = Vec::new();
         let mut anon_counter: usize = 0;
         loop {
             self.skip_ws_and_comments();
@@ -2210,6 +2233,7 @@ impl<'a> Parser<'a> {
                     AtRuleOutcome::Import(i) => imports.push(i),
                     AtRuleOutcome::FontFace(f) => font_faces.push(f),
                     AtRuleOutcome::FontPaletteValues(fp) => font_palette_values.push(fp),
+                    AtRuleOutcome::ColorProfile(cp) => color_profiles.push(cp),
                     AtRuleOutcome::LayerNames(names) => {
                         for n in names {
                             if !layer_order.iter().any(|e| e == &n) {
@@ -2294,6 +2318,7 @@ impl<'a> Parser<'a> {
             scope_rules,
             starting_style_rules,
             container_rules,
+            color_profiles,
         }
     }
 
@@ -2363,6 +2388,11 @@ impl<'a> Parser<'a> {
             return self
                 .parse_container_rule()
                 .map_or(AtRuleOutcome::None, AtRuleOutcome::Container);
+        }
+        if name.eq_ignore_ascii_case("color-profile") {
+            return self
+                .parse_color_profile_body()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::ColorProfile);
         }
         // Прочее @-правило: откатимся к '@' и пропустим как раньше.
         self.pos = start;
@@ -2550,6 +2580,48 @@ impl<'a> Parser<'a> {
             font_family,
             base_palette,
             override_colors,
+        })
+    }
+
+    /// Парсит `@color-profile --name { src: url(...); rendering-intent: ...; }`.
+    /// CSS Color L5 §4. Prelude — dashed-ident (e.g. `--swop5c`). Block contains
+    /// descriptors: `src` (URL, via `parse_import_url`), `rendering-intent`
+    /// (keyword, stored raw). Returns `None` if the name is missing or no `{`
+    /// follows.
+    fn parse_color_profile_body(&mut self) -> Option<ColorProfileRule> {
+        self.skip_ws_and_comments();
+        // Prelude: dashed-ident starting with '--'
+        let name = self.parse_ident()?;
+        if !name.starts_with("--") {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume(); // '{'
+        let declarations = self.parse_declaration_block();
+
+        let mut src: Option<String> = None;
+        let mut rendering_intent: Option<String> = None;
+
+        for d in &declarations {
+            match d.property.to_ascii_lowercase().as_str() {
+                "src" => {
+                    src = Parser::new(d.value.trim()).parse_import_url();
+                }
+                "rendering-intent" => {
+                    rendering_intent = Some(d.value.trim().to_ascii_lowercase());
+                }
+                _ => {}
+            }
+        }
+        Some(ColorProfileRule {
+            name,
+            src,
+            rendering_intent,
         })
     }
 
@@ -7835,5 +7907,52 @@ mod tests {
         assert_eq!(s.rules.len(), 2);
         assert_eq!(s.font_palette_values.len(), 1);
         assert_eq!(s.font_palette_values[0].base_palette, Some(3));
+    }
+
+    // ── @color-profile tests ────────────────────────────────────────────────
+
+    #[test]
+    fn color_profile_basic() {
+        let s = parse(r#"@color-profile --swop5c { src: url("swop5c.icc"); rendering-intent: relative-colorimetric; }"#);
+        assert_eq!(s.color_profiles.len(), 1);
+        let cp = &s.color_profiles[0];
+        assert_eq!(cp.name, "--swop5c");
+        assert_eq!(cp.src.as_deref(), Some("swop5c.icc"));
+        assert_eq!(cp.rendering_intent.as_deref(), Some("relative-colorimetric"));
+    }
+
+    #[test]
+    fn color_profile_src_only() {
+        let s = parse(r#"@color-profile --display-p3 { src: url("display-p3.icc"); }"#);
+        let cp = &s.color_profiles[0];
+        assert_eq!(cp.src.as_deref(), Some("display-p3.icc"));
+        assert_eq!(cp.rendering_intent, None);
+    }
+
+    #[test]
+    fn color_profile_multiple_rules() {
+        let s = parse(
+            r#"@color-profile --a { src: url("a.icc"); } @color-profile --b { src: url("b.icc"); }"#,
+        );
+        assert_eq!(s.color_profiles.len(), 2);
+        assert_eq!(s.color_profiles[0].name, "--a");
+        assert_eq!(s.color_profiles[1].name, "--b");
+    }
+
+    #[test]
+    fn color_profile_no_double_dash_ignored() {
+        // Prelude without '--' is invalid per CSS Color L5 §4 — treated as unknown.
+        let s = parse(r#"@color-profile myname { src: url("a.icc"); }"#);
+        assert!(s.color_profiles.is_empty());
+    }
+
+    #[test]
+    fn color_profile_coexists_with_other_rules() {
+        let s = parse(
+            r#"div { color: red; } @color-profile --p { src: url("p.icc"); } p { margin: 0; }"#,
+        );
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.color_profiles.len(), 1);
+        assert_eq!(s.color_profiles[0].name, "--p");
     }
 }
