@@ -8595,8 +8595,11 @@ mod tests {
     }
 
     #[test]
-    fn css_revert_treated_like_unset_in_phase0() {
-        // Phase 0: revert == unset. Тест дублирует css_unset_*.
+    fn css_revert_falls_back_to_inherited_without_ua_hint() {
+        // `color` has no UA-stylesheet hint on `<p>`, so `revert` rolls back to
+        // the same value `unset` would give: the inherited value. Cases where
+        // `revert` differs from `unset` (a UA hint applies) are covered in
+        // `style.rs`'s `revert_*_ua_hint_*` tests.
         let c1 = lay_get_p_color(
             "<div><p>x</p></div>",
             "div { color: red; } p { color: blue; color: revert; }",
