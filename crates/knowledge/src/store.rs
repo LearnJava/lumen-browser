@@ -22,6 +22,7 @@ use crate::fts::HistoryFts;
 use crate::notes::Notes;
 use crate::open_tabs::OpenTabsIndex;
 use crate::read_later::ReadLater;
+use crate::semantic::{SemanticHit, SemanticIndex};
 
 /// SQLite-backed [`KnowledgeStore`]. One instance per browser process.
 ///
@@ -30,11 +31,15 @@ use crate::read_later::ReadLater;
 /// - `notes` at `<base>/notes.db` (§12.2)
 /// - `read_later` at `<base>/read_later.db` (§12.3)
 /// - `open_tabs` — in-memory only (§12.4)
+///
+/// Plus an in-memory [`SemanticIndex`] (§12.5, Step 3 — not part of the
+/// `KnowledgeStore` trait yet, see [`Self::search_semantic`]).
 pub struct DefaultKnowledgeStore {
     history: HistoryFts,
     notes: Notes,
     read_later: ReadLater,
     tabs: OpenTabsIndex,
+    semantic: SemanticIndex,
 }
 
 impl std::fmt::Debug for DefaultKnowledgeStore {
@@ -56,6 +61,7 @@ impl DefaultKnowledgeStore {
             notes: Notes::open(base.join("notes.db"))?,
             read_later: ReadLater::open(base.join("read_later.db"))?,
             tabs: OpenTabsIndex::new()?,
+            semantic: SemanticIndex::new(),
         })
     }
 
@@ -68,6 +74,7 @@ impl DefaultKnowledgeStore {
             notes: Notes::open_in_memory()?,
             read_later: ReadLater::open_in_memory()?,
             tabs: OpenTabsIndex::new()?,
+            semantic: SemanticIndex::new(),
         })
     }
 
@@ -82,6 +89,34 @@ impl DefaultKnowledgeStore {
     /// update operations not covered by the search-oriented trait.
     pub fn notes(&self) -> &Notes {
         &self.notes
+    }
+
+    /// Index (or replace) the embedding for a history entry (§12.5, Step 3).
+    ///
+    /// `rowid` should equal the corresponding `KnowledgeHistoryHit::rowid` /
+    /// `lumen_storage::history::HistoryEntry.id`. `vector` comes from an
+    /// `lumen_ai::embedding::EmbeddingBackend` — this crate does not depend
+    /// on `lumen-ai`, so callers embed first and pass the resulting vector
+    /// in. In-memory only: not persisted across process restarts (see
+    /// [`SemanticIndex`]).
+    pub fn index_semantic(&self, rowid: i64, url: &str, title: &str, vector: Vec<f32>) {
+        self.semantic.insert(rowid, url, title, vector);
+    }
+
+    /// Remove a history entry's embedding from the semantic index, if present.
+    pub fn unindex_semantic(&self, rowid: i64) {
+        self.semantic.remove(rowid);
+    }
+
+    /// Semantic (embedding-similarity) search over history entries indexed
+    /// via [`Self::index_semantic`], most similar first.
+    ///
+    /// Not part of the `KnowledgeStore` trait: the underlying [`SemanticIndex`]
+    /// is a linear-scan placeholder for a real HNSW index (see module docs on
+    /// [`crate::semantic`]), so this method may still change shape once that
+    /// lands.
+    pub fn search_semantic(&self, query_vector: &[f32], limit: i64) -> Vec<SemanticHit> {
+        self.semantic.nearest(query_vector, limit.max(0) as usize)
     }
 }
 
