@@ -68,11 +68,38 @@ Full step-by-step plan — [`docs/tasks/ph3-ai-module.md`](../docs/tasks/ph3-ai-
 - Does not wire a real backend into `Lumen::ai_backend`/`AiPanel` — that is
   Step 5 (`RagEngine`).
 
+### Step 5 — `RagEngine` (2026-07-15)
+- `crates/ai/src/rag.rs` (gated behind the `ollama` Cargo feature):
+  `RagEngine::new(top_k)` + `RagEngine::answer(prompt, knowledge_store,
+  embedding_backend, generation_backend) -> String`. Embeds `prompt`, calls
+  `DefaultKnowledgeStore::search_semantic` for the `top_k` nearest indexed
+  entries, builds a `"- title (url)"` context string from the hits, and
+  delegates to `GenerationBackend::generate(prompt, context)`. Falls back to
+  an empty context (bare-prompt generation) when embedding fails or the
+  index has no matches — never panics or blocks on a missing index.
+- `lumen-ai` gained a new internal workspace dependency on `lumen-knowledge`
+  (no cycle: `lumen-knowledge` does not depend on `lumen-ai`) — needed to
+  call `DefaultKnowledgeStore::search_semantic` directly, per the
+  architecture diagram in `docs/tasks/ph3-ai-module.md`.
+- Tests use fixed-vector/echo-context mock backends (no real Ollama
+  process): grounds response in nearest hit, limits context to `top_k`,
+  falls back to empty context on embedding failure or empty index, returns
+  empty string when generation fails.
+- Does not wire `RagEngine` into `Lumen::ai_backend`/`AiPanel` — nothing in
+  the shell populates `DefaultKnowledgeStore`'s semantic index from real
+  browsing history yet (no crate currently constructs a
+  `DefaultKnowledgeStore` in `crates/shell` at all: it uses the individual
+  `HistoryFts`/`Notes`/`ReadLater` stores directly). Wiring `AiPanel::submit`
+  to a real `RagEngine` is deferred until that population path exists —
+  tracked as part of Step 6/7 below, not invented here to avoid a
+  panel that always "RAG"s over an empty index.
+
 ## Deferred
 
-- Step 5 — `RagEngine`, wired into `AiPanel::submit`.
 - Step 6 — semantic bookmarks: `Bookmarks` schema extension
-  (`summary`/`embedding` nullable columns), auto-summarise + embed on save.
+  (`summary`/`embedding` nullable columns), auto-summarise + embed on save;
+  also where `Lumen::ai_backend`/`AiPanel` first gets wired to a real
+  `RagEngine` backed by a populated `DefaultKnowledgeStore`.
 - Step 7 — omnibox `@ai` prefix routed through `RagEngine::answer`.
 
 ## Invariants
