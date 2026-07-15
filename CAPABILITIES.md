@@ -45,11 +45,11 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 ### lumen-css-parser (`crates/engine/css-parser`)
 - Parses selectors + **untyped string declarations**; typed values + cascade live in `lumen-layout/style.rs` (~139 properties wired end-to-end — see CSS-SPECS.md).
 - ✅ Selectors L3 full set + L4: attribute operators (`= ~= |= ^= $= *=`, case flag), structural pseudo, form/UI-state pseudo (DOM-attr-based), `:nth-*(of …)`, `:not/:is/:where`, `:has` (in layout).
-- ✅ `:lang/:dir/:link/:visited(always false)/:scope/:target`; interactive pseudo (`:hover/:focus`) parsed as always-false (runtime state applied in layout).
+- ✅ `:lang/:dir/:link/:visited(always false)/:scope/:target/:state()` (custom-state, matches `data-lumen-state-<name>` sentinel attr reflected by `ElementInternals.states`); interactive pseudo (`:hover/:focus`) parsed as always-false (runtime state applied in layout).
 - ✅ `!important` extraction; at-rules parsed+stored: `@media` (cascade-integrated), `@font-face`, `@import`, `@property`, `@layer`, `@supports` (typed `evaluate()` — incl. `selector()`, `font-tech()`/`font-format()` matched against lumen-font capabilities), `@keyframes`, `@scope`, `@container`, `@color-profile` (`ColorProfileRule`), `@function` (`FunctionRule`, call-site evaluation wired in layout — see CSS-SPECS.md).
 - ✅ Cascade wiring for `@layer` (layer priority in `layer_pri`)/`@scope` (`node_is_in_scope` + `to (<limit>)`)/`@container` (`apply_container_rules`) — all applied in `compute_style`/`box_tree.rs`. Nested `@media`/`@supports`/`@layer`/`@container`/`@scope` inside another conditional-group at-rule body now parse too (bubble to stylesheet-level, flat model, done 2026-07-15).
 - ⬜ Namespace prefixes.
-- ~299 tests.
+- ~304 tests.
 
 ### lumen-encoding (`crates/engine/encoding`)
 - ✅ Decoders: Windows-1251, KOI8-R, CP866, UTF-16 LE/BE (surrogates), UTF-8; BOM strip; `from_label` (WHATWG aliases).
@@ -73,7 +73,7 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 - ✅ Positioned: relative, absolute/fixed (out-of-flow + containing-block threading); `position: sticky` partial (offsets computed, scroll wiring shell-side).
 - ✅ SVG layout pass (viewBox, rect/circle/ellipse/line/path, `<use>` with cycle detection); `<text>` with `text-anchor`/`dominant-baseline` (presentation attribute **and** CSS property — CSS overrides the attribute and inherits from `<g>`); vertical writing modes (`vertical-rl/lr`).
 - ✅ Replaced: `<img>` (picture/srcset picker), `<iframe>` placeholder.
-- ✅ Cascade: specificity + `!important`, RTL selector matching, all CSS3 structural + L4 form/UI pseudo, `:has()`, `::before/::after` (string content), `::first-line/::first-letter` (drop-cap float), `initial-letter` (size/sink drop cap, Phase 0).
+- ✅ Cascade: specificity + `!important`, RTL selector matching, all CSS3 structural + L4 form/UI pseudo, `:has()`, `:state()` (custom-state, matches `data-lumen-state-<name>` sentinel attr), `::before/::after` (string content), `::first-line/::first-letter` (drop-cap float), `initial-letter` (size/sink drop cap, Phase 0).
 - ✅ Values: `calc/min/max/clamp` + math fns, `var()`, `@property` registration, viewport units, intrinsic sizing (`min/max/fit-content`); `@function` custom-function calls (`--name(<args>)`, positional args + defaults, local decls, `result:` — direct calls and calls reached through a custom-property chain both resolve; `returns` typing deferred).
 - ✅ Forced Colors Mode (CSS Color Adjust L1 §3): a11y-panel preference forces the system palette element-aware (LinkText/ButtonText/GrayText/Field), clears shadows, drops non-`url()` background images, honours `forced-color-adjust: auto|none|preserve-parent-color`; drives `@media (forced-colors: active)`. JS `matchMedia` shim not yet wired.
 - ✅ Animations/transitions scheduling (`@keyframes` interpolation, timing functions, transform/gradient/filter interpolation; `background:<color>` shorthand in keyframes); `content-visibility: auto` skip; Shadow DOM flat-tree integration.
