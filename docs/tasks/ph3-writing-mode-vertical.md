@@ -75,7 +75,7 @@ ROADMAP помечает PARTIAL «дошить Phase 2 vertical inline flow». 
 - Тест `draw_text_sideways_rotates_ink_bbox` (`cpu_raster.rs`): ink bbox для
   `Sideways` выше, чем шире (обратный аспект горизонтального рендера).
 
-**Остаток:** Срез 2 (femtovg — ныне fallback-бэкенд) + новый пункт, не
+**Остаток на конец Среза 1:** Срез 2 (femtovg — ныне fallback-бэкенд) + новый пункт, не
 учтённый в исходном брифе (файл писался 2026-07-05, до ADR-017 2026-07-13,
 когда wgpu стал дефолтным бэкендом): `crates/engine/paint/src/renderer.rs`
 (wgpu, live default) **тоже** игнорирует `text_orientation`
@@ -84,10 +84,35 @@ ROADMAP помечает PARTIAL «дошить Phase 2 vertical inline flow». 
 Срез 3 (mixed/upright различение), Срез 4 (BUG-264 реордер, опц.), Срез 5
 (graphic-тест) — не начаты.
 
+## Progress (2026-07-15) — Срез 2 (wgpu renderer) DONE
+
+`crates/engine/paint/src/renderer.rs`:
+- `DrawText`-обработчик читает `text_orientation` (было `_`); для
+  `Some(Sideways | Mixed)` генерирует глиф-квады через `push_text_glyphs` в
+  локальном origin `(0, 0)` (вместо `dest_rect`), затем применяет новую
+  `rotate_text_vertices_cw` к сгенерированным `TextVertex`: `(x, y) ->
+  (-y + dest.x, x + dest.y)` — та же формула, что и `tiny_skia::Transform::
+  from_row(0, 1, -1, 0, rect.x, rect.y)` в CPU-варианте (Срез 1), портированная
+  на прямое умножение вершин вместо композита пиксельного слоя. CSS-transform
+  (`transform_stack`) применяется поверх, как и раньше.
+- `Upright` и `None` не тронуты (текущий горизонтальный путь).
+- `Mixed` пока = `Sideways` (весь run повёрнут) — per-glyph CJK/латиница
+  остаётся Срезом 3, как и в Срезе 1.
+- Тест `rotate_text_vertices_cw_maps_horizontal_run_into_vertical_column`
+  (`renderer.rs`, требует `--features backend-wgpu`): широкий-невысокий квад
+  в локальных координатах после поворота становится узким-высоким в целевых —
+  геометрическая проверка формулы поворота без реального GPU-рендера.
+- femtovg (fallback-бэкенд) по-прежнему игнорирует `text_orientation` —
+  не в скоупе (см. `## Срезы` выше, Срез 2 приоритезирован на wgpu как
+  live default).
+
+**Остаток:** Срез 3 (mixed/upright различение), Срез 4 (BUG-264 реордер,
+опц.), Срез 5 (graphic-тест) — не начаты.
+
 ## Definition of done
 
 - [x] Глифы реально повёрнуты/upright в CPU-рендерере (срез 1)
-- [ ] Глифы реально повёрнуты/upright в femtovg-окне (срез 2)
+- [x] Глифы реально повёрнуты/upright в wgpu-рендерере — live default бэкенд, ADR-017 (срез 2; femtovg fallback остаётся ⬜, вне скоупа)
 - [ ] `mixed`/`upright`/`sideways` дают разный визуальный результат (срез 3)
 - [ ] BUG-264 (layout-часть) закрыт, `#[allow(items_after_test_module)]` снят (срез 4, опц.)
 - [ ] `cargo clippy -p lumen-paint --all-targets -- -D warnings` и `-p lumen-layout` чистые
