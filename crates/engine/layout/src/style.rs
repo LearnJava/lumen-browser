@@ -3718,10 +3718,13 @@ pub struct ContainerContext {
 /// (`em`, `%`, viewport/container units) still require the serialized form to
 /// match textually — resolving them needs font-size/viewport context that
 /// `ContainerContext` doesn't carry.
+/// Boolean form (`style(--prop)` / `style(prop)` without a value) is true when the
+/// container has any value for that property — for custom properties this checks
+/// `custom_props`, for standard properties `style_props` (a standard property never
+/// computes to the custom-property-only guaranteed-invalid value, so in practice
+/// this is true whenever the container's computed style was resolved for it).
 /// Phase 0 limitations:
 /// - Only a single declaration inside `style()` (no comma-separated list).
-/// - Boolean form (`style(--prop)` without a value) still only recognizes custom
-///   properties; boolean form on a standard property name returns false.
 /// - `state()` container queries are not supported.
 ///
 /// Unknown features → false (safe fallback).
@@ -3746,13 +3749,19 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
     if s_lower.starts_with("style(") && s.ends_with(')') {
         // Extract content between `style(` and the final `)`.
         let inner = &s[6..s.len()-1].trim();
-        // Boolean form: `style(--prop)`
+        // Boolean form: `style(--prop)` or `style(prop)`
         if !inner.contains(':') {
             let name = inner.trim();
             if name.starts_with("--") {
                 return resolve_container_custom_prop(ctx, name).is_some_and(|v| !v.trim().is_empty());
             }
-            return false;
+            // Standard property: true if the container's computed style has
+            // any value for it (a standard property never computes to the
+            // custom-property-only guaranteed-invalid value).
+            return ctx
+                .style_props
+                .get(&name.to_ascii_lowercase())
+                .is_some_and(|v| !v.trim().is_empty());
         }
         // Declaration form: `style(--prop: value)` or `style(prop: value)`
         if let Some((name, value)) = inner.split_once(':') {

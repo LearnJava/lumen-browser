@@ -7439,9 +7439,14 @@ mod tests {
     }
 
     #[test]
-    fn style_query_non_custom_property_boolean_form_returns_false() {
-        // Boolean `style(prop)` form is only recognized for custom properties.
+    fn style_query_non_custom_property_boolean_form_true_when_set() {
         let ctx = style_ctx_with_style_props(&[], &[("display", "flex")]);
+        assert!(crate::evaluate_container_condition("style(display)", &ctx));
+    }
+
+    #[test]
+    fn style_query_non_custom_property_boolean_form_false_when_unset() {
+        let ctx = style_ctx_with_style_props(&[], &[]);
         assert!(!crate::evaluate_container_condition("style(display)", &ctx));
     }
 
