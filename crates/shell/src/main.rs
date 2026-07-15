@@ -80,7 +80,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
-use lumen_core::ext::{DisplayColorProfile, EventSink, HyphenationProvider, NullHyphenationProvider, SuspendedHeap};
+use lumen_core::ext::{DisplayColorProfile, EventSink, HyphenationProvider, NullHyphenationProvider, SpellChecker as _, SuspendedHeap};
 use lumen_core::geom::{Point, Rect, Size};
 use lumen_core::ColorSpace;
 use lumen_encoding::KnuthLiangHyphenation;
@@ -940,9 +940,20 @@ fn run_window_mode(
         a11y_panel: panels::a11y_panel::A11yPanel::new(),
         platform_bridge: lumen_a11y::platform::platform_bridge(),
         print_panel: panels::print_panel::PrintPanel::new(),
-        settings_store: lumen_storage::BrowserSettings::open_in_memory()
-            .expect("settings in-memory"),
+        settings_store: {
+            let path = adblock::browser_data_dir().join("settings.db");
+            lumen_storage::BrowserSettings::open(&path).unwrap_or_else(|e| {
+                eprintln!(
+                    "settings: cannot open {} ({e}); using in-memory store",
+                    path.display()
+                );
+                lumen_storage::BrowserSettings::open_in_memory()
+                    .expect("in-memory settings always opens")
+            })
+        },
         settings_panel: panels::settings_panel::SettingsPanel::new(),
+        settings_hover: None,
+        adblock_store: std::sync::Arc::clone(&adblock_store),
         shortcuts_panel: {
             let ks = lumen_storage::KeyboardShortcuts::open_in_memory()
                 .expect("shortcuts in-memory");
@@ -7271,16 +7282,32 @@ struct Lumen {
     print_panel: panels::print_panel::PrintPanel,
     /// Persistent browser settings store (task D-7).
     ///
-    /// Backed by SQLite (in-memory for the session). Stores homepage, search
-    /// engine ID, shields, fingerprint mode, DoH, font size, theme, and
-    /// download path. Read on panel open; written when panel closes.
+    /// Backed by SQLite at `<exe_dir>/data/settings.db` (survives restarts;
+    /// falls back to an in-memory store if the file cannot be opened). Stores
+    /// homepage, search engine ID, shields, fingerprint mode, DoH, font size,
+    /// theme, download path, tab layout, and panel layout. Read on panel open;
+    /// written when panel closes.
     settings_store: lumen_storage::BrowserSettings,
     /// Settings page overlay state (task D-7, `about:settings`).
     ///
-    /// `Ctrl+,` (or navigating to `about:settings`) toggles a centred
-    /// 640×480 overlay with four tabbed sections: General, Privacy,
-    /// Appearance, Downloads.
+    /// `Ctrl+,`, the settings gear button in the tab strip, or navigating to
+    /// `about:settings` toggles a centred overlay with seven tabbed sections:
+    /// General, Privacy, Appearance, Downloads, Network, Adblock, Language.
+    /// Opened/closed via [`Lumen::open_settings_panel`] /
+    /// [`Lumen::close_settings_panel`], which also sync the sections backed by
+    /// stores other than `settings_store` (HTTP/3 → `fingerprint.toml`,
+    /// ad-block subscriptions → `AdblockStore`, spellcheck locale → `SPELL_DICTS`).
     settings_panel: panels::settings_panel::SettingsPanel,
+    /// Cursor position (window CSS px) while the settings panel is visible,
+    /// used to render a hover tooltip next to the pointer. `None` when the
+    /// panel is hidden or the cursor is outside it.
+    settings_hover: Option<(f32, f32)>,
+    /// Persistent ad-block filter-list store (`<exe_dir>/data/adblock/adblock.db`).
+    ///
+    /// Opened once at startup ([`config::init_adblock`]); shared with the
+    /// background refresh thread and with the settings panel's Adblock
+    /// section (enable/disable a subscription, trigger a manual refresh).
+    adblock_store: std::sync::Arc<lumen_storage::adblock::AdblockStore>,
     /// Keyboard shortcuts panel (Ctrl+Shift+/, §D-4).
     ///
     /// Shows all `KeyCommand` bindings with rebind-on-click support.
@@ -11176,7 +11203,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.hovered_tab_idx = if y_css < tabs::strip::TAB_BAR_HEIGHT {
                         let tab_area_w = win_w
                             - tabs::archive::ARCHIVE_BTN_W
-                            - tabs::strip::LAYOUT_BTN_W;
+                            - tabs::strip::LAYOUT_BTN_W
+                            - tabs::strip::SETTINGS_BTN_W;
                         match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
                             tabs::strip::TabHit::Tab(idx) => Some(idx),
                             _ => None,
@@ -11184,6 +11212,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     } else {
                         None
                     };
+                }
+                // Settings panel: update hover position for tooltip rendering.
+                if self.settings_panel.visible {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    self.settings_hover = Some((
+                        (position.x as f32) / dpr,
+                        (position.y as f32) / dpr,
+                    ));
+                    self.request_redraw();
                 }
                 // CC-4: update tab context-menu hover highlight.
                 if self.tab_context_menu.is_open() {
@@ -11238,6 +11279,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             WindowEvent::CursorLeft { .. } => {
                 self.cursor_position = None;
                 self.hovered_tab_idx = None;
+                self.settings_hover = None;
                 self.resize_active = None; // Clear resize when cursor leaves window
                 // Clear hover state when cursor leaves the window.
                 if self.hovered_nid.is_some() {
@@ -11287,7 +11329,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     if state == ElementState::Pressed && !self.focus.active {
                         let tab_area_w = self.viewport_width_css()
                             - tabs::archive::ARCHIVE_BTN_W
-                            - tabs::strip::LAYOUT_BTN_W;
+                            - tabs::strip::LAYOUT_BTN_W
+                            - tabs::strip::SETTINGS_BTN_W;
                         if let tabs::strip::TabHit::Tab(idx) =
                             tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w)
                         {
@@ -11577,9 +11620,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             self.request_redraw();
                             return;
                         }
-                        // Tab area: pass effective width (excluding archive + layout buttons).
-                        let tab_area_w =
-                            win_w - tabs::archive::ARCHIVE_BTN_W - tabs::strip::LAYOUT_BTN_W;
+                        // Settings gear button: between tabs and layout toggle.
+                        let settings_btn_x = layout_btn_x - tabs::strip::SETTINGS_BTN_W;
+                        if tabs::strip::hit_test_settings_btn(x_css, y_css, settings_btn_x) {
+                            if self.settings_panel.visible {
+                                self.close_settings_panel();
+                            } else {
+                                self.open_settings_panel();
+                            }
+                            self.request_redraw();
+                            return;
+                        }
+                        // Tab area: pass effective width (excluding archive + layout + settings buttons).
+                        let tab_area_w = win_w
+                            - tabs::archive::ARCHIVE_BTN_W
+                            - tabs::strip::LAYOUT_BTN_W
+                            - tabs::strip::SETTINGS_BTN_W;
                         match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
                             tabs::strip::TabHit::Tab(idx) => {
                                 // Record a potential drag; switch tab only if no drag occurs
@@ -12055,25 +12111,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         );
                         match hit {
                             SettingsHit::Close => {
-                                let draft = self.settings_panel.apply_draft();
-                                // Apply theme & accent from draft when panel closes.
-                                self.shell_theme =
-                                    panels::themes::ShellTheme::parse(&draft.theme);
-                                // Mirror explicit dark/light lock to dark_mode so that
-                                // @media prefers-color-scheme reflects the user choice.
-                                // For System theme, is_dark(self.dark_mode) = self.dark_mode
-                                // (no change); for Dark/Light it overrides.
-                                let new_dark = self.shell_theme.is_dark(self.dark_mode);
-                                if new_dark != self.dark_mode {
-                                    self.dark_mode = new_dark;
-                                    // ADR-016 M2.2b-4: an explicit dark/light lock is
-                                    // async-safe like the OS theme flip — a whole-page
-                                    // restyle with no synchronous geometry read here
-                                    // (only chrome state follows), so route it off-thread.
-                                    self.relayout_chrome();
-                                }
-                                let _ = self.settings_store.apply_snapshot(&draft);
-                                self.settings_panel.visible = false;
+                                self.close_settings_panel();
                             }
                             SettingsHit::TabSelect(sec) => {
                                 self.settings_panel.section = sec;
@@ -12122,6 +12160,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 self.settings_panel.draft.font_size =
                                     (self.settings_panel.draft.font_size + 2.0).min(36.0);
                             }
+                            SettingsHit::SetTabLayout(mode) => {
+                                self.settings_panel.draft.tab_layout = mode;
+                            }
                             SettingsHit::FocusHomepage => {
                                 self.settings_panel.focused_input =
                                     Some(panels::settings_panel::SettingInput::Homepage);
@@ -12130,11 +12171,48 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 self.settings_panel.focused_input =
                                     Some(panels::settings_panel::SettingInput::DownloadPath);
                             }
+                            SettingsHit::ResetPanelLayout => {
+                                self.settings_panel.draft.panel_layout = String::new();
+                            }
+                            SettingsHit::ToggleHttp3 => {
+                                self.settings_panel.http3_draft = !self.settings_panel.http3_draft;
+                            }
+                            SettingsHit::ToggleSubscription(url) => {
+                                if let Some(sub) = self
+                                    .settings_panel
+                                    .adblock_subs
+                                    .iter()
+                                    .find(|s| s.url == url)
+                                {
+                                    let _ = self.adblock_store.set_subscription(
+                                        &sub.url, &sub.title, !sub.enabled,
+                                    );
+                                }
+                                self.settings_panel.adblock_subs =
+                                    self.adblock_store.list_subscriptions().unwrap_or_default();
+                                let count = adblock::load_and_install(&self.adblock_store);
+                                eprintln!("adblock: список переключён, фильтр обновлён ({count} правил)");
+                            }
+                            SettingsHit::RefreshAdblockNow => {
+                                let store = std::sync::Arc::clone(&self.adblock_store);
+                                let http = config::global().apply_http(lumen_network::HttpClient::new());
+                                std::thread::Builder::new()
+                                    .name("adblock-manual-refresh".to_owned())
+                                    .spawn(move || {
+                                        if adblock::refresh(&store, &http) {
+                                            let count = adblock::load_and_install(&store);
+                                            eprintln!(
+                                                "adblock: списки обновлены вручную, фильтр обновлён ({count} правил)"
+                                            );
+                                        } else {
+                                            eprintln!("adblock: обновление вручную — изменений нет");
+                                        }
+                                    })
+                                    .ok();
+                            }
                             SettingsHit::Inside => { /* swallow */ }
                             SettingsHit::Outside => {
-                                let draft = self.settings_panel.apply_draft();
-                                let _ = self.settings_store.apply_snapshot(&draft);
-                                self.settings_panel.visible = false;
+                                self.close_settings_panel();
                             }
                         }
                         self.request_redraw();
@@ -12522,7 +12600,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             let win_w = self.viewport_width_css();
                             let tab_area_w = win_w
                                 - tabs::archive::ARCHIVE_BTN_W
-                                - tabs::strip::LAYOUT_BTN_W;
+                                - tabs::strip::LAYOUT_BTN_W
+                                - tabs::strip::SETTINGS_BTN_W;
                             let release_x = self.cursor_position
                                 .map(|p| (p.x as f32) / dpr)
                                 .unwrap_or(drag.ghost_x);
@@ -12621,6 +12700,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     } else if lines < 0.0 {
                         self.read_later_panel.scroll_down(max_scroll);
                     }
+                    self.request_redraw();
+                    return;
+                }
+                // Settings panel intercepts the wheel while visible: scroll the
+                // active section's content rather than the page.
+                if self.settings_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    self.settings_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
                     self.request_redraw();
                     return;
                 }
@@ -13601,13 +13691,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut pp_cmds);
                 }
 
-                // Settings panel (task D-7): centred overlay, Ctrl+, or about:settings.
+                // Settings panel (task D-7): centred overlay, Ctrl+, gear button, or about:settings.
                 if self.settings_panel.visible {
                     let win_w = self.viewport_width_css();
                     let win_h = self.viewport_height_css();
                     let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
                     let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
                     panels::settings_panel::build_panel(&self.settings_panel, &mut overlay_buf, sp_x, sp_y, &pal);
+                    // Hover tooltip: immediate, no delay (matches the tab-strip pattern).
+                    if let Some((mx, my)) = self.settings_hover
+                        && let Some(text) = panels::settings_panel::tooltip_for(
+                            &self.settings_panel, mx, my, sp_x, sp_y,
+                        )
+                    {
+                        let mut tip_cmds = panels::settings_panel::build_tooltip(
+                            text, mx, my, win_w, win_h, &pal,
+                        );
+                        overlay_buf.append(&mut tip_cmds);
+                    }
                 }
 
                 // Keyboard shortcuts panel (§D-4): centred floating overlay.
@@ -13657,10 +13758,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // mode never reflows content (the strip shows page background).
                 if !self.focus.active {
                     let win_w = self.viewport_width_css();
-                    // Tab strip uses the area to the left of the layout toggle + archive buttons.
+                    // Tab strip uses the area to the left of the settings/layout/archive buttons.
                     let tab_area_w = win_w
                         - tabs::archive::ARCHIVE_BTN_W
-                        - tabs::strip::LAYOUT_BTN_W;
+                        - tabs::strip::LAYOUT_BTN_W
+                        - tabs::strip::SETTINGS_BTN_W;
                     let mut tab_cmds = tabs::strip::build_tab_bar(
                         &self.tab_strip,
                         tab_area_w,
@@ -13690,6 +13792,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     );
                     let mut layout_btn = tabs::strip::build_layout_toggle_btn(tab_layout, layout_btn_x);
                     overlay_buf.append(&mut layout_btn);
+                    // Settings gear button: between tabs and layout toggle.
+                    let settings_btn_x = layout_btn_x - tabs::strip::SETTINGS_BTN_W;
+                    let mut settings_btn = tabs::strip::build_settings_btn(
+                        settings_btn_x,
+                        self.settings_panel.visible,
+                    );
+                    overlay_buf.append(&mut settings_btn);
                     // Archive toolbar button (rightmost 36 px of tab bar).
                     let mut arch_btn = tabs::archive::build_button(
                         &self.archive,
@@ -15493,14 +15602,10 @@ impl Lumen {
                 self.request_redraw();
             }
             KeyCommand::ToggleSettings => {
-                let snap = self.settings_store.snapshot();
                 if self.settings_panel.visible {
-                    // Flush draft to store on close.
-                    let draft = self.settings_panel.apply_draft();
-                    let _ = self.settings_store.apply_snapshot(&draft);
-                    self.settings_panel.visible = false;
+                    self.close_settings_panel();
                 } else {
-                    self.settings_panel.open(snap);
+                    self.open_settings_panel();
                 }
                 self.request_redraw();
             }
@@ -16677,8 +16782,7 @@ impl Lumen {
 
         // `about:settings` — open the browser settings overlay (task D-7).
         if value.trim() == "about:settings" {
-            let snap = self.settings_store.snapshot();
-            self.settings_panel.open(snap);
+            self.open_settings_panel();
             self.request_redraw();
             return;
         }
@@ -17196,6 +17300,65 @@ impl Lumen {
         }
     }
 
+    /// Open the settings panel, populating every section — including the ones
+    /// backed by stores other than `settings_store` (HTTP/3 from the process-
+    /// global fingerprint profile, Tor status from the same, ad-block
+    /// subscriptions from `AdblockStore`, spellcheck locale from `SPELL_DICTS`).
+    fn open_settings_panel(&mut self) {
+        let snap = self.settings_store.snapshot();
+        self.settings_panel.open(snap);
+        self.settings_panel.set_http3(config::global().http3);
+        self.settings_panel.set_tor_active(
+            config::global().http_profile == lumen_network::HttpProfile::TorBrowser,
+        );
+        self.settings_panel
+            .set_adblock_subs(self.adblock_store.list_subscriptions().unwrap_or_default());
+        self.settings_panel
+            .set_spell_locale(SPELL_DICTS.get().map(|d| d.locale().to_owned()));
+    }
+
+    /// Close the settings panel, flushing the draft to every backing store.
+    ///
+    /// Centralised so all four close paths (× button, click outside, `Ctrl+,`
+    /// toggle, `Escape`) apply theme/dark-mode sync and the HTTP/3 rewrite
+    /// identically — previously only the × button synced `dark_mode`.
+    fn close_settings_panel(&mut self) {
+        let draft = self.settings_panel.apply_draft();
+        // Apply theme & accent from draft when panel closes.
+        self.shell_theme = panels::themes::ShellTheme::parse(&draft.theme);
+        // Mirror explicit dark/light lock to dark_mode so that
+        // @media prefers-color-scheme reflects the user choice. For System
+        // theme, is_dark(self.dark_mode) = self.dark_mode (no change); for
+        // Dark/Light it overrides.
+        let new_dark = self.shell_theme.is_dark(self.dark_mode);
+        if new_dark != self.dark_mode {
+            self.dark_mode = new_dark;
+            // ADR-016 M2.2b-4: an explicit dark/light lock is async-safe like
+            // the OS theme flip — a whole-page restyle with no synchronous
+            // geometry read here (only chrome state follows), so route it
+            // off-thread.
+            self.relayout_chrome();
+        }
+        // Live-sync the tab-strip layout so the Appearance section's toggle
+        // takes effect immediately rather than only after the next restart.
+        self.vertical_tabs.visible =
+            tabs::strip::TabLayout::from_str(&draft.tab_layout) == tabs::strip::TabLayout::Vertical;
+        let _ = self.settings_store.apply_snapshot(&draft);
+        // HTTP/3 lives in fingerprint.toml, loaded once into a process-global
+        // at startup — only rewrite the file (and note the restart) if the
+        // draft actually changed it.
+        if self.settings_panel.http3_draft != config::global().http3 {
+            match config::set_http3(self.settings_panel.http3_draft) {
+                Ok(()) => eprintln!(
+                    "settings: HTTP/3 изменён на {} — вступит в силу после перезапуска браузера",
+                    self.settings_panel.http3_draft
+                ),
+                Err(e) => eprintln!("settings: не удалось записать fingerprint.toml: {e}"),
+            }
+        }
+        self.settings_panel.visible = false;
+    }
+
     /// Handle keyboard input when the settings panel is visible.
     ///
     /// Printable chars go to the focused text input. Escape closes panel (flushing
@@ -17206,9 +17369,7 @@ impl Lumen {
         }
         match code {
             KeyCode::Escape if !key_event.repeat => {
-                let draft = self.settings_panel.apply_draft();
-                let _ = self.settings_store.apply_snapshot(&draft);
-                self.settings_panel.visible = false;
+                self.close_settings_panel();
                 self.request_redraw();
                 true
             }

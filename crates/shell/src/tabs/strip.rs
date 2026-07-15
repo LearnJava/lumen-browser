@@ -32,6 +32,11 @@ const DROP_INDICATOR_W: f32 = 3.0;
 /// archive button.
 pub const LAYOUT_BTN_W: f32 = 28.0;
 
+/// Width of the settings gear button in CSS px.
+/// Rendered between the tabs and the layout-toggle button (opens
+/// `about:settings`, mirrors [`LAYOUT_BTN_W`]'s geometry).
+pub const SETTINGS_BTN_W: f32 = 28.0;
+
 /// Side length of the per-tab ad-block checkbox square in CSS px.
 /// Rendered at the tab's left edge, before the title (away from the × button so
 /// the user does not hit close by mistake).
@@ -617,6 +622,53 @@ pub fn build_layout_toggle_btn(tab_layout: TabLayout, btn_x: f32) -> DisplayList
         DisplayCommand::DrawText {
             rect: Rect::new(icon_x, icon_y, ICON_SZ, ICON_SZ * 1.2),
             text: "\u{2630}".to_owned(), // ☰ trigram for heaven / hamburger
+            font_size: ICON_SZ,
+            color: icon_color,
+            font_family: Vec::new(),
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            highlight_name: None,
+            text_orientation: None,
+        },
+    ]
+}
+
+/// Returns `true` if `(x, y)` falls inside the settings gear button.
+///
+/// The button is `SETTINGS_BTN_W` wide, positioned at `btn_x..btn_x + SETTINGS_BTN_W`
+/// in the tab bar row (`y ∈ 0..TAB_BAR_HEIGHT`). `btn_x` is typically
+/// `win_w − archive_btn_w − LAYOUT_BTN_W − SETTINGS_BTN_W`.
+pub fn hit_test_settings_btn(x: f32, y: f32, btn_x: f32) -> bool {
+    (btn_x..btn_x + SETTINGS_BTN_W).contains(&x) && (0.0..TAB_BAR_HEIGHT).contains(&y)
+}
+
+/// Build a display list for the settings gear button (opens `about:settings`).
+///
+/// `btn_x` — CSS-px x coordinate of the button's left edge (positioned between
+/// the tab strip and the layout-toggle button). `active` lights the background
+/// while the settings page is open, mirroring the layout button's highlight.
+pub fn build_settings_btn(btn_x: f32, active: bool) -> DisplayList {
+    let bg = if active {
+        Color { r: 30, g: 60, b: 100, a: 255 }
+    } else {
+        BAR_BG
+    };
+    let icon_color = Color { r: 160, g: 160, b: 180, a: 255 };
+    const ICON_SZ: f32 = 12.0;
+    let icon_x = btn_x + (SETTINGS_BTN_W - ICON_SZ) * 0.5;
+    let icon_y = (TAB_BAR_HEIGHT - ICON_SZ * 1.2) * 0.5;
+    vec![
+        DisplayCommand::FillRect {
+            rect: Rect::new(btn_x, 0.0, SETTINGS_BTN_W, TAB_BAR_HEIGHT),
+            color: bg,
+        },
+        DisplayCommand::DrawText {
+            rect: Rect::new(icon_x, icon_y, ICON_SZ, ICON_SZ * 1.2),
+            text: "\u{2699}".to_owned(), // ⚙ gear
             font_size: ICON_SZ,
             color: icon_color,
             font_family: Vec::new(),
@@ -1747,5 +1799,28 @@ mod tests {
         let dl = build_layout_toggle_btn(TabLayout::Horizontal, 700.0);
         let has_icon = dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { .. }));
         assert!(has_icon, "toggle button must emit an icon glyph");
+    }
+
+    // ── Settings gear button ──────────────────────────────────────────────────
+
+    #[test]
+    fn settings_btn_hit_inside_button() {
+        let btn_x = 470.0_f32;
+        assert!(hit_test_settings_btn(480.0, 18.0, btn_x));
+    }
+
+    #[test]
+    fn settings_btn_hit_outside_button() {
+        let btn_x = 470.0_f32;
+        assert!(!hit_test_settings_btn(469.0, 18.0, btn_x));
+        assert!(!hit_test_settings_btn(btn_x + SETTINGS_BTN_W + 1.0, 18.0, btn_x));
+        assert!(!hit_test_settings_btn(480.0, TAB_BAR_HEIGHT + 1.0, btn_x));
+    }
+
+    #[test]
+    fn build_settings_btn_emits_icon_text() {
+        let dl = build_settings_btn(700.0, false);
+        let has_icon = dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { .. }));
+        assert!(has_icon, "settings button must emit an icon glyph");
     }
 }
