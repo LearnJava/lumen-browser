@@ -249,6 +249,7 @@ TESTS: list[tuple[str, str, float, str]] = [
 # Добавлять ТОЛЬКО Phase 2+ фичи с OPEN BUG-NNN и diff-изображением,
 # подтверждающим что расхождение локализовано в области нереализованной фичи.
 KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
+    '14': ('BUG-288', 1.63),   # overflow: the overflow-x:hidden/overflow-y:visible and overflow-x:visible/overflow-y:hidden columns coerce the visible axis to `auto` (BUG-020, CSS Overflow L3 §2.1) — correctly clipped, but `auto` is a scrollable overflow value, so `emit_scrollbars` (BUG-220, landed after BUG-020) now paints a static scrollbar there. Edge uses overlay scrollbars, invisible in a static headless screenshot, so it shows no bar — same class as TEST-83. No text on this page, so the whole 1.63% is this one divergence; not fixable without suppressing scrollbar rendering that is otherwise correct
     # --- BUG-243 dynamic-SVG suite (JS-built SVG, gdigrab): tests are CORRECT; these
     #     fail until the SVG-engine gaps they uncovered are fixed. Do NOT edit the tests
     #     (user rule) — fix the engine, then delete these entries. ---
