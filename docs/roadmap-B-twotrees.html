@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-15",
  "counts": {
-  "open": 27,
+  "open": 28,
   "fixed": 231,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 258,
+ "total_bugs": 259,
  "phases": [
   {
    "id": "P0",
@@ -840,7 +840,7 @@
      "title": "Опциональный AI-модуль (lumen-ai, семантический поиск/RAG)",
      "status": "active",
      "size": "XL",
-     "note": "Step 1 влит 2026-07-15 (branch p1-ph3-ai-module): крейт lumen-ai (feature-flagged, не в default), AiBackend.embed()/summarise() default-impl, ADR-019 (Ollama HTTP первым, candle отложен). Step 2 влит 2026-07-15 (branch p1-ai-embedding-backend): EmbeddingBackend trait + OllamaEmbeddingBackend (crates/ai/src/embedding.rs, feature `ollama`), AiBackend::embed делегирует. Step 3 влит 2026-07-15 (branch p1-ai-semantic-search): SemanticIndex — in-memory linear-scan заглушка HNSW (crates/knowledge/src/semantic.rs) + DefaultKnowledgeStore::index_semantic/search_semantic (не в трейте KnowledgeStore). Step 4 влит 2026-07-15 (branch p1-ph3-ai-summarisation): GenerationBackend trait + OllamaGenerationBackend (crates/ai/src/generation.rs, feature `ollama`, POST /api/generate), AiBackend::summarise/query делегируют; общий HTTP-парсинг вынесен в crates/ai/src/http.rs (переиспользуется embedding.rs). Реальный бэкенд в Lumen::ai_backend/AiPanel не подключён — это Step 5. Остаток — Step 5-7 по docs/tasks/ph3-ai-module.md: RAG, semantic bookmarks, omnibox @ai"
+     "note": "Step 1 влит 2026-07-15 (branch p1-ph3-ai-module): крейт lumen-ai (feature-flagged, не в default), AiBackend.embed()/summarise() default-impl, ADR-019 (Ollama HTTP первым, candle отложен). Step 2 влит 2026-07-15 (branch p1-ai-embedding-backend): EmbeddingBackend trait + OllamaEmbeddingBackend (crates/ai/src/embedding.rs, feature `ollama`), AiBackend::embed делегирует. Step 3 влит 2026-07-15 (branch p1-ai-semantic-search): SemanticIndex — in-memory linear-scan заглушка HNSW (crates/knowledge/src/semantic.rs) + DefaultKnowledgeStore::index_semantic/search_semantic (не в трейте KnowledgeStore). Step 4 влит 2026-07-15 (branch p1-ph3-ai-summarisation): GenerationBackend trait + OllamaGenerationBackend (crates/ai/src/generation.rs, feature `ollama`, POST /api/generate), AiBackend::summarise/query делегируют; общий HTTP-парсинг вынесен в crates/ai/src/http.rs (переиспользуется embedding.rs). Step 5 влит 2026-07-15 (branch p1-ph3-ai-rag-engine): RagEngine::answer (crates/ai/src/rag.rs) — embed prompt → DefaultKnowledgeStore::search_semantic → generate(prompt, context); lumen-ai получил зависимость на lumen-knowledge (без цикла). В AiPanel/Lumen::ai_backend не подключён: в shell нигде не создаётся DefaultKnowledgeStore и нечем населять semantic-индекс реальной историей — подключение отложено до Step 6 (или его расширения). Остаток — Step 6-7 по docs/tasks/ph3-ai-module.md: semantic bookmarks, omnibox @ai"
     },
     {
      "id": "P3-ws",
@@ -3275,6 +3275,13 @@
    "component": "shell (`main.rs`, `maybe_expand_cv_relevant`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-287": {
+   "status": "open",
+   "title": "Полный `graphic_tests/run.py --continue-on-fail` на чистом `main` (после мержа `p3-cascade-perf`) даёт 43 FAIL (13 из них — регрессия хуже KNOWN_DEBTORS baselin…",
+   "component": "неизвестен (layout/paint?)",
+   "date": null,
+   "debtor": true
   }
  },
  "unlinked": {
@@ -3626,6 +3633,9 @@
   "test/snapshot": [
    "BUG-118",
    "BUG-149"
+  ],
+  "неизвестен (layout/paint?)": [
+   "BUG-287"
   ]
  }
 }
