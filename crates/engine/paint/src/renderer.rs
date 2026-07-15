@@ -33,7 +33,7 @@ use lumen_font::{
     SystemFontIndex, maybe_decode_font,
 };
 use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
-use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent, style::TextOrientation};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -5854,7 +5854,7 @@ impl Renderer {
                     font_palette: _,
                     tab_size,
                     highlight_name: _,
-                    text_orientation: _,
+                    text_orientation,
                 } => {
                     let primary_face_id = text_face_iter.next().unwrap_or(0);
                     if lazy_faces
@@ -5870,9 +5870,27 @@ impl Renderer {
                     }
                     let alpha = 1.0_f32;
                     let v_start = text_vertices.len() as u32;
+                    let dest_rect = translate_rect(*rect, dx, dy);
+                    // Ph3 writing-mode vertical, Срез 2 (wgpu — live default
+                    // backend, ADR-017): `Sideways`/`Mixed` rotate the whole
+                    // run 90° CW, mirroring the CPU rasterizer
+                    // (`rasterize_text_rotated`). Glyphs are laid out
+                    // horizontally at the local origin, then `rotate_text_vertices_cw`
+                    // maps them onto `dest_rect`. `Upright`/`None` keep the
+                    // existing horizontal path (per-glyph CJK-vs-Latin split
+                    // for `Mixed` is Срез 3).
+                    let rotated = matches!(
+                        text_orientation,
+                        Some(TextOrientation::Sideways | TextOrientation::Mixed)
+                    );
+                    let glyph_rect = if rotated {
+                        Rect::new(0.0, 0.0, dest_rect.height, dest_rect.width)
+                    } else {
+                        dest_rect
+                    };
                     push_text_glyphs(
                         &mut text_vertices,
-                        translate_rect(*rect, dx, dy),
+                        glyph_rect,
                         text,
                         *font_size,
                         apply_alpha_to_color(color_to_array(color), alpha),
@@ -5883,6 +5901,9 @@ impl Renderer {
                         font_variation_axes,
                         *tab_size,
                     );
+                    if rotated {
+                        rotate_text_vertices_cw(&mut text_vertices[v_start as usize..], dest_rect);
+                    }
                     if let Some(m) = transform_stack.last() {
                         apply_affine_to_verts(&mut text_vertices[v_start as usize..], m);
                     }
@@ -9683,6 +9704,20 @@ fn push_text_glyphs(
     }
 }
 
+/// Ph3 writing-mode vertical, Срез 2 — rotates a glyph run's vertices 90° CW
+/// around the local origin and translates the result onto `dest`. Mirrors the
+/// CPU rasterizer's `rasterize_text_rotated` transform
+/// (`tiny_skia::Transform::from_row(0, 1, -1, 0, dest.x, dest.y)`): a point
+/// laid out horizontally at `(x, y)` maps to `(-y + dest.x, x + dest.y)`.
+/// Callers must have generated `verts` with `push_text_glyphs` at the local
+/// origin `(0, 0)` — not at `dest`.
+fn rotate_text_vertices_cw(verts: &mut [TextVertex], dest: Rect) {
+    for v in verts {
+        let (x, y) = (v.pos[0], v.pos[1]);
+        v.pos = [-y + dest.x, x + dest.y];
+    }
+}
+
 /// CSS Fonts L4 §5.3 — for each character cascade. Сначала пробуем primary
 /// face; если `cmap.glyph_index` возвращает None или Some(0) (= .notdef) —
 /// обходим остальные loaded faces. Если ни у кого нет — возвращаем
@@ -10130,6 +10165,31 @@ mod tests {
         assert_eq!(size_bin_for(1.0), 8);
         assert_eq!(size_bin_for(7.0), 8);
         assert_eq!(size_bin_for(0.5), 8);
+    }
+
+    #[test]
+    fn rotate_text_vertices_cw_maps_horizontal_run_into_vertical_column() {
+        // Ph3 writing-mode vertical, Срез 2: a horizontal run laid out at the
+        // local origin (0,0)..(40,10) — a wide, short glyph quad — must land
+        // as a tall, narrow quad once rotated 90° CW onto dest (100, 50).
+        let dest = Rect::new(100.0, 50.0, 10.0, 40.0);
+        let mut verts = [
+            TextVertex { pos: [0.0, 0.0], z: 0.0, uv: [0.0, 0.0], color: [0.0; 4] },
+            TextVertex { pos: [40.0, 0.0], z: 0.0, uv: [1.0, 0.0], color: [0.0; 4] },
+            TextVertex { pos: [40.0, 10.0], z: 0.0, uv: [1.0, 1.0], color: [0.0; 4] },
+            TextVertex { pos: [0.0, 10.0], z: 0.0, uv: [0.0, 1.0], color: [0.0; 4] },
+        ];
+        rotate_text_vertices_cw(&mut verts, dest);
+        // (0,0) -> (-0 + 100, 0 + 50) = (100, 50): local origin lands on dest origin.
+        assert_eq!(verts[0].pos, [100.0, 50.0]);
+        // (40,0) -> (0 + 100, 40 + 50) = (100, 90): local width becomes vertical extent.
+        assert_eq!(verts[1].pos, [100.0, 90.0]);
+        // (40,10) -> (-10 + 100, 40 + 50) = (90, 90).
+        assert_eq!(verts[2].pos, [90.0, 90.0]);
+        // (0,10) -> (-10 + 100, 0 + 50) = (90, 50): local height becomes horizontal extent.
+        assert_eq!(verts[3].pos, [90.0, 50.0]);
+        // UV/color untouched — only screen position rotates.
+        assert_eq!(verts[0].uv, [0.0, 0.0]);
     }
 
     #[test]
