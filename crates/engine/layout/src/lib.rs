@@ -7592,6 +7592,79 @@ mod tests {
         assert!(crate::evaluate_container_condition("style(--gap: 8px)", &ctx));
     }
 
+    // ── CSS Container Style Queries — nested and/or/not inside a single
+    // style() call (CSS Containment L3 §5.2 <style-condition> grammar) ────
+
+    #[test]
+    fn style_query_nested_and_both_true() {
+        let ctx = style_ctx(&[("--a", "1"), ("--b", "2")]);
+        assert!(crate::evaluate_container_condition("style((--a: 1) and (--b: 2))", &ctx));
+    }
+
+    #[test]
+    fn style_query_nested_and_one_false() {
+        let ctx = style_ctx(&[("--a", "1"), ("--b", "3")]);
+        assert!(!crate::evaluate_container_condition("style((--a: 1) and (--b: 2))", &ctx));
+    }
+
+    #[test]
+    fn style_query_nested_or_one_true() {
+        let ctx = style_ctx(&[("--a", "9"), ("--b", "2")]);
+        assert!(crate::evaluate_container_condition("style((--a: 1) or (--b: 2))", &ctx));
+    }
+
+    #[test]
+    fn style_query_nested_or_both_false() {
+        let ctx = style_ctx(&[("--a", "9"), ("--b", "9")]);
+        assert!(!crate::evaluate_container_condition("style((--a: 1) or (--b: 2))", &ctx));
+    }
+
+    #[test]
+    fn style_query_nested_not() {
+        let ctx = style_ctx_with_style_props(&[], &[("display", "block")]);
+        assert!(crate::evaluate_container_condition("style(not (display: none))", &ctx));
+    }
+
+    #[test]
+    fn style_query_nested_not_false() {
+        let ctx = style_ctx_with_style_props(&[], &[("display", "none")]);
+        assert!(!crate::evaluate_container_condition("style(not (display: none))", &ctx));
+    }
+
+    #[test]
+    fn style_query_nested_and_chain_of_three() {
+        let ctx = style_ctx(&[("--a", "1"), ("--b", "2"), ("--c", "3")]);
+        assert!(crate::evaluate_container_condition(
+            "style((--a: 1) and (--b: 2) and (--c: 3))",
+            &ctx
+        ));
+    }
+
+    #[test]
+    fn style_query_nested_and_chain_of_three_last_false() {
+        let ctx = style_ctx(&[("--a", "1"), ("--b", "2"), ("--c", "9")]);
+        assert!(!crate::evaluate_container_condition(
+            "style((--a: 1) and (--b: 2) and (--c: 3))",
+            &ctx
+        ));
+    }
+
+    #[test]
+    fn style_query_nested_mixed_custom_and_standard() {
+        let ctx = style_ctx_with_style_props(&[("--theme", "dark")], &[("display", "flex")]);
+        assert!(crate::evaluate_container_condition(
+            "style((--theme: dark) and (display: flex))",
+            &ctx
+        ));
+    }
+
+    #[test]
+    fn style_query_single_feature_extra_grouping_paren() {
+        // A single <style-feature> wrapped in one redundant grouping paren layer.
+        let ctx = style_ctx(&[("--theme", "dark")]);
+        assert!(crate::evaluate_container_condition("style((--theme: dark))", &ctx));
+    }
+
     // ── CSS Container Queries L1 ──────────────────────────────────────────
 
     /// @container (min-width) — rule applies when container is wide enough.

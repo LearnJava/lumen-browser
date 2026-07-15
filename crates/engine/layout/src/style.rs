@@ -3731,9 +3731,15 @@ pub struct ContainerContext {
 /// `custom_props`, for standard properties `style_props` (a standard property never
 /// computes to the custom-property-only guaranteed-invalid value, so in practice
 /// this is true whenever the container's computed style was resolved for it).
+/// A single `style()` call may itself combine multiple property queries with
+/// `and`/`or`/`not`, each wrapped in its own parentheses — e.g.
+/// `style((--a: 1) and (--b: 2))` or `style(not (display: none))` — per the
+/// formal grammar (`<style-query> = <style-condition> | <style-feature>`,
+/// CSS Containment L3 §5.2); see `evaluate_style_query`.
 /// Phase 0 limitations:
-/// - Only a single declaration inside `style()` (no comma-separated list).
-/// - `state()` container queries are not supported.
+/// - `state()` container queries: not a Lumen gap — the CSS Containment L3
+///   spec itself removed/deferred state query features, so there is nothing
+///   to implement against.
 /// - `%` in a `style()` value always resolves against the container's own
 ///   width, regardless of which property is being queried (the honest
 ///   per-property percentage basis — e.g. `line-height`'s is font-size —
@@ -3760,38 +3766,8 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
     let s_lower = s.to_ascii_lowercase();
     if s_lower.starts_with("style(") && s.ends_with(')') {
         // Extract content between `style(` and the final `)`.
-        let inner = &s[6..s.len()-1].trim();
-        // Boolean form: `style(--prop)` or `style(prop)`
-        if !inner.contains(':') {
-            let name = inner.trim();
-            if name.starts_with("--") {
-                return resolve_container_custom_prop(ctx, name).is_some_and(|v| !v.trim().is_empty());
-            }
-            // Standard property: true if the container's computed style has
-            // any value for it (a standard property never computes to the
-            // custom-property-only guaranteed-invalid value).
-            return ctx
-                .style_props
-                .get(&name.to_ascii_lowercase())
-                .is_some_and(|v| !v.trim().is_empty());
-        }
-        // Declaration form: `style(--prop: value)` or `style(prop: value)`
-        if let Some((name, value)) = inner.split_once(':') {
-            let name = name.trim();
-            let want = normalize_style_value(value);
-            if name.starts_with("--") {
-                return resolve_container_custom_prop(ctx, name)
-                    .map(|v| normalize_style_value(&v))
-                    == Some(want);
-            }
-            // Standard property: compare against the container's own computed
-            // style (case-insensitive — CSS keywords are ASCII case-insensitive).
-            return ctx
-                .style_props
-                .get(&name.to_ascii_lowercase())
-                .is_some_and(|v| style_query_value_matches(v, &want, ctx));
-        }
-        return false;
+        let inner = s[6..s.len() - 1].trim();
+        return evaluate_style_query(inner, ctx);
     }
     // Feature: `(feature: value)`.
     let inner = s.strip_prefix('(').and_then(|x| x.strip_suffix(')'));
@@ -3817,6 +3793,77 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
         ("height", Some(v))     => ctx.height.is_some_and(|h| (h - v).abs() < 0.5),
         _ => false,
     }
+}
+
+/// Evaluates the content of a `style()` container query — CSS Containment L3
+/// §5.2. Per the formal grammar (`<style-query> = <style-condition> |
+/// <style-feature>`, `<style-condition> = not <style-in-parens> |
+/// <style-in-parens> [and <style-in-parens>]* | [or <style-in-parens>]*`,
+/// `<style-in-parens> = (<style-condition>) | (<style-feature>)`), a single
+/// `style()` call may combine multiple property queries with `and`/`or`/`not`,
+/// each wrapped in its own parentheses (e.g. `style((--a: 1) and (--b: 2))`,
+/// `style(not (display: none))`). `<style-feature>` itself always queries
+/// exactly one property — the grammar has no comma-separated multi-declaration
+/// form — handled by `evaluate_style_feature`.
+fn evaluate_style_query(s: &str, ctx: &ContainerContext) -> bool {
+    let s = s.trim();
+    if let Some(rest) = s.strip_prefix("not") {
+        let rest = rest.trim();
+        if rest.starts_with('(') {
+            return !evaluate_style_query(rest, ctx);
+        }
+    }
+    if let Some((lhs, rhs)) = split_top_level_logical(s, " and ") {
+        return evaluate_style_query(lhs, ctx) && evaluate_style_query(rhs, ctx);
+    }
+    if let Some((lhs, rhs)) = split_top_level_logical(s, " or ") {
+        return evaluate_style_query(lhs, ctx) || evaluate_style_query(rhs, ctx);
+    }
+    // `<style-in-parens>` grouping: strip one layer and recurse.
+    if let Some(inner) = s.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        return evaluate_style_query(inner, ctx);
+    }
+    // Leaf: a bare `<style-feature>` (boolean `prop` or declaration `prop: value`).
+    evaluate_style_feature(s, ctx)
+}
+
+/// Evaluates a single `<style-feature>` (CSS Containment L3 §5.2): the boolean
+/// form `prop` (true iff the container has any value for it) or the
+/// declaration form `prop: value` (true iff the container's own value matches,
+/// with the same custom-property/var()-expansion and standard-property
+/// canonicalization as `evaluate_container_condition`'s `style()` handling).
+fn evaluate_style_feature(feature: &str, ctx: &ContainerContext) -> bool {
+    let inner = feature.trim();
+    // Boolean form: `--prop` or `prop`.
+    if !inner.contains(':') {
+        let name = inner.trim();
+        if name.starts_with("--") {
+            return resolve_container_custom_prop(ctx, name).is_some_and(|v| !v.trim().is_empty());
+        }
+        // Standard property: true if the container's computed style has
+        // any value for it (a standard property never computes to the
+        // custom-property-only guaranteed-invalid value).
+        return ctx
+            .style_props
+            .get(&name.to_ascii_lowercase())
+            .is_some_and(|v| !v.trim().is_empty());
+    }
+    // Declaration form: `--prop: value` or `prop: value`.
+    if let Some((name, value)) = inner.split_once(':') {
+        let name = name.trim();
+        let want = normalize_style_value(value);
+        if name.starts_with("--") {
+            return resolve_container_custom_prop(ctx, name).map(|v| normalize_style_value(&v))
+                == Some(want);
+        }
+        // Standard property: compare against the container's own computed
+        // style (case-insensitive — CSS keywords are ASCII case-insensitive).
+        return ctx
+            .style_props
+            .get(&name.to_ascii_lowercase())
+            .is_some_and(|v| style_query_value_matches(v, &want, ctx));
+    }
+    false
 }
 
 /// Resolves a container's custom property for a `style()` query: looks up `name`
