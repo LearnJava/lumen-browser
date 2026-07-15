@@ -11,10 +11,13 @@
 ## Status
 
 In progress. Optional feature, disabled in the default bundle. Step 1 (crate
-skeleton, `AiBackend::embed`/`summarise`) and Step 2 (`EmbeddingBackend` +
-`OllamaEmbeddingBackend`) are merged — see `subsystems/ai.md` §Done. Step 3
-is blocked on a missing HNSW index in `lumen-knowledge` (mock/linear-scan
-interface first, per Step 0). Steps 4-7 not started.
+skeleton, `AiBackend::embed`/`summarise`), Step 2 (`EmbeddingBackend` +
+`OllamaEmbeddingBackend`) and Step 3 (`SemanticIndex` linear-scan +
+`DefaultKnowledgeStore::search_semantic`) are merged — see `subsystems/ai.md`
+§Done and `subsystems/knowledge.md`. Step 3 used the mock/linear-scan
+interface Step 0 allows (the referenced HNSW prerequisite doc still does not
+exist); a real ANN index is a drop-in replacement for `SemanticIndex` later.
+Steps 4-7 not started.
 
 ---
 

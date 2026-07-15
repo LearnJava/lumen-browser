@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-15",
  "counts": {
-  "open": 26,
+  "open": 27,
   "fixed": 231,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 257,
+ "total_bugs": 258,
  "phases": [
   {
    "id": "P0",
@@ -840,7 +840,7 @@
      "title": "Опциональный AI-модуль (lumen-ai, семантический поиск/RAG)",
      "status": "active",
      "size": "XL",
-     "note": "Step 1 влит 2026-07-15 (branch p1-ph3-ai-module): крейт lumen-ai (feature-flagged, не в default), AiBackend.embed()/summarise() default-impl, ADR-019 (Ollama HTTP первым, candle отложен). Step 2 влит 2026-07-15 (branch p1-ai-embedding-backend): EmbeddingBackend trait + OllamaEmbeddingBackend (crates/ai/src/embedding.rs, feature `ollama`), AiBackend::embed делегирует. Остаток — Step 3-7 по docs/tasks/ph3-ai-module.md: RAG, semantic bookmarks, omnibox @ai. Step 3 (semantic search) заблокирован отсутствующим HNSW-индексом в lumen-knowledge — план допускает mock-интерфейс на старте"
+     "note": "Step 1 влит 2026-07-15 (branch p1-ph3-ai-module): крейт lumen-ai (feature-flagged, не в default), AiBackend.embed()/summarise() default-impl, ADR-019 (Ollama HTTP первым, candle отложен). Step 2 влит 2026-07-15 (branch p1-ai-embedding-backend): EmbeddingBackend trait + OllamaEmbeddingBackend (crates/ai/src/embedding.rs, feature `ollama`), AiBackend::embed делегирует. Step 3 влит 2026-07-15 (branch p1-ai-semantic-search): SemanticIndex — in-memory linear-scan заглушка HNSW (crates/knowledge/src/semantic.rs) + DefaultKnowledgeStore::index_semantic/search_semantic (не в трейте KnowledgeStore). Остаток — Step 4-7 по docs/tasks/ph3-ai-module.md: суммаризация, RAG, semantic bookmarks, omnibox @ai"
     },
     {
      "id": "P3-ws",
@@ -3268,6 +3268,13 @@
    "component": "layout (`style.rs` cascade, `rule_index.rs`)",
    "date": "2026-07-15",
    "debtor": false
+  },
+  "BUG-286": {
+   "status": "open",
+   "title": "Первый скролл колесом на тяжёлой реальной странице (https://ria.ru) подвисает на ~1с (`[engine] relayout 1041.99ms` посреди скролла) — `content-visibility:auto`…",
+   "component": "shell (`main.rs`, `maybe_expand_cv_relevant`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3582,6 +3589,9 @@
    "BUG-068",
    "BUG-147",
    "BUG-148"
+  ],
+  "shell (`main.rs`, `maybe_expand_cv_relevant`)": [
+   "BUG-286"
   ],
   "shell (event loop) + js (таймер-шим)": [
    "BUG-271"

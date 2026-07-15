@@ -14,7 +14,9 @@
 //!
 //! Реализовано: §12.2 аннотации/заметки ([`notes`], своя FTS5-таблица),
 //! §12.3 read-later ([`read_later`], snapshot HTML + текст), §12.4 поиск
-//! по открытым вкладкам ([`open_tabs`], live-индекс без disk-persistence).
+//! по открытым вкладкам ([`open_tabs`], live-индекс без disk-persistence),
+//! §12.5 semantic search over history ([`semantic`], in-memory linear-scan
+//! placeholder for a real HNSW index — `docs/tasks/ph3-ai-module.md` Step 3).
 //! §12.1–12.4 объединены в [`DefaultKnowledgeStore`] через трейт
 //! [`lumen_core::ext::KnowledgeStore`] — единый фасад для shell и omnibox.
 
@@ -23,6 +25,7 @@ pub mod history;
 pub mod notes;
 pub mod open_tabs;
 pub mod read_later;
+pub mod semantic;
 pub mod store;
 
 pub use fts::{HistoryFts, SearchHit};
@@ -30,4 +33,5 @@ pub use history::HistoryWithFts;
 pub use notes::{Note, NoteSearchHit, Notes};
 pub use open_tabs::{OpenTabHit, OpenTabsIndex};
 pub use read_later::{ReadLater, ReadLaterEntry, ReadLaterSearchHit, ReadStatus};
+pub use semantic::{SemanticHit, SemanticIndex};
 pub use store::DefaultKnowledgeStore;
