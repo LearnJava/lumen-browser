@@ -486,30 +486,36 @@ pub struct FemtovgBackend {
     /// `release_layer` in `composite_blend_layer` — it is never GPU-sampled,
     /// only used as a render target and read back via `screenshot()`.
     blend_layer_stack: Vec<BlendLayerEntry>,
-    /// Overflow/resize-retirement queue for both `blend_layer_stack`'s own
-    /// images and `blend_result_pool` entries evicted on a size mismatch —
-    /// deleting an ImageId mid-frame is unsafe while queued draw commands
-    /// may still reference it, so retirement always waits for the next flush.
+    /// Overflow/resize-retirement queue for `blend_layer_stack`'s own images
+    /// and for `cpu_upload_pool` entries evicted on a size mismatch or a
+    /// failed `update_image` — deleting an ImageId mid-frame is unsafe while
+    /// queued draw commands may still reference it, so retirement always
+    /// waits for the next flush.
     blend_layer_pending_delete: Vec<femtovg::ImageId>,
-    /// BUG-272 (item 5): pool of reusable CPU-composited blend-result images.
-    /// `composite_blend_layer` used to `create_image` (fresh GPU upload) on
-    /// every Pop and queue it for after-flush deletion — a frame with several
-    /// simultaneous blend-mode layers accumulated one full-framebuffer upload
-    /// per layer, held alive until the frame's flush. Unlike `layer_pool`,
-    /// these images ARE GPU-sampled (`Paint::image`, same function) so pooled
-    /// slots use plain `PREMULTIPLIED` (as `create_image` did), not
-    /// `offscreen_layer_image_flags()` — `FLIP_Y` is a render-target-only
-    /// concern and would flip a directly-sampled image. Slots are refreshed
-    /// in place via `update_image` instead of being reallocated; this is safe
-    /// because `composite_blend_layer` always starts with `canvas.flush()`,
-    /// which executes any earlier blend layer's pending `fill_path` (and thus
-    /// its read of the pooled image) before this call overwrites the slot.
-    blend_result_pool: Vec<femtovg::ImageId>,
-    /// Device-pixel size `blend_result_pool` images were created for; a
+    /// BUG-272 (item 5, generalised in срез 4): pool of reusable
+    /// CPU-composited one-off upload images, shared by every render path that
+    /// re-uploads a full-framebuffer CPU pixel buffer once per Pop:
+    /// `composite_blend_layer`'s blend result, `composite_filter_layer`'s
+    /// colour-matrix re-upload, and `apply_backdrop_filters`'s filtered
+    /// backdrop. Each used to `create_image` (fresh GPU upload) on every Pop
+    /// and queue it for after-flush deletion — a frame with several such
+    /// layers accumulated one full-framebuffer upload per layer, held alive
+    /// until the frame's flush. Unlike `layer_pool`, these images ARE
+    /// GPU-sampled (`Paint::image`) so pooled slots use plain `PREMULTIPLIED`
+    /// (as `create_image` did), not `offscreen_layer_image_flags()` —
+    /// `FLIP_Y` is a render-target-only concern and would flip a
+    /// directly-sampled image. Slots are refreshed in place via
+    /// `update_image` instead of being reallocated; this is safe because
+    /// every consumer unconditionally calls `canvas.flush()` before its own
+    /// screenshot/re-upload step, which executes any earlier consumer's
+    /// pending `fill_path` (and thus its read of the pooled image) before
+    /// this call overwrites the slot.
+    cpu_upload_pool: Vec<femtovg::ImageId>,
+    /// Device-pixel size `cpu_upload_pool` images were created for; a
     /// mismatch (window resize) retires pooled images via the pending-delete
     /// queue. `usize` to match `backdrop_w`/`backdrop_h` (image-buffer
     /// dimensions), unlike `layer_pool_size`'s `u32` (framebuffer size).
-    blend_result_pool_size: (usize, usize),
+    cpu_upload_pool_size: (usize, usize),
     /// Offscreen opacity group layer stack (BUG-133). Each entry holds an
     /// offscreen ImageId that subtree draws render into; PopOpacity composites
     /// it once with the group alpha (CSS Color L3 §3.2: opacity is atomic —
@@ -522,8 +528,6 @@ pub struct FemtovgBackend {
     /// Offscreen backdrop-filter layer stack (PA-4). Each entry holds the filtered
     /// backdrop image and element content image for compositing on PopBackdropFilter.
     backdrop_filter_layer_stack: Vec<BackdropFilterLayerEntry>,
-    /// Images from backdrop-filter layers queued for deletion after the next flush.
-    backdrop_filter_pending_delete: Vec<femtovg::ImageId>,
     /// Стек видов клипа (BUG-140): общий `PopClip` закрывает scissor-клипы
     /// (`canvas.restore()`) и shape-клипы (композит offscreen-слоя через
     /// путь формы) по-разному; вид определяется парным Push.
@@ -976,6 +980,12 @@ struct BackdropFilterLayerEntry {
     elem_image_id: femtovg::ImageId,
     /// Full-canvas filtered backdrop snapshot — blurred and/or colour-filtered.
     filtered_backdrop_id: femtovg::ImageId,
+    /// Device-pixel width `filtered_backdrop_id` was uploaded at (BUG-272 срез
+    /// 4) — needed to return it to `cpu_upload_pool` on Pop.
+    filtered_backdrop_w: usize,
+    /// Device-pixel height `filtered_backdrop_id` was uploaded at; see
+    /// `filtered_backdrop_w`.
+    filtered_backdrop_h: usize,
     /// Element bounds in CSS pixels — the region where the filtered backdrop is visible.
     bounds: lumen_core::geom::Rect,
     /// Render target active before PushBackdropFilter — restored on PopBackdropFilter.
@@ -1425,10 +1435,9 @@ impl FemtovgBackend {
             mask_layer_stack: Vec::new(),
             blend_layer_stack: Vec::new(),
             blend_layer_pending_delete: Vec::new(),
-            blend_result_pool: Vec::new(),
-            blend_result_pool_size: (0, 0),
+            cpu_upload_pool: Vec::new(),
+            cpu_upload_pool_size: (0, 0),
             backdrop_filter_layer_stack: Vec::new(),
-            backdrop_filter_pending_delete: Vec::new(),
             clip_stack: Vec::new(),
             active_rt_image: None,
             gradient_pending_delete: Vec::new(),
@@ -1602,31 +1611,31 @@ impl FemtovgBackend {
         }
     }
 
-    /// BUG-272 (item 5): take a `blend_result_pool` image sized `w × h`,
-    /// creating one only when the pool is empty or the pooled size no longer
-    /// matches. The caller must fully overwrite the returned image (via
-    /// `canvas.update_image`) before sampling it — a reused slot holds a
-    /// previous blend layer's pixels.
-    fn acquire_blend_result_image(&mut self, w: usize, h: usize) -> Option<femtovg::ImageId> {
-        if self.blend_result_pool_size != (w, h) {
-            self.blend_layer_pending_delete.append(&mut self.blend_result_pool);
-            self.blend_result_pool_size = (w, h);
+    /// BUG-272 (item 5, generalised in срез 4): take a `cpu_upload_pool` image
+    /// sized `w × h`, creating one only when the pool is empty or the pooled
+    /// size no longer matches. The caller must fully overwrite the returned
+    /// image (via `canvas.update_image`) before sampling it — a reused slot
+    /// holds a previous consumer's pixels. Shared by the blend-result,
+    /// colour-matrix filter, and backdrop-filter re-upload paths.
+    fn acquire_cpu_upload_image(&mut self, w: usize, h: usize) -> Option<femtovg::ImageId> {
+        if self.cpu_upload_pool_size != (w, h) {
+            self.blend_layer_pending_delete.append(&mut self.cpu_upload_pool);
+            self.cpu_upload_pool_size = (w, h);
         }
-        self.blend_result_pool.pop()
+        self.cpu_upload_pool.pop()
     }
 
-    /// Returns a blend-result image acquired via
-    /// [`Self::acquire_blend_result_image`] to the pool for reuse. Overflow
-    /// beyond the cap or a since-resized pool is retired via the
-    /// after-flush pending-delete queue.
-    fn release_blend_result_image(&mut self, id: femtovg::ImageId, w: usize, h: usize) {
-        /// Blend layers rarely nest more than a couple deep; matches the cap
+    /// Returns an image acquired via [`Self::acquire_cpu_upload_image`] to the
+    /// pool for reuse. Overflow beyond the cap or a since-resized pool is
+    /// retired via the after-flush pending-delete queue.
+    fn release_cpu_upload_image(&mut self, id: femtovg::ImageId, w: usize, h: usize) {
+        /// These layers rarely nest more than a couple deep; matches the cap
         /// `release_layer` uses for the render-target `layer_pool`.
-        const MAX_POOLED_BLEND_RESULTS: usize = 4;
-        if self.blend_result_pool_size == (w, h)
-            && self.blend_result_pool.len() < MAX_POOLED_BLEND_RESULTS
+        const MAX_POOLED_CPU_UPLOADS: usize = 4;
+        if self.cpu_upload_pool_size == (w, h)
+            && self.cpu_upload_pool.len() < MAX_POOLED_CPU_UPLOADS
         {
-            self.blend_result_pool.push(id);
+            self.cpu_upload_pool.push(id);
         } else {
             self.blend_layer_pending_delete.push(id);
         }
@@ -2306,9 +2315,10 @@ impl FemtovgBackend {
         // current_id tracks which image has the latest filtered content.
         let mut current_id = src_id;
         // BUG-272: whether current_id came from the layer pool (the Push layer
-        // and blur destinations do; the colour-matrix re-upload creates a
-        // one-off PREMULTIPLIED image that must NOT be pooled).
+        // and blur destinations do). The colour-matrix re-upload instead comes
+        // from `cpu_upload_pool` (срез 4) — its dimensions, when set, say so.
         let mut current_pooled = true;
+        let mut current_cpu_upload_dims: Option<(usize, usize)> = None;
 
         // ── Step 1: GPU Gaussian blur (no CPU round-trip needed) ─────────────
         if has_blur {
@@ -2365,21 +2375,38 @@ impl FemtovgBackend {
                         apply_filter_rgba(&mut rgba, f);
                     }
                 }
-                // Re-upload processed pixels.
+                // Re-upload processed pixels. BUG-272 срез 4: reuse
+                // `cpu_upload_pool` via `update_image` instead of a fresh GPU
+                // upload on every Pop — same class as the blend-result pool
+                // (item 5). Falls back to a fresh upload if the pool is empty
+                // or the reused slot fails to update.
                 let pixels: Vec<rgb::RGBA8> = rgba
                     .chunks_exact(4)
                     .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
                     .collect();
                 let img_src = imgref::ImgRef::new(&pixels, iw, ih);
-                if let Ok(dst) = self.canvas.create_image(
-                    img_src,
-                    femtovg::ImageFlags::PREMULTIPLIED,
-                ) {
+                let dst = match self.acquire_cpu_upload_image(iw, ih) {
+                    Some(id) => match self.canvas.update_image(id, img_src, 0, 0) {
+                        Ok(()) => Some(id),
+                        Err(_) => {
+                            self.blend_layer_pending_delete.push(id);
+                            self.canvas
+                                .create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED)
+                                .ok()
+                        }
+                    },
+                    None => self
+                        .canvas
+                        .create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED)
+                        .ok(),
+                };
+                if let Some(dst) = dst {
                     // BUG-272: recycle the pooled source; the re-uploaded image
-                    // is a one-off (wrong flags for the pool).
+                    // belongs to `cpu_upload_pool`, not `layer_pool`.
                     self.release_layer(current_id);
                     current_id = dst;
                     current_pooled = false;
+                    current_cpu_upload_dims = Some((iw, ih));
                 }
             }
         }
@@ -2398,10 +2425,13 @@ impl FemtovgBackend {
         self.canvas.fill_path(&path, &paint);
         self.canvas.restore();
 
-        // BUG-272: pooled layers are recycled; one-off colour-matrix images are
-        // deleted after flush (pending — fill_path still holds the id).
+        // BUG-272: `layer_pool` images are recycled via `release_layer`; a
+        // colour-matrix re-upload (срез 4) goes back to `cpu_upload_pool`;
+        // anything else waits on the after-flush delete queue.
         if current_pooled {
             self.release_layer(current_id);
+        } else if let Some((w, h)) = current_cpu_upload_dims {
+            self.release_cpu_upload_image(current_id, w, h);
         } else {
             self.filter_layer_pending_delete.push(current_id);
         }
@@ -2671,9 +2701,9 @@ impl FemtovgBackend {
             let img_ref = imgref::ImgRef::new(&pixels, backdrop_w, backdrop_h);
             // BUG-272 (item 5): reuse a pooled image via `update_image` instead
             // of `create_image`-ing a fresh GPU upload on every Pop (see
-            // `blend_result_pool`). Fall back to a fresh upload if the pooled
+            // `cpu_upload_pool`). Fall back to a fresh upload if the pooled
             // slot fails to update (e.g. driver-level image loss).
-            let result_id = match self.acquire_blend_result_image(backdrop_w, backdrop_h) {
+            let result_id = match self.acquire_cpu_upload_image(backdrop_w, backdrop_h) {
                 Some(id) => match self.canvas.update_image(id, img_ref, 0, 0) {
                     Ok(()) => Some(id),
                     Err(_) => {
@@ -2695,7 +2725,7 @@ impl FemtovgBackend {
                 path.rect(0.0, 0.0, css_w, css_h);
                 self.canvas.fill_path(&path, &paint);
                 self.canvas.restore();
-                self.release_blend_result_image(result_id, backdrop_w, backdrop_h);
+                self.release_cpu_upload_image(result_id, backdrop_w, backdrop_h);
             }
         }
         // BUG-272: src_image_id came from acquire_layer() — recycle it
@@ -2705,15 +2735,16 @@ impl FemtovgBackend {
 
     /// Applies `filters` to a full-canvas snapshot of the current render target.
     ///
-    /// Flush must be called before this. Returns the filtered image id (or `None`
-    /// on failure). Intermediate images are queued in `filter_layer_pending_delete`.
-    /// After return the active render target may have changed; caller must
+    /// Flush must be called before this. Returns the filtered image id plus its
+    /// device-pixel `(w, h)` (or `None` on failure) — the caller needs the
+    /// dimensions to later return the image to `cpu_upload_pool` (BUG-272 срез
+    /// 4). After return the active render target may have changed; caller must
     /// `switch_render_target` to the desired next target.
     fn apply_backdrop_filters(
         &mut self,
         filters: &[lumen_layout::FilterFn],
         bounds: &Rect,
-    ) -> Option<femtovg::ImageId> {
+    ) -> Option<(femtovg::ImageId, usize, usize)> {
         // Screenshot the current RT (flush must have been called already).
         // `screenshot()` reverses GL's bottom-up rows, so `rgba` is the raw
         // backdrop in top-down order. The entire filter chain runs on these CPU
@@ -2779,12 +2810,29 @@ impl FemtovgBackend {
         }
 
         // Upload the filtered backdrop once. Top-down CPU pixels → no FLIP_Y,
-        // matching `composite_backdrop_filter_layer`'s sampling.
+        // matching `composite_backdrop_filter_layer`'s sampling. BUG-272 срез
+        // 4: reuse `cpu_upload_pool` via `update_image` instead of a fresh GPU
+        // upload on every Pop, same class as the blend-result pool (item 5).
         let pixels: Vec<rgb::RGBA8> = rgba.chunks_exact(4)
             .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
             .collect();
         let img_ref = imgref::ImgRef::new(&pixels, iw, ih);
-        self.canvas.create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED).ok()
+        let id = match self.acquire_cpu_upload_image(iw, ih) {
+            Some(id) => match self.canvas.update_image(id, img_ref, 0, 0) {
+                Ok(()) => Some(id),
+                Err(_) => {
+                    self.blend_layer_pending_delete.push(id);
+                    self.canvas
+                        .create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED)
+                        .ok()
+                }
+            },
+            None => self
+                .canvas
+                .create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED)
+                .ok(),
+        };
+        id.map(|id| (id, iw, ih))
     }
 
     /// Composites a backdrop-filter layer (PA-4) onto the previous render target.
@@ -2798,6 +2846,8 @@ impl FemtovgBackend {
         let BackdropFilterLayerEntry {
             elem_image_id,
             filtered_backdrop_id,
+            filtered_backdrop_w,
+            filtered_backdrop_h,
             bounds,
             prev_render_target,
         } = entry;
@@ -2832,9 +2882,9 @@ impl FemtovgBackend {
         self.canvas.fill_path(&elem_path, &elem_paint);
         self.canvas.restore();
 
-        self.backdrop_filter_pending_delete.push(filtered_backdrop_id);
-        // BUG-272: the element-content layer is pooled; the filtered backdrop
-        // is a one-off CPU upload and stays on the after-flush delete queue.
+        // BUG-272 срез 4: the filtered backdrop is now also pooled
+        // (`cpu_upload_pool`), same as the element-content layer.
+        self.release_cpu_upload_image(filtered_backdrop_id, filtered_backdrop_w, filtered_backdrop_h);
         self.release_layer(elem_image_id);
     }
 
@@ -3906,9 +3956,9 @@ impl FemtovgBackend {
                 // Flush so backdrop has all content rendered.
                 self.canvas.flush();
                 // Apply filters to a screenshot of the current RT.
-                let filtered_backdrop_id = self.apply_backdrop_filters(filters, bounds);
+                let filtered_backdrop = self.apply_backdrop_filters(filters, bounds);
 
-                if let Some(filt_id) = filtered_backdrop_id {
+                if let Some((filt_id, filt_w, filt_h)) = filtered_backdrop {
                     // Restore prev_rt after apply_backdrop_filters may have switched.
                     self.switch_render_target(prev_rt);
                     // `elem_id` is a GPU FBO: element content is rendered into it
@@ -3930,13 +3980,16 @@ impl FemtovgBackend {
                             self.backdrop_filter_layer_stack.push(BackdropFilterLayerEntry {
                                 elem_image_id: elem_id,
                                 filtered_backdrop_id: filt_id,
+                                filtered_backdrop_w: filt_w,
+                                filtered_backdrop_h: filt_h,
                                 bounds: *bounds,
                                 prev_render_target: prev_rt,
                             });
                         }
                         None => {
-                            // Fallback: queue filtered_id for deletion, draw to prev_rt.
-                            self.backdrop_filter_pending_delete.push(filt_id);
+                            // Fallback: return the filtered backdrop to the pool
+                            // (BUG-272 срез 4), draw to prev_rt without it.
+                            self.release_cpu_upload_image(filt_id, filt_w, filt_h);
                             self.canvas.save();
                         }
                     }
@@ -4071,12 +4124,13 @@ impl RenderBackend for FemtovgBackend {
     fn debug_mem_report(&self) -> String {
         let raw_bytes: usize = self.raw_images.values().map(|i| i.data.len()).sum();
         format!(
-            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}",
+            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}, cpu_upload_pool={}",
             self.raw_images.len(),
             raw_bytes as f64 / 1e6,
             self.images.len(),
             self.layer_pool.len(),
-            self.content_band_pool.len()
+            self.content_band_pool.len(),
+            self.cpu_upload_pool.len()
         )
     }
 
@@ -4366,10 +4420,6 @@ impl RenderBackend for FemtovgBackend {
         }
         let blend_del: Vec<_> = self.blend_layer_pending_delete.drain(..).collect();
         for id in blend_del {
-            self.canvas.delete_image(id);
-        }
-        let backdrop_del: Vec<_> = self.backdrop_filter_pending_delete.drain(..).collect();
-        for id in backdrop_del {
             self.canvas.delete_image(id);
         }
         // BUG-085: per-pixel gradient textures (repeating linear + radial).
