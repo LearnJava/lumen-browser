@@ -7357,6 +7357,8 @@ mod tests {
             names: vec![],
             custom_props: custom,
             style_props: style,
+            font_size: 16.0,
+            viewport: lumen_core::Size::new(1024.0, 768.0),
         }
     }
 
@@ -7503,11 +7505,30 @@ mod tests {
     }
 
     #[test]
-    fn style_query_length_relative_unit_not_canonicalized() {
-        // `em` needs font-size context ContainerContext doesn't carry — must
-        // fall back to textual comparison, not be coerced into a false match.
+    fn style_query_em_matches_computed_px() {
+        // `style_ctx` has font_size: 16.0 → `1em` resolves to 16px.
         let ctx = style_ctx_with_style_props(&[], &[("width", "16px")]);
-        assert!(!crate::evaluate_container_condition("style(width: 1em)", &ctx));
+        assert!(crate::evaluate_container_condition("style(width: 1em)", &ctx));
+    }
+
+    #[test]
+    fn style_query_em_mismatch_returns_false() {
+        let ctx = style_ctx_with_style_props(&[], &[("width", "16px")]);
+        assert!(!crate::evaluate_container_condition("style(width: 2em)", &ctx));
+    }
+
+    #[test]
+    fn style_query_percent_matches_computed_px() {
+        // `style_ctx` has width: 200.0 → `50%` resolves to 100px.
+        let ctx = style_ctx_with_style_props(&[], &[("width", "100px")]);
+        assert!(crate::evaluate_container_condition("style(width: 50%)", &ctx));
+    }
+
+    #[test]
+    fn style_query_viewport_unit_matches_computed_px() {
+        // `style_ctx` has viewport: 1024x768 → `10vw` resolves to 102.4px.
+        let ctx = style_ctx_with_style_props(&[], &[("width", "102.4px")]);
+        assert!(crate::evaluate_container_condition("style(width: 10vw)", &ctx));
     }
 
     #[test]
