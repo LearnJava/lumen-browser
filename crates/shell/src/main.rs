@@ -16790,6 +16790,13 @@ impl Lumen {
             return;
         }
 
+        // `ai-answer:noop` — committing an `@ai` answer row is a no-op (§12.5):
+        // the RAG answer is already fully shown in the dropdown row itself,
+        // there is no URL to navigate to.
+        if value.trim() == "ai-answer:noop" {
+            return;
+        }
+
         // `about:settings` — open the browser settings overlay (task D-7).
         if value.trim() == "about:settings" {
             self.open_settings_panel();
@@ -17022,6 +17029,15 @@ impl Lumen {
                             snippet: b.summary.clone().unwrap_or_default(),
                         });
                     }
+                }
+            }
+            OmniboxPrefix::Ai => {
+                // @ai <query> — единственная строка: RAG-ответ (§12.5) под
+                // `--features ai`, либо статичный hint под её отсутствие
+                // (см. `Self::ai_answer_for`, обе ветки cfg-gated). Пустой
+                // запрос — ни одной строки, как у остальных префиксов.
+                if !query.is_empty() {
+                    suggestions.push(OmniboxSuggestion::Ai { answer: self.ai_answer_for(query) });
                 }
             }
             OmniboxPrefix::Plain => {
@@ -18362,6 +18378,53 @@ impl Lumen {
             .map(|f| f.text)
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// Answer an `@ai <query>` omnibox prompt (§12.5, Step 7).
+    ///
+    /// Grounds the answer in bookmark embeddings (§12.8) — the only
+    /// `DefaultKnowledgeStore`-populatable data this shell has today; wiring a
+    /// real browsing-history population path is deferred (see
+    /// `subsystems/ai.md` §Deferred, needs its own task brief). Rebuilds an
+    /// in-memory `DefaultKnowledgeStore` per query rather than caching one on
+    /// `Lumen`, mirroring `query_omnibox_suggestions`'s existing synchronous
+    /// per-keystroke `@bookmarks` embed call.
+    #[cfg(feature = "ai")]
+    fn ai_answer_for(&self, query: &str) -> String {
+        use lumen_ai::embedding::OllamaEmbeddingBackend;
+        use lumen_ai::generation::OllamaGenerationBackend;
+        use lumen_ai::rag::RagEngine;
+        use lumen_knowledge::DefaultKnowledgeStore;
+
+        let Ok(store) = DefaultKnowledgeStore::open_in_memory() else {
+            return self.ai_backend.query(query);
+        };
+        if let Ok(bookmarks) = self.bookmarks.list_all() {
+            for b in bookmarks {
+                if let Some(embedding) = &b.embedding {
+                    store.index_semantic(
+                        b.id,
+                        &b.url,
+                        &b.title,
+                        lumen_storage::bookmarks::embedding_from_bytes(embedding),
+                    );
+                }
+            }
+        }
+        let embedding_backend = OllamaEmbeddingBackend::new("nomic-embed-text");
+        let generation_backend = OllamaGenerationBackend::new("phi3:mini");
+        let answer = RagEngine::new(5).answer(query, &store, &embedding_backend, &generation_backend);
+        // Ollama unreachable/erroring → fall back to the NullAiBackend stub
+        // message, matching ADR-019's documented degrade-not-error contract.
+        if answer.is_empty() { self.ai_backend.query(query) } else { answer }
+    }
+
+    /// `--features ai` not compiled in: static hint row, no `lumen-ai` calls.
+    #[cfg(not(feature = "ai"))]
+    fn ai_answer_for(&self, _query: &str) -> String {
+        "AI module not enabled — rebuild with `cargo build --features ai` \
+         (requires a local Ollama daemon, see ADR-019)."
+            .to_owned()
     }
 
     /// Top-left anchor of the bookmark panel overlay (just under the tab bar).

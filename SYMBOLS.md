@@ -35,7 +35,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/a11y/src/roles.rs:266` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
 `crates/engine/a11y/src/roles.rs:349` **fn** `implicit_role` — Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5
 
-## lumen-ai  (8 symbols)
+## lumen-ai  (11 symbols)
 
 `crates/ai/src/embedding.rs:21` **trait** `EmbeddingBackend` — Produces a dense embedding vector for a piece of text (§12.5, §12.8)
 `crates/ai/src/embedding.rs:29` **enum** `EmbeddingError` — Failure to embed text via an [`EmbeddingBackend`]
@@ -45,6 +45,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ai/src/generation.rs:31` **enum** `GenerationError` — Failure to generate text via a [`GenerationBackend`]
 `crates/ai/src/generation.rs:57` **struct** `OllamaGenerationBackend` — Generation backend that talks to a local Ollama daemon over plain HTTP
 `crates/ai/src/generation.rs:65` **fn** `new` — New backend targeting the default Ollama port (11434) with `model`
+`crates/ai/src/rag.rs:19` **struct** `RagEngine` — Retrieval-augmented generation over a [`DefaultKnowledgeStore`]'s
+`crates/ai/src/rag.rs:26` **fn** `new` — New engine that retrieves up to `top_k` context entries per query
+`crates/ai/src/rag.rs:41` **fn** `answer` — Answer `prompt`, grounding the response in the `top_k` most
 
 ## lumen-bench  (5 symbols)
 
@@ -3990,28 +3993,28 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/adblock.rs:74` **fn** `default_subscriptions` — The lists seeded on first run: EasyList (ads) + EasyPrivacy (trackers)
 `crates/shell/src/adblock.rs:171` **fn** `load_and_install` — Read the enabled subscriptions' cached bodies from disk, merge them into a
 `crates/shell/src/adblock.rs:208` **fn** `refresh` — Conditionally refresh all enabled subscriptions over the network
-`crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
-`crates/shell/src/address_bar.rs:78` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
-`crates/shell/src/address_bar.rs:97` **enum** `OmniboxSuggestion` — Одна строка autocomplete в dropdown omnibox
-`crates/shell/src/address_bar.rs:163` **fn** `commit_value` — Строка, которая будет зафиксирована при выборе этой подсказки
-`crates/shell/src/address_bar.rs:174` **fn** `label` — Основной текст строки dropdown
-`crates/shell/src/address_bar.rs:194` **fn** `sub_label` — Дополнительный текст под основным label
-`crates/shell/src/address_bar.rs:240` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
-`crates/shell/src/address_bar.rs:255` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
-`crates/shell/src/address_bar.rs:263` **fn** `close`
-`crates/shell/src/address_bar.rs:271` **fn** `is_open`
-`crates/shell/src/address_bar.rs:275` **fn** `input`
-`crates/shell/src/address_bar.rs:280` **fn** `suggestions` — Текущий список подсказок (для рендера и клавиатурной навигации)
-`crates/shell/src/address_bar.rs:285` **fn** `selected_idx` — Индекс выделенной подсказки. `None` — ни одна не выделена
-`crates/shell/src/address_bar.rs:291` **fn** `set_suggestions` — Установить новый список подсказок и сбросить выделение
-`crates/shell/src/address_bar.rs:297` **fn** `select_next` — Перейти к следующей (вниз) подсказке
-`crates/shell/src/address_bar.rs:308` **fn** `select_prev` — Перейти к предыдущей (вверх) подсказке. `None` если уже на первой
-`crates/shell/src/address_bar.rs:316` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
-`crates/shell/src/address_bar.rs:330` **fn** `backspace` — Backspace — удалить последний Unicode-символ
-`crates/shell/src/address_bar.rs:340` **fn** `commit` — Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
-`crates/shell/src/address_bar.rs:357` **fn** `take_commit` — Вернуть зафиксированный URL/запрос (если есть) и сбросить его
-`crates/shell/src/address_bar.rs:365` **struct** `BarOverlay` — Параметры для сборки overlay display list
-`crates/shell/src/address_bar.rs:373` **fn** `build_bar_overlay` — Собирает display list адресной строки. Вызывается каждый кадр, пока
+`crates/shell/src/address_bar.rs:59` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
+`crates/shell/src/address_bar.rs:89` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
+`crates/shell/src/address_bar.rs:112` **enum** `OmniboxSuggestion` — Одна строка autocomplete в dropdown omnibox
+`crates/shell/src/address_bar.rs:201` **fn** `commit_value` — Строка, которая будет зафиксирована при выборе этой подсказки
+`crates/shell/src/address_bar.rs:214` **fn** `label` — Основной текст строки dropdown
+`crates/shell/src/address_bar.rs:238` **fn** `sub_label` — Дополнительный текст под основным label
+`crates/shell/src/address_bar.rs:292` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
+`crates/shell/src/address_bar.rs:307` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
+`crates/shell/src/address_bar.rs:315` **fn** `close`
+`crates/shell/src/address_bar.rs:323` **fn** `is_open`
+`crates/shell/src/address_bar.rs:327` **fn** `input`
+`crates/shell/src/address_bar.rs:332` **fn** `suggestions` — Текущий список подсказок (для рендера и клавиатурной навигации)
+`crates/shell/src/address_bar.rs:337` **fn** `selected_idx` — Индекс выделенной подсказки. `None` — ни одна не выделена
+`crates/shell/src/address_bar.rs:343` **fn** `set_suggestions` — Установить новый список подсказок и сбросить выделение
+`crates/shell/src/address_bar.rs:349` **fn** `select_next` — Перейти к следующей (вниз) подсказке
+`crates/shell/src/address_bar.rs:360` **fn** `select_prev` — Перейти к предыдущей (вверх) подсказке. `None` если уже на первой
+`crates/shell/src/address_bar.rs:368` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
+`crates/shell/src/address_bar.rs:382` **fn** `backspace` — Backspace — удалить последний Unicode-символ
+`crates/shell/src/address_bar.rs:392` **fn** `commit` — Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
+`crates/shell/src/address_bar.rs:409` **fn** `take_commit` — Вернуть зафиксированный URL/запрос (если есть) и сбросить его
+`crates/shell/src/address_bar.rs:417` **struct** `BarOverlay` — Параметры для сборки overlay display list
+`crates/shell/src/address_bar.rs:425` **fn** `build_bar_overlay` — Собирает display list адресной строки. Вызывается каждый кадр, пока
 `crates/shell/src/animation_scheduler.rs:116` **struct** `AnimationScheduler` — Планировщик CSS-анимаций. Хранит timing-состояние между кадрами
 `crates/shell/src/animation_scheduler.rs:121` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:133` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
@@ -4925,7 +4928,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/zoom.rs:48` **fn** `preview_scale` — Preview scale for transform-first zoom (ADR-016 M0.3)
 `crates/shell/src/zoom.rs:64` **fn** `effective_viewport` — Compute the CSS layout viewport size from the physical window size
 
-## lumen-storage  (511 symbols)
+## lumen-storage  (515 symbols)
 
 `crates/storage/src/a11y_prefs.rs:38` **enum** `CursorSize` — Accessibility cursor magnification level
 `crates/storage/src/a11y_prefs.rs:50` **fn** `as_str` — Serialize to the storage string representation
@@ -4977,20 +4980,24 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/bfcache.rs:136` **fn** `is_empty`
 `crates/storage/src/bfcache.rs:140` **fn** `clear`
 `crates/storage/src/bfcache.rs:146` **fn** `has_frozen` — Check whether a frozen page exists for the given URL
-`crates/storage/src/bookmarks.rs:36` **struct** `Bookmark` — Одна закладка
-`crates/storage/src/bookmarks.rs:46` **struct** `Bookmarks`
-`crates/storage/src/bookmarks.rs:57` **fn** `open`
-`crates/storage/src/bookmarks.rs:63` **fn** `open_in_memory`
-`crates/storage/src/bookmarks.rs:103` **fn** `add` — Добавить или обновить закладку. Если url уже существует —
-`crates/storage/src/bookmarks.rs:162` **fn** `get` — Получить закладку по url. None если нет
-`crates/storage/src/bookmarks.rs:200` **fn** `delete` — Удалить закладку (вместе с тегами благодаря ON DELETE CASCADE)
-`crates/storage/src/bookmarks.rs:214` **fn** `list_all` — Все закладки, отсортированные по папке (ASC), затем по created_at DESC
-`crates/storage/src/bookmarks.rs:231` **fn** `set_folder` — Переместить закладку в другую папку (DnD reorder в UI-панели)
-`crates/storage/src/bookmarks.rs:246` **fn** `list_by_folder` — Список закладок в данной папке (точное совпадение строки)
-`crates/storage/src/bookmarks.rs:260` **fn** `list_by_tag` — Список закладок с данным тегом. Сортировка по created_at DESC
-`crates/storage/src/bookmarks.rs:277` **fn** `all_tags` — Все уникальные теги в системе (для UI tag-cloud / autocomplete)
-`crates/storage/src/bookmarks.rs:296` **fn** `all_folders` — Все уникальные папки
-`crates/storage/src/bookmarks.rs:317` **fn** `count` — Общее число закладок
+`crates/storage/src/bookmarks.rs:38` **struct** `Bookmark` — Одна закладка
+`crates/storage/src/bookmarks.rs:55` **struct** `Bookmarks`
+`crates/storage/src/bookmarks.rs:66` **fn** `open`
+`crates/storage/src/bookmarks.rs:72` **fn** `open_in_memory`
+`crates/storage/src/bookmarks.rs:115` **fn** `add` — Добавить или обновить закладку. Если url уже существует —
+`crates/storage/src/bookmarks.rs:174` **fn** `get` — Получить закладку по url. None если нет
+`crates/storage/src/bookmarks.rs:218` **fn** `set_semantic` — Записать AI-саммари и эмбеддинг для закладки (§12.8, Step 6). No-op,
+`crates/storage/src/bookmarks.rs:237` **fn** `delete` — Удалить закладку (вместе с тегами благодаря ON DELETE CASCADE)
+`crates/storage/src/bookmarks.rs:251` **fn** `list_all` — Все закладки, отсортированные по папке (ASC), затем по created_at DESC
+`crates/storage/src/bookmarks.rs:268` **fn** `set_folder` — Переместить закладку в другую папку (DnD reorder в UI-панели)
+`crates/storage/src/bookmarks.rs:283` **fn** `list_by_folder` — Список закладок в данной папке (точное совпадение строки)
+`crates/storage/src/bookmarks.rs:297` **fn** `list_by_tag` — Список закладок с данным тегом. Сортировка по created_at DESC
+`crates/storage/src/bookmarks.rs:314` **fn** `all_tags` — Все уникальные теги в системе (для UI tag-cloud / autocomplete)
+`crates/storage/src/bookmarks.rs:333` **fn** `all_folders` — Все уникальные папки
+`crates/storage/src/bookmarks.rs:354` **fn** `count` — Общее число закладок
+`crates/storage/src/bookmarks.rs:394` **fn** `embedding_to_bytes` — Serialises an embedding vector to little-endian bytes for BLOB storage
+`crates/storage/src/bookmarks.rs:400` **fn** `embedding_from_bytes` — Deserialises bytes produced by [`embedding_to_bytes`] back into an `f32` vector
+`crates/storage/src/bookmarks.rs:410` **fn** `cosine_similarity` — Cosine similarity between two embeddings, for semantic-bookmark ranking
 `crates/storage/src/broadcast_channels.rs:24` **struct** `ChannelRegistration`
 `crates/storage/src/broadcast_channels.rs:34` **struct** `BroadcastChannels`
 `crates/storage/src/broadcast_channels.rs:45` **fn** `open`
@@ -5440,4 +5447,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5366 symbols in 23 crates*
+*Total: 5373 symbols in 23 crates*

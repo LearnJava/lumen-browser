@@ -121,14 +121,50 @@ Full step-by-step plan — [`docs/tasks/ph3-ai-module.md`](../docs/tasks/ph3-ai-
   not include that wiring; it was only speculatively mentioned in this file's
   previous Deferred note. Still open — see Deferred below.
 
+### Step 7 — omnibox `@ai` prefix (2026-07-15)
+- New `OmniboxPrefix::Ai` / `OmniboxSuggestion::Ai { answer }` (`address_bar.rs`)
+  and `@ai` branch in `Lumen::query_omnibox_suggestions` (`main.rs`), following
+  the same prefix-parsing/dropdown-row pattern as `@bookmarks`. Commit value is
+  the sentinel `"ai-answer:noop"`, intercepted in `handle_omnibox_commit` as a
+  no-op (nothing to navigate to — the answer is already the row's own text),
+  same pattern as `note-viewer:`/`switch-tab:`.
+- `Lumen::ai_answer_for` (two `#[cfg(feature = "ai")]`/`#[cfg(not(...))]`
+  variants — the first `#[cfg(feature = "ai")]` gate anywhere in
+  `crates/shell`): under `ai`, builds a throwaway
+  `DefaultKnowledgeStore::open_in_memory()` per query, populates it from
+  `self.bookmarks.list_all()`'s stored embeddings (the only
+  `DefaultKnowledgeStore`-populatable data this shell has — see the still-open
+  "population path" item below), then calls
+  `RagEngine::new(5).answer(query, &store, &OllamaEmbeddingBackend::new("nomic-embed-text"),
+  &OllamaGenerationBackend::new("phi3:mini"))`. An empty `RagEngine::answer`
+  result (Ollama unreachable, per ADR-019's degrade-not-error contract) falls
+  back to `self.ai_backend.query(query)` (the `NullAiBackend` stub text).
+  Without `ai`, returns a static "AI module not enabled" hint — no `lumen-ai`
+  reference at all in that build.
+- `ai = ["dep:lumen-ai", "lumen-ai/ollama"]` in `crates/shell/Cargo.toml`:
+  `lumen-ai`'s `rag`/`embedding`/`generation` modules are gated behind its own
+  `ollama` feature (`default = []`), so shell's `ai` feature has to forward it
+  explicitly or `RagEngine` etc. don't exist even with `dep:lumen-ai` on.
+- Recomputes the RAG answer synchronously on every keystroke while the `@ai`
+  prefix is active (network round-trip to Ollama included) — same synchronous
+  per-keystroke shape as `@bookmarks`' embed call, not addressed in this step.
+- Does **not** change `Lumen::ai_backend` (still always `NullAiBackend`) or
+  wire `AiPanel` to `RagEngine` — out of scope per Step 7's bullet list; see
+  Deferred below (still open, `@ai` omnibox uses its own local backend
+  instances instead).
+
 ## Deferred
 
 - Wire `Lumen::ai_backend`/`AiPanel` to a real `RagEngine` backed by a
   populated `DefaultKnowledgeStore` — needs a design for *what* gets indexed
   and *when* (a "population path" from real browsing history/notes/bookmarks),
-  which no step so far has specified. Not part of Step 6 or Step 7 as written;
-  needs its own task brief before implementation.
-- Step 7 — omnibox `@ai` prefix routed through `RagEngine::answer`.
+  which no step so far has specified. Needs its own task brief before
+  implementation. Omnibox `@ai` (Step 7) works around this narrowly by
+  populating from bookmark embeddings only, at query time — that is not a
+  substitute for a real history/notes population path.
+- Real HNSW vector index in `lumen-knowledge` (§12.5) — `SemanticIndex` is
+  still the Step 3 linear-scan placeholder; tracked separately in
+  `p2-knowledge-stemmer-hnsw.md`.
 
 ## Invariants
 
