@@ -48,6 +48,18 @@ struct CascadeIndex {
     layers: Vec<RuleIndex>,
     media: Vec<RuleIndex>,
     supports: Vec<RuleIndex>,
+    /// Perf (docs/tasks/p3-cascade-perf.md Задача 1): whether each
+    /// `sheet.media_rules[i]`/`sheet.supports_rules[i]` block is currently
+    /// active, precomputed once per (sheet, viewport, dark_mode) instead of
+    /// re-evaluating `media.query.matches(..)`/`supports.condition.evaluate(..)`
+    /// for every block on every node. This loop is node-independent — the
+    /// per-node re-evaluation (×2 call sites: `compute_style` and
+    /// `compute_pseudo_element_style`, the latter running twice per element
+    /// for `::before`/`::after`) was the dominant cascade cost on stylesheets
+    /// that put most rules inside `@media` breakpoints (profiled: ~60% of
+    /// `compute_style`'s matching phase on a 3000-rule real-world sheet).
+    active_media: Vec<bool>,
+    active_supports: Vec<bool>,
 }
 
 impl CascadeIndex {
@@ -57,29 +69,70 @@ impl CascadeIndex {
             layers: Vec::new(),
             media: Vec::new(),
             supports: Vec::new(),
+            active_media: Vec::new(),
+            active_supports: Vec::new(),
         }
     }
 
-    fn build(sheet: &Stylesheet) -> Self {
+    fn build(sheet: &Stylesheet, media_ctx: &MediaContext) -> Self {
         Self {
             rules: RuleIndex::build(sheet),
             layers: sheet.layers.iter().map(|l| RuleIndex::build_from_rules(&l.rules)).collect(),
             media: sheet.media_rules.iter().map(|m| RuleIndex::build_from_rules(&m.rules)).collect(),
             supports: sheet.supports_rules.iter().map(|s| RuleIndex::build_from_rules(&s.rules)).collect(),
+            active_media: sheet.media_rules.iter().map(|m| m.query.matches(media_ctx)).collect(),
+            active_supports: sheet.supports_rules.iter()
+                .map(|s| s.condition.evaluate(SUPPORTED_PROPERTIES))
+                .collect(),
+        }
+    }
+}
+
+/// Perf cache key fields beyond (sheet pointer, rules count) that affect
+/// which `@media` blocks are active — a viewport resize or dark-mode/
+/// print/forced-colors toggle must invalidate `active_media` just like a
+/// stylesheet swap does. `f32` compared via `to_bits()` (no NaN in practice
+/// for a viewport size, and bit-equality avoids float-equality pitfalls).
+#[derive(Clone, Copy, PartialEq)]
+struct CascadeMediaKey {
+    width_bits: u32,
+    height_bits: u32,
+    dark_mode: bool,
+    print_active: bool,
+    forced_colors: bool,
+}
+
+impl CascadeMediaKey {
+    const NONE: Self = Self {
+        width_bits: 0,
+        height_bits: 0,
+        dark_mode: false,
+        print_active: false,
+        forced_colors: false,
+    };
+
+    fn current(viewport: Size, dark_mode: bool) -> Self {
+        Self {
+            width_bits: viewport.width.to_bits(),
+            height_bits: viewport.height.to_bits(),
+            dark_mode,
+            print_active: print_media_active(),
+            forced_colors: forced_colors_active(),
         }
     }
 }
 
 thread_local! {
-    /// Per-thread rule-index cache. Keyed by (sheet pointer, rules count) to
-    /// detect stylesheet changes between layout passes. Rebuilt only when the
-    /// key changes; reused for every node in the same pass (O(1) amortised).
+    /// Per-thread rule-index cache. Keyed by (sheet pointer, rules count,
+    /// media key) to detect stylesheet or viewport/media-preference changes
+    /// between layout passes. Rebuilt only when the key changes; reused for
+    /// every node in the same pass (O(1) amortised).
     ///
     /// SAFETY: raw-pointer keys are vulnerable to address reuse across sessions
     /// (freed sheet → new session → same address). Call `invalidate_rule_idx_cache`
     /// at the start of every layout pass to prevent stale hits.
-    static RULE_IDX_CACHE: RefCell<(usize, usize, CascadeIndex)> =
-        RefCell::new((0, 0, CascadeIndex::empty()));
+    static RULE_IDX_CACHE: RefCell<(usize, usize, CascadeMediaKey, CascadeIndex)> =
+        RefCell::new((0, 0, CascadeMediaKey::NONE, CascadeIndex::empty()));
 }
 
 /// Invalidate the thread-local rule-index cache.
@@ -6533,6 +6586,7 @@ pub fn compute_style(
     };
     let mut matched: Vec<(bool, bool, i32, Specificity, usize, usize, &Declaration)> = Vec::new();
 
+
     // Build or reuse a per-stylesheet rule index (thread-local, keyed by
     // pointer+length). Amortised O(1): rebuilt only when the sheet changes.
     let node_data = doc.get(node);
@@ -6543,14 +6597,16 @@ pub fn compute_style(
 
     let sheet_ptr = sheet as *const Stylesheet as usize;
     let sheet_rules_len = sheet.rules.len();
+    let media_key = CascadeMediaKey::current(viewport, dark_mode);
     RULE_IDX_CACHE.with(|cell| {
         let mut cached = cell.borrow_mut();
-        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len {
-            *cached = (sheet_ptr, sheet_rules_len, CascadeIndex::build(sheet));
+        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len || cached.2 != media_key {
+            let media_ctx = media_context_from_viewport(viewport, dark_mode);
+            *cached = (sheet_ptr, sheet_rules_len, media_key, CascadeIndex::build(sheet, &media_ctx));
         }
     });
     let cands = RULE_IDX_CACHE.with(|cell| {
-        cell.borrow().2.rules.candidates(node_tag, node_id, &node_classes)
+        cell.borrow().3.rules.candidates(node_tag, node_id, &node_classes)
     });
 
     for &rule_idx in &cands {
@@ -6589,7 +6645,7 @@ pub fn compute_style(
         // in the layer for every node — dominant cascade cost on stylesheets
         // that put most rules inside layers/media/supports blocks).
         let layer_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().2.layers[layer_i].candidates(node_tag, node_id, &node_classes)
+            cell.borrow().3.layers[layer_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in layer_cands {
             let rule = &layer_rule.rules[rule_idx];
@@ -6620,17 +6676,23 @@ pub fn compute_style(
     // viewport. Source-order между обычными и
     // @media-rules не сохраняется идеально (все @media идут после
     // обычных) — это известное ограничение.
-    let media_ctx = media_context_from_viewport(viewport, dark_mode);
+    //
+    // Perf: "active" per block precomputed once per (sheet, viewport,
+    // dark_mode) in `CascadeIndex::active_media` — see its doc comment.
+    // `media.query.matches(..)` used to run here on every node. Fetched once
+    // per node (not once per block) to avoid N thread-local accesses when
+    // the stylesheet has many `@media` blocks.
+    let active_media = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_media.clone());
     let mut next_rule_idx = sheet.rules.len();
     for (media_i, media) in sheet.media_rules.iter().enumerate() {
-        if !media.query.matches(&media_ctx) {
+        if !active_media[media_i] {
             next_rule_idx += media.rules.len();
             continue;
         }
         // BUG-284: candidate pre-filter (see @layer above) — real-world
         // stylesheets often put the bulk of their rules inside @media blocks.
         let media_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().2.media[media_i].candidates(node_tag, node_id, &node_classes)
+            cell.borrow().3.media[media_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
@@ -6657,13 +6719,17 @@ pub fn compute_style(
     // CSS Conditional Rules L3 §2 — `@supports`: evaluate condition against
     // Lumen's supported-properties list; include contained rules only when
     // condition is true (same ordering semantics as @media).
+    //
+    // Perf: "active" precomputed once per sheet in `CascadeIndex::active_supports`
+    // (see doc comment) — `supports.condition.evaluate(..)` used to run per node.
+    let active_supports = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_supports.clone());
     for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
-        if !supports.condition.evaluate(SUPPORTED_PROPERTIES) {
+        if !active_supports[supports_i] {
             next_rule_idx += supports.rules.len();
             continue;
         }
         let supports_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().2.supports[supports_i].candidates(node_tag, node_id, &node_classes)
+            cell.borrow().3.supports[supports_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];
@@ -6863,7 +6929,29 @@ pub fn compute_style(
     // `apply_ua_*`/presentational-hint пассы выше (§ «UA stylesheet» /
     // «HTML presentational hints») отработали, но ни одна matched-декларация
     // ещё не применена. Снэпшот уходит в `apply_declaration` → `apply_css_wide_keyword`.
-    let ua_baseline = style.clone();
+    //
+    // Perf (docs/tasks/p3-cascade-perf.md Задача 1): безусловный
+    // `ComputedStyle::clone()` здесь был вторым по весу вкладом в build_box
+    // на тяжёлых страницах — на каждый узел клонируются десятки Vec/String/
+    // HashMap-полей ради свойства, которое почти никогда не встречается в
+    // реальном CSS. Клонируем, только если среди matched-деклараций реально
+    // есть `revert` — прямой (`prop: revert`) или через цепочку custom
+    // properties (`--x: revert; prop: var(--x);`, в т.ч. унаследованную от
+    // предка — все такие декларации остаются raw-строками в
+    // `custom_props`/`inherited.custom_props`, поэтому проверка ловит любую
+    // глубину вложенности). Когда клон не нужен, `ua_baseline_ref` указывает
+    // на `inherited` как безопасную заглушку: `apply_declaration` читает этот
+    // параметр только внутри ветки `kw == Revert`, которая в этом случае
+    // гарантированно не сработает ни для одной декларации.
+    let ua_baseline_font_size = style.font_size;
+    let needs_ua_baseline = matched.iter().any(|&(_, _, _, _, _, _, decl)| {
+        decl.value.trim().eq_ignore_ascii_case("revert")
+    }) || (
+        matched.iter().any(|&(_, _, _, _, _, _, decl)| decl.value.contains("var("))
+            && inherited.custom_props.values().any(|v| v.trim().eq_ignore_ascii_case("revert"))
+    );
+    let ua_baseline_storage: Option<ComputedStyle> = needs_ua_baseline.then(|| style.clone());
+    let ua_baseline_ref: &ComputedStyle = ua_baseline_storage.as_ref().unwrap_or(inherited);
 
     // Pre-pass: применяем font-size раньше, потому что em/% других свойств
     // считаются относительно computed font-size этого же элемента, а em для
@@ -6871,7 +6959,7 @@ pub fn compute_style(
     let parent_fs = inherited.font_size;
     let is_quirks = doc.mode() == DocumentMode::Quirks;
     for (_, _, _, _, _, _, decl) in &matched {
-        apply_font_size(&mut style, decl, parent_fs, ua_baseline.font_size, viewport, is_quirks);
+        apply_font_size(&mut style, decl, parent_fs, ua_baseline_font_size, viewport, is_quirks);
     }
 
     // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные
@@ -6880,7 +6968,7 @@ pub fn compute_style(
     // резолвятся отдельным post-pass в конце compute_style).
     for (_, _, _, _, _, _, decl) in &matched {
         if decl.property.eq_ignore_ascii_case("color-scheme") {
-            apply_declaration(&mut style, decl, parent_fs, viewport, FontWeight::NORMAL, inherited, &ua_baseline, is_quirks, dark_mode);
+            apply_declaration(&mut style, decl, parent_fs, viewport, FontWeight::NORMAL, inherited, ua_baseline_ref, is_quirks, dark_mode);
         }
     }
 
@@ -6998,7 +7086,7 @@ pub fn compute_style(
         } else {
             effective_decl
         };
-        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, &ua_baseline, is_quirks, dark_mode);
+        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, ua_baseline_ref, is_quirks, dark_mode);
     }
 
     // CSS Color 4 §6.2 — post-pass: resolve any CssColor::System variants in
@@ -7498,14 +7586,16 @@ pub fn compute_pseudo_element_style(
     let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
     let sheet_ptr = sheet as *const Stylesheet as usize;
     let sheet_rules_len = sheet.rules.len();
+    let media_key = CascadeMediaKey::current(viewport, dark_mode);
     RULE_IDX_CACHE.with(|cell| {
         let mut cached = cell.borrow_mut();
-        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len {
-            *cached = (sheet_ptr, sheet_rules_len, CascadeIndex::build(sheet));
+        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len || cached.2 != media_key {
+            let media_ctx = media_context_from_viewport(viewport, dark_mode);
+            *cached = (sheet_ptr, sheet_rules_len, media_key, CascadeIndex::build(sheet, &media_ctx));
         }
     });
     let cands = RULE_IDX_CACHE.with(|cell| {
-        cell.borrow().2.rules.candidates(node_tag, node_id, &node_classes)
+        cell.borrow().3.rules.candidates(node_tag, node_id, &node_classes)
     });
     for rule_idx in cands {
         let rule = &sheet.rules[rule_idx];
@@ -7525,15 +7615,19 @@ pub fn compute_pseudo_element_style(
         }
     }
 
-    let media_ctx = media_context_from_viewport(viewport, dark_mode);
+    // Perf: see the analogous @media/@supports comments in `compute_style` —
+    // "active" precomputed once per (sheet, viewport, dark_mode) rather than
+    // re-evaluated on every element (this function runs twice per element,
+    // for `::before` and `::after`).
+    let active_media = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_media.clone());
     let mut next_rule_idx = sheet.rules.len();
     for (media_i, media) in sheet.media_rules.iter().enumerate() {
-        if !media.query.matches(&media_ctx) {
+        if !active_media[media_i] {
             next_rule_idx += media.rules.len();
             continue;
         }
         let media_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().2.media[media_i].candidates(node_tag, node_id, &node_classes)
+            cell.borrow().3.media[media_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
@@ -7556,13 +7650,14 @@ pub fn compute_pseudo_element_style(
         next_rule_idx += media.rules.len();
     }
     // CSS Conditional Rules L3 §2 — @supports in pseudo-element context.
+    let active_supports = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_supports.clone());
     for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
-        if !supports.condition.evaluate(SUPPORTED_PROPERTIES) {
+        if !active_supports[supports_i] {
             next_rule_idx += supports.rules.len();
             continue;
         }
         let supports_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().2.supports[supports_i].candidates(node_tag, node_id, &node_classes)
+            cell.borrow().3.supports[supports_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];
