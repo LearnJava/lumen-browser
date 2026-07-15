@@ -2169,135 +2169,135 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style.rs:3657` **enum** `InterpolateSizeMode` — CSS Sizing L4 §4.5 — `interpolate-size` property value
 `crates/engine/layout/src/style.rs:3669` **enum** `ContainerType` — CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`
 `crates/engine/layout/src/style.rs:3679` **struct** `ContainerContext` — Resolved container dimensions, passed during style re-computation for container queries
-`crates/engine/layout/src/style.rs:3723` **fn** `evaluate_container_condition` — Evaluates a raw @container condition string against a `ContainerContext`
-`crates/engine/layout/src/style.rs:3884` **fn** `apply_container_rules` — Applies matching `@container` rules from `sheet` to `style`
-`crates/engine/layout/src/style.rs:3938` **enum** `ShapeOutside` — CSS Shapes L1 §3 — `shape-outside` value. NOT inherited. Initial: `None`
-`crates/engine/layout/src/style.rs:3947` **enum** `OffsetRotate` — CSS Motion Path L1 §3 — `offset-rotate`. NOT inherited. Initial: `Auto`
-`crates/engine/layout/src/style.rs:3958` **enum** `PrintColorAdjust` — CSS Color Adjustment L1 §5 — `print-color-adjust`. NOT inherited. Initial: `Economy`
-`crates/engine/layout/src/style.rs:3966` **enum** `FontSizeAdjust` — CSS Fonts L5 §4 — `font-size-adjust`. Inherited. Initial: `None`
-`crates/engine/layout/src/style.rs:3975` **enum** `WritingMode` — CSS Writing Modes L3 §2.1 — `writing-mode`. Inherited. Initial: `HorizontalTb`
-`crates/engine/layout/src/style.rs:3992` **enum** `TextOrientation` — CSS Writing Modes L3 §6.5 — `text-orientation`. Inherited. Initial: `Mixed`
-`crates/engine/layout/src/style.rs:4004` **enum** `UserSelect` — CSS UI L4 §6.2 — `user-select`. Inherited
-`crates/engine/layout/src/style.rs:4014` **fn** `parse`
-`crates/engine/layout/src/style.rs:4028` **enum** `ScrollBehavior` — CSS Overflow L3 — `scroll-behavior`. Inherited
-`crates/engine/layout/src/style.rs:4036` **struct** `ScrollSnapType` — CSS Scroll Snap L1 §3.1 — `scroll-snap-type: none | <axis> [mandatory | proximity]`
-`crates/engine/layout/src/style.rs:4042` **enum** `ScrollSnapAxis`
-`crates/engine/layout/src/style.rs:4053` **enum** `ScrollSnapStrictness`
-`crates/engine/layout/src/style.rs:4061` **struct** `ScrollSnapAlign` — CSS Scroll Snap L1 §6.1 — `scroll-snap-align: none | <axis-keyword>{1,2}`
-`crates/engine/layout/src/style.rs:4067` **enum** `ScrollSnapAlignKeyword`
-`crates/engine/layout/src/style.rs:4076` **enum** `ScrollSnapStop`
-`crates/engine/layout/src/style.rs:4084` **enum** `OverscrollBehavior` — CSS Overscroll Behavior L1 §2 — `overscroll-behavior: auto | contain | none`
-`crates/engine/layout/src/style.rs:4092` **fn** `parse`
-`crates/engine/layout/src/style.rs:4107` **enum** `ParsedGradient` — CSS Images L3/L4 §3.3/§3.7 — parsed linear / radial / conic gradient
-`crates/engine/layout/src/style.rs:4152` **enum** `RadialShape` — CSS Images L3 §3.5 — ending-shape of a `radial-gradient`
-`crates/engine/layout/src/style.rs:4164` **enum** `RadialSize` — CSS Images L3 §3.5 — sizing keyword controlling the radii of a
-`crates/engine/layout/src/style.rs:4182` **fn** `radial_gradient_radii` — CSS Images L3 §3.5.1 — resolves a `radial-gradient` ending shape to concrete
-`crates/engine/layout/src/style.rs:4219` **enum** `BackgroundImage` — CSS Backgrounds L3 §3.1 / CSS Images L4 §4 — `background-image` value
-`crates/engine/layout/src/style.rs:4247` **enum** `BackgroundRepeat` — CSS Backgrounds L3 §3.4 — `background-repeat`
-`crates/engine/layout/src/style.rs:4258` **fn** `parse`
-`crates/engine/layout/src/style.rs:4277` **enum** `BgSizeAxis` — CSS Backgrounds L3 §3.5 — one axis of an explicit `background-size` value
-`crates/engine/layout/src/style.rs:4291` **fn** `resolve` — Resolve to a concrete px extent against `area` (the positioning-area
-`crates/engine/layout/src/style.rs:4302` **enum** `BackgroundSize` — CSS Backgrounds L3 §3.5 — `background-size`
-`crates/engine/layout/src/style.rs:4314` **enum** `BackgroundAttachment` — CSS Backgrounds L3 §3.6 — `background-attachment`
-`crates/engine/layout/src/style.rs:4322` **fn** `parse`
-`crates/engine/layout/src/style.rs:4343` **enum** `BackgroundOrigin` — CSS Backgrounds L3 §3.7 — `background-origin`. Non-inherited
-`crates/engine/layout/src/style.rs:4354` **fn** `parse`
-`crates/engine/layout/src/style.rs:4377` **enum** `BackgroundClip` — CSS Backgrounds L3 §3.8 — `background-clip`. Non-inherited
-`crates/engine/layout/src/style.rs:4391` **fn** `parse`
-`crates/engine/layout/src/style.rs:4407` **struct** `BackgroundLayer` — CSS Backgrounds L3 §3 — один фоновый слой. Первый в Vec = верхний (рисуется последним)
-`crates/engine/layout/src/style.rs:4447` **enum** `ObjectFit` — CSS Images L3 §5.5 — `object-fit`. Применяется к replaced elements
-`crates/engine/layout/src/style.rs:4468` **fn** `parse`
-`crates/engine/layout/src/style.rs:4488` **enum** `ImageRendering` — CSS Images L3 §6.1 — `image-rendering`. Hint для движка о том, как
-`crates/engine/layout/src/style.rs:4508` **fn** `parse`
-`crates/engine/layout/src/style.rs:4532` **enum** `TextWrapMode` — CSS Text Module Level 4 §6.4.1 — `text-wrap-mode`. Inherited
-`crates/engine/layout/src/style.rs:4541` **fn** `parse`
-`crates/engine/layout/src/style.rs:4559` **enum** `TextWrapStyle` — CSS Text Module Level 4 §6.4.2 — `text-wrap-style`. Inherited
-`crates/engine/layout/src/style.rs:4572` **fn** `parse`
-`crates/engine/layout/src/style.rs:4588` **enum** `FlexDirection` — CSS Flexbox L1 §5.1 — `flex-direction`. Non-inherited
-`crates/engine/layout/src/style.rs:4601` **fn** `parse`
-`crates/engine/layout/src/style.rs:4617` **enum** `FlexWrap` — CSS Flexbox L1 §5.2 — `flex-wrap`. Non-inherited
-`crates/engine/layout/src/style.rs:4628` **fn** `parse`
-`crates/engine/layout/src/style.rs:4643` **enum** `FlexBasis` — CSS Flexbox L1 §7.3 — `flex-basis`. Non-inherited
-`crates/engine/layout/src/style.rs:4654` **fn** `parse`
-`crates/engine/layout/src/style.rs:4668` **struct** `GridRepeat` — CSS Grid Layout L3 §9 — `repeat(auto-fill | auto-fit | <count>, <track-list>)`
-`crates/engine/layout/src/style.rs:4677` **enum** `RepeatCount` — Count type for grid-template-columns/rows `repeat()`
-`crates/engine/layout/src/style.rs:4690` **enum** `GridTrackSize` — CSS Grid Layout L1 §7.2 — sizing function for a grid track
-`crates/engine/layout/src/style.rs:4724` **fn** `resolve_fixed` — Resolve to a concrete pixel size given container width, em, viewport
-`crates/engine/layout/src/style.rs:4733` **fn** `is_fr` — True for fractional tracks
-`crates/engine/layout/src/style.rs:4738` **fn** `fr` — Extract fr value
-`crates/engine/layout/src/style.rs:4743` **fn** `is_subgrid` — True when this track inherits its size from the parent grid (subgrid axis)
-`crates/engine/layout/src/style.rs:4748` **fn** `is_masonry` — True when this axis uses masonry placement (CSS Grid L3 §14)
-`crates/engine/layout/src/style.rs:4794` **fn** `parse_track_list` — Parse a track-list value string into a Vec of GridTrackSize
-`crates/engine/layout/src/style.rs:4925` **enum** `GridAutoFlow` — CSS Grid Layout L1 §8.5 — `grid-auto-flow`. Non-inherited
-`crates/engine/layout/src/style.rs:4938` **fn** `parse`
-`crates/engine/layout/src/style.rs:4952` **enum** `MasonryAutoFlow` — CSS Masonry Layout §9 — `masonry-auto-flow`. Controls the placement order
-`crates/engine/layout/src/style.rs:4965` **fn** `parse` — Parse a CSS `masonry-auto-flow` value string
-`crates/engine/layout/src/style.rs:4978` **enum** `GridLine` — CSS Grid Layout L1 §8.3 — a grid-line reference for grid-column-start,
-`crates/engine/layout/src/style.rs:4992` **fn** `parse`
-`crates/engine/layout/src/style.rs:5027` **enum** `PositionComponent` — Одна компонента `object-position`. Length-варианты резолвятся в px
-`crates/engine/layout/src/style.rs:5040` **fn** `resolve` — Резолв в финальный px-offset относительно левого/верхнего края
-`crates/engine/layout/src/style.rs:5051` **struct** `ObjectPosition` — CSS Images L3 §5.5 — `object-position` (две компоненты, x + y)
-`crates/engine/layout/src/style.rs:5088` **fn** `parse` — CSS Values L4 §9.4 — `<position>` для object-position. Phase 0
-`crates/engine/layout/src/style.rs:5190` **enum** `AlignValue` — CSS Box Alignment L3 §6.1 — значения для align-/justify- свойств
-`crates/engine/layout/src/style.rs:5217` **fn** `parse`
-`crates/engine/layout/src/style.rs:5241` **enum** `ShapeValue` — CSS Masking L1 §3.5 — `<length-percentage>` значение координаты/размера
-`crates/engine/layout/src/style.rs:5251` **fn** `resolve` — Резолвит значение в px. `basis` — размер reference box по
-`crates/engine/layout/src/style.rs:5266` **enum** `ClipPath` — CSS Masking L1 §3.5 — basic-shapes для `clip-path`. Phase 0
-`crates/engine/layout/src/style.rs:5307` **enum** `TransformStyle` — CSS Transforms L1 §11 — функции `transform`. Phase 0 поддерживает
-`crates/engine/layout/src/style.rs:5317` **enum** `BackfaceVisibility` — CSS Transforms L2 §5.1 — `backface-visibility: visible | hidden`
-`crates/engine/layout/src/style.rs:5328` **enum** `TransformFn` — CSS transform functions — translate/scale/rotate/skew/skewX/skewY/matrix
-`crates/engine/layout/src/style.rs:5366` **enum** `FilterFn` — CSS Filter Effects L1 §3 — функции `filter`. Phase 0 поддерживает
-`crates/engine/layout/src/style.rs:5399` **struct** `GradientStop` — CSS Images L3 §3.4 — единичный `<color-stop>` градиента
-`crates/engine/layout/src/style.rs:5412` **enum** `MaskMode` — CSS Masking L1 §6.4 — `mask-mode`. Selects which channel of the mask image
-`crates/engine/layout/src/style.rs:5426` **enum** `MaskComposite` — CSS Masking L1 §4.7 — `mask-composite`. Controls how multiple mask layers
-`crates/engine/layout/src/style.rs:5435` **fn** `parse`
-`crates/engine/layout/src/style.rs:5451` **fn** `outline_used_width` — CSS 2.1 §17.6.1 / Basic UI L4 §5.2 — **used** value `outline-width`
-`crates/engine/layout/src/style.rs:5462` **fn** `text_rendering_eq` — Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, начертание,
-`crates/engine/layout/src/style.rs:5480` **fn** `root` — Стартовые значения для корня документа
-`crates/engine/layout/src/style.rs:5790` **fn** `compute_style` — Computes the `ComputedStyle` for `node` by running the CSS cascade
-`crates/engine/layout/src/style.rs:7065` **fn** `compute_style_from_declarations` — Build a `ComputedStyle` from a flat list of declarations with neutral context
-`crates/engine/layout/src/style.rs:7110` **fn** `compute_pseudo_element_style` — Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`
-`crates/engine/layout/src/style.rs:7340` **fn** `compute_selection_style` — Computes the `::selection` override style for a DOM element
-`crates/engine/layout/src/style.rs:7398` **fn** `validate_against_syntax` — CSS Properties and Values L1 §2 — упрощённая валидация значения
-`crates/engine/layout/src/style.rs:9887` **fn** `ua_form_element_colors` — UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»)
-`crates/engine/layout/src/style.rs:10097` **fn** `parse_font_family` — Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
-`crates/engine/layout/src/style.rs:10160` **fn** `parse_font_variation_settings` — Парсит CSS `font-variation-settings` (CSS Fonts L4 §7)
-`crates/engine/layout/src/style.rs:10203` **fn** `parse_font_feature_settings` — Парсит CSS `font-feature-settings` (CSS Fonts L3 §6)
-`crates/engine/layout/src/style.rs:10244` **enum** `FontPalette` — CSS Fonts L4 §11.3 — computed value of `font-palette`
-`crates/engine/layout/src/style.rs:10261` **fn** `parse_font_palette` — Парсит CSS `font-palette`: `normal | light | dark | <dashed-ident>`
-`crates/engine/layout/src/style.rs:10336` **fn** `set_cq_context` — Sets the nearest-container size for `cq*` unit resolution during the container re-layout pass
-`crates/engine/layout/src/style.rs:10341` **fn** `clear_cq_context` — Clears the `cq*` context after the container re-layout pass completes
-`crates/engine/layout/src/style.rs:10365` **fn** `set_interactive_state` — Sets the interactive hover/focus/active state for the next layout pass
-`crates/engine/layout/src/style.rs:10376` **fn** `clear_interactive_state` — Clears hover/focus/active state after layout
-`crates/engine/layout/src/style.rs:10395` **fn** `set_forced_colors` — Enables/disables Forced Colors Mode (CSS Color Adjustment L1 §3) for all
-`crates/engine/layout/src/style.rs:10400` **fn** `forced_colors_active` — True when Forced Colors Mode is active on the current thread
-`crates/engine/layout/src/style.rs:10419` **fn** `set_print_media` — Selects the `print` (`true`) or `screen` (`false`) `@media` type for all
-`crates/engine/layout/src/style.rs:10424` **fn** `print_media_active` — True when the current layout pass renders for `print` media
-`crates/engine/layout/src/style.rs:10447` **struct** `StyleEnvSnapshot` — Snapshot of all style-pass thread-locals needed for rayon worker threads
-`crates/engine/layout/src/style.rs:10458` **fn** `capture` — Capture the current thread's style environment
-`crates/engine/layout/src/style.rs:10473` **fn** `install` — Install this snapshot on the **current** (worker) thread
-`crates/engine/layout/src/style.rs:10525` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
-`crates/engine/layout/src/style.rs:10533` **fn** `is_auto`
-`crates/engine/layout/src/style.rs:10540` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
-`crates/engine/layout/src/style.rs:10550` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
-`crates/engine/layout/src/style.rs:10558` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
-`crates/engine/layout/src/style.rs:10569` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
-`crates/engine/layout/src/style.rs:10634` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
-`crates/engine/layout/src/style.rs:10663` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
-`crates/engine/layout/src/style.rs:10692` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
-`crates/engine/layout/src/style.rs:10716` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
-`crates/engine/layout/src/style.rs:10914` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
-`crates/engine/layout/src/style.rs:10954` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
-`crates/engine/layout/src/style.rs:10960` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
-`crates/engine/layout/src/style.rs:10966` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
-`crates/engine/layout/src/style.rs:11121` **fn** `parse_length`
-`crates/engine/layout/src/style.rs:14869` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
-`crates/engine/layout/src/style.rs:16955` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
-`crates/engine/layout/src/style.rs:18189` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
-`crates/engine/layout/src/style.rs:18269` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
-`crates/engine/layout/src/style.rs:18678` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
-`crates/engine/layout/src/style.rs:19549` **fn** `parse_color`
-`crates/engine/layout/src/style.rs:19712` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
+`crates/engine/layout/src/style.rs:3775` **fn** `evaluate_container_condition` — Evaluates a raw @container condition string against a `ContainerContext`
+`crates/engine/layout/src/style.rs:4055` **fn** `apply_container_rules` — Applies matching `@container` rules from `sheet` to `style`
+`crates/engine/layout/src/style.rs:4109` **enum** `ShapeOutside` — CSS Shapes L1 §3 — `shape-outside` value. NOT inherited. Initial: `None`
+`crates/engine/layout/src/style.rs:4118` **enum** `OffsetRotate` — CSS Motion Path L1 §3 — `offset-rotate`. NOT inherited. Initial: `Auto`
+`crates/engine/layout/src/style.rs:4129` **enum** `PrintColorAdjust` — CSS Color Adjustment L1 §5 — `print-color-adjust`. NOT inherited. Initial: `Economy`
+`crates/engine/layout/src/style.rs:4137` **enum** `FontSizeAdjust` — CSS Fonts L5 §4 — `font-size-adjust`. Inherited. Initial: `None`
+`crates/engine/layout/src/style.rs:4146` **enum** `WritingMode` — CSS Writing Modes L3 §2.1 — `writing-mode`. Inherited. Initial: `HorizontalTb`
+`crates/engine/layout/src/style.rs:4163` **enum** `TextOrientation` — CSS Writing Modes L3 §6.5 — `text-orientation`. Inherited. Initial: `Mixed`
+`crates/engine/layout/src/style.rs:4175` **enum** `UserSelect` — CSS UI L4 §6.2 — `user-select`. Inherited
+`crates/engine/layout/src/style.rs:4185` **fn** `parse`
+`crates/engine/layout/src/style.rs:4199` **enum** `ScrollBehavior` — CSS Overflow L3 — `scroll-behavior`. Inherited
+`crates/engine/layout/src/style.rs:4207` **struct** `ScrollSnapType` — CSS Scroll Snap L1 §3.1 — `scroll-snap-type: none | <axis> [mandatory | proximity]`
+`crates/engine/layout/src/style.rs:4213` **enum** `ScrollSnapAxis`
+`crates/engine/layout/src/style.rs:4224` **enum** `ScrollSnapStrictness`
+`crates/engine/layout/src/style.rs:4232` **struct** `ScrollSnapAlign` — CSS Scroll Snap L1 §6.1 — `scroll-snap-align: none | <axis-keyword>{1,2}`
+`crates/engine/layout/src/style.rs:4238` **enum** `ScrollSnapAlignKeyword`
+`crates/engine/layout/src/style.rs:4247` **enum** `ScrollSnapStop`
+`crates/engine/layout/src/style.rs:4255` **enum** `OverscrollBehavior` — CSS Overscroll Behavior L1 §2 — `overscroll-behavior: auto | contain | none`
+`crates/engine/layout/src/style.rs:4263` **fn** `parse`
+`crates/engine/layout/src/style.rs:4278` **enum** `ParsedGradient` — CSS Images L3/L4 §3.3/§3.7 — parsed linear / radial / conic gradient
+`crates/engine/layout/src/style.rs:4323` **enum** `RadialShape` — CSS Images L3 §3.5 — ending-shape of a `radial-gradient`
+`crates/engine/layout/src/style.rs:4335` **enum** `RadialSize` — CSS Images L3 §3.5 — sizing keyword controlling the radii of a
+`crates/engine/layout/src/style.rs:4353` **fn** `radial_gradient_radii` — CSS Images L3 §3.5.1 — resolves a `radial-gradient` ending shape to concrete
+`crates/engine/layout/src/style.rs:4390` **enum** `BackgroundImage` — CSS Backgrounds L3 §3.1 / CSS Images L4 §4 — `background-image` value
+`crates/engine/layout/src/style.rs:4418` **enum** `BackgroundRepeat` — CSS Backgrounds L3 §3.4 — `background-repeat`
+`crates/engine/layout/src/style.rs:4429` **fn** `parse`
+`crates/engine/layout/src/style.rs:4448` **enum** `BgSizeAxis` — CSS Backgrounds L3 §3.5 — one axis of an explicit `background-size` value
+`crates/engine/layout/src/style.rs:4462` **fn** `resolve` — Resolve to a concrete px extent against `area` (the positioning-area
+`crates/engine/layout/src/style.rs:4473` **enum** `BackgroundSize` — CSS Backgrounds L3 §3.5 — `background-size`
+`crates/engine/layout/src/style.rs:4485` **enum** `BackgroundAttachment` — CSS Backgrounds L3 §3.6 — `background-attachment`
+`crates/engine/layout/src/style.rs:4493` **fn** `parse`
+`crates/engine/layout/src/style.rs:4514` **enum** `BackgroundOrigin` — CSS Backgrounds L3 §3.7 — `background-origin`. Non-inherited
+`crates/engine/layout/src/style.rs:4525` **fn** `parse`
+`crates/engine/layout/src/style.rs:4548` **enum** `BackgroundClip` — CSS Backgrounds L3 §3.8 — `background-clip`. Non-inherited
+`crates/engine/layout/src/style.rs:4562` **fn** `parse`
+`crates/engine/layout/src/style.rs:4578` **struct** `BackgroundLayer` — CSS Backgrounds L3 §3 — один фоновый слой. Первый в Vec = верхний (рисуется последним)
+`crates/engine/layout/src/style.rs:4618` **enum** `ObjectFit` — CSS Images L3 §5.5 — `object-fit`. Применяется к replaced elements
+`crates/engine/layout/src/style.rs:4639` **fn** `parse`
+`crates/engine/layout/src/style.rs:4659` **enum** `ImageRendering` — CSS Images L3 §6.1 — `image-rendering`. Hint для движка о том, как
+`crates/engine/layout/src/style.rs:4679` **fn** `parse`
+`crates/engine/layout/src/style.rs:4703` **enum** `TextWrapMode` — CSS Text Module Level 4 §6.4.1 — `text-wrap-mode`. Inherited
+`crates/engine/layout/src/style.rs:4712` **fn** `parse`
+`crates/engine/layout/src/style.rs:4730` **enum** `TextWrapStyle` — CSS Text Module Level 4 §6.4.2 — `text-wrap-style`. Inherited
+`crates/engine/layout/src/style.rs:4743` **fn** `parse`
+`crates/engine/layout/src/style.rs:4759` **enum** `FlexDirection` — CSS Flexbox L1 §5.1 — `flex-direction`. Non-inherited
+`crates/engine/layout/src/style.rs:4772` **fn** `parse`
+`crates/engine/layout/src/style.rs:4788` **enum** `FlexWrap` — CSS Flexbox L1 §5.2 — `flex-wrap`. Non-inherited
+`crates/engine/layout/src/style.rs:4799` **fn** `parse`
+`crates/engine/layout/src/style.rs:4814` **enum** `FlexBasis` — CSS Flexbox L1 §7.3 — `flex-basis`. Non-inherited
+`crates/engine/layout/src/style.rs:4825` **fn** `parse`
+`crates/engine/layout/src/style.rs:4839` **struct** `GridRepeat` — CSS Grid Layout L3 §9 — `repeat(auto-fill | auto-fit | <count>, <track-list>)`
+`crates/engine/layout/src/style.rs:4848` **enum** `RepeatCount` — Count type for grid-template-columns/rows `repeat()`
+`crates/engine/layout/src/style.rs:4861` **enum** `GridTrackSize` — CSS Grid Layout L1 §7.2 — sizing function for a grid track
+`crates/engine/layout/src/style.rs:4895` **fn** `resolve_fixed` — Resolve to a concrete pixel size given container width, em, viewport
+`crates/engine/layout/src/style.rs:4904` **fn** `is_fr` — True for fractional tracks
+`crates/engine/layout/src/style.rs:4909` **fn** `fr` — Extract fr value
+`crates/engine/layout/src/style.rs:4914` **fn** `is_subgrid` — True when this track inherits its size from the parent grid (subgrid axis)
+`crates/engine/layout/src/style.rs:4919` **fn** `is_masonry` — True when this axis uses masonry placement (CSS Grid L3 §14)
+`crates/engine/layout/src/style.rs:4965` **fn** `parse_track_list` — Parse a track-list value string into a Vec of GridTrackSize
+`crates/engine/layout/src/style.rs:5096` **enum** `GridAutoFlow` — CSS Grid Layout L1 §8.5 — `grid-auto-flow`. Non-inherited
+`crates/engine/layout/src/style.rs:5109` **fn** `parse`
+`crates/engine/layout/src/style.rs:5123` **enum** `MasonryAutoFlow` — CSS Masonry Layout §9 — `masonry-auto-flow`. Controls the placement order
+`crates/engine/layout/src/style.rs:5136` **fn** `parse` — Parse a CSS `masonry-auto-flow` value string
+`crates/engine/layout/src/style.rs:5149` **enum** `GridLine` — CSS Grid Layout L1 §8.3 — a grid-line reference for grid-column-start,
+`crates/engine/layout/src/style.rs:5163` **fn** `parse`
+`crates/engine/layout/src/style.rs:5198` **enum** `PositionComponent` — Одна компонента `object-position`. Length-варианты резолвятся в px
+`crates/engine/layout/src/style.rs:5211` **fn** `resolve` — Резолв в финальный px-offset относительно левого/верхнего края
+`crates/engine/layout/src/style.rs:5222` **struct** `ObjectPosition` — CSS Images L3 §5.5 — `object-position` (две компоненты, x + y)
+`crates/engine/layout/src/style.rs:5259` **fn** `parse` — CSS Values L4 §9.4 — `<position>` для object-position. Phase 0
+`crates/engine/layout/src/style.rs:5361` **enum** `AlignValue` — CSS Box Alignment L3 §6.1 — значения для align-/justify- свойств
+`crates/engine/layout/src/style.rs:5388` **fn** `parse`
+`crates/engine/layout/src/style.rs:5412` **enum** `ShapeValue` — CSS Masking L1 §3.5 — `<length-percentage>` значение координаты/размера
+`crates/engine/layout/src/style.rs:5422` **fn** `resolve` — Резолвит значение в px. `basis` — размер reference box по
+`crates/engine/layout/src/style.rs:5437` **enum** `ClipPath` — CSS Masking L1 §3.5 — basic-shapes для `clip-path`. Phase 0
+`crates/engine/layout/src/style.rs:5478` **enum** `TransformStyle` — CSS Transforms L1 §11 — функции `transform`. Phase 0 поддерживает
+`crates/engine/layout/src/style.rs:5488` **enum** `BackfaceVisibility` — CSS Transforms L2 §5.1 — `backface-visibility: visible | hidden`
+`crates/engine/layout/src/style.rs:5499` **enum** `TransformFn` — CSS transform functions — translate/scale/rotate/skew/skewX/skewY/matrix
+`crates/engine/layout/src/style.rs:5537` **enum** `FilterFn` — CSS Filter Effects L1 §3 — функции `filter`. Phase 0 поддерживает
+`crates/engine/layout/src/style.rs:5570` **struct** `GradientStop` — CSS Images L3 §3.4 — единичный `<color-stop>` градиента
+`crates/engine/layout/src/style.rs:5583` **enum** `MaskMode` — CSS Masking L1 §6.4 — `mask-mode`. Selects which channel of the mask image
+`crates/engine/layout/src/style.rs:5597` **enum** `MaskComposite` — CSS Masking L1 §4.7 — `mask-composite`. Controls how multiple mask layers
+`crates/engine/layout/src/style.rs:5606` **fn** `parse`
+`crates/engine/layout/src/style.rs:5622` **fn** `outline_used_width` — CSS 2.1 §17.6.1 / Basic UI L4 §5.2 — **used** value `outline-width`
+`crates/engine/layout/src/style.rs:5633` **fn** `text_rendering_eq` — Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, начертание,
+`crates/engine/layout/src/style.rs:5651` **fn** `root` — Стартовые значения для корня документа
+`crates/engine/layout/src/style.rs:5961` **fn** `compute_style` — Computes the `ComputedStyle` for `node` by running the CSS cascade
+`crates/engine/layout/src/style.rs:7236` **fn** `compute_style_from_declarations` — Build a `ComputedStyle` from a flat list of declarations with neutral context
+`crates/engine/layout/src/style.rs:7281` **fn** `compute_pseudo_element_style` — Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`
+`crates/engine/layout/src/style.rs:7511` **fn** `compute_selection_style` — Computes the `::selection` override style for a DOM element
+`crates/engine/layout/src/style.rs:7569` **fn** `validate_against_syntax` — CSS Properties and Values L1 §2 — упрощённая валидация значения
+`crates/engine/layout/src/style.rs:10058` **fn** `ua_form_element_colors` — UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»)
+`crates/engine/layout/src/style.rs:10268` **fn** `parse_font_family` — Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
+`crates/engine/layout/src/style.rs:10331` **fn** `parse_font_variation_settings` — Парсит CSS `font-variation-settings` (CSS Fonts L4 §7)
+`crates/engine/layout/src/style.rs:10374` **fn** `parse_font_feature_settings` — Парсит CSS `font-feature-settings` (CSS Fonts L3 §6)
+`crates/engine/layout/src/style.rs:10415` **enum** `FontPalette` — CSS Fonts L4 §11.3 — computed value of `font-palette`
+`crates/engine/layout/src/style.rs:10432` **fn** `parse_font_palette` — Парсит CSS `font-palette`: `normal | light | dark | <dashed-ident>`
+`crates/engine/layout/src/style.rs:10507` **fn** `set_cq_context` — Sets the nearest-container size for `cq*` unit resolution during the container re-layout pass
+`crates/engine/layout/src/style.rs:10512` **fn** `clear_cq_context` — Clears the `cq*` context after the container re-layout pass completes
+`crates/engine/layout/src/style.rs:10536` **fn** `set_interactive_state` — Sets the interactive hover/focus/active state for the next layout pass
+`crates/engine/layout/src/style.rs:10547` **fn** `clear_interactive_state` — Clears hover/focus/active state after layout
+`crates/engine/layout/src/style.rs:10566` **fn** `set_forced_colors` — Enables/disables Forced Colors Mode (CSS Color Adjustment L1 §3) for all
+`crates/engine/layout/src/style.rs:10571` **fn** `forced_colors_active` — True when Forced Colors Mode is active on the current thread
+`crates/engine/layout/src/style.rs:10590` **fn** `set_print_media` — Selects the `print` (`true`) or `screen` (`false`) `@media` type for all
+`crates/engine/layout/src/style.rs:10595` **fn** `print_media_active` — True when the current layout pass renders for `print` media
+`crates/engine/layout/src/style.rs:10618` **struct** `StyleEnvSnapshot` — Snapshot of all style-pass thread-locals needed for rayon worker threads
+`crates/engine/layout/src/style.rs:10629` **fn** `capture` — Capture the current thread's style environment
+`crates/engine/layout/src/style.rs:10644` **fn** `install` — Install this snapshot on the **current** (worker) thread
+`crates/engine/layout/src/style.rs:10696` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
+`crates/engine/layout/src/style.rs:10704` **fn** `is_auto`
+`crates/engine/layout/src/style.rs:10711` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
+`crates/engine/layout/src/style.rs:10721` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
+`crates/engine/layout/src/style.rs:10729` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
+`crates/engine/layout/src/style.rs:10740` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
+`crates/engine/layout/src/style.rs:10805` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
+`crates/engine/layout/src/style.rs:10834` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
+`crates/engine/layout/src/style.rs:10863` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
+`crates/engine/layout/src/style.rs:10887` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
+`crates/engine/layout/src/style.rs:11085` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
+`crates/engine/layout/src/style.rs:11125` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
+`crates/engine/layout/src/style.rs:11131` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
+`crates/engine/layout/src/style.rs:11137` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
+`crates/engine/layout/src/style.rs:11292` **fn** `parse_length`
+`crates/engine/layout/src/style.rs:15040` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
+`crates/engine/layout/src/style.rs:17126` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
+`crates/engine/layout/src/style.rs:18360` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
+`crates/engine/layout/src/style.rs:18440` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
+`crates/engine/layout/src/style.rs:18849` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
+`crates/engine/layout/src/style.rs:19720` **fn** `parse_color`
+`crates/engine/layout/src/style.rs:19883` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
 `crates/engine/layout/src/subgrid.rs:24` **struct** `SubgridContext` — Resolved track sizes and cumulative offsets for one grid axis (columns or rows)
 `crates/engine/layout/src/subgrid.rs:35` **fn** `from_parent_tracks` — Build from a slice of parent track sizes and the gap value used between them
 `crates/engine/layout/src/subgrid.rs:46` **fn** `total_size` — Total span width/height occupied by all inherited tracks (including inter-track gaps)

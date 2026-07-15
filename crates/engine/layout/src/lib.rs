@@ -7359,6 +7359,7 @@ mod tests {
             style_props: style,
             font_size: 16.0,
             viewport: lumen_core::Size::new(1024.0, 768.0),
+            own_containing_block_height: 100.0,
         }
     }
 
@@ -7546,6 +7547,21 @@ mod tests {
     fn style_query_top_percent_uses_height_basis() {
         let ctx = style_ctx_with_style_props(&[], &[("top", "25px")]);
         assert!(crate::evaluate_container_condition("style(top: 25%)", &ctx));
+    }
+
+    #[test]
+    fn style_query_height_basis_is_own_containing_block_not_own_height() {
+        // Even when the container is `container-type: inline-size` (its own
+        // `height` is unknown, mirroring `ctx.height: None`), `%` in a
+        // `height`/`top` style() query must resolve against the container's
+        // *own* containing block height — not fall back to width like the
+        // Phase 0 gap used to (see CSS-SPECS.md T3 Container Queries).
+        let mut ctx = style_ctx_with_style_props(&[], &[("height", "60px")]);
+        ctx.height = None;
+        ctx.own_containing_block_height = 300.0;
+        assert!(crate::evaluate_container_condition("style(height: 20%)", &ctx));
+        assert!(!crate::evaluate_container_condition("style(height: 30%)", &ctx),
+            "30% of the containing block (300px) is 90px, not 60px — must not fall back to width (200px)");
     }
 
     #[test]
@@ -7826,6 +7842,32 @@ mod tests {
         assert!(
             (p.rect.height - 40.0).abs() < 0.5,
             "combined (min-width: 150px) and style(--theme: dark) should apply, got height={}",
+            p.rect.height,
+        );
+    }
+
+    /// @container style(height: %) — the `%` in the query's declared value
+    /// must resolve against the container's *own* containing block height
+    /// (its parent's content box), not the container's own height or width.
+    /// `outer` is 300px tall; `container`'s own `height: 150px` is exactly
+    /// 50% of that — a basis of the container's own height (150) or its
+    /// width (200) would both give a mismatch instead.
+    #[test]
+    fn container_style_query_height_percent_uses_parent_containing_block() {
+        let root = lay_measured(
+            "<div class=\"outer\"><div class=\"container\"><p></p></div></div>",
+            "div.outer { height: 300px; }
+             div.container { container-type: size; width: 200px; height: 150px; }
+             @container style(height: 50%) { p { height: 40px; } }",
+            400.0,
+        );
+        let outer = first_element_child(&root);
+        let container = first_element_child(outer);
+        let p = first_element_child(container);
+        assert!(
+            (p.rect.height - 40.0).abs() < 0.5,
+            "style(height: 50%) should apply (50% of the 300px parent height == the \
+             container's own 150px height), got p.height={}",
             p.rect.height,
         );
     }

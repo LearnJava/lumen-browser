@@ -10369,9 +10369,17 @@ pub fn apply_container_styles(
         return;
     }
     let pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, hp, dark_mode);
+    // CSS2.1 §10.5: the initial containing block's height is the viewport height —
+    // the `%`-height basis a root-level container itself would resolve against.
+    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, viewport.height, hp, dark_mode);
 }
 
+/// `parent_h` is the content-box height (px) of `b`'s *immediate* parent —
+/// the CSS2.1 §10.5 containing-block-height basis for resolving `%` in `b`'s
+/// own `height`/`top`/`bottom` in a `style()` query. Distinct from `pcb`
+/// (nearest *positioned* containing block, used for abs/fixed descendants):
+/// for a statically-positioned `b` nested several levels under a positioned
+/// ancestor, `pcb` is that ancestor's rect, not `b`'s immediate parent.
 #[allow(clippy::too_many_arguments, clippy::only_used_in_recursion)]
 fn apply_container_inner(
     b: &mut LayoutBox,
@@ -10380,22 +10388,26 @@ fn apply_container_inner(
     viewport: Size,
     measurer: Option<&dyn TextMeasurer>,
     pcb: Rect,
+    parent_h: f32,
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
 ) {
+    // Derive content dimensions from already-laid-out rect + style — needed
+    // both for container-query context (if `b` is a container) and as the
+    // `parent_h` basis passed down to `b`'s own children either way.
+    let em = b.style.font_size;
+    let bw = b.rect.width;
+    let pad_l = b.style.padding_left.resolve_or_zero(em, bw, viewport);
+    let pad_r = b.style.padding_right.resolve_or_zero(em, bw, viewport);
+    let pad_t = b.style.padding_top.resolve_or_zero(em, bw, viewport);
+    let pad_b = b.style.padding_bottom.resolve_or_zero(em, bw, viewport);
+    let content_w = (bw - pad_l - pad_r
+        - b.style.border_left_width - b.style.border_right_width).max(0.0);
+    let content_h_val = (b.rect.height - pad_t - pad_b
+        - b.style.border_top_width - b.style.border_bottom_width).max(0.0);
+
     let is_container = !matches!(b.style.container_type, ContainerType::Normal);
     if is_container {
-        // Derive content dimensions from already-laid-out rect + style.
-        let em = b.style.font_size;
-        let bw = b.rect.width;
-        let pad_l = b.style.padding_left.resolve_or_zero(em, bw, viewport);
-        let pad_r = b.style.padding_right.resolve_or_zero(em, bw, viewport);
-        let pad_t = b.style.padding_top.resolve_or_zero(em, bw, viewport);
-        let pad_b = b.style.padding_bottom.resolve_or_zero(em, bw, viewport);
-        let content_w = (bw - pad_l - pad_r
-            - b.style.border_left_width - b.style.border_right_width).max(0.0);
-        let content_h_val = (b.rect.height - pad_t - pad_b
-            - b.style.border_top_width - b.style.border_bottom_width).max(0.0);
         let content_h = if matches!(b.style.container_type, ContainerType::Size) {
             Some(content_h_val)
         } else {
@@ -10409,6 +10421,7 @@ fn apply_container_inner(
             style_props: crate::selector_query::computed_style_to_map(&b.style),
             font_size: em,
             viewport,
+            own_containing_block_height: parent_h,
         };
         // Re-apply container rules to all direct + indirect descendants.
         for child in &mut b.children {
@@ -10444,12 +10457,12 @@ fn apply_container_inner(
         // After re-layout, recurse into children to catch nested containers.
         // Each nested container will set its own cq* context during its own re-layout.
         for child in &mut b.children {
-            apply_container_inner(child, doc, sheet, viewport, measurer, child_pcb, hp, dark_mode);
+            apply_container_inner(child, doc, sheet, viewport, measurer, child_pcb, content_h_val, hp, dark_mode);
         }
     } else {
         // Not a container — just recurse looking for container descendants.
         for child in &mut b.children {
-            apply_container_inner(child, doc, sheet, viewport, measurer, pcb, hp, dark_mode);
+            apply_container_inner(child, doc, sheet, viewport, measurer, pcb, content_h_val, hp, dark_mode);
         }
     }
 }
