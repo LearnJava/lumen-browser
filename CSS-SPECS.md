@@ -717,7 +717,7 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | 24 | `column-rule` rendering | ✅ | done — multi-column `column-rule` (CAPABILITIES.md) |
 | 25 | `line-height` leading in line box | ✅ | half_leading=(line_h-em)/2 в apply_inline_vertical_align + ascent_px() в TextMeasurer + 4 тесты 2026-05-24 |
 | 26 | Scroll snap shell integration | ✅ | done — scroll-snap fields wired in `style.rs`/`lib.rs` |
-| 27 | `@container` 2nd-pass execution | L | container-type done; general `@layer`/`@scope`/`@container` cascade wiring in css-parser still ⬜ per CAPABILITIES.md — needs P4 verification, not re-marked done here |
+| 27 | `@container` 2nd-pass execution | ✅ | done 2026-07-15 — nested `@media`/`@supports`/`@layer`/`@container`/`@scope` inside conditional-group at-rule bodies now bubble to stylesheet-level (flat model), `Parser::bubbled` + `parse_bare_group_body`/`parse_nested_group_body` in `css-parser/src/parser.rs`, 8 new tests |
 | 28 | `backdrop-filter` GPU compositing pass | ✅ | done — LRU cache (CAPABILITIES.md) |
 | 29 | `writing-mode: vertical-*` axis swap | ✅ | done — `vertical-rl/lr` (CAPABILITIES.md) |
 | 30 | `subgrid` track inheritance | ✅ | done — `SubgridContext`/`SUBGRID_COL_CTX`/`SUBGRID_ROW_CTX` in `box_tree.rs` (was stale-flagged as "algorithm stub" in CAPABILITIES.md, fixed same sweep) |
