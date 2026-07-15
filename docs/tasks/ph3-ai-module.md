@@ -10,24 +10,28 @@
 
 ## Status
 
-In progress. Optional feature, disabled in the default bundle. Step 1 (crate
-skeleton, `AiBackend::embed`/`summarise`), Step 2 (`EmbeddingBackend` +
-`OllamaEmbeddingBackend`), Step 3 (`SemanticIndex` linear-scan +
-`DefaultKnowledgeStore::search_semantic`), Step 4 (`GenerationBackend` +
-`OllamaGenerationBackend`, `AiBackend::summarise`/`query` delegation), and
-Step 5 (`RagEngine::answer` — embed prompt, retrieve nearest semantic-index
-entries, generate a grounded response) are merged — see `subsystems/ai.md`
-§Done and `subsystems/knowledge.md`. Step 3 used the mock/linear-scan
-interface Step 0 allows (the referenced HNSW prerequisite doc still does not
-exist); a real ANN index is a drop-in replacement for `SemanticIndex` later.
-Step 5 does **not** wire `RagEngine` into `Lumen::ai_backend`/`AiPanel`:
-nothing in `crates/shell` constructs a `DefaultKnowledgeStore` or populates
-its semantic index from real browsing history yet (the shell uses the
-individual `HistoryFts`/`Notes`/`ReadLater` stores directly, not the
-`DefaultKnowledgeStore` facade) — wiring a panel to `RagEngine` today would
-always retrieve zero context. That wiring now depends on Step 6 (which adds
-the first real embedding-population path, for bookmarks) landing first, or
-on extending Step 6 to also populate history embeddings. Step 7 not started.
+All 7 steps merged (2026-07-15). Optional feature, disabled in the default
+bundle. See `subsystems/ai.md` §Done for the full per-step breakdown and
+§Deferred for what's intentionally still open:
+
+- Steps 1-5: crate skeleton, `EmbeddingBackend`/`OllamaEmbeddingBackend`,
+  `SemanticIndex` linear-scan + `DefaultKnowledgeStore::search_semantic`,
+  `GenerationBackend`/`OllamaGenerationBackend`, `RagEngine::answer`.
+- Step 6: semantic bookmarks (`Bookmark.summary`/`.embedding`, auto-populated
+  on Ctrl+D, `@bookmarks` omnibox prefix with cosine-similarity re-ranking).
+- Step 7: `@ai` omnibox prefix, routed through `RagEngine::answer` grounded
+  in bookmark embeddings (the only populated `DefaultKnowledgeStore` data
+  source today), falling back to the `NullAiBackend` stub text when Ollama
+  isn't reachable (ADR-019), or a static hint when `--features ai` is off.
+
+**Intentionally still open** (not part of any step's spec as written — see
+`subsystems/ai.md` §Deferred for why):
+- `Lumen::ai_backend`/`AiPanel` still always uses `NullAiBackend` — never
+  wired to a real `RagEngine`. Needs a design for populating
+  `DefaultKnowledgeStore` from real browsing history/notes, which no step so
+  far has specified; needs its own task brief.
+- `SemanticIndex` is still the Step 3 linear-scan mock, not a real HNSW index
+  (tracked separately in `p2-knowledge-stemmer-hnsw.md`).
 
 ---
 

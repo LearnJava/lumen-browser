@@ -53,8 +53,11 @@ backend-wgpu = ["lumen-paint/backend-wgpu"]
 
 # Optional local AI layer (§12.5, §12.8; docs/tasks/ph3-ai-module.md, ADR-019).
 # NOT in default — the basic bundle stays exactly as-is (NullAiBackend, no
-# lumen-ai compiled in). Enable with --features ai.
-ai = ["dep:lumen-ai"]
+# lumen-ai compiled in). Enable with --features ai. Also turns on lumen-ai's
+# own `ollama` feature — omnibox `@ai` (Step 7) needs `RagEngine` /
+# `OllamaEmbeddingBackend` / `OllamaGenerationBackend`, which lumen-ai gates
+# behind `ollama` internally (off by its own default).
+ai = ["dep:lumen-ai", "lumen-ai/ollama"]
 
 # Opt-in visual profiler (Tracy GUI app, https://github.com/wolfpld/tracy —
 # download and run it BEFORE launching lumen with this feature; it listens
