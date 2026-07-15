@@ -10,8 +10,11 @@
 
 ## Status
 
-Greenfield. Phase 3 — not started. Optional feature, disabled in the default
-bundle. Two prerequisite stubs already exist in the codebase (see §Current state).
+In progress. Optional feature, disabled in the default bundle. Step 1 (crate
+skeleton, `AiBackend::embed`/`summarise`) and Step 2 (`EmbeddingBackend` +
+`OllamaEmbeddingBackend`) are merged — see `subsystems/ai.md` §Done. Step 3
+is blocked on a missing HNSW index in `lumen-knowledge` (mock/linear-scan
+interface first, per Step 0). Steps 4-7 not started.
 
 ---
 

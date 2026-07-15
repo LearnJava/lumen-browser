@@ -6,11 +6,14 @@
 //! [ADR-019](../../../docs/decisions/ADR-019-ai-module-embedding-backend.md)
 //! for the embedding/generation backend choice (Ollama HTTP first).
 
+#[cfg(feature = "ollama")]
+pub mod embedding;
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn smoke() {
-        // Crate compiles and links against lumen-core. Real coverage lands with
-        // the embedding/generation backends (docs/tasks/ph3-ai-module.md Step 2+).
+        // Crate compiles and links against lumen-core. Generation backend +
+        // RAG engine land in docs/tasks/ph3-ai-module.md Step 4+.
     }
 }
