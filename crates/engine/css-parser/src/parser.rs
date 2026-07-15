@@ -891,6 +891,42 @@ pub struct Stylesheet {
     /// resolution happen in layout (`resolve_color_profile`); real ICC transform
     /// is deferred — channels are treated as already-sRGB.
     pub color_profiles: Vec<ColorProfileRule>,
+    /// CSS Functions and Mixins L1 — `@function --name(<params>) { decls }`.
+    /// Author-defined custom function, invoked as `--name(<args>)` from any
+    /// property value. Parsing covers positional parameters with optional
+    /// defaults and a raw `returns` type; evaluation (positional argument
+    /// binding, local `--x` declarations, `result` substitution) happens in
+    /// layout (`expand_custom_functions`, style.rs). Conditional group rules
+    /// inside the body (`@media`, `@container`) are not yet supported.
+    pub function_rules: Vec<FunctionRule>,
+}
+
+/// `@function <name>(<params>) [returns <type>]? { declarations }` — CSS
+/// Functions and Mixins L1. Declares an author-defined custom function
+/// invoked from property values as `<name>(<args>)`. `<name>` is a
+/// dashed-ident (function-token grammar: no whitespace before `(`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionRule {
+    /// Dashed-ident name, e.g. `--double`. Matched against `<name>(...)` calls.
+    pub name: String,
+    /// Positional parameters in declared order.
+    pub parameters: Vec<FunctionParameter>,
+    /// Raw `returns <type>` descriptor, if present. Stored but not type-checked
+    /// (call-site substitution is untyped string substitution, same as `var()`).
+    pub returns: Option<String>,
+    /// Body declarations in source order: local `--x: ...;` custom properties
+    /// used to build up a value, plus the `result: <value>;` descriptor that
+    /// gives the function's return value.
+    pub declarations: Vec<Declaration>,
+}
+
+/// One parameter of an `@function` rule: `--name` or `--name: <default>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionParameter {
+    /// Dashed-ident parameter name, e.g. `--x`. Referenced inside the body via `var(--x)`.
+    pub name: String,
+    /// Optional default value, substituted when the call site omits this argument.
+    pub default: Option<String>,
 }
 
 /// `@color-profile --name { src: url(...); rendering-intent: ...; }` — CSS
@@ -1543,6 +1579,7 @@ enum AtRuleOutcome {
     StartingStyle(StartingStyleRule),
     Container(ContainerRule),
     ColorProfile(ColorProfileRule),
+    Function(FunctionRule),
     None,
 }
 
@@ -2222,6 +2259,7 @@ impl<'a> Parser<'a> {
         let mut starting_style_rules: Vec<StartingStyleRule> = Vec::new();
         let mut container_rules: Vec<ContainerRule> = Vec::new();
         let mut color_profiles: Vec<ColorProfileRule> = Vec::new();
+        let mut function_rules: Vec<FunctionRule> = Vec::new();
         let mut anon_counter: usize = 0;
         loop {
             self.skip_ws_and_comments();
@@ -2234,6 +2272,7 @@ impl<'a> Parser<'a> {
                     AtRuleOutcome::FontFace(f) => font_faces.push(f),
                     AtRuleOutcome::FontPaletteValues(fp) => font_palette_values.push(fp),
                     AtRuleOutcome::ColorProfile(cp) => color_profiles.push(cp),
+                    AtRuleOutcome::Function(f) => function_rules.push(f),
                     AtRuleOutcome::LayerNames(names) => {
                         for n in names {
                             if !layer_order.iter().any(|e| e == &n) {
@@ -2319,6 +2358,7 @@ impl<'a> Parser<'a> {
             starting_style_rules,
             container_rules,
             color_profiles,
+            function_rules,
         }
     }
 
@@ -2393,6 +2433,11 @@ impl<'a> Parser<'a> {
             return self
                 .parse_color_profile_body()
                 .map_or(AtRuleOutcome::None, AtRuleOutcome::ColorProfile);
+        }
+        if name.eq_ignore_ascii_case("function") {
+            return self
+                .parse_function_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Function);
         }
         // Прочее @-правило: откатимся к '@' и пропустим как раньше.
         self.pos = start;
@@ -2623,6 +2668,127 @@ impl<'a> Parser<'a> {
             src,
             rendering_intent,
         })
+    }
+
+    /// Парсит `@function <name>(<params>) [returns <type>]? { decls }` — CSS
+    /// Functions and Mixins L1. Prelude — dashed-ident сразу (без пробела,
+    /// function-token grammar) за которым следует `(`. Параметры — список
+    /// `--param [: <default>]` через запятую (`--foo()` — пустой список).
+    /// Опциональный `returns <type>` перед `{` хранится сырой строкой, без
+    /// типизации. Возвращает `None`, если prelude не dashed-ident-function-
+    /// token или блок `{ ... }` отсутствует.
+    fn parse_function_rule(&mut self) -> Option<FunctionRule> {
+        self.skip_ws_and_comments();
+        let name = self.parse_ident()?;
+        if !name.starts_with("--") || self.peek() != Some('(') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume(); // '('
+        let params_str = self.read_balanced_parens()?;
+        let parameters: Vec<FunctionParameter> = split_top_level_commas(&params_str)
+            .into_iter()
+            .filter_map(|raw| {
+                let raw = raw.trim();
+                if raw.is_empty() {
+                    return None;
+                }
+                let param = match raw.split_once(':') {
+                    Some((n, default)) => FunctionParameter {
+                        name: n.trim().to_string(),
+                        default: Some(default.trim().to_string()),
+                    },
+                    None => FunctionParameter { name: raw.to_string(), default: None },
+                };
+                param.name.starts_with("--").then_some(param)
+            })
+            .collect();
+
+        self.skip_ws_and_comments();
+        let mut returns = None;
+        if self.skip_optional_returns_keyword() {
+            self.skip_ws_and_comments();
+            let type_start = self.pos;
+            while let Some(c) = self.peek() {
+                if c == '{' {
+                    break;
+                }
+                self.consume();
+            }
+            let raw_type = self.input[type_start..self.pos].trim();
+            if !raw_type.is_empty() {
+                returns = Some(raw_type.to_string());
+            }
+        }
+
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume(); // '{'
+        let declarations = self.parse_declaration_block();
+        Some(FunctionRule { name, parameters, returns, declarations })
+    }
+
+    /// Читает содержимое между уже открытой `(` (позиция парсера сразу
+    /// после неё) и парной закрывающей скобкой, съедая закрывающую. Учитывает
+    /// вложенные `(...)` и строковые литералы (`)`/`(` внутри строк не меняют
+    /// depth). Возвращает `None`, если EOF наступил раньше закрывающей скобки.
+    fn read_balanced_parens(&mut self) -> Option<String> {
+        let mut depth = 1u32;
+        let mut in_string: Option<char> = None;
+        let mut out = String::new();
+        loop {
+            let c = self.peek()?;
+            match (in_string, c) {
+                (Some(q), ch) if ch == q => {
+                    in_string = None;
+                    out.push(ch);
+                    self.consume();
+                }
+                (None, '"') | (None, '\'') => {
+                    in_string = Some(c);
+                    out.push(c);
+                    self.consume();
+                }
+                (None, '(') => {
+                    depth += 1;
+                    out.push(c);
+                    self.consume();
+                }
+                (None, ')') => {
+                    depth -= 1;
+                    self.consume();
+                    if depth == 0 {
+                        return Some(out);
+                    }
+                    out.push(')');
+                }
+                _ => {
+                    out.push(c);
+                    self.consume();
+                }
+            }
+        }
+    }
+
+    /// Если позиция стоит на слове `returns` (case-insensitive), за которым
+    /// НЕ следует ident-continuation байт, продвигает позицию за это слово
+    /// и возвращает `true`. Иначе — не трогает позицию, возвращает `false`.
+    fn skip_optional_returns_keyword(&mut self) -> bool {
+        let bytes = self.input.as_bytes();
+        let p = self.pos;
+        if p + 7 > bytes.len() || !bytes[p..p + 7].eq_ignore_ascii_case(b"returns") {
+            return false;
+        }
+        if let Some(&c) = bytes.get(p + 7)
+            && (c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+        {
+            return false;
+        }
+        self.pos += 7;
+        true
     }
 
     /// Парсит тело `@import url("...") [<media-query>];` или
@@ -7954,5 +8120,80 @@ mod tests {
         assert_eq!(s.rules.len(), 2);
         assert_eq!(s.color_profiles.len(), 1);
         assert_eq!(s.color_profiles[0].name, "--p");
+    }
+
+    // ── @function tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn function_basic_single_param() {
+        let s = parse("@function --double(--x) { result: calc(var(--x) * 2); }");
+        assert_eq!(s.function_rules.len(), 1);
+        let f = &s.function_rules[0];
+        assert_eq!(f.name, "--double");
+        assert_eq!(f.parameters.len(), 1);
+        assert_eq!(f.parameters[0].name, "--x");
+        assert_eq!(f.parameters[0].default, None);
+        assert_eq!(f.declarations.len(), 1);
+        assert_eq!(f.declarations[0].property, "result");
+        assert_eq!(f.declarations[0].value, "calc(var(--x) * 2)");
+    }
+
+    #[test]
+    fn function_multiple_params_with_default() {
+        let s = parse("@function --pad(--a, --b: 10px) { result: var(--a); }");
+        let f = &s.function_rules[0];
+        assert_eq!(f.parameters.len(), 2);
+        assert_eq!(f.parameters[0].name, "--a");
+        assert_eq!(f.parameters[0].default, None);
+        assert_eq!(f.parameters[1].name, "--b");
+        assert_eq!(f.parameters[1].default.as_deref(), Some("10px"));
+    }
+
+    #[test]
+    fn function_zero_params() {
+        let s = parse("@function --pi() { result: 3.14159; }");
+        let f = &s.function_rules[0];
+        assert_eq!(f.name, "--pi");
+        assert!(f.parameters.is_empty());
+    }
+
+    #[test]
+    fn function_returns_type_stored_raw() {
+        let s = parse("@function --double(--x) returns <length> { result: calc(var(--x) * 2); }");
+        let f = &s.function_rules[0];
+        assert_eq!(f.returns.as_deref(), Some("<length>"));
+    }
+
+    #[test]
+    fn function_local_declarations_and_result_order_preserved() {
+        let s = parse(
+            "@function --clamped(--min, --val, --max) { \
+                 --c: clamp(var(--min), var(--val), var(--max)); \
+                 result: var(--c); \
+             }",
+        );
+        let f = &s.function_rules[0];
+        assert_eq!(f.declarations.len(), 2);
+        assert_eq!(f.declarations[0].property, "--c");
+        assert_eq!(f.declarations[1].property, "result");
+    }
+
+    #[test]
+    fn function_name_without_double_dash_ignored() {
+        // Prelude must be a dashed-ident (function-token grammar); a bare
+        // ident is not a valid `@function` name per CSS Functions & Mixins L1.
+        let s = parse("@function double(--x) { result: var(--x); }");
+        assert!(s.function_rules.is_empty());
+    }
+
+    #[test]
+    fn function_multiple_rules_and_coexists_with_other_at_rules() {
+        let s = parse(
+            r#"@function --a() { result: 1px; } div { color: red; } @function --b() { result: 2px; }"#,
+        );
+        assert_eq!(s.function_rules.len(), 2);
+        assert_eq!(s.function_rules[0].name, "--a");
+        assert_eq!(s.function_rules[1].name, "--b");
+        assert_eq!(s.rules.len(), 1);
     }
 }
