@@ -7525,6 +7525,39 @@ mod tests {
     }
 
     #[test]
+    fn style_query_line_height_percent_uses_font_size_basis_not_width() {
+        // `style_ctx` has font_size: 16.0, width: 200.0. `line-height: 150%`
+        // must resolve against font-size (24px), not width (300px).
+        let ctx = style_ctx_with_style_props(&[], &[("line-height", "24px")]);
+        assert!(crate::evaluate_container_condition("style(line-height: 150%)", &ctx));
+        assert!(!crate::evaluate_container_condition("style(line-height: 50%)", &ctx));
+    }
+
+    #[test]
+    fn style_query_height_percent_uses_height_basis_not_width() {
+        // `style_ctx` has height: Some(100.0), width: 200.0. `height: 50%`
+        // must resolve against height (50px), not width (100px).
+        let ctx = style_ctx_with_style_props(&[], &[("height", "50px")]);
+        assert!(crate::evaluate_container_condition("style(height: 50%)", &ctx));
+        assert!(!crate::evaluate_container_condition("style(height: 100%)", &ctx));
+    }
+
+    #[test]
+    fn style_query_top_percent_uses_height_basis() {
+        let ctx = style_ctx_with_style_props(&[], &[("top", "25px")]);
+        assert!(crate::evaluate_container_condition("style(top: 25%)", &ctx));
+    }
+
+    #[test]
+    fn style_query_margin_top_percent_still_uses_width_basis() {
+        // CSS2.1 §8.3: vertical margin/padding percentages resolve against
+        // the containing block *width*, not height — unlike `height`/`top`.
+        // `style_ctx` has width: 200.0 → `50%` resolves to 100px.
+        let ctx = style_ctx_with_style_props(&[], &[("margin-top", "100px")]);
+        assert!(crate::evaluate_container_condition("style(margin-top: 50%)", &ctx));
+    }
+
+    #[test]
     fn style_query_viewport_unit_matches_computed_px() {
         // `style_ctx` has viewport: 1024x768 → `10vw` resolves to 102.4px.
         let ctx = style_ctx_with_style_props(&[], &[("width", "102.4px")]);
