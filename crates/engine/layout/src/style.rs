@@ -3253,6 +3253,14 @@ pub struct ComputedStyle {
     /// CSS Anchor Positioning L1 §4 — `anchor-size()` in `height`. Non-inherited. Initial: `None`.
     /// When set, the element's used height is the referenced anchor's dimension.
     pub anchor_size_h: Option<crate::anchor::AnchorSizeFunc>,
+    /// CSS Anchor Positioning L1 §3.1 — `anchor()` in `top`. Non-inherited. Initial: `None`.
+    pub anchor_top: Option<crate::anchor::AnchorFunc>,
+    /// CSS Anchor Positioning L1 §3.1 — `anchor()` in `right`. Non-inherited. Initial: `None`.
+    pub anchor_right: Option<crate::anchor::AnchorFunc>,
+    /// CSS Anchor Positioning L1 §3.1 — `anchor()` in `bottom`. Non-inherited. Initial: `None`.
+    pub anchor_bottom: Option<crate::anchor::AnchorFunc>,
+    /// CSS Anchor Positioning L1 §3.1 — `anchor()` in `left`. Non-inherited. Initial: `None`.
+    pub anchor_left: Option<crate::anchor::AnchorFunc>,
 
     /// CSS View Transitions L1 §10 — `view-transition-name`. Non-inherited. Initial: `None` (none).
     /// Custom-ident that marks this element as a named view-transition capture target.
@@ -5988,6 +5996,10 @@ impl ComputedStyle {
             anchor_scope: crate::anchor::AnchorScope::None,
             anchor_size_w: None,
             anchor_size_h: None,
+            anchor_top: None,
+            anchor_right: None,
+            anchor_bottom: None,
+            anchor_left: None,
             view_transition_name: None,
             quotes: Quotes::Auto,
         }
@@ -6352,6 +6364,10 @@ pub fn compute_style(
         anchor_scope: crate::anchor::AnchorScope::None,
         anchor_size_w: None,
         anchor_size_h: None,
+        anchor_top: None,
+        anchor_right: None,
+        anchor_bottom: None,
+        anchor_left: None,
         view_transition_name: None,
         // CSS Generated Content L3 §3.2 — quotes inherited.
         quotes: inherited.quotes.clone(),
@@ -13964,10 +13980,11 @@ fn apply_declaration(
                 Some(v.into())
             };
         }
-        "top" => set_margin_side(&mut style.top, val, is_quirks),
-        "right" => set_margin_side(&mut style.right, val, is_quirks),
-        "bottom" => set_margin_side(&mut style.bottom, val, is_quirks),
-        "left" => set_margin_side(&mut style.left, val, is_quirks),
+        // CSS Anchor Positioning L1 §3.1 — intercept `anchor()` before normal inset parsing.
+        "top" => set_inset_side(&mut style.top, &mut style.anchor_top, val, is_quirks),
+        "right" => set_inset_side(&mut style.right, &mut style.anchor_right, val, is_quirks),
+        "bottom" => set_inset_side(&mut style.bottom, &mut style.anchor_bottom, val, is_quirks),
+        "left" => set_inset_side(&mut style.left, &mut style.anchor_left, val, is_quirks),
         "inset" => {
             // CSS Logical Properties L1 §8.2.1 — inset shorthand (1-4 values).
             let tokens = split_box_tokens(val);
@@ -13978,10 +13995,10 @@ fn apply_declaration(
                 [a, b, c, d] => (a, b, c, d),
                 _ => return,
             };
-            set_margin_side(&mut style.top, t, is_quirks);
-            set_margin_side(&mut style.right, r, is_quirks);
-            set_margin_side(&mut style.bottom, b, is_quirks);
-            set_margin_side(&mut style.left, l, is_quirks);
+            set_inset_side(&mut style.top, &mut style.anchor_top, t, is_quirks);
+            set_inset_side(&mut style.right, &mut style.anchor_right, r, is_quirks);
+            set_inset_side(&mut style.bottom, &mut style.anchor_bottom, b, is_quirks);
+            set_inset_side(&mut style.left, &mut style.anchor_left, l, is_quirks);
         }
         // CSS Logical Properties L1 §8.2 — inset-inline-* / inset-block-*.
         // Stored in logical fields; resolved to physical (top/right/bottom/left) in resolve_logical_properties().
@@ -16908,21 +16925,29 @@ fn apply_css_wide_keyword(
         }
         "top" => {
             style.top = if inh_only_inherit { inherited.top.clone() } else { init.top.clone() };
+            style.anchor_top = if inh_only_inherit { inherited.anchor_top.clone() } else { None };
         }
         "right" => {
             style.right = if inh_only_inherit { inherited.right.clone() } else { init.right.clone() };
+            style.anchor_right = if inh_only_inherit { inherited.anchor_right.clone() } else { None };
         }
         "bottom" => {
             style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
+            style.anchor_bottom = if inh_only_inherit { inherited.anchor_bottom.clone() } else { None };
         }
         "left" => {
             style.left = if inh_only_inherit { inherited.left.clone() } else { init.left.clone() };
+            style.anchor_left = if inh_only_inherit { inherited.anchor_left.clone() } else { None };
         }
         "inset" => {
             style.top = if inh_only_inherit { inherited.top.clone() } else { init.top.clone() };
             style.right = if inh_only_inherit { inherited.right.clone() } else { init.right.clone() };
             style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
             style.left = if inh_only_inherit { inherited.left.clone() } else { init.left.clone() };
+            style.anchor_top = if inh_only_inherit { inherited.anchor_top.clone() } else { None };
+            style.anchor_right = if inh_only_inherit { inherited.anchor_right.clone() } else { None };
+            style.anchor_bottom = if inh_only_inherit { inherited.anchor_bottom.clone() } else { None };
+            style.anchor_left = if inh_only_inherit { inherited.anchor_left.clone() } else { None };
         }
         // CSS Logical Properties L1 — inset-inline-* / inset-block-*.
         "inset-inline-start" => style.inset_inline_start = if inh_only_inherit { inherited.inset_inline_start.clone() } else { init.inset_inline_start.clone() },
@@ -19628,6 +19653,24 @@ fn set_margin_side(target: &mut LengthOrAuto, val: &str, is_quirks: bool) {
     }
 }
 
+/// Sets one inset side (`top`/`right`/`bottom`/`left`), intercepting the CSS
+/// Anchor Positioning L1 `anchor()` function before falling back to a normal
+/// length/`auto` value. Mirrors the `anchor-size()` interception used for
+/// `width`/`height` (see `parse_anchor_size_func`).
+fn set_inset_side(
+    target: &mut LengthOrAuto,
+    anchor_target: &mut Option<crate::anchor::AnchorFunc>,
+    val: &str,
+    is_quirks: bool,
+) {
+    if let Some(func) = parse_anchor_func(val, is_quirks) {
+        *anchor_target = Some(func);
+    } else {
+        set_margin_side(target, val, is_quirks);
+        *anchor_target = None;
+    }
+}
+
 /// Устанавливает одну сторону padding как typed `Length`.
 /// `auto` не валиден для padding — игнорируем; отрицательные px — игнорируем.
 fn set_padding_side(target: &mut Length, val: &str, is_quirks: bool) {
@@ -19914,6 +19957,51 @@ fn parse_anchor_size_func(val: &str) -> Option<crate::anchor::AnchorSizeFunc> {
         _ => return None,
     };
     Some(AnchorSizeFunc { anchor_name, dimension })
+}
+
+/// CSS Anchor Positioning L1 §3.1 — parse `anchor(<anchor-el>? <anchor-side>, <fallback>?)`.
+///
+/// Accepts forms:
+/// - `anchor(top)` / `anchor(50%)` / `anchor(start)` — anchor-side only, uses the
+///   element's `position-anchor` default anchor.
+/// - `anchor(--name top)` / `anchor(--name 25%)` — explicit anchor-element argument.
+/// - `anchor(top, 10px)` / `anchor(--name left, 1em)` — trailing `<length-percentage>`
+///   fallback, used when the anchor can't be resolved.
+///
+/// Returns `None` when `val` is not an `anchor()` expression.
+fn parse_anchor_func(val: &str, is_quirks: bool) -> Option<crate::anchor::AnchorFunc> {
+    use crate::anchor::AnchorFunc;
+    let v = val.trim();
+    let inner = v.strip_prefix("anchor(")?.strip_suffix(')')?;
+    let parts: Vec<&str> = inner.splitn(2, ',').map(str::trim).collect();
+    let fallback = match parts.get(1) {
+        Some(fb) => Some(parse_length_q(fb, is_quirks)?),
+        None => None,
+    };
+    let head_parts: Vec<&str> = parts[0].split_whitespace().collect();
+    let (anchor_name, side_str) = match head_parts.as_slice() {
+        [side] => (None, *side),
+        [name, side] if name.starts_with("--") => (Some((*name).into()), *side),
+        _ => return None,
+    };
+    let side = parse_anchor_side(side_str)?;
+    Some(AnchorFunc { anchor_name, side, fallback })
+}
+
+/// CSS Anchor Positioning L1 §3.1 — parse a single `<anchor-side>` keyword or
+/// `<percentage>`.
+fn parse_anchor_side(s: &str) -> Option<crate::anchor::AnchorSide> {
+    use crate::anchor::AnchorSide;
+    match s.trim().to_ascii_lowercase().as_str() {
+        "top" => Some(AnchorSide::Top),
+        "right" => Some(AnchorSide::Right),
+        "bottom" => Some(AnchorSide::Bottom),
+        "left" => Some(AnchorSide::Left),
+        "center" => Some(AnchorSide::Center),
+        "start" => Some(AnchorSide::Start),
+        "end" => Some(AnchorSide::End),
+        other => other.strip_suffix('%')?.trim().parse::<f32>().ok().map(AnchorSide::Percentage),
+    }
 }
 
 fn parse_break_value(s: &str) -> Option<BreakValue> {
@@ -32658,6 +32746,77 @@ mod anchor_positioning_tests {
         );
         assert_eq!(s.inset_area_row, InsetAreaKeyword::Start);
         assert_eq!(s.inset_area_col, InsetAreaKeyword::End);
+    }
+
+    // ── CSS Anchor Positioning L1 §3.1 — `anchor()` function ─────────────────
+
+    #[test]
+    fn anchor_func_side_only_parsed() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; position-anchor: --btn; top: anchor(bottom); }",
+        );
+        let f = s.anchor_top.as_ref().expect("anchor() not parsed");
+        assert!(f.anchor_name.is_none());
+        assert_eq!(f.side, crate::anchor::AnchorSide::Bottom);
+        assert!(f.fallback.is_none());
+        assert!(s.top.is_auto(), "plain top must stay auto when anchor() is used");
+    }
+
+    #[test]
+    fn anchor_func_explicit_name_parsed() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; left: anchor(--btn right); }",
+        );
+        let f = s.anchor_left.as_ref().expect("anchor() not parsed");
+        assert_eq!(f.anchor_name.as_deref(), Some("--btn"));
+        assert_eq!(f.side, crate::anchor::AnchorSide::Right);
+    }
+
+    #[test]
+    fn anchor_func_percentage_side_parsed() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; left: anchor(25%); }",
+        );
+        let f = s.anchor_left.as_ref().expect("anchor() not parsed");
+        assert_eq!(f.side, crate::anchor::AnchorSide::Percentage(25.0));
+    }
+
+    #[test]
+    fn anchor_func_fallback_parsed() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; bottom: anchor(top, 10px); }",
+        );
+        let f = s.anchor_bottom.as_ref().expect("anchor() not parsed");
+        assert_eq!(f.side, crate::anchor::AnchorSide::Top);
+        assert_eq!(f.fallback, Some(Length::Px(10.0)));
+    }
+
+    #[test]
+    fn anchor_func_cleared_by_plain_length() {
+        // A later declaration without anchor() must clear the previously
+        // parsed AnchorFunc (mirrors width/anchor-size() interception).
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; top: anchor(bottom); top: 5px; }",
+        );
+        assert!(s.anchor_top.is_none());
+        assert_eq!(s.top, LengthOrAuto::Length(Length::Px(5.0)));
+    }
+
+    #[test]
+    fn anchor_func_inset_shorthand_applies_to_all_sides() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; inset: anchor(top); }",
+        );
+        assert!(s.anchor_top.is_some());
+        assert!(s.anchor_right.is_some());
+        assert!(s.anchor_bottom.is_some());
+        assert!(s.anchor_left.is_some());
     }
 
     #[test]

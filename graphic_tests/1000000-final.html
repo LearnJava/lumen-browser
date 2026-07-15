@@ -1280,6 +1280,27 @@
   </div>
 </div><!-- /anchor-positioning card -->
 
+<!-- anchor() / anchor-size() demo card -->
+<style>
+  .ancf-card { background:#16213e; padding:8px; border-radius:4px; }
+  .ancf-box { position:relative; width:280px; height:160px; background:#161b22; margin-top:6px; }
+  .ancf-anchor { position:absolute; anchor-name:--ancf-anchor; width:60px; height:40px; background:#f0f6fc; top:40px; left:110px; }
+  .ancf-bottom-left { position:absolute; position-anchor:--ancf-anchor; top:anchor(bottom); left:anchor(left); width:40px; height:24px; background:#e63946; }
+  .ancf-top-pct { position:absolute; position-anchor:--ancf-anchor; top:anchor(top); left:anchor(75%); width:30px; height:20px; background:#2a9d8f; opacity:.85; }
+  .ancf-fallback { position:absolute; top:anchor(--missing top, 12px); left:anchor(--missing left, 210px); width:30px; height:30px; background:#f4a261; }
+  .ancf-size { position:absolute; position-anchor:--ancf-anchor; top:90px; left:150px; width:anchor-size(width); height:anchor-size(height); background:#9d4edd; }
+</style>
+<div class="card ancf-card">
+  <h4>anchor() / anchor-size() (Anchor Positioning L1 §3.1, §4)</h4>
+  <div class="ancf-box">
+    <div class="ancf-anchor"></div>
+    <div class="ancf-bottom-left"></div>
+    <div class="ancf-top-pct"></div>
+    <div class="ancf-fallback"></div>
+    <div class="ancf-size"></div>
+  </div>
+</div><!-- /anchor() / anchor-size() card -->
+
 <!-- scroll-driven animations demo card -->
 <style>
   .sda-card { display:inline-block; vertical-align:top; width:200px; padding:10px; margin:4px; background:#0d1b2a; border:1px solid #4fc3f7; border-radius:6px; }

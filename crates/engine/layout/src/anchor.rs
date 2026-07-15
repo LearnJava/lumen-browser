@@ -21,7 +21,9 @@
 //! - `inset-area: <row> <col>` → `ComputedStyle.inset_area_row` / `ComputedStyle.inset_area_col`
 //! - `anchor-scope: all | none | --name` → `ComputedStyle.anchor_scope`
 //! - `width: anchor-size(...)` / `height: anchor-size(...)` → `ComputedStyle.anchor_size_w/h`
-//! - `anchor(<anchor-element> <side>)` in inset values → call [`resolve_anchor_function`]
+//! - `top`/`right`/`bottom`/`left`: `anchor(<anchor-element>? <side>, <fallback>?)` →
+//!   `ComputedStyle.anchor_top/right/bottom/left: Option<AnchorFunc>`, resolved via
+//!   [`resolve_inset`] / [`resolve_inset_scoped`].
 //! - Wire `collect_anchors(root)` before the positioned-layout pass in `box_tree.rs`.
 //!
 //! # CSS specification
@@ -29,10 +31,11 @@
 
 use std::collections::HashMap;
 
-use lumen_core::geom::Rect;
+use lumen_core::geom::{Rect, Size};
 use lumen_dom::NodeId;
 
 use crate::box_tree::LayoutBox;
+use crate::style::{Length, LengthOrAuto};
 
 // ─── AnchorSide ──────────────────────────────────────────────────────────────
 
@@ -147,6 +150,28 @@ pub struct AnchorSizeFunc {
     pub anchor_name: Option<Box<str>>,
     /// Which dimension of the anchor to use.
     pub dimension: AnchorSizeDimension,
+}
+
+// ─── AnchorFunc ──────────────────────────────────────────────────────────────
+
+/// Parsed `anchor(<anchor-el>? <anchor-side>, <fallback>?)` value stored in
+/// ComputedStyle.
+///
+/// Used when `top`/`right`/`bottom`/`left` contains an `anchor()` function
+/// call. Resolved in `lay_out_abs_children` (local registry) and corrected in
+/// the global `apply_anchor_positions` post-layout pass via
+/// [`resolve_anchor_func`] / [`resolve_anchor_func_scoped`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnchorFunc {
+    /// Optional anchor element name (e.g. `"--my-anchor"`).
+    /// `None` = use the element's `position-anchor` default.
+    pub anchor_name: Option<Box<str>>,
+    /// Which edge/point of the anchor to reference.
+    pub side: AnchorSide,
+    /// Fallback length used when the anchor can't be resolved (not registered,
+    /// or `side` doesn't apply to the axis being resolved). `None` = the
+    /// property computes as `auto` in that case.
+    pub fallback: Option<Length>,
 }
 
 // ─── AnchorRegistry ──────────────────────────────────────────────────────────
@@ -292,26 +317,165 @@ pub fn resolve_anchor_function(
     is_horizontal: bool,
 ) -> Option<f32> {
     let entry = registry.get(anchor_name)?;
-    let r = entry.rect;
+    anchor_side_value(entry, side, is_horizontal)
+}
 
-    let value = if is_horizontal {
+/// Scope-aware variant of [`resolve_anchor_function`].
+///
+/// `ancestor_ids` — NodeIds of all ancestors of the positioned element.
+/// Anchors outside the positioned element's scope are not resolved.
+// CSS: anchor(), position-anchor, anchor-scope
+pub fn resolve_anchor_function_scoped(
+    registry: &AnchorRegistry,
+    anchor_name: &str,
+    side: AnchorSide,
+    is_horizontal: bool,
+    ancestor_ids: &[NodeId],
+) -> Option<f32> {
+    let entry = registry.get_scoped(anchor_name, ancestor_ids)?;
+    anchor_side_value(entry, side, is_horizontal)
+}
+
+fn anchor_side_value(entry: &AnchorEntry, side: AnchorSide, is_horizontal: bool) -> Option<f32> {
+    let r = entry.rect;
+    if is_horizontal {
         match side {
-            AnchorSide::Left | AnchorSide::Start => r.x,
-            AnchorSide::Right | AnchorSide::End => r.x + r.width,
-            AnchorSide::Center => r.x + r.width * 0.5,
-            AnchorSide::Top | AnchorSide::Bottom => return None,
-            AnchorSide::Percentage(pct) => r.x + r.width * pct / 100.0,
+            AnchorSide::Left | AnchorSide::Start => Some(r.x),
+            AnchorSide::Right | AnchorSide::End => Some(r.x + r.width),
+            AnchorSide::Center => Some(r.x + r.width * 0.5),
+            AnchorSide::Top | AnchorSide::Bottom => None,
+            AnchorSide::Percentage(pct) => Some(r.x + r.width * pct / 100.0),
         }
     } else {
         match side {
-            AnchorSide::Top | AnchorSide::Start => r.y,
-            AnchorSide::Bottom | AnchorSide::End => r.y + r.height,
-            AnchorSide::Center => r.y + r.height * 0.5,
-            AnchorSide::Left | AnchorSide::Right => return None,
-            AnchorSide::Percentage(pct) => r.y + r.height * pct / 100.0,
+            AnchorSide::Top | AnchorSide::Start => Some(r.y),
+            AnchorSide::Bottom | AnchorSide::End => Some(r.y + r.height),
+            AnchorSide::Center => Some(r.y + r.height * 0.5),
+            AnchorSide::Left | AnchorSide::Right => None,
+            AnchorSide::Percentage(pct) => Some(r.y + r.height * pct / 100.0),
         }
-    };
-    Some(value)
+    }
+}
+
+// ─── resolve_anchor_func / resolve_inset ────────────────────────────────────
+
+/// Resolve a full [`AnchorFunc`] value (parsed `anchor()` call) to a CSS pixel
+/// value, applying the fallback length when the anchor can't be resolved.
+///
+/// - `default_anchor` — the element's `position-anchor` value, used when
+///   `func.anchor_name` is `None`.
+/// - `is_end_edge` — `true` when resolving `right`/`bottom` (measured backward
+///   from the containing block's far edge), `false` for `left`/`top`
+///   (measured forward from the near edge).
+/// - `cb_near`/`cb_far` — the containing block's near/far edge coordinate on
+///   this axis (`cb.x`/`cb.x + cb.width` for horizontal, `cb.y`/`cb.y +
+///   cb.height` for vertical). `anchor()` resolves to an inset value — the
+///   distance from the corresponding property's own edge to the anchor point
+///   (CSS Anchor Positioning L1 §3.1) — but the anchor registry stores
+///   viewport-absolute rects, so the edge coordinate is subtracted here to
+///   convert back to a CB-relative offset, mirroring [`resolve_inset_area`]'s
+///   `top - containing_rect.y` / `left - containing_rect.x`.
+/// - `em`/`basis`/`viewport` — passed to the fallback length's `.resolve()`
+///   when the anchor lookup fails and a fallback was declared (already
+///   CB-relative, so `cb_near`/`cb_far` don't apply to it).
+// CSS: anchor(), position-anchor
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_anchor_func(
+    registry: &AnchorRegistry,
+    func: &AnchorFunc,
+    default_anchor: Option<&str>,
+    is_horizontal: bool,
+    is_end_edge: bool,
+    cb_near: f32,
+    cb_far: f32,
+    em: f32,
+    basis: f32,
+    viewport: Size,
+) -> Option<f32> {
+    if let Some(name) = func.anchor_name.as_deref().or(default_anchor)
+        && let Some(v) = resolve_anchor_function(registry, name, func.side, is_horizontal)
+    {
+        return Some(if is_end_edge { cb_far - v } else { v - cb_near });
+    }
+    func.fallback.as_ref().and_then(|len| len.resolve(em, Some(basis), viewport))
+}
+
+/// Scope-aware variant of [`resolve_anchor_func`].
+// CSS: anchor(), position-anchor, anchor-scope
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_anchor_func_scoped(
+    registry: &AnchorRegistry,
+    func: &AnchorFunc,
+    default_anchor: Option<&str>,
+    is_horizontal: bool,
+    is_end_edge: bool,
+    cb_near: f32,
+    cb_far: f32,
+    em: f32,
+    basis: f32,
+    viewport: Size,
+    ancestor_ids: &[NodeId],
+) -> Option<f32> {
+    if let Some(name) = func.anchor_name.as_deref().or(default_anchor)
+        && let Some(v) =
+            resolve_anchor_function_scoped(registry, name, func.side, is_horizontal, ancestor_ids)
+    {
+        return Some(if is_end_edge { cb_far - v } else { v - cb_near });
+    }
+    func.fallback.as_ref().and_then(|len| len.resolve(em, Some(basis), viewport))
+}
+
+/// Resolve one inset side (`top`/`right`/`bottom`/`left`) to a CSS px value,
+/// intercepting an `anchor()` function before falling back to the plain
+/// `LengthOrAuto` value. Mirrors the `anchor-size()` interception pattern
+/// used for `width`/`height` in `lay_out_abs_children`.
+// CSS: anchor(), top, right, bottom, left
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_inset(
+    registry: &AnchorRegistry,
+    plain: &LengthOrAuto,
+    func: Option<&AnchorFunc>,
+    default_anchor: Option<&str>,
+    is_horizontal: bool,
+    is_end_edge: bool,
+    cb_near: f32,
+    cb_far: f32,
+    em: f32,
+    basis: f32,
+    viewport: Size,
+) -> Option<f32> {
+    match func {
+        Some(f) => resolve_anchor_func(
+            registry, f, default_anchor, is_horizontal, is_end_edge, cb_near, cb_far, em, basis, viewport,
+        ),
+        None => plain.resolve(em, basis, viewport),
+    }
+}
+
+/// Scope-aware variant of [`resolve_inset`].
+// CSS: anchor(), top, right, bottom, left, anchor-scope
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_inset_scoped(
+    registry: &AnchorRegistry,
+    plain: &LengthOrAuto,
+    func: Option<&AnchorFunc>,
+    default_anchor: Option<&str>,
+    is_horizontal: bool,
+    is_end_edge: bool,
+    cb_near: f32,
+    cb_far: f32,
+    em: f32,
+    basis: f32,
+    viewport: Size,
+    ancestor_ids: &[NodeId],
+) -> Option<f32> {
+    match func {
+        Some(f) => resolve_anchor_func_scoped(
+            registry, f, default_anchor, is_horizontal, is_end_edge, cb_near, cb_far, em, basis, viewport,
+            ancestor_ids,
+        ),
+        None => plain.resolve(em, basis, viewport),
+    }
 }
 
 // ─── resolve_anchor_size ─────────────────────────────────────────────────────
@@ -888,6 +1052,138 @@ mod tests {
         let reg = make_registry("--a", rect(0.0, 0.0, 75.0, 25.0));
         let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::SelfInline };
         assert_eq!(resolve_anchor_size(&reg, &func, Some("--a")), Some(75.0));
+    }
+
+    // ── resolve_anchor_func / resolve_inset ──────────────────────────────────
+
+    const VP: Size = Size { width: 800.0, height: 600.0 };
+
+    #[test]
+    fn anchor_func_resolves_from_default_anchor() {
+        let reg = make_registry("--btn", rect(100.0, 200.0, 80.0, 40.0));
+        let func = AnchorFunc { anchor_name: None, side: AnchorSide::Bottom, fallback: None };
+        assert_eq!(
+            resolve_anchor_func(&reg, &func, Some("--btn"), false, false, 0.0, VP.height, 16.0, 600.0, VP),
+            Some(240.0)
+        );
+    }
+
+    #[test]
+    fn anchor_func_resolves_from_explicit_anchor() {
+        let mut reg = AnchorRegistry::default();
+        register_anchor(&mut reg, "--btn".to_string(), node(1), rect(0.0, 0.0, 80.0, 40.0));
+        register_anchor(&mut reg, "--other".to_string(), node(2), rect(50.0, 60.0, 20.0, 10.0));
+        let func =
+            AnchorFunc { anchor_name: Some("--other".into()), side: AnchorSide::Left, fallback: None };
+        assert_eq!(
+            resolve_anchor_func(&reg, &func, Some("--btn"), true, false, 0.0, VP.width, 16.0, 800.0, VP),
+            Some(50.0)
+        );
+    }
+
+    #[test]
+    fn anchor_func_missing_anchor_uses_fallback() {
+        let reg = AnchorRegistry::default();
+        let func =
+            AnchorFunc { anchor_name: None, side: AnchorSide::Top, fallback: Some(Length::Px(10.0)) };
+        assert_eq!(
+            resolve_anchor_func(&reg, &func, Some("--missing"), false, false, 0.0, VP.height, 16.0, 600.0, VP),
+            Some(10.0)
+        );
+    }
+
+    #[test]
+    fn anchor_func_missing_anchor_no_fallback_returns_none() {
+        let reg = AnchorRegistry::default();
+        let func = AnchorFunc { anchor_name: None, side: AnchorSide::Top, fallback: None };
+        assert!(resolve_anchor_func(&reg, &func, Some("--missing"), false, false, 0.0, VP.height, 16.0, 600.0, VP)
+            .is_none());
+    }
+
+    #[test]
+    fn anchor_func_cross_axis_falls_back() {
+        // `anchor(top)` used on a horizontal axis (left/right) can't resolve — the
+        // fallback applies just like a missing anchor.
+        let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
+        let func =
+            AnchorFunc { anchor_name: None, side: AnchorSide::Top, fallback: Some(Length::Px(5.0)) };
+        assert_eq!(
+            resolve_anchor_func(&reg, &func, Some("--a"), true, false, 0.0, VP.width, 16.0, 800.0, VP),
+            Some(5.0)
+        );
+    }
+
+    #[test]
+    fn resolve_inset_uses_anchor_func_when_present() {
+        let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
+        let func = AnchorFunc { anchor_name: None, side: AnchorSide::Left, fallback: None };
+        let plain = LengthOrAuto::Auto;
+        assert_eq!(
+            resolve_inset(&reg, &plain, Some(&func), Some("--a"), true, false, 0.0, VP.width, 16.0, 800.0, VP),
+            Some(100.0)
+        );
+    }
+
+    #[test]
+    fn resolve_inset_falls_back_to_plain_length_when_no_func() {
+        let reg = AnchorRegistry::default();
+        let plain = LengthOrAuto::Length(Length::Px(42.0));
+        assert_eq!(
+            resolve_inset(&reg, &plain, None, None, true, false, 0.0, VP.width, 16.0, 800.0, VP),
+            Some(42.0)
+        );
+    }
+
+    #[test]
+    fn anchor_func_scoped_respects_scope() {
+        let mut reg = AnchorRegistry::default();
+        register_anchor_scoped(
+            &mut reg,
+            "--scoped".to_string(),
+            node(10),
+            rect(0.0, 0.0, 100.0, 50.0),
+            Some(node(5)),
+        );
+        let func = AnchorFunc { anchor_name: None, side: AnchorSide::Right, fallback: None };
+        // Ancestors don't include the scope root → invisible → falls to fallback (none → None).
+        assert!(resolve_anchor_func_scoped(
+            &reg, &func, Some("--scoped"), true, false, 0.0, VP.width, 16.0, 800.0, VP, &[node(1)]
+        )
+        .is_none());
+        // Ancestors include the scope root → visible.
+        assert_eq!(
+            resolve_anchor_func_scoped(
+                &reg, &func, Some("--scoped"), true, false, 0.0, VP.width, 16.0, 800.0, VP, &[node(5)]
+            ),
+            Some(100.0)
+        );
+    }
+
+    #[test]
+    fn anchor_func_left_converts_absolute_anchor_to_cb_relative_offset() {
+        // Regression test: the anchor registry stores viewport-absolute rects, but
+        // `left`/`top` insets must resolve to an offset *from the containing block's
+        // near edge*, not the raw absolute coordinate (BUG-anchor-cb-offset).
+        let reg = make_registry("--a", rect(441.0, 111.0, 100.0, 60.0));
+        let func = AnchorFunc { anchor_name: None, side: AnchorSide::Left, fallback: None };
+        // Containing block starts at x=41 (not the viewport origin).
+        assert_eq!(
+            resolve_anchor_func(&reg, &func, Some("--a"), true, false, 41.0, 941.0, 16.0, 900.0, VP),
+            Some(400.0)
+        );
+    }
+
+    #[test]
+    fn anchor_func_right_measures_from_containing_block_far_edge() {
+        // `right: anchor(...)` measures backward from the CB's far edge, not forward
+        // from its near edge — `is_end_edge` must flip the subtraction.
+        let reg = make_registry("--a", rect(441.0, 111.0, 100.0, 60.0));
+        let func = AnchorFunc { anchor_name: None, side: AnchorSide::Right, fallback: None };
+        // Containing block spans x=[41, 941); anchor's right edge is at 541.
+        assert_eq!(
+            resolve_anchor_func(&reg, &func, Some("--a"), true, true, 41.0, 941.0, 16.0, 900.0, VP),
+            Some(400.0)
+        );
     }
 
     // ── anchor-scope / get_scoped ────────────────────────────────────────────

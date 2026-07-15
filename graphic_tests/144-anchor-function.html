@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<!--
+  TEST-144: anchor() / anchor-size() functions — CSS Anchor Positioning L1 §3.1, §4
+  Verifies that anchor() resolves a single inset side (side keyword, percentage,
+  explicit anchor-element argument, missing-anchor fallback) and that anchor-size()
+  resolves an element's width/height to match the referenced anchor's dimension.
+  Pure geometry test — no text involved.
+-->
+<html>
+<head>
+  <title>Lumen — 144 anchor-function</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #0d1117;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 40px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .container {
+    position: relative;
+    width: 900px;
+    height: 260px;
+    background: #161b22;
+  }
+
+  /* The anchor element — reference box for every anchor()/anchor-size() call below. */
+  .anchor-el {
+    position: absolute;
+    anchor-name: --a1;
+    top: 70px; left: 400px;
+    width: 100px; height: 60px;
+    background: #f0f6fc;
+  }
+
+  /* anchor(bottom) / anchor(left): hugs the anchor's bottom edge, aligned to its left edge. */
+  .box-bottom-left {
+    position: absolute;
+    position-anchor: --a1;
+    top: anchor(bottom);
+    left: anchor(left);
+    width: 60px; height: 40px;
+    background: #e63946;
+  }
+
+  /* anchor(top) / anchor(75%): top edge aligned, left at 75% across the anchor's width. */
+  .box-top-pct {
+    position: absolute;
+    position-anchor: --a1;
+    top: anchor(top);
+    left: anchor(75%);
+    width: 50px; height: 30px;
+    background: #2a9d8f;
+    opacity: 0.85;
+  }
+
+  /* anchor(--missing ..., <fallback>): the referenced anchor doesn't exist, so both
+     insets fall back to their declared length. */
+  .box-fallback {
+    position: absolute;
+    top: anchor(--missing top, 20px);
+    left: anchor(--missing left, 700px);
+    width: 40px; height: 40px;
+    background: #f4a261;
+  }
+
+  /* anchor-size(width) / anchor-size(height): sized to match the anchor exactly,
+     positioned independently via plain (non-anchor()) insets. */
+  .box-anchor-size {
+    position: absolute;
+    position-anchor: --a1;
+    top: 150px; left: 550px;
+    width: anchor-size(width);
+    height: anchor-size(height);
+    background: #9d4edd;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <div class="container">
+    <div class="anchor-el"></div>
+    <div class="box-bottom-left"></div>
+    <div class="box-top-pct"></div>
+    <div class="box-fallback"></div>
+    <div class="box-anchor-size"></div>
+  </div>
+
+</div>
+</body>
+</html>
