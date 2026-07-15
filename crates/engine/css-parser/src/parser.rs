@@ -209,6 +209,12 @@ pub enum PseudoClass {
     /// трактуется как `ltr` (real auto-direction по UAX #9 first-strong
     /// отложен до bidi-движка). Невалидные аргументы → `Unsupported(name)`.
     Dir(DirArg),
+    /// `:state(<custom-ident>)` (CSS Selectors L4 §17.4 / WHATWG HTML §4.13.2
+    /// `CustomStateSet`). Матчит custom-element, у которого
+    /// `ElementInternals.states` содержит данный state-ident. Custom-ident —
+    /// case-sensitive (в отличие от `:lang()`), single identifier without
+    /// comma-list. Невалидный/пустой аргумент → `Unsupported(name)`.
+    State(String),
     /// `:scope` (CSS Selectors L4 §4.2) — root of selector matching context.
     /// В author-CSS-stylesheet без runtime querySelector/matches API scope =
     /// document root element. Spec: «In all other contexts, :scope matches
@@ -648,6 +654,7 @@ fn pc_to_css_str(pc: &PseudoClass) -> String {
         PseudoClass::OutOfRange => ":out-of-range".into(),
         PseudoClass::Dir(DirArg::Ltr) => ":dir(ltr)".into(),
         PseudoClass::Dir(DirArg::Rtl) => ":dir(rtl)".into(),
+        PseudoClass::State(name) => format!(":state({name})"),
         PseudoClass::Scope => ":scope".into(),
         PseudoClass::Target => ":target".into(),
         PseudoClass::TargetWithin => ":target-within".into(),
@@ -4241,6 +4248,18 @@ impl<'a> Parser<'a> {
                 }
                 Some(PseudoClass::Lang(tags))
             }
+            "state" => {
+                // CSS Selectors L4 §17.4: single custom-ident argument,
+                // case-sensitive (custom-ident, not a BCP-47 tag — no
+                // lowercasing, unlike `:lang()`).
+                self.skip_ws_and_comments();
+                let ident = self.parse_ident()?;
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')') {
+                    return None;
+                }
+                Some(PseudoClass::State(ident))
+            }
             _ => None,
         }
     }
@@ -5411,6 +5430,60 @@ mod tests {
             p,
             SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "dir"
         ));
+    }
+
+    #[test]
+    fn pseudo_state_basic_ident() {
+        let s = parse(":state(open) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::State(name)) => {
+                assert_eq!(name, "open");
+            }
+            _ => panic!("expected State, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_state_is_case_sensitive() {
+        // Custom-ident (§17.4), в отличие от `:lang()`, не нормализуется к
+        // lowercase — состояния из ElementInternals.states case-sensitive.
+        let s = parse(":state(Open) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::State(name)) => {
+                assert_eq!(name, "Open");
+            }
+            _ => panic!("expected State, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_state_hyphenated_ident() {
+        let s = parse(":state(is-collapsed) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::State(name)) => {
+                assert_eq!(name, "is-collapsed");
+            }
+            _ => panic!("expected State, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_state_empty_falls_back_to_unsupported() {
+        let s = parse(":state() { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "state"
+        ));
+    }
+
+    #[test]
+    fn pseudo_state_to_css_str_roundtrip() {
+        let s = parse(":state(checked) { color: red; }");
+        assert_eq!(s.rules[0].selectors[0].to_css_str(), ":state(checked)");
     }
 
     #[test]

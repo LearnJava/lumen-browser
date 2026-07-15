@@ -8185,6 +8185,17 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // Runtime-only: атрибут `popover` декларирует тип, но не открытое
         // состояние. Phase 0 без Popover API runtime — всегда `false`.
         PseudoClass::PopoverOpen => doc.get(node).get_attr("data-lumen-popover-open").is_some(),
+        // CSS Selectors L4 §17.4 `:state(name)` — WHATWG HTML §4.13.2
+        // `ElementInternals.states` (`CustomStateSet`). Runtime-only, same
+        // sentinel-attribute pattern as `:fullscreen`/`:modal`: the JS shim
+        // (`CustomStateSet.add`/`delete`/`clear`) reflects each active state
+        // into a `data-lumen-state-<name>` attribute on the host element via
+        // `_lumen_set_attr`/`_lumen_remove_attr` — layout never calls into
+        // the JS engine during matching.
+        PseudoClass::State(name) => doc
+            .get(node)
+            .get_attr(&format!("data-lumen-state-{name}"))
+            .is_some(),
         // CSS Selectors L4 §11.4 time-dimensional pseudo-classes —
         // `:current` / `:past` / `:future` matches на active / elapsed /
         // upcoming моменты в timed-text потоке (WebVTT cue rendering при
@@ -31051,6 +31062,45 @@ mod tests {
         let root = ComputedStyle::root();
         let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_ne!(style.color.r, 255, ":modal rule must NOT apply without sentinel attr");
+    }
+
+    #[test]
+    fn state_pseudo_matches_sentinel_attr() {
+        // :state(open) matches when the JS CustomStateSet reflects the
+        // active state into `data-lumen-state-open` on the host element.
+        let html = r#"<my-el id="el" data-lumen-state-open="">x</my-el>"#;
+        let css = r#":state(open) { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let el = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
+        assert_eq!(style.color.r, 255, ":state(open) rule should apply when sentinel attr present");
+    }
+
+    #[test]
+    fn state_pseudo_does_not_match_without_sentinel_attr() {
+        let html = r#"<my-el id="el">x</my-el>"#;
+        let css = r#":state(open) { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let el = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
+        assert_ne!(style.color.r, 255, ":state(open) must NOT apply without sentinel attr");
+    }
+
+    #[test]
+    fn state_pseudo_distinguishes_state_names() {
+        // Sentinel attr для одного state-имени не должен матчить другое.
+        let html = r#"<my-el id="el" data-lumen-state-collapsed="">x</my-el>"#;
+        let css = r#":state(open) { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let el = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
+        assert_ne!(style.color.r, 255, ":state(open) must not match a differently-named state attr");
     }
 
     #[test]
