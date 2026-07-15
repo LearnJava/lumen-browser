@@ -95,6 +95,14 @@ flate2 = "1"
 # at comparable ratio for binary blobs (QuickJS heap = mixed data). Graduation
 # criterion: replace with zstd frame when a stable pure-Rust impl matures (§5).
 lz4_flex = "0.11"
+# Provisional: tracy-client — opt-in visual profiler (Tracy GUI app,
+# https://github.com/wolfpld/tracy), feature-gated behind `tracy` in every
+# crate that uses it so normal builds pay zero cost/binary size (§14.3,
+# BUG-284 perf investigation — replaces guesswork with a real timeline view).
+# Graduation: promote to a permanent, always-buildable dev profile once the
+# profiling workflow is established in CI; otherwise swapped for a different
+# profiler if `tracy` proves impractical.
+tracy-client = { version = "0.17", default-features = false }
 # Provisional: hyphenation — Knuth-Liang алгоритм переносов для CSS `hyphens: auto`.
 # Trait-anchor: `lumen-core::ext::HyphenationProvider`. Graduation: permanent когда
 # перенос слов станет стандартной частью pipeline (§5, Phase 2-3).

@@ -11,3 +11,9 @@ description = "Lumen: foundational types and traits. Bottom of the dependency gr
 # Why this dependency (serde): serialization for network transport (MCP, BiDi) — permanent.
 serde = { version = "1.0", features = ["derive"] }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+# Why this dependency (tracy-client): opt-in visual profiler, provisional,
+# feature-gated — see the workspace Cargo.toml comment above the version pin.
+tracy-client = { workspace = true, optional = true }
+
+[features]
+tracy = ["dep:tracy-client"]

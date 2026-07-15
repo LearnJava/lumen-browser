@@ -42,6 +42,17 @@ cargo run -p lumen-bench --release
 #                       variants by time per frame (finds the expensive command type).
 LUMEN_FRAME_LOG=1 cargo run -p lumen-shell -- samples/page.html
 
+# Ad-hoc call-tree profiling of layout/cascade phases (BUG-284): zero-dependency,
+# always compiled in, negligible cost when off (one cached env-var check).
+# Prints an indented [profile] tree to stderr on each relayout — see
+# crates/core/src/profile.rs and docs/plan/security-performance.md §14.3.
+LUMEN_PROFILE_TREE=1 cargo run -p lumen-shell -- samples/page.html
+
+# Real visual profiler with a timeline (Tracy GUI) instead of a printed tree —
+# download + start the Tracy GUI app FIRST (https://github.com/wolfpld/tracy),
+# then run with the `tracy` feature (NOT in default, adds tracy-client):
+cargo run -p lumen-shell --features tracy -- samples/page.html
+
 # Scroll smoothness benchmark: spawns a live window via --mcp-live-port, emulates
 # mouse-wheel scrolling down/up, collects the [frame] log and prints avg/p50/max
 # frame time + effective FPS. Honors an external LUMEN_FRAME_LOG=2.

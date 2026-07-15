@@ -67,9 +67,37 @@
 
 ### 11.3 Профилирование
 
-- `tracy` интегрирован, активируется флагом `--profile`.
-- Бенчмарки в CI: layout простой страницы, парсинг HTML 10 МБ, JS Speedometer.
-- Tracking регрессий — графики по коммитам.
+Два инструмента, для разных задач — не взаимозаменяемы:
+
+- **Лёгкий scope-timer** (`lumen_core::profile::scope`, `crates/core/src/profile.rs`) —
+  zero-dependency, всегда собирается, включается `LUMEN_PROFILE_TREE=1`.
+  Печатает в stderr отступленное дерево времён по фазам при завершении
+  верхнего scope. Без переменной окружения — один кэшированный `OnceLock`
+  чек, накладные расходы отсутствуют даже на горячем пути (можно оставлять
+  в коде постоянно, не убирать после диагностики). Для быстрой, без-GUI
+  диагностики из Bash/агента — заменяет одноразовые `eprintln!`-таймеры,
+  которыми раньше временно инструментировали код и вручную убирали (см.
+  BUG-284). Уже подключён в `lumen_layout::box_tree::layout_measured_hyp`
+  (`precompute_counters`/`build_box`/`lay_out`/`post_layout_passes`).
+- **`tracy`** (`tracy-client` крейт, фича `tracy`, НЕ в default) — настоящий
+  визуальный профайлер с таймлайном. Требует отдельно скачать и запустить
+  Tracy GUI (<https://github.com/wolfpld/tracy>) ДО старта Lumen — клиент сам
+  находит запущенный GUI (broadcast discovery) или коннектится по адресу.
+  Запуск: `cargo run -p lumen-shell --features tracy -- <url>`. Зона
+  добавляется макросом `lumen_core::tracy_zone!("name")` рядом со scope —
+  оба вызова обычно ставятся в одном месте (см. пример в doc-комментарии
+  `profile.rs`). Компилируется в полный no-op без фичи — нулевая стоимость
+  и нулевой лишний бинарный вес для обычной сборки.
+- **Бенчмарки в CI — реализовано, но не в точности как было заявлено здесь
+  раньше.** `.github/workflows/bench-gate.yml` → `crates/bench` (`lumen-bench
+  --ci`, task 9G.3, `ci_gate.rs`): полный `decode → html-parse → css-parse →
+  layout → paint` пайплайн на `samples/heavy.html` (порог: mean < 200мс, peak
+  RSS < 512МБ) + bfcache restore P50 < 50мс на `samples/page.html`
+  (`bfcache_restore.rs`). Это НЕ «layout простой страницы / парсинг HTML 10 МБ
+  / JS Speedometer» — тот список был аспирационным и не совпадает с тем, что
+  реально измеряется.
+- Tracking регрессий по коммитам (графики) — не найдено; `bench/compare.py`
+  сравнивает текущий прогон с `bench/baseline.json` (порог, не история).
 
 ### 11.4 Memory budget per tab — пятитайерная модель ([ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md))
 

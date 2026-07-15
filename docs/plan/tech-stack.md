@@ -109,6 +109,7 @@ Trait-anchor у каждого — в `lumen-core::ext`. Подключаем п
 - `cargo-dist` — упаковка релизов (опционально).
 - `cross` — кросс-компиляция на CI.
 - `cargo-hakari` + `workspace-hack` (internal crate) — feature-unification: 55 общих транзитивных зависимостей пришпилены к единому набору фич; устраняет перекомпиляцию при переключении между `-p lumen-shell` и `-p lumen-driver`. Категория: постоянная dev-инфраструктура; публикации нет; `workspace-hack` — path-dep только внутри workspace. Добавлено 2026-07-13 (§3.4 `docs/build-speed.md`).
+- `tracy-client` — визуальный профайлер (Tracy GUI, <https://github.com/wolfpld/tracy>), фича `tracy` (`lumen-core`/`lumen-layout`/`lumen-shell`), **не в default**. В отличие от остальных пунктов этого раздела — МОЖЕТ попасть в собранный бинарь, но только при явном `--features tracy`; обычная сборка (`cargo build -p lumen-shell`) не тянет его вовсе (`dep:tracy-client` опционален, макрос `lumen_core::tracy_zone!` компилируется в no-op без фичи). Категория: provisional (см. workspace `Cargo.toml`, комментарий над версией). Добавлено 2026-07-15 (BUG-284 perf investigation, `docs/plan/security-performance.md` §14.3).
 
 ### Принцип «no new dep без обоснования»
 
