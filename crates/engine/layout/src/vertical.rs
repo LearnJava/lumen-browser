@@ -7,10 +7,16 @@
 //! - CSS `height` → inline-size → physical height.
 //! - CSS `width`  → block-size  → physical width.
 //!
-//! Text orientation (rotating glyphs 90°) and vertical inline text flow
-//! are Phase 2 tasks: this module only handles block-direction stacking.
-//! InlineRun nodes inside vertical containers use horizontal text flow as
-//! a stub; glyphs appear sideways but positions are correct.
+//! Vertical inline text flow (`lay_out_vertical_inline_run` /
+//! `wrap_inline_run_vertical`, below) is implemented: text wraps top→bottom
+//! by inline-size, in addition to the block-direction stacking this header
+//! used to describe as the only thing done here.
+//!
+//! Text orientation (rotating glyphs 90°) is a paint concern
+//! (`docs/tasks/ph3-writing-mode-vertical.md`), not layout: this module only
+//! computes column positions. The CPU rasterizer honors `text_orientation`
+//! (Срез 1); the wgpu and femtovg backends still draw every run horizontally
+//! regardless of orientation (Срезы 2+, pending).
 //!
 //! Algorithm sketch (vertical-rl):
 //! 1. Inline-size (physical height) comes from CSS `height` or `available_height`.

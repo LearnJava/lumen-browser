@@ -57,9 +57,36 @@ ROADMAP помечает PARTIAL «дошить Phase 2 vertical inline flow». 
 - Unit `vertical.rs`: advance-ось по `text_orientation`.
 - Graphic: `NN-writing-mode.html` + демо.
 
+## Progress (2026-07-15) — Срез 1 (CPU-рендерер) DONE
+
+`crates/engine/paint/src/cpu_raster.rs`:
+- `DrawText`-обработчик прокидывает `text_orientation` в `rasterize_text`.
+- `rasterize_text` при `Some(Sideways | Mixed)` делегирует в новую
+  `rasterize_text_rotated`: рендерит run горизонтально в локальный
+  full-canvas-sized буфер через тот же `rasterize_text` (origin `(0,0)`, без
+  клипа — рекурсия с `text_orientation: None`, без дублирования
+  shaping/blit-цикла), затем композитит его на `pixmap` с поворотом на 90° CW
+  вокруг локального origin + translate к `rect` (`tiny_skia::Transform::
+  from_row(0, 1, -1, 0, rect.x, rect.y)`), клип — через существующий
+  `build_clip_mask`.
+- `Upright` и `None` не тронуты (текущее горизонтальное поведение).
+- Per-glyph различение `mixed` (латиница повёрнута / CJK прямо) — отдельно,
+  Срез 3; в этом срезе `Mixed` трактуется как `Sideways` (весь run повёрнут).
+- Тест `draw_text_sideways_rotates_ink_bbox` (`cpu_raster.rs`): ink bbox для
+  `Sideways` выше, чем шире (обратный аспект горизонтального рендера).
+
+**Остаток:** Срез 2 (femtovg — ныне fallback-бэкенд) + новый пункт, не
+учтённый в исходном брифе (файл писался 2026-07-05, до ADR-017 2026-07-13,
+когда wgpu стал дефолтным бэкендом): `crates/engine/paint/src/renderer.rs`
+(wgpu, live default) **тоже** игнорирует `text_orientation`
+(`text_orientation: _` в `DrawText`-обработчике) — приоритетнее femtovg для
+следующего среза, так как это путь, который реально видит пользователь.
+Срез 3 (mixed/upright различение), Срез 4 (BUG-264 реордер, опц.), Срез 5
+(graphic-тест) — не начаты.
+
 ## Definition of done
 
-- [ ] Глифы реально повёрнуты/upright в CPU-рендерере (срез 1)
+- [x] Глифы реально повёрнуты/upright в CPU-рендерере (срез 1)
 - [ ] Глифы реально повёрнуты/upright в femtovg-окне (срез 2)
 - [ ] `mixed`/`upright`/`sideways` дают разный визуальный результат (срез 3)
 - [ ] BUG-264 (layout-часть) закрыт, `#[allow(items_after_test_module)]` снят (срез 4, опц.)
