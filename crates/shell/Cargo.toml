@@ -12,10 +12,17 @@ name = "lumen"
 path = "src/main.rs"
 
 [features]
-# Phase 2 defaults: femtovg primary + wgpu fallback (ADR-010 RB-9).
-# Both must be in default so that #[cfg(feature = "backend-*")] guards in
-# backend_factory.rs compile the real backends, not the stub error paths.
+# Both rendering backends are compiled in by default so that #[cfg(feature =
+# "backend-*")] guards in backend_factory.rs compile the real backends, not the
+# stub error paths. At runtime, ADR-017 probes and prefers wgpu (Vulkan → GL →
+# DX12 on Windows) as the live default render path; femtovg is the
+# init-failure fallback and an explicit `LUMEN_BACKEND=femtovg` override
+# (supersedes the older ADR-010 RB-9 femtovg-primary ordering — that ADR's
+# *compile-time* "both backends in default" wiring still holds, only the
+# *runtime* preference flipped).
 # Ph3 S12 cutover (ADR-018): V8 replaces QuickJS as the default JS engine.
+# A plain `cargo build -p lumen-shell` (no extra --features) already ships the
+# fastest default combination: wgpu (probed) + V8.
 default = ["backend-femtovg", "backend-wgpu", "v8"]
 
 # Enable QuickJS JavaScript engine (rquickjs). Kept as an opt-in rollback path
@@ -34,11 +41,13 @@ quickjs = ["dep:lumen-js", "lumen-js/webgpu"]
 # quickjs wins) or `--no-default-features --features backend-femtovg,backend-wgpu,quickjs`.
 v8 = ["dep:lumen-js", "lumen-js/v8-backend"]
 
-# femtovg rendering backend — Phase 2 default (ADR-010 RB-9).
+# femtovg rendering backend — the runtime fallback used only when the wgpu
+# probe fails to init, or via an explicit `LUMEN_BACKEND=femtovg` override
+# (ADR-017; previously the ADR-010 RB-9 default before the wgpu flip).
 backend-femtovg = ["lumen-paint/backend-femtovg"]
 
-# wgpu rendering backend — Phase 1 / Phase 2 fallback (ADR-010 §Migration path).
-# Use when femtovg is unavailable or LUMEN_BACKEND=wgpu is set.
+# wgpu rendering backend — the live default render path (ADR-017), probe-
+# selected at startup (Vulkan → GL → DX12 on Windows).
 # cargo run -p lumen-shell --no-default-features --features backend-wgpu,v8
 backend-wgpu = ["lumen-paint/backend-wgpu"]
 

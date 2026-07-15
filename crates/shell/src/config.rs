@@ -368,6 +368,40 @@ pub fn load() -> Option<FingerprintProfile> {
     Some(parse(&contents))
 }
 
+/// Rewrite the `http3` key in the portable `fingerprint.toml`, preserving every
+/// other line verbatim. Creates the file (and its parent directory) if absent.
+///
+/// Used by the settings panel's Network section. [`FingerprintProfile`] is
+/// loaded once into a process-global [`OnceLock`] at startup ([`global`]), so
+/// this only takes effect on the next launch — the caller is responsible for
+/// surfacing a "restart required" hint.
+pub fn set_http3(enabled: bool) -> std::io::Result<()> {
+    let path = config_path().expect("config_path always returns Some");
+    set_http3_at(&path, enabled)
+}
+
+/// Path-parameterised implementation of [`set_http3`] (unit-testable without
+/// touching the real portable config file).
+fn set_http3_at(path: &std::path::Path, enabled: bool) -> std::io::Result<()> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<&str> = existing
+        .lines()
+        .filter(|line| {
+            let trimmed = strip_comment(line).trim();
+            match trimmed.split_once('=') {
+                Some((key, _)) => key.trim() != "http3",
+                None => true,
+            }
+        })
+        .collect();
+    let http3_line = format!("http3 = {enabled}");
+    lines.push(&http3_line);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, lines.join("\n") + "\n")
+}
+
 /// Parse a flat `key = value` TOML subset into a [`FingerprintProfile`].
 ///
 /// Comments (`#` to end of line) and blank lines are skipped. Values may be
@@ -817,6 +851,48 @@ mod tests {
     fn socks5_alias_key_works() {
         let p = parse("socks5 = socks5://127.0.0.1:9050");
         assert_eq!(p.socks5_proxy, Some("socks5://127.0.0.1:9050".to_string()));
+    }
+
+    // ── set_http3_at (settings-panel Network toggle) ─────────────────────────
+
+    fn temp_toml_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("lumen_test_set_http3_{name}.toml"))
+    }
+
+    #[test]
+    fn set_http3_creates_missing_file() {
+        let path = temp_toml_path("creates_missing");
+        let _ = std::fs::remove_file(&path);
+        set_http3_at(&path, true).unwrap();
+        let p = parse(&std::fs::read_to_string(&path).unwrap());
+        assert!(p.http3);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn set_http3_preserves_other_keys() {
+        let path = temp_toml_path("preserves_keys");
+        std::fs::write(&path, "screen_width = 1366\nplatform = \"Linux\"\n").unwrap();
+        set_http3_at(&path, true).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let p = parse(&contents);
+        assert!(p.http3);
+        assert_eq!(p.screen_width, 1366);
+        assert_eq!(p.platform, "Linux");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn set_http3_toggle_round_trip() {
+        let path = temp_toml_path("toggle_round_trip");
+        set_http3_at(&path, true).unwrap();
+        assert!(parse(&std::fs::read_to_string(&path).unwrap()).http3);
+        set_http3_at(&path, false).unwrap();
+        assert!(!parse(&std::fs::read_to_string(&path).unwrap()).http3);
+        // No duplicate `http3 =` lines accumulate across repeated writes.
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents.matches("http3").count(), 1);
+        std::fs::remove_file(&path).ok();
     }
 
     #[cfg(any(feature = "quickjs", feature = "v8"))]

@@ -195,7 +195,7 @@ cargo build --release
 Движок Phase 2 многое уже умеет (полный список и текущие пробелы — в [`CAPABILITIES.md`](CAPABILITIES.md), [`BUGS.md`](BUGS.md) и `CSS-SPECS.md`). Крупные нереализованные блоки:
 
 - HTML parser — без полного набора HTML5 insertion modes; lenient к ошибкам.
-- JS-движок — QuickJS (rquickjs), не V8; переход на `rusty_v8` запланирован на Phase 3.
+- JS-движок — V8 (`rusty_v8`) с 2026-07-14 (ADR-018), JIT-компиляция; QuickJS (`rquickjs`) остаётся опциональным rollback-путём (`--features quickjs`) до полного вывода из кода. Оба движка входят в `default` вместе с обоими paint-бэкендами (`backend-femtovg`, `backend-wgpu`) — обычная сборка `cargo build -p lumen-shell` без флагов уже получает самый быстрый вариант (wgpu + V8).
 - Сетевой стек — HTTP/1.1 + HTTP/2; HTTP/3 (QUIC) — позже.
 - Часть CSS-свойств и WPT-покрытие ещё в работе (см. `CSS-SPECS.md`).
 - JavaScript — нет.
