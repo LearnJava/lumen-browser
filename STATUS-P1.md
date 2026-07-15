@@ -14,9 +14,8 @@ BUGS.md:293
 BUGS.md:296
 ROADMAP.md:157
 CAPABILITIES.md:173
-docs/tasks/ph3-ai-module.md:229
-docs/tasks/ph3-ai-module.md:239
-docs/tasks/ph3-ai-module.md:261
+docs/tasks/ph3-ai-module.md:236
+docs/tasks/ph3-ai-module.md:283
 ROADMAP.md:125
 ROADMAP.md:171
 ROADMAP.md:178
