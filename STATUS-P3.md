@@ -23,3 +23,4 @@ BUGS.md:291
 BUGS.md:293
 BUGS.md:296
 BUGS.md:301
+docs/tasks/p3-cascade-perf.md — план на 3 задачи (ускорить каскад / LUMEN_ENGINE_THREAD default / частичный пересчёт стилей)
