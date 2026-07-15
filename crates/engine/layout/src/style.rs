@@ -3689,6 +3689,12 @@ pub struct ContainerContext {
     /// `window.getComputedStyle()` (`selector_query::computed_style_to_map`) —
     /// used to resolve `style()` queries against standard (non-custom) properties.
     pub style_props: HashMap<String, String>,
+    /// Container's own font-size — the `em` basis when resolving relative
+    /// units in a `style()` query's declared value.
+    pub font_size: f32,
+    /// Viewport size — the `vw`/`vh`/`vmin`/`vmax` basis when resolving
+    /// relative units in a `style()` query's declared value.
+    pub viewport: Size,
 }
 
 /// Evaluates a raw @container condition string against a `ContainerContext`.
@@ -3712,12 +3718,14 @@ pub struct ContainerContext {
 /// used for custom properties, so it works for keyword and length values whose
 /// author-written form matches the serialized form (`style(width: 100px)` against
 /// a computed `100px`); if that normalized comparison fails, both sides are also
-/// tried as CSS colors and as absolute-unit lengths (`style_query_value_matches`),
-/// so `style(color: red)` matches a computed `rgb(255, 0, 0)` and
-/// `style(border-width: 2pt)` matches a computed `2.6667px`. Relative lengths
-/// (`em`, `%`, viewport/container units) still require the serialized form to
-/// match textually — resolving them needs font-size/viewport context that
-/// `ContainerContext` doesn't carry.
+/// tried as CSS colors and as lengths (`style_query_value_matches`), so
+/// `style(color: red)` matches a computed `rgb(255, 0, 0)`, `style(border-width:
+/// 2pt)` matches a computed `2.6667px`, and relative lengths (`em`, `%`,
+/// viewport units) resolve against the container's own `font_size`/`width`/
+/// `viewport` (`style(width: 1em)` matches a computed `16px` on a container
+/// whose font-size is `16px`) — the same basis `cq*` units use, since a
+/// `style()` query's declared value is evaluated as if specified on the
+/// container element itself (CSS Containment L3 §4).
 /// Boolean form (`style(--prop)` / `style(prop)` without a value) is true when the
 /// container has any value for that property — for custom properties this checks
 /// `custom_props`, for standard properties `style_props` (a standard property never
@@ -3726,6 +3734,10 @@ pub struct ContainerContext {
 /// Phase 0 limitations:
 /// - Only a single declaration inside `style()` (no comma-separated list).
 /// - `state()` container queries are not supported.
+/// - `%` in a `style()` value always resolves against the container's own
+///   width, regardless of which property is being queried (the honest
+///   per-property percentage basis — e.g. `line-height`'s is font-size —
+///   needs more context than `ContainerContext` carries).
 ///
 /// Unknown features → false (safe fallback).
 pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> bool {
@@ -3777,7 +3789,7 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
             return ctx
                 .style_props
                 .get(&name.to_ascii_lowercase())
-                .is_some_and(|v| style_query_value_matches(v, &want));
+                .is_some_and(|v| style_query_value_matches(v, &want, ctx));
         }
         return false;
     }
@@ -3869,24 +3881,32 @@ fn normalize_style_value(s: &str) -> String {
 ///    so `style(color: red)` matches a container computed to
 ///    `color: rgb(255, 0, 0)` (CSS Color L4 §4, equivalent notations denote
 ///    the same color).
-/// 2. Absolute CSS lengths: both sides parsed via `parse_length` and compared
-///    as px when *both* resolve to `Length::Px` — so `style(border-width: 2pt)`
-///    matches a computed `2.6667px` (CSS Values L3 §5.2, absolute units are a
-///    fixed ratio to px, no layout context needed). Relative units (`em`,
-///    `%`, viewport/container units) are deliberately excluded: `ContainerContext`
-///    carries no font-size/viewport to resolve them, and treating an
-///    unresolved relative unit as a raw px number would produce false matches.
+/// 2. CSS lengths: both sides parsed via `parse_length`, then resolved to px
+///    using `ctx` as the basis — `ctx.font_size` for `em`, `ctx.width` for
+///    `%`, `ctx.viewport` for `vw`/`vh`/`vmin`/`vmax` (CSS Values L3 §5.2/§6.1;
+///    absolute units like `pt` resolve independent of any basis) — so
+///    `style(border-width: 2pt)` matches a computed `2.6667px`, and
+///    `style(width: 1em)` matches a computed `16px` on a container whose
+///    font-size is `16px`. Values that need layout context beyond `ctx`
+///    (`min-content`, unresolved `cq*` outside a re-layout pass) don't
+///    resolve and fall through to the textual comparison's `false`.
 ///
 /// `want` must already be normalized by the caller.
-fn style_query_value_matches(computed: &str, want: &str) -> bool {
+fn style_query_value_matches(computed: &str, want: &str, ctx: &ContainerContext) -> bool {
     if normalize_style_value(computed).eq_ignore_ascii_case(want) {
         return true;
     }
     if let (Some(a), Some(b)) = (parse_color(computed), parse_color(want)) {
         return a == b;
     }
-    if let (Some(Length::Px(a)), Some(Length::Px(b))) = (parse_length(computed), parse_length(want)) {
-        return (a - b).abs() < 0.01;
+    if let (Some(a), Some(b)) = (parse_length(computed), parse_length(want)) {
+        let basis = Some(ctx.width);
+        if let (Some(pa), Some(pb)) = (
+            a.resolve(ctx.font_size, basis, ctx.viewport),
+            b.resolve(ctx.font_size, basis, ctx.viewport),
+        ) {
+            return (pa - pb).abs() < 0.01;
+        }
     }
     false
 }
