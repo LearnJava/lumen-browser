@@ -2582,6 +2582,8 @@ pub fn layout_measured_hyp(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
 ) -> LayoutBox {
+    let _prof = lumen_core::profile::scope("layout_measured_hyp");
+    lumen_core::tracy_zone!("layout_measured_hyp");
     // Invalidate the rule-index cache before each layout pass to prevent
     // stale hits when a new stylesheet lands at the same pointer as a freed one.
     crate::style::invalidate_rule_idx_cache();
@@ -2589,21 +2591,37 @@ pub fn layout_measured_hyp(
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
-    let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
+    let counters = {
+        let _prof = lumen_core::profile::scope("precompute_counters");
+        lumen_core::tracy_zone!("precompute_counters");
+        precompute_counters(doc, sheet, viewport, &flat, dark_mode)
+    };
     let registry = build_counter_style_registry(sheet);
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode);
+    let mut root = {
+        let _prof = lumen_core::profile::scope("build_box");
+        lumen_core::tracy_zone!("build_box");
+        build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode)
+    };
     propagate_canvas_background(doc, &mut root);
     // CSS Fonts L5 §4 — resolve `font-size-adjust` against the real font x-height
     // before measurement, so both line wrapping and paint use the scaled size.
     apply_font_size_adjust(&mut root, measurer);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp, false);
-    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
-    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
-    // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
-    apply_anchor_positions(&mut root, viewport);
-    // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
-    split_first_line_boxes(&mut root);
+    {
+        let _prof = lumen_core::profile::scope("lay_out");
+        lumen_core::tracy_zone!("lay_out");
+        lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp, false);
+    }
+    {
+        let _prof = lumen_core::profile::scope("post_layout_passes");
+        lumen_core::tracy_zone!("post_layout_passes");
+        apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
+        apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
+        // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
+        apply_anchor_positions(&mut root, viewport);
+        // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
+        split_first_line_boxes(&mut root);
+    }
     root
 }
 

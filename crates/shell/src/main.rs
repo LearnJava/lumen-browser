@@ -314,6 +314,16 @@ fn fast_scroll_degrade_disabled() -> bool {
 }
 
 fn main() -> ExitCode {
+    // Opt-in visual profiler (§14.3, BUG-284): `Client::start()` spawns the
+    // background thread that connects to (or is discovered by) a running
+    // Tracy GUI app — https://github.com/wolfpld/tracy. Must be started
+    // before any `lumen_core::tracy_zone!` spans fire, so this is the very
+    // first thing main() does. No-op unless built with `--features tracy`.
+    #[cfg(feature = "tracy")]
+    let _tracy_client = tracy_client::Client::start();
+    #[cfg(feature = "tracy")]
+    eprintln!("[tracy] профилировщик активен — открой Tracy GUI, чтобы увидеть таймлайн");
+
     // Anchor for launch->first-frame timing (§4 score table) — before any work.
     bench_frames::mark_process_start();
     // Load the fingerprint profile (9F.1) once, before any network or JS setup.

@@ -56,6 +56,13 @@ backend-wgpu = ["lumen-paint/backend-wgpu"]
 # lumen-ai compiled in). Enable with --features ai.
 ai = ["dep:lumen-ai"]
 
+# Opt-in visual profiler (Tracy GUI app, https://github.com/wolfpld/tracy —
+# download and run it BEFORE launching lumen with this feature; it listens
+# for the client to connect). NOT in default — adds `tracy-client` and starts
+# its background connection thread. See docs/plan/security-performance.md
+# §14.3 for setup. `cargo run -p lumen-shell --features tracy`.
+tracy = ["dep:tracy-client", "lumen-layout/tracy"]
+
 [dependencies]
 lumen-core.workspace = true
 # PH1-4: IPC to the out-of-process network service (NetworkServiceHandle, --network-service).
@@ -74,6 +81,11 @@ lumen-html-parser.workspace = true
 lumen-css-parser.workspace = true
 lumen-dom.workspace = true
 lumen-layout.workspace = true
+# Why this dependency (tracy-client): opt-in visual profiler, provisional,
+# feature-gated — see the workspace Cargo.toml comment above the version pin.
+# Needed directly here (not just via lumen-layout) to call `Client::start()`
+# once at process startup.
+tracy-client = { workspace = true, optional = true }
 # Phase 2: backend features are activated via [features] default above (ADR-010 RB-9).
 # cpu-render: deterministic tiny-skia rasterizer used by the headless `--screenshot` CLI.
 lumen-paint = { workspace = true, features = ["cpu-render"] }

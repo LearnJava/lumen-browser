@@ -19,6 +19,7 @@ pub mod json;
 pub mod memory_pressure;
 pub mod module;
 pub mod pcs;
+pub mod profile;
 pub mod punycode;
 pub mod sandbox;
 pub mod spell;

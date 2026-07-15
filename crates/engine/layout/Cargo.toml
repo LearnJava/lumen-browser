@@ -17,3 +17,10 @@ lumen-image.workspace = true
 # Permanent dep: work-stealing parallelism for independent sibling style computations.
 rayon = "1"
 workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
+
+[features]
+# Opt-in visual profiler (Tracy GUI) — forwards to lumen-core's own `tracy`
+# feature. Every crate in the chain needs its own feature of this name for
+# `lumen_core::tracy_zone!`'s internal `#[cfg(feature = "tracy")]` to
+# evaluate against *this* crate (Cargo feature unification, not inheritance).
+tracy = ["lumen-core/tracy"]
