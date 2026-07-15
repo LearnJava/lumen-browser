@@ -987,7 +987,7 @@
      "id": "P3-vertical",
      "title": "CSS writing-mode: вертикальный текст (полный layout)",
      "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): block axis-swap vertical-rl/lr готов (vertical.rs); дошить — вертикальный inline-поток (Phase 2, lay_out_vertical_inline_run)"
+     "note": "АКТУАЛИЗАЦИЯ 2026-07-15: block axis-swap готов (vertical.rs); вертикальный inline-поток (lay_out_vertical_inline_run/wrap_inline_run_vertical) уже реализован — ROADMAP-нота была устаревшей, `vertical.rs:10` шапка переписана. Реальный остаток — paint (поворот глифов): Срез 1 (CPU-рендерер, cpu_raster.rs) влит; Срез 2 (wgpu renderer.rs — ныне дефолтный бэкенд, ADR-017 — приоритетнее исходно предполагавшегося femtovg) не начат; Срез 3 (mixed/upright per-glyph), Срез 4 (BUG-264 реордер, опц.), Срез 5 (graphic-тест) — не начаты. Бриф docs/tasks/ph3-writing-mode-vertical.md"
     },
     {
      "id": "P3-resizeobs",

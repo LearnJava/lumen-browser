@@ -5405,10 +5405,11 @@ fn lay_out_inner(
     }
 
     // CSS Writing Modes L3 §3: vertical writing modes swap the block/inline axes.
-    // Vertical block stacking is handled by the `vertical` module. InlineRun,
-    // FormControl, etc. inside a vertical context fall through to horizontal
-    // layout as a Phase 0 stub (text appears sideways but positions are valid).
-    // CSS: writing-mode — Phase 2: vertical inline text flow + sideways glyphs.
+    // Vertical block stacking and InlineRun flow (below, `lay_out_vertical_inline_run`)
+    // are both implemented in the `vertical` module. FormControl and other box
+    // kinds inside a vertical context still fall through to horizontal layout.
+    // Glyph rotation is a paint concern — CPU rasterizer honors it (Ph3
+    // writing-mode vertical, Срез 1); wgpu/femtovg backends do not yet (Срез 2+).
     if !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
         && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
     {
