@@ -1,6 +1,6 @@
 # BUG-283 — краш процесса на реальных веб-шрифтах: allocation of ~906 GB failed
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-15
 **Компонент:** font (`Rasterizer::rasterize`)
 **Найден:** 2026-07-15, ручной прогон релизной сборки на https://lenta.ru
 
@@ -47,13 +47,21 @@ let height = (y_max - y_min) as u32;  // нет проверки y_max >= y_min
 связанной с переполнением) — даже корректный, но экстремальный
 `pixel_size`/`units_per_em` может запросить неограниченно большой буфер.
 
-## Возможный фикс (не реализован в этой задаче)
+## Фикс (2026-07-15)
 
-В `rasterize()` после вычисления `x_min/x_max/y_min/y_max`:
-- вернуть `None`, если `x_max < x_min` или `y_max < y_min` (испорченный
-  bbox — тот же трактовка, что уже есть для `width == 0 || height == 0`);
-- добавить защитный верхний предел на `width`/`height` (например, разумный
-  максимум в пикселях) и возвращать `None` при превышении вместо аллокации.
+`rasterize()` теперь считает `width_i32`/`height_i32` как `i32` (без каста в
+`u32`) и возвращает `None`, если:
+- `width_i32 <= 0` или `height_i32 <= 0` — испорченный/инвертированный bbox
+  (тот же случай, что раньше заворачивался в `u32::MAX`);
+- `width_i32 > MAX_GLYPH_DIM` или `height_i32 > MAX_GLYPH_DIM` (8192 px) —
+  корректный, но экстремальный bbox/pixel_size, который иначе запросил бы
+  неограниченно большой буфер.
+
+Только после этой проверки диапазоны кастуются в `u32` для аллокации
+`pixels`. 3 новых юнит-теста: `inverted_bbox_returns_none_instead_of_crashing`,
+`inverted_bbox_y_axis_returns_none`, `oversized_bbox_returns_none_instead_of_huge_allocation`
+(`crates/engine/font/src/rasterizer.rs`). `cargo test -p lumen-font` — 362/362
+зелёных, `cargo clippy -p lumen-font --all-targets -- -D warnings` чист.
 
 ## Воспроизведение
 
