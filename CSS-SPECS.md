@@ -672,7 +672,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `anchor-name` / `position-anchor` / `inset-area` | ✅ | ComputedStyle + collect_anchors + apply_anchor_positions post-layout pass; position-area alias |
-| `anchor()` / `anchor-size()` functions | ⬜ | |
+| `anchor()` / `anchor-size()` functions | ✅ | `anchor()` in top/right/bottom/left (+ `inset` shorthand) resolved via `resolve_inset`/`resolve_inset_scoped` (two-phase, mirrors `inset-area`); `anchor-size()` in width/height via `resolve_anchor_size`; тест 144 (p4-anchor-functions 2026-07-15) |
 
 ### [T4] Color L5
 

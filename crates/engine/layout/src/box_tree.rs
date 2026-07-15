@@ -7929,10 +7929,26 @@ fn lay_out_abs_children(
             my_pcb
         };
 
-        let left = cs.left.resolve(c_em, cb.width, viewport);
-        let right = cs.right.resolve(c_em, cb.width, viewport);
-        let top = cs.top.resolve(c_em, cb.height, viewport);
-        let bottom = cs.bottom.resolve(c_em, cb.height, viewport);
+        // CSS Anchor Positioning L1 §3.1 — intercept `anchor()` in top/right/bottom/left
+        // before falling back to the plain length/auto value.
+        // CSS: anchor(), position-anchor
+        let default_anchor = cs.position_anchor.as_deref();
+        let left = crate::anchor::resolve_inset(
+            &anchors, &cs.left, cs.anchor_left.as_ref(), default_anchor, true, false, cb.x, cb.x + cb.width,
+            c_em, cb.width, viewport,
+        );
+        let right = crate::anchor::resolve_inset(
+            &anchors, &cs.right, cs.anchor_right.as_ref(), default_anchor, true, true, cb.x, cb.x + cb.width,
+            c_em, cb.width, viewport,
+        );
+        let top = crate::anchor::resolve_inset(
+            &anchors, &cs.top, cs.anchor_top.as_ref(), default_anchor, false, false, cb.y, cb.y + cb.height,
+            c_em, cb.height, viewport,
+        );
+        let bottom = crate::anchor::resolve_inset(
+            &anchors, &cs.bottom, cs.anchor_bottom.as_ref(), default_anchor, false, true, cb.y, cb.y + cb.height,
+            c_em, cb.height, viewport,
+        );
 
         // Доступная ширина для layout абсолютного child.
         let avail_w = if left.is_some() && right.is_some() && cs.width.is_none() {
@@ -10493,14 +10509,38 @@ fn apply_anchor_positions_rec(
     pcb: Rect,
     ancestors: &mut Vec<lumen_dom::NodeId>,
 ) {
+    // CSS Anchor Positioning L1 §4 — correct `anchor-size()` width/height against the
+    // final, global anchor registry. The local registry `lay_out_abs_children` used is
+    // collected once before any deferred (abs/fixed) sibling in the same containing
+    // block is laid out, so an `anchor-size()` referencing a sibling anchor that is
+    // itself abs/fixed-positioned always sees that anchor's stale (pre-layout) rect
+    // there. Mirrors the `anchor()` inset correction below; must run first since the
+    // inset-area/inset corrections below read `lb.rect.width`/`height`.
+    // CSS: anchor-size(), position-anchor
+    if matches!(lb.style.position, Position::Absolute | Position::Fixed) {
+        let default_anchor = lb.style.position_anchor.as_deref();
+        if let Some(w) = lb.style.anchor_size_w.as_ref().and_then(|f| {
+            crate::anchor::resolve_anchor_size(registry, f, default_anchor)
+        }) {
+            lb.rect.width = w;
+        }
+        if let Some(h) = lb.style.anchor_size_h.as_ref().and_then(|f| {
+            crate::anchor::resolve_anchor_size(registry, f, default_anchor)
+        }) {
+            lb.rect.height = h;
+        }
+    }
+
     // Resolve inset-area for this element if it is abs/fixed-positioned with a named anchor.
     let anchor_name = matches!(lb.style.position, Position::Absolute | Position::Fixed)
         .then(|| lb.style.position_anchor.as_deref())
         .flatten();
+    let mut positioned_by_inset_area = false;
     if let Some(anchor_name) = anchor_name {
         let row = lb.style.inset_area_row;
         let col = lb.style.inset_area_col;
         if row != InsetAreaKeyword::None || col != InsetAreaKeyword::None {
+            positioned_by_inset_area = true;
             let cb = if matches!(lb.style.position, Position::Fixed) {
                 Rect::new(0.0, 0.0, viewport.width, viewport.height)
             } else {
@@ -10534,6 +10574,69 @@ fn apply_anchor_positions_rec(
                 if let Some(h) = pos.height {
                     lb.rect.height = h;
                 }
+            }
+        }
+    }
+
+    // CSS Anchor Positioning L1 §3.1 — correct plain `anchor()` insets against the
+    // final, global anchor registry (mirrors the `inset-area` correction above; the
+    // local registry `lay_out_abs_children` used may have missed anchors outside this
+    // element's containing-block subtree, or anchors whose rect only became final after
+    // a later container-query relayout pass). Skipped when `inset-area` already placed
+    // the element — that shorthand takes full precedence over plain insets.
+    // CSS: anchor(), position-anchor, anchor-scope
+    if !positioned_by_inset_area && matches!(lb.style.position, Position::Absolute | Position::Fixed) {
+        let has_anchor_func = lb.style.anchor_left.is_some()
+            || lb.style.anchor_right.is_some()
+            || lb.style.anchor_top.is_some()
+            || lb.style.anchor_bottom.is_some();
+        if has_anchor_func {
+            let cb = if matches!(lb.style.position, Position::Fixed) {
+                Rect::new(0.0, 0.0, viewport.width, viewport.height)
+            } else {
+                pcb
+            };
+            let em = lb.style.font_size;
+            let default_anchor = lb.style.position_anchor.as_deref();
+            let left = crate::anchor::resolve_inset_scoped(
+                registry, &lb.style.left, lb.style.anchor_left.as_ref(), default_anchor, true, false,
+                cb.x, cb.x + cb.width, em, cb.width, viewport, ancestors,
+            );
+            let right = crate::anchor::resolve_inset_scoped(
+                registry, &lb.style.right, lb.style.anchor_right.as_ref(), default_anchor, true, true,
+                cb.x, cb.x + cb.width, em, cb.width, viewport, ancestors,
+            );
+            let top = crate::anchor::resolve_inset_scoped(
+                registry, &lb.style.top, lb.style.anchor_top.as_ref(), default_anchor, false, false,
+                cb.y, cb.y + cb.height, em, cb.height, viewport, ancestors,
+            );
+            let bottom = crate::anchor::resolve_inset_scoped(
+                registry, &lb.style.bottom, lb.style.anchor_bottom.as_ref(), default_anchor, false, true,
+                cb.y, cb.y + cb.height, em, cb.height, viewport, ancestors,
+            );
+            let c_ml = lb.style.margin_left.resolve_or_zero(em, cb.width, viewport);
+            let c_mr = lb.style.margin_right.resolve_or_zero(em, cb.width, viewport);
+            let c_mt = lb.style.margin_top.resolve_or_zero(em, cb.height, viewport);
+            let c_mb = lb.style.margin_bottom.resolve_or_zero(em, cb.height, viewport);
+
+            // Only override the axis when the corresponding side resolved — an
+            // unresolved `anchor()` with no fallback computes as `auto`, leaving
+            // this axis at whatever `lay_out_abs_children` already placed it at
+            // (its own static-position fallback).
+            let new_x = match (left, right) {
+                (Some(l), _) => Some(cb.x + l + c_ml),
+                (None, Some(r)) => Some(cb.x + cb.width - r - c_mr - lb.rect.width),
+                (None, None) => None,
+            };
+            let new_y = match (top, bottom) {
+                (Some(t), _) => Some(cb.y + t + c_mt),
+                (None, Some(bv)) => Some(cb.y + cb.height - bv - c_mb - lb.rect.height),
+                (None, None) => None,
+            };
+            let dx = new_x.map_or(0.0, |nx| nx - lb.rect.x);
+            let dy = new_y.map_or(0.0, |ny| ny - lb.rect.y);
+            if dx != 0.0 || dy != 0.0 {
+                shift_tree(lb, dx, dy);
             }
         }
     }
