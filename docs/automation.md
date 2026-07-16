@@ -45,7 +45,7 @@ Misc: `--no-scrollbar` (cleaner screenshot crops) · `--activity-log` / `--click
 
 `--mcp-live-port N <src>` runs MCP JSON-RPC over TCP against the **live window**. All 7 tools wired: `navigate`, `wait` (conditions: `document_ready` / `visible` / `stable` / `network_idle` / `js_idle`), `click`, `type`, `scroll`, `eval` (JS), `query` (CSS selector → DOM nodes). All 5 resources wired: `resource://screenshot` (PNG, CPU path), `resource://a11y_tree`, `resource://layout` (box model JSON), `resource://console`, `resource://network`.
 
-Headless variants `--mcp` / `--mcp-port` exist but `screenshot`/`eval`/`click`/`type`/`scroll` return errors there (InProcessSession stubs — DEVX-5).
+Headless variants `--mcp` / `--mcp-port` exist. DEVX-5 slice 1: `screenshot` (CPU tiny-skia path, `cpu-render` — now a **default** feature of `lumen-driver`, no GPU adapter needed) and `scroll` (wired to the existing off-main-thread `scroll_page_by`) now work in `InProcessSession`. `eval`/`click`/`type` still return errors there — they need a persistent V8 runtime wired to `InProcessSession`'s DOM (`Document` currently owned, not `Arc<Mutex<_>>` — see `docs/plan/architecture.md`-style headless-runtime pattern in `crates/shell/src/main.rs`'s `V8PersistentJs`) plus synthetic-event dispatch + hit-testing for `click`; remaining DEVX-5 scope.
 
 `graphic_tests/run.py --live` (DEVX-1) also spawns with `--deterministic --viewport 1024x720` (kills Date.now/Math.random/rAF flake in JS tests like TEST-57/129-138 while keeping the pipeline's calibrated viewport) and reads `resource://console` after every test — a `console.error` FAILs the test and its text lands in the HTML report, independent of the pixel diff. `resource://console` for `LiveWindowSession` round-trips through a new `AutomationCommand::ConsoleLog` to the shell's DevTools console buffer (cleared on every `navigate()`). `network`/`layout` resources remain untapped for `--live` (still returns real data only via `InProcessSession`, not the live window — SDC-2 MVP scope).
 
@@ -83,6 +83,6 @@ Snapshot-test env vars: `SNAPSHOT_VS_EDGE_STRICT=1` (hard-gate `crates/driver/te
 ## Known stubs — do NOT rely on these
 
 - **CDP `--devtools-port`**: only `Browser.getVersion` is real; `DOM.getDocument` returns an empty document, `*.enable` are ACK stubs, everything else → `-32601`. Use BiDi or MCP instead; no DEVX task (BiDi/MCP cover the need).
-- **Headless MCP** (`--mcp`/`--mcp-port`): `eval`/`screenshot`/`click`/`type`/`scroll` error out (DEVX-5).
+- **Headless MCP** (`--mcp`/`--mcp-port`): `eval`/`click`/`type` still error out — need a persistent V8 runtime on `InProcessSession` (DEVX-5, remaining scope). `screenshot` (CPU path) and `scroll` now work (DEVX-5 slice 1).
 - **CPU screenshot path** (`--screenshot`, `--ipc`, `resource://screenshot`): no JS execution, rendering not at parity with the windowed backend (BUG-221) — fine for coarse checks, not for the Edge-diff gate.
 - In-app DevTools panels (console/inspector/network in the shell UI) are interactive-only — not scriptable.

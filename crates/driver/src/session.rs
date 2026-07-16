@@ -39,7 +39,8 @@ struct SessionState {
 /// Headless in-process сессия браузера.
 ///
 /// Запускает полный pipeline движка (HTML parse → CSS cascade → layout) без GPU.
-/// `screenshot` недоступен до реализации задачи 8A.5 (tinyskia-cpu-raster).
+/// `screenshot` рендерит через CPU-растеризатор tiny-skia (`cpu-render`, default
+/// feature этого crate) — работает без GPU-адаптера, детерминированно на всех ОС.
 ///
 /// # Пример
 /// ```rust,no_run
@@ -360,6 +361,17 @@ impl Default for InProcessSession {
 impl BrowserSession for InProcessSession {
     // ── Ресурсы ────────────────────────────────────────────────────────────
 
+    // DEVX-5: headless MCP/CI runs have no GPU adapter, so the trait method
+    // rasterizes via the deterministic tiny-skia CPU path (`screenshot_cpu_png`,
+    // `cpu-render` — a default feature of this crate, see Cargo.toml) instead of
+    // `Renderer::new_headless` (wgpu), which fails at runtime without a GPU.
+    // `--no-default-features` builds fall back to the GPU path unchanged.
+    #[cfg(feature = "cpu-render")]
+    fn screenshot(&self) -> Result<Vec<u8>> {
+        self.screenshot_cpu_png()
+    }
+
+    #[cfg(not(feature = "cpu-render"))]
     fn screenshot(&self) -> Result<Vec<u8>> {
         let state = self.state()?;
 
@@ -489,8 +501,10 @@ impl BrowserSession for InProcessSession {
         Ok(())
     }
 
-    fn scroll(&mut self, _target: &Target, _delta: ScrollDelta) -> Result<()> {
-        // Scroll state management — задача 8A.7 (shell-as-driver-client).
+    fn scroll(&mut self, _target: &Target, delta: ScrollDelta) -> Result<()> {
+        // Whole-page scroll only (matches WinitSession — `_target` is unused
+        // there too): off-main-thread compositor update, no relayout.
+        self.scroll_page_by(delta.x, delta.y);
         Ok(())
     }
 
