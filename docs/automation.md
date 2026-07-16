@@ -16,7 +16,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 | Catch layout/paint-order regressions without GPU/Edge | `python graphic_tests/dump_golden.py` (`--update` to promote, DEVX-3) | fixed page set, text-diff vs `graphic_tests/dump-golden/`; complements the pixel pipeline, doesn't replace it |
 | Deterministic screenshot without a window | `lumen --screenshot out.png <src>` | CPU path: no JS execution, not at parity with windowed render (BUG-221) |
 | Full visual regression vs Edge | `python graphic_tests/run.py` (`--live` = one window per run; SDC-4 will make it default) | see docs/graphic-tests.md |
-| Localize which paint optimization causes an artifact | `LUMEN_NO_*` env flags (see table below) + `run.py --only NN` | A/B bisection, one flag at a time |
+| Localize which paint optimization causes an artifact | `python graphic_tests/run.py --paint-bisect NN` (DEVX-4) | runs baseline + each `LUMEN_NO_*` flag (see table below) once, prints a diff% table |
 | Kill flake from `Date.now()` / `Math.random()` / rAF timestamps | `--deterministic` (+ `--viewport WxH` to keep a non-default window size, DEVX-1) | `--rng-seed`/`--monotonic-clock` are parsed but not wired (see CLI flags below); crates/shell/src/deterministic.rs |
 | Drive the real visible window from a script | `--mcp-live-port <N>` (MCP JSON-RPC over TCP) or `--bidi-port <N>` (WebDriver BiDi over WS) | both wired to the live window (SDC-2) |
 | Headless tab control (no GPU, CI) | `--ipc-server` (prints `LUMEN_IPC_PORT=<port>`) | CPU screenshots, BUG-221 parity |
@@ -76,7 +76,7 @@ Snapshot-test env vars: `SNAPSHOT_VS_EDGE_STRICT=1` (hard-gate `crates/driver/te
 | `LUMEN_ENGINE_THREAD=1` | Off-thread layout (ADR-016 M2.2) |
 | `LUMEN_RENDER_THREAD` | Render thread on/off |
 | `LUMEN_PRESENT` | Present mode override |
-| `LUMEN_NO_FRAME_SKIP` / `LUMEN_NO_SCROLL_COMPOSITOR` / `LUMEN_NO_ANIM_SPLIT` / `LUMEN_NO_BBOX_SCISSOR` / `LUMEN_NO_BBOX_BACKDROP` / `LUMEN_NO_IMAGE_MIPS` / `LUMEN_NO_BAND_BIAS` | Disable one paint optimization each — **the paint-regression bisection kit** (crates/engine/paint/src/renderer.rs). DEVX-4 automates this |
+| `LUMEN_NO_FRAME_SKIP` / `LUMEN_NO_SCROLL_COMPOSITOR` / `LUMEN_NO_ANIM_SPLIT` / `LUMEN_NO_BBOX_SCISSOR` / `LUMEN_NO_BBOX_BACKDROP` / `LUMEN_NO_IMAGE_MIPS` / `LUMEN_NO_BAND_BIAS` | Disable one paint optimization each — **the paint-regression bisection kit** (crates/engine/paint/src/renderer.rs), driven automatically by `run.py --paint-bisect NN` (DEVX-4) |
 | `LUMEN_SCROLL_BLIT` / `LUMEN_NO_FAST_SCROLL_DEGRADE` | Scroll-blit opt / fast-scroll quality degrade |
 | `LUMEN_FRAME_LOG=1\|2` · `LUMEN_PROFILE_TREE=1` · `LUMEN_MEM_REPORT=1` · `LUMEN_BENCH` / `LUMEN_BENCH_ITERS` | Diagnostics (see chooser table) |
 

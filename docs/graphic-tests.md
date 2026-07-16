@@ -50,9 +50,12 @@ python graphic_tests/run.py --no-cache               # force re-capture Edge scr
 python graphic_tests/run.py --bisect 100             # run unit deps of an interaction test, then the test; prints verdict
 python graphic_tests/run.py --ipc                    # deterministic CPU snapshot over TCP (TAB-7); no window/gdigrab, no real JS
 python graphic_tests/run.py --live                    # one live lumen window for the whole run (SDC-3); gdigrab capture, real JS
+python graphic_tests/run.py --paint-bisect 100        # DEVX-4: baseline + one run per LUMEN_NO_* paint flag; prints a diff% table
 ```
 
 `--live` (SDC-3): keeps a single `lumen.exe --mcp-live-port N` window open for the entire run instead of killing and relaunching a process per test — the process-per-test model was the main source of wall-clock cost and focus-race flakiness ("magenta marker not found"). Navigation is driven through MCP (`LiveWindowSession`, SDC-2): `tools/call navigate` + `tools/call wait{condition:document_ready}` give a real load-complete signal instead of a blind `time.sleep`. The pixel capture itself is still gdigrab against the real femtovg-rendered window (not MCP's `resource://screenshot`, which renders through the CPU path and isn't at parity with femtovg — same gap as `--ipc`), so `--live` is safe for real-JS tests (57, 129–138) unlike `--ipc`. TEST-00 magenta calibration still runs once and the offset is reused for the rest of the run, same as the default mode.
+
+`--paint-bisect <id>` (DEVX-4): automates the manual `LUMEN_NO_*` A/B bisection described in `docs/automation.md` — runs the given test once as baseline, then once more per paint-optimization kill-switch (`LUMEN_NO_FRAME_SKIP`/`NO_SCROLL_COMPOSITOR`/`NO_ANIM_SPLIT`/`NO_BBOX_SCISSOR`/`NO_BBOX_BACKDROP`/`NO_IMAGE_MIPS`/`NO_BAND_BIAS`, `crates/engine/paint/src/renderer.rs`), each in a fresh `lumen.exe` process (the env var must be set before the paint pipeline reads it, so it's incompatible with `--ipc`/`--live`, which reuse one process). Prints a diff% table with each flag's delta from baseline, so you can see at a glance which optimization moves the picture. Reuses the cached crop offset (calibrates via TEST-00 first if none is cached).
 
 Results are saved to `graphic_tests/results/`:
 - `YYYYMMDD-HHMMSS.json` — full results: status, diff%, diff_region bounding box per test

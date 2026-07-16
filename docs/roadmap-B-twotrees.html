@@ -1473,9 +1473,9 @@
       {
        "id": "DEVX-4",
        "title": "DEVX-4: --paint-bisect по LUMEN_NO_* флагам",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "`graphic_tests/run.py --paint-bisect <id>`: прогнать тест N+1 раз — baseline и с поочерёдным отключением каждой paint-оптимизации (`LUMEN_NO_FRAME_SKIP`/`NO_SCROLL_COMPOSITOR`/`NO_ANIM_SPLIT`/`NO_BBOX_SCISSOR`/`NO_BBOX_BACKDROP`/`NO_IMAGE_MIPS`/`NO_BAND_BIAS`, renderer.rs); вывести таблицу diff% по флагам — какая оптимизация меняет картинку. Автоматизирует ручную бисекцию визуальных артефактов"
+       "note": "DONE 2026-07-16: `graphic_tests/run.py --paint-bisect <id>` прогоняет тест N+1 раз — baseline (кэш crop_offset или TEST-00 при отсутствии) и по одному с каждым из 7 `LUMEN_NO_*`-флагов (`FRAME_SKIP`/`SCROLL_COMPOSITOR`/`ANIM_SPLIT`/`BBOX_SCISSOR`/`BBOX_BACKDROP`/`IMAGE_MIPS`/`BAND_BIAS`, renderer.rs) через `capture_lumen(..., extra_env=...)`; печатает таблицу diff% + Δ vs baseline и список флагов, сдвигающих картинку. Несовместим с `--ipc`/`--live` (нужен свежий процесс на флаг). Живой gdigrab-снимок не удалось прогнать в этой рабочей сессии (среда: gdigrab access-denied, тот же известный гэп, что и в DEVX-1) — управляющая логика (запуск 8 процессов с разным env, диспетчеризация, таблица, коды возврата) проверена напрямую: `--paint-bisect 01` (кэшированный crop_offset) и `--paint-bisect 999` (неизвестный id)"
       },
       {
        "id": "DEVX-5",

@@ -12,6 +12,7 @@
     python graphic_tests/run.py --bisect 100        # юнит-зависимости interaction-теста + сам тест
     python graphic_tests/run.py --ipc               # захват Lumen по IPC (CPU-снимок), без gdigrab (TAB-7)
     python graphic_tests/run.py --live               # одно живое окно на весь прогон, gdigrab-снимок (SDC-3)
+    python graphic_tests/run.py --paint-bisect 100  # DEVX-4: diff% при отключении каждого LUMEN_NO_* флага
 
 Workflow:
   1. Снимаем Edge headless + Lumen (gdigrab) для каждого теста по порядку.
@@ -92,6 +93,19 @@ TESTS_DIR = os.path.join(REPO, 'graphic_tests')
 VIEWPORT_W = 1024
 VIEWPORT_H = 720
 LUMEN_WAIT_SEC = 5
+
+# DEVX-4: paint-optimization kill-switches (crates/engine/paint/src/renderer.rs),
+# toggled one at a time by --paint-bisect to localize which optimization moves
+# the pixel diff.
+PAINT_BISECT_FLAGS = [
+    'LUMEN_NO_FRAME_SKIP',
+    'LUMEN_NO_SCROLL_COMPOSITOR',
+    'LUMEN_NO_ANIM_SPLIT',
+    'LUMEN_NO_BBOX_SCISSOR',
+    'LUMEN_NO_BBOX_BACKDROP',
+    'LUMEN_NO_IMAGE_MIPS',
+    'LUMEN_NO_BAND_BIAS',
+]
 
 # (id, html, threshold_pct, label).
 # threshold — % пикселей с заметной разницей; выше = FAIL → стоп.
@@ -935,10 +949,15 @@ def capture_edge(html_path: str, out_png: str, force: bool = False) -> None:
         capture_output=True, timeout=60,
     )
 
-def capture_lumen(html_relpath: str, out_png: str) -> None:
-    """Запускаем Lumen, ждём LUMEN_WAIT_SEC сек, грабим desktop через ffmpeg, kill-аем."""
+def capture_lumen(html_relpath: str, out_png: str,
+                   extra_env: dict[str, str] | None = None) -> None:
+    """Запускаем Lumen, ждём LUMEN_WAIT_SEC сек, грабим desktop через ffmpeg, kill-аем.
+
+    extra_env добавляет/переопределяет переменные окружения дочернего процесса
+    (DEVX-4: LUMEN_NO_* paint-бисект флаги)."""
+    env = {**os.environ, **extra_env} if extra_env else None
     proc = subprocess.Popen([LUMEN, '--no-scrollbar', html_relpath], cwd=REPO,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     time.sleep(LUMEN_WAIT_SEC)
     _bring_pid_to_front(proc.pid)
     time.sleep(0.2)  # brief pause for window compositor to repaint
@@ -1110,13 +1129,17 @@ def ensure_lumen(force_build: bool = False) -> None:
 
 def run_one(tid: str, html: str, threshold: float, label: str,
             crop_offset: tuple[int, int] | None,
-            no_cache: bool = False) -> tuple[bool, tuple[int, int] | None, float, dict | None, list[str]]:
+            no_cache: bool = False,
+            extra_env: dict[str, str] | None = None,
+            ) -> tuple[bool, tuple[int, int] | None, float, dict | None, list[str]]:
     """Запускает один тест.
 
     Возвращает (passed, new_crop_offset, diff_pct, diff_region, console_errors).
     diff_pct < 0 и diff_region = None означают ошибку (ERROR). console_errors —
     тексты `console.error` со страницы (DEVX-1, только в --live режиме);
     непустой список FAIL'ит тест независимо от diff_pct (баг, невидимый на скриншоте).
+    extra_env применяется только в дефолтном режиме захвата (не --ipc/--live,
+    DEVX-4: LUMEN_NO_* paint-бисект).
     """
     test_path = os.path.join(TESTS_DIR, html)
     if not os.path.exists(test_path):
@@ -1185,7 +1208,7 @@ def run_one(tid: str, html: str, threshold: float, label: str,
             print(f'TEST-{tid}: FAIL (no crop offset — run TEST-00 first)')
             return False, None, -1.0, None, console_errors
     else:
-        capture_lumen(rel_html, lumen_raw)
+        capture_lumen(rel_html, lumen_raw, extra_env=extra_env)
         if not os.path.exists(lumen_raw):
             print(f'TEST-{tid}: FAIL (gdigrab screenshot missing)')
             return False, crop_offset, -1.0, None, []
@@ -1484,6 +1507,57 @@ def print_diff_vs_previous(current: list[dict], prev_data: dict) -> None:
         print('  Изменений нет.')
 
 
+def run_paint_bisect(tid: str, no_cache: bool = False) -> int:
+    """DEVX-4: прогоняет один тест N+1 раз — baseline, затем по одному с каждым
+    LUMEN_NO_* флагом отключённым — и печатает таблицу diff%% по флагам, чтобы
+    локализовать, какая paint-оптимизация меняет картинку (см. docs/automation.md).
+    """
+    target = next((t for t in TESTS if t[0] == tid), None)
+    if target is None:
+        known = ', '.join(t[0] for t in TESTS)
+        print(f'--paint-bisect: тест {tid} не найден в TESTS. Доступны: {known}')
+        return 1
+    _, html, threshold, label = target
+
+    crop_offset = _load_crop_offset()
+    if crop_offset is None:
+        print('Калибровка отсутствует — прогоняю TEST-00...')
+        cal_id, cal_html, cal_threshold, cal_label = TESTS[0]
+        _, crop_offset, _, _, _ = run_one(cal_id, cal_html, cal_threshold, cal_label, None)
+        if crop_offset is None:
+            print('Калибровка не удалась (TEST-00) — --paint-bisect остановлен.')
+            return 1
+
+    print(f'--paint-bisect {tid}: baseline + {len(PAINT_BISECT_FLAGS)} флагов (по одному)')
+    _, crop_offset, base_pct, _, _ = run_one(
+        tid, html, threshold, label, crop_offset, no_cache=no_cache,
+    )
+    if base_pct < 0:
+        print(f'--paint-bisect: baseline TEST-{tid} не дал результата (ERROR).')
+        return 1
+    rows: list[tuple[str, float]] = [('baseline', base_pct)]
+    for flag in PAINT_BISECT_FLAGS:
+        _, crop_offset, pct, _, _ = run_one(
+            tid, html, threshold, label, crop_offset, extra_env={flag: '1'},
+        )
+        if pct < 0:
+            print(f'--paint-bisect: {flag} прогон не дал результата (ERROR), пропущен.')
+            continue
+        rows.append((flag, pct))
+
+    print(f'\n--paint-bisect TEST-{tid} ({label}) — diff% по флагам:')
+    for name, pct in rows:
+        delta_str = '' if name == 'baseline' else f'  (Δ {pct - base_pct:+.2f})'
+        print(f'  {name:<26} {pct:6.2f}%{delta_str}')
+
+    moved = [name for name, pct in rows[1:] if abs(pct - base_pct) >= 0.01]
+    if moved:
+        print(f'\nМеняют картинку: {", ".join(moved)}')
+    else:
+        print('\nНи один флаг не изменил diff% — оптимизации не влияют на этот тест.')
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description='Lumen graphic tests pipeline',
@@ -1517,14 +1591,25 @@ def main() -> int:
     parser.add_argument('--bisect', metavar='ID',
                         help='Прогнать юнит-зависимости interaction-теста (DEPS), затем сам тест; '
                              'вердикт: сломано свойство или взаимодействие')
+    parser.add_argument('--paint-bisect', metavar='ID',
+                        help='DEVX-4: прогнать тест N+1 раз — baseline и с поочерёдным '
+                             'отключением каждого LUMEN_NO_* paint-флага (renderer.rs); '
+                             'таблица diff%% — какая оптимизация меняет картинку')
     args = parser.parse_args()
 
     if args.ipc and args.live:
         print('--ipc и --live взаимоисключающие (два разных способа захвата Lumen).')
         return 2
+    if args.paint_bisect and (args.ipc or args.live):
+        print('--paint-bisect несовместим с --ipc/--live: нужен свежий процесс Lumen на '
+              'каждый LUMEN_NO_* флаг, чтобы переменная окружения гарантированно применилась.')
+        return 2
 
     os.makedirs(SHOTS, exist_ok=True)
     ensure_lumen(force_build=args.build)
+
+    if args.paint_bisect:
+        return run_paint_bisect(args.paint_bisect, no_cache=args.no_cache)
 
     # IPC-режим (TAB-7): один раз поднимаем lumen --ipc-server, держим одну
     # вкладку, навигируем её на каждый тест. Завершение — через atexit.
