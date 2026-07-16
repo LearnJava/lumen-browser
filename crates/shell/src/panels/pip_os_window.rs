@@ -141,6 +141,19 @@ pub fn build_pip_content(video_rect: Rect, poster_url: &str, win_w: f32, win_h: 
     out
 }
 
+/// Convert a window's physical inner size to CSS logical pixels using its DPI
+/// scale factor.
+///
+/// Falls back to treating `width`/`height` as already logical when the scale
+/// factor is non-positive (defensive: winit never reports one in practice).
+pub fn physical_to_logical(width: u32, height: u32, scale_factor: f32) -> (f32, f32) {
+    if scale_factor > 0.0 {
+        (width as f32 / scale_factor, height as f32 / scale_factor)
+    } else {
+        (width as f32, height as f32)
+    }
+}
+
 /// `object-fit: contain` destination rect: scale `src_w`×`src_h` to fit inside
 /// `win_w`×`win_h` preserving aspect ratio, centred (letterboxed / pillarboxed).
 ///
@@ -282,6 +295,20 @@ mod tests {
     fn content_zero_window_is_empty() {
         let dl = build_pip_content(Rect::new(0.0, 0.0, 640.0, 360.0), "p.jpg", 0.0, 0.0);
         assert!(dl.is_empty());
+    }
+
+    #[test]
+    fn physical_to_logical_divides_by_scale() {
+        let (w, h) = physical_to_logical(800, 450, 2.0);
+        assert!((w - 400.0).abs() < 1e-3);
+        assert!((h - 225.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn physical_to_logical_zero_scale_passthrough() {
+        let (w, h) = physical_to_logical(800, 450, 0.0);
+        assert!((w - 800.0).abs() < 1e-3);
+        assert!((h - 450.0).abs() < 1e-3);
     }
 
     #[test]
