@@ -13,6 +13,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 | See the decoded HTML the parser received | `lumen --dump-source <src>` | headless, stdout |
 | Check box geometry without pixel-diffing | `lumen --dump-layout <src>` | headless, stdout; text-diffable |
 | Check paint order / colors / z-index | `lumen --dump-display-list <src>` | headless, stdout; text-diffable |
+| Catch layout/paint-order regressions without GPU/Edge | `python graphic_tests/dump_golden.py` (`--update` to promote, DEVX-3) | fixed page set, text-diff vs `graphic_tests/dump-golden/`; complements the pixel pipeline, doesn't replace it |
 | Deterministic screenshot without a window | `lumen --screenshot out.png <src>` | CPU path: no JS execution, not at parity with windowed render (BUG-221) |
 | Full visual regression vs Edge | `python graphic_tests/run.py` (`--live` = one window per run; SDC-4 will make it default) | see docs/graphic-tests.md |
 | Localize which paint optimization causes an artifact | `LUMEN_NO_*` env flags (see table below) + `run.py --only NN` | A/B bisection, one flag at a time |
@@ -47,6 +48,10 @@ Misc: `--no-scrollbar` (cleaner screenshot crops) · `--activity-log` / `--click
 Headless variants `--mcp` / `--mcp-port` exist but `screenshot`/`eval`/`click`/`type`/`scroll` return errors there (InProcessSession stubs — DEVX-5).
 
 `graphic_tests/run.py --live` (DEVX-1) also spawns with `--deterministic --viewport 1024x720` (kills Date.now/Math.random/rAF flake in JS tests like TEST-57/129-138 while keeping the pipeline's calibrated viewport) and reads `resource://console` after every test — a `console.error` FAILs the test and its text lands in the HTML report, independent of the pixel diff. `resource://console` for `LiveWindowSession` round-trips through a new `AutomationCommand::ConsoleLog` to the shell's DevTools console buffer (cleared on every `navigate()`). `network`/`layout` resources remain untapped for `--live` (still returns real data only via `InProcessSession`, not the live window — SDC-2 MVP scope).
+
+## Golden dump gate (`graphic_tests/dump_golden.py`, DEVX-3)
+
+Runs `lumen --dump-layout`/`--dump-display-list` over a fixed 6-page set (`samples/page.html`, `samples/test-06-layout.html`, and three `graphic_tests/*.html` pages covering table/grid/flex/transform-stacking) and text-diffs the stdout against committed golden files in `graphic_tests/dump-golden/<page>.{layout,display-list}.txt`. `--update` promotes the current output to the new golden; a mismatch prints a unified diff and exits 1. No GPU, no Edge, no ffmpeg — catches geometry/paint-order/z-index regressions cheaply and cross-platform, complementing (not replacing) the pixel pipeline.
 
 ## WebDriver BiDi (`crates/bidi-server`, `--bidi-port N`)
 

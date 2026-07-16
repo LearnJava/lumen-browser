@@ -1,0 +1,285 @@
+Block rect=(0.00, 0.00, 1024.00, 720.00)
+  Skip rect=(0.00, 0.00, 0.00, 0.00)
+  Block rect=(0.00, 0.00, 1024.00, 720.00) bg=#f0f4f8ff box-sizing=border-box
+    Skip rect=(0.00, 0.00, 0.00, 0.00) display=none box-sizing=border-box
+    Skip rect=(0.00, 0.00, 0.00, 0.00)
+    Block rect=(0.00, 0.00, 1024.00, 720.00) w=1024.00 h=720.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+      Skip rect=(0.00, 0.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Block rect=(0.00, 0.00, 1024.00, 36.00) bg=#1e3a5fff h=36.00 box-sizing=border-box color=#e2e8f0ff fs=12.00 lh=3.00 font-weight=700 letter-spacing=1.00 p=(0.00, 16.00, 0.00, 16.00) bw=(0.00,0.00,3.00,0.00) bs=(none,none,solid,none) bc=(currentColor,currentColor,#e94560ff,currentColor)
+        InlineRun rect=(16.00, 0.00, 992.00, 36.00) color=#e2e8f0ff fs=12.00 lh=3.00 font-weight=700 letter-spacing=1.00
+          seg[0] "LUMEN BROWSER " color=#e2e8f0ff fs=12.00 lh=3.00 font-weight=700 letter-spacing=1.00
+          seg[1] "/ LAYOUT И ВИДИМОСТЬ" color=#7ec8e3ff fs=12.00 lh=3.00 font-weight=700 letter-spacing=1.00
+          seg[2] " — Страница 6 из 6" color=#e2e8f0ff fs=12.00 lh=3.00 font-weight=700 letter-spacing=1.00
+          line[0]:
+            frag[0] x=0.00 "LUMEN BROWSER"
+            frag[1] x=120.77 "/ LAYOUT И ВИДИМОСТЬ"
+            frag[2] x=293.78 "— Страница 6 из 6"
+      Skip rect=(0.00, 36.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 36.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 36.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Block rect=(0.00, 36.00, 1024.00, 121.40) bg=#ffffffff box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(5.00, 16.00, 5.00, 16.00) bw=(0.00,0.00,1.00,0.00) bs=(none,none,solid,none) bc=(currentColor,currentColor,#e2e8f0ff,currentColor)
+        Skip rect=(16.00, 41.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 41.00, 992.00, 14.00) box-sizing=border-box color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50 m=(0.00, 0.00, 4.00, 0.00)
+          InlineRun rect=(16.00, 41.00, 992.00, 14.00) color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            seg[0] "DISPLAY: BLOCK — КАЖДЫЙ БЛОК НАЧИНАЕТСЯ С НОВОЙ СТРОКИ, ЗАНИМАЕТ ВСЮ ШИРИНУ" color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            line[0]:
+              frag[0] x=0.00 "DISPLAY: BLOCK — КАЖДЫЙ БЛОК НАЧИНАЕТСЯ С НОВОЙ СТРОКИ, ЗАНИМАЕТ ВСЮ ШИРИНУ"
+        Skip rect=(16.00, 59.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 59.00, 992.00, 28.80) bg=#ebf8ffff box-sizing=border-box color=#2b6cb0ff fs=12.00 lh=1.40 m=(0.00, 0.00, 3.00, 0.00) p=(4.00, 10.00, 4.00, 10.00) bw=(2.00,2.00,2.00,2.00) bs=(solid,solid,solid,solid) bc=(#3182ceff,#3182ceff,#3182ceff,#3182ceff)
+          InlineRun rect=(28.00, 65.00, 968.00, 16.80) color=#2b6cb0ff fs=12.00 lh=1.40
+            seg[0] "Блок 1 (div) — display: block — вся ширина" color=#2b6cb0ff fs=12.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "Блок 1 (div) — display: block — вся ширина"
+        Skip rect=(16.00, 90.80, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 90.80, 992.00, 28.80) bg=#f0fff4ff box-sizing=border-box color=#276749ff fs=12.00 lh=1.40 m=(0.00, 0.00, 3.00, 0.00) p=(4.00, 10.00, 4.00, 10.00) bw=(2.00,2.00,2.00,2.00) bs=(solid,solid,solid,solid) bc=(#38a169ff,#38a169ff,#38a169ff,#38a169ff)
+          InlineRun rect=(28.00, 96.80, 968.00, 16.80) color=#276749ff fs=12.00 lh=1.40
+            seg[0] "Блок 2 (div) — display: block — следующая строка" color=#276749ff fs=12.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "Блок 2 (div) — display: block — следующая строка"
+        Skip rect=(16.00, 122.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 122.60, 992.00, 28.80) bg=#faf5ffff box-sizing=border-box color=#553c9aff fs=12.00 lh=1.40 p=(4.00, 10.00, 4.00, 10.00) bw=(2.00,2.00,2.00,2.00) bs=(solid,solid,solid,solid) bc=(#805ad5ff,#805ad5ff,#805ad5ff,#805ad5ff)
+          InlineRun rect=(28.00, 128.60, 968.00, 16.80) color=#553c9aff fs=12.00 lh=1.40
+            seg[0] "Блок 3 (div) — display: block — и ещё одна строка" color=#553c9aff fs=12.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "Блок 3 (div) — display: block — и ещё одна строка"
+        Skip rect=(16.00, 151.40, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 157.40, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 157.40, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 157.40, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Block rect=(0.00, 157.40, 1024.00, 47.20) bg=#ffffffff box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(5.00, 16.00, 5.00, 16.00) bw=(0.00,0.00,1.00,0.00) bs=(none,none,solid,none) bc=(currentColor,currentColor,#e2e8f0ff,currentColor)
+        Skip rect=(16.00, 162.40, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 162.40, 992.00, 14.00) box-sizing=border-box color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50 m=(0.00, 0.00, 4.00, 0.00)
+          InlineRun rect=(16.00, 162.40, 992.00, 14.00) color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            seg[0] "DISPLAY: INLINE — SPAN-ЭЛЕМЕНТЫ ТЕКУТ В СТРОКУ (БЕЗ PADDING/BORDER — ТЕ СТАКАЮТСЯ ВЕРТИКАЛЬНО)" color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            line[0]:
+              frag[0] x=0.00 "DISPLAY: INLINE — SPAN-ЭЛЕМЕНТЫ ТЕКУТ В СТРОКУ (БЕЗ PADDING/BORDER — ТЕ СТАКАЮТСЯ ВЕРТИКАЛЬНО)"
+        Skip rect=(16.00, 180.40, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 180.40, 992.00, 18.20) box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40
+          InlineRun rect=(16.00, 180.40, 992.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40
+            seg[0] "\n      Текст строки:\n      " color=#2d3748ff fs=13.00 lh=1.40
+            seg[1] "красный bold " color=#e53e3eff fs=13.00 lh=1.40 font-weight=700
+            seg[2] "зелёный italic " color=#38a169ff fs=13.00 lh=1.40 font-style=italic
+            seg[3] "синий underline " color=#3182ceff fs=13.00 lh=1.40 decoration=underline
+            seg[4] "фиолетовый " color=#805ad5ff fs=13.00 lh=1.40
+            seg[5] "золотой bold" color=#d69e2eff fs=13.00 lh=1.40 font-weight=700
+            seg[6] "\n      — все на одной строке, перенос при нехватке места.\n    " color=#2d3748ff fs=13.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "Текст строки:"
+              frag[1] x=91.53 "красный bold"
+              frag[2] x=180.34 "зелёный italic"
+              frag[3] x=270.05 "синий underline"
+              frag[4] x=372.85 "фиолетовый"
+              frag[5] x=454.44 "золотой bold"
+              frag[6] x=539.64 "— все на одной строке, перенос при нехватке места."
+        Skip rect=(16.00, 198.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 204.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 204.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 204.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Block rect=(0.00, 204.60, 1024.00, 68.40) bg=#ffffffff box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(5.00, 16.00, 5.00, 16.00) bw=(0.00,0.00,1.00,0.00) bs=(none,none,solid,none) bc=(currentColor,currentColor,#e2e8f0ff,currentColor)
+        Skip rect=(16.00, 209.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 209.60, 992.00, 14.00) box-sizing=border-box color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50 m=(0.00, 0.00, 4.00, 0.00)
+          InlineRun rect=(16.00, 209.60, 992.00, 14.00) color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            seg[0] "DISPLAY: NONE — ЭЛЕМЕНТ ПОЛНОСТЬЮ СКРЫТ, МЕСТО НЕ ЗАНИМАЕТ (ТОЛЬКО НА БЛОЧНЫХ DIV)" color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            line[0]:
+              frag[0] x=0.00 "DISPLAY: NONE — ЭЛЕМЕНТ ПОЛНОСТЬЮ СКРЫТ, МЕСТО НЕ ЗАНИМАЕТ (ТОЛЬКО НА БЛОЧНЫХ DIV)"
+        Skip rect=(16.00, 227.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 227.60, 992.00, 18.20) box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 m=(0.00, 0.00, 3.00, 0.00)
+          InlineRun rect=(16.00, 227.60, 992.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40
+            seg[0] "Первый параграф — видимый." color=#2d3748ff fs=13.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "Первый параграф — видимый."
+        Skip rect=(16.00, 248.80, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Skip rect=(16.00, 248.80, 0.00, 0.00) bg=#ff0000ff display=none box-sizing=border-box color=#ffffffff fs=13.00 lh=1.40 p=(4.00, 8.00, 4.00, 8.00)
+        Skip rect=(16.00, 248.80, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 248.80, 992.00, 18.20) box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40
+          InlineRun rect=(16.00, 248.80, 992.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40
+            seg[0] "Второй параграф — видимый. Между параграфами нет пробела — скрытый div не занял место." color=#2d3748ff fs=13.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "Второй параграф — видимый. Между параграфами нет пробела — скрытый div не занял место."
+        Skip rect=(16.00, 267.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 273.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 273.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 273.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Block rect=(0.00, 273.00, 1024.00, 105.00) bg=#ffffffff box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(5.00, 16.00, 5.00, 16.00) bw=(0.00,0.00,1.00,0.00) bs=(none,none,solid,none) bc=(currentColor,currentColor,#e2e8f0ff,currentColor)
+        Skip rect=(16.00, 278.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 278.00, 992.00, 14.00) box-sizing=border-box color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50 m=(0.00, 0.00, 4.00, 0.00)
+          InlineRun rect=(16.00, 278.00, 992.00, 14.00) color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            seg[0] "OVERFLOW: HIDDEN — СОДЕРЖИМОЕ ОБРЕЗАЕТСЯ ПО ГРАНИЦЕ БЛОКА" color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            line[0]:
+              frag[0] x=0.00 "OVERFLOW: HIDDEN — СОДЕРЖИМОЕ ОБРЕЗАЕТСЯ ПО ГРАНИЦЕ БЛОКА"
+        Skip rect=(16.00, 296.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 296.00, 360.00, 36.00) bg=#ebf8ffff w=360.00 h=36.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden m=(0.00, 0.00, 4.00, 0.00) p=(4.00, 8.00, 4.00, 8.00) bw=(2.00,2.00,2.00,2.00) bs=(solid,solid,solid,solid) bc=(#3182ceff,#3182ceff,#3182ceff,#3182ceff)
+          InlineRun rect=(26.00, 302.00, 340.00, 54.60) color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+            seg[0] "\n      overflow:hidden — этот текст очень длинный и будет обрезан при выходе за границу блока фиксированной высоты\n    " color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+            line[0]:
+              frag[0] x=0.00 "overflow:hidden — этот текст очень длинный и будет"
+            line[1]:
+              frag[0] x=0.00 "обрезан при выходе за границу блока"
+            line[2]:
+              frag[0] x=0.00 "фиксированной высоты"
+        Skip rect=(16.00, 336.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 336.00, 360.00, 36.00) bg=#f0fff4ff w=360.00 h=36.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(4.00, 8.00, 4.00, 8.00) bw=(2.00,2.00,2.00,2.00) bs=(solid,solid,solid,solid) bc=(#38a169ff,#38a169ff,#38a169ff,#38a169ff)
+          InlineRun rect=(26.00, 342.00, 340.00, 36.40) color=#2d3748ff fs=13.00 lh=1.40
+            seg[0] "\n      overflow:visible — текст выходит за пределы блока фиксированной высоты и виден снаружи блока\n    " color=#2d3748ff fs=13.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "overflow:visible — текст выходит за пределы блока"
+            line[1]:
+              frag[0] x=0.00 "фиксированной высоты и виден снаружи блока"
+        Skip rect=(16.00, 372.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 378.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 378.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 378.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Block rect=(0.00, 378.00, 1024.00, 150.00) bg=#ffffffff box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(5.00, 16.00, 5.00, 16.00) bw=(0.00,0.00,1.00,0.00) bs=(none,none,solid,none) bc=(currentColor,currentColor,#e2e8f0ff,currentColor)
+        Skip rect=(16.00, 383.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 383.00, 992.00, 14.00) box-sizing=border-box color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50 m=(0.00, 0.00, 4.00, 0.00)
+          InlineRun rect=(16.00, 383.00, 992.00, 14.00) color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            seg[0] "ЕДИНИЦЫ ШИРИНЫ: PX, %, VW" color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            line[0]:
+              frag[0] x=0.00 "ЕДИНИЦЫ ШИРИНЫ: PX, %, VW"
+        Skip rect=(16.00, 401.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 401.00, 200.00, 42.40) bg=#fed7d7ff w=200.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 m=(0.00, 0.00, 2.00, 0.00) p=(2.00, 8.00, 2.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#e53e3eff,#e53e3eff,#e53e3eff,#e53e3eff)
+          InlineRun rect=(25.00, 404.00, 182.00, 36.40) color=#2d3748ff fs=13.00 lh=1.40
+            seg[0] "width: 200px — фиксированная" color=#2d3748ff fs=13.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "width: 200px —"
+            line[1]:
+              frag[0] x=0.00 "фиксированная"
+        Skip rect=(16.00, 445.40, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 445.40, 496.00, 24.20) bg=#c6f6d5ff w=50.00% box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 m=(0.00, 0.00, 2.00, 0.00) p=(2.00, 8.00, 2.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#38a169ff,#38a169ff,#38a169ff,#38a169ff)
+          InlineRun rect=(25.00, 448.40, 478.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40
+            seg[0] "width: 50% — половина родителя" color=#2d3748ff fs=13.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "width: 50% — половина родителя"
+        Skip rect=(16.00, 471.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 471.60, 768.00, 24.20) bg=#bee3f8ff w=75.00vw box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 m=(0.00, 0.00, 2.00, 0.00) p=(2.00, 8.00, 2.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#3182ceff,#3182ceff,#3182ceff,#3182ceff)
+          InlineRun rect=(25.00, 474.60, 750.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40
+            seg[0] "width: 75vw — 75% ширины viewport (768px)" color=#2d3748ff fs=13.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "width: 75vw — 75% ширины viewport (768px)"
+        Skip rect=(16.00, 497.80, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 497.80, 992.00, 24.20) bg=#faf5ffff w=100.00% box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(2.00, 8.00, 2.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#805ad5ff,#805ad5ff,#805ad5ff,#805ad5ff)
+          InlineRun rect=(25.00, 500.80, 974.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40
+            seg[0] "width: 100% — вся доступная ширина" color=#2d3748ff fs=13.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "width: 100% — вся доступная ширина"
+        Skip rect=(16.00, 522.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 528.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 528.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 528.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Block rect=(0.00, 528.00, 1024.00, 86.60) bg=#ffffffff box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(5.00, 16.00, 5.00, 16.00) bw=(0.00,0.00,1.00,0.00) bs=(none,none,solid,none) bc=(currentColor,currentColor,#e2e8f0ff,currentColor)
+        Skip rect=(16.00, 533.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 533.00, 992.00, 14.00) box-sizing=border-box color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50 m=(0.00, 0.00, 4.00, 0.00)
+          InlineRun rect=(16.00, 533.00, 992.00, 14.00) color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            seg[0] "ЕДИНИЦЫ ВЫСОТЫ: PX, VH — БЛОЧНЫЕ DIV С ФИКСИРОВАННОЙ ВЫСОТОЙ" color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            line[0]:
+              frag[0] x=0.00 "ЕДИНИЦЫ ВЫСОТЫ: PX, VH — БЛОЧНЫЕ DIV С ФИКСИРОВАННОЙ ВЫСОТОЙ"
+        Skip rect=(16.00, 551.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        InlineBlockRow rect=(16.00, 551.00, 992.00, 57.60) color=#2d3748ff fs=13.00 lh=1.40
+          Block rect=(16.00, 551.00, 80.00, 20.00) display=inline-block box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 m=(0.00, 8.00, 0.00, 0.00)
+            Skip rect=(16.00, 551.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+            Block rect=(16.00, 551.00, 80.00, 20.00) bg=#fed7d7ff w=80.00 h=20.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden p=(0.00, 8.00, 0.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#e53e3eff,#e53e3eff,#e53e3eff,#e53e3eff)
+              InlineRun rect=(25.00, 552.00, 62.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+                seg[0] "h:20px" color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+                line[0]:
+                  frag[0] x=0.00 "h:20px"
+            Skip rect=(16.00, 571.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+          InlineSpace rect=(0.00, 0.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+          Block rect=(107.00, 551.00, 80.00, 30.00) display=inline-block box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 m=(0.00, 8.00, 0.00, 0.00)
+            Skip rect=(107.00, 551.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+            Block rect=(107.00, 551.00, 80.00, 30.00) bg=#c6f6d5ff w=80.00 h=30.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden p=(0.00, 8.00, 0.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#38a169ff,#38a169ff,#38a169ff,#38a169ff)
+              InlineRun rect=(116.00, 552.00, 62.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+                seg[0] "h:30px" color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+                line[0]:
+                  frag[0] x=0.00 "h:30px"
+            Skip rect=(107.00, 581.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+          InlineSpace rect=(0.00, 0.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+          Block rect=(198.00, 551.00, 80.00, 40.00) display=inline-block box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 m=(0.00, 8.00, 0.00, 0.00)
+            Skip rect=(198.00, 551.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+            Block rect=(198.00, 551.00, 80.00, 40.00) bg=#bee3f8ff w=80.00 h=40.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden p=(0.00, 8.00, 0.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#3182ceff,#3182ceff,#3182ceff,#3182ceff)
+              InlineRun rect=(207.00, 552.00, 62.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+                seg[0] "h:40px" color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+                line[0]:
+                  frag[0] x=0.00 "h:40px"
+            Skip rect=(198.00, 591.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+          InlineSpace rect=(0.00, 0.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+          Block rect=(289.00, 551.00, 80.00, 57.60) display=inline-block box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 m=(0.00, 8.00, 0.00, 0.00)
+            Skip rect=(289.00, 551.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+            Block rect=(289.00, 551.00, 80.00, 57.60) bg=#faf5ffff w=80.00 h=8.00vh box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden p=(0.00, 8.00, 0.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#805ad5ff,#805ad5ff,#805ad5ff,#805ad5ff)
+              InlineRun rect=(298.00, 552.00, 62.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+                seg[0] "h:8vh" color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+                line[0]:
+                  frag[0] x=0.00 "h:8vh"
+            Skip rect=(289.00, 608.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+          InlineSpace rect=(0.00, 0.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+          Block rect=(380.00, 551.00, 269.65, 19.40) display=inline-block box-sizing=border-box color=#718096ff fs=11.00 lh=1.40 p=(4.00, 0.00, 0.00, 0.00)
+            InlineRun rect=(380.00, 555.00, 269.65, 15.40) display=inline-block color=#718096ff fs=11.00 lh=1.40
+              seg[0] "\n      ← vh от высоты окна 720px · 8vh = ~58px\n    " color=#718096ff fs=11.00 lh=1.40
+              line[0]:
+                frag[0] x=0.00 "← vh от высоты окна 720px · 8vh = ~58px"
+      Skip rect=(0.00, 614.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 614.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 614.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Block rect=(0.00, 614.60, 1024.00, 65.40) bg=#ffffffff box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(5.00, 16.00, 5.00, 16.00) bw=(0.00,0.00,1.00,0.00) bs=(none,none,solid,none) bc=(currentColor,currentColor,#e2e8f0ff,currentColor)
+        Skip rect=(16.00, 619.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 619.60, 992.00, 14.00) box-sizing=border-box color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50 m=(0.00, 0.00, 4.00, 0.00)
+          InlineRun rect=(16.00, 619.60, 992.00, 14.00) color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            seg[0] "НАСЛЕДОВАНИЕ CSS — ДОЧЕРНИЕ ЭЛЕМЕНТЫ НАСЛЕДУЮТ COLOR, FONT-SIZE, FONT-STYLE" color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            line[0]:
+              frag[0] x=0.00 "НАСЛЕДОВАНИЕ CSS — ДОЧЕРНИЕ ЭЛЕМЕНТЫ НАСЛЕДУЮТ COLOR, FONT-SIZE, FONT-STYLE"
+        Skip rect=(16.00, 637.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 637.60, 992.00, 36.40) box-sizing=border-box color=#e53e3eff fs=13.00 lh=1.40
+          InlineRun rect=(16.00, 637.60, 992.00, 18.20) color=#e53e3eff fs=13.00 lh=1.40
+            seg[0] "\n      Родитель: color=красный, font-size=13px.\n      " color=#e53e3eff fs=13.00 lh=1.40
+            seg[1] "Дочерний span наследует цвет (bold локально)." color=#e53e3eff fs=13.00 lh=1.40 font-weight=700
+            line[0]:
+              frag[0] x=0.00 "Родитель: color=красный, font-size=13px."
+              frag[1] x=268.90 "Дочерний span наследует цвет (bold локально)."
+          Block rect=(16.00, 655.80, 992.00, 18.20) box-sizing=border-box color=#e53e3eff fs=13.00 lh=1.40 font-style=italic
+            InlineRun rect=(16.00, 655.80, 992.00, 18.20) color=#e53e3eff fs=13.00 lh=1.40 font-style=italic
+              seg[0] "\n        Вложенный div: наследует красный + добавляет italic.\n        " color=#e53e3eff fs=13.00 lh=1.40 font-style=italic
+              seg[1] "Внук-span: цвет → синий, курсив унаследован." color=#3182ceff fs=13.00 lh=1.40 font-style=italic
+              line[0]:
+                frag[0] x=0.00 "Вложенный div: наследует красный + добавляет italic."
+                frag[1] x=350.40 "Внук-span: цвет → синий, курсив унаследован."
+          Skip rect=(16.00, 674.00, 0.00, 0.00) color=#e53e3eff fs=13.00 lh=1.40
+        Skip rect=(16.00, 674.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 680.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 680.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 680.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Block rect=(0.00, 680.00, 1024.00, 159.80) bg=#ffffffff box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(5.00, 16.00, 5.00, 16.00) bw=(0.00,0.00,1.00,0.00) bs=(none,none,solid,none) bc=(currentColor,currentColor,#e2e8f0ff,currentColor)
+        Skip rect=(16.00, 685.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 685.00, 992.00, 14.00) box-sizing=border-box color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50 m=(0.00, 0.00, 4.00, 0.00)
+          InlineRun rect=(16.00, 685.00, 992.00, 14.00) color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            seg[0] "ВЛОЖЕННЫЕ БЛОКИ — ПОРЯДОК ОТРИСОВКИ DOM (ДОЧЕРНИЕ ПОВЕРХ РОДИТЕЛЯ)" color=#94a3b8ff fs=10.00 lh=1.40 text-transform=uppercase letter-spacing=0.50
+            line[0]:
+              frag[0] x=0.00 "ВЛОЖЕННЫЕ БЛОКИ — ПОРЯДОК ОТРИСОВКИ DOM (ДОЧЕРНИЕ ПОВЕРХ РОДИТЕЛЯ)"
+        Skip rect=(16.00, 703.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Block rect=(16.00, 703.00, 500.00, 130.80) bg=#e53e3eff w=500.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(8.00, 8.00, 8.00, 8.00)
+          Skip rect=(24.00, 711.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+          InlineRun rect=(24.00, 711.00, 484.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40
+            seg[0] "Уровень 1 — красный фон" color=#ffffffff fs=11.00 lh=1.40
+            line[0]:
+              frag[0] x=0.00 "Уровень 1 — красный фон"
+          Block rect=(24.00, 733.20, 484.00, 92.60) bg=#3182ceff box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 m=(4.00, 0.00, 0.00, 0.00) p=(6.00, 6.00, 6.00, 6.00)
+            Skip rect=(30.00, 739.20, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+            InlineRun rect=(30.00, 739.20, 472.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40
+              seg[0] "Уровень 2 — синий" color=#ffffffff fs=11.00 lh=1.40
+              line[0]:
+                frag[0] x=0.00 "Уровень 2 — синий"
+            Block rect=(30.00, 761.40, 472.00, 58.40) bg=#38a169ff box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 m=(4.00, 0.00, 0.00, 0.00) p=(5.00, 5.00, 5.00, 5.00)
+              Skip rect=(35.00, 766.40, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+              InlineRun rect=(35.00, 766.40, 462.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40
+                seg[0] "Уровень 3 — зелёный" color=#ffffffff fs=11.00 lh=1.40
+                line[0]:
+                  frag[0] x=0.00 "Уровень 3 — зелёный"
+              Block rect=(35.00, 788.60, 462.00, 26.20) bg=#fefcbfff box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 m=(4.00, 0.00, 0.00, 0.00) p=(4.00, 4.00, 4.00, 4.00)
+                Skip rect=(39.00, 792.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+                InlineRun rect=(39.00, 792.60, 454.00, 18.20) color=#2d3748ff fs=13.00 lh=1.40
+                  seg[0] "Уровень 4 — жёлтый (контент)" color=#744210ff fs=11.00 lh=1.40
+                  line[0]:
+                    frag[0] x=0.00 "Уровень 4 — жёлтый (контент)"
+              Skip rect=(35.00, 814.80, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+            Skip rect=(30.00, 819.80, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+          Skip rect=(24.00, 825.80, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+        Skip rect=(16.00, 833.80, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
+      Skip rect=(0.00, 839.80, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40

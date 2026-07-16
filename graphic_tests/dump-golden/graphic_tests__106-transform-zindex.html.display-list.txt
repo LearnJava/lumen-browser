@@ -1,0 +1,68 @@
+FillRect (0.00, 0.00, 1024.00, 720.00) #ff00ffff
+PushClipRect (0.00, 0.00, 1024.00, 720.00)
+FillRect (1.00, 1.00, 1022.00, 718.00) #1a202cff
+PushClipRect (1.00, 1.00, 1022.00, 718.00)
+FillRect (735.00, 405.00, 240.00, 240.00) #2d3748ff
+PopClip
+PopClip
+PushClipRect (0.00, 0.00, 1024.00, 720.00)
+PushClipRect (1.00, 1.00, 1022.00, 718.00)
+PushTransform [0.990 0.139 -0.139 0.990 26.058 -22.652]
+FillRect (55.00, 55.00, 240.00, 240.00) #2b6cb0ff
+FillRect (155.00, 155.00, 160.00, 160.00) #ed8936ff
+FillRect (75.00, 75.00, 140.00, 140.00) #f6e05eff
+PopTransform
+PopClip
+PopClip
+PushClipRect (0.00, 0.00, 1024.00, 720.00)
+PushClipRect (1.00, 1.00, 1022.00, 718.00)
+PushTransform [1.000 0.000 0.000 1.000 30.000 30.000]
+FillRect (385.00, 45.00, 170.00, 170.00) #e53e3eff
+PopTransform
+PopClip
+PopClip
+PushClipRect (0.00, 0.00, 1024.00, 720.00)
+PushClipRect (1.00, 1.00, 1022.00, 718.00)
+PushTransform [0.985 -0.174 0.174 0.985 -88.507 38.364]
+FillRect (55.00, 405.00, 240.00, 240.00) #2d3748ff
+FillRect (85.00, 435.00, 140.00, 140.00) #2b6cb0ff
+FillRect (145.00, 495.00, 140.00, 140.00) #e53e3eff
+PopTransform
+PopClip
+PopClip
+PushClipRect (0.00, 0.00, 1024.00, 720.00)
+PushClipRect (1.00, 1.00, 1022.00, 718.00)
+PushTransform [1.500 0.000 0.000 1.500 -257.500 -262.500]
+FillRect (425.00, 435.00, 180.00, 180.00) #2d3748ff
+FillRect (485.00, 495.00, 100.00, 100.00) #38a169ff
+FillRect (445.00, 455.00, 100.00, 100.00) #f6e05eff
+PopTransform
+PopClip
+PopClip
+PushClipRect (0.00, 0.00, 1024.00, 720.00)
+PushClipRect (1.00, 1.00, 1022.00, 718.00)
+FillRect (485.00, 145.00, 170.00, 170.00) #48bb78ff
+PopClip
+PopClip
+PushClipRect (0.00, 0.00, 1024.00, 720.00)
+PushClipRect (1.00, 1.00, 1022.00, 718.00)
+PushTransform [0.978 0.208 -0.208 0.978 45.878 -166.498]
+FillRect (725.00, 45.00, 180.00, 180.00) #9f7aeaff
+PopTransform
+PopClip
+PopClip
+PushClipRect (0.00, 0.00, 1024.00, 720.00)
+PushClipRect (1.00, 1.00, 1022.00, 718.00)
+FillRect (765.00, 435.00, 140.00, 140.00) #2b6cb0ff
+PopClip
+PopClip
+PushClipRect (0.00, 0.00, 1024.00, 720.00)
+PushClipRect (1.00, 1.00, 1022.00, 718.00)
+FillRect (815.00, 135.00, 170.00, 170.00) #4fd1c5ff
+PopClip
+PopClip
+PushClipRect (0.00, 0.00, 1024.00, 720.00)
+PushClipRect (1.00, 1.00, 1022.00, 718.00)
+FillRect (825.00, 495.00, 140.00, 140.00) #e53e3eff
+PopClip
+PopClip

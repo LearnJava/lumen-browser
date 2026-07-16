@@ -1,0 +1,37 @@
+Block rect=(0.00, 0.00, 1024.00, 720.00)
+  Skip rect=(0.00, 0.00, 0.00, 0.00)
+  Block rect=(0.00, 0.00, 1024.00, 720.00) bg=#ff00ffff box-sizing=border-box
+    Skip rect=(0.00, 0.00, 0.00, 0.00) display=none box-sizing=border-box
+    Skip rect=(0.00, 0.00, 0.00, 0.00)
+    Block rect=(0.00, 0.00, 1024.00, 720.00) w=1024.00 h=720.00 box-sizing=border-box overflow=hidden/hidden
+      Skip rect=(0.00, 0.00, 0.00, 0.00)
+      Block rect=(1.00, 1.00, 1022.00, 718.00) bg=#f7fafcff w=1022.00 h=718.00 box-sizing=border-box overflow=hidden/hidden m=(1.00, 1.00, 1.00, 1.00) p=(24.00, 24.00, 24.00, 24.00)
+        Skip rect=(25.00, 25.00, 0.00, 0.00)
+        Skip rect=(25.00, 25.00, 0.00, 0.00)
+        Skip rect=(25.00, 25.00, 0.00, 0.00)
+        Block rect=(25.00, 25.00, 960.00, 628.00) display=grid w=960.00 box-sizing=border-box
+          Block rect=(25.00, 25.00, 964.00, 60.00) bg=#3182ceff box-sizing=border-box
+          Block rect=(25.00, 89.00, 200.00, 500.00) bg=#38a169ff box-sizing=border-box
+          Block rect=(229.00, 89.00, 760.00, 500.00) bg=#e53e3eff box-sizing=border-box
+          Block rect=(25.00, 593.00, 964.00, 60.00) bg=#805ad5ff box-sizing=border-box
+        Skip rect=(25.00, 653.00, 0.00, 0.00)
+        Skip rect=(25.00, 653.00, 0.00, 0.00)
+        Skip rect=(25.00, 653.00, 0.00, 0.00)
+        Block rect=(25.00, 661.00, 300.00, 82.00) display=grid w=300.00 box-sizing=border-box m=(8.00, 0.00, 0.00, 0.00)
+          Block rect=(25.00, 661.00, 98.67, 82.00) bg=#dd6b20ff box-sizing=border-box
+          Block rect=(125.67, 661.00, 98.67, 40.00) bg=#d53f8cff box-sizing=border-box
+          Block rect=(226.33, 661.00, 98.67, 40.00) bg=#319795ff box-sizing=border-box
+          Block rect=(125.67, 703.00, 98.67, 40.00) bg=#2b6cb0ff box-sizing=border-box
+          Block rect=(226.33, 703.00, 98.67, 40.00) bg=#276749ff box-sizing=border-box
+        Skip rect=(25.00, 743.00, 0.00, 0.00)
+        Skip rect=(25.00, 743.00, 0.00, 0.00)
+        Skip rect=(25.00, 743.00, 0.00, 0.00)
+        Block rect=(25.00, 751.00, 450.00, 103.00) display=grid w=450.00 box-sizing=border-box m=(8.00, 0.00, 0.00, 0.00)
+          Block rect=(25.00, 751.00, 183.00, 50.00) bg=#3182ceff box-sizing=border-box
+          Block rect=(211.00, 751.00, 276.00, 50.00) bg=#e53e3eff box-sizing=border-box
+          Block rect=(25.00, 804.00, 90.00, 50.00) bg=#38a169ff box-sizing=border-box
+          Block rect=(118.00, 804.00, 90.00, 50.00) bg=#805ad5ff box-sizing=border-box
+          Block rect=(211.00, 804.00, 183.00, 50.00) bg=#dd6b20ff box-sizing=border-box
+          Block rect=(397.00, 804.00, 90.00, 50.00) bg=#d53f8cff box-sizing=border-box
+        Skip rect=(25.00, 854.00, 0.00, 0.00)
+      Skip rect=(0.00, 720.00, 0.00, 0.00)
