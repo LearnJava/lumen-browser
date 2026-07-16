@@ -44,9 +44,15 @@ serde_json = "1.0"
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [features]
-# Deterministic CPU rasterization for snapshot tests (8A.6): forwards to
-# lumen-paint's tiny-skia path so InProcessSession can render cross-OS-identical
-# pixels without a GPU. Off by default; enable with --features cpu-render.
+# DEVX-5: InProcessSession is the backing session for headless MCP
+# (`--mcp`/`--mcp-port`, no window/GPU adapter) — its `BrowserSession::screenshot`
+# needs the CPU path by default, not opt-in, or the MCP `screenshot` tool fails
+# at runtime on any machine without a usable GPU adapter (CI, most servers).
+default = ["cpu-render"]
+
+# Deterministic CPU rasterization for snapshot tests (8A.6) and the default
+# headless screenshot path (DEVX-5): forwards to lumen-paint's tiny-skia path
+# so InProcessSession can render cross-OS-identical pixels without a GPU.
 cpu-render = ["lumen-paint/cpu-render"]
 
 # QuickJS runtime for JS eval in headless mode (SDC-1a).

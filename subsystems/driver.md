@@ -71,8 +71,7 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Deferred
 
-- `InProcessSession::screenshot()` — returns Err; use `screenshot_cpu_rgba/png` (feature `cpu-render`) for deterministic CPU snapshots. GPU readback path planned for 8A.5+.
-- `InProcessSession`'s own `click/type_text/scroll/wait/eval` remain no-op/Err stubs — no persistent JS runtime wired there (unlike `WinitSession`, above).
+- `InProcessSession::click/type_text/eval` remain no-op/Err stubs (DEVX-5, remaining scope) — no persistent JS runtime wired there yet (unlike `WinitSession`, above); needs `Document` → `Arc<Mutex<_>>` plus a persistent V8 runtime (default engine, ADR-018), synthetic-event dispatch, and `lumen_paint::hit_test` for `click`. `wait` already works (poll loop); `scroll` and `screenshot` were fixed in DEVX-5 slice 1 (see Invariants below).
 - `WinitSession::eval` without `--features quickjs` still errors.
 - Native OS-level input dispatch (isTrusted mouse/keyboard events) for click/type — that's the live shell window's job (SDC-1b), not this headless session.
 - Full auto-wait (`WaitCondition::Visible/Stable/NetworkIdle/JsIdle`) beyond `WinitSession::wait`'s existing poll loop — task 8D refinements.
@@ -87,7 +86,8 @@ headless pipeline without winit/wgpu/ffmpeg.
 ## Invariants
 
 - `InProcessSession` is single-threaded (`!Send`-interior `FontMeasurer` lifetime).
-- `InProcessSession::screenshot()` always returns Err — use `screenshot_cpu_rgba/png` (feature `cpu-render`). `WinitSession::screenshot()` is a separate implementation and does return real PNG bytes (headless GPU-path renderer).
+- `InProcessSession::screenshot()` (DEVX-5 slice 1) renders through the CPU tiny-skia path by default — `cpu-render` is now a **default feature** of `lumen-driver` (was opt-in), so headless MCP (`--mcp`/`--mcp-port`) works without a GPU adapter. `--no-default-features` builds fall back to the old GPU `Renderer::new_headless` path. `WinitSession::screenshot()` is a separate implementation and always uses the GPU path (headless-window renderer).
+- `InProcessSession::scroll()` (DEVX-5 slice 1) is wired to `scroll_page_by` — off-main-thread compositor update, no relayout; whole-page only (`Target` argument ignored, matches `WinitSession`).
 - No winit/wgpu dependency in this crate — keeps it usable in CI without GPU.
 - `navigate()` clears `net_log` and `con_log` — callers must read logs before next navigate.
 - `screenshot_cpu_rgba/png` (feature `cpu-render`): renders through the deterministic tiny-skia CPU path for cross-OS pixel-identical snapshots.

@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-16",
+ "generated": "2026-07-17",
  "counts": {
   "open": 31,
   "fixed": 235,
@@ -1480,9 +1480,9 @@
       {
        "id": "DEVX-5",
        "title": "DEVX-5: headless MCP/InProcessSession — снять заглушки",
-       "status": "planned",
+       "status": "active",
        "size": "L",
-       "note": "Реализовать headless-заглушки автоматизации (сейчас Err): в `InProcessSession` (crates/driver) — `click`/`type_text`/`scroll`/`wait`/`eval` (persistent JS-runtime на снимке DOM через **дефолтный V8-движок** (ADR-018); паттерн — WinitSession SDC-1a, но НЕ его one-shot QuickJS-путь: rquickjs — rollback-only и сносится S12b) и CPU-`screenshot`; прокинуть в headless MCP (`--mcp`/`--mcp-port`), чтобы tools `eval`/`click`/`type`/`scroll`/`screenshot` работали без окна. Открывает MCP/agent-драйв и DEVX-2-тесты с интеракциями в CI без GPU"
+       "note": "Срез 1 DONE 2026-07-17: `scroll` подключён к существующему `scroll_page_by` (off-main-thread, без релейаута); `screenshot` теперь по умолчанию рендерит через CPU tiny-skia путь (`cpu-render` стал default-фичей `lumen-driver` вместо opt-in) — работает без GPU-адаптера, детерминированно на всех ОС. Остаток: `click`/`type_text`/`eval` всё ещё `Err`/no-op — нужен persistent JS-runtime на **дефолтном V8-движке** (ADR-018) поверх `InProcessSession`'s `Document` (сейчас владеющий, не `Arc<Mutex<_>>` — рефакторинг обязателен, паттерн `V8PersistentJs` в crates/shell/src/main.rs), плюс synthetic-event dispatch (mousedown/mouseup/click, keydown/input/keyup) и `lumen_paint::hit_test` для `click`. Паттерн — WinitSession SDC-1a, но НЕ его one-shot QuickJS-путь (rquickjs — rollback-only, сносится S12b)"
       },
       {
        "id": "DEVX-6",
