@@ -4596,6 +4596,39 @@ mod tests {
         assert_eq!(text, JsValue::String("Hello".into()));
     }
 
+    // BUG-280 (mirrors `dom::tests::dynamic_window_property_is_bare_reachable`):
+    // `window` must literally BE the engine's real global object, so a property
+    // assigned via `window.foo = ...` — including names not known in advance,
+    // e.g. testharness.js's dynamic `expose(fn, name)` — resolves as a bare,
+    // unqualified identifier. V8 is the default engine (ADR-018), so this is
+    // the authoritative test surface for the fix in `WEB_API_SHIM`.
+    #[test]
+    fn dynamic_window_property_is_bare_reachable() {
+        let rt = runtime_with_dom(make_doc(), "");
+        let ok = rt
+            .eval(
+                "window.__bug280_probe = function() { return 42; }; \
+                 typeof __bug280_probe === 'function' && __bug280_probe() === 42",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
+    }
+
+    // BUG-280: same for a property assigned via bare `self`, matching the
+    // real-browser invariant `self === window === globalThis` (same object).
+    #[test]
+    fn dynamic_self_property_is_bare_reachable() {
+        let rt = runtime_with_dom(make_doc(), "");
+        let ok = rt
+            .eval(
+                "self.__bug280_probe2 = 'hi'; \
+                 typeof __bug280_probe2 !== 'undefined' && __bug280_probe2 === 'hi' \
+                 && window === globalThis",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
+    }
+
     #[test]
     fn timeout_is_deferred_until_tick() {
         let rt = runtime_with_dom(make_doc(), "");
