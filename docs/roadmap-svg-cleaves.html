@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-16",
  "counts": {
-  "open": 28,
+  "open": 31,
   "fixed": 235,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 263,
+ "total_bugs": 266,
  "phases": [
   {
    "id": "P0",
@@ -1438,9 +1438,12 @@
       {
        "id": "DEVX-2",
        "title": "DEVX-2: не-пиксельные тесты на driver-API",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Слой не-пиксельных regression-тестов на driver-API (`cargo test -p lumen-driver`, InProcessSession, без GPU/Edge): `layout_box_by_selector` (геометрия по селектору), `computed_style_snapshot` (типизированные ассерты каскада), `query_a11y` (роль/имя, Playwright-стиль getByRole). Набор golden-кейсов по мотивам graphic_tests (геометрия контейнеров, каскад, a11y-роли форм); фикстуры — маленькие самодостаточные HTML в tests/fixtures"
+       "note": "Слой не-пиксельных regression-тестов на driver-API (`cargo test -p lumen-driver`, InProcessSession, без GPU/Edge): `layout_box_by_selector` (геометрия по селектору), `computed_style_snapshot` (типизированные ассерты каскада), `query_a11y` (роль/имя, Playwright-стиль getByRole). Набор golden-кейсов по мотивам graphic_tests (геометрия контейнеров, каскад, a11y-роли форм); фикстуры — маленькие самодостаточные HTML в tests/fixtures. По ходу найден BUG-294 (двойное применение margin у flex-item в `lay_out_flex`)",
+       "bugs": [
+        "BUG-294"
+       ]
       },
       {
        "id": "DEVX-3",
@@ -3350,6 +3353,27 @@
    "component": "js (DOM child-node bindings, `crates/js/src/dom.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-292": {
+   "status": "open",
+   "title": "Адблок блокирует топ-левел навигацию на обычные сайты: easylist-правило `/^https?:\\/\\/[0-9a-z]{5,}\\.com\\/.*/$script,third-party,xhr,domain=<стриминги>` в ABP-се…",
+   "component": "network (`filter/easylist.rs` + filter context в `lib.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-293": {
+   "status": "open",
+   "title": "Вкладка, открытая `window.open('file:///…')`, не загружается: дренаж popup-запросов заворачивает URL как есть в `PageSource::Url` → сетевой путь → `unsupported…",
+   "component": "shell (`main.rs` — дренаж `window.open()` popup-запросов)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-294": {
+   "status": "open",
+   "title": "Flex-item с `margin-left` в row-контейнере позиционируется со сдвигом в 2× margin вместо 1×: `lay_out_flex`'s row-ветка передаёт `content_x + main_cursor + m_l`…",
+   "component": "layout (`box_tree.rs`, `lay_out_flex`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3555,6 +3579,9 @@
   "network (HTTP client)": [
    "BUG-278"
   ],
+  "network (`filter/easylist.rs` + filter context в `lib.rs`)": [
+   "BUG-292"
+  ],
   "network+shell": [
    "BUG-169"
   ],
@@ -3679,6 +3706,9 @@
    "BUG-068",
    "BUG-147",
    "BUG-148"
+  ],
+  "shell (`main.rs` — дренаж `window.open()` popup-запросов)": [
+   "BUG-293"
   ],
   "shell (`main.rs`, `maybe_expand_cv_relevant`)": [
    "BUG-286"

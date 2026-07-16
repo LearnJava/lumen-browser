@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-294)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-295)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -306,6 +306,7 @@
 | [BUG-291](bugs/BUG-291-OPEN.md) | OPEN | js (DOM child-node bindings, `crates/js/src/dom.rs`) | После фикса BUG-280 `tests/wpt/run_smoke.py` всё ещё не проходит целиком: встроенный рендерер результатов `testharness.js` (`Output.show_results`) падает с `TypeError: Cannot read properties of null (reading 'appendChild')` при сборке `<table>` результатов (`tbody.lastChild.lastChild` — `null`), что обрывает `notify_complete()` до вызова коллбэка `testharnessreport.js`, который смок-тест реально опрашивает. Сопутствующая находка: JS-обёртки DOM-узлов не стабильны по `===` при повторном доступе (`tbody.lastChild === tr` — `false` для того же узла) — вероятный смежный корень. Найдено P2-wpt S4/S5 2026-07-16 |
 | [BUG-292](bugs/BUG-292-OPEN.md) | OPEN | network (`filter/easylist.rs` + filter context в `lib.rs`) | Адблок блокирует топ-левел навигацию на обычные сайты: easylist-правило `/^https?:\/\/[0-9a-z]{5,}\.com\/.*/$script,third-party,xhr,domain=<стриминги>` в ABP-семантике узкое, но в Lumen все три ограничения снимаются разом — нет типа ресурса «document» (у навигации `resource_type: None`, unknown удовлетворяет ограничения), `third_party: None` — то же, `domain=` parsed-and-ignored. Итог: любой голый домен `<слово≥5>.com` (example.com, github.com…) не открывается («blocked: easylist»). Нужен `ResourceType::Document`/`is_top_level` в `RequestContext` + не применять типизированные правила к документу. Найдено 2026-07-16 |
 | [BUG-293](bugs/BUG-293-OPEN.md) | OPEN | shell (`main.rs` — дренаж `window.open()` popup-запросов) | Вкладка, открытая `window.open('file:///…')`, не загружается: дренаж popup-запросов заворачивает URL как есть в `PageSource::Url` → сетевой путь → `unsupported scheme: file`. Разбор `file://`→путь уже существует (CLI `PageSource::from_arg`; automation-хелпер `main.rs:517` для BiDi/MCP), но в этом пути не переиспользован. Проверить заодно другие JS-навигации (`location.href`). Учесть security: web→file переход блокировать осознанно, file→file — разрешить. Найдено 2026-07-16 |
+| [BUG-294](bugs/BUG-294-OPEN.md) | OPEN | layout (`box_tree.rs`, `lay_out_flex`) | Flex-item с `margin-left` в row-контейнере позиционируется со сдвигом в 2× margin вместо 1×: `lay_out_flex`'s row-ветка передаёт `content_x + main_cursor + m_l` в `lay_out()`, но `lay_out_inner` сама добавляет `margin_left` к переданному `start_x` (как и все остальные вызовы `lay_out` в файле — они передают margin-box start без предварительного добавления margin). Похожая двойная-добавка вероятна и для `margin-top` row-item'ов, и для `margin-left` column-item'ов (тот же паттерн, непроверено — нет существующих flex-тестов с margin на item, все используют `gap`). Найдено P2-DEVX-2 2026-07-16 при написании golden-теста на flex-геометрию |
 
 ---
 
