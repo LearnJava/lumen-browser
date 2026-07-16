@@ -149,10 +149,17 @@ impl ConsolePanel {
     }
 
     /// Clear all stored messages and reset scroll.
-    #[allow(dead_code)]
+    ///
+    /// Called on every navigation so `AutomationCommand::ConsoleLog` (DEVX-1)
+    /// reflects only the current page's console output.
     pub fn clear(&mut self) {
         self.messages.clear();
         self.scroll_offset = 0;
+    }
+
+    /// All stored messages, oldest first — feeds `AutomationCommand::ConsoleLog` (DEVX-1).
+    pub fn messages(&self) -> &[ConsoleMessage] {
+        &self.messages
     }
 
     /// Toggle panel visibility.

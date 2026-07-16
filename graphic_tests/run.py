@@ -40,6 +40,15 @@ wait{condition:document_ready}` даёт настоящий сигнал гот�
 скриптов). TEST-00 калибрует crop offset один раз за прогон, как и раньше —
 окно/процесс просто не пересоздаётся между тестами.
 
+DEVX-1: живое окно запускается с `--deterministic --viewport 1024x720` — первое
+замораживает Date.now()/Math.random()/rAF timestamp (убирает флейк в TEST-57,
+129-138), второе перекрывает вызванный `--deterministic` дефолт окна 1280×800
+обратно на калиброванные 1024×720 (иначе магента-маркер TEST-00 и весь crop
+offset были бы недействительны). После каждого теста читается MCP
+`resource://console` (буфер чистится на `navigate()`, см. `LiveWindowClient.
+read_console`) — любая `console.error` на странице FAIL'ит тест независимо от
+pixel diff и попадает в HTML-отчёт (класс багов, невидимый на скриншоте).
+
 Результаты:
   graphic_tests/results/YYYYMMDD-HHMMSS.json — полные результаты прогона
   graphic_tests/results/YYYYMMDD-HHMMSS.html — визуальный отчёт (edge|lumen|diff для FAIL)
@@ -49,6 +58,7 @@ Edge-скриншоты кэшируются: пересъёмка только 
 --recheck загружает список FAIL из latest.json и перегоняет только их + TEST-00.
 """
 from __future__ import annotations
+from html import escape as escape_html
 import argparse
 import ctypes
 import ctypes.wintypes
@@ -744,8 +754,15 @@ class LiveWindowClient:
     """
 
     def __init__(self, lumen_path: str, cwd: str, port: int) -> None:
+        # DEVX-1: `--deterministic` freezes Date.now()/Math.random()/rAF timestamps
+        # (kills flake in JS-driven tests, e.g. TEST-57/129-138) but on its own
+        # forces a 1280x800 window; `--viewport` (added alongside) overrides that
+        # back to the pipeline's calibrated 1024x720 so TEST-00's magenta-marker
+        # crop offset stays valid for the rest of the --live run.
         self.proc = subprocess.Popen(
-            [lumen_path, '--mcp-live-port', str(port), '--no-scrollbar', 'about:blank'],
+            [lumen_path, '--mcp-live-port', str(port), '--no-scrollbar',
+             '--deterministic', '--viewport', f'{VIEWPORT_W}x{VIEWPORT_H}',
+             'about:blank'],
             cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         self.sock = self._connect_with_retry(port)
@@ -797,6 +814,20 @@ class LiveWindowClient:
             'name': 'wait',
             'arguments': {'condition': 'document_ready', 'timeout_ms': timeout_ms},
         })
+
+    def read_console(self) -> list[dict]:
+        """`resources/read` on `resource://console` (DEVX-1).
+
+        Returns JS `console.log/warn/error` messages captured since the last
+        `navigate()` (the live window clears its console buffer on every
+        navigation — see `AutomationCommand::Navigate` in `crates/shell/src/main.rs`).
+        Each entry is `{"level": "Log"|"Info"|"Warn"|"Error", "message": str}`.
+        """
+        result = self._call('resources/read', {'uri': 'resource://console'})
+        contents = result.get('contents') or []
+        if not contents:
+            return []
+        return json.loads(contents[0].get('text', '[]'))
 
     def shutdown(self) -> None:
         """Закрыть соединение и корректно (или принудительно) завершить процесс."""
@@ -1079,16 +1110,18 @@ def ensure_lumen(force_build: bool = False) -> None:
 
 def run_one(tid: str, html: str, threshold: float, label: str,
             crop_offset: tuple[int, int] | None,
-            no_cache: bool = False) -> tuple[bool, tuple[int, int] | None, float, dict | None]:
+            no_cache: bool = False) -> tuple[bool, tuple[int, int] | None, float, dict | None, list[str]]:
     """Запускает один тест.
 
-    Возвращает (passed, new_crop_offset, diff_pct, diff_region).
-    diff_pct < 0 и diff_region = None означают ошибку (ERROR).
+    Возвращает (passed, new_crop_offset, diff_pct, diff_region, console_errors).
+    diff_pct < 0 и diff_region = None означают ошибку (ERROR). console_errors —
+    тексты `console.error` со страницы (DEVX-1, только в --live режиме);
+    непустой список FAIL'ит тест независимо от diff_pct (баг, невидимый на скриншоте).
     """
     test_path = os.path.join(TESTS_DIR, html)
     if not os.path.exists(test_path):
         print(f'TEST-{tid}: FAIL (no HTML: {test_path})')
-        return False, crop_offset, -1.0, None
+        return False, crop_offset, -1.0, None, []
 
     stem = html[:-5]  # '00-calibration.html' → '00-calibration'
     edge_png   = os.path.join(SHOTS, f'{stem}-edge.png')
@@ -1099,19 +1132,20 @@ def run_one(tid: str, html: str, threshold: float, label: str,
     capture_edge(test_path, edge_png, force=no_cache)
     if not os.path.exists(edge_png):
         print(f'TEST-{tid}: FAIL (Edge screenshot missing)')
-        return False, crop_offset, -1.0, None
+        return False, crop_offset, -1.0, None, []
 
     rel_html = os.path.relpath(test_path, REPO).replace('\\', '/')
+    console_errors: list[str] = []
     if _IPC_CLIENT is not None:
         # IPC-режим (TAB-7): детерминированный CPU-снимок по TCP, без gdigrab.
         try:
             ipc_capture_lumen(test_path, lumen_raw)
         except (IpcError, OSError) as e:
             print(f'TEST-{tid}: ERROR (IPC: {e})', flush=True)
-            return False, crop_offset, -1.0, None
+            return False, crop_offset, -1.0, None, []
         if not os.path.exists(lumen_raw):
             print(f'TEST-{tid}: FAIL (IPC screenshot missing)')
-            return False, crop_offset, -1.0, None
+            return False, crop_offset, -1.0, None, []
         # CPU-снимок уже от (0,0): магента-калибровка/crop offset не нужны.
         crop_offset = (0, 0)
     elif _LIVE_CLIENT is not None:
@@ -1122,16 +1156,26 @@ def run_one(tid: str, html: str, threshold: float, label: str,
             capture_lumen_live(_LIVE_CLIENT, test_path, lumen_raw)
         except (McpLiveError, OSError) as e:
             print(f'TEST-{tid}: ERROR (live: {e})', flush=True)
-            return False, crop_offset, -1.0, None
+            return False, crop_offset, -1.0, None, []
         if not os.path.exists(lumen_raw):
             print(f'TEST-{tid}: FAIL (live-window screenshot missing)')
-            return False, crop_offset, -1.0, None
+            return False, crop_offset, -1.0, None, []
+
+        # DEVX-1: любая console.error на странице — баг, невидимый на
+        # скриншоте (не влияет на pixel diff). Читаем после навигации, до
+        # следующего navigate() (который чистит буфер на стороне шелла).
+        try:
+            console_errors = [
+                e['message'] for e in _LIVE_CLIENT.read_console() if e.get('level') == 'Error'
+            ]
+        except McpLiveError as e:
+            print(f'TEST-{tid}: WARN (console read failed: {e})', flush=True)
 
         if tid == '00':
             origin = find_marker_origin(lumen_raw)
             if origin is None:
                 print(f'TEST-{tid}: FAIL (magenta marker not found)')
-                return False, None, -1.0, None
+                return False, None, -1.0, None, console_errors
             crop_offset = origin
             _save_crop_offset(crop_offset)
 
@@ -1139,18 +1183,18 @@ def run_one(tid: str, html: str, threshold: float, label: str,
             crop_offset = _load_crop_offset()
         if crop_offset is None:
             print(f'TEST-{tid}: FAIL (no crop offset — run TEST-00 first)')
-            return False, None, -1.0, None
+            return False, None, -1.0, None, console_errors
     else:
         capture_lumen(rel_html, lumen_raw)
         if not os.path.exists(lumen_raw):
             print(f'TEST-{tid}: FAIL (gdigrab screenshot missing)')
-            return False, crop_offset, -1.0, None
+            return False, crop_offset, -1.0, None, []
 
         if tid == '00':
             origin = find_marker_origin(lumen_raw)
             if origin is None:
                 print(f'TEST-{tid}: FAIL (magenta marker not found)')
-                return False, None, -1.0, None
+                return False, None, -1.0, None, []
             crop_offset = origin
             _save_crop_offset(crop_offset)
 
@@ -1158,18 +1202,18 @@ def run_one(tid: str, html: str, threshold: float, label: str,
             crop_offset = _load_crop_offset()
         if crop_offset is None:
             print(f'TEST-{tid}: FAIL (no crop offset — run TEST-00 first)')
-            return False, None, -1.0, None
+            return False, None, -1.0, None, []
 
     ffmpeg_crop(lumen_raw, lumen_crop, crop_offset[0], crop_offset[1])
     if os.path.exists(lumen_raw):
         os.remove(lumen_raw)
     if not os.path.exists(lumen_crop):
         print(f'TEST-{tid}: FAIL (ffmpeg crop failed)')
-        return False, crop_offset, -1.0, None
+        return False, crop_offset, -1.0, None, console_errors
     ffmpeg_diff(edge_png, lumen_crop, diff_png)
     if not os.path.exists(diff_png):
         print(f'TEST-{tid}: FAIL (ffmpeg diff failed)')
-        return False, crop_offset, -1.0, None
+        return False, crop_offset, -1.0, None, console_errors
 
     pct, region = diff_stats(diff_png)
     debtor_verdict, debtor_msg = check_debtor(tid, pct)
@@ -1190,7 +1234,11 @@ def run_one(tid: str, html: str, threshold: float, label: str,
         region_str = _fmt_region(region) if region else ''
         suffix = f'  [{region_str}]' if region_str and not passed else ''
         print(f'TEST-{tid}: {"PASS" if passed else "FAIL"} ({pct:.2f}%){suffix}', flush=True)
-    return passed, crop_offset, pct, region
+    if console_errors:
+        passed = False
+        for msg in console_errors:
+            print(f'TEST-{tid}: FAIL (console error: {msg})', flush=True)
+    return passed, crop_offset, pct, region, console_errors
 
 
 def _fmt_region(r: dict) -> str:
@@ -1268,6 +1316,7 @@ def _write_html_report(path: str, data: dict) -> None:
         thr     = r.get('threshold', 0.5)
         label   = r.get('label', '')
         region  = r.get('diff_region')
+        console_errors = r.get('console_errors') or []
 
         css_cls = {'PASS': 'pass', 'FAIL': 'fail', 'ERROR': 'error', 'DEBTOR': 'debtor'}.get(status, 'skip')
         pct_str = f'{pct:.2f}%' if pct >= 0 else '—'
@@ -1288,6 +1337,11 @@ def _write_html_report(path: str, data: dict) -> None:
             )
         else:
             imgs = ''
+
+        # DEVX-1: console.error текст — класс багов, невидимый на скриншоте.
+        if console_errors:
+            errs = ''.join(f'<div>{escape_html(msg)}</div>' for msg in console_errors)
+            imgs += f'<div class="console-err">{errs}</div>'
 
         rows_html.append(
             f'<tr class="{css_cls}">'
@@ -1333,6 +1387,7 @@ tr.debtor td{{background:#1a1400}}
 .region{{width:160px;color:#888;font-size:11px}}
 .label{{max-width:280px;color:#999;word-break:break-word}}
 .imgs{{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}}
+.console-err{{width:100%;color:#e88;font-size:11px;margin-top:4px;font-family:monospace}}
 figure{{margin:0}}
 figcaption{{font-size:10px;color:#555;text-align:center;margin-top:2px}}
 img{{display:block;width:310px;border:1px solid #2a2a2a}}
@@ -1546,13 +1601,17 @@ def main() -> int:
     for tid, html, threshold, label in TESTS:
         if run_filter is not None and tid not in run_filter:
             continue
-        passed, crop_offset, pct, region = run_one(
+        passed, crop_offset, pct, region, console_errors = run_one(
             tid, html, threshold, label, crop_offset,
             no_cache=args.no_cache,
         )
         debtor_verdict, debtor_msg = check_debtor(tid, pct)
         if pct < 0:
             status = 'ERROR'
+        elif console_errors:
+            # DEVX-1: a JS console error overrides even a known-debtor pixel
+            # verdict — it's a distinct class of bug the pixel diff can't see.
+            status = 'FAIL'
         elif debtor_verdict == 'OK':
             status = 'DEBTOR'
         elif passed:
@@ -1569,6 +1628,8 @@ def main() -> int:
             'diff_pct': round(pct, 4),
             'diff_region': region,
         }
+        if console_errors:
+            entry['console_errors'] = console_errors
         if debtor_verdict is not None:
             bug, baseline = KNOWN_DEBTORS[tid]
             entry['debtor'] = {'bug': bug, 'baseline': baseline, 'verdict': debtor_verdict}
@@ -1582,7 +1643,7 @@ def main() -> int:
                 print(f'         юнит-зависимости: {", ".join(DEPS[tid])}'
                       f'  (python graphic_tests/run.py --bisect {tid})')
         results.append(entry)
-        if not passed and not args.continue_on_fail and debtor_verdict != 'OK':
+        if not passed and not args.continue_on_fail and (debtor_verdict != 'OK' or console_errors):
             halted_at = tid
             break
 
