@@ -49,8 +49,8 @@ QuickJS-specific `install_*`/`QuickJsRuntime`/`QuickPersistentJs` implementation
 
 Verifying the "React 18 CRA loads without JS errors" DoD item surfaced two real, pre-existing, **engine-
 agnostic** `WEB_API_SHIM` bugs (reproduced byte-for-byte under both QuickJS and V8, so unrelated to this
-cutover): [BUG-280](../../bugs/BUG-280-OPEN.md) (`window` is a plain object, not the real global object —
-already filed, in progress) and [BUG-281](../../bugs/BUG-281-OPEN.md) (`document.nodeType`, `ownerDocument`
+cutover): [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` is a plain object, not the real global object —
+already filed, in progress at ADR time, fixed 2026-07-16) and [BUG-281](../../bugs/BUG-281-FIXED.md) (`document.nodeType`, `ownerDocument`
 identity, `documentElement.tagName`, `namespaceURI` are wrong, crashing react-dom's root-mount path). Both
 block a full, clean React 18 mount today on **either** engine; V8 itself (classes, hooks/closures, modern
 ES, JIT-compiled execution) ran the React 18 UMD bundle correctly up to the point these DOM-shim bugs threw.

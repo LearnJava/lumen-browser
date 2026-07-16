@@ -12817,18 +12817,52 @@ function _lumen_fire_window_scroll_event() {
     if (typeof document !== 'undefined') { document.dispatchEvent(ev); }
 }
 
-// ── WindowOrWorkerGlobalScope: self / globalThis / window aliasing (HTML LS) ──
-// In a real browser self === window === globalThis (same object). Webpack
-// runtimes and countless libraries reference `self` as the global object
-// (e.g. `(self.webpackChunk = self.webpackChunk || []).push(...)`,
-// `typeof self !== 'undefined' ? self : this`). The shim builds `window` as a
-// plain object literal, so without this block bare `self` is a ReferenceError
-// and the first webpack chunk on any bundled site bails (BUG-233). Properties
-// stored on `self` must also be visible through `window` — guaranteed here
-// because `self` and `window` are the SAME object reference.
+// ── WindowOrWorkerGlobalScope: window IS the real global object (HTML LS) ──
+// In a real browser self === window === globalThis === the JS engine's own
+// global object — so ANY property a script assigns via `window.foo = ...` /
+// `self.foo = ...` is automatically reachable afterward as a bare, unqualified
+// `foo` identifier. Up to this point `window` has been built as a plain object
+// literal (see `var window = {...}` above), merely cross-referenced with
+// `globalThis` for a hardcoded list of names (`self`, `addEventListener`, …
+// this was BUG-233's fix). That only covers names known in advance — dynamic
+// assignments (e.g. `testharness.js`'s `expose(fn, name)`, which does
+// `window[name] = fn`, or any real-world `window.foo = ...; foo()` pattern)
+// stayed invisible as bare identifiers, because `window` and the true global
+// object were two different objects (BUG-280).
+//
+// Fix: copy every property built onto `window` so far onto `globalThis` once,
+// then repoint `window` to literally BE `globalThis`. From here on `window`
+// and the engine's real global object are the SAME reference, so later
+// `window.foo = ...` writes land directly on the global object and are
+// bare-reachable — no finite alias list needed.
+//
+// Copy accessors (get/set) via `defineProperty` and plain values via assignment
+// — two different copy strategies, both needed:
+//  - `Object.assign` alone would invoke every getter once and copy the
+//    resulting *value* (e.g. `scrollY`/`pageYOffset` call
+//    `_lumen_get_page_scroll_y()` on every read), freezing it as a static
+//    data property and silently breaking the live binding — so accessors need
+//    `defineProperty` to carry the getter/setter itself across.
+//  - `defineProperty` for EVERY property would instead break plain values
+//    that already exist on `globalThis` as non-configurable (but writable)
+//    data properties — e.g. quickjs-ng's built-in `addEventListener` —
+//    because `defineProperty` fails when the target's existing descriptor
+//    isn't configurable, even to set the same kind of value. Plain
+//    assignment (`globalThis[k] = ...`) only invokes [[Set]], which is
+//    exactly what non-configurable-but-writable globals still allow.
+(function() {
+    var descs = Object.getOwnPropertyDescriptors(window);
+    for (var k in descs) {
+        var d = descs[k];
+        if (d.get || d.set) {
+            Object.defineProperty(globalThis, k, d);
+        } else {
+            globalThis[k] = d.value;
+        }
+    }
+})();
+window = globalThis;
 var self = window;
-globalThis.self      = window;   // bare `self` resolves to the window object
-globalThis.window    = window;   // bare `window` is the same object
 window.self          = window;
 window.window        = window;   // window.window === window (HTML LS)
 window.globalThis    = globalThis;
@@ -12837,15 +12871,11 @@ window.top           = window;   // top-level browsing context is itself
 window.parent        = window;   // no parent frame
 window.length        = 0;        // number of child browsing contexts (frames)
 
-// In a real browser addEventListener/removeEventListener/dispatchEvent
-// resolve as bare identifiers because window IS the global object — the
-// same reason BUG-233 needed bare self/window/globalThis aliases above.
-// window here is a plain object literal (see comment above), so a bare,
-// unqualified addEventListener(...) call — used unconditionally by
-// testharness.js's own top-level setup (resources/testharness.js,
-// addEventListener('error', ...) / addEventListener('unhandledrejection', ...),
-// and by plenty of real-world scripts written the same way) — was a
-// ReferenceError. Found running P2-wpt S4.
+// addEventListener/removeEventListener/dispatchEvent now resolve as bare
+// identifiers because `window` (just reassigned above) IS the global object —
+// this rebind is mostly for clarity, since the copy loop above already put the
+// raw functions onto globalThis. Kept explicit and bound to `window` so
+// `this` inside these methods is well-defined regardless of call style.
 var addEventListener    = window.addEventListener.bind(window);
 var removeEventListener = window.removeEventListener.bind(window);
 var dispatchEvent       = window.dispatchEvent.bind(window);
@@ -12996,6 +13026,38 @@ mod tests {
             .eval(
                 "(self.webpackChunk = self.webpackChunk || []).push([1]); \
                  Array.isArray(window.webpackChunk) && window.webpackChunk.length === 1",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-280: `window` must literally BE the real QuickJS global object, not
+    // a plain object cross-referenced with `globalThis` via a fixed alias
+    // list. Any property assigned via `window.foo = ...` — including names
+    // not known in advance, e.g. testharness.js's dynamic `expose(fn, name)`
+    // (`window[name] = fn`) — must resolve as a bare, unqualified identifier.
+    #[test]
+    fn dynamic_window_property_is_bare_reachable() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "window.__bug280_probe = function() { return 42; }; \
+                 typeof __bug280_probe === 'function' && __bug280_probe() === 42",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-280: same for a property assigned via bare `self`, matching the
+    // real-browser invariant `self === window === globalThis` (same object).
+    #[test]
+    fn dynamic_self_property_is_bare_reachable() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "self.__bug280_probe2 = 'hi'; \
+                 typeof __bug280_probe2 !== 'undefined' && __bug280_probe2 === 'hi' \
+                 && window === globalThis",
             )
             .unwrap();
         assert_eq!(ok, lumen_core::JsValue::Bool(true));

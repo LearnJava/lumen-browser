@@ -18,6 +18,23 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **`window` is now the engine's real global object (BUG-280 fix, [P2] P2-wpt S4, 2026-07-16).**
+  `WEB_API_SHIM` copies every own property of `window` onto `globalThis` (values via plain
+  assignment — required because some quickjs-ng built-ins like `addEventListener` are
+  non-configurable-but-writable, `defineProperty` would throw on them; accessors via
+  `Object.defineProperty` to preserve the live getter/setter rather than freezing a one-time
+  read), then `window = globalThis`. From then on `window === self === globalThis`, matching
+  the real-browser invariant, so a property assigned via `window.x = ...`/`self.x = ...` —
+  including dynamic, not-known-in-advance names (`testharness.js`'s `expose(fn, name)`) — is
+  reachable as a bare identifier, same as any real browser. Shared `WEB_API_SHIM` source fixes
+  both engines (V8 `v8_runtime.rs` evaluates the same string). Verified: mirrored unit-test
+  pairs `dynamic_window_property_is_bare_reachable`/`dynamic_self_property_is_bare_reachable`
+  in both `dom::tests` (rquickjs) and `v8_runtime::tests` (V8, `--features v8-backend`), plus
+  live BiDi `script.evaluate` probes against the default V8 dev-release build.
+  Follow-up fix alongside: `File.prototype` now extends `Blob.prototype` (`file_input.rs`, W3C
+  File API §4) — this fix made `window.File` reach the real global `File`, surfacing the missing
+  prototype link. Fixing BUG-280 got the WPT smoke test far enough to expose a second, unrelated
+  blocker — see [BUG-291](../bugs/BUG-291-OPEN.md) under Deferred.
 - **`document.getElementsByTagName(tag)` (BUG-279 fix, [P2] P2-wpt S4, 2026-07-13).**
   Was missing entirely from `var document = {...}` in `dom.rs` — broke `testharness.js`'s own
   module-level setup (`test_timeout()`/`get_script_url()` call it unconditionally) with a
@@ -326,15 +343,15 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Deferred
 
-- **`window` is not the engine's real global object** ([BUG-280](../bugs/BUG-280-OPEN.md), found by
-  [P2] P2-wpt S4, 2026-07-13). `window` is built as a plain `WEB_API_SHIM` object literal, so
-  properties assigned via `window.x = ...`/`self.x = ...` (e.g. `testharness.js`'s `expose()`, ~50
-  functions) are unreachable as bare identifiers — a real browser has `self === window ===
-  globalThis` as the actual lexical global. A hardcoded alias list (`addEventListener`/
-  `removeEventListener`/`dispatchEvent`, same pattern as BUG-233's `self`/`window`/`globalThis`
-  aliases) only covers known-in-advance names; the general fix needs `window` to be the QuickJS
-  engine's real global object (or a `Proxy`-based forward) — an engine bootstrap change outside
-  `lumen-bidi-server`/`tests/wpt` scope.
+- **`testharness.js`'s built-in results renderer throws, aborting harness completion**
+  ([BUG-291](../bugs/BUG-291-OPEN.md), found by [P2] P2-wpt S4/S5, 2026-07-16, after BUG-280 was
+  fixed). `Output.show_results` throws `TypeError: Cannot read properties of null (reading
+  'appendChild')` while building its results `<table>` (`crates/js` DOM child-node bindings,
+  `createElementNS`-created elements), which aborts `notify_complete()` before
+  `testharnessreport.js`'s own completion callback runs — blocks `tests/wpt/run_smoke.py` from
+  reaching a genuine PASS/FAIL. A related anomaly found while isolating this: DOM node references
+  returned by repeated property access (`parent.lastChild`) are not stable under `===` for the same
+  underlying node — see the bug file for the isolated repro.
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
 - `rusty_v8` backend porting (S12 remains; S0/S1/S2/S3/S4/S5-S7/S8/S9/S10/S11 done

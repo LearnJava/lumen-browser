@@ -44,9 +44,9 @@ or specific to the Ph3-v8-migration engine cutover, and not blocked on it either
 
 ## Related but distinct
 
-[BUG-280](BUG-280-OPEN.md) (`window` is a plain object, not the real global object — bare globals set via
-`window.x = ...` unreachable) is a **different** gap in the same file, already filed and in progress
-(`p2-bug-280-global-object`). Fixing BUG-280 alone does not fix this bug — my repro explicitly referenced
+[BUG-280](BUG-280-FIXED.md) (`window` was a plain object, not the real global object — bare globals set via
+`window.x = ...` unreachable) was a **different** gap in the same file, filed separately (fixed
+2026-07-16). Fixing BUG-280 alone did not fix this bug — my repro explicitly referenced
 `window.React`/`window.ReactDOM` (not bare identifiers) to isolate this bug from BUG-280's.
 
 ## Repro
