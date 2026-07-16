@@ -328,6 +328,8 @@ pub enum AutomationCommand {
     Query(String),
     /// Snapshot the accessibility tree (SDC-2).
     A11yTree,
+    /// Read captured JS console messages since the last `Navigate` (DEVX-1).
+    ConsoleLog,
 }
 
 /// Reply from automation API — returned from shell after command execution.
@@ -345,4 +347,6 @@ pub enum AutomationReply {
     Query(Vec<NodeRef>),
     /// `A11yTree` result: accessibility tree snapshot (SDC-2).
     A11yTree(Box<A11yNode>),
+    /// `ConsoleLog` result: captured JS console messages (DEVX-1).
+    ConsoleLog(Vec<ConsoleEntry>),
 }

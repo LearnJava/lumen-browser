@@ -76,11 +76,11 @@
  "generated": "2026-07-16",
  "counts": {
   "open": 28,
-  "fixed": 234,
+  "fixed": 235,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 262,
+ "total_bugs": 263,
  "phases": [
   {
    "id": "P0",
@@ -1443,15 +1443,15 @@
     {
      "id": "DEVX",
      "title": "DEVX: dev-tooling на готовых поверхностях браузера",
-     "status": "planned",
+     "status": "active",
      "note": "Дорожка dev-tooling (владелец — P2): задействовать уже существующие automation/introspection-поверхности браузера для ускорения разработки. Полный каталог поверхностей и «что когда применять» — `docs/automation.md` (аудит 2026-07-16): MCP tools/resources, BiDi-команды, driver-API, `--deterministic`, `LUMEN_NO_*` paint-флаги — почти всё не задействовано тулингом",
      "tasks": [
       {
        "id": "DEVX-1",
        "title": "DEVX-1: детерминизм + console-гейт в live-прогоне",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "В `--live`-прогон `graphic_tests/run.py` добавить: (а) запуск lumen с `--deterministic` (+ фикс. `--rng-seed`) — убирает флейк Date.now/Math.random/rAF в JS-тестах (57, 129–138); (б) после каждого теста читать MCP `resource://console` — JS-ошибка на странице = FAIL с текстом ошибки в отчёте (класс багов, невидимых на скриншоте). Гейт: полный прогон, дельта «Изменений нет» по diff%, новые console-FAIL разобрать поштучно"
+       "note": "DONE 2026-07-16: `--live` теперь спавнит lumen с `--deterministic --viewport 1024x720` (заморозка Date.now/Math.random/rAF; `--viewport` — новый флаг, т.к. `--deterministic` сам по себе даёт окно 1280×800, что ломает магента-калибровку TEST-00) и после каждого теста читает MCP `resource://console` (новый `AutomationCommand::ConsoleLog`, буфер живёт в DevTools console panel и чистится на `navigate()`) — `console.error` FAIL'ит тест независимо от diff% и попадает в HTML-отчёт. `--rng-seed`/`--monotonic-clock` остались невостребованы движком (см. docs/automation.md CLI flags) — сид всегда берётся из хеша URL, этого достаточно для детерминизма между прогонами. Полный `--live`-прогон не удалось прогнать как гейт в этой рабочей сессии: `ffmpeg -f gdigrab` возвращает access-denied в этом Windows-сеансе независимо от кода (окружение, не Lumen); проверено напрямую по MCP-протоколу через CPU `resource://screenshot` (размер 1024×720 подтверждён) и `resource://console` (console.error перехвачен и текст совпал, буфер очистился на следующей навигации)"
       },
       {
        "id": "DEVX-2",
@@ -3293,10 +3293,10 @@
    "debtor": false
   },
   "BUG-280": {
-   "status": "open",
-   "title": "`window` — плоский JS-объект-литерал, не настоящий global object движка (см. BUG-233) — свойства, назначенные через `window.x = ...`/`self.x = ...` (в т.ч. `tes…",
-   "component": "js (JS environment bootstrap)",
-   "date": null,
+   "status": "fixed",
+   "title": "`window` был плоским JS-объектом-литералом, не настоящим global object движка — свойства, назначенные через `window.x = ...`/`self.x = ...` (в т.ч. `testharness…",
+   "component": "js (JS environment bootstrap, `WEB_API_SHIM`)",
+   "date": "2026-07-16",
    "debtor": false
   },
   "BUG-281": {
@@ -3361,6 +3361,13 @@
    "component": "paint/layout (font metrics; `upright` per-glyph advance)",
    "date": null,
    "debtor": true
+  },
+  "BUG-291": {
+   "status": "open",
+   "title": "После фикса BUG-280 `tests/wpt/run_smoke.py` всё ещё не проходит целиком: встроенный рендерер результатов `testharness.js` (`Output.show_results`) падает с `Typ…",
+   "component": "js (DOM child-node bindings, `crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3420,7 +3427,10 @@
    "BUG-155",
    "BUG-243"
   ],
-  "js (JS environment bootstrap)": [
+  "js (DOM child-node bindings, `crates/js/src/dom.rs`)": [
+   "BUG-291"
+  ],
+  "js (JS environment bootstrap, `WEB_API_SHIM`)": [
    "BUG-280"
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
