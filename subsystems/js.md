@@ -18,6 +18,22 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **`_lumen_dispatch_pointer_move_coalesced` — real Pointer Events L3 §4.1
+  `getCoalescedEvents()`/`getPredictedEvents()` (`P3-pointerfull`, 2026-07-17).**
+  New engine-agnostic `WEB_API_SHIM` function (`dom.rs`, registered on
+  `window`): takes a JSON array of `[x, y]` CSS-px samples batched by the
+  shell (`Lumen::flush_pointer_moves`, `crates/shell/src/main.rs`) and builds
+  one `PointerEvent` per point, dispatching the last as the "main" event via
+  `_lumen_dispatch_rich`. `getCoalescedEvents()` returns the full list (main
+  event last, by reference); `getPredictedEvents()` linearly extrapolates 2
+  points from the last two samples' velocity, `[]` below 2 samples. The
+  older `_lumen_dispatch_pointer_event`'s `[ev]`/`[]` stubs were kept
+  unchanged for non-move types (down/up/enter/leave/over/out,
+  `_lumen_dispatch_capture_event`) and one-off synthetic pointermove
+  (pointer-lock, automation) — already spec-correct for a genuinely single,
+  non-coalescing event. 3 new tests (`dom::tests::pointer_move_coalesced_*`),
+  green under both QuickJS (default) and `--features v8-backend`. See
+  `subsystems/shell.md` for the shell-side buffering; `docs/tasks/ph3-pointer-events-l3.md`.
 - **`window` is now the engine's real global object (BUG-280 fix, [P2] P2-wpt S4, 2026-07-16).**
   `WEB_API_SHIM` copies every own property of `window` onto `globalThis` (values via plain
   assignment — required because some quickjs-ng built-ins like `addEventListener` are

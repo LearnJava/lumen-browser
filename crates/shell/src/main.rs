@@ -805,6 +805,7 @@ fn run_window_mode(
         cv_events: Vec::new(),
         dark_mode: false,
         cursor_position: None,
+        pending_pointer_moves: Vec::new(),
         hovered_nid: None,
         hovered_tab_idx: None,
         active_nid: None,
@@ -6702,6 +6703,15 @@ struct Lumen {
     /// `None` пока курсор не вошёл в окно. Конвертируется в CSS px через
     /// `scale_factor()` непосредственно в hit-test / drag callback-ах.
     cursor_position: Option<winit::dpi::PhysicalPosition<f64>>,
+    /// Ph3 pointer-events-l3: CSS-pixel `(x, y)` samples from `CursorMoved`
+    /// queued since the last flush, in chronological order. Pointer Events
+    /// Level 3 §4.1 "coalesced events" — multiple raw OS samples can arrive
+    /// before the next paint; `flush_pointer_moves` turns the whole batch
+    /// into one `pointermove` dispatch with the rest exposed via
+    /// `getCoalescedEvents()`. Flushed once per `about_to_wait` tick, or
+    /// earlier — right before a hover-boundary crossing or `pointerdown`/
+    /// `pointerup` — so event order stays chronological.
+    pending_pointer_moves: Vec<(f32, f32)>,
     /// DOM node currently under the mouse pointer (CSS `:hover` target).
     /// Updated on every `CursorMoved`; triggers relayout when it changes so
     /// `:hover` rules re-evaluate. `None` when cursor is outside the content area.
@@ -10492,6 +10502,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             self.pending_waits = still_pending;
         }
 
+        // Ph3 pointer-events-l3: flush any `CursorMoved` samples queued this
+        // tick as one coalesced `pointermove` — Pointer Events L3 §4.1. Runs
+        // once per `about_to_wait` iteration (roughly once per frame); a fast
+        // mouse can queue several samples between paints, all folded into a
+        // single dispatch with the rest exposed via `getCoalescedEvents()`.
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
+        self.flush_pointer_moves();
+
         // ── Native input injection (ADR-007 §8C) ─────────────────────────────
         // Drain injected commands and route through the same dispatch path as
         // real OS events so events have isTrusted=true.
@@ -11267,6 +11285,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // Dispatch hover-change events per W3C UI Events §17.5 / Pointer Events L2 §10.
                         #[cfg(any(feature = "quickjs", feature = "v8"))]
                         {
+                            // Ph3 pointer-events-l3: flush pointermove samples
+                            // queued before this boundary crossing first, so
+                            // they precede pointerout/leave/over/enter in
+                            // dispatch order (spec-observable event order).
+                            self.flush_pointer_moves();
                             // Leave events on the element losing hover.
                             if let Some(old) = old_nid {
                                 let nid = old.index() as u32;
@@ -11285,6 +11308,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             }
                         }
                     }
+                    // Ph3 pointer-events-l3: queue this raw sample for the next
+                    // coalesced pointermove flush (about_to_wait tick, next
+                    // hover-boundary crossing, or press/release) — Pointer
+                    // Events L3 §4.1.
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
+                    self.pending_pointer_moves.push((x_css, y_css));
                 }
                 // Tab bar: update hovered_tab_idx for tooltip rendering.
                 {
@@ -11382,6 +11411,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Dispatch leave events before clearing hovered state.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let Some(old) = self.hovered_nid {
+                        // Ph3 pointer-events-l3: flush queued pointermove
+                        // samples first so they precede pointerout/leave.
+                        self.flush_pointer_moves();
                         let nid = old.index() as u32;
                         self.js_pointer_event(nid, "pointerout",   0.0, 0.0, 0, 0);
                         self.js_mouse_event(nid,   "mouseout",     0.0, 0.0, 0, 0);
@@ -11553,6 +11585,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // any default action (click). Only when cursor is over page content.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let Some(hov) = self.hovered_nid {
+                        // Ph3 pointer-events-l3: flush queued pointermove samples
+                        // first so they precede pointerdown in dispatch order.
+                        self.flush_pointer_moves();
                         let nid = hov.index() as u32;
                         self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
                         self.js_mouse_event(nid, "mousedown", x_css, y_css, 0, 1);
@@ -12635,6 +12670,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Per W3C UI Events §17.6 + Pointer Events L2 §10.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let (Some(hov), Some(pos)) = (self.hovered_nid, self.cursor_position) {
+                        // Ph3 pointer-events-l3: flush queued pointermove samples
+                        // first so they precede pointerup in dispatch order.
+                        self.flush_pointer_moves();
                         let dpr = self.renderer.as_ref()
                             .map_or(1.0_f32, |r| r.scale_factor() as f32).max(1e-6);
                         let xu = (pos.x as f32) / dpr;
@@ -14400,6 +14438,58 @@ impl Lumen {
     fn js_capture_event(&self, nid: u32, event_type: &str) {
         let script = format!("_lumen_dispatch_capture_event({}, '{}')", nid, event_type);
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+    }
+
+    /// Flush `pending_pointer_moves` (Pointer Events L3 §4.1 coalescing) as a
+    /// single `pointermove` + `mousemove` dispatch.
+    ///
+    /// Hit-tests the *last* queued point to find the target (mirrors
+    /// [`Lumen::dispatch_mouse_move`]); every queued point becomes an entry
+    /// in `getCoalescedEvents()` on the dispatched (main) `pointermove`, main
+    /// event last per spec. `getPredictedEvents()` is computed JS-side from
+    /// the trailing two points. No-op if the buffer is empty or the last
+    /// point hits no element (e.g. cursor over the tab bar / browser chrome).
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    fn flush_pointer_moves(&mut self) {
+        if self.pending_pointer_moves.is_empty() {
+            return;
+        }
+        let points = std::mem::take(&mut self.pending_pointer_moves);
+        let (x_css, y_css) = *points.last().expect("checked non-empty above");
+        let (page_x, page_y) = self.page_point(x_css, y_css);
+        let Some(hit) = self
+            .layout_box
+            .as_ref()
+            .and_then(|lb| hit_test(Point::new(page_x, page_y), lb))
+        else {
+            return;
+        };
+        let hit_nid = hit.node.index() as u32;
+        let ptr_nid = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |c| c.pointer_capture_nid(),
+        )
+        .flatten()
+        .unwrap_or(hit_nid);
+        let mut points_json = String::from("[");
+        for (i, (px, py)) in points.iter().enumerate() {
+            if i > 0 {
+                points_json.push(',');
+            }
+            points_json.push_str(&format!("[{},{}]", *px as i32, *py as i32));
+        }
+        points_json.push(']');
+        let script = format!(
+            "_lumen_dispatch_pointer_move_coalesced({}, '{}', {}, {}, {})",
+            ptr_nid,
+            points_json,
+            0u8,
+            0u8,
+            self.mod_flags(),
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+        self.js_mouse_event(hit_nid, "mousemove", x_css, y_css, 0, 0);
     }
 
     /// Dispatch a synthetic `mousemove` event at CSS-pixel viewport coordinates.

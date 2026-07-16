@@ -3795,10 +3795,64 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
         width: 1, height: 1,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
-    // Level 3: getCoalescedEvents() / getPredictedEvents() — single event, no coalescing
+    // Level 3 §4.1: this dispatcher is for non-move pointer types (down/up/
+    // enter/leave/over/out) plus one-off synthetic pointermove (pointer-lock,
+    // automation single-step) — these never coalesce, so a sequence
+    // containing only this event is the spec-correct answer, not a stub.
+    // Real batched pointermove goes through `_lumen_dispatch_pointer_move_coalesced`.
     ev.getCoalescedEvents = function() { return [ev]; };
     ev.getPredictedEvents = function() { return []; };
     return _lumen_dispatch_rich(start_nid, ev);
+}
+
+// Ph3 pointer-events-l3, Срез 3-4 — called from shell with every raw
+// `CursorMoved` sample buffered since the last flush (Pointer Events Level 3
+// §4.1 coalesced events). `points_json` is a JSON array of `[x, y]`
+// CSS-pixel pairs in chronological order; the last pair is the main event
+// actually dispatched to `nid`. Builds one `PointerEvent` per point (shared
+// pointerId/pointerType/button state, own clientX/Y) and exposes the full
+// list via `getCoalescedEvents()` on the main event — main event last, per
+// spec. `getPredictedEvents()` linearly extrapolates two future points from
+// the last two samples' velocity (the spec does not mandate a specific
+// prediction algorithm); fewer than 2 samples → no prediction.
+// mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
+function _lumen_dispatch_pointer_move_coalesced(nid, points_json, button, buttons, mod) {
+    var points = JSON.parse(points_json);
+    if (points.length === 0) return;
+    function makeMoveEvent(x, y) {
+        return new PointerEvent('pointermove', {
+            bubbles: true, cancelable: true, isTrusted: true,
+            clientX: x, clientY: y,
+            screenX: x, screenY: y,
+            pageX:   x, pageY:   y,
+            button: button, buttons: buttons,
+            ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+            altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
+            pointerId: 1, pointerType: 'mouse', isPrimary: true,
+            pressure: buttons ? 0.5 : 0.0,
+            altitudeAngle: Math.PI / 2, azimuthAngle: 0,
+            width: 1, height: 1,
+            tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
+        });
+    }
+    var coalesced = [];
+    for (var i = 0; i < points.length - 1; i++) {
+        coalesced.push(makeMoveEvent(points[i][0], points[i][1]));
+    }
+    var last = points[points.length - 1];
+    var main = makeMoveEvent(last[0], last[1]);
+    coalesced.push(main); // main event is last, per Pointer Events L3 §4.1
+    main.getCoalescedEvents = function() { return coalesced; };
+    var predicted = [];
+    if (points.length >= 2) {
+        var a = points[points.length - 2];
+        var dx = last[0] - a[0];
+        var dy = last[1] - a[1];
+        predicted.push(makeMoveEvent(last[0] + dx, last[1] + dy));
+        predicted.push(makeMoveEvent(last[0] + dx * 2, last[1] + dy * 2));
+    }
+    main.getPredictedEvents = function() { return predicted; };
+    return _lumen_dispatch_rich(nid, main);
 }
 
 // _lumen_dispatch_capture_event — fire gotpointercapture / lostpointercapture on a node.
@@ -3811,6 +3865,8 @@ function _lumen_dispatch_capture_event(nid, type) {
         width: 1, height: 1,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
+    // gotpointercapture/lostpointercapture never coalesce (not a move event);
+    // an empty sequence is the spec-correct answer, not a placeholder.
     ev.getCoalescedEvents = function() { return []; };
     ev.getPredictedEvents = function() { return []; };
     _lumen_dispatch_rich(nid, ev);
@@ -9161,6 +9217,7 @@ var window = {
     _lumen_dispatch_mouse_event:        _lumen_dispatch_mouse_event,
     _lumen_dispatch_locked_mousemove:   _lumen_dispatch_locked_mousemove,
     _lumen_dispatch_pointer_event:      _lumen_dispatch_pointer_event,
+    _lumen_dispatch_pointer_move_coalesced: _lumen_dispatch_pointer_move_coalesced,
     _lumen_dispatch_capture_event:      _lumen_dispatch_capture_event,
     _lumen_dispatch_key_event:     _lumen_dispatch_key_event,
     _lumen_dispatch_rich:          _lumen_dispatch_rich,
@@ -26609,6 +26666,65 @@ mod tests {
              _lumen_dispatch_pointer_event(el.__nid__, 'pointermove', 5, 5, 0, 0, 0); \
              Array.isArray(got.getCoalescedEvents()) && got.getCoalescedEvents().length === 1 && \
              Array.isArray(got.getPredictedEvents()) && got.getPredictedEvents().length === 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Pointer Events Level 3 §4.1 — real coalesced/predicted pointermove ───
+
+    #[test]
+    fn pointer_move_coalesced_dispatch_single_point() {
+        // A single-point batch behaves like the non-coalescing dispatcher:
+        // getCoalescedEvents() === [the event itself], no predicted events.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var got = null; \
+             el.addEventListener('pointermove', function(e) { got = e; }); \
+             _lumen_dispatch_pointer_move_coalesced(el.__nid__, '[[5,5]]', 0, 0, 0); \
+             var ce = got.getCoalescedEvents(); \
+             ce.length === 1 && ce[0] === got && \
+             got.clientX === 5 && got.clientY === 5 && \
+             got.getPredictedEvents().length === 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pointer_move_coalesced_dispatch_multi_point() {
+        // A 3-point batch: getCoalescedEvents() has all 3 in order, main event
+        // (dispatched, matches the last point) is last in the list by identity;
+        // getPredictedEvents() linearly extrapolates 2 points from the last leg.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var got = null; \
+             el.addEventListener('pointermove', function(e) { got = e; }); \
+             _lumen_dispatch_pointer_move_coalesced(el.__nid__, '[[0,0],[10,0],[20,0]]', 0, 0, 0); \
+             var ce = got.getCoalescedEvents(); \
+             var okCoalesced = ce.length === 3 && \
+                 ce[0].clientX === 0  && ce[1].clientX === 10 && ce[2].clientX === 20 && \
+                 ce[2] === got; \
+             var pe = got.getPredictedEvents(); \
+             var okPredicted = pe.length === 2 && \
+                 pe[0].clientX === 30 && pe[1].clientX === 40 && \
+                 pe[0].clientY === 0  && pe[1].clientY === 0; \
+             var okMain = got.clientX === 20 && got.clientY === 0 && got.type === 'pointermove'; \
+             okCoalesced && okPredicted && okMain"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pointer_move_coalesced_dispatch_empty_batch_is_noop() {
+        // An empty batch must not throw and must not dispatch anything.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var fired = false; \
+             el.addEventListener('pointermove', function(e) { fired = true; }); \
+             _lumen_dispatch_pointer_move_coalesced(el.__nid__, '[]', 0, 0, 0); \
+             !fired"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
