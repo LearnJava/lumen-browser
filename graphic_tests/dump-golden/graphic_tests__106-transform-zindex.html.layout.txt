@@ -1,0 +1,76 @@
+Block rect=(0.00, 0.00, 1024.00, 720.00)
+  Skip rect=(0.00, 0.00, 0.00, 0.00)
+  Block rect=(0.00, 0.00, 1024.00, 720.00) bg=#ff00ffff box-sizing=border-box
+    Skip rect=(0.00, 0.00, 0.00, 0.00) display=none box-sizing=border-box
+    Skip rect=(0.00, 0.00, 0.00, 0.00)
+    Block rect=(0.00, 0.00, 1024.00, 720.00) w=1024.00 h=720.00 box-sizing=border-box overflow=hidden/hidden
+      Skip rect=(0.00, 0.00, 0.00, 0.00)
+      Block rect=(1.00, 1.00, 1022.00, 718.00) bg=#1a202cff position=relative w=1022.00 h=718.00 box-sizing=border-box overflow=hidden/hidden m=(1.00, 1.00, 1.00, 1.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Block rect=(25.00, 25.00, 300.00, 300.00) position=absolute w=300.00 h=300.00 box-sizing=border-box
+          Skip rect=(25.00, 25.00, 0.00, 0.00)
+          Block rect=(55.00, 55.00, 240.00, 240.00) bg=#2b6cb0ff position=absolute w=240.00 h=240.00 box-sizing=border-box
+            Skip rect=(55.00, 55.00, 0.00, 0.00)
+            Block rect=(155.00, 155.00, 160.00, 160.00) bg=#ed8936ff position=absolute w=160.00 h=160.00 box-sizing=border-box
+            Skip rect=(55.00, 55.00, 0.00, 0.00)
+            Block rect=(75.00, 75.00, 140.00, 140.00) bg=#f6e05eff position=absolute w=140.00 h=140.00 box-sizing=border-box
+            Skip rect=(55.00, 55.00, 0.00, 0.00)
+          Skip rect=(25.00, 25.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Block rect=(365.00, 25.00, 300.00, 300.00) position=absolute w=300.00 h=300.00 box-sizing=border-box
+          Skip rect=(365.00, 25.00, 0.00, 0.00)
+          Block rect=(485.00, 145.00, 170.00, 170.00) bg=#48bb78ff position=absolute w=170.00 h=170.00 box-sizing=border-box
+          Skip rect=(365.00, 25.00, 0.00, 0.00)
+          Block rect=(385.00, 45.00, 170.00, 170.00) bg=#e53e3eff position=absolute w=170.00 h=170.00 box-sizing=border-box
+          Skip rect=(365.00, 25.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Block rect=(705.00, 25.00, 300.00, 300.00) position=absolute w=300.00 h=300.00 box-sizing=border-box
+          Skip rect=(705.00, 25.00, 0.00, 0.00)
+          Block rect=(725.00, 45.00, 180.00, 180.00) bg=#9f7aeaff position=absolute w=180.00 h=180.00 box-sizing=border-box
+          Skip rect=(705.00, 25.00, 0.00, 0.00)
+          Block rect=(815.00, 135.00, 170.00, 170.00) bg=#4fd1c5ff position=absolute w=170.00 h=170.00 box-sizing=border-box
+          Skip rect=(705.00, 25.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Block rect=(25.00, 375.00, 300.00, 300.00) position=absolute w=300.00 h=300.00 box-sizing=border-box
+          Skip rect=(25.00, 375.00, 0.00, 0.00)
+          Block rect=(55.00, 405.00, 240.00, 240.00) bg=#2d3748ff position=absolute w=240.00 h=240.00 box-sizing=border-box
+            Skip rect=(55.00, 405.00, 0.00, 0.00)
+            Block rect=(85.00, 435.00, 140.00, 140.00) bg=#2b6cb0ff position=absolute w=140.00 h=140.00 box-sizing=border-box
+            Skip rect=(55.00, 405.00, 0.00, 0.00)
+            Block rect=(145.00, 495.00, 140.00, 140.00) bg=#e53e3eff position=absolute w=140.00 h=140.00 box-sizing=border-box
+            Skip rect=(55.00, 405.00, 0.00, 0.00)
+          Skip rect=(25.00, 375.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Block rect=(365.00, 375.00, 300.00, 300.00) position=absolute w=300.00 h=300.00 box-sizing=border-box
+          Skip rect=(365.00, 375.00, 0.00, 0.00)
+          Block rect=(425.00, 435.00, 180.00, 180.00) bg=#2d3748ff position=absolute w=180.00 h=180.00 box-sizing=border-box
+            Skip rect=(425.00, 435.00, 0.00, 0.00)
+            Block rect=(445.00, 455.00, 100.00, 100.00) bg=#f6e05eff position=absolute w=100.00 h=100.00 box-sizing=border-box
+            Skip rect=(425.00, 435.00, 0.00, 0.00)
+            Block rect=(485.00, 495.00, 100.00, 100.00) bg=#38a169ff position=absolute w=100.00 h=100.00 box-sizing=border-box
+            Skip rect=(425.00, 435.00, 0.00, 0.00)
+          Skip rect=(365.00, 375.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+        Block rect=(705.00, 375.00, 300.00, 300.00) position=absolute w=300.00 h=300.00 box-sizing=border-box
+          Skip rect=(705.00, 375.00, 0.00, 0.00)
+          Block rect=(735.00, 405.00, 240.00, 240.00) bg=#2d3748ff position=absolute w=240.00 h=240.00 box-sizing=border-box
+            Skip rect=(735.00, 405.00, 0.00, 0.00)
+            Block rect=(765.00, 435.00, 140.00, 140.00) bg=#2b6cb0ff position=absolute w=140.00 h=140.00 box-sizing=border-box
+            Skip rect=(735.00, 405.00, 0.00, 0.00)
+            Block rect=(825.00, 495.00, 140.00, 140.00) bg=#e53e3eff position=absolute w=140.00 h=140.00 box-sizing=border-box
+            Skip rect=(735.00, 405.00, 0.00, 0.00)
+          Skip rect=(705.00, 375.00, 0.00, 0.00)
+        Skip rect=(1.00, 1.00, 0.00, 0.00)
+      Skip rect=(0.00, 720.00, 0.00, 0.00)

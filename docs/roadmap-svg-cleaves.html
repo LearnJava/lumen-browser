@@ -1448,9 +1448,9 @@
       {
        "id": "DEVX-3",
        "title": "DEVX-3: golden-гейт на dump-layout/display-list",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Golden-гейт на текстовых дампах: скрипт (python или cargo-тест) прогоняет `--dump-layout` и `--dump-display-list` по фиксированному набору страниц, diff с закоммиченными эталонами; обновление эталонов явным флагом (`--update`). Ловит регрессии геометрии/порядка отрисовки/z-index стабильно и кросс-платформенно, без GPU и без Edge; дополняет пиксельный пайплайн, не заменяет"
+       "note": "DONE 2026-07-16: `graphic_tests/dump_golden.py` прогоняет `--dump-layout`/`--dump-display-list` по фиксированному набору из 6 страниц (samples/page.html, samples/test-06-layout.html, 25-table-layout, 35-grid-named-areas, 65-flex-align-content, 106-transform-zindex), diff с эталонами в `graphic_tests/dump-golden/`; `--update` промоутит текущий вывод. Без GPU/Edge/ffmpeg, дополняет пиксельный пайплайн"
       },
       {
        "id": "DEVX-4",
