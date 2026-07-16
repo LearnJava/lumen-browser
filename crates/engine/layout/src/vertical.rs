@@ -35,8 +35,12 @@ use crate::{InlineFrag, InlineSegment, TextMeasurer};
 use crate::box_tree::{measure_text_w_varied, strip_soft_hyphens, BoxKind, LayoutBox};
 use crate::style::{BoxSizing, Length, WritingMode};
 
-#[allow(dead_code)]
-pub(crate) fn is_cjk(ch: char) -> bool {
+/// CSS Writing Modes L4 §4 — codepoint ranges treated as CJK for
+/// `text-orientation: mixed` (upright ideographs vs. rotated Latin/other).
+/// Public: consumed by `lumen-paint` (`display_list::split_mixed_runs`) to
+/// classify glyphs per character at paint time (layout itself only needs the
+/// total run advance, not the per-character split).
+pub fn is_cjk(ch: char) -> bool {
     matches!(ch as u32,
         0x3000..=0x303F |
         0x3040..=0x309F |

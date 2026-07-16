@@ -109,11 +109,49 @@ ROADMAP помечает PARTIAL «дошить Phase 2 vertical inline flow». 
 **Остаток:** Срез 3 (mixed/upright различение), Срез 4 (BUG-264 реордер,
 опц.), Срез 5 (graphic-тест) — не начаты.
 
+## Progress (2026-07-16) — Срез 3 (mixed/upright различение) DONE
+
+Per-glyph split для `text-orientation: mixed` в обоих боевых бэкендах (CPU +
+wgpu): `lumen_layout::vertical::is_cjk` сделан `pub` (был `pub(crate)`,
+использовался только внутри layout); `display_list::split_mixed_runs`
+классифицирует строку на `MixedSegment::Cjk(char)` (изолированный идеограф)
+и `MixedSegment::Other(String)` (прогон подряд идущих не-CJK символов —
+шейпится целиком, чтобы не потерять кернинг/лигатуры латиницы).
+
+- **CPU** (`cpu_raster.rs::rasterize_text_mixed`): CJK-сегменты рисуются
+  upright — **напрямую** в целевой `pixmap` при реальном `rect.y + y_cursor`
+  (без поворота, как обычный горизонтальный путь); не-CJK сегменты — через
+  локальный full-canvas буфер + поворот на 90° CW (как `rasterize_text_rotated`,
+  срез 1).
+- **wgpu** (`renderer.rs::push_text_glyphs_mixed`): симметрично —
+  `push_text_glyphs` для CJK пишет квады прямо в целевой `dest_rect` со
+  сдвигом по колонке; не-CJK — в локальный origin `(0,0)` + `rotate_text_vertices_cw`.
+- **Найден и исправлен баг в процессе ревью этого среза** (до коммита):
+  первая версия CPU-пути рендерила upright-CJK-сегмент через тот же
+  локальный full-canvas буфер с `local_rect.y = 0`, что и non-CJK-ветка, а
+  затем транслировала на `rect.y + y_cursor`. Для CJK это ломает рендер —
+  визуальный bbox идеографа нередко выше, чем ascent-метрика, на которой
+  основана базовая линия (`baseline_y = rect.y + font_size * ascent_ratio`);
+  при `local_rect.y = 0` верх глифа уходит в отрицательные Y и обрезается
+  границей канваса ДО трансляции — итоговый глиф оказывается обрезан сверху
+  на любом рендере, не только у края страницы. Тест
+  `draw_text_mixed_keeps_cjk_upright` это ловил (ink bbox `(9,1,19,36)` против
+  ожидаемого `(9,4,19,36)` — расхождение ровно на `rect.y`). Фикс: upright-ветка
+  вызывает `rasterize_text` напрямую на `pixmap` с настоящим `rect.y + y_cursor`
+  (как это уже делает wgpu-путь `push_text_glyphs_mixed`), без промежуточного
+  буфера — багу неоткуда взяться, т.к. нет фазы «рендер в (0,0) → перенос».
+- Тесты: `draw_text_mixed_keeps_cjk_upright` (CPU, CJK == horizontal
+  bbox — не повёрнут), `draw_text_mixed_rotates_latin_run` (CPU, Latin ==
+  sideways bbox — повёрнут), `split_mixed_runs_*` (3 теста на классификацию
+  сегментов в `display_list.rs`).
+
+**Остаток:** Срез 4 (BUG-264 реордер, опц.), Срез 5 (graphic-тест) — не начаты.
+
 ## Definition of done
 
 - [x] Глифы реально повёрнуты/upright в CPU-рендерере (срез 1)
 - [x] Глифы реально повёрнуты/upright в wgpu-рендерере — live default бэкенд, ADR-017 (срез 2; femtovg fallback остаётся ⬜, вне скоупа)
-- [ ] `mixed`/`upright`/`sideways` дают разный визуальный результат (срез 3)
+- [x] `mixed`/`upright`/`sideways` дают разный визуальный результат (срез 3)
 - [ ] BUG-264 (layout-часть) закрыт, `#[allow(items_after_test_module)]` снят (срез 4, опц.)
 - [ ] `cargo clippy -p lumen-paint --all-targets -- -D warnings` и `-p lumen-layout` чистые
 - [ ] Graphic-тест зелёный/оформлен debtor; `COVERAGE.md` + `run.py` обновлены

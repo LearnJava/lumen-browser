@@ -1138,6 +1138,46 @@ fn fit_with_ratio(iw: f32, ih: f32, bw: f32, bh: f32, cover: bool) -> (f32, f32)
     (iw * s, ih * s)
 }
 
+/// One classified run of a `text-orientation: mixed` string (CSS Writing
+/// Modes L4 §4): a CJK ideograph paints upright (no rotation, stacked below
+/// the previous glyph); a run of consecutive non-CJK characters (Latin,
+/// digits, punctuation, whitespace) paints as one rotated block so kerning
+/// and ligatures inside a Latin word stay intact. Produced by
+/// [`split_mixed_runs`]; consumed by the CPU rasterizer
+/// (`cpu_raster::rasterize_text_mixed`) and the wgpu renderer
+/// (`renderer::push_text_glyphs_mixed`) — both backends that actually rotate
+/// glyphs (femtovg still ignores `text_orientation` entirely, out of scope
+/// per `docs/tasks/ph3-writing-mode-vertical.md`).
+#[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+pub(crate) enum MixedSegment {
+    /// A single CJK ideograph, rendered upright.
+    Cjk(char),
+    /// A run of consecutive non-CJK characters, rendered as one rotated block.
+    Other(String),
+}
+
+/// Splits `text` into [`MixedSegment`]s for `text-orientation: mixed` paint —
+/// see that type's docs for the CJK/Latin split rule.
+#[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+pub(crate) fn split_mixed_runs(text: &str) -> Vec<MixedSegment> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    for ch in text.chars() {
+        if lumen_layout::vertical::is_cjk(ch) {
+            if !buf.is_empty() {
+                out.push(MixedSegment::Other(std::mem::take(&mut buf)));
+            }
+            out.push(MixedSegment::Cjk(ch));
+        } else {
+            buf.push(ch);
+        }
+    }
+    if !buf.is_empty() {
+        out.push(MixedSegment::Other(buf));
+    }
+    out
+}
+
 /// Tile geometry for a background image from `background-size` /
 /// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
 ///
@@ -8817,6 +8857,43 @@ mod tests {
         ] {
             assert!(cmd.cull_rect().is_none(), "structural cmd must be un-cullable: {}", cmd.variant_name());
         }
+    }
+
+    // ── Ph3 writing-mode vertical, Срез 3: `text-orientation: mixed` split ──
+    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+    #[test]
+    fn split_mixed_runs_groups_consecutive_non_cjk_and_isolates_cjk() {
+        let segs = split_mixed_runs("Hi日本Bye");
+        let described: Vec<(bool, String)> = segs
+            .into_iter()
+            .map(|s| match s {
+                MixedSegment::Cjk(ch) => (true, ch.to_string()),
+                MixedSegment::Other(s) => (false, s),
+            })
+            .collect();
+        assert_eq!(
+            described,
+            vec![
+                (false, "Hi".to_string()),
+                (true, "日".to_string()),
+                (true, "本".to_string()),
+                (false, "Bye".to_string()),
+            ],
+        );
+    }
+
+    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+    #[test]
+    fn split_mixed_runs_pure_latin_is_one_segment() {
+        let segs = split_mixed_runs("Hello, world!");
+        assert_eq!(segs.len(), 1);
+        assert!(matches!(&segs[0], MixedSegment::Other(s) if s == "Hello, world!"));
+    }
+
+    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+    #[test]
+    fn split_mixed_runs_empty_text_is_empty() {
+        assert!(split_mixed_runs("").is_empty());
     }
 
     // ── CSS Backgrounds L3 §3.4: `background-repeat: round` tile rescale ────
