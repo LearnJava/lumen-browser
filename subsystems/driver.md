@@ -60,6 +60,15 @@ headless pipeline without winit/wgpu/ffmpeg.
   fingerprint-isolation methods are local stub defaults (documented per-method) — the
   automation channel doesn't carry those commands yet.
 
+- DEVX-2: non-pixel golden regression layer (`crates/driver/tests/cases/test_devx2_golden.rs`),
+  modeled on `graphic_tests` but asserted through `BrowserSession` (`layout_box_by_selector`,
+  `computed_style_snapshot`, `query_a11y`/`query_a11y_all`) instead of pixel diffing — runs via
+  `cargo test -p lumen-driver`, no GPU/Edge. Fixtures: `crates/driver/tests/fixtures/golden-*.html`
+  (container/flex geometry, cascade specificity + inheritance, form-control accessible roles).
+  Surfaced [BUG-294](../bugs/BUG-294-OPEN.md) (flex-item `margin-left` double-applied in
+  `lay_out_flex`'s row branch) — the fixture uses `gap` instead of per-item `margin` to avoid
+  baking that bug into the golden baseline.
+
 ## Deferred
 
 - `InProcessSession::screenshot()` — returns Err; use `screenshot_cpu_rgba/png` (feature `cpu-render`) for deterministic CPU snapshots. GPU readback path planned for 8A.5+.
