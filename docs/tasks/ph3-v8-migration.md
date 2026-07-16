@@ -617,8 +617,8 @@ new v8-default binary: 141/141 green (first attempt hit the known TEST-00 gdigra
 **React 18 CRA DoD item — partially verified, 2 pre-existing bugs found and filed, not fixed here**:
 downloaded the real `react@18`/`react-dom@18` UMD production builds (`unpkg.com`) and built a self-contained
 smoke-test page. First attempt (bare `React`/`ReactDOM` identifiers, as real `<script>`-tag usage would be)
-hit [BUG-280](../../bugs/BUG-280-OPEN.md) (`window` is a plain object, not the real global object — already
-filed, P2 in progress) — rewrote the test to reference `window.React`/`window.ReactDOM` explicitly (what an
+hit [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` is a plain object, not the real global object — already
+filed, P2 in progress at the time, fixed 2026-07-16) — rewrote the test to reference `window.React`/`window.ReactDOM` explicitly (what an
 actually-bundled CRA build's webpack closures would do, since they never rely on the browser's bare-global
 machinery) to isolate a *different* bug: `ReactDOM.createRoot(...).render(...)` throws inside react-dom's
 event-delegation bootstrap (`Cannot read properties of undefined (reading '_reactListening<rnd>')`).
