@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-16",
+ "generated": "2026-07-17",
  "counts": {
   "open": 31,
   "fixed": 235,
@@ -1083,8 +1083,8 @@
     {
      "id": "P3-pointerfull",
      "title": "Pointer Events L3 (coalesced / predicted events)",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): base PointerEvent L2 работает; дошить — L3 getCoalescedEvents/getPredictedEvents (сейчас возвращают [])"
+     "status": "done",
+     "note": "реализовано (2026-07-17): shell копит CursorMoved-сэмплы между кадрами, флашит через _lumen_dispatch_pointer_move_coalesced — реальный getCoalescedEvents() (главное событие последним) + линейная экстраполяция getPredictedEvents(); docs/tasks/ph3-pointer-events-l3.md"
     },
     {
      "id": "P3-compressionstream",

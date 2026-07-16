@@ -1,5 +1,28 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Done (Pointer Events L3 coalesced/predicted moves, `P3-pointerfull`, 2026-07-17):**
+  discovered while scoping the task that real `CursorMoved` never dispatched a
+  continuous `pointermove`/`mousemove` at all — only hover-boundary events
+  (`pointerover`/`out`/`enter`/`leave`); the only path that fired `pointermove`
+  was the automation-injected `dispatch_mouse_move` (`InputCommand::MouseMove`).
+  New `Lumen::pending_pointer_moves: Vec<(f32, f32)>` buffers every raw
+  `CursorMoved` CSS-px sample (queued in the `:hover`-tracking block, after the
+  panel-resize/DnD/Pointer-Lock early returns). New `flush_pointer_moves()`
+  hit-tests the *last* buffered point (mirrors `dispatch_mouse_move`, including
+  `pointer_capture_nid()` redirect), serializes the whole batch to a `[[x,y],...]`
+  JSON array and calls the new JS shim `_lumen_dispatch_pointer_move_coalesced`
+  (`crates/js/src/dom.rs`) — one `PointerEvent` per point, main event = last
+  point, `getCoalescedEvents()` returns the full list (main last, by reference),
+  `getPredictedEvents()` linearly extrapolates 2 points from the last two
+  samples' velocity. Flushed once per `about_to_wait` tick ("once per frame")
+  and pre-emptively before `pointerdown`/`pointerup`/hover-boundary
+  crossings/`CursorLeft` so dispatch order stays chronological. The older
+  `_lumen_dispatch_pointer_event`'s `getCoalescedEvents() => [ev]` stub was
+  left as-is for non-move types (down/up/enter/leave/over/out) and one-off
+  synthetic pointermove (pointer-lock, automation) — already spec-correct for
+  a genuinely single event, not a placeholder. 3 new JS tests
+  (`pointer_move_coalesced_dispatch_*`), green on default (QuickJS) and
+  `--features v8-backend`. `docs/tasks/ph3-pointer-events-l3.md`.
 - **Done (V8 cutover — Ph3-v8-migration S12a, 2026-07-14, ADR-018):** `default` feature
   flipped from `quickjs` to `v8` in `crates/shell/Cargo.toml` — a default `cargo build`/
   `cargo run -p lumen-shell` now runs V8, not QuickJS (supersedes the "default already
