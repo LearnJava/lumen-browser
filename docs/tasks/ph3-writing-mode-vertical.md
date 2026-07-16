@@ -145,14 +145,26 @@ wgpu): `lumen_layout::vertical::is_cjk` сделан `pub` (был `pub(crate)`,
   sideways bbox — повёрнут), `split_mixed_runs_*` (3 теста на классификацию
   сегментов в `display_list.rs`).
 
-**Остаток:** Срез 4 (BUG-264 реордер, опц.), Срез 5 (graphic-тест) — не начаты.
+## Progress (2026-07-16) — Срез 4 (BUG-264 реордер) DONE
+
+`lay_out_vertical_inline_run` / `wrap_inline_run_vertical` перенесены в
+`vertical.rs` ДО `#[cfg(test)] mod tests`; снят
+`#[allow(clippy::items_after_test_module)]` и комментарий-обоснование BUG-264.
+Заодно переписаны шапки, ссылавшиеся на устаревшее «Срез 2+, pending»/«Срез
+1» — `vertical.rs:10` и дispatch-комментарий в `box_tree.rs` (блок vertical
+block) теперь отражают, что оба боевых бэкенда (CPU, wgpu) honour
+`text_orientation` целиком, включая `mixed`-split. Layout-часть BUG-264
+закрыта; wgpu/cpu_raster-часть (P5) была отдельным пунктом и не в скоупе этой
+задачи.
+
+**Остаток:** Срез 5 (graphic-тест) — не начат.
 
 ## Definition of done
 
 - [x] Глифы реально повёрнуты/upright в CPU-рендерере (срез 1)
 - [x] Глифы реально повёрнуты/upright в wgpu-рендерере — live default бэкенд, ADR-017 (срез 2; femtovg fallback остаётся ⬜, вне скоупа)
 - [x] `mixed`/`upright`/`sideways` дают разный визуальный результат (срез 3)
-- [ ] BUG-264 (layout-часть) закрыт, `#[allow(items_after_test_module)]` снят (срез 4, опц.)
+- [x] BUG-264 (layout-часть) закрыт, `#[allow(items_after_test_module)]` снят (срез 4)
 - [ ] `cargo clippy -p lumen-paint --all-targets -- -D warnings` и `-p lumen-layout` чистые
 - [ ] Graphic-тест зелёный/оформлен debtor; `COVERAGE.md` + `run.py` обновлены
 - [ ] `CSS-SPECS.md:104/645` (`writing-mode` vertical → ✅ layout+paint) и `CAPABILITIES.md` обновлены; шапки `vertical.rs:10` («Phase 2 tasks») и `box_tree.rs:5315` переписаны

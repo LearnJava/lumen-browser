@@ -14,9 +14,11 @@
 //!
 //! Text orientation (rotating glyphs 90°) is a paint concern
 //! (`docs/tasks/ph3-writing-mode-vertical.md`), not layout: this module only
-//! computes column positions. The CPU rasterizer honors `text_orientation`
-//! (Срез 1); the wgpu and femtovg backends still draw every run horizontally
-//! regardless of orientation (Срезы 2+, pending).
+//! computes column positions. Both the CPU rasterizer and the wgpu renderer
+//! (live default backend, ADR-017) honor `text_orientation`, including the
+//! per-glyph `mixed` CJK-upright/Latin-rotated split (`is_cjk`, below); the
+//! femtovg fallback backend still draws every run horizontally regardless of
+//! orientation (out of scope, see the task doc).
 //!
 //! Algorithm sketch (vertical-rl):
 //! 1. Inline-size (physical height) comes from CSS `height` or `available_height`.
@@ -288,222 +290,6 @@ fn shift_subtree_x(b: &mut LayoutBox, dx: f32) {
     }
 }
 
-// BUG-264 (lumen-layout portion): `lay_out_vertical_inline_run` / `wrap_inline_run_vertical`
-// are declared after this test module (P3-vertical Phase 2 layout), tripping
-// `clippy::items_after_test_module` and blocking the `-p lumen-layout --all-targets`
-// finish gate for every role. Suppressing here is the idiomatic non-functional unblock
-// (same class as BUG-263's `too_many_arguments` allows); reordering the functions is
-// deferred. The wgpu/cpu_raster pieces of BUG-264 stay OPEN (lumen-paint, P5).
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use lumen_core::geom::Size;
-
-    use super::*;
-    use crate::BoxKind;
-
-    fn lay(html: &str, css: &str) -> LayoutBox {
-        let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
-        crate::box_tree::layout(&doc, &sheet, Size::new(800.0, 600.0))
-    }
-
-    /// Walk the tree to find the first descendant `Block` element whose style
-    /// has the requested writing mode set (i.e. the test's `<div>` under test).
-    fn find_vertical_block(b: &LayoutBox) -> Option<&LayoutBox> {
-        if matches!(b.kind, BoxKind::Block)
-            && !matches!(b.style.writing_mode, WritingMode::HorizontalTb)
-        {
-            return Some(b);
-        }
-        for c in &b.children {
-            if let Some(found) = find_vertical_block(c) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
-    fn first_non_skip_child(b: &LayoutBox) -> Option<&LayoutBox> {
-        b.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip))
-    }
-
-    #[test]
-    fn vertical_rl_container_height_is_inline_size() {
-        let root = lay(
-            "<div id=v><div></div></div>",
-            "#v { writing-mode: vertical-rl; height: 200px; width: 300px; }",
-        );
-        let v = find_vertical_block(&root).expect("vertical block missing");
-        assert!(
-            (v.rect.height - 200.0).abs() < 0.5,
-            "expected physical height 200 (CSS height = inline-size), got {}",
-            v.rect.height,
-        );
-        assert!(
-            (v.rect.width - 300.0).abs() < 0.5,
-            "expected physical width 300 (CSS width = block-size), got {}",
-            v.rect.width,
-        );
-    }
-
-    #[test]
-    fn vertical_lr_container_height_is_inline_size() {
-        let root = lay(
-            "<div id=v><div></div></div>",
-            "#v { writing-mode: vertical-lr; height: 250px; width: 120px; }",
-        );
-        let v = find_vertical_block(&root).expect("vertical block missing");
-        assert!(
-            (v.rect.height - 250.0).abs() < 0.5,
-            "expected physical height 250, got {}",
-            v.rect.height,
-        );
-        assert!(
-            (v.rect.width - 120.0).abs() < 0.5,
-            "expected physical width 120, got {}",
-            v.rect.width,
-        );
-    }
-
-    #[test]
-    fn vertical_rl_single_child_fills_inline_extent() {
-        // Single child with no explicit height should fill the parent's
-        // inline-size (= parent's physical height = 200px).
-        let root = lay(
-            "<div id=v><div class=c></div></div>",
-            "#v { writing-mode: vertical-rl; height: 200px; width: 100px; } \
-             .c { width: 40px; }",
-        );
-        let v = find_vertical_block(&root).expect("vertical block missing");
-        let c = first_non_skip_child(v).expect("child missing");
-        assert!(
-            (c.rect.height - 200.0).abs() < 0.5,
-            "child should fill parent's inline-size (200), got {}",
-            c.rect.height,
-        );
-    }
-
-    #[test]
-    fn vertical_rl_children_stack_right_to_left() {
-        let root = lay(
-            "<div id=v><div class=a></div><div class=b></div></div>",
-            "#v { writing-mode: vertical-rl; height: 100px; width: 200px; } \
-             .a { width: 50px; } .b { width: 50px; }",
-        );
-        let v = find_vertical_block(&root).expect("vertical block missing");
-        let kids: Vec<&LayoutBox> = v
-            .children
-            .iter()
-            .filter(|c| !matches!(c.kind, BoxKind::Skip))
-            .collect();
-        assert!(kids.len() >= 2, "expected at least 2 children");
-        // First child (.a) should be to the right of the second (.b).
-        assert!(
-            kids[0].rect.x > kids[1].rect.x,
-            "vertical-rl: first child should be rightmost, got a.x={} b.x={}",
-            kids[0].rect.x,
-            kids[1].rect.x,
-        );
-    }
-
-    #[test]
-    fn vertical_lr_children_stack_left_to_right() {
-        let root = lay(
-            "<div id=v><div class=a></div><div class=b></div></div>",
-            "#v { writing-mode: vertical-lr; height: 100px; width: 200px; } \
-             .a { width: 50px; } .b { width: 50px; }",
-        );
-        let v = find_vertical_block(&root).expect("vertical block missing");
-        let kids: Vec<&LayoutBox> = v
-            .children
-            .iter()
-            .filter(|c| !matches!(c.kind, BoxKind::Skip))
-            .collect();
-        assert!(kids.len() >= 2, "expected at least 2 children");
-        // First child (.a) should be to the left of the second (.b).
-        assert!(
-            kids[0].rect.x < kids[1].rect.x,
-            "vertical-lr: first child should be leftmost, got a.x={} b.x={}",
-            kids[0].rect.x,
-            kids[1].rect.x,
-        );
-    }
-
-    #[test]
-    fn vertical_rl_explicit_child_block_size() {
-        let root = lay(
-            "<div id=v><div class=c></div></div>",
-            "#v { writing-mode: vertical-rl; height: 100px; width: 200px; } \
-             .c { width: 60px; }",
-        );
-        let v = find_vertical_block(&root).expect("vertical block missing");
-        let c = first_non_skip_child(v).expect("child missing");
-        // Child inherits writing-mode from parent; its CSS width (60) is its
-        // block-size = physical width.
-        assert!(
-            (c.rect.width - 60.0).abs() < 0.5,
-            "child explicit width 60 should yield physical width 60, got {}",
-            c.rect.width,
-        );
-    }
-
-    #[test]
-    fn vertical_rl_auto_container_width_grows() {
-        // No explicit width on the container; physical width should equal the
-        // sum of children's physical widths (here 40+30 = 70).
-        let root = lay(
-            "<div id=v><div class=a></div><div class=b></div></div>",
-            "#v { writing-mode: vertical-rl; height: 100px; } \
-             .a { width: 40px; } .b { width: 30px; }",
-        );
-        let v = find_vertical_block(&root).expect("vertical block missing");
-        assert!(
-            (v.rect.width - 70.0).abs() < 0.5,
-            "auto-width container should shrink-to-fit children (70), got {}",
-            v.rect.width,
-        );
-    }
-
-    #[test]
-    fn vertical_rl_nested_containers() {
-        // Outer vertical-rl with two children; the second child is itself a
-        // vertical-rl block. Both inner and outer should layout independently
-        // without panicking, and the inner container should have a sensible
-        // physical size.
-        let root = lay(
-            "<div id=v><div class=a></div><div id=inner><div class=ic></div></div></div>",
-            "#v { writing-mode: vertical-rl; height: 200px; width: 300px; } \
-             .a { width: 50px; } \
-             #inner { writing-mode: vertical-rl; height: 100px; width: 80px; } \
-             .ic { width: 25px; }",
-        );
-        let v = find_vertical_block(&root).expect("outer vertical block missing");
-        // Outer must have explicit physical size (300×200).
-        assert!((v.rect.width - 300.0).abs() < 0.5);
-        assert!((v.rect.height - 200.0).abs() < 0.5);
-        // The second child (#inner) must have its own explicit physical size (80×100).
-        let kids: Vec<&LayoutBox> = v
-            .children
-            .iter()
-            .filter(|c| !matches!(c.kind, BoxKind::Skip))
-            .collect();
-        assert!(kids.len() >= 2, "expected at least 2 children, got {}", kids.len());
-        let inner = kids[1];
-        assert!(
-            (inner.rect.width - 80.0).abs() < 0.5,
-            "inner #inner physical width should be 80, got {}",
-            inner.rect.width,
-        );
-        assert!(
-            (inner.rect.height - 100.0).abs() < 0.5,
-            "inner #inner physical height should be 100, got {}",
-            inner.rect.height,
-        );
-    }
-}
-
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lay_out_vertical_inline_run(
     b: &mut LayoutBox,
@@ -760,3 +546,210 @@ pub(crate) fn wrap_inline_run_vertical(
     result
 }
 
+#[cfg(test)]
+mod tests {
+    use lumen_core::geom::Size;
+
+    use super::*;
+    use crate::BoxKind;
+
+    fn lay(html: &str, css: &str) -> LayoutBox {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        crate::box_tree::layout(&doc, &sheet, Size::new(800.0, 600.0))
+    }
+
+    /// Walk the tree to find the first descendant `Block` element whose style
+    /// has the requested writing mode set (i.e. the test's `<div>` under test).
+    fn find_vertical_block(b: &LayoutBox) -> Option<&LayoutBox> {
+        if matches!(b.kind, BoxKind::Block)
+            && !matches!(b.style.writing_mode, WritingMode::HorizontalTb)
+        {
+            return Some(b);
+        }
+        for c in &b.children {
+            if let Some(found) = find_vertical_block(c) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    fn first_non_skip_child(b: &LayoutBox) -> Option<&LayoutBox> {
+        b.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip))
+    }
+
+    #[test]
+    fn vertical_rl_container_height_is_inline_size() {
+        let root = lay(
+            "<div id=v><div></div></div>",
+            "#v { writing-mode: vertical-rl; height: 200px; width: 300px; }",
+        );
+        let v = find_vertical_block(&root).expect("vertical block missing");
+        assert!(
+            (v.rect.height - 200.0).abs() < 0.5,
+            "expected physical height 200 (CSS height = inline-size), got {}",
+            v.rect.height,
+        );
+        assert!(
+            (v.rect.width - 300.0).abs() < 0.5,
+            "expected physical width 300 (CSS width = block-size), got {}",
+            v.rect.width,
+        );
+    }
+
+    #[test]
+    fn vertical_lr_container_height_is_inline_size() {
+        let root = lay(
+            "<div id=v><div></div></div>",
+            "#v { writing-mode: vertical-lr; height: 250px; width: 120px; }",
+        );
+        let v = find_vertical_block(&root).expect("vertical block missing");
+        assert!(
+            (v.rect.height - 250.0).abs() < 0.5,
+            "expected physical height 250, got {}",
+            v.rect.height,
+        );
+        assert!(
+            (v.rect.width - 120.0).abs() < 0.5,
+            "expected physical width 120, got {}",
+            v.rect.width,
+        );
+    }
+
+    #[test]
+    fn vertical_rl_single_child_fills_inline_extent() {
+        // Single child with no explicit height should fill the parent's
+        // inline-size (= parent's physical height = 200px).
+        let root = lay(
+            "<div id=v><div class=c></div></div>",
+            "#v { writing-mode: vertical-rl; height: 200px; width: 100px; } \
+             .c { width: 40px; }",
+        );
+        let v = find_vertical_block(&root).expect("vertical block missing");
+        let c = first_non_skip_child(v).expect("child missing");
+        assert!(
+            (c.rect.height - 200.0).abs() < 0.5,
+            "child should fill parent's inline-size (200), got {}",
+            c.rect.height,
+        );
+    }
+
+    #[test]
+    fn vertical_rl_children_stack_right_to_left() {
+        let root = lay(
+            "<div id=v><div class=a></div><div class=b></div></div>",
+            "#v { writing-mode: vertical-rl; height: 100px; width: 200px; } \
+             .a { width: 50px; } .b { width: 50px; }",
+        );
+        let v = find_vertical_block(&root).expect("vertical block missing");
+        let kids: Vec<&LayoutBox> = v
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        assert!(kids.len() >= 2, "expected at least 2 children");
+        // First child (.a) should be to the right of the second (.b).
+        assert!(
+            kids[0].rect.x > kids[1].rect.x,
+            "vertical-rl: first child should be rightmost, got a.x={} b.x={}",
+            kids[0].rect.x,
+            kids[1].rect.x,
+        );
+    }
+
+    #[test]
+    fn vertical_lr_children_stack_left_to_right() {
+        let root = lay(
+            "<div id=v><div class=a></div><div class=b></div></div>",
+            "#v { writing-mode: vertical-lr; height: 100px; width: 200px; } \
+             .a { width: 50px; } .b { width: 50px; }",
+        );
+        let v = find_vertical_block(&root).expect("vertical block missing");
+        let kids: Vec<&LayoutBox> = v
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        assert!(kids.len() >= 2, "expected at least 2 children");
+        // First child (.a) should be to the left of the second (.b).
+        assert!(
+            kids[0].rect.x < kids[1].rect.x,
+            "vertical-lr: first child should be leftmost, got a.x={} b.x={}",
+            kids[0].rect.x,
+            kids[1].rect.x,
+        );
+    }
+
+    #[test]
+    fn vertical_rl_explicit_child_block_size() {
+        let root = lay(
+            "<div id=v><div class=c></div></div>",
+            "#v { writing-mode: vertical-rl; height: 100px; width: 200px; } \
+             .c { width: 60px; }",
+        );
+        let v = find_vertical_block(&root).expect("vertical block missing");
+        let c = first_non_skip_child(v).expect("child missing");
+        // Child inherits writing-mode from parent; its CSS width (60) is its
+        // block-size = physical width.
+        assert!(
+            (c.rect.width - 60.0).abs() < 0.5,
+            "child explicit width 60 should yield physical width 60, got {}",
+            c.rect.width,
+        );
+    }
+
+    #[test]
+    fn vertical_rl_auto_container_width_grows() {
+        // No explicit width on the container; physical width should equal the
+        // sum of children's physical widths (here 40+30 = 70).
+        let root = lay(
+            "<div id=v><div class=a></div><div class=b></div></div>",
+            "#v { writing-mode: vertical-rl; height: 100px; } \
+             .a { width: 40px; } .b { width: 30px; }",
+        );
+        let v = find_vertical_block(&root).expect("vertical block missing");
+        assert!(
+            (v.rect.width - 70.0).abs() < 0.5,
+            "auto-width container should shrink-to-fit children (70), got {}",
+            v.rect.width,
+        );
+    }
+
+    #[test]
+    fn vertical_rl_nested_containers() {
+        // Outer vertical-rl with two children; the second child is itself a
+        // vertical-rl block. Both inner and outer should layout independently
+        // without panicking, and the inner container should have a sensible
+        // physical size.
+        let root = lay(
+            "<div id=v><div class=a></div><div id=inner><div class=ic></div></div></div>",
+            "#v { writing-mode: vertical-rl; height: 200px; width: 300px; } \
+             .a { width: 50px; } \
+             #inner { writing-mode: vertical-rl; height: 100px; width: 80px; } \
+             .ic { width: 25px; }",
+        );
+        let v = find_vertical_block(&root).expect("outer vertical block missing");
+        // Outer must have explicit physical size (300×200).
+        assert!((v.rect.width - 300.0).abs() < 0.5);
+        assert!((v.rect.height - 200.0).abs() < 0.5);
+        // The second child (#inner) must have its own explicit physical size (80×100).
+        let kids: Vec<&LayoutBox> = v
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        assert!(kids.len() >= 2, "expected at least 2 children, got {}", kids.len());
+        let inner = kids[1];
+        assert!(
+            (inner.rect.width - 80.0).abs() < 0.5,
+            "inner #inner physical width should be 80, got {}",
+            inner.rect.width,
+        );
+        assert!(
+            (inner.rect.height - 100.0).abs() < 0.5,
+            "inner #inner physical height should be 100, got {}",
+            inner.rect.height,
+        );
+    }
+}
