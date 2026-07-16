@@ -573,7 +573,12 @@ pub enum DisplayCommand {
     /// Phase 0: renderer отслеживает стек через `current_blend_mode()`,
     /// но использует Normal pipeline для всех режимов; реальный pipeline
     /// switch — P2 1B.4.
-    PushBlendMode { mode: BlendMode },
+    ///
+    /// `bounds` — document-space CSS px bbox of the element this group
+    /// belongs to (same convention as [`Self::PushFilter`]/
+    /// [`Self::PushBackdropFilter`]). BUG-273 срез 1: backends use it to skip
+    /// the whole offscreen-composite bracket when it lands outside the viewport.
+    PushBlendMode { mode: BlendMode, bounds: Rect },
     /// Закрывает blend-группу.
     PopBlendMode,
     /// Рисует ранее загруженный GPU-снимок слоя (см. `Renderer::upload_layer_snapshot`)
@@ -2598,8 +2603,11 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::PopOpacity => {
                 out.push_str("PopOpacity\n");
             }
-            DisplayCommand::PushBlendMode { mode } => {
-                out.push_str(&format!("PushBlendMode {}\n", blend_mode_name(*mode)));
+            DisplayCommand::PushBlendMode { mode, bounds } => {
+                out.push_str(&format!(
+                    "PushBlendMode {} bounds=({:.0},{:.0},{:.0},{:.0})\n",
+                    blend_mode_name(*mode), bounds.x, bounds.y, bounds.width, bounds.height,
+                ));
             }
             DisplayCommand::PopBlendMode => {
                 out.push_str("PopBlendMode\n");
@@ -3866,6 +3874,7 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
     if s.mix_blend_mode != LayoutBlendMode::Normal {
         pre.push(DisplayCommand::PushBlendMode {
             mode: map_blend_mode(s.mix_blend_mode),
+            bounds: b.rect,
         });
         post.push(DisplayCommand::PopBlendMode);
     }
@@ -4682,7 +4691,7 @@ fn emit_background_layer(
     let origin = background_origin_rect(b, layer.origin);
     let use_blend = !suppress_blend && layer.blend_mode != LayoutBlendMode::Normal;
     if use_blend {
-        out.push(DisplayCommand::PushBlendMode { mode: map_blend_mode(layer.blend_mode) });
+        out.push(DisplayCommand::PushBlendMode { mode: map_blend_mode(layer.blend_mode), bounds: clip });
     }
     match &layer.image {
         BackgroundImage::Url(src) if !src.is_empty() => {
@@ -7080,6 +7089,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             if has_blend {
                 out.push(DisplayCommand::PushBlendMode {
                     mode: map_blend_mode(b.style.mix_blend_mode),
+                    bounds: b.rect,
                 });
             }
             // CSS Color L3 §3: opacity < 1.0 creates compositing layer.
@@ -11328,8 +11338,12 @@ mod tests {
     fn push_blend_mode_serializes_with_name() {
         let dl = vec![DisplayCommand::PushBlendMode {
             mode: BlendMode::Multiply,
+            bounds: Rect::new(0.0, 0.0, 10.0, 20.0),
         }];
-        assert_eq!(serialize_display_list(&dl), "PushBlendMode multiply\n");
+        assert_eq!(
+            serialize_display_list(&dl),
+            "PushBlendMode multiply bounds=(0,0,10,20)\n",
+        );
     }
 
     #[test]
@@ -11995,7 +12009,7 @@ mod tests {
         let pushes: Vec<_> = dl
             .iter()
             .filter_map(|c| match c {
-                DisplayCommand::PushBlendMode { mode } => Some(*mode),
+                DisplayCommand::PushBlendMode { mode, .. } => Some(*mode),
                 _ => None,
             })
             .collect();
@@ -14806,7 +14820,7 @@ mod tests {
             r#"<div style="background-image:linear-gradient(red,blue),linear-gradient(green,yellow),linear-gradient(cyan,magenta);background-blend-mode:multiply;width:100px;height:100px"></div>"#,
             "",
         );
-        let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { mode: BlendMode::Multiply })).count();
+        let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { mode: BlendMode::Multiply, .. })).count();
         assert_eq!(push_count, 2, "cycling: 3 layers but bottom-most suppressed → 2 PushBlendMode");
     }
 

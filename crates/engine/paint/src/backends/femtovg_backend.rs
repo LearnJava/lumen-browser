@@ -1759,6 +1759,14 @@ impl FemtovgBackend {
     /// Each range is a self-balanced bracket, so skipping it whole leaves the
     /// canvas stack balanced. Pass an empty slice on the direct path (overlays draw
     /// inline).
+    ///
+    /// BUG-273 срез 1: in addition to `skip`, every `PushFilter` /
+    /// `PushBackdropFilter` / `PushBlendMode` bracket is checked against the
+    /// viewport ([`Self::group_bounds`] + [`Self::is_command_culled`]) as it is
+    /// reached; one that lands fully outside is skipped whole via
+    /// [`Self::matching_close`], avoiding the offscreen layer acquire, the
+    /// children draws, and the CPU-readback composite for content that would
+    /// not have painted a visible pixel this frame.
     fn run_content_pass(
         &mut self,
         content: &[DisplayCommand],
@@ -1791,8 +1799,23 @@ impl FemtovgBackend {
             // Уровень 2: разбивка времени по типам команд (top-8 за кадр).
             let mut per_variant: HashMap<&'static str, (std::time::Duration, u32)> =
                 HashMap::new();
-            for (i, cmd) in content.iter().enumerate() {
+            let mut culled_groups = 0u32;
+            let mut i = 0usize;
+            while i < content.len() {
                 if skip.iter().any(|r| r.contains(&i)) {
+                    i += 1;
+                    continue;
+                }
+                let cmd = &content[i];
+                // BUG-273 срез 1: an offscreen-composite group whose bbox lands
+                // fully outside the viewport paints nothing this frame — skip
+                // the whole bracket (layer acquire, children, composite) rather
+                // than paying for it and discarding the result.
+                if let Some(bounds) = Self::group_bounds(cmd)
+                    && self.is_command_culled(bounds)
+                {
+                    culled_groups += 1;
+                    i = Self::matching_close(content, i) + 1;
                     continue;
                 }
                 let t = std::time::Instant::now();
@@ -1800,6 +1823,7 @@ impl FemtovgBackend {
                 let e = per_variant.entry(cmd.variant_name()).or_default();
                 e.0 += t.elapsed();
                 e.1 += 1;
+                i += 1;
             }
             let mut rows: Vec<_> = per_variant.into_iter().collect();
             rows.sort_by_key(|&(_, (dur, _))| std::cmp::Reverse(dur));
@@ -1808,13 +1832,26 @@ impl FemtovgBackend {
                 .take(8)
                 .map(|(name, (dur, n))| format!("{name} {:.2}ms/{n}", dur.as_secs_f64() * 1000.0))
                 .collect();
-            eprintln!("[frame] top: {}", top.join(", "));
+            eprintln!(
+                "[frame] top: {}, offscreen groups culled: {culled_groups}",
+                top.join(", "),
+            );
         } else {
-            for (i, cmd) in content.iter().enumerate() {
+            let mut i = 0usize;
+            while i < content.len() {
                 if skip.iter().any(|r| r.contains(&i)) {
+                    i += 1;
+                    continue;
+                }
+                let cmd = &content[i];
+                if let Some(bounds) = Self::group_bounds(cmd)
+                    && self.is_command_culled(bounds)
+                {
+                    i = Self::matching_close(content, i) + 1;
                     continue;
                 }
                 self.render_command(cmd);
+                i += 1;
             }
         }
         self.canvas.restore();
@@ -3271,6 +3308,39 @@ impl FemtovgBackend {
             || min_y > self.cull_css_h + slop
     }
 
+    /// BUG-273 срез 1: document-space CSS px bbox of the offscreen-composite
+    /// group a command opens (`PushFilter` / `PushBackdropFilter` /
+    /// `PushBlendMode`), or `None` for anything else / a `PushFilter` with no
+    /// computable bounds. Same coordinate convention as [`DisplayCommand::cull_rect`]
+    /// — a leaf command's own bbox, pre-transform.
+    fn group_bounds(cmd: &DisplayCommand) -> Option<Rect> {
+        match cmd {
+            DisplayCommand::PushFilter { bounds, .. } => *bounds,
+            DisplayCommand::PushBackdropFilter { bounds, .. } => Some(*bounds),
+            DisplayCommand::PushBlendMode { bounds, .. } => Some(*bounds),
+            _ => None,
+        }
+    }
+
+    /// BUG-273 срез 1: index of the command balancing the layer opened at
+    /// `open`, via the same `Push*`/`Pop*` depth accounting
+    /// [`crate::overlay_partition::layer_delta`] uses for overlay brackets.
+    /// Falls back to the last index for a malformed (unclosed) bracket — a
+    /// well-formed display list, the only kind the emitters produce, never
+    /// hits this.
+    fn matching_close(content: &[DisplayCommand], open: usize) -> usize {
+        let mut depth = 1i32;
+        let mut j = open + 1;
+        while j < content.len() {
+            depth += crate::overlay_partition::layer_delta(&content[j]);
+            if depth == 0 {
+                return j;
+            }
+            j += 1;
+        }
+        content.len().saturating_sub(1)
+    }
+
     fn render_command(&mut self, cmd: &DisplayCommand) {
         // ADR-016 M0.2: skip self-contained leaf draws whose box is fully
         // off-screen under the current transform. Structural commands return
@@ -3787,7 +3857,7 @@ impl FemtovgBackend {
             // ── Blend mode (PA-3) ─────────────────────────────────────────────
             // Normal → fast path (SourceOver). PlusLighter → fast path (Lighter).
             // All other CSS blend modes → offscreen CPU compositing via mix_blend_rgba.
-            DisplayCommand::PushBlendMode { mode } => {
+            DisplayCommand::PushBlendMode { mode, .. } => {
                 if *mode == BlendMode::Normal {
                     self.canvas.save();
                     self.layer_stack_depth += 1;
@@ -4752,6 +4822,75 @@ mod tests {
         let flags = offscreen_layer_image_flags();
         assert!(flags.contains(femtovg::ImageFlags::FLIP_Y));
         assert!(flags.contains(femtovg::ImageFlags::PREMULTIPLIED));
+    }
+
+    /// BUG-273 срез 1: `group_bounds` reports the culling bbox only for the three
+    /// offscreen-composite openers, `None` for everything else (including a
+    /// `PushFilter` whose `bounds` is itself `None`).
+    #[test]
+    fn group_bounds_covers_the_three_offscreen_openers() {
+        use lumen_core::geom::Rect;
+        let r = Rect::new(1.0, 2.0, 3.0, 4.0);
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushFilter {
+                filters: vec![],
+                bounds: Some(r),
+            }),
+            Some(r),
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushFilter {
+                filters: vec![],
+                bounds: None,
+            }),
+            None,
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushBackdropFilter {
+                filters: vec![],
+                bounds: r,
+            }),
+            Some(r),
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushBlendMode {
+                mode: BlendMode::Multiply,
+                bounds: r,
+            }),
+            Some(r),
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushOpacity { alpha: 0.5 }),
+            None,
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::FillRect {
+                rect: r,
+                color: lumen_layout::Color { r: 0, g: 0, b: 0, a: 255 },
+            }),
+            None,
+        );
+    }
+
+    /// BUG-273 срез 1: `matching_close` finds the Pop that balances the Push at
+    /// `open`, skipping over any nested brackets (of any kind) in between.
+    #[test]
+    fn matching_close_skips_nested_brackets() {
+        let cmds = vec![
+            DisplayCommand::PushBlendMode {
+                mode: BlendMode::Multiply,
+                bounds: lumen_core::geom::Rect::new(0.0, 0.0, 10.0, 10.0),
+            }, // 0
+            DisplayCommand::PushClipRect { rect: lumen_core::geom::Rect::new(0.0, 0.0, 5.0, 5.0) }, // 1
+            DisplayCommand::PopClip, // 2
+            DisplayCommand::PushOpacity { alpha: 0.5 }, // 3
+            DisplayCommand::PopOpacity, // 4
+            DisplayCommand::PopBlendMode, // 5 — matches index 0
+            DisplayCommand::PopBlendMode, // 6 — unrelated trailing command
+        ];
+        assert_eq!(FemtovgBackend::matching_close(&cmds, 0), 5);
+        // A bracket with no nesting closes at the very next index.
+        assert_eq!(FemtovgBackend::matching_close(&cmds, 1), 2);
     }
 
     /// BUG-249: скруглённый клип (`overflow:hidden` + `border-radius`) теперь
