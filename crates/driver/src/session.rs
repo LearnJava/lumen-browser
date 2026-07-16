@@ -4,7 +4,7 @@
 //! без winit-окна и wgpu-поверхности. Это «базовый клиент» BrowserSession:
 //! все остальные реализации (winit, BiDi) можно строить на тех же примитивах.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use lumen_core::error::{Error, Result};
 use lumen_core::ext::NoopEventSink;
@@ -31,9 +31,17 @@ const DEFAULT_VIEWPORT: Size = Size::new(1024.0, 720.0);
 
 /// Состояние после успешной загрузки страницы.
 struct SessionState {
-    doc: Document,
+    /// DOM документа. За `Mutex`, чтобы `js` (persistent V8 runtime, DEVX-5)
+    /// и `click`/`type_text` мутировали один и тот же документ — в отличие от
+    /// `WinitSession::eval`'а, JS-мутации видны последующим `eval()`-вызовам.
+    doc: Arc<Mutex<Document>>,
     layout_root: LayoutBox,
     flat_tree: lumen_dom::FlatTree,
+    /// Persistent V8 runtime, установленный на `doc` при навигации (DEVX-5).
+    /// Переиспользуется для каждого `eval()` в рамках этой навигации.
+    /// Отсутствует в сборках без `v8-backend` — тогда `eval()` возвращает `Err`.
+    #[cfg(feature = "v8-backend")]
+    js: lumen_js::v8_runtime::V8JsRuntime,
 }
 
 /// Headless in-process сессия браузера.
@@ -257,8 +265,37 @@ impl InProcessSession {
         let measurer = lumen_paint::FontMeasurer::new(&font)
             .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
 
-        let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
-        let flat_tree = lumen_dom::build_flat_tree(&doc);
+        let (layout_root, flat_tree) = {
+            // Layout/flat-tree строятся по снимку документа до его оборачивания
+            // в Arc<Mutex<>> — единственный владелец на этот момент, лишний lock не нужен.
+            let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
+            let flat_tree = lumen_dom::build_flat_tree(&doc);
+            (layout_root, flat_tree)
+        };
+        let doc = Arc::new(Mutex::new(doc));
+
+        // DEVX-5: persistent V8 runtime installed on `doc` — shared by
+        // eval()/click()/type_text() for the lifetime of this navigation.
+        #[cfg(feature = "v8-backend")]
+        let js = {
+            use lumen_js::v8_runtime::V8JsRuntime;
+            let rt = V8JsRuntime::new().map_err(|e| Error::Other(format!("V8 init: {e}")))?;
+            rt.install_dom(
+                Arc::clone(&doc),
+                &url,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .map_err(|e| Error::Other(format!("install_dom: {e}")))?;
+            rt
+        };
 
         // Build property trees (PH1-7): four parallel trees (Transform / Scroll /
         // Effect / Clip) from the completed layout root. Committed to the in-process
@@ -278,7 +315,13 @@ impl InProcessSession {
         self.compositor.flush_pending();
 
         self.current_url = url;
-        self.state = Some(SessionState { doc, layout_root, flat_tree });
+        self.state = Some(SessionState {
+            doc,
+            layout_root,
+            flat_tree,
+            #[cfg(feature = "v8-backend")]
+            js,
+        });
         Ok(())
     }
 
@@ -360,6 +403,16 @@ impl Default for InProcessSession {
 impl BrowserSession for InProcessSession {
     // ── Ресурсы ────────────────────────────────────────────────────────────
 
+    // DEVX-5: headless MCP (`--mcp`/`--mcp-port`) needs a screenshot without a
+    // GPU adapter, so this path prefers the CPU rasterizer (tiny-skia) when
+    // `cpu-render` is compiled in; the GPU headless renderer remains the
+    // fallback for builds without it (e.g. plain `cargo test -p lumen-driver`).
+    #[cfg(feature = "cpu-render")]
+    fn screenshot(&self) -> Result<Vec<u8>> {
+        self.screenshot_cpu_png()
+    }
+
+    #[cfg(not(feature = "cpu-render"))]
     fn screenshot(&self) -> Result<Vec<u8>> {
         let state = self.state()?;
 
@@ -383,7 +436,8 @@ impl BrowserSession for InProcessSession {
 
     fn a11y_tree(&self) -> Result<A11yNode> {
         let state = self.state()?;
-        let ax_tree = lumen_a11y::build_ax_tree(&state.doc, state.doc.root(), &state.flat_tree);
+        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &state.flat_tree);
         Ok(ax_node_to_a11y(&ax_tree.root))
     }
 
@@ -401,14 +455,16 @@ impl BrowserSession for InProcessSession {
 
     fn layout_snapshot(&self) -> Result<Vec<BoxModel>> {
         let state = self.state()?;
+        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
         let mut out = Vec::new();
-        collect_boxes(&state.layout_root, &state.doc, &mut out);
+        collect_boxes(&state.layout_root, &doc, &mut out);
         Ok(out)
     }
 
     fn computed_style(&self, selector: &str) -> Result<Option<ComputedProperties>> {
         let state = self.state()?;
-        let Some(node_id) = find_first_by_selector(&state.doc, selector) else {
+        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let Some(node_id) = find_first_by_selector(&doc, selector) else {
             return Ok(None);
         };
         // Найти LayoutBox для этого node_id.
@@ -428,7 +484,8 @@ impl BrowserSession for InProcessSession {
 
     fn computed_style_snapshot(&self, selector: &str) -> Result<Option<ComputedStyleSnapshot>> {
         let state = self.state()?;
-        Ok(computed_style_by_selector(&state.layout_root, &state.doc, selector))
+        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        Ok(computed_style_by_selector(&state.layout_root, &doc, selector))
     }
 
     fn current_url(&self) -> String {
@@ -465,32 +522,92 @@ impl BrowserSession for InProcessSession {
         self.run_pipeline(&bytes, None, format!("file://{url}"))
     }
 
+    // DEVX-5: headless click semantics (no OS window / no JS event dispatch —
+    // that path is the live shell window). Mirrors `WinitSession::click`: a
+    // real `<a href>` follows the link, a checkbox/radio toggles `checked`.
+    // `Target::Point` has no coordinate→node hit-testing yet, so it's a
+    // harmless no-op (matches pre-DEVX-5 behavior for viewport-only callers).
     fn click(&mut self, target: &Target) -> Result<()> {
-        let state = self.state()?;
-        let _point = resolve_target_point(state, target)?;
-        // Phase 1 (8C): native input injection для mouse click.
-        //
-        // Headless (без JS runtime) может только проверить что элемент найден и виден.
-        // Полный click с JS dispatch требует persistent JS runtime (задача 8A.7).
-        // После интеграции: eval JS код который создаёт mousedown → mouseup → click
-        // через QuickJS eval с isTrusted=true (через специальный JS API).
+        let (Target::Selector(_) | Target::NodeId(_)) = target else {
+            return Ok(());
+        };
+
+        let navigate_url = {
+            let state = self.state()?;
+            let mut doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+            let id = resolve_target_node(&doc, target)?;
+
+            let node = doc.get(id);
+            let is_link = node
+                .element_name()
+                .is_some_and(|n| n.local.eq_ignore_ascii_case("a"));
+            let href = is_link.then(|| node.get_attr("href").map(str::to_owned)).flatten();
+            let input_type = node.input_type();
+
+            if let Some(href) = href
+                && is_navigable_href(&href)
+            {
+                Some(resolve_href(&self.current_url, &href))
+            } else {
+                match input_type {
+                    Some(lumen_dom::InputType::Checkbox) | Some(lumen_dom::InputType::Radio) => {
+                        let node = doc.get_mut(id);
+                        if node.get_attr("checked").is_some() {
+                            remove_attr(node, "checked");
+                        } else {
+                            set_attr(node, "checked", "checked");
+                        }
+                        None
+                    }
+                    _ => None,
+                }
+            }
+        };
+
+        if let Some(url) = navigate_url {
+            return self.navigate(&url);
+        }
         Ok(())
     }
 
+    // DEVX-5: headless keystroke semantics — overwrite the DOM `value`
+    // attribute directly (no separate "clear" command, no per-char
+    // keydown/input/keyup dispatch; that's the live shell window's job).
     fn type_text(&mut self, target: &Target, text: &str) -> Result<()> {
         let state = self.state()?;
-        let _ = resolve_target_point(state, target)?;
-        // Phase 1 (8C): native input injection для keyboard input.
-        //
-        // Headless не может обновить form field state без JS runtime.
-        // После интеграции persistent JS runtime: eval JS для посимвольного ввода
-        // с keydown → input → keyup событиями (isTrusted=true).
-        let _ = text;  // unused in headless mode
+        let mut doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let id = resolve_target_node(&doc, target)?;
+
+        let node = doc.get(id);
+        let is_typeable = node
+            .element_name()
+            .is_some_and(|n| n.local.eq_ignore_ascii_case("textarea"))
+            || matches!(
+                node.input_type(),
+                Some(lumen_dom::InputType::Text)
+                    | Some(lumen_dom::InputType::Password)
+                    | Some(lumen_dom::InputType::Email)
+                    | Some(lumen_dom::InputType::Tel)
+                    | Some(lumen_dom::InputType::Url)
+                    | Some(lumen_dom::InputType::Number)
+                    | Some(lumen_dom::InputType::Search)
+            );
+        if !is_typeable {
+            return Err(Error::Other(
+                "type_text: target не является текстовым input/textarea".into(),
+            ));
+        }
+
+        let node = doc.get_mut(id);
+        set_attr(node, "value", text);
         Ok(())
     }
 
-    fn scroll(&mut self, _target: &Target, _delta: ScrollDelta) -> Result<()> {
-        // Scroll state management — задача 8A.7 (shell-as-driver-client).
+    fn scroll(&mut self, _target: &Target, delta: ScrollDelta) -> Result<()> {
+        // DEVX-5: wire to the existing off-main-thread compositor scroll —
+        // `_target` is unused (matches WinitSession: only page-level scroll
+        // is supported today, no per-element scroll containers).
+        self.scroll_page_by(delta.x, delta.y);
         Ok(())
     }
 
@@ -525,25 +642,38 @@ impl BrowserSession for InProcessSession {
         }
     }
 
+    // DEVX-5: persistent V8 runtime installed on `state.js` at navigation time
+    // (see `run_pipeline`) — reused across every `eval()` call for this
+    // navigation, so JS-side DOM mutations persist between calls (unlike
+    // `WinitSession::eval`'s one-shot runtime).
+    #[cfg(feature = "v8-backend")]
+    fn eval(&self, js: &str) -> Result<String> {
+        use lumen_core::ext::JsRuntime as _;
+
+        let state = self.state()?;
+        let value = state.js.eval(js).map_err(|e| Error::Other(format!("eval: {e}")))?;
+        Ok(value.to_json_string())
+    }
+
+    #[cfg(not(feature = "v8-backend"))]
     fn eval(&self, _js: &str) -> Result<String> {
-        // JS eval через QuickJS — задача persistent-js-runtime (уже в shell).
-        // InProcessSession получит его через задачу 8A.7.
         Err(Error::Other(
-            "eval доступен после интеграции persistent JS runtime (задача 8A.7)".into(),
+            "eval требует пересборку с --features v8-backend".into(),
         ))
     }
 
     fn query(&self, selector: &str) -> Result<Vec<NodeRef>> {
         let state = self.state()?;
-        let ids = find_all_by_selector(&state.doc, selector);
+        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let ids = find_all_by_selector(&doc, selector);
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
-            let node = state.doc.get(id);
+            let node = doc.get(id);
             let tag_name = match &node.data {
                 NodeData::Element { name, .. } => name.local.to_string(),
                 _ => String::new(),
             };
-            let text_content = collect_text(&state.doc, id);
+            let text_content = collect_text(&doc, id);
             let bounding_rect = find_layout_box(&state.layout_root, id)
                 .map(|lb| lb.rect)
                 .unwrap_or(Rect::ZERO);
@@ -559,12 +689,13 @@ impl BrowserSession for InProcessSession {
 
     fn layout_box_by_selector(&self, selector: &str) -> Result<Option<BoxModel>> {
         let state = self.state()?;
-        let Some(lb) = lumen_layout::find_box_by_selector(&state.layout_root, &state.doc, selector) else {
+        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let Some(lb) = lumen_layout::find_box_by_selector(&state.layout_root, &doc, selector) else {
             return Ok(None);
         };
 
         let tag_name = {
-            let node = state.doc.get(lb.node);
+            let node = doc.get(lb.node);
             match &node.data {
                 NodeData::Element { name, .. } => name.local.to_string(),
                 _ => String::new(),
@@ -593,12 +724,13 @@ impl BrowserSession for InProcessSession {
 
     fn all_layout_boxes_by_selector(&self, selector: &str) -> Result<Vec<BoxModel>> {
         let state = self.state()?;
-        let boxes = lumen_layout::find_all_by_selector(&state.layout_root, &state.doc, selector);
+        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let boxes = lumen_layout::find_all_by_selector(&state.layout_root, &doc, selector);
         let mut out = Vec::with_capacity(boxes.len());
 
         for lb in boxes {
             let tag_name = {
-                let node = state.doc.get(lb.node);
+                let node = doc.get(lb.node);
                 match &node.data {
                     NodeData::Element { name, .. } => name.local.to_string(),
                     _ => String::new(),
@@ -690,10 +822,14 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
     }
 
     fn type_text(&mut self, text: &str) -> Result<()> {
-        let state = self.state()?;
         // Найти сфокусированный элемент или первый input.
         let selector = "input:not([type='hidden']), textarea, [contenteditable]";
-        if let Some(node_id) = find_first_by_selector(&state.doc, selector) {
+        let node_id = {
+            let state = self.state()?;
+            let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+            find_first_by_selector(&doc, selector)
+        };
+        if let Some(node_id) = node_id {
             <Self as BrowserSession>::type_text(self, &Target::NodeId(node_id.index() as u32), text)?;
         }
         Ok(())
@@ -1086,27 +1222,77 @@ fn format_length_or_auto(l: &lumen_layout::LengthOrAuto) -> String {
     }
 }
 
-/// Разрешить `Target` в координату точки клика (центр элемента или явная точка).
-fn resolve_target_point(state: &SessionState, target: &Target) -> Result<(f32, f32)> {
+/// Разрешить `Target` в `NodeId` элемента (без требования layout-бокса —
+/// `Target::Point` не может быть разрешён в узел). DEVX-5: параметризована
+/// над `&Document`, а не `&SessionState`, чтобы вызываться под уже взятым
+/// локом `state.doc.lock()` (сам `Mutex` не реентерабелен).
+fn resolve_target_node(doc: &Document, target: &Target) -> Result<NodeId> {
     match target {
-        Target::Point { x, y } => Ok((*x, *y)),
-        Target::Selector(sel) => {
-            let id = find_first_by_selector(&state.doc, sel).ok_or_else(|| {
-                Error::NotFound(format!("элемент не найден: {sel}"))
-            })?;
-            let lb = find_layout_box(&state.layout_root, id).ok_or_else(|| {
-                Error::NotFound(format!("layout-бокс не найден для: {sel}"))
-            })?;
-            Ok((lb.rect.x + lb.rect.width / 2.0, lb.rect.y + lb.rect.height / 2.0))
-        }
-        Target::NodeId(raw_id) => {
-            let id = NodeId::from_index(*raw_id as usize);
-            let lb = find_layout_box(&state.layout_root, id).ok_or_else(|| {
-                Error::NotFound(format!("layout-бокс не найден для node_id={raw_id}"))
-            })?;
-            Ok((lb.rect.x + lb.rect.width / 2.0, lb.rect.y + lb.rect.height / 2.0))
+        Target::Point { x, y } => Err(Error::NotFound(format!(
+            "Target::Point({x}, {y}) не привязан к узлу DOM"
+        ))),
+        Target::Selector(sel) => find_first_by_selector(doc, sel)
+            .ok_or_else(|| Error::NotFound(format!("элемент не найден: {sel}"))),
+        Target::NodeId(raw_id) => Ok(NodeId::from_index(*raw_id as usize)),
+    }
+}
+
+/// Записать/перезаписать значение атрибута элемента (element-only; no-op на
+/// текстовых/комментарных узлах).
+fn set_attr(node: &mut lumen_dom::Node, name: &str, value: &str) {
+    if let NodeData::Element { attrs, .. } = &mut node.data {
+        if let Some(a) = attrs.iter_mut().find(|a| a.name.local.eq_ignore_ascii_case(name)) {
+            a.value = value.to_string();
+        } else {
+            attrs.push(lumen_dom::Attribute {
+                name: lumen_dom::QualName::html(name),
+                value: value.to_string(),
+            });
         }
     }
+}
+
+/// Удалить атрибут элемента, если он присутствует.
+fn remove_attr(node: &mut lumen_dom::Node, name: &str) {
+    if let NodeData::Element { attrs, .. } = &mut node.data {
+        attrs.retain(|a| !a.name.local.eq_ignore_ascii_case(name));
+    }
+}
+
+/// Упрощённое (не RFC 3986) разрешение относительного `href` против текущего
+/// URL сессии — достаточно для навигации по `<a>` в headless-автоматизации:
+/// абсолютные URL (содержат `://`) возвращаются как есть, абсолютные пути
+/// (`/foo`) наследуют scheme+host базового URL, относительные — резолвятся
+/// против директории базового URL.
+fn resolve_href(base_url: &str, href: &str) -> String {
+    if href.contains("://") {
+        return href.to_string();
+    }
+    if let Some(stripped) = href.strip_prefix('/') {
+        if let Some(scheme_end) = base_url.find("://") {
+            let (scheme, rest) = base_url.split_at(scheme_end + 3);
+            if let Some(host_end) = rest.find('/') {
+                return format!("{scheme}{}/{stripped}", &rest[..host_end]);
+            }
+        }
+        return format!("file:///{stripped}");
+    }
+    match base_url.rfind('/') {
+        Some(idx) => format!("{}{}", &base_url[..=idx], href),
+        None => href.to_string(),
+    }
+}
+
+/// `href` не должен запускать навигацию: пустой, javascript:, mailto:/tel:,
+/// или чисто фрагментный (`#...`) — как в реальном браузере, эти формы не
+/// приводят к document navigation.
+fn is_navigable_href(href: &str) -> bool {
+    let h = href.trim();
+    !h.is_empty()
+        && !h.starts_with('#')
+        && !h.starts_with("javascript:")
+        && !h.starts_with("mailto:")
+        && !h.starts_with("tel:")
 }
 
 impl InProcessSession {
@@ -1121,7 +1307,8 @@ impl InProcessSession {
     /// Ошибка [`Error::NotFound`], если ни один элемент не совпал с селектором.
     pub fn computed_style_json(&self, selector: &str) -> Result<String> {
         let state = self.state()?;
-        lumen_layout::computed_style_json_by_selector(&state.layout_root, &state.doc, selector)
+        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        lumen_layout::computed_style_json_by_selector(&state.layout_root, &doc, selector)
             .ok_or_else(|| Error::NotFound(format!("элемент не найден: {selector}")))
     }
 
@@ -1151,8 +1338,8 @@ impl InProcessSession {
                 // (Реальная реализация через layout-change tracking — в WinitSession + shell)
                 // Сначала проверяем что элемент существует в DOM, затем report stable.
                 let state = self.state()?;
-                let doc = &state.doc;
-                let ids = find_all_by_selector(doc, selector);
+                let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+                let ids = find_all_by_selector(&doc, selector);
                 Ok(!ids.is_empty())
             }
             WaitCondition::NetworkIdle => {
