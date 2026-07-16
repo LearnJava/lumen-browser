@@ -1,4 +1,4 @@
-ROADMAP.md — SDC-4: сделать `--live` (одно живое окно) дефолтом graphic_tests/run.py, kill+relaunch → opt-out флаг
+ROADMAP.md:247
 BUGS.md:288
 BUGS.md:117
 BUGS.md:118

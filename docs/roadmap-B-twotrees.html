@@ -1439,6 +1439,56 @@
        "note": "7✅ 14🟡 0⬜ 0🚫 из 21 модулей CSS-SPECS.md (Tier 4)"
       }
      ]
+    },
+    {
+     "id": "DEVX",
+     "title": "DEVX: dev-tooling на готовых поверхностях браузера",
+     "status": "planned",
+     "note": "Дорожка dev-tooling (владелец — P2): задействовать уже существующие automation/introspection-поверхности браузера для ускорения разработки. Полный каталог поверхностей и «что когда применять» — `docs/automation.md` (аудит 2026-07-16): MCP tools/resources, BiDi-команды, driver-API, `--deterministic`, `LUMEN_NO_*` paint-флаги — почти всё не задействовано тулингом",
+     "tasks": [
+      {
+       "id": "DEVX-1",
+       "title": "DEVX-1: детерминизм + console-гейт в live-прогоне",
+       "status": "planned",
+       "size": "S",
+       "note": "В `--live`-прогон `graphic_tests/run.py` добавить: (а) запуск lumen с `--deterministic` (+ фикс. `--rng-seed`) — убирает флейк Date.now/Math.random/rAF в JS-тестах (57, 129–138); (б) после каждого теста читать MCP `resource://console` — JS-ошибка на странице = FAIL с текстом ошибки в отчёте (класс багов, невидимых на скриншоте). Гейт: полный прогон, дельта «Изменений нет» по diff%, новые console-FAIL разобрать поштучно"
+      },
+      {
+       "id": "DEVX-2",
+       "title": "DEVX-2: не-пиксельные тесты на driver-API",
+       "status": "planned",
+       "size": "M",
+       "note": "Слой не-пиксельных regression-тестов на driver-API (`cargo test -p lumen-driver`, InProcessSession, без GPU/Edge): `layout_box_by_selector` (геометрия по селектору), `computed_style_snapshot` (типизированные ассерты каскада), `query_a11y` (роль/имя, Playwright-стиль getByRole). Набор golden-кейсов по мотивам graphic_tests (геометрия контейнеров, каскад, a11y-роли форм); фикстуры — маленькие самодостаточные HTML в tests/fixtures"
+      },
+      {
+       "id": "DEVX-3",
+       "title": "DEVX-3: golden-гейт на dump-layout/display-list",
+       "status": "planned",
+       "size": "M",
+       "note": "Golden-гейт на текстовых дампах: скрипт (python или cargo-тест) прогоняет `--dump-layout` и `--dump-display-list` по фиксированному набору страниц, diff с закоммиченными эталонами; обновление эталонов явным флагом (`--update`). Ловит регрессии геометрии/порядка отрисовки/z-index стабильно и кросс-платформенно, без GPU и без Edge; дополняет пиксельный пайплайн, не заменяет"
+      },
+      {
+       "id": "DEVX-4",
+       "title": "DEVX-4: --paint-bisect по LUMEN_NO_* флагам",
+       "status": "planned",
+       "size": "S",
+       "note": "`graphic_tests/run.py --paint-bisect <id>`: прогнать тест N+1 раз — baseline и с поочерёдным отключением каждой paint-оптимизации (`LUMEN_NO_FRAME_SKIP`/`NO_SCROLL_COMPOSITOR`/`NO_ANIM_SPLIT`/`NO_BBOX_SCISSOR`/`NO_BBOX_BACKDROP`/`NO_IMAGE_MIPS`/`NO_BAND_BIAS`, renderer.rs); вывести таблицу diff% по флагам — какая оптимизация меняет картинку. Автоматизирует ручную бисекцию визуальных артефактов"
+      },
+      {
+       "id": "DEVX-5",
+       "title": "DEVX-5: headless MCP/InProcessSession — снять заглушки",
+       "status": "planned",
+       "size": "L",
+       "note": "Реализовать headless-заглушки автоматизации (сейчас Err): в `InProcessSession` (crates/driver) — `click`/`type_text`/`scroll`/`wait`/`eval` (persistent QuickJS на снимке DOM, по образцу WinitSession SDC-1a) и CPU-`screenshot`; прокинуть в headless MCP (`--mcp`/`--mcp-port`), чтобы tools `eval`/`click`/`type`/`scroll`/`screenshot` работали без окна. Открывает MCP/agent-драйв и DEVX-2-тесты с интеракциями в CI без GPU"
+      },
+      {
+       "id": "DEVX-6",
+       "title": "DEVX-6: BiDi-сценарии offline/intercept/timezone/UA",
+       "status": "planned",
+       "size": "M",
+       "note": "Интеграционные сценарные тесты на неиспользуемых BiDi-рычагах (`--bidi-port`, живое окно): `network.setOfflineStatus` (offline-поведение), `network.addIntercept`+`failRequest`/`continueRequest` (деградация при падении ресурса), `browser.setTimezoneOverride` и `emulation.setUserAgentOverride` (Date/navigator.userAgent на странице). Python-тесты рядом с tests/wpt-тулингом; заодно проверяет сами BiDi-команды end-to-end"
+      }
+     ]
     }
    ],
    "date": "36–48 мес"
