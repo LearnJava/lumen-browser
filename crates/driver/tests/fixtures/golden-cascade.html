@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { color: black; }
+  p { color: blue; }
+  .note { color: green; }
+  #warn { color: red; }
+  .force-orange { color: orange !important; }
+  .bold-group { font-weight: bold; }
+</style>
+</head>
+<body>
+  <p class="tag-wins">Tag beats inherited</p>
+  <p class="note">Class beats tag</p>
+  <p id="warn" class="note">Id beats class</p>
+  <p class="force-orange" style="color: blue;">Important beats inline</p>
+  <div class="bold-group"><div class="child">Inherits weight</div></div>
+</body>
+</html>
