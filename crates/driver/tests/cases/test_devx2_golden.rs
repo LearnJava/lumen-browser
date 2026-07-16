@@ -77,11 +77,10 @@ fn golden_containers_block_and_flex_geometry() {
             item.border_box.height
         );
     }
-    eprintln!("DEBUG a.x={} a.w={} b.x={} b.w={}", item_a.border_box.x, item_a.border_box.width, item_b.border_box.x, item_b.border_box.width);
     let gap = item_b.border_box.x - (item_a.border_box.x + item_a.border_box.width);
     assert!(
         approx(gap, 10.0),
-        "item-b should sit 10px (margin-left) after item-a, got gap {gap}"
+        "item-b should sit 10px (flex `gap`) after item-a, got gap {gap}"
     );
 }
 
