@@ -10977,10 +10977,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     if size.width == 0 || size.height == 0 {
                         return;
                     }
+                    let scale = self
+                        .pip_os
+                        .as_ref()
+                        .map_or(1.0, |p| p.window.scale_factor() as f32);
                     if let Some(p) = self.pip_os.as_mut() {
                         p.renderer.resize(size.width, size.height);
                     }
                     self.render_pip_os();
+                    let (win_w, win_h) =
+                        panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
+                    self.notify_pip_window_resized(win_w, win_h);
                 }
                 WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                     if let Some(p) = self.pip_os.as_mut() {
@@ -15996,6 +16003,11 @@ impl Lumen {
             }
         };
 
+        let (win_w, win_h) = panels::pip_os_window::physical_to_logical(
+            window.inner_size().width,
+            window.inner_size().height,
+            window.scale_factor() as f32,
+        );
         self.pip_os = Some(PipOsWindow {
             window,
             renderer,
@@ -16003,6 +16015,7 @@ impl Lumen {
             video_rect,
         });
         self.render_pip_os();
+        self.notify_pip_window_resized(win_w, win_h);
     }
 
     /// CC-7: tear down the OS PiP window. Releasing the last `Arc<Window>` makes
@@ -16022,11 +16035,8 @@ impl Lumen {
         };
         let size = pip.window.inner_size();
         let scale = pip.window.scale_factor() as f32;
-        let (win_w, win_h) = if scale > 0.0 {
-            (size.width as f32 / scale, size.height as f32 / scale)
-        } else {
-            (size.width as f32, size.height as f32)
-        };
+        let (win_w, win_h) =
+            panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
         let content = panels::pip_os_window::build_pip_content(
             pip.video_rect,
             &pip.poster_url,
@@ -16036,6 +16046,27 @@ impl Lumen {
         if let Err(err) = pip.renderer.render(&[], &content, 0.0, 0.0) {
             eprintln!("PiP OS render error: {err:?}");
         }
+    }
+
+    /// Push the OS PiP window's current logical size into JS via
+    /// `_lumen_pip_deliver_resize` (`video_pip.rs`), so the page's
+    /// `PictureInPictureWindow.width`/`.height` reflect the real floating
+    /// window instead of the `(0, 0)` stub set at `requestPictureInPicture()`
+    /// time, and its `resize` event fires when the user drags the window's
+    /// edge. Called once right after the OS window is created and again on
+    /// every `WindowEvent::Resized` — not on `ScaleFactorChanged`/
+    /// `RedrawRequested`, which don't change the logical size delivered here.
+    /// `route_eval_js` no-ops when no JS runtime is installed, so this is
+    /// safe to call unconditionally regardless of the `quickjs`/`v8` features.
+    fn notify_pip_window_resized(&mut self, win_w: f32, win_h: f32) {
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!(
+                "if(typeof _lumen_pip_deliver_resize==='function')\
+                 {{_lumen_pip_deliver_resize({win_w},{win_h});}}"
+            ),
+        );
     }
 
     /// Commit the current navigation state to the JS side so that

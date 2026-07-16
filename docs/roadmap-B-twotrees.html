@@ -1174,7 +1174,7 @@
      "id": "P3-pip",
      "title": "Picture-in-Picture API",
      "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): Document PiP requestWindow готов (document_pip.rs), Element.requestPictureInPicture частично; дошить — element-PiP + полноценное OS-окно"
+     "note": "PARTIAL (сверка с кодом 2026-07-17): Element.requestPictureInPicture — реальное OS-окно (CC-7, panels/pip_os_window.rs) + доставка реального размера через `_lumen_pip_deliver_resize` на открытие и на `WindowEvent::Resized` (было (0,0)-заглушкой, `resize`-событие никогда не летело) — ЗАВЕРШЕНО. Document PiP (`documentPictureInPicture.requestWindow`, document_pip.rs) остаётся JS-only заглушкой без нативного окна (`_lumen_pip_request_window` не забинжен, `.document` — фейковый mock-объект); дошить — реальное OS-окно для произвольного DOM-контента"
     },
     {
      "id": "P3-imagebitmap",
