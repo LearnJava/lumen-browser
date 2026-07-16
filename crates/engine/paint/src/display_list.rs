@@ -3651,6 +3651,86 @@ fn frag_selection_highlight(frag: &InlineFrag, sel: &SelectionHighlight) -> Opti
     Some((x_start, (x_end - x_start).max(0.0)))
 }
 
+/// CSS Writing Modes L4 §3–4 — paints an InlineRun's lines when the box is in
+/// a vertical writing mode (`vertical-rl`/`vertical-lr`/`sideways-*`).
+///
+/// `wrap_inline_run_vertical` (`lumen-layout`) repurposes `InlineFrag.x` as the
+/// cumulative offset along the inline axis (physical Y for vertical writing
+/// modes, top→bottom) and `InlineFrag.width` as the frag's own extent along
+/// that axis — the same two fields the horizontal path in [`emit_inline_run`]
+/// reads as a physical X offset and physical width. Before this function
+/// existed, `emit_inline_run` ran unconditionally and misread those fields as
+/// horizontal geometry: every frag in a line landed at the same physical Y
+/// (`line_y`, correct only for a horizontal row) with X spread out by what is
+/// actually the vertical cursor, and each word's DrawText got the column's
+/// *width* (`b.rect.width`, one column wide) as its rect height — silently
+/// breaking every real vertical `<div>` (caught by `graphic_tests/145-writing-mode.html`,
+/// Ph3 writing-mode vertical Срез 5; the layout side — `vertical.rs` — was
+/// already correct, only this paint conversion was never ported to the axis
+/// swap).
+///
+/// Each outer `lines` entry is one wrapped column along the block axis;
+/// column 0 sits at `b.rect.x` (already correctly placed by
+/// `lay_out_vertical_inline_run`/the vertical block-stacking cursor in
+/// `vertical.rs`), so wrapped column N shifts by `N * col_width` — leftward
+/// for `vertical-rl`/`sideways-rl` (later columns sit further from the
+/// right-edge start), rightward for `vertical-lr`/`sideways-lr`.
+///
+/// Not yet ported to this axis (Phase 0, same class of gap the horizontal
+/// path documents elsewhere): `vertical-align` (`frag.y_offset`), inline
+/// replaced content (images), `::selection` highlight, and
+/// `text-overflow: ellipsis`.
+fn emit_inline_run_vertical(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<DisplayCommand>) {
+    let col_width = b.rect.width;
+    let is_rtl = matches!(
+        b.style.writing_mode,
+        lumen_layout::style::WritingMode::VerticalRl | lumen_layout::style::WritingMode::SidewaysRl
+    );
+    for (line_idx, line) in lines.iter().enumerate() {
+        let column_x = if is_rtl {
+            b.rect.x - line_idx as f32 * col_width
+        } else {
+            b.rect.x + line_idx as f32 * col_width
+        };
+        for frag in line {
+            if !matches!(frag.style.visibility, Visibility::Visible) || frag.img_src.is_some() {
+                continue;
+            }
+            let rect = Rect::new(column_x, b.rect.y + frag.x, col_width, frag.width);
+            emit_text_shadows(out, rect, rect.height, frag);
+            out.push(DisplayCommand::DrawText {
+                rect,
+                text: frag.text.clone(),
+                font_size: frag.style.font_size,
+                color: frag.style.color,
+                font_family: frag.style.font_family.clone(),
+                font_weight: frag.style.font_weight,
+                font_style: frag.style.font_style,
+                font_features: frag.style.font_feature_settings.iter().map(|f| (f.tag, f.value)).collect(),
+                font_palette: palette_selection(&frag.style),
+                font_variation_axes: {
+                    let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
+                        .iter().map(|a| (a.tag, a.value)).collect();
+                    if frag.style.font_optical_sizing == FontOpticalSizing::Auto
+                        && !axes.iter().any(|(t, _)| t == b"opsz")
+                    {
+                        axes.push((*b"opsz", frag.style.font_size));
+                    }
+                    if frag.style.font_stretch != FontStretch::NORMAL
+                        && !axes.iter().any(|(t, _)| t == b"wdth")
+                    {
+                        axes.push((*b"wdth", frag.style.font_stretch.0 as f32 / 10.0));
+                    }
+                    axes
+                },
+                tab_size: frag.style.tab_size,
+                highlight_name: None,
+                text_orientation: Some(frag.style.text_orientation),
+            });
+        }
+    }
+}
+
 /// Renders all lines of a [`BoxKind::InlineRun`].
 ///
 /// When `text-overflow: ellipsis` (CSS UI L4 §3) is active on the box style
@@ -3668,6 +3748,10 @@ fn emit_inline_run(
     sel: Option<&SelectionHighlight>,
     out: &mut Vec<DisplayCommand>,
 ) {
+    if b.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+        emit_inline_run_vertical(b, lines, out);
+        return;
+    }
     // CSS Rhythmic Sizing L1 §2 — line-height-step rounds each line box up to a
     // multiple of the step so paint stacks lines at the same rhythm layout used.
     let raw_line_h = b.style.font_size * b.style.line_height;
