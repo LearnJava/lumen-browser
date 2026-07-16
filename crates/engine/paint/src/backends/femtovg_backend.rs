@@ -516,6 +516,20 @@ pub struct FemtovgBackend {
     /// queue. `usize` to match `backdrop_w`/`backdrop_h` (image-buffer
     /// dimensions), unlike `layer_pool_size`'s `u32` (framebuffer size).
     cpu_upload_pool_size: (usize, usize),
+    /// BUG-272 срез 5 (item 3, "bbox instead of full-frame"): pool of reusable
+    /// upload images for the backdrop-filter path's filtered-backdrop result
+    /// (`apply_backdrop_filters`), sized to the element's bbox instead of the
+    /// full framebuffer. Kept separate from `cpu_upload_pool` because its size
+    /// varies per element (unlike the other `cpu_upload_pool` consumers, which
+    /// are always full-framebuffer-sized) — sharing one pool would evict on
+    /// every differently-sized backdrop-filter group and thrash the
+    /// full-framebuffer consumers sharing that slot within the same frame.
+    /// Same reuse contract as `cpu_upload_pool`: plain `PREMULTIPLIED` (no
+    /// `FLIP_Y` — CPU pixels are top-down), refreshed via `update_image`.
+    backdrop_bbox_pool: Vec<femtovg::ImageId>,
+    /// Device-pixel size `backdrop_bbox_pool` images were created for; see
+    /// `cpu_upload_pool_size`.
+    backdrop_bbox_pool_size: (usize, usize),
     /// Offscreen opacity group layer stack (BUG-133). Each entry holds an
     /// offscreen ImageId that subtree draws render into; PopOpacity composites
     /// it once with the group alpha (CSS Color L3 §3.2: opacity is atomic —
@@ -972,20 +986,28 @@ struct BlendLayerEntry {
 /// Entry pushed onto `FemtovgBackend::backdrop_filter_layer_stack` by `PushBackdropFilter`.
 ///
 /// `elem_image_id` receives all draws between Push and Pop. `filtered_backdrop_id` holds
-/// the full-canvas backdrop snapshot with the filter chain applied (blur + colour-matrix).
+/// the backdrop snapshot cropped to `bounds` (device px) with the filter chain applied
+/// (blur + colour-matrix) — BUG-272 item 3: sized to the element's bbox instead of the
+/// full framebuffer, since the filtered result is only ever sampled within `bounds`.
 /// On `PopBackdropFilter`, `composite_backdrop_filter_layer` blits the filtered backdrop
-/// region at `bounds`, then composites element content on top (CSS Filter Effects L2 §2).
+/// at `bounds`, then composites element content on top (CSS Filter Effects L2 §2).
 struct BackdropFilterLayerEntry {
     /// Offscreen image capturing element content (draws between Push and Pop).
     elem_image_id: femtovg::ImageId,
-    /// Full-canvas filtered backdrop snapshot — blurred and/or colour-filtered.
+    /// Bbox-cropped filtered backdrop snapshot — blurred and/or colour-filtered.
     filtered_backdrop_id: femtovg::ImageId,
     /// Device-pixel width `filtered_backdrop_id` was uploaded at (BUG-272 срез
-    /// 4) — needed to return it to `cpu_upload_pool` on Pop.
+    /// 5) — needed to return it to `backdrop_bbox_pool` on Pop.
     filtered_backdrop_w: usize,
     /// Device-pixel height `filtered_backdrop_id` was uploaded at; see
     /// `filtered_backdrop_w`.
     filtered_backdrop_h: usize,
+    /// Device-pixel X origin of `filtered_backdrop_id` within the framebuffer
+    /// (BUG-272 срез 5) — the crop's top-left corner, needed to place the
+    /// smaller image back at the right spot on composite.
+    filtered_backdrop_x: usize,
+    /// Device-pixel Y origin of `filtered_backdrop_id`; see `filtered_backdrop_x`.
+    filtered_backdrop_y: usize,
     /// Element bounds in CSS pixels — the region where the filtered backdrop is visible.
     bounds: lumen_core::geom::Rect,
     /// Render target active before PushBackdropFilter — restored on PopBackdropFilter.
@@ -1321,6 +1343,37 @@ fn extend_region_replicated(
     (ex0, ey0, ex1, ey1)
 }
 
+/// Extracts the `region` sub-rectangle of a top-down RGBA8 buffer sized
+/// `width × height` into a new, tightly-sized buffer.
+///
+/// BUG-272 item 3 ("bbox instead of full-frame"): lets a full-framebuffer CPU
+/// snapshot be uploaded at just its visible bbox size instead of the whole
+/// canvas. Returns `(pixels, w, h)` where `w`/`h` are the cropped extent —
+/// `(vec![], 0, 0)` if `region` is empty or degenerate.
+fn crop_region_rgba(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    region: (usize, usize, usize, usize),
+) -> (Vec<u8>, usize, usize) {
+    let (rx0, ry0, rx1, ry1) = region;
+    let rx1 = rx1.min(width);
+    let ry1 = ry1.min(height);
+    if rx0 >= rx1 || ry0 >= ry1 {
+        return (Vec::new(), 0, 0);
+    }
+    let w = rx1 - rx0;
+    let h = ry1 - ry0;
+    let stride = width * 4;
+    let mut out = vec![0u8; w * h * 4];
+    for y in 0..h {
+        let src_off = ((ry0 + y) * stride) + rx0 * 4;
+        let dst_off = y * w * 4;
+        out[dst_off..dst_off + w * 4].copy_from_slice(&rgba[src_off..src_off + w * 4]);
+    }
+    (out, w, h)
+}
+
 impl FemtovgBackend {
     /// Создаёт оконный femtovg-бэкенд из winit-окна.
     ///
@@ -1437,6 +1490,8 @@ impl FemtovgBackend {
             blend_layer_pending_delete: Vec::new(),
             cpu_upload_pool: Vec::new(),
             cpu_upload_pool_size: (0, 0),
+            backdrop_bbox_pool: Vec::new(),
+            backdrop_bbox_pool_size: (0, 0),
             backdrop_filter_layer_stack: Vec::new(),
             clip_stack: Vec::new(),
             active_rt_image: None,
@@ -1636,6 +1691,34 @@ impl FemtovgBackend {
             && self.cpu_upload_pool.len() < MAX_POOLED_CPU_UPLOADS
         {
             self.cpu_upload_pool.push(id);
+        } else {
+            self.blend_layer_pending_delete.push(id);
+        }
+    }
+
+    /// BUG-272 срез 5: same contract as [`Self::acquire_cpu_upload_image`], but
+    /// backed by `backdrop_bbox_pool` — a dedicated slot for the
+    /// bbox-cropped backdrop-filter result, kept separate so its per-element
+    /// varying size doesn't thrash the full-framebuffer-sized
+    /// `cpu_upload_pool` consumers (blend-result, colour-matrix filter).
+    fn acquire_backdrop_bbox_image(&mut self, w: usize, h: usize) -> Option<femtovg::ImageId> {
+        if self.backdrop_bbox_pool_size != (w, h) {
+            self.blend_layer_pending_delete.append(&mut self.backdrop_bbox_pool);
+            self.backdrop_bbox_pool_size = (w, h);
+        }
+        self.backdrop_bbox_pool.pop()
+    }
+
+    /// Returns an image acquired via [`Self::acquire_backdrop_bbox_image`] to
+    /// the pool for reuse; see [`Self::release_cpu_upload_image`].
+    fn release_backdrop_bbox_image(&mut self, id: femtovg::ImageId, w: usize, h: usize) {
+        /// Same cap as `release_cpu_upload_image` — backdrop-filter groups
+        /// rarely nest more than a couple deep.
+        const MAX_POOLED_BACKDROP_BBOX: usize = 4;
+        if self.backdrop_bbox_pool_size == (w, h)
+            && self.backdrop_bbox_pool.len() < MAX_POOLED_BACKDROP_BBOX
+        {
+            self.backdrop_bbox_pool.push(id);
         } else {
             self.blend_layer_pending_delete.push(id);
         }
@@ -2770,18 +2853,21 @@ impl FemtovgBackend {
         self.release_layer(src_image_id);
     }
 
-    /// Applies `filters` to a full-canvas snapshot of the current render target.
+    /// Applies `filters` to a snapshot of the current render target, cropped to
+    /// `bounds`.
     ///
     /// Flush must be called before this. Returns the filtered image id plus its
-    /// device-pixel `(w, h)` (or `None` on failure) — the caller needs the
-    /// dimensions to later return the image to `cpu_upload_pool` (BUG-272 срез
-    /// 4). After return the active render target may have changed; caller must
-    /// `switch_render_target` to the desired next target.
+    /// device-pixel `(w, h, x, y)` — `(w, h)` is the cropped extent (BUG-272
+    /// item 3: bbox-sized, not full-framebuffer), `(x, y)` its device-pixel
+    /// origin within the framebuffer — or `None` on failure/empty bbox. The
+    /// caller needs `(w, h)` to later return the image to `backdrop_bbox_pool`
+    /// (BUG-272 срез 5). After return the active render target may have
+    /// changed; caller must `switch_render_target` to the desired next target.
     fn apply_backdrop_filters(
         &mut self,
         filters: &[lumen_layout::FilterFn],
         bounds: &Rect,
-    ) -> Option<(femtovg::ImageId, usize, usize)> {
+    ) -> Option<(femtovg::ImageId, usize, usize, usize, usize)> {
         // Screenshot the current RT (flush must have been called already).
         // `screenshot()` reverses GL's bottom-up rows, so `rgba` is the raw
         // backdrop in top-down order. The entire filter chain runs on these CPU
@@ -2809,7 +2895,12 @@ impl FemtovgBackend {
         let by0 = (bounds.y * scale).floor().max(0.0) as usize;
         let bx1 = ((bounds.x + bounds.width) * scale).ceil().max(0.0) as usize;
         let by1 = ((bounds.y + bounds.height) * scale).ceil().max(0.0) as usize;
-        let mut region = (bx0.min(iw), by0.min(ih), bx1.min(iw), by1.min(ih));
+        // Tight crop = the element bbox alone (BUG-272 item 3) — the extended
+        // `region` below only exists to give the blur kernel symmetric edge
+        // samples; the final upload only needs to cover what
+        // `composite_backdrop_filter_layer` actually draws (`bounds`).
+        let crop = (bx0.min(iw), by0.min(ih), bx1.min(iw), by1.min(ih));
+        let mut region = crop;
 
         // For `backdrop-filter: blur()` the CSS backdrop is cropped to the
         // element's border box. Clamping the box-blur kernel to that crop
@@ -2846,15 +2937,26 @@ impl FemtovgBackend {
             }
         }
 
+        // Crop down to the element bbox (BUG-272 item 3) before upload — the
+        // filter chain above already ran on the full buffer (blur needed the
+        // extended `region` for correct edge samples), but only `crop`
+        // (`bounds`, clamped to the framebuffer) is ever sampled by
+        // `composite_backdrop_filter_layer`.
+        let (cropped, cw, ch) = crop_region_rgba(&rgba, iw, ih, crop);
+        if cw == 0 || ch == 0 {
+            return None;
+        }
+
         // Upload the filtered backdrop once. Top-down CPU pixels → no FLIP_Y,
         // matching `composite_backdrop_filter_layer`'s sampling. BUG-272 срез
-        // 4: reuse `cpu_upload_pool` via `update_image` instead of a fresh GPU
-        // upload on every Pop, same class as the blend-result pool (item 5).
-        let pixels: Vec<rgb::RGBA8> = rgba.chunks_exact(4)
+        // 5: reuse `backdrop_bbox_pool` via `update_image` instead of a fresh
+        // GPU upload on every Pop, same class as the blend-result pool (item 5,
+        // срез 4), but sized to the bbox instead of the full framebuffer.
+        let pixels: Vec<rgb::RGBA8> = cropped.chunks_exact(4)
             .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
             .collect();
-        let img_ref = imgref::ImgRef::new(&pixels, iw, ih);
-        let id = match self.acquire_cpu_upload_image(iw, ih) {
+        let img_ref = imgref::ImgRef::new(&pixels, cw, ch);
+        let id = match self.acquire_backdrop_bbox_image(cw, ch) {
             Some(id) => match self.canvas.update_image(id, img_ref, 0, 0) {
                 Ok(()) => Some(id),
                 Err(_) => {
@@ -2869,7 +2971,7 @@ impl FemtovgBackend {
                 .create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED)
                 .ok(),
         };
-        id.map(|id| (id, iw, ih))
+        id.map(|id| (id, cw, ch, crop.0, crop.1))
     }
 
     /// Composites a backdrop-filter layer (PA-4) onto the previous render target.
@@ -2885,6 +2987,8 @@ impl FemtovgBackend {
             filtered_backdrop_id,
             filtered_backdrop_w,
             filtered_backdrop_h,
+            filtered_backdrop_x,
+            filtered_backdrop_y,
             bounds,
             prev_render_target,
         } = entry;
@@ -2899,12 +3003,18 @@ impl FemtovgBackend {
         let css_h = (self.height as f64 / self.scale) as f32;
 
         // Step 1: blit filtered backdrop at element bounds (Copy = pixel-replace).
-        // The paint maps the full filtered_backdrop image to the full canvas; only
-        // the path rect (element bounds) receives pixels, everything else is untouched.
+        // BUG-272 item 3: `filtered_backdrop_id` is bbox-sized (cropped to
+        // `bounds`, device px), not full-canvas — the paint maps it back at its
+        // device-pixel origin (`filtered_backdrop_x/y`) instead of `(0, 0)`. The
+        // path rect (element bounds) still gates which pixels actually land.
         self.canvas.save();
         self.canvas.reset_transform();
         self.canvas.global_composite_operation(femtovg::CompositeOperation::Copy);
-        let bd_paint = femtovg::Paint::image(filtered_backdrop_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+        let bd_x = filtered_backdrop_x as f32 / self.scale as f32;
+        let bd_y = filtered_backdrop_y as f32 / self.scale as f32;
+        let bd_w = filtered_backdrop_w as f32 / self.scale as f32;
+        let bd_h = filtered_backdrop_h as f32 / self.scale as f32;
+        let bd_paint = femtovg::Paint::image(filtered_backdrop_id, bd_x, bd_y, bd_w, bd_h, 0.0, 1.0);
         let mut bd_path = femtovg::Path::new();
         bd_path.rect(bounds.x, bounds.y, bounds.width, bounds.height);
         self.canvas.fill_path(&bd_path, &bd_paint);
@@ -2919,9 +3029,10 @@ impl FemtovgBackend {
         self.canvas.fill_path(&elem_path, &elem_paint);
         self.canvas.restore();
 
-        // BUG-272 срез 4: the filtered backdrop is now also pooled
-        // (`cpu_upload_pool`), same as the element-content layer.
-        self.release_cpu_upload_image(filtered_backdrop_id, filtered_backdrop_w, filtered_backdrop_h);
+        // BUG-272 срез 5: the filtered backdrop is now bbox-sized and pooled
+        // via `backdrop_bbox_pool` (separate from `cpu_upload_pool`'s
+        // full-framebuffer consumers — see field doc).
+        self.release_backdrop_bbox_image(filtered_backdrop_id, filtered_backdrop_w, filtered_backdrop_h);
         self.release_layer(elem_image_id);
     }
 
@@ -4028,7 +4139,7 @@ impl FemtovgBackend {
                 // Apply filters to a screenshot of the current RT.
                 let filtered_backdrop = self.apply_backdrop_filters(filters, bounds);
 
-                if let Some((filt_id, filt_w, filt_h)) = filtered_backdrop {
+                if let Some((filt_id, filt_w, filt_h, filt_x, filt_y)) = filtered_backdrop {
                     // Restore prev_rt after apply_backdrop_filters may have switched.
                     self.switch_render_target(prev_rt);
                     // `elem_id` is a GPU FBO: element content is rendered into it
@@ -4052,14 +4163,16 @@ impl FemtovgBackend {
                                 filtered_backdrop_id: filt_id,
                                 filtered_backdrop_w: filt_w,
                                 filtered_backdrop_h: filt_h,
+                                filtered_backdrop_x: filt_x,
+                                filtered_backdrop_y: filt_y,
                                 bounds: *bounds,
                                 prev_render_target: prev_rt,
                             });
                         }
                         None => {
                             // Fallback: return the filtered backdrop to the pool
-                            // (BUG-272 срез 4), draw to prev_rt without it.
-                            self.release_cpu_upload_image(filt_id, filt_w, filt_h);
+                            // (BUG-272 срез 5), draw to prev_rt without it.
+                            self.release_backdrop_bbox_image(filt_id, filt_w, filt_h);
                             self.canvas.save();
                         }
                     }
@@ -4194,13 +4307,14 @@ impl RenderBackend for FemtovgBackend {
     fn debug_mem_report(&self) -> String {
         let raw_bytes: usize = self.raw_images.values().map(|i| i.data.len()).sum();
         format!(
-            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}, cpu_upload_pool={}",
+            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}, cpu_upload_pool={}, backdrop_bbox_pool={}",
             self.raw_images.len(),
             raw_bytes as f64 / 1e6,
             self.images.len(),
             self.layer_pool.len(),
             self.content_band_pool.len(),
-            self.cpu_upload_pool.len()
+            self.cpu_upload_pool.len(),
+            self.backdrop_bbox_pool.len()
         )
     }
 
@@ -5753,5 +5867,49 @@ mod tests {
         for &off in &[0, 4, 8, 12, 16, 20] {
             assert_eq!(&px[off..off+4], &white, "pixel at offset {off} must be replicated white");
         }
+    }
+
+    /// BUG-272 срез 5: `crop_region_rgba` extracts exactly the requested
+    /// sub-rectangle, dropping everything outside it.
+    #[test]
+    fn crop_region_rgba_extracts_sub_rect() {
+        // 4×2 image, region = [1,3) x [0,2) (the two middle columns).
+        let px = vec![
+            10, 10, 10, 255,   20, 20, 20, 255,   30, 30, 30, 255,   40, 40, 40, 255, // row 0
+            50, 50, 50, 255,   60, 60, 60, 255,   70, 70, 70, 255,   80, 80, 80, 255, // row 1
+        ];
+        let (out, w, h) = crop_region_rgba(&px, 4, 2, (1, 0, 3, 2));
+        assert_eq!((w, h), (2, 2));
+        assert_eq!(
+            out,
+            vec![20, 20, 20, 255, 30, 30, 30, 255, 60, 60, 60, 255, 70, 70, 70, 255]
+        );
+    }
+
+    /// A region clamped fully outside the buffer (or degenerate after
+    /// clamping) must return an empty crop rather than panic — the caller
+    /// (`apply_backdrop_filters`) treats `(w, h) == (0, 0)` as "skip this
+    /// backdrop-filter layer".
+    #[test]
+    fn crop_region_rgba_empty_region_returns_empty() {
+        let px = vec![1u8, 2, 3, 4];
+        let (out, w, h) = crop_region_rgba(&px, 1, 1, (2, 2, 5, 5));
+        assert!(out.is_empty());
+        assert_eq!((w, h), (0, 0));
+    }
+
+    /// A region extending past the buffer edge is clamped, not rejected —
+    /// mirrors the `bx1.min(iw)`/`by1.min(ih)` clamping already applied by
+    /// `apply_backdrop_filters` before calling this helper, so this exercises
+    /// the defensive clamp inside `crop_region_rgba` itself.
+    #[test]
+    fn crop_region_rgba_clamps_to_buffer_bounds() {
+        let px = vec![
+            1, 1, 1, 255,   2, 2, 2, 255, // row 0
+            3, 3, 3, 255,   4, 4, 4, 255, // row 1
+        ];
+        let (out, w, h) = crop_region_rgba(&px, 2, 2, (1, 0, 10, 10));
+        assert_eq!((w, h), (1, 2));
+        assert_eq!(out, vec![2, 2, 2, 255, 4, 4, 4, 255]);
     }
 }
