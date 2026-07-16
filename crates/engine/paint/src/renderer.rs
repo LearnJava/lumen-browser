@@ -5871,38 +5871,64 @@ impl Renderer {
                     let alpha = 1.0_f32;
                     let v_start = text_vertices.len() as u32;
                     let dest_rect = translate_rect(*rect, dx, dy);
-                    // Ph3 writing-mode vertical, Срез 2 (wgpu — live default
-                    // backend, ADR-017): `Sideways`/`Mixed` rotate the whole
-                    // run 90° CW, mirroring the CPU rasterizer
-                    // (`rasterize_text_rotated`). Glyphs are laid out
-                    // horizontally at the local origin, then `rotate_text_vertices_cw`
-                    // maps them onto `dest_rect`. `Upright`/`None` keep the
-                    // existing horizontal path (per-glyph CJK-vs-Latin split
-                    // for `Mixed` is Срез 3).
-                    let rotated = matches!(
-                        text_orientation,
-                        Some(TextOrientation::Sideways | TextOrientation::Mixed)
-                    );
-                    let glyph_rect = if rotated {
-                        Rect::new(0.0, 0.0, dest_rect.height, dest_rect.width)
-                    } else {
-                        dest_rect
-                    };
-                    push_text_glyphs(
-                        &mut text_vertices,
-                        glyph_rect,
-                        text,
-                        *font_size,
-                        apply_alpha_to_color(color_to_array(color), alpha),
-                        primary_face_id,
-                        &mut lazy_faces,
-                        &mut self.atlas,
-                        &mut self.cached_glyphs,
-                        font_variation_axes,
-                        *tab_size,
-                    );
-                    if rotated {
-                        rotate_text_vertices_cw(&mut text_vertices[v_start as usize..], dest_rect);
+                    // Ph3 writing-mode vertical (wgpu — live default backend,
+                    // ADR-017): `Sideways` rotates the whole run 90° CW
+                    // (Срез 2), mirroring the CPU rasterizer
+                    // (`rasterize_text_rotated`) — glyphs are laid out
+                    // horizontally at the local origin, then
+                    // `rotate_text_vertices_cw` maps them onto `dest_rect`.
+                    // `Mixed` splits per glyph — CJK upright, Latin rotated
+                    // (Срез 3, `push_text_glyphs_mixed`, mirrors
+                    // `rasterize_text_mixed`). `Upright`/`None` keep the
+                    // existing horizontal path.
+                    match text_orientation {
+                        Some(TextOrientation::Sideways) => {
+                            let glyph_rect = Rect::new(0.0, 0.0, dest_rect.height, dest_rect.width);
+                            push_text_glyphs(
+                                &mut text_vertices,
+                                glyph_rect,
+                                text,
+                                *font_size,
+                                apply_alpha_to_color(color_to_array(color), alpha),
+                                primary_face_id,
+                                &mut lazy_faces,
+                                &mut self.atlas,
+                                &mut self.cached_glyphs,
+                                font_variation_axes,
+                                *tab_size,
+                            );
+                            rotate_text_vertices_cw(&mut text_vertices[v_start as usize..], dest_rect);
+                        }
+                        Some(TextOrientation::Mixed) => {
+                            push_text_glyphs_mixed(
+                                &mut text_vertices,
+                                dest_rect,
+                                text,
+                                *font_size,
+                                apply_alpha_to_color(color_to_array(color), alpha),
+                                primary_face_id,
+                                &mut lazy_faces,
+                                &mut self.atlas,
+                                &mut self.cached_glyphs,
+                                font_variation_axes,
+                                *tab_size,
+                            );
+                        }
+                        _ => {
+                            push_text_glyphs(
+                                &mut text_vertices,
+                                dest_rect,
+                                text,
+                                *font_size,
+                                apply_alpha_to_color(color_to_array(color), alpha),
+                                primary_face_id,
+                                &mut lazy_faces,
+                                &mut self.atlas,
+                                &mut self.cached_glyphs,
+                                font_variation_axes,
+                                *tab_size,
+                            );
+                        }
                     }
                     if let Some(m) = transform_stack.last() {
                         apply_affine_to_verts(&mut text_vertices[v_start as usize..], m);
@@ -9593,6 +9619,9 @@ fn normalize_variation_axes(face: &ParsedFace<'_>, axes: &[([u8; 4], f32)]) -> V
     coords
 }
 
+/// Returns the final pen `x` (== `rect.x` + shaped advance) — used by
+/// [`push_text_glyphs_mixed`] to measure a segment's real width without a
+/// separate shaping pass.
 #[allow(clippy::too_many_arguments)]
 fn push_text_glyphs(
     out: &mut Vec<TextVertex>,
@@ -9606,7 +9635,7 @@ fn push_text_glyphs(
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
     font_variation_axes: &[([u8; 4], f32)],
     tab_size: f32,
-) {
+) -> f32 {
     // Multi-size atlas: подбираем bin под font_size, растеризируем глифы
     // на этом bin. Display масштаб = font_size / size_bin — если font_size
     // совпал с bin-ом (12/16/24/32/...) — масштаба нет, текст резкий.
@@ -9702,6 +9731,7 @@ fn push_text_glyphs(
             }
         }
     }
+    cursor_x
 }
 
 /// Ph3 writing-mode vertical, Срез 2 — rotates a glyph run's vertices 90° CW
@@ -9715,6 +9745,59 @@ fn rotate_text_vertices_cw(verts: &mut [TextVertex], dest: Rect) {
     for v in verts {
         let (x, y) = (v.pos[0], v.pos[1]);
         v.pos = [-y + dest.x, x + dest.y];
+    }
+}
+
+/// Ph3 writing-mode vertical, Срез 3 — per-glyph split for `text-orientation:
+/// mixed`, wgpu path: each CJK ideograph paints upright at an increasing
+/// offset along `dest`'s column (no rotation — same as `push_text_glyphs`
+/// generating straight into `dest`); each run of non-CJK characters shapes as
+/// one block at the local origin, then [`rotate_text_vertices_cw`] maps it
+/// onto `dest` starting at the same column offset. Mirrors the CPU
+/// rasterizer's `rasterize_text_mixed`. `push_text_glyphs`'s returned pen
+/// position gives each segment's real shaped width, so a whitespace-only
+/// segment (no visible glyph, but still an advance) still moves the cursor.
+#[allow(clippy::too_many_arguments)]
+fn push_text_glyphs_mixed(
+    out: &mut Vec<TextVertex>,
+    dest: Rect,
+    text: &str,
+    font_size: f32,
+    color: [f32; 4],
+    primary_face_id: usize,
+    lazy: &mut LazyParsedFaces<'_>,
+    atlas: &mut GlyphAtlas,
+    cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
+    font_variation_axes: &[([u8; 4], f32)],
+    tab_size: f32,
+) {
+    let mut y_cursor = 0.0_f32;
+    for seg in crate::display_list::split_mixed_runs(text) {
+        let (seg_text, upright) = match seg {
+            crate::display_list::MixedSegment::Cjk(ch) => {
+                let mut s = String::new();
+                s.push(ch);
+                (s, true)
+            }
+            crate::display_list::MixedSegment::Other(s) => (s, false),
+        };
+        if upright {
+            let seg_rect = Rect::new(dest.x, dest.y + y_cursor, dest.width, dest.height);
+            let end_x = push_text_glyphs(
+                out, seg_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
+                cached, font_variation_axes, tab_size,
+            );
+            y_cursor += end_x - dest.x;
+        } else {
+            let v_start = out.len();
+            let local_rect = Rect::new(y_cursor, 0.0, dest.width, dest.height);
+            let end_x = push_text_glyphs(
+                out, local_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
+                cached, font_variation_axes, tab_size,
+            );
+            rotate_text_vertices_cw(&mut out[v_start..], dest);
+            y_cursor = end_x;
+        }
     }
 }
 

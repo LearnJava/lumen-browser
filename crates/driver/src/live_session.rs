@@ -9,12 +9,13 @@
 //! drive a real, visible window with the exact same API as headless tests.
 //!
 //! MVP scope (ROADMAP SDC-2): navigate/click/type/scroll/wait/eval/screenshot/
-//! query/a11y_tree are real round-trips to the live window. The remaining
-//! `BrowserSession` methods (layout snapshots, computed style, network/console
-//! logs, fingerprint/clock/rng isolation controls) are not yet threaded
-//! through `AutomationCommand` — they return local, documented defaults so
-//! this type satisfies the trait without silently pretending to support
-//! features the live channel doesn't carry yet.
+//! query/a11y_tree/console_log are real round-trips to the live window
+//! (console_log added DEVX-1: reads the DevTools console buffer, cleared on
+//! each `navigate()`). The remaining `BrowserSession` methods (layout
+//! snapshots, computed style, network logs, fingerprint/clock/rng isolation
+//! controls) are not yet threaded through `AutomationCommand` — they return
+//! local, documented defaults so this type satisfies the trait without
+//! silently pretending to support features the live channel doesn't carry yet.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -120,9 +121,14 @@ impl BrowserSession for LiveWindowSession {
         Ok(Vec::new())
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always empty.
+    /// Captured JS console messages since the last `navigate()` (DEVX-1) —
+    /// round-trips through `AutomationCommand::ConsoleLog` to the live
+    /// window's DevTools console buffer.
     fn console_log(&self) -> Result<Vec<ConsoleEntry>> {
-        Ok(Vec::new())
+        match self.execute(AutomationCommand::ConsoleLog)? {
+            AutomationReply::ConsoleLog(entries) => Ok(entries),
+            other => Err(unexpected_reply("ConsoleLog", &other)),
+        }
     }
 
     fn current_url(&self) -> String {

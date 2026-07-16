@@ -45,7 +45,7 @@ pub mod masonry;
 pub mod subgrid;
 pub mod table;
 pub mod text_iter;
-pub(crate) mod vertical;
+pub mod vertical;
 
 pub use counters::{
     format_counter, format_counter_with_registry, precompute_counters,

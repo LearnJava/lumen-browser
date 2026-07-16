@@ -14,6 +14,8 @@ Update this file whenever you change architecture, invariants, or policies.
 
 Current phase: **Phase 2 — v0.5 «Interactive» (complete)**, app version **v0.5.0**. Phase 0 (prototype) closed 2026-05-26; Phase 1 «Reader» largely complete. Phase 2 delivered: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, forms, find-in-page, DevTools/CDP, knowledge layer.
 
+**JS engine: V8 (`rusty_v8`) is the DEFAULT since the S12 cutover (ADR-018, 2026-07-14).** QuickJS/`rquickjs` remains only as an opt-in rollback path (`--features quickjs`) and is being deleted slice-by-slice (S12b, `docs/tasks/ph3-v8-migration.md`). Never target new functionality, fixes, or investigation at the rquickjs path; the engine-agnostic JS shim (`WEB_API_SHIM` in `crates/js/src/dom.rs`) is shared by both engines and is the right place for engine-independent fixes. Validate JS work against the default (V8) build.
+
 ### Versioning & phase policy
 
 Single source of truth for the version is `[workspace.package] version` in `Cargo.toml`. All machine-readable version strings (User-Agent, Sec-CH-UA, CDP `Browser.getVersion`, window title, startup banner) derive from `CARGO_PKG_VERSION` — do **not** hardcode a version number in code. The one manual-bump site is the `navigator.userAgent` literal in `crates/js/src/dom.rs` (JS shim string).
@@ -33,6 +35,7 @@ Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 
 | `docs/plan/` | Design doc split into 11 files: architecture, tech-stack, engine, web-apis-shell, privacy, features, knowledge, security-performance, testing, phases, meta. (The former `roadmap.md`/`history.md` were deleted 2026-07-02 — task status lives in `ROADMAP.md`, chronology in `git log`.) |
 | `CSS-SPECS.md` | Complete CSS property & spec roadmap: all W3C modules, per-property status (✅🟡⬜🚫), P4 priority queue. |
 | `docs/build-speed.md` | Compile-time optimization plan: current baseline, measurement protocol (S1–S5), ranked measures (stable / nightly / rejected), benchmark journal. Read before changing build config (profiles, `.cargo/config.toml`, sccache). |
+| `docs/automation.md` | **All automation/introspection surfaces of the browser and when to apply them** (dump modes, `--deterministic`, MCP tools/resources, BiDi, IPC, driver-API, `LUMEN_NO_*` paint-bisect flags, known stubs). Read before writing a debugging script or a new test harness — the capability usually already exists. |
 | `docs/roadmap-trees.md` | **How to use the interactive roadmap trees** (`docs/roadmap-*.html`): open in a browser, filters/search, and how to keep them current (`ROADMAP.md` + `python scripts/gen_roadmap.py`, auto-pulls bug status from `BUGS.md`). |
 | `ROADMAP.md` | Flat, grep-friendly source of the phase/task tree (two markdown tables: phases + tasks, one task per line). Feeds `gen_roadmap.py`; replaced the old nested `docs/roadmap.json`. Bug↔task links live in its `bugs` column; CSS-module status is live-aggregated from `CSS-SPECS.md` into rows `css-specs-t0`…`t4` (note = `AUTO:CSS-SPECS:T<N>`, do not hand-edit that note). |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
@@ -62,7 +65,7 @@ Full role definitions, workflows, collaboration rules, task tracking schema — 
 | Developer | Domain | Crates |
 |---|---|---|
 | **P1** | Feature development: any subsystem from roadmap (source → layout → paint → shell) | All crates (coordinated with P2/P4) |
-| **P2** | **Реактивирована 2026-07-13**: ведёт задачу P2-wpt (WPT-интеграция через официальный `wptrunner` + WebDriver BiDi, срезы S1–S8, см. `docs/tasks/p2-wpt-integration.md`). Прежде была резервом (с 2026-06-18) без задач. | `lumen-bidi-server` (S1 фикс), Python-тулинг `tests/wpt/` |
+| **P2** | **Reactivated 2026-07-13**: leads P2-wpt (WPT via `wptrunner` + WebDriver BiDi, `docs/tasks/p2-wpt-integration.md`) and the DEVX track (dev-tooling on existing automation surfaces, `docs/automation.md`, ROADMAP.md DEVX-1…6, assigned 2026-07-16). Was reserve (since 2026-06-18). | `lumen-bidi-server`, `lumen-driver`/`lumen-mcp` (DEVX-5), Python tooling `tests/wpt/` + `graphic_tests/run.py` (DEVX-1/4) |
 | **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
 | **P5** | **Code health ONLY**: audit, workspace-clippy, stub/branch/docs/dep sweeps, safe mechanical cleanup | All crates (read-only except trivial clippy fixes in own crate + branch/worktree/SYMBOLS.md cleanup) |
@@ -91,6 +94,7 @@ Full role definitions, workflows, collaboration rules, task tracking schema — 
 ## Commands
 
 Full reference (token efficiency, OS detection, PATH setup) — [`docs/commands.md`](docs/commands.md).
+Automation & diagnostics (dumps, deterministic mode, MCP/BiDi/IPC drive, paint-bisect env flags) — [`docs/automation.md`](docs/automation.md).
 
 ```bash
 export PATH="/c/Users/konstantin/.cargo/bin:$PATH"          # Git Bash only

@@ -47,16 +47,27 @@ headless pipeline without winit/wgpu/ffmpeg.
   impl over `AutomationHandle` — same trait `InProcessSession`/`WinitSession` implement, so
   `lumen-bidi-server` and `lumen-mcp` drive a real window with no protocol-specific glue.
   Real round-trips: `navigate`/`click`/`type_text`/`scroll`/`wait`/`eval`/`screenshot`/
-  `query`/`a11y_tree` (+ `query_a11y`/`query_a11y_all`, composed locally from `a11y_tree()`).
-  `AutomationCommand` gained `Query(String)`/`A11yTree` variants for this (shell-side
-  handlers reuse `lumen_layout::selector_query::find_all_by_selector` and
+  `query`/`a11y_tree`/`console_log` (+ `query_a11y`/`query_a11y_all`, composed locally from
+  `a11y_tree()`). `AutomationCommand` gained `Query(String)`/`A11yTree`/`ConsoleLog` variants
+  for this (shell-side handlers reuse `lumen_layout::selector_query::find_all_by_selector` and
   `lumen_a11y::build_ax_tree`, same helpers `resolve_automation_target`/
-  `update_platform_ax_tree` already used). `current_url()` changed from `&str` to owned
-  `String` across the whole `BrowserSession` trait (all implementors updated) — the old
-  borrow-tied signature would have forced `LiveWindowSession` to leak memory on every read
-  to satisfy the lifetime. Layout/computed-style/network-console-log/fingerprint-isolation
-  methods are local stub defaults (documented per-method) — the automation channel doesn't
-  carry those commands yet.
+  `update_platform_ax_tree` already used; `ConsoleLog`, DEVX-1, reads the shell's DevTools
+  console-panel buffer — `devtools::console_panel::ConsolePanel::messages()` — cleared on
+  every `Navigate` so `console_log()` reflects only the current page). `current_url()` changed
+  from `&str` to owned `String` across the whole `BrowserSession` trait (all implementors
+  updated) — the old borrow-tied signature would have forced `LiveWindowSession` to leak
+  memory on every read to satisfy the lifetime. Layout/computed-style/network-log/
+  fingerprint-isolation methods are local stub defaults (documented per-method) — the
+  automation channel doesn't carry those commands yet.
+
+- DEVX-2: non-pixel golden regression layer (`crates/driver/tests/cases/test_devx2_golden.rs`),
+  modeled on `graphic_tests` but asserted through `BrowserSession` (`layout_box_by_selector`,
+  `computed_style_snapshot`, `query_a11y`/`query_a11y_all`) instead of pixel diffing — runs via
+  `cargo test -p lumen-driver`, no GPU/Edge. Fixtures: `crates/driver/tests/fixtures/golden-*.html`
+  (container/flex geometry, cascade specificity + inheritance, form-control accessible roles).
+  Surfaced [BUG-294](../bugs/BUG-294-OPEN.md) (flex-item `margin-left` double-applied in
+  `lay_out_flex`'s row branch) — the fixture uses `gap` instead of per-item `margin` to avoid
+  baking that bug into the golden baseline.
 
 ## Deferred
 
@@ -66,8 +77,9 @@ headless pipeline without winit/wgpu/ffmpeg.
 - Native OS-level input dispatch (isTrusted mouse/keyboard events) for click/type — that's the live shell window's job (SDC-1b), not this headless session.
 - Full auto-wait (`WaitCondition::Visible/Stable/NetworkIdle/JsIdle`) beyond `WinitSession::wait`'s existing poll loop — task 8D refinements.
 - `LiveWindowSession`'s `layout_snapshot`/`computed_style(_snapshot)`/`layout_box_by_selector`/
-  `all_layout_boxes_by_selector`/`network_log`/`console_log`/fingerprint-isolation methods —
-  local stub defaults, not yet threaded through `AutomationCommand` (SDC-2 MVP scope).
+  `all_layout_boxes_by_selector`/`network_log`/fingerprint-isolation methods — local stub
+  defaults, not yet threaded through `AutomationCommand` (SDC-2 MVP scope). `console_log` is
+  real as of DEVX-1 (see above) — no longer in this list.
 - Remote transport (BiDi over WebSocket) — live navigate/eval/captureScreenshot/input done
   (SDC-2); network interception, cookie/storage events, `domContentLoaded` remain 8H.3.
 - CSS selector: descendant/child combinators, pseudo-classes — when needed.

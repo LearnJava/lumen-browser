@@ -2636,6 +2636,133 @@ fn rasterize_text_rotated(
     Ok(Some((dl, dt, dr, db)))
 }
 
+/// Measures the shaped horizontal advance of `text` without rendering —
+/// mirrors the tab/shape/advance loop in [`rasterize_text`]. Needed by
+/// [`rasterize_text_mixed`] because a whitespace-only `Other` segment
+/// produces no ink (so [`rasterize_text`]'s returned bbox can't place it) but
+/// still has to advance the column by its real width.
+fn measure_run_advance(face: &CpuFace, text: &str, font_size: f32, tab_size: f32) -> f32 {
+    let advance_scale = font_size / f32::from(face.units_per_em);
+    let mut total = 0.0_f32;
+    let mut first_segment = true;
+    let segments: Vec<&str> = if tab_size > 0.0 { text.split('\t').collect() } else { vec![text] };
+    for segment in segments {
+        if !first_segment {
+            total += tab_size;
+        }
+        first_segment = false;
+        if segment.is_empty() {
+            continue;
+        }
+        let glyph_ids: Vec<u16> = segment
+            .chars()
+            .map(|ch| face.cmap.glyph_index(ch as u32).unwrap_or(0))
+            .collect();
+        let shaped = face.shaper.shape(&glyph_ids, &face.hmtx);
+        total += shaped.iter().map(|sg| sg.x_advance as f32 * advance_scale).sum::<f32>();
+    }
+    total
+}
+
+/// Ph3 writing-mode vertical, Срез 3 — per-glyph split for `text-orientation:
+/// mixed`: each CJK ideograph paints upright (no rotation — [`rasterize_text`]
+/// runs directly against `pixmap` at `rect` shifted down by `y_cursor`, same
+/// as the plain horizontal path); each run of non-CJK characters paints as
+/// one block rotated 90° CW like [`rasterize_text_rotated`] — shaping the
+/// whole run together keeps Latin kerning/ligatures intact, and needs a
+/// full-canvas local buffer (via [`rasterize_text`] with `text_orientation:
+/// None`) composited onto `pixmap` with the rotation transform. The upright
+/// branch must NOT go through that local-buffer-at-origin-then-translate
+/// route: a local buffer always anchors at y=0, so any glyph ink that
+/// extends above the assumed ascent offset (common for CJK, whose visual
+/// bbox often exceeds the Latin-derived ascent metric) gets clipped at the
+/// canvas edge before the translate ever runs — rendering straight at the
+/// real `rect.y + y_cursor` keeps the same headroom the plain horizontal
+/// path has. [`measure_run_advance`] advances `y_cursor` by each segment's
+/// real shaped width (ink bbox alone would misplace a whitespace-only
+/// segment).
+#[allow(clippy::too_many_arguments)]
+fn rasterize_text_mixed(
+    pixmap: &mut tiny_skia::Pixmap,
+    rect: &Rect,
+    text: &str,
+    font_size: f32,
+    color: &Color,
+    tab_size: f32,
+    clip: Option<&Rect>,
+    font_weight: u16,
+    font_style: lumen_layout::FontStyle,
+    font_features: &[([u8; 4], u32)],
+) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
+    let Some(face) = load_bundled_face(font_features) else {
+        return Ok(None);
+    };
+    let width = pixmap.width();
+    let height = pixmap.height();
+    let local_rect = Rect { x: 0.0, y: 0.0, width: rect.width, height: rect.height };
+    let clip_mask = build_clip_mask(width, height, clip.copied());
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+
+    let mut y_cursor = 0.0_f32;
+    let mut ink: Option<DrawBounds> = None;
+    let mark_ink = |b: DrawBounds, ink: &mut Option<DrawBounds>| {
+        *ink = Some(match *ink {
+            None => b,
+            Some((l, t, r, btm)) => (l.min(b.0), t.min(b.1), r.max(b.2), btm.max(b.3)),
+        });
+    };
+
+    for seg in crate::display_list::split_mixed_runs(text) {
+        let (seg_text, upright) = match seg {
+            crate::display_list::MixedSegment::Cjk(ch) => {
+                let mut s = String::new();
+                s.push(ch);
+                (s, true)
+            }
+            crate::display_list::MixedSegment::Other(s) => (s, false),
+        };
+        let advance = measure_run_advance(&face, &seg_text, font_size, tab_size);
+        if upright {
+            let dest_rect =
+                Rect { x: rect.x, y: rect.y + y_cursor, width: rect.width, height: rect.height };
+            if let Some(b) = rasterize_text(
+                pixmap, &dest_rect, &seg_text, font_size, color, tab_size, clip, font_weight,
+                font_style, font_features, None,
+            )? {
+                mark_ink(b, &mut ink);
+            }
+        } else {
+            let mut local = tiny_skia::Pixmap::new(width, height)
+                .ok_or("Failed to create mixed-orientation text layer")?;
+            if let Some((l, t, r, b)) = rasterize_text(
+                &mut local, &local_rect, &seg_text, font_size, color, tab_size, None, font_weight,
+                font_style, font_features, None,
+            )? {
+                let transform =
+                    tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x, rect.y + y_cursor);
+                pixmap.draw_pixmap(0, 0, local.as_ref(), &paint, transform, clip_mask.as_ref());
+                let rotate = |x: f32, y: f32| (-y + rect.x, x + rect.y + y_cursor);
+                let corners = [rotate(l, t), rotate(r, t), rotate(r, b), rotate(l, b)];
+                let (mut dl, mut dt, mut dr, mut db) =
+                    (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+                for (x, y) in corners {
+                    dl = dl.min(x);
+                    dt = dt.min(y);
+                    dr = dr.max(x);
+                    db = db.max(y);
+                }
+                mark_ink((dl, dt, dr, db), &mut ink);
+            }
+        }
+        y_cursor += advance;
+    }
+    Ok(ink)
+}
+
 /// Render a `DrawText` run with the bundled Inter face, compositing each
 /// glyph's coverage onto `pixmap`.
 ///
@@ -2659,9 +2786,10 @@ fn rasterize_text_rotated(
 /// the glyph outline (fake italic). Both leave advances untouched — layout
 /// metrics must not change.
 ///
-/// `text_orientation: Some(Sideways | Mixed)` delegates to
-/// [`rasterize_text_rotated`] instead (Ph3 writing-mode vertical, Срез 1);
-/// `Upright` and `None` render horizontally as before.
+/// `text_orientation: Some(Sideways)` delegates to [`rasterize_text_rotated`]
+/// (Ph3 writing-mode vertical, Срез 1); `Some(Mixed)` delegates to
+/// [`rasterize_text_mixed`] (Срез 3 — per-glyph CJK-upright/Latin-rotated
+/// split). `Upright` and `None` render horizontally as before.
 #[allow(clippy::too_many_arguments)]
 fn rasterize_text(
     pixmap: &mut tiny_skia::Pixmap,
@@ -2679,18 +2807,25 @@ fn rasterize_text(
     if text.is_empty() || font_size <= 0.0 || color.a == 0 {
         return Ok(None);
     }
-    // Ph3 writing-mode vertical, Срез 1: `Sideways`/`Mixed` rotate the whole
-    // run 90° CW (per-glyph CJK-vs-Latin split is Срез 3). `Upright` and the
-    // horizontal (`None`) case fall through to the existing unrotated path —
-    // `Upright`'s per-glyph vertical advance is a separate follow-up.
-    if matches!(
-        text_orientation,
-        Some(TextOrientation::Sideways | TextOrientation::Mixed)
-    ) {
-        return rasterize_text_rotated(
-            pixmap, rect, text, font_size, color, tab_size, clip, font_weight, font_style,
-            font_features,
-        );
+    // Ph3 writing-mode vertical: `Sideways` rotates the whole run 90° CW
+    // (Срез 1); `Mixed` splits per glyph — CJK upright, Latin rotated (Срез
+    // 3). `Upright` and the horizontal (`None`) case fall through to the
+    // existing unrotated path — `Upright`'s per-glyph vertical advance is a
+    // separate follow-up.
+    match text_orientation {
+        Some(TextOrientation::Sideways) => {
+            return rasterize_text_rotated(
+                pixmap, rect, text, font_size, color, tab_size, clip, font_weight, font_style,
+                font_features,
+            );
+        }
+        Some(TextOrientation::Mixed) => {
+            return rasterize_text_mixed(
+                pixmap, rect, text, font_size, color, tab_size, clip, font_weight, font_style,
+                font_features,
+            );
+        }
+        _ => {}
     }
     let Some(face) = load_bundled_face(font_features) else {
         return Ok(None);
@@ -3333,6 +3468,101 @@ mod tests {
         let (s_w, s_h) = (sr - sl, sb - st);
         assert!(h_w > h_h, "horizontal run should be wider than tall (w={h_w} h={h_h})");
         assert!(s_h > s_w, "sideways run should be taller than wide (w={s_w} h={s_h})");
+    }
+
+    fn ink_bbox_blue(img: &Image) -> (u32, u32, u32, u32) {
+        let (mut l, mut t, mut r, mut b) = (img.width, img.height, 0u32, 0u32);
+        for y in 0..img.height {
+            for x in 0..img.width {
+                let (pr, pg, pb, _) = px(img, x, y);
+                if pb > pr && pb > pg {
+                    l = l.min(x);
+                    t = t.min(y);
+                    r = r.max(x);
+                    b = b.max(y);
+                }
+            }
+        }
+        (l, t, r, b)
+    }
+
+    /// Ph3 writing-mode vertical, Срез 3: a pure-CJK run under
+    /// `text_orientation: Mixed` must stay upright — same ink bbox as the same
+    /// run drawn horizontally (`None`), NOT rotated like `Sideways`. Before
+    /// Срез 3 `Mixed` was treated as `Sideways` for the whole run, so this
+    /// would have failed (the CJK glyph would have come out rotated).
+    #[test]
+    fn draw_text_mixed_keeps_cjk_upright() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let make_cmds = |orientation: Option<TextOrientation>| {
+            vec![DisplayCommand::DrawText {
+                rect: rect(4.0, 4.0, 60.0, 60.0),
+                text: "日".to_string(),
+                font_size: 32.0,
+                color: blue,
+                font_family: Vec::new(),
+                font_weight: lumen_layout::FontWeight::default(),
+                font_style: lumen_layout::FontStyle::default(),
+                font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 0.0,
+                highlight_name: None,
+                text_orientation: orientation,
+            }]
+        };
+
+        let horizontal =
+            rasterize_cpu(80, 80, &make_cmds(None), &[], 0.0, 0.0).expect("rasterize");
+        let mixed =
+            rasterize_cpu(80, 80, &make_cmds(Some(TextOrientation::Mixed)), &[], 0.0, 0.0)
+                .expect("rasterize");
+
+        let (hl, ht, hr, hb) = ink_bbox_blue(&horizontal);
+        let (ml, mt, mr, mb) = ink_bbox_blue(&mixed);
+        assert!(hr > hl && hb > ht, "horizontal CJK glyph produced no ink");
+        assert!(mr > ml && mb > mt, "mixed CJK glyph produced no ink");
+        assert_eq!((hl, ht, hr, hb), (ml, mt, mr, mb), "mixed CJK glyph should render identically to horizontal (upright, not rotated)");
+    }
+
+    /// Ph3 writing-mode vertical, Срез 3: a pure-Latin run under
+    /// `text_orientation: Mixed` still rotates 90° CW, same as `Sideways` —
+    /// only CJK glyphs get the upright exemption.
+    #[test]
+    fn draw_text_mixed_rotates_latin_run() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let make_cmds = |orientation: Option<TextOrientation>| {
+            vec![DisplayCommand::DrawText {
+                rect: rect(4.0, 4.0, 120.0, 40.0),
+                text: "Hi".to_string(),
+                font_size: 32.0,
+                color: blue,
+                font_family: Vec::new(),
+                font_weight: lumen_layout::FontWeight::default(),
+                font_style: lumen_layout::FontStyle::default(),
+                font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 0.0,
+                highlight_name: None,
+                text_orientation: orientation,
+            }]
+        };
+
+        let sideways = rasterize_cpu(
+            160, 160, &make_cmds(Some(TextOrientation::Sideways)), &[], 0.0, 0.0,
+        )
+        .expect("rasterize");
+        let mixed = rasterize_cpu(160, 160, &make_cmds(Some(TextOrientation::Mixed)), &[], 0.0, 0.0)
+            .expect("rasterize");
+
+        let (sl, st, sr, sb) = ink_bbox_blue(&sideways);
+        let (ml, mt, mr, mb) = ink_bbox_blue(&mixed);
+        assert!(sr > sl && sb > st, "sideways Latin run produced no ink");
+        assert!(mr > ml && mb > mt, "mixed Latin run produced no ink");
+        let (m_w, m_h) = (mr - ml, mb - mt);
+        assert!(m_h > m_w, "mixed Latin run should be taller than wide, like sideways (w={m_w} h={m_h})");
+        assert_eq!((sl, st, sr, sb), (ml, mt, mr, mb), "mixed pure-Latin run should rotate identically to sideways");
     }
 
     /// Empty text is a no-op: the background stays pure white.

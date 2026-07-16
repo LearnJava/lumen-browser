@@ -107,7 +107,10 @@ use lumen_paint::{
     RenderBackend,
 };
 use lumen_layout::Cursor as CssCursor;
-use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply, AutomationRequest, WaitCondition};
+use lumen_driver::{
+    AutomationCommand, AutomationHandle, AutomationReply, AutomationRequest, ConsoleEntry,
+    ConsoleLevel as DriverConsoleLevel, WaitCondition,
+};
 use winit::application::ApplicationHandler;
 
 /// Событие от background-потока загрузки страницы в event loop.
@@ -367,6 +370,7 @@ fn main() -> ExitCode {
     click_log::init(click_log_flag);
     let (det_cfg, rest_args) = deterministic::extract_deterministic(&rest_args);
     let det_mode = det_cfg.enabled;
+    let (viewport_override, rest_args) = extract_viewport_override(&rest_args);
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (screenshot_output, rest_args) = extract_screenshot(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
@@ -503,7 +507,7 @@ fn main() -> ExitCode {
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode, automation_handle, automation_cmd_tx, automation_rx),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode, viewport_override, automation_handle, automation_cmd_tx, automation_rx),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
@@ -619,6 +623,7 @@ fn run_window_mode(
     initial_scroll: (f32, f32),
     no_scrollbar: bool,
     deterministic: bool,
+    viewport_override: Option<(f32, f32)>,
     automation_handle: AutomationHandle,
     automation_cmd_tx: std::sync::mpsc::Sender<AutomationRequest>,
     automation_rx: std::sync::mpsc::Receiver<AutomationRequest>,
@@ -939,6 +944,7 @@ fn run_window_mode(
         memory_poll: memory_poll::MemoryPollTick::new(memory_poll::platform_source()),
         cache_registry: lumen_core::ext::CacheRegistry::new(),
         deterministic,
+        viewport_override,
         devtools_console: devtools::console_panel::ConsolePanel::new(),
         dom_inspector: devtools::inspector::DomInspectorPanel::new(),
         network_panel: devtools::network_panel::NetworkPanel::new(std::sync::Arc::clone(
@@ -1585,6 +1591,7 @@ fn print_usage() {
     eprintln!("  [--devtools-port <N>]                           — DevTools WS сервер (любой режим)");
     eprintln!("  [--bidi-port <N>]                               — WebDriver BiDi WS сервер (любой режим)");
     eprintln!("  [--mcp-live-port <N>]                           — MCP-сервер (TCP) на живом окне (любой режим, SDC-2)");
+    eprintln!("  [--viewport <W>x<H>]                            — фикс. CSS-размер окна (переопределяет --deterministic 1280×800)");
     eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
     eprintln!("  [--tor [--tor-port <N>]]                        — Tor-режим: TorBrowser fingerprint + SOCKS5 9050 (или N)");
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
@@ -1769,6 +1776,45 @@ fn extract_import_session(
         i += 1;
     }
     Ok((session, rest))
+}
+
+/// Извлечь `--viewport <W>x<H>` из аргументов (DEVX-1).
+///
+/// Overrides the window's CSS content viewport size (window height still adds
+/// `tabs::strip::TAB_BAR_HEIGHT` on top, same as the non-deterministic default —
+/// see `resumed()`). Needed because `--deterministic` forces a 1280×800 window,
+/// which breaks `graphic_tests/run.py --live`'s magenta-marker crop calibration
+/// (baked in at the pipeline's fixed 1024×720 viewport); this flag lets a caller
+/// combine `--deterministic` (freeze Date.now/Math.random/rAF) with the exact
+/// viewport graphic_tests expects. Malformed values (missing `x`, non-numeric)
+/// are left in `rest` untouched rather than silently ignored.
+fn extract_viewport_override(args: &[String]) -> (Option<(f32, f32)>, Vec<String>) {
+    let mut size: Option<(f32, f32)> = None;
+    let mut rest = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--viewport" && size.is_none() {
+            match iter.next() {
+                Some(val) => match val.split_once('x') {
+                    Some((w, h)) => match (w.parse::<f32>(), h.parse::<f32>()) {
+                        (Ok(w), Ok(h)) => size = Some((w, h)),
+                        _ => {
+                            rest.push(arg.clone());
+                            rest.push(val.clone());
+                        }
+                    },
+                    None => {
+                        rest.push(arg.clone());
+                        rest.push(val.clone());
+                    }
+                },
+                None => rest.push(arg.clone()),
+            }
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (size, rest)
 }
 
 /// Извлечь `--no-scrollbar` из аргументов, вернуть (flag, остальные аргументы).
@@ -7237,11 +7283,18 @@ struct Lumen {
     cache_registry: lumen_core::ext::CacheRegistry,
     /// Deterministic render mode (8F).
     ///
-    /// When `true` (`--deterministic` CLI flag): window opens at 1280×800,
-    /// `Date.now()` is frozen at 0, `Math.random` uses a seeded PRNG, and
+    /// When `true` (`--deterministic` CLI flag): window opens at 1280×800
+    /// (unless overridden by `viewport_override`, DEVX-1), `Date.now()` is
+    /// frozen at 0, `Math.random` uses a seeded PRNG, and
     /// `requestAnimationFrame` callbacks receive a 0 ms timestamp.
     /// Intended for snapshot testing and reproducible output.
     deterministic: bool,
+    /// `--viewport <W>x<H>` override (DEVX-1): pins the window's CSS content
+    /// viewport size, taking priority over both the `deterministic` 1280×800
+    /// default and the plain 1024×720 default (see `resumed()`). Lets
+    /// automation combine `--deterministic` with `graphic_tests`'s fixed
+    /// 1024×720 crop-calibration contract.
+    viewport_override: Option<(f32, f32)>,
     /// DevTools JS console panel (§7E.5).
     ///
     /// Captures `console.log/warn/error` output from the active page's JS runtime.
@@ -9482,7 +9535,12 @@ struct PipOsWindow {
 
 impl ApplicationHandler<LoadEvent> for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let (win_w, win_h) = if self.deterministic {
+        let (win_w, win_h) = if let Some((w, h)) = self.viewport_override {
+            // `--viewport` (DEVX-1) wins over both defaults below — lets
+            // `--deterministic` be combined with graphic_tests' fixed 1024×720
+            // crop-calibration contract.
+            (w, h + tabs::strip::TAB_BAR_HEIGHT)
+        } else if self.deterministic {
             (1280.0, 800.0)
         } else {
             // Высота окна = CSS viewport (720) + tab bar (36) = 756, чтобы
@@ -10303,6 +10361,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         for (cmd, reply_tx) in automation_cmds {
             match cmd {
                 AutomationCommand::Navigate(url) => {
+                    // Real browsers clear the console on navigation (unless "preserve
+                    // log" is set); doing the same here keeps `ConsoleLog` (DEVX-1)
+                    // scoped to the page just loaded instead of accumulating across
+                    // an entire --live run.
+                    self.devtools_console.clear();
                     self.navigate_to(page_source_for_automation_url(&url));
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
@@ -10382,6 +10445,29 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let _ = reply_tx.send(AutomationReply::Error("no page loaded".to_string()));
                     }
                 },
+                AutomationCommand::ConsoleLog => {
+                    // Drain any messages the JS runtime queued this tick before the
+                    // periodic DevTools drain below would (same pattern, just eager
+                    // so a message logged earlier this frame isn't missed).
+                    let msgs = self.drain_query_js(|j| j.take_console_messages()).unwrap_or_default();
+                    if !msgs.is_empty() {
+                        self.devtools_console.push_batch(msgs);
+                    }
+                    let entries: Vec<ConsoleEntry> = self
+                        .devtools_console
+                        .messages()
+                        .iter()
+                        .map(|m| ConsoleEntry {
+                            level: match m.level {
+                                devtools::console_panel::ConsoleLevel::Log => DriverConsoleLevel::Log,
+                                devtools::console_panel::ConsoleLevel::Warn => DriverConsoleLevel::Warn,
+                                devtools::console_panel::ConsoleLevel::Error => DriverConsoleLevel::Error,
+                            },
+                            message: m.text.clone(),
+                        })
+                        .collect();
+                    let _ = reply_tx.send(AutomationReply::ConsoleLog(entries));
+                }
             }
         }
 
@@ -22156,6 +22242,42 @@ mod tests {
             extract_screenshot(&args(&["--screenshot", "a.png", "--screenshot", "b.png"]));
         assert_eq!(output.as_deref(), Some(std::path::Path::new("a.png")));
         assert_eq!(rest, args(&["--screenshot", "b.png"]));
+    }
+
+    #[test]
+    fn extract_viewport_override_basic() {
+        let (size, rest) = extract_viewport_override(&args(&["--viewport", "1024x720", "page.html"]));
+        assert_eq!(size, Some((1024.0, 720.0)));
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn extract_viewport_override_no_flag() {
+        let (size, rest) = extract_viewport_override(&args(&["page.html"]));
+        assert!(size.is_none());
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn extract_viewport_override_malformed_kept_in_rest() {
+        let (size, rest) = extract_viewport_override(&args(&["--viewport", "bogus", "page.html"]));
+        assert!(size.is_none());
+        assert_eq!(rest, args(&["--viewport", "bogus", "page.html"]));
+    }
+
+    #[test]
+    fn extract_viewport_override_missing_value_kept_in_rest() {
+        let (size, rest) = extract_viewport_override(&args(&["--viewport"]));
+        assert!(size.is_none());
+        assert_eq!(rest, args(&["--viewport"]));
+    }
+
+    #[test]
+    fn extract_viewport_override_only_first_flag_consumed() {
+        let (size, rest) =
+            extract_viewport_override(&args(&["--viewport", "800x600", "--viewport", "1x1"]));
+        assert_eq!(size, Some((800.0, 600.0)));
+        assert_eq!(rest, args(&["--viewport", "1x1"]));
     }
 
     #[test]

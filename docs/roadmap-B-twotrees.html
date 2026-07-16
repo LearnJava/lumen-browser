@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-15",
+ "generated": "2026-07-16",
  "counts": {
-  "open": 27,
-  "fixed": 232,
+  "open": 31,
+  "fixed": 235,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 259,
+ "total_bugs": 266,
  "phases": [
   {
    "id": "P0",
@@ -233,9 +233,15 @@
      "status": "done"
     },
     {
+     "id": "P3-vertical",
+     "title": "CSS writing-mode: вертикальный текст (полный layout)",
+     "status": "done",
+     "note": "ЗАВЕРШЕНО 2026-07-16 (P1, срезы 1-5): layout (axis-swap + вертикальный inline-поток) был готов; paint — CPU-рендерер (срез 1) и wgpu-рендерер (срез 2, live default, ADR-017) поворачивают глифы, mixed-режим различает CJK-upright/латиница-повёрнута per-glyph (срез 3); BUG-264 layout-реордер закрыт (срез 4); graphic-тест 145-writing-mode.html (срез 5) вскрыл и закрыл BUG-289 (vertical InlineRun текст никогда не рисовался на реальном DOM — emit_inline_run игнорировал writing_mode); остаток — font-parity + upright per-glyph advance, KNOWN_DEBTOR BUG-290. femtovg (fallback-бэкенд) по-прежнему игнорирует text_orientation — вне скоупа. Бриф docs/tasks/ph3-writing-mode-vertical.md"
+    },
+    {
      "id": "SDC",
      "title": "SDC: Управление живым окном (8A.7 Ф4)",
-     "status": "done",
+     "status": "active",
      "note": "Shell-as-driver-client: управление ЖИВЫМ видимым окном Lumen напрямую командами (Selenium/WebDriver-подобно, без headless-прокладки) — закрытие 8A.7 Фазы 4 по `docs/plans/8A.7-shell-as-driver-client-plan.md` + ADR-006. Разрез по владению: SDC-1a (P1 driver) → SDC-1b (P3 shell) → {SDC-2 (P1 фронты), SDC-3 (P3 графтест)}. Цепочка зависимостей строгая",
      "tasks": [
       {
@@ -265,6 +271,13 @@
        "status": "done",
        "size": "M",
        "note": "`graphic_tests/run.py --live`: один живой `lumen --mcp-live-port` процесс/окно на весь прогон вместо kill+relaunch на каждый тест (`LiveWindowClient`, MCP JSON-RPC — `navigate`+`wait(document_ready)` вместо блокирующего `time.sleep(LUMEN_WAIT_SEC=5)`); пиксельный снимок остался gdigrab-ом реального femtovg-окна (не CPU `resource://screenshot`, тот же разрыв паритета что у `--ipc`), поэтому проходят и JS-тесты (57, 129–138). TEST-00 калибрует crop offset один раз, как раньше. Валидировано полным прогоном: результат идентичен baseline (`Изменений нет`), 139 тестов за ~10.5 мин. По пути найдены и исправлены 2 бага живого окна, важных и для SDC-2: `AutomationCommand::Navigate` не поддерживал `file://` (всегда `PageSource::Url` → сетевой `HttpClient` → \"unsupported scheme: file\"); команда с BiDi/MCP-потока не будила запаркованный `ControlFlow::Wait` event loop (добавлен `LoadEvent::AutomationWake` + `AutomationHandle::set_wake`)"
+      },
+      {
+       "id": "SDC-4",
+       "title": "SDC-4: --live как дефолт графтест-прогона",
+       "status": "planned",
+       "size": "S",
+       "note": "Сделать `--live` (SDC-3) режимом по умолчанию в `graphic_tests/run.py`: kill+relaunch-на-каждый-тест оставить как явный opt-out флаг (`--per-test-process`), `--live` из CLI убрать/оставить no-op алиасом; обновить docstring run.py, `docs/graphic-tests.md`, секцию Graphic tests в CLAUDE.md. Мотивация: SDC-3 влит и валидирован (полный прогон идентичен baseline, 139 тестов ~10.5 мин), но дефолт всё ещё перезапускает процесс на каждый тест — главный источник времени прогона и гонок фокуса («magenta marker not found»). Гейт: полный `--continue-on-fail` прогон новым дефолтом — дельта к latest.json «Изменений нет»; проверить совместимость с `--only`/`--recheck`/`--bisect`/`--build`"
       }
      ]
     },
@@ -1002,12 +1015,6 @@
      "note": "PARTIAL (сверка с кодом 2026-07-02): Phase 0 drop-cap float (size×line-height, sink); дошить — точное cap-height/baseline выравнивание, raised-cap, RTL"
     },
     {
-     "id": "P3-vertical",
-     "title": "CSS writing-mode: вертикальный текст (полный layout)",
-     "status": "planned",
-     "note": "АКТУАЛИЗАЦИЯ 2026-07-15: block axis-swap готов (vertical.rs); вертикальный inline-поток (lay_out_vertical_inline_run/wrap_inline_run_vertical) уже реализован — ROADMAP-нота была устаревшей, `vertical.rs:10` шапка переписана. Реальный остаток — paint (поворот глифов): Срез 1 (CPU-рендерер, cpu_raster.rs) влит; Срез 2 (wgpu renderer.rs — ныне дефолтный бэкенд, ADR-017 — приоритетнее исходно предполагавшегося femtovg) не начат; Срез 3 (mixed/upright per-glyph), Срез 4 (BUG-264 реордер, опц.), Срез 5 (graphic-тест) — не начаты. Бриф docs/tasks/ph3-writing-mode-vertical.md"
-    },
-    {
      "id": "P3-resizeobs",
      "title": "ResizeObserver",
      "status": "done",
@@ -1430,6 +1437,59 @@
        "title": "CSS модули — Tier 4 (Advanced/future)",
        "status": "active",
        "note": "7✅ 14🟡 0⬜ 0🚫 из 21 модулей CSS-SPECS.md (Tier 4)"
+      }
+     ]
+    },
+    {
+     "id": "DEVX",
+     "title": "DEVX: dev-tooling на готовых поверхностях браузера",
+     "status": "active",
+     "note": "Дорожка dev-tooling (владелец — P2): задействовать уже существующие automation/introspection-поверхности браузера для ускорения разработки. Полный каталог поверхностей и «что когда применять» — `docs/automation.md` (аудит 2026-07-16): MCP tools/resources, BiDi-команды, driver-API, `--deterministic`, `LUMEN_NO_*` paint-флаги — почти всё не задействовано тулингом",
+     "tasks": [
+      {
+       "id": "DEVX-1",
+       "title": "DEVX-1: детерминизм + console-гейт в live-прогоне",
+       "status": "done",
+       "size": "S",
+       "note": "DONE 2026-07-16: `--live` теперь спавнит lumen с `--deterministic --viewport 1024x720` (заморозка Date.now/Math.random/rAF; `--viewport` — новый флаг, т.к. `--deterministic` сам по себе даёт окно 1280×800, что ломает магента-калибровку TEST-00) и после каждого теста читает MCP `resource://console` (новый `AutomationCommand::ConsoleLog`, буфер живёт в DevTools console panel и чистится на `navigate()`) — `console.error` FAIL'ит тест независимо от diff% и попадает в HTML-отчёт. `--rng-seed`/`--monotonic-clock` остались невостребованы движком (см. docs/automation.md CLI flags) — сид всегда берётся из хеша URL, этого достаточно для детерминизма между прогонами. Полный `--live`-прогон не удалось прогнать как гейт в этой рабочей сессии: `ffmpeg -f gdigrab` возвращает access-denied в этом Windows-сеансе независимо от кода (окружение, не Lumen); проверено напрямую по MCP-протоколу через CPU `resource://screenshot` (размер 1024×720 подтверждён) и `resource://console` (console.error перехвачен и текст совпал, буфер очистился на следующей навигации)"
+      },
+      {
+       "id": "DEVX-2",
+       "title": "DEVX-2: не-пиксельные тесты на driver-API",
+       "status": "done",
+       "size": "M",
+       "note": "Слой не-пиксельных regression-тестов на driver-API (`cargo test -p lumen-driver`, InProcessSession, без GPU/Edge): `layout_box_by_selector` (геометрия по селектору), `computed_style_snapshot` (типизированные ассерты каскада), `query_a11y` (роль/имя, Playwright-стиль getByRole). Набор golden-кейсов по мотивам graphic_tests (геометрия контейнеров, каскад, a11y-роли форм); фикстуры — маленькие самодостаточные HTML в tests/fixtures. По ходу найден BUG-294 (двойное применение margin у flex-item в `lay_out_flex`)",
+       "bugs": [
+        "BUG-294"
+       ]
+      },
+      {
+       "id": "DEVX-3",
+       "title": "DEVX-3: golden-гейт на dump-layout/display-list",
+       "status": "planned",
+       "size": "M",
+       "note": "Golden-гейт на текстовых дампах: скрипт (python или cargo-тест) прогоняет `--dump-layout` и `--dump-display-list` по фиксированному набору страниц, diff с закоммиченными эталонами; обновление эталонов явным флагом (`--update`). Ловит регрессии геометрии/порядка отрисовки/z-index стабильно и кросс-платформенно, без GPU и без Edge; дополняет пиксельный пайплайн, не заменяет"
+      },
+      {
+       "id": "DEVX-4",
+       "title": "DEVX-4: --paint-bisect по LUMEN_NO_* флагам",
+       "status": "planned",
+       "size": "S",
+       "note": "`graphic_tests/run.py --paint-bisect <id>`: прогнать тест N+1 раз — baseline и с поочерёдным отключением каждой paint-оптимизации (`LUMEN_NO_FRAME_SKIP`/`NO_SCROLL_COMPOSITOR`/`NO_ANIM_SPLIT`/`NO_BBOX_SCISSOR`/`NO_BBOX_BACKDROP`/`NO_IMAGE_MIPS`/`NO_BAND_BIAS`, renderer.rs); вывести таблицу diff% по флагам — какая оптимизация меняет картинку. Автоматизирует ручную бисекцию визуальных артефактов"
+      },
+      {
+       "id": "DEVX-5",
+       "title": "DEVX-5: headless MCP/InProcessSession — снять заглушки",
+       "status": "planned",
+       "size": "L",
+       "note": "Реализовать headless-заглушки автоматизации (сейчас Err): в `InProcessSession` (crates/driver) — `click`/`type_text`/`scroll`/`wait`/`eval` (persistent JS-runtime на снимке DOM через **дефолтный V8-движок** (ADR-018); паттерн — WinitSession SDC-1a, но НЕ его one-shot QuickJS-путь: rquickjs — rollback-only и сносится S12b) и CPU-`screenshot`; прокинуть в headless MCP (`--mcp`/`--mcp-port`), чтобы tools `eval`/`click`/`type`/`scroll`/`screenshot` работали без окна. Открывает MCP/agent-драйв и DEVX-2-тесты с интеракциями в CI без GPU"
+      },
+      {
+       "id": "DEVX-6",
+       "title": "DEVX-6: BiDi-сценарии offline/intercept/timezone/UA",
+       "status": "planned",
+       "size": "M",
+       "note": "Интеграционные сценарные тесты на неиспользуемых BiDi-рычагах (`--bidi-port`, живое окно): `network.setOfflineStatus` (offline-поведение), `network.addIntercept`+`failRequest`/`continueRequest` (деградация при падении ресурса), `browser.setTimezoneOverride` и `emulation.setUserAgentOverride` (Date/navigator.userAgent на странице). Python-тесты рядом с tests/wpt-тулингом; заодно проверяет сами BiDi-команды end-to-end"
       }
      ]
     }
@@ -3216,7 +3276,7 @@
   },
   "BUG-277": {
    "status": "open",
-   "title": "Установленный wgpu-базлайн (не регрессия): первый полный прогон `LUMEN_BACKEND=wgpu graphic_tests/run.py --continue-on-fail` после фикса BUG-276 — 65 PASS · 38…",
+   "title": "Установленный wgpu-базлайн: первый полный прогон `LUMEN_BACKEND=wgpu graphic_tests/run.py --continue-on-fail` после фикса BUG-276 — 65 PASS · 38 FAIL · 38 DEBTO…",
    "component": "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg",
    "date": null,
    "debtor": true
@@ -3236,10 +3296,10 @@
    "debtor": false
   },
   "BUG-280": {
-   "status": "open",
-   "title": "`window` — плоский JS-объект-литерал, не настоящий global object движка (см. BUG-233) — свойства, назначенные через `window.x = ...`/`self.x = ...` (в т.ч. `tes…",
-   "component": "js (JS environment bootstrap)",
-   "date": null,
+   "status": "fixed",
+   "title": "`window` был плоским JS-объектом-литералом, не настоящим global object движка — свойства, назначенные через `window.x = ...`/`self.x = ...` (в т.ч. `testharness…",
+   "component": "js (JS environment bootstrap, `WEB_API_SHIM`)",
+   "date": "2026-07-16",
    "debtor": false
   },
   "BUG-281": {
@@ -3278,11 +3338,60 @@
    "debtor": false
   },
   "BUG-287": {
+   "status": "fixed",
+   "title": "Полный `graphic_tests/run.py --continue-on-fail` на `main` давал 43 FAIL — оказалось НЕ движковой регрессией. `git bisect` на представителе (TEST-76) сошёлся на…",
+   "component": "paint (test-harness baseline, не движок)",
+   "date": "2026-07-16",
+   "debtor": true
+  },
+  "BUG-288": {
    "status": "open",
-   "title": "Полный `graphic_tests/run.py --continue-on-fail` на чистом `main` (после мержа `p3-cascade-perf`) даёт 43 FAIL (13 из них — регрессия хуже KNOWN_DEBTORS baselin…",
-   "component": "неизвестен (layout/paint?)",
+   "title": "TEST-14 (overflow, часть BUG-287): overflow-axis coercion (BUG-020, CSS Overflow L3 §2.1 — один явный не-`visible` axis коэрсит второй `visible` в `auto`) корре…",
+   "component": "paint (`emit_scrollbars`) / test-triage",
    "date": null,
    "debtor": true
+  },
+  "BUG-289": {
+   "status": "fixed",
+   "title": "Вертикальный `writing-mode` текст на реальных страницах никогда не рисовался корректно: layout (`vertical.rs`) верно вычислял позиции колонок/фрагментов, но `em…",
+   "component": "paint (`display_list.rs::emit_inline_run`)",
+   "date": "2026-07-16",
+   "debtor": true
+  },
+  "BUG-290": {
+   "status": "open",
+   "title": "TEST-145 (writing-mode) residual 3.68% после BUG-289: (1) font-parity Inter vs Edge sans (rule 3, тот же класс что BUG-100/TEST-58); (2) `text-orientation: upri…",
+   "component": "paint/layout (font metrics; `upright` per-glyph advance)",
+   "date": null,
+   "debtor": true
+  },
+  "BUG-291": {
+   "status": "open",
+   "title": "После фикса BUG-280 `tests/wpt/run_smoke.py` всё ещё не проходит целиком: встроенный рендерер результатов `testharness.js` (`Output.show_results`) падает с `Typ…",
+   "component": "js (DOM child-node bindings, `crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-292": {
+   "status": "open",
+   "title": "Адблок блокирует топ-левел навигацию на обычные сайты: easylist-правило `/^https?:\\/\\/[0-9a-z]{5,}\\.com\\/.*/$script,third-party,xhr,domain=<стриминги>` в ABP-се…",
+   "component": "network (`filter/easylist.rs` + filter context в `lib.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-293": {
+   "status": "open",
+   "title": "Вкладка, открытая `window.open('file:///…')`, не загружается: дренаж popup-запросов заворачивает URL как есть в `PageSource::Url` → сетевой путь → `unsupported…",
+   "component": "shell (`main.rs` — дренаж `window.open()` popup-запросов)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-294": {
+   "status": "open",
+   "title": "Flex-item с `margin-left` в row-контейнере позиционируется со сдвигом в 2× margin вместо 1×: `lay_out_flex`'s row-ветка передаёт `content_x + main_cursor + m_l`…",
+   "component": "layout (`box_tree.rs`, `lay_out_flex`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3342,7 +3451,10 @@
    "BUG-155",
    "BUG-243"
   ],
-  "js (JS environment bootstrap)": [
+  "js (DOM child-node bindings, `crates/js/src/dom.rs`)": [
+   "BUG-291"
+  ],
+  "js (JS environment bootstrap, `WEB_API_SHIM`)": [
    "BUG-280"
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
@@ -3485,6 +3597,9 @@
   "network (HTTP client)": [
    "BUG-278"
   ],
+  "network (`filter/easylist.rs` + filter context в `lib.rs`)": [
+   "BUG-292"
+  ],
   "network+shell": [
    "BUG-169"
   ],
@@ -3554,6 +3669,12 @@
   "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg": [
    "BUG-277"
   ],
+  "paint (`display_list.rs::emit_inline_run`)": [
+   "BUG-289"
+  ],
+  "paint (`emit_scrollbars`) / test-triage": [
+   "BUG-288"
+  ],
   "paint (build)": [
    "BUG-235"
   ],
@@ -3566,6 +3687,9 @@
   "paint (font-metrics)": [
    "BUG-250"
   ],
+  "paint (test-harness baseline, не движок)": [
+   "BUG-287"
+  ],
   "paint/cpu_raster": [
    "BUG-052"
   ],
@@ -3575,6 +3699,9 @@
   "paint/layout": [
    "BUG-096",
    "BUG-156"
+  ],
+  "paint/layout (font metrics; `upright` per-glyph advance)": [
+   "BUG-290"
   ],
   "paint/shadow-dom": [
    "BUG-142"
@@ -3597,6 +3724,9 @@
    "BUG-068",
    "BUG-147",
    "BUG-148"
+  ],
+  "shell (`main.rs` — дренаж `window.open()` popup-запросов)": [
+   "BUG-293"
   ],
   "shell (`main.rs`, `maybe_expand_cv_relevant`)": [
    "BUG-286"
@@ -3634,9 +3764,6 @@
   "test/snapshot": [
    "BUG-118",
    "BUG-149"
-  ],
-  "неизвестен (layout/paint?)": [
-   "BUG-287"
   ]
  }
 }

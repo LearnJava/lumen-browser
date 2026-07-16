@@ -135,7 +135,8 @@ fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
 /// into the JS context.
 ///
 /// Must run after `dom::install_dom_bindings` (needs `_lumen_make_element`,
-/// `_lumen_set_attr`, `_lumen_get_attr`, `_lumen_dispatch_bubble`).
+/// `_lumen_set_attr`, `_lumen_get_attr`, `_lumen_dispatch_bubble`, and `Blob`
+/// — `File.prototype` extends `Blob.prototype`).
 pub fn install_file_input_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     install_native_bindings(ctx)?;
     ctx.eval::<(), _>(FILE_INPUT_SHIM)?;
@@ -179,8 +180,12 @@ const FILE_INPUT_SHIM: &str = r#"
 function File(bits, name, options) {
   options = options || {};
   this.name = String(name || '');
-  this.size = 0;
-  this.type = String(options.type || '');
+  // Own writable data properties, not plain assignment: `File.prototype` (below)
+  // extends `Blob.prototype`, which defines `size`/`type` as getter-only accessors
+  // (backed by `_bytes`/`_type`, unused here) — a bare `this.size = 0` would hit
+  // that accessor's missing setter and throw under 'use strict' (this shim's mode).
+  Object.defineProperty(this, 'size', { value: 0, writable: true, enumerable: true, configurable: true });
+  Object.defineProperty(this, 'type', { value: String(options.type || ''), writable: true, enumerable: true, configurable: true });
   this.lastModified = (typeof options.lastModified === 'number')
     ? options.lastModified
     : (typeof Date !== 'undefined' ? Date.now() : 0);
@@ -193,6 +198,13 @@ function File(bits, name, options) {
     this.size = joined.length;
   }
 }
+// W3C File API §4: `interface File : Blob` — BUG-280 made `window.File = ...`
+// (below) reach the real global `File`, which surfaced that this token-backed
+// File never inherited from Blob, so `fileInput.files[0] instanceof Blob` was
+// false. `size`/`type` stay own-properties (set above), shadowing Blob.prototype's
+// getters, so this only adds the missing prototype link — no behaviour change.
+File.prototype = Object.create(Blob.prototype);
+File.prototype.constructor = File;
 
 // File.prototype.text() — W3C File API §4.3
 // Returns a Promise resolving to the file's contents as a UTF-8 string.
@@ -353,6 +365,10 @@ mod tests {
             ctx.eval::<(), _>(r#"
                 var window = globalThis;
                 var _lumen_listeners = {};
+                // Minimal Blob stand-in — real Blob (dom.rs::WEB_API_SHIM) isn't
+                // installed in this isolated harness, but File.prototype now
+                // extends Blob.prototype (W3C File API §4: `interface File : Blob`).
+                function Blob(blobParts, options) {}
                 function _lumen_set_attr(nid, name, val) {}
                 function _lumen_get_attr(nid, name) { return undefined; }
                 function _lumen_dispatch_bubble(nid, type) {}
@@ -533,6 +549,7 @@ mod tests {
         ctx.with(|ctx| {
             ctx.eval::<(), _>(r#"
                 var window = globalThis;
+                function Blob(blobParts, options) {}
                 function _lumen_set_attr() {} function _lumen_get_attr() {}
                 function _lumen_dispatch_bubble() {}
                 function _lumen_make_element(n) { return {}; }
@@ -561,6 +578,7 @@ mod tests {
         ctx.with(|ctx| {
             ctx.eval::<(), _>(r#"
                 var window = globalThis;
+                function Blob(blobParts, options) {}
                 function _lumen_set_attr() {} function _lumen_get_attr() {}
                 function _lumen_dispatch_bubble() {}
                 function _lumen_make_element(n) { return {}; }
@@ -593,6 +611,7 @@ mod tests {
         ctx.with(|ctx| {
             ctx.eval::<(), _>(r#"
                 var window = globalThis;
+                function Blob(blobParts, options) {}
                 function _lumen_set_attr() {} function _lumen_get_attr() {}
                 function _lumen_dispatch_bubble() {}
                 function _lumen_make_element(n) { return {}; }

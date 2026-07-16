@@ -1138,6 +1138,46 @@ fn fit_with_ratio(iw: f32, ih: f32, bw: f32, bh: f32, cover: bool) -> (f32, f32)
     (iw * s, ih * s)
 }
 
+/// One classified run of a `text-orientation: mixed` string (CSS Writing
+/// Modes L4 §4): a CJK ideograph paints upright (no rotation, stacked below
+/// the previous glyph); a run of consecutive non-CJK characters (Latin,
+/// digits, punctuation, whitespace) paints as one rotated block so kerning
+/// and ligatures inside a Latin word stay intact. Produced by
+/// [`split_mixed_runs`]; consumed by the CPU rasterizer
+/// (`cpu_raster::rasterize_text_mixed`) and the wgpu renderer
+/// (`renderer::push_text_glyphs_mixed`) — both backends that actually rotate
+/// glyphs (femtovg still ignores `text_orientation` entirely, out of scope
+/// per `docs/tasks/ph3-writing-mode-vertical.md`).
+#[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+pub(crate) enum MixedSegment {
+    /// A single CJK ideograph, rendered upright.
+    Cjk(char),
+    /// A run of consecutive non-CJK characters, rendered as one rotated block.
+    Other(String),
+}
+
+/// Splits `text` into [`MixedSegment`]s for `text-orientation: mixed` paint —
+/// see that type's docs for the CJK/Latin split rule.
+#[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+pub(crate) fn split_mixed_runs(text: &str) -> Vec<MixedSegment> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    for ch in text.chars() {
+        if lumen_layout::vertical::is_cjk(ch) {
+            if !buf.is_empty() {
+                out.push(MixedSegment::Other(std::mem::take(&mut buf)));
+            }
+            out.push(MixedSegment::Cjk(ch));
+        } else {
+            buf.push(ch);
+        }
+    }
+    if !buf.is_empty() {
+        out.push(MixedSegment::Other(buf));
+    }
+    out
+}
+
 /// Tile geometry for a background image from `background-size` /
 /// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
 ///
@@ -3611,6 +3651,86 @@ fn frag_selection_highlight(frag: &InlineFrag, sel: &SelectionHighlight) -> Opti
     Some((x_start, (x_end - x_start).max(0.0)))
 }
 
+/// CSS Writing Modes L4 §3–4 — paints an InlineRun's lines when the box is in
+/// a vertical writing mode (`vertical-rl`/`vertical-lr`/`sideways-*`).
+///
+/// `wrap_inline_run_vertical` (`lumen-layout`) repurposes `InlineFrag.x` as the
+/// cumulative offset along the inline axis (physical Y for vertical writing
+/// modes, top→bottom) and `InlineFrag.width` as the frag's own extent along
+/// that axis — the same two fields the horizontal path in [`emit_inline_run`]
+/// reads as a physical X offset and physical width. Before this function
+/// existed, `emit_inline_run` ran unconditionally and misread those fields as
+/// horizontal geometry: every frag in a line landed at the same physical Y
+/// (`line_y`, correct only for a horizontal row) with X spread out by what is
+/// actually the vertical cursor, and each word's DrawText got the column's
+/// *width* (`b.rect.width`, one column wide) as its rect height — silently
+/// breaking every real vertical `<div>` (caught by `graphic_tests/145-writing-mode.html`,
+/// Ph3 writing-mode vertical Срез 5; the layout side — `vertical.rs` — was
+/// already correct, only this paint conversion was never ported to the axis
+/// swap).
+///
+/// Each outer `lines` entry is one wrapped column along the block axis;
+/// column 0 sits at `b.rect.x` (already correctly placed by
+/// `lay_out_vertical_inline_run`/the vertical block-stacking cursor in
+/// `vertical.rs`), so wrapped column N shifts by `N * col_width` — leftward
+/// for `vertical-rl`/`sideways-rl` (later columns sit further from the
+/// right-edge start), rightward for `vertical-lr`/`sideways-lr`.
+///
+/// Not yet ported to this axis (Phase 0, same class of gap the horizontal
+/// path documents elsewhere): `vertical-align` (`frag.y_offset`), inline
+/// replaced content (images), `::selection` highlight, and
+/// `text-overflow: ellipsis`.
+fn emit_inline_run_vertical(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<DisplayCommand>) {
+    let col_width = b.rect.width;
+    let is_rtl = matches!(
+        b.style.writing_mode,
+        lumen_layout::style::WritingMode::VerticalRl | lumen_layout::style::WritingMode::SidewaysRl
+    );
+    for (line_idx, line) in lines.iter().enumerate() {
+        let column_x = if is_rtl {
+            b.rect.x - line_idx as f32 * col_width
+        } else {
+            b.rect.x + line_idx as f32 * col_width
+        };
+        for frag in line {
+            if !matches!(frag.style.visibility, Visibility::Visible) || frag.img_src.is_some() {
+                continue;
+            }
+            let rect = Rect::new(column_x, b.rect.y + frag.x, col_width, frag.width);
+            emit_text_shadows(out, rect, rect.height, frag);
+            out.push(DisplayCommand::DrawText {
+                rect,
+                text: frag.text.clone(),
+                font_size: frag.style.font_size,
+                color: frag.style.color,
+                font_family: frag.style.font_family.clone(),
+                font_weight: frag.style.font_weight,
+                font_style: frag.style.font_style,
+                font_features: frag.style.font_feature_settings.iter().map(|f| (f.tag, f.value)).collect(),
+                font_palette: palette_selection(&frag.style),
+                font_variation_axes: {
+                    let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
+                        .iter().map(|a| (a.tag, a.value)).collect();
+                    if frag.style.font_optical_sizing == FontOpticalSizing::Auto
+                        && !axes.iter().any(|(t, _)| t == b"opsz")
+                    {
+                        axes.push((*b"opsz", frag.style.font_size));
+                    }
+                    if frag.style.font_stretch != FontStretch::NORMAL
+                        && !axes.iter().any(|(t, _)| t == b"wdth")
+                    {
+                        axes.push((*b"wdth", frag.style.font_stretch.0 as f32 / 10.0));
+                    }
+                    axes
+                },
+                tab_size: frag.style.tab_size,
+                highlight_name: None,
+                text_orientation: Some(frag.style.text_orientation),
+            });
+        }
+    }
+}
+
 /// Renders all lines of a [`BoxKind::InlineRun`].
 ///
 /// When `text-overflow: ellipsis` (CSS UI L4 §3) is active on the box style
@@ -3628,6 +3748,10 @@ fn emit_inline_run(
     sel: Option<&SelectionHighlight>,
     out: &mut Vec<DisplayCommand>,
 ) {
+    if b.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+        emit_inline_run_vertical(b, lines, out);
+        return;
+    }
     // CSS Rhythmic Sizing L1 §2 — line-height-step rounds each line box up to a
     // multiple of the step so paint stacks lines at the same rhythm layout used.
     let raw_line_h = b.style.font_size * b.style.line_height;
@@ -8817,6 +8941,43 @@ mod tests {
         ] {
             assert!(cmd.cull_rect().is_none(), "structural cmd must be un-cullable: {}", cmd.variant_name());
         }
+    }
+
+    // ── Ph3 writing-mode vertical, Срез 3: `text-orientation: mixed` split ──
+    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+    #[test]
+    fn split_mixed_runs_groups_consecutive_non_cjk_and_isolates_cjk() {
+        let segs = split_mixed_runs("Hi日本Bye");
+        let described: Vec<(bool, String)> = segs
+            .into_iter()
+            .map(|s| match s {
+                MixedSegment::Cjk(ch) => (true, ch.to_string()),
+                MixedSegment::Other(s) => (false, s),
+            })
+            .collect();
+        assert_eq!(
+            described,
+            vec![
+                (false, "Hi".to_string()),
+                (true, "日".to_string()),
+                (true, "本".to_string()),
+                (false, "Bye".to_string()),
+            ],
+        );
+    }
+
+    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+    #[test]
+    fn split_mixed_runs_pure_latin_is_one_segment() {
+        let segs = split_mixed_runs("Hello, world!");
+        assert_eq!(segs.len(), 1);
+        assert!(matches!(&segs[0], MixedSegment::Other(s) if s == "Hello, world!"));
+    }
+
+    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+    #[test]
+    fn split_mixed_runs_empty_text_is_empty() {
+        assert!(split_mixed_runs("").is_empty());
     }
 
     // ── CSS Backgrounds L3 §3.4: `background-repeat: round` tile rescale ────

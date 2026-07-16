@@ -109,12 +109,101 @@ ROADMAP помечает PARTIAL «дошить Phase 2 vertical inline flow». 
 **Остаток:** Срез 3 (mixed/upright различение), Срез 4 (BUG-264 реордер,
 опц.), Срез 5 (graphic-тест) — не начаты.
 
+## Progress (2026-07-16) — Срез 3 (mixed/upright различение) DONE
+
+Per-glyph split для `text-orientation: mixed` в обоих боевых бэкендах (CPU +
+wgpu): `lumen_layout::vertical::is_cjk` сделан `pub` (был `pub(crate)`,
+использовался только внутри layout); `display_list::split_mixed_runs`
+классифицирует строку на `MixedSegment::Cjk(char)` (изолированный идеограф)
+и `MixedSegment::Other(String)` (прогон подряд идущих не-CJK символов —
+шейпится целиком, чтобы не потерять кернинг/лигатуры латиницы).
+
+- **CPU** (`cpu_raster.rs::rasterize_text_mixed`): CJK-сегменты рисуются
+  upright — **напрямую** в целевой `pixmap` при реальном `rect.y + y_cursor`
+  (без поворота, как обычный горизонтальный путь); не-CJK сегменты — через
+  локальный full-canvas буфер + поворот на 90° CW (как `rasterize_text_rotated`,
+  срез 1).
+- **wgpu** (`renderer.rs::push_text_glyphs_mixed`): симметрично —
+  `push_text_glyphs` для CJK пишет квады прямо в целевой `dest_rect` со
+  сдвигом по колонке; не-CJK — в локальный origin `(0,0)` + `rotate_text_vertices_cw`.
+- **Найден и исправлен баг в процессе ревью этого среза** (до коммита):
+  первая версия CPU-пути рендерила upright-CJK-сегмент через тот же
+  локальный full-canvas буфер с `local_rect.y = 0`, что и non-CJK-ветка, а
+  затем транслировала на `rect.y + y_cursor`. Для CJK это ломает рендер —
+  визуальный bbox идеографа нередко выше, чем ascent-метрика, на которой
+  основана базовая линия (`baseline_y = rect.y + font_size * ascent_ratio`);
+  при `local_rect.y = 0` верх глифа уходит в отрицательные Y и обрезается
+  границей канваса ДО трансляции — итоговый глиф оказывается обрезан сверху
+  на любом рендере, не только у края страницы. Тест
+  `draw_text_mixed_keeps_cjk_upright` это ловил (ink bbox `(9,1,19,36)` против
+  ожидаемого `(9,4,19,36)` — расхождение ровно на `rect.y`). Фикс: upright-ветка
+  вызывает `rasterize_text` напрямую на `pixmap` с настоящим `rect.y + y_cursor`
+  (как это уже делает wgpu-путь `push_text_glyphs_mixed`), без промежуточного
+  буфера — багу неоткуда взяться, т.к. нет фазы «рендер в (0,0) → перенос».
+- Тесты: `draw_text_mixed_keeps_cjk_upright` (CPU, CJK == horizontal
+  bbox — не повёрнут), `draw_text_mixed_rotates_latin_run` (CPU, Latin ==
+  sideways bbox — повёрнут), `split_mixed_runs_*` (3 теста на классификацию
+  сегментов в `display_list.rs`).
+
+## Progress (2026-07-16) — Срез 4 (BUG-264 реордер) DONE
+
+`lay_out_vertical_inline_run` / `wrap_inline_run_vertical` перенесены в
+`vertical.rs` ДО `#[cfg(test)] mod tests`; снят
+`#[allow(clippy::items_after_test_module)]` и комментарий-обоснование BUG-264.
+Заодно переписаны шапки, ссылавшиеся на устаревшее «Срез 2+, pending»/«Срез
+1» — `vertical.rs:10` и дispatch-комментарий в `box_tree.rs` (блок vertical
+block) теперь отражают, что оба боевых бэкенда (CPU, wgpu) honour
+`text_orientation` целиком, включая `mixed`-split. Layout-часть BUG-264
+закрыта; wgpu/cpu_raster-часть (P5) была отдельным пунктом и не в скоупе этой
+задачи.
+
+## Progress (2026-07-16) — Срез 5 (graphic-тест) DONE, + BUG-289 найден и исправлен
+
+`graphic_tests/145-writing-mode.html` — первый end-to-end graphic-тест на
+реальном DOM для writing-mode vertical (все предыдущие тесты этой задачи
+были unit-тестами layout или paint с вручную сконструированными
+`DisplayCommand`). Первый прогон вскрыл **BUG-289**: вертикальный текст на
+реальных страницах никогда не рисовался корректно — `emit_inline_run`
+(`display_list.rs`, единственный конвертер `InlineFrag → DrawText` для
+реального DOM) не проверял `writing_mode` вообще, трактуя `frag.x`/
+`frag.width`/`line_idx·line_h` как горизонтальную геометрию. Layout
+(`vertical.rs`) при этом был полностью корректен (`--dump-layout` подтвердил
+верные rect'ы колонок) — баг был чисто в paint-конверсии, невидимый для
+Срезов 1–3, потому что их unit-тесты либо проверяли layout напрямую, либо
+вызывали `rasterize_text`/`rasterize_cpu` с вручную собранными `DrawText`,
+минуя `emit_inline_run`. До фикса: `vertical-rl` боксы рендерились полностью
+пустыми, `vertical-lr` — с текстом, наложенным горизонтально поверх соседних
+колонок.
+
+Фикс: новая `emit_inline_run_vertical` (при `writing_mode != HorizontalTb`)
+корректно читает `frag.x` как накопленный курсор вдоль inline-оси (физический
+Y) и `frag.width` как собственный экстент фрагмента по этой оси (физическая
+высота); колонка `N` (при обёртке в несколько колонок) смещается на
+`N · col_width` — влево для `vertical-rl`/`sideways-rl`, вправо для
+`vertical-lr`/`sideways-lr`. Подробности и не перенесённые на эту ось пробелы
+(vertical-align, inline-images, ::selection, ellipsis — Phase 0, тот же класс,
+что и у горизонтального пути) — `bugs/BUG-289-FIXED.md`.
+
+После фикса: `cargo test -p lumen-paint --features cpu-render,backend-wgpu` —
+1093/1093 зелёных (регрессий нет), `clippy -p lumen-paint -p lumen-layout`
+(дефолтные фичи и `--features cpu-render,backend-wgpu`) чист. Визуально
+`mixed`/`sideways` рендерят читаемый повёрнутый/upright-CJK текст;
+`text-orientation: upright` для латиницы использует пословный (не per-glyph)
+вертикальный аванс — уже задокументированный отдельный пробел (см. выше),
+не в этом фиксе.
+
+Остаточный diff TEST-145 (3.68%, было полностью сломано до BUG-289) —
+`KNOWN_DEBTOR` **BUG-290**: font-parity Inter vs Edge sans (rule 3, класс
+BUG-100/TEST-58) + `upright` per-word vs per-glyph advance. `mixed`/`upright`/
+`sideways` визуально различимы (DoD задачи выполнен). `COVERAGE.md`,
+`run.py` (`TESTS` + `KNOWN_DEBTORS`), `1000000-final.html` обновлены.
+
 ## Definition of done
 
 - [x] Глифы реально повёрнуты/upright в CPU-рендерере (срез 1)
 - [x] Глифы реально повёрнуты/upright в wgpu-рендерере — live default бэкенд, ADR-017 (срез 2; femtovg fallback остаётся ⬜, вне скоупа)
-- [ ] `mixed`/`upright`/`sideways` дают разный визуальный результат (срез 3)
-- [ ] BUG-264 (layout-часть) закрыт, `#[allow(items_after_test_module)]` снят (срез 4, опц.)
-- [ ] `cargo clippy -p lumen-paint --all-targets -- -D warnings` и `-p lumen-layout` чистые
-- [ ] Graphic-тест зелёный/оформлен debtor; `COVERAGE.md` + `run.py` обновлены
-- [ ] `CSS-SPECS.md:104/645` (`writing-mode` vertical → ✅ layout+paint) и `CAPABILITIES.md` обновлены; шапки `vertical.rs:10` («Phase 2 tasks») и `box_tree.rs:5315` переписаны
+- [x] `mixed`/`upright`/`sideways` дают разный визуальный результат (срез 3)
+- [x] BUG-264 (layout-часть) закрыт, `#[allow(items_after_test_module)]` снят (срез 4)
+- [x] `cargo clippy -p lumen-paint --all-targets -- -D warnings` и `-p lumen-layout` чистые
+- [x] Graphic-тест зелёный/оформлен debtor; `COVERAGE.md` + `run.py` обновлены (срез 5 — попутно нашёл и закрыл BUG-289, реальный paint-баг вертикального текста; остаток → BUG-290 KNOWN_DEBTOR)
+- [x] `CSS-SPECS.md:104/645` (`writing-mode` vertical → ✅ layout+paint) и `CAPABILITIES.md` обновлены; шапки `vertical.rs:10` и `box_tree.rs` dispatch-комментарий переписаны

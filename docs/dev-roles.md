@@ -7,7 +7,7 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 | Developer | Domain | Crates |
 |---|---|---|
 | **P1** | Feature development: any subsystem from roadmap (source → layout → paint → shell) | All crates (coordinated with P2/P4) |
-| **P2** | **Резерв (с 2026-06-18): задач нет, в активной ротации не участвует.** Все незакрытые задачи переданы P1 (`STATUS-P1.md` → «Унаследовано от P2»). Роль сохранена как запасной вариант на случай возврата к параллельной работе. | — |
+| **P2** | **Reactivated 2026-07-13**: leads P2-wpt (WPT integration via `wptrunner` + WebDriver BiDi, `docs/tasks/p2-wpt-integration.md`) and the DEVX dev-tooling track (`docs/automation.md`, ROADMAP.md DEVX-1…6, assigned 2026-07-16). Was reserve 2026-06-18…2026-07-13 (tasks of that period inherited by P1, `STATUS-P1.md`). | `lumen-bidi-server`, `lumen-driver`/`lumen-mcp` (DEVX-5), Python tooling `tests/wpt/` + `graphic_tests/run.py` (DEVX-1/4) |
 | **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
 | **P5** | **Code health ONLY**: audit, workspace-clippy, stub/branch/docs/dep sweeps, safe mechanical cleanup | All crates (read-only except trivial clippy fixes in own crate + branch/worktree/SYMBOLS.md cleanup) |
