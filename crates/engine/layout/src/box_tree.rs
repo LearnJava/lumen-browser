@@ -5408,8 +5408,9 @@ fn lay_out_inner(
     // Vertical block stacking and InlineRun flow (below, `lay_out_vertical_inline_run`)
     // are both implemented in the `vertical` module. FormControl and other box
     // kinds inside a vertical context still fall through to horizontal layout.
-    // Glyph rotation is a paint concern — CPU rasterizer honors it (Ph3
-    // writing-mode vertical, Срез 1); wgpu/femtovg backends do not yet (Срез 2+).
+    // Glyph rotation is a paint concern — CPU rasterizer and wgpu renderer (live
+    // default backend, ADR-017) both honor it, including the per-glyph `mixed`
+    // CJK-upright/Latin-rotated split; femtovg (fallback backend) does not.
     if !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
         && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
     {

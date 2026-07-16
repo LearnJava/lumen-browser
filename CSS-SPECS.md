@@ -101,7 +101,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
-| CSS Writing Modes L4 | [css-writing-modes-4](https://www.w3.org/TR/css-writing-modes-4/) | 🟡 | vertical-rl/lr layout axis swap | **#41** |
+| CSS Writing Modes L4 | [css-writing-modes-4](https://www.w3.org/TR/css-writing-modes-4/) | 🟡 | layout (axis swap + vertical inline flow) ✅; paint glyph rotation ✅ CPU+wgpu (mixed/upright/sideways, P3-vertical срезы 1–4); femtovg fallback backend ⬜ | **#41** |
 | CSS Grid L2 | [css-grid-2](https://www.w3.org/TR/css-grid-2/) | 🟡 | subgrid layout algorithm ✅ 2026-06-03 (`subgrid.rs`, `GridTrackSize::Subgrid`, thread-local track inheritance); masonry ✅ 2026-06-10 (`masonry.rs`, `GridTrackSize::Masonry`, greedy waterfall algorithm) | **#42** |
 | CSS Shapes L1 | [css-shapes-1](https://www.w3.org/TR/css-shapes-1/) | 🟡 | circle() ✅ 2026-06-03; polygon/ellipse ✅ (`shape_polygons`/`shape_ellipses`); inset() ✅ 2026-06-10 (`shape_insets`, `parse_shape_inset_px`, rounded corners); `clip-path: path()` ✅ 2026-06-14 (p4-clip-path-path); `path()`/`polygon()` `<fill-rule>` evenodd/nonzero ✅ 2026-06-14 (p4-clip-path-fill-rule); `shape-outside: path()` ✅ 2026-06-14 (p4-shape-outside-path: `parse_shape_path_px` flattens SVG path → wrapping polygon) | **#43** |
 | Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | `offset-path: path()` ✅ 2026-06-10 (P4: ComputedStyle fields + resolve_motion_transform wiring in property_trees); `offset-distance`/`offset-rotate` ✅; `ray(<angle>)` ✅ 2026-06-13 (p4-offset-ray: deg/grad/rad/turn, size/contain/at parsed-and-ignored for px distance); `offset-anchor` ⬜ Phase 3; `url()` paths ⬜ | **#44** |
@@ -642,8 +642,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `direction` | 🟡 | ltr/rtl; fragment mirroring ✅; UBA ⬜ |
-| `writing-mode` | 🟡 | parsed; vertical-rl/lr layout ⬜ |
-| `text-orientation` | 🟡 | parsed; glyph rotation on CPU rasterizer ✅ (Срез 1), wgpu ✅ (Срез 2), femtovg ⬜ |
+| `writing-mode` | ✅ | vertical-rl/lr axis-swap layout + vertical inline flow; glyph rotation on CPU+wgpu (femtovg fallback ⬜) |
+| `text-orientation` | 🟡 | parsed; mixed/upright/sideways glyph rotation ✅ on CPU+wgpu (per-glyph CJK-upright/Latin-rotated split for `mixed`, Срезы 1–3), femtovg ⬜ |
 | `unicode-bidi` | 🟡 | parsed; full bidi ⬜ |
 
 ### [T4] Shapes & Motion Path

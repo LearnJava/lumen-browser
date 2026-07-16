@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-16",
  "counts": {
-  "open": 27,
-  "fixed": 233,
+  "open": 28,
+  "fixed": 234,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 260,
+ "total_bugs": 262,
  "phases": [
   {
    "id": "P0",
@@ -213,6 +213,12 @@
      "id": "P1-tablife1",
      "title": "Tab lifecycle Phase 1 (TabState T0–T4, memory pressure, image LRU, T1 paused)",
      "status": "done"
+    },
+    {
+     "id": "P3-vertical",
+     "title": "CSS writing-mode: вертикальный текст (полный layout)",
+     "status": "done",
+     "note": "ЗАВЕРШЕНО 2026-07-16 (P1, срезы 1-5): layout (axis-swap + вертикальный inline-поток) был готов; paint — CPU-рендерер (срез 1) и wgpu-рендерер (срез 2, live default, ADR-017) поворачивают глифы, mixed-режим различает CJK-upright/латиница-повёрнута per-glyph (срез 3); BUG-264 layout-реордер закрыт (срез 4); graphic-тест 145-writing-mode.html (срез 5) вскрыл и закрыл BUG-289 (vertical InlineRun текст никогда не рисовался на реальном DOM — emit_inline_run игнорировал writing_mode); остаток — font-parity + upright per-glyph advance, KNOWN_DEBTOR BUG-290. femtovg (fallback-бэкенд) по-прежнему игнорирует text_orientation — вне скоупа. Бриф docs/tasks/ph3-writing-mode-vertical.md"
     },
     {
      "id": "SDC",
@@ -989,12 +995,6 @@
      "title": "CSS initial-letter (буквица drop-cap)",
      "status": "planned",
      "note": "PARTIAL (сверка с кодом 2026-07-02): Phase 0 drop-cap float (size×line-height, sink); дошить — точное cap-height/baseline выравнивание, raised-cap, RTL"
-    },
-    {
-     "id": "P3-vertical",
-     "title": "CSS writing-mode: вертикальный текст (полный layout)",
-     "status": "planned",
-     "note": "АКТУАЛИЗАЦИЯ 2026-07-15: block axis-swap готов (vertical.rs); вертикальный inline-поток (lay_out_vertical_inline_run/wrap_inline_run_vertical) уже реализован — ROADMAP-нота была устаревшей, `vertical.rs:10` шапка переписана. Реальный остаток — paint (поворот глифов): Срез 1 (CPU-рендерер, cpu_raster.rs) влит; Срез 2 (wgpu renderer.rs — ныне дефолтный бэкенд, ADR-017) влит; Срез 3 (mixed/upright per-glyph), Срез 4 (BUG-264 реордер, опц.), Срез 5 (graphic-тест) — не начаты; femtovg (fallback-бэкенд) по-прежнему игнорирует text_orientation. Бриф docs/tasks/ph3-writing-mode-vertical.md"
     },
     {
      "id": "P3-resizeobs",
@@ -3329,6 +3329,20 @@
    "component": "paint (`emit_scrollbars`) / test-triage",
    "date": null,
    "debtor": true
+  },
+  "BUG-289": {
+   "status": "fixed",
+   "title": "Вертикальный `writing-mode` текст на реальных страницах никогда не рисовался корректно: layout (`vertical.rs`) верно вычислял позиции колонок/фрагментов, но `em…",
+   "component": "paint (`display_list.rs::emit_inline_run`)",
+   "date": "2026-07-16",
+   "debtor": true
+  },
+  "BUG-290": {
+   "status": "open",
+   "title": "TEST-145 (writing-mode) residual 3.68% после BUG-289: (1) font-parity Inter vs Edge sans (rule 3, тот же класс что BUG-100/TEST-58); (2) `text-orientation: upri…",
+   "component": "paint/layout (font metrics; `upright` per-glyph advance)",
+   "date": null,
+   "debtor": true
   }
  },
  "unlinked": {
@@ -3600,6 +3614,9 @@
   "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg": [
    "BUG-277"
   ],
+  "paint (`display_list.rs::emit_inline_run`)": [
+   "BUG-289"
+  ],
   "paint (`emit_scrollbars`) / test-triage": [
    "BUG-288"
   ],
@@ -3627,6 +3644,9 @@
   "paint/layout": [
    "BUG-096",
    "BUG-156"
+  ],
+  "paint/layout (font metrics; `upright` per-glyph advance)": [
+   "BUG-290"
   ],
   "paint/shadow-dom": [
    "BUG-142"
