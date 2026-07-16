@@ -498,7 +498,7 @@ pub(crate) fn rasterize_cpu(
             // the backdrop below with the CSS blend formula rather than plain
             // source-over, so the element blends against everything painted
             // beneath it within the stacking context.
-            DisplayCommand::PushBlendMode { mode } => {
+            DisplayCommand::PushBlendMode { mode, .. } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create blend layer")?;
                 layers.push(CpuLayer::new(layer));
@@ -3517,7 +3517,7 @@ mod tests {
         let magenta = Color { r: 255, g: 0, b: 255, a: 255 };
         let cmds = vec![
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: yellow },
-            DisplayCommand::PushBlendMode { mode: crate::BlendMode::Multiply },
+            DisplayCommand::PushBlendMode { mode: crate::BlendMode::Multiply, bounds: rect(0.0, 0.0, 32.0, 32.0) },
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: magenta },
             DisplayCommand::PopBlendMode,
         ];
@@ -3534,7 +3534,7 @@ mod tests {
     fn blend_normal_is_source_over() {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushBlendMode { mode: crate::BlendMode::Normal },
+            DisplayCommand::PushBlendMode { mode: crate::BlendMode::Normal, bounds: rect(10.0, 10.0, 20.0, 20.0) },
             DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
             DisplayCommand::PopBlendMode,
         ];
@@ -3549,7 +3549,7 @@ mod tests {
     fn blend_difference_inverts() {
         let red = Color { r: 255, g: 0, b: 0, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushBlendMode { mode: crate::BlendMode::Difference },
+            DisplayCommand::PushBlendMode { mode: crate::BlendMode::Difference, bounds: rect(0.0, 0.0, 32.0, 32.0) },
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: red },
             DisplayCommand::PopBlendMode,
         ];
@@ -3771,7 +3771,7 @@ mod tests {
         for mode in modes {
             let mut cmds = crop_scene_backdrop_cmds(160, 120);
             cmds.extend([
-                DisplayCommand::PushBlendMode { mode },
+                DisplayCommand::PushBlendMode { mode, bounds: fill },
                 DisplayCommand::FillRect { rect: fill, color: orange },
                 DisplayCommand::PopBlendMode,
             ]);

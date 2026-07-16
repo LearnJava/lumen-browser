@@ -1,6 +1,6 @@
 # BUG-273 — Слайдшоу при прокрутке страниц с mix-blend-mode / filter / backdrop-filter (1.5 FPS)
 
-**Статус:** OPEN — корень найден и подтверждён покадровым профилем
+**Статус:** OPEN — срез 1 (viewport-culling офscreen-групп) влит 2026-07-16; остаются срезы 2 (кэш слоя) и 3 (GPU-композитинг)
 **Компонент:** paint (femtovg backend, offscreen-композитинг blend/filter-слоёв)
 **Найден:** 2026-07-08, живое окно + `scripts/scroll_perf.py` (новый инструмент, см. ниже)
 
@@ -55,6 +55,37 @@ PushBackdropFilter   43–60 мс / 5
    вошедшие во viewport. Для `filter` (не зависит от backdrop) кэш тривиален.
 3. **GPU-композитинг (Phase 3).** femtovg не даёт programmable blending —
    полноценный фикс = blend/filter шейдерами в wgpu/vello-бэкенде.
+
+## Срез 1 — viewport-culling офscreen-групп (влит 2026-07-16)
+
+`FemtovgBackend::run_content_pass` теперь проверяет каждую `PushFilter`/
+`PushBackdropFilter`/`PushBlendMode`-группу целиком, а не только листовые draw-команды
+внутри неё (ADR-016 M0.2 покрывал только последние). Новый `group_bounds(cmd)`
+достаёт document-space bbox группы (`PushFilter.bounds: Option<Rect>`,
+`PushBackdropFilter.bounds`/`PushBlendMode.bounds: Rect` — оба поля были обязательными
+и раньше, `PushBlendMode` получил `bounds` этим срезом, эмиттеры заполняют его из
+`LayoutBox::rect`). Если `Self::is_command_culled(bounds)` (тот же тест, что уже
+использует ADR-016 M0.2 для листьев — transform-aware AABB против viewport + 256px
+slop) возвращает `true`, вся скобка Push…Pop целиком пропускается через
+`matching_close` (depth-счётчик на `overlay_partition::layer_delta`, теперь
+`pub(crate)`) — ни `acquire_layer`, ни дочерние draw-команды, ни CPU-readback
+composite (`composite_blend_layer`/`composite_filter_layer`/`apply_backdrop_filters`)
+не выполняются для контента, который всё равно не дал бы видимого пикселя в этом
+кадре. Закрывает направление 2 из «Корня» (нет viewport-culling для
+offscreen-композит-групп — ADR-016 M0.2 покрывал только листья).
+
+Корректность: 2 новых юнит-теста (`group_bounds_covers_the_three_offscreen_openers`,
+`matching_close_skips_nested_brackets`); `cargo test -p lumen-paint --features
+backend-femtovg` 926 passed, 0 failed; `cargo clippy -p lumen-paint --all-targets
+--features backend-femtovg -- -D warnings` чист. Графические тесты 00/03/30/56/103
+(`LUMEN_BACKEND=femtovg`, dev-release) дают числа, побитово совпадающие с main
+(4.27%/12.41%/0.03% — идентично прогону без этого среза) — визуальных регрессий нет;
+расхождение этих чисел с `KNOWN_DEBTORS`-записями (которые сейчас откалиброваны под
+wgpu после BUG-287, а не под femtovg) — отдельный, не связанный с этим срезом дрейф.
+
+Не устраняет: срез только пропускает уже-невидимые группы; видимые (даже частично)
+offscreen-группы по-прежнему платят полный CPU-readback-composite каждый кадр —
+остаётся направлениям 2 (межкадровый кэш слоя) и 3 (GPU-композитинг, Phase 3) ниже.
 
 ## Инструменты (влиты вместе с этим багом, остаются в коде)
 

@@ -386,8 +386,11 @@ pub fn spatial_layer_close(open: &DisplayCommand) -> Option<DisplayCommand> {
 /// outermost spans they are always balanced before a span's start, so they do not
 /// perturb the ancestor-depth reading. Keep this in sync with the `Push*`/`Pop*`
 /// and `Begin*`/`End*` pairs in [`DisplayCommand`].
+///
+/// `pub(crate)`: also used by the femtovg backend (BUG-273 срез 1) to find the
+/// matching close of an offscreen-composite bracket being culled off-viewport.
 #[must_use]
-fn layer_delta(cmd: &DisplayCommand) -> i32 {
+pub(crate) fn layer_delta(cmd: &DisplayCommand) -> i32 {
     match cmd {
         DisplayCommand::PushClipRect { .. }
         | DisplayCommand::PushClipRoundedRect { .. }

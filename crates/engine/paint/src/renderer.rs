@@ -6255,7 +6255,7 @@ impl Renderer {
                 // CSS Compositing & Blending L1 §5 — mix-blend-mode compositing.
                 // Non-Normal mode: push offscreen level + track blend mode.
                 // Normal mode: no offscreen layer needed (pass-through).
-                DisplayCommand::PushBlendMode { mode } => {
+                DisplayCommand::PushBlendMode { mode, .. } => {
                     blend_mode_stack.push(*mode);
                     if *mode != BlendMode::Normal {
                         flush_batch!();
@@ -10665,7 +10665,7 @@ mod tests {
         let mut level_blend_mode_stack: Vec<BlendMode> = Vec::new();
         for cmd in cmds {
             match cmd {
-                DisplayCommand::PushBlendMode { mode } => {
+                DisplayCommand::PushBlendMode { mode, .. } => {
                     blend_mode_stack.push(*mode);
                     if *mode != BlendMode::Normal {
                         level_blend_mode_stack.push(*mode);
@@ -10688,7 +10688,7 @@ mod tests {
     fn push_blend_mode_normal_does_not_create_new_level() {
         // PushBlendMode { Normal } — level остаётся 0.
         let cmds = vec![
-            DisplayCommand::PushBlendMode { mode: BlendMode::Normal },
+            DisplayCommand::PushBlendMode { mode: BlendMode::Normal, bounds: Rect::new(0.0, 0.0, 10.0, 10.0) },
         ];
         let (level, stack) = sim_blend_level(&cmds);
         assert_eq!(level, 0, "Normal blend mode не должен открывать offscreen level");
@@ -10699,7 +10699,7 @@ mod tests {
     fn push_blend_mode_non_normal_creates_new_level() {
         // PushBlendMode { Multiply } — level становится 1.
         let cmds = vec![
-            DisplayCommand::PushBlendMode { mode: BlendMode::Multiply },
+            DisplayCommand::PushBlendMode { mode: BlendMode::Multiply, bounds: Rect::new(0.0, 0.0, 10.0, 10.0) },
         ];
         let (level, _) = sim_blend_level(&cmds);
         assert_eq!(level, 1, "не-Normal blend mode должен открывать offscreen level");
@@ -10709,7 +10709,7 @@ mod tests {
     fn pop_blend_mode_restores_level() {
         // Push/Pop пары: level возвращается в 0.
         let cmds = vec![
-            DisplayCommand::PushBlendMode { mode: BlendMode::Screen },
+            DisplayCommand::PushBlendMode { mode: BlendMode::Screen, bounds: Rect::new(0.0, 0.0, 10.0, 10.0) },
             DisplayCommand::PopBlendMode,
         ];
         let (level, stack) = sim_blend_level(&cmds);
