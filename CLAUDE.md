@@ -14,6 +14,8 @@ Update this file whenever you change architecture, invariants, or policies.
 
 Current phase: **Phase 2 — v0.5 «Interactive» (complete)**, app version **v0.5.0**. Phase 0 (prototype) closed 2026-05-26; Phase 1 «Reader» largely complete. Phase 2 delivered: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, forms, find-in-page, DevTools/CDP, knowledge layer.
 
+**JS engine: V8 (`rusty_v8`) is the DEFAULT since the S12 cutover (ADR-018, 2026-07-14).** QuickJS/`rquickjs` remains only as an opt-in rollback path (`--features quickjs`) and is being deleted slice-by-slice (S12b, `docs/tasks/ph3-v8-migration.md`). Never target new functionality, fixes, or investigation at the rquickjs path; the engine-agnostic JS shim (`WEB_API_SHIM` in `crates/js/src/dom.rs`) is shared by both engines and is the right place for engine-independent fixes. Validate JS work against the default (V8) build.
+
 ### Versioning & phase policy
 
 Single source of truth for the version is `[workspace.package] version` in `Cargo.toml`. All machine-readable version strings (User-Agent, Sec-CH-UA, CDP `Browser.getVersion`, window title, startup banner) derive from `CARGO_PKG_VERSION` — do **not** hardcode a version number in code. The one manual-bump site is the `navigator.userAgent` literal in `crates/js/src/dom.rs` (JS shim string).

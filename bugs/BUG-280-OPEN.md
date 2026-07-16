@@ -79,3 +79,14 @@ global `Proxy`), and if so, migrate `window` to be that object instead of a `WEB
 literal — or find another mechanism that makes `window`/`self` properties bare-identifier-reachable
 generally, not just for a hardcoded alias list. Re-run `tests/wpt/run_smoke.py` afterward — DoD unblocks
 the rest of P2-wpt S4/S5.
+
+## Directive (2026-07-16, coordinator)
+
+**V8 is the default JS engine since the S12 cutover (ADR-018, 2026-07-14).** The
+"Investigate whether rquickjs/QuickJS supports…" wording above predates the cutover — do
+NOT invest in an rquickjs-specific mechanism: that path is rollback-only (`--features
+quickjs`) and is being deleted slice-by-slice (S12b). The fix must land either in the
+engine-agnostic `WEB_API_SHIM` (crates/js/src/dom.rs — shared by both engines; a JS-level
+fix like repointing `window` to `globalThis` qualifies) or in the V8 path
+(`v8_runtime.rs`). Definition of done: `tests/wpt/run_smoke.py` passes on the **default
+(V8) build** — not on a `--features quickjs` build.
