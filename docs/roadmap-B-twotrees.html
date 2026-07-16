@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-15",
+ "generated": "2026-07-16",
  "counts": {
   "open": 27,
-  "fixed": 232,
+  "fixed": 233,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 259,
+ "total_bugs": 260,
  "phases": [
   {
    "id": "P0",
@@ -235,7 +235,7 @@
     {
      "id": "SDC",
      "title": "SDC: Управление живым окном (8A.7 Ф4)",
-     "status": "done",
+     "status": "active",
      "note": "Shell-as-driver-client: управление ЖИВЫМ видимым окном Lumen напрямую командами (Selenium/WebDriver-подобно, без headless-прокладки) — закрытие 8A.7 Фазы 4 по `docs/plans/8A.7-shell-as-driver-client-plan.md` + ADR-006. Разрез по владению: SDC-1a (P1 driver) → SDC-1b (P3 shell) → {SDC-2 (P1 фронты), SDC-3 (P3 графтест)}. Цепочка зависимостей строгая",
      "tasks": [
       {
@@ -265,6 +265,13 @@
        "status": "done",
        "size": "M",
        "note": "`graphic_tests/run.py --live`: один живой `lumen --mcp-live-port` процесс/окно на весь прогон вместо kill+relaunch на каждый тест (`LiveWindowClient`, MCP JSON-RPC — `navigate`+`wait(document_ready)` вместо блокирующего `time.sleep(LUMEN_WAIT_SEC=5)`); пиксельный снимок остался gdigrab-ом реального femtovg-окна (не CPU `resource://screenshot`, тот же разрыв паритета что у `--ipc`), поэтому проходят и JS-тесты (57, 129–138). TEST-00 калибрует crop offset один раз, как раньше. Валидировано полным прогоном: результат идентичен baseline (`Изменений нет`), 139 тестов за ~10.5 мин. По пути найдены и исправлены 2 бага живого окна, важных и для SDC-2: `AutomationCommand::Navigate` не поддерживал `file://` (всегда `PageSource::Url` → сетевой `HttpClient` → \"unsupported scheme: file\"); команда с BiDi/MCP-потока не будила запаркованный `ControlFlow::Wait` event loop (добавлен `LoadEvent::AutomationWake` + `AutomationHandle::set_wake`)"
+      },
+      {
+       "id": "SDC-4",
+       "title": "SDC-4: --live как дефолт графтест-прогона",
+       "status": "planned",
+       "size": "S",
+       "note": "Сделать `--live` (SDC-3) режимом по умолчанию в `graphic_tests/run.py`: kill+relaunch-на-каждый-тест оставить как явный opt-out флаг (`--per-test-process`), `--live` из CLI убрать/оставить no-op алиасом; обновить docstring run.py, `docs/graphic-tests.md`, секцию Graphic tests в CLAUDE.md. Мотивация: SDC-3 влит и валидирован (полный прогон идентичен baseline, 139 тестов ~10.5 мин), но дефолт всё ещё перезапускает процесс на каждый тест — главный источник времени прогона и гонок фокуса («magenta marker not found»). Гейт: полный `--continue-on-fail` прогон новым дефолтом — дельта к latest.json «Изменений нет»; проверить совместимость с `--only`/`--recheck`/`--bisect`/`--build`"
       }
      ]
     },
@@ -1005,7 +1012,7 @@
      "id": "P3-vertical",
      "title": "CSS writing-mode: вертикальный текст (полный layout)",
      "status": "planned",
-     "note": "АКТУАЛИЗАЦИЯ 2026-07-15: block axis-swap готов (vertical.rs); вертикальный inline-поток (lay_out_vertical_inline_run/wrap_inline_run_vertical) уже реализован — ROADMAP-нота была устаревшей, `vertical.rs:10` шапка переписана. Реальный остаток — paint (поворот глифов): Срез 1 (CPU-рендерер, cpu_raster.rs) влит; Срез 2 (wgpu renderer.rs — ныне дефолтный бэкенд, ADR-017 — приоритетнее исходно предполагавшегося femtovg) не начат; Срез 3 (mixed/upright per-glyph), Срез 4 (BUG-264 реордер, опц.), Срез 5 (graphic-тест) — не начаты. Бриф docs/tasks/ph3-writing-mode-vertical.md"
+     "note": "АКТУАЛИЗАЦИЯ 2026-07-15: block axis-swap готов (vertical.rs); вертикальный inline-поток (lay_out_vertical_inline_run/wrap_inline_run_vertical) уже реализован — ROADMAP-нота была устаревшей, `vertical.rs:10` шапка переписана. Реальный остаток — paint (поворот глифов): Срез 1 (CPU-рендерер, cpu_raster.rs) влит; Срез 2 (wgpu renderer.rs — ныне дефолтный бэкенд, ADR-017) влит; Срез 3 (mixed/upright per-glyph), Срез 4 (BUG-264 реордер, опц.), Срез 5 (graphic-тест) — не начаты; femtovg (fallback-бэкенд) по-прежнему игнорирует text_orientation. Бриф docs/tasks/ph3-writing-mode-vertical.md"
     },
     {
      "id": "P3-resizeobs",
@@ -3216,7 +3223,7 @@
   },
   "BUG-277": {
    "status": "open",
-   "title": "Установленный wgpu-базлайн (не регрессия): первый полный прогон `LUMEN_BACKEND=wgpu graphic_tests/run.py --continue-on-fail` после фикса BUG-276 — 65 PASS · 38…",
+   "title": "Установленный wgpu-базлайн: первый полный прогон `LUMEN_BACKEND=wgpu graphic_tests/run.py --continue-on-fail` после фикса BUG-276 — 65 PASS · 38 FAIL · 38 DEBTO…",
    "component": "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg",
    "date": null,
    "debtor": true
@@ -3278,9 +3285,16 @@
    "debtor": false
   },
   "BUG-287": {
+   "status": "fixed",
+   "title": "Полный `graphic_tests/run.py --continue-on-fail` на `main` давал 43 FAIL — оказалось НЕ движковой регрессией. `git bisect` на представителе (TEST-76) сошёлся на…",
+   "component": "paint (test-harness baseline, не движок)",
+   "date": "2026-07-16",
+   "debtor": true
+  },
+  "BUG-288": {
    "status": "open",
-   "title": "Полный `graphic_tests/run.py --continue-on-fail` на чистом `main` (после мержа `p3-cascade-perf`) даёт 43 FAIL (13 из них — регрессия хуже KNOWN_DEBTORS baselin…",
-   "component": "неизвестен (layout/paint?)",
+   "title": "TEST-14 (overflow, часть BUG-287): overflow-axis coercion (BUG-020, CSS Overflow L3 §2.1 — один явный не-`visible` axis коэрсит второй `visible` в `auto`) корре…",
+   "component": "paint (`emit_scrollbars`) / test-triage",
    "date": null,
    "debtor": true
   }
@@ -3554,6 +3568,9 @@
   "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg": [
    "BUG-277"
   ],
+  "paint (`emit_scrollbars`) / test-triage": [
+   "BUG-288"
+  ],
   "paint (build)": [
    "BUG-235"
   ],
@@ -3565,6 +3582,9 @@
   ],
   "paint (font-metrics)": [
    "BUG-250"
+  ],
+  "paint (test-harness baseline, не движок)": [
+   "BUG-287"
   ],
   "paint/cpu_raster": [
    "BUG-052"
@@ -3634,9 +3654,6 @@
   "test/snapshot": [
    "BUG-118",
    "BUG-149"
-  ],
-  "неизвестен (layout/paint?)": [
-   "BUG-287"
   ]
  }
 }
