@@ -1461,7 +1461,7 @@
        "title": "DEVX-5: headless MCP/InProcessSession — снять заглушки",
        "status": "planned",
        "size": "L",
-       "note": "Реализовать headless-заглушки автоматизации (сейчас Err): в `InProcessSession` (crates/driver) — `click`/`type_text`/`scroll`/`wait`/`eval` (persistent QuickJS на снимке DOM, по образцу WinitSession SDC-1a) и CPU-`screenshot`; прокинуть в headless MCP (`--mcp`/`--mcp-port`), чтобы tools `eval`/`click`/`type`/`scroll`/`screenshot` работали без окна. Открывает MCP/agent-драйв и DEVX-2-тесты с интеракциями в CI без GPU"
+       "note": "Реализовать headless-заглушки автоматизации (сейчас Err): в `InProcessSession` (crates/driver) — `click`/`type_text`/`scroll`/`wait`/`eval` (persistent JS-runtime на снимке DOM через **дефолтный V8-движок** (ADR-018); паттерн — WinitSession SDC-1a, но НЕ его one-shot QuickJS-путь: rquickjs — rollback-only и сносится S12b) и CPU-`screenshot`; прокинуть в headless MCP (`--mcp`/`--mcp-port`), чтобы tools `eval`/`click`/`type`/`scroll`/`screenshot` работали без окна. Открывает MCP/agent-драйв и DEVX-2-тесты с интеракциями в CI без GPU"
       },
       {
        "id": "DEVX-6",
