@@ -371,7 +371,9 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   (`crates/engine/dom/src/lib.rs`) allocates node ids append-only with no free-list reuse, and the
   whole shim is re-evaluated fresh on every navigation/bfcache thaw. Shared `WEB_API_SHIM`, fixes both
   engines. Regression test: `dom::tests::repeated_node_access_returns_identical_wrapper`. `tests/wpt/run_smoke.py`
-  still doesn't reach a real PASS — a separate, unrelated blocker, [BUG-296](../bugs/BUG-296-OPEN.md).
+  still doesn't reach a real PASS — a separate, unrelated blocker (a `script.evaluate`-install race, not a
+  DOM/JS gap — see [BUG-296](../bugs/BUG-296-FIXED.md)'s "Остаток"; the stale-session mechanism BUG-296
+  itself diagnosed is fixed).
 
 ## Deferred
 

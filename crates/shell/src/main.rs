@@ -507,7 +507,7 @@ fn main() -> ExitCode {
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode, viewport_override, automation_handle, automation_cmd_tx, automation_rx),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
@@ -614,6 +614,18 @@ fn spawn_engine_thread_if_enabled()
     }
 }
 
+/// Whether `run_window_mode` should restore the last on-disk session for the
+/// initial tab: only for a truly argument-less launch (`source` is
+/// [`PageSource::Empty`]) that isn't driven by an automation front-end.
+///
+/// `automation_mode` is `true` when `--bidi-port`/`--mcp-live-port` was
+/// passed — those launches are documented as opening an empty window and the
+/// driver always issues its own first navigation, so restoring a leftover
+/// session tab would silently race it (BUG-296).
+fn should_restore_session(source: &PageSource, automation_mode: bool) -> bool {
+    matches!(source, PageSource::Empty) && !automation_mode
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_window_mode(
     source: PageSource,
@@ -627,6 +639,7 @@ fn run_window_mode(
     automation_handle: AutomationHandle,
     automation_cmd_tx: std::sync::mpsc::Sender<AutomationRequest>,
     automation_rx: std::sync::mpsc::Receiver<AutomationRequest>,
+    automation_mode: bool,
 ) -> ExitCode {
     println!("Lumen v{} — Phase 2 (Interactive) complete", env!("CARGO_PKG_VERSION"));
 
@@ -1022,7 +1035,18 @@ fn run_window_mode(
     // (no file/url argument and no --import-session), so we never clobber an
     // argv-requested page. Sets the active tab's source before `run_app`, so the
     // streaming load in `resumed` picks it up.
-    if matches!(app.source, PageSource::Empty) {
+    //
+    // Also skipped in automation mode (BUG-296): an automation driver's own
+    // `browsingContext.navigate` races a leftover `last_session.db` tab (saved
+    // by a prior interactive run from the same working directory — the session
+    // store's on-disk file is a bare CWD-relative path, see `session_persist.rs`)
+    // restoring into the same top-level context, sometimes landing *after* the
+    // driver's navigate and silently leaving `window`/`document` pointed at the
+    // stale page. `lumen --bidi-port`/`--mcp-live-port` are documented as
+    // opening an empty window (`print_usage`'s "пустое окно") — automation
+    // callers always drive their own first navigation, so restoring a session
+    // here would violate that contract even without the race.
+    if should_restore_session(&app.source, automation_mode) {
         app.restore_session();
     }
     if let Err(err) = event_loop.run_app(&mut app) {
@@ -22423,6 +22447,22 @@ mod tests {
         assert_eq!(DumpKind::from_flag("--dump-html"), None);
         assert_eq!(DumpKind::from_flag("samples/page.html"), None);
         assert_eq!(DumpKind::from_flag(""), None);
+    }
+
+    #[test]
+    fn should_restore_session_empty_source_no_automation() {
+        assert!(should_restore_session(&PageSource::Empty, false));
+    }
+
+    #[test]
+    fn should_restore_session_skipped_in_automation_mode() {
+        assert!(!should_restore_session(&PageSource::Empty, true));
+    }
+
+    #[test]
+    fn should_restore_session_skipped_for_explicit_source() {
+        assert!(!should_restore_session(&PageSource::AboutBlank, false));
+        assert!(!should_restore_session(&PageSource::AboutBlank, true));
     }
 
     #[test]

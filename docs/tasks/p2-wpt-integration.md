@@ -321,21 +321,26 @@ option isn't lost — do not fold it into this task's scope.
       breaking `===` identity and crashing `testharness.js`'s built-in results renderer,
       `Output.show_results`, on `tbody.lastChild.lastChild.appendChild(...)`). All four are now fixed.
       Diagnosis used BiDi `script.evaluate` to bisect `testharness.js`'s execution live (marker-injected
-      copies + scratch probe pages — see bug files) rather than guessing. **Blocked on a real PASS** by
-      [BUG-296](../../bugs/BUG-296-OPEN.md) (new, found re-verifying BUG-291's fix): a plain
-      `lumen --bidi-port <N>` process's own default-homepage navigation can land in the same top-level
-      context *after* the test driver's explicit `browsingContext.navigate`, leaving `window`/`document`
-      pointing at the homepage — unrelated to any of the four DOM/engine bugs above, which are all
-      confirmed fixed by direct unit test / isolated BiDi diagnostics.
+      copies + scratch probe pages — see bug files) rather than guessing. [BUG-296](../../bugs/BUG-296-FIXED.md)
+      (found re-verifying BUG-291's fix, now fixed): a stale on-disk `last_session.db` (session restore,
+      not a "default homepage" feature — CWD-relative store path, see the bug file) could silently reopen
+      a leftover tab and race the test driver's explicit `browsingContext.navigate`. Fix: `--bidi-port`/
+      `--mcp-live-port` launches now skip session restore entirely (`should_restore_session`,
+      `crates/shell/src/main.rs`), matching their documented "empty window" behavior.
 - [ ] A deliberately-failing assertion is observed as FAIL (harness genuinely checks assertions) —
-      blocked on BUG-296 above (no test reaches a genuine PASS/FAIL distinction yet).
+      still blocked: `run_smoke.py` doesn't reach a real PASS in this environment even after BUG-296's
+      fix (confirmed via direct BiDi repro that the stale-session race itself is gone — see BUG-296-FIXED's
+      "Остаток"), because of a separate, pre-existing `script.evaluate`-install race (`CLAUDE.md` → "Known
+      gotchas" → "Live-window BiDi/MCP `script.evaluate` can hang indefinitely..."), independent of page
+      content and not yet root-caused.
 - [ ] `.ini` expectations committed for a curated ~15–20 synchronous DOM-test subset.
 - [ ] Async subset (S6) admitted, `awaitPromise` behavior verified against the implementation.
 - [ ] Suite runs fully offline.
 - [ ] `docs/plan/testing.md` updated; `ROADMAP.md:131` flipped to `done` (or split if S8 remains
       open); `tests/wpt/README.md` written.
 - [x] Any engine/BiDi gap found while running the harness filed as `BUG-NNN` (no test weakened to
-      pass) — BUG-278/279/280/291 (fixed), BUG-296 (open, blocks the remaining checkboxes above).
+      pass) — BUG-278/279/280/291/296 (all fixed); the remaining checkboxes above are blocked by the
+      separate, pre-existing `script.evaluate`-install race noted in `CLAUDE.md` → "Known gotchas".
 - [x] `cargo clippy -p lumen-bidi-server --all-targets -- -D warnings` clean; existing
       `bidi-server`/`driver` test suites still pass (verified 2026-07-17: bidi-server 96/96,
       driver 125/126 — the one failure, `cases::snapshot_cpu::cpu_snapshots_match_references`,
