@@ -3774,11 +3774,61 @@ function _lumen_dispatch_locked_mousemove(nid, clientX, clientY, dx, dy, mod) {
     _lumen_dispatch_rich(nid, pev);
 }
 
-// Called from shell for pointer events (W3C Pointer Events Level 2).
+// Build a non-dispatched PointerEvent representing one buffered intermediate
+// sample for _lumen_dispatch_pointer_event's getCoalescedEvents()/
+// getPredictedEvents() arrays (Pointer Events L3 §4.1). Mirrors the main
+// event's fields except position.
+function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod, bubbles) {
+    var cev = new PointerEvent(type, {
+        bubbles: bubbles, cancelable: bubbles, isTrusted: true,
+        clientX: cx, clientY: cy,
+        screenX: cx, screenY: cy,
+        pageX:   cx, pageY:   cy,
+        button: button, buttons: buttons,
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
+        pointerId: 1, pointerType: 'mouse', isPrimary: true,
+        pressure: buttons ? 0.5 : 0.0,
+        altitudeAngle: Math.PI / 2, azimuthAngle: 0,
+        width: 1, height: 1,
+        tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
+    });
+    cev.getCoalescedEvents = function() { return [cev]; };
+    cev.getPredictedEvents = function() { return []; };
+    return cev;
+}
+
+// Pointer Events L3 §4.1: linearly extrapolate up to 2 future positions from
+// the last two entries of `coalesced` (oldest..newest, main event last).
+// Returns [] when fewer than 2 points are available (no velocity to derive).
+// Not a spec-mandated algorithm — linear extrapolation is an accepted default.
+function _lumen_predict_pointer_events(coalesced) {
+    var n = coalesced.length;
+    if (n < 2) return [];
+    var last = coalesced[n - 1];
+    var prev = coalesced[n - 2];
+    var dx = last.clientX - prev.clientX;
+    var dy = last.clientY - prev.clientY;
+    var mod = (last.ctrlKey ? 1 : 0) | (last.shiftKey ? 2 : 0) |
+              (last.altKey  ? 4 : 0) | (last.metaKey  ? 8 : 0);
+    var out = [];
+    for (var i = 1; i <= 2; i++) {
+        out.push(_lumen_make_coalesced_pointer_event(
+            last.type, last.clientX + dx * i, last.clientY + dy * i,
+            last.button, last.buttons, mod, last.bubbles
+        ));
+    }
+    return out;
+}
+
+// Called from shell for pointer events (W3C Pointer Events Level 2/3).
 // Mirrors _lumen_dispatch_mouse_event but creates a PointerEvent (extends MouseEvent).
 // Non-bubbling types (pointerenter / pointerleave) set bubbles:false per spec.
 // mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
-function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod) {
+// coalesced: optional array of [x,y] CSS-pixel positions buffered since the
+// last dispatch (Level 3 §4.1), oldest first, NOT including this event's own
+// (clientX, clientY). Omitted/empty for non-move event types.
+function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod, coalesced) {
     var bubbles = (type !== 'pointerenter' && type !== 'pointerleave');
     var ev = new PointerEvent(type, {
         bubbles: bubbles, cancelable: bubbles, isTrusted: true,
@@ -3795,9 +3845,20 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
         width: 1, height: 1,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
-    // Level 3: getCoalescedEvents() / getPredictedEvents() — single event, no coalescing
-    ev.getCoalescedEvents = function() { return [ev]; };
-    ev.getPredictedEvents = function() { return []; };
+    // Level 3 §4.1: intermediate samples buffered since the last dispatch,
+    // then this event appended last (spec order: oldest..newest, main event
+    // last). Without `coalesced` (non-move event types) this is just [ev].
+    var coalescedEvents = [];
+    if (Array.isArray(coalesced)) {
+        for (var i = 0; i < coalesced.length; i++) {
+            coalescedEvents.push(_lumen_make_coalesced_pointer_event(
+                type, coalesced[i][0], coalesced[i][1], button, buttons, mod, bubbles
+            ));
+        }
+    }
+    coalescedEvents.push(ev);
+    ev.getCoalescedEvents = function() { return coalescedEvents; };
+    ev.getPredictedEvents = function() { return _lumen_predict_pointer_events(coalescedEvents); };
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
@@ -26609,6 +26670,30 @@ mod tests {
              _lumen_dispatch_pointer_event(el.__nid__, 'pointermove', 5, 5, 0, 0, 0); \
              Array.isArray(got.getCoalescedEvents()) && got.getCoalescedEvents().length === 1 && \
              Array.isArray(got.getPredictedEvents()) && got.getPredictedEvents().length === 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pointer_event_coalesced_events_real_batch_and_prediction() {
+        // With buffered intermediate samples, getCoalescedEvents() must return
+        // every one of them (oldest first) plus the main event last, and
+        // getPredictedEvents() must linearly extrapolate from the last two.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var got = null; \
+             el.addEventListener('pointermove', function(e) { got = e; }); \
+             _lumen_dispatch_pointer_event(el.__nid__, 'pointermove', 30, 30, 0, 0, 0, [[10,10],[20,20]]); \
+             var c = got.getCoalescedEvents(); \
+             var p = got.getPredictedEvents(); \
+             Array.isArray(c) && c.length === 3 && \
+             c[0].clientX === 10 && c[0].clientY === 10 && \
+             c[1].clientX === 20 && c[1].clientY === 20 && \
+             c[2] === got && \
+             Array.isArray(p) && p.length === 2 && \
+             p[0].clientX === 40 && p[0].clientY === 40 && \
+             p[1].clientX === 50 && p[1].clientY === 50"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }

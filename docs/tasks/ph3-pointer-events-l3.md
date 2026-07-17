@@ -90,11 +90,21 @@ Events Level 3 §4.1: собирать промежуточные `pointermove`-
   (обновить существующий тест `dom.rs:26125`).
 
 ## Definition of done
-- [ ] Shell копит промежуточные `pointermove` и флашит покадрово.
-- [ ] `getCoalescedEvents()` возвращает реальные промежуточные события
+- [x] Shell копит промежуточные `pointermove` и флашит покадрово
+      (`pending_pointer_moves` + `flush_pointer_moves`, флаш в `about_to_wait`).
+- [x] `getCoalescedEvents()` возвращает реальные промежуточные события
       (порядок по спеку, главное — последнее).
-- [ ] `getPredictedEvents()` возвращает экстраполированные точки (или `[]`).
-- [ ] press/release/enter/leave корректно флашат буфер (нет потери порядка).
-- [ ] Заглушки `dom.rs:3765`, `3739`, `3781` заменены/выверены.
-- [ ] Тесты `dom.rs:21554`, `26117` обновлены под реальное поведение.
-- [ ] `CAPABILITIES.md` — Pointer Events L3 🟡 → ✅.
+- [x] `getPredictedEvents()` возвращает экстраполированные точки (или `[]`).
+- [x] press/release/enter/leave корректно флашат буфер (нет потери порядка) —
+      `flush_pointer_moves()` вызывается eagerly перед pointerdown/up/
+      pointerout+leave/CursorLeft, плюс safety-net флаш раз в `about_to_wait`.
+- [x] Заглушки в `dom.rs` (`_lumen_dispatch_pointer_event`,
+      `_lumen_dispatch_locked_mousemove`, `_lumen_dispatch_capture_event`)
+      выверены: главный путь дошит, pointer-lock/capture пути оставлены
+      односэмпловыми/пустыми — корректно по спеку (нет батчинга между кадрами
+      для них).
+- [x] Тесты обновлены/добавлены: `pointer_event_get_coalesced_events_returns_array`
+      (регрессия — одиночное событие) + новый
+      `pointer_event_coalesced_events_real_batch_and_prediction` (реальный батч
+      + предсказание).
+- [x] `CAPABILITIES.md` — Pointer Events L3 🟡 → ✅.
