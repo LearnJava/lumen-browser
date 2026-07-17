@@ -13666,11 +13666,25 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     (self.select_dropdown_node, &self.layout_box)
                     && let Some(anchor) = forms::find_box_rect(lb, sel_node)
                 {
-                    let doc = self.layout_source.as_ref().map(|s| s.document.lock().unwrap());
-                    if let Some(doc) = doc {
+                    // `appearance: base-select` renders the picker from author CSS
+                    // on the `<option>`s; the native (Auto/Compat) path keeps the
+                    // fixed UA chrome. Row geometry is shared, so `hit_select_option`
+                    // is valid regardless of which builder produced the overlay.
+                    let base_select_style = forms::find_layout_box(lb, sel_node)
+                        .filter(|b| b.style.appearance == lumen_layout::Appearance::BaseSelect)
+                        .map(|b| b.style.clone());
+                    if let Some(src) = self.layout_source.as_ref() {
+                        let doc = src.document.lock().unwrap();
                         let opts = forms::collect_select_options(&doc, sel_node);
                         let vp_h = self.viewport_height_css();
-                        let mut dd = forms::build_select_dropdown(anchor, &opts, self.scroll_y, vp_w, vp_h);
+                        let mut dd = if let Some(sel_style) = &base_select_style {
+                            forms::build_base_select_dropdown(
+                                anchor, &doc, &src.stylesheet, sel_style, &opts,
+                                self.scroll_y, vp_w, vp_h, self.dark_mode,
+                            )
+                        } else {
+                            forms::build_select_dropdown(anchor, &opts, self.scroll_y, vp_w, vp_h)
+                        };
                         dd.append(&mut overlay_buf);
                         overlay_buf = dd;
                     }

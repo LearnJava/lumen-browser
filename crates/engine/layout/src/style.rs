@@ -3652,6 +3652,11 @@ pub enum Appearance {
     /// `menulist-button` / `searchfield` / `textfield` / `button` и прочие
     /// platform-специфичные значения — хранятся как Compat.
     Compat,
+    /// `base-select` (HTML/CSS «Customizable Select») — `<select>` рендерится
+    /// как author-стилизуемое дерево (кнопка-триггер + `<selectedcontent>` +
+    /// `::picker(select)` со списком опций) вместо непрозрачного нативного
+    /// контрола. См. `box_tree.rs` (построение дерева) и `forms.rs` (поповер).
+    BaseSelect,
 }
 
 /// CSS Basic UI L4 §4.4 — `field-sizing`. NOT inherited. Initial: `Fixed`.
@@ -7390,6 +7395,9 @@ fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
         PseudoElementKind::Selection => name.eq_ignore_ascii_case("selection"),
         PseudoElementKind::Placeholder => name.eq_ignore_ascii_case("placeholder"),
         PseudoElementKind::Highlight(_) => name.eq_ignore_ascii_case("highlight"),
+        PseudoElementKind::Picker(_) => name.eq_ignore_ascii_case("picker"),
+        PseudoElementKind::Checkmark => name.eq_ignore_ascii_case("checkmark"),
+        PseudoElementKind::PickerIcon => name.eq_ignore_ascii_case("picker-icon"),
         PseudoElementKind::Unknown(s) => s.eq_ignore_ascii_case(name),
     }
 }
@@ -14185,6 +14193,10 @@ fn apply_declaration(
             style.appearance = match val.trim() {
                 "auto" => Appearance::Auto,
                 "none" => Appearance::None,
+                // HTML/CSS «Customizable Select»: opt into the author-styleable
+                // widget tree. `base` is the shorthand that also resets other
+                // appearance-related UA styling; treat both as `BaseSelect`.
+                "base-select" | "base" => Appearance::BaseSelect,
                 _ => Appearance::Compat,
             };
         }
@@ -29276,6 +29288,16 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.appearance, Appearance::None);
+    }
+
+    #[test]
+    fn appearance_base_select() {
+        let doc = lumen_html_parser::parse("<select></select>");
+        let sheet = lumen_css_parser::parse("select { appearance: base-select; }");
+        let root = ComputedStyle::root();
+        let sel = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, sel, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.appearance, Appearance::BaseSelect);
     }
 
     #[test]

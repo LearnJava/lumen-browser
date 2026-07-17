@@ -3752,6 +3752,94 @@ fn flatten_contents(children: &mut Vec<LayoutBox>) {
     }
 }
 
+/// True when `node` is a `<select>`/`<selectlist>` host that opts into the
+/// HTML/CSS «Customizable Select» rendering (`appearance: base-select`).
+fn is_base_select_host(doc: &Document, node: NodeId) -> bool {
+    matches!(
+        &doc.get(node).data,
+        NodeData::Element { name, .. }
+            if matches!(name.local.as_str(), "select" | "selectlist")
+    )
+}
+
+/// Build the author-styleable box subtree for a `<select>`/`<selectlist>` with
+/// `appearance: base-select` (HTML/CSS «Customizable Select»).
+///
+/// Structure (Phase 0 — closed state):
+/// ```text
+/// FlowRoot (the <select> box, styled by author rules on `select`)
+/// └── Block  trigger button — holds the `<selectedcontent>` label text
+/// ```
+/// Unlike the opaque native `FormControlKind::Select`, this is a real box tree,
+/// so author CSS on the `<select>` (and, later, on `option`/`::picker(select)`)
+/// cascades into it. The pop-up option list (`::picker(select)`) is revealed by
+/// the shell as a popover on click — see `forms.rs`.
+#[allow(clippy::too_many_arguments)]
+fn build_base_select_box(
+    doc: &Document,
+    style: &ComputedStyle,
+    id: NodeId,
+) -> LayoutBox {
+    // The trigger button shows the currently-selected option's label, mirroring
+    // the `<selectedcontent>` element of the Customizable Select spec.
+    let label = if is_selectlist(doc, id) {
+        collect_selectlist_label(doc, id)
+    } else {
+        collect_select_label(doc, id)
+    };
+
+    let mut trigger_children = Vec::new();
+    if !label.is_empty() {
+        let seg = InlineSegment {
+            text: label,
+            style: anon_style(style),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_is_lazy: false,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: id,
+            source_char_offset: 0,
+        };
+        trigger_children.push(anon_inline_run(id, style, vec![seg]));
+    }
+
+    let mut trigger_style = anon_style(style);
+    trigger_style.display = Display::Block;
+    let trigger = LayoutBox {
+        node: id,
+        rect: Rect::ZERO,
+        style: trigger_style,
+        kind: BoxKind::Block,
+        children: trigger_children,
+        col_span: 1,
+        row_span: 1,
+        svg_group_transform: None,
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        dirty: Default::default(),
+    };
+
+    LayoutBox {
+        node: id,
+        rect: Rect::ZERO,
+        style: style.clone(),
+        // FlowRoot: establishes a BFC and lays out the trigger as a block child,
+        // regardless of the select's own (inline-block) UA display.
+        kind: BoxKind::FlowRoot,
+        children: vec![trigger],
+        col_span: 1,
+        row_span: 1,
+        svg_group_transform: None,
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        dirty: Default::default(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_box(
     doc: &Document,
@@ -3772,6 +3860,15 @@ fn build_box(
         .style_for(id)
         .cloned()
         .unwrap_or_else(|| compute_style(doc, id, sheet, inherited, viewport, dark_mode));
+
+    // HTML/CSS «Customizable Select»: a `<select appearance:base-select>` renders
+    // as an author-styleable widget tree instead of the opaque native control.
+    if style.appearance == crate::style::Appearance::BaseSelect
+        && style.display != Display::None
+        && is_base_select_host(doc, id)
+    {
+        return build_base_select_box(doc, &style, id);
+    }
 
     let kind = match &doc.get(id).data {
         // Shadow root nodes are infrastructure — never rendered directly.
@@ -15482,6 +15579,54 @@ mod tests {
             }
         }
         None
+    }
+
+    /// Collect the concatenated text of every `InlineRun` segment in the tree.
+    fn collect_inline_text(root: &super::LayoutBox, out: &mut Vec<String>) {
+        if let super::BoxKind::InlineRun { segments, .. } = &root.kind {
+            for seg in segments {
+                out.push(seg.text.clone());
+            }
+        }
+        for child in &root.children {
+            collect_inline_text(child, out);
+        }
+    }
+
+    #[test]
+    fn base_select_builds_styleable_tree_not_native_widget() {
+        // `appearance: base-select` must render an author-styleable box tree
+        // (FlowRoot → trigger Block → InlineRun with the selected label), not the
+        // opaque `FormControlKind::Select` native widget.
+        let html = r#"<select><option>Apple</option><option selected>Banana</option></select>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("select { appearance: base-select; }");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        assert!(
+            find_form_kind(&root).is_none(),
+            "base-select must NOT produce a native FormControl::Select box"
+        );
+        let mut texts = Vec::new();
+        collect_inline_text(&root, &mut texts);
+        assert!(
+            texts.iter().any(|t| t.contains("Banana")),
+            "trigger should show the selected option label, got {texts:?}"
+        );
+    }
+
+    #[test]
+    fn native_select_still_uses_form_control_widget() {
+        // Regression guard: without `appearance: base-select`, a `<select>` keeps
+        // rendering as the opaque native widget.
+        let html = r#"<select><option selected>Only</option></select>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        assert!(
+            matches!(find_form_kind(&root), Some(super::FormControlKind::Select { .. })),
+            "plain <select> should still be a native FormControl::Select"
+        );
     }
 
     #[test]
