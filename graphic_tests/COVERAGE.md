@@ -225,6 +225,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **box-shadow: inset** — не реализовано в paint (требует clip)
 - **border-radius: elliptical (rx≠ry)** — ✅ supported since 2026-05-24: `border-radius: H / V` shorthand + individual `border-*-*-radius: rx ry`
 - **background-image** (url) — url images ✅; gradient rendering ✅ (linear + radial GPU pipeline, тест 39; conic gradient ✅ тест 40)
+- **background-repeat** — ✅ `repeat`/`no-repeat`/`repeat-x`/`repeat-y`/`round`/`space` (CSS Backgrounds L3 §3.4). `space` (тест 147) укладывает целые плитки, прижимая первую и последнюю к краям и распределяя остаток равными зазорами; общий хелпер `display_list::space_axis_geometry` для всех путей тайлинга (femtovg + CPU + wgpu-renderer фон/маска), тот же что и для `mask-repeat: space`
 - **transform** — ✅ полностью реализован (translate/rotate/scale/skew/matrix + transform-origin), тест 22
 - **filter** — ✅ реализован (grayscale/sepia/brightness/invert/contrast/saturate/opacity/hue-rotate + blur), тест 30
 - **backdrop-filter** — ✅ реализован (blur/grayscale/brightness/invert/combo; Phase 0: требует parent stacking context), тест 30

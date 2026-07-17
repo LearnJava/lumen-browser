@@ -1178,6 +1178,42 @@ pub(crate) fn split_mixed_runs(text: &str) -> Vec<MixedSegment> {
     out
 }
 
+/// Per-axis tiling geometry for `background-repeat: space` /
+/// `mask-repeat: space` (CSS Backgrounds L3 §3.4, CSS Masking L1 §4.4).
+///
+/// Given the positioning-area leading edge `area_origin`, its extent `area`
+/// along the axis, the tile size `tile`, and the `position` offset `pos_off`
+/// (from the leading edge), returns `(start, step, repeat)`:
+/// * `start` — absolute coordinate of the first tile's leading edge;
+/// * `step` — distance between successive tile origins (tile size + gap);
+/// * `repeat` — whether more than one tile is laid out along the axis.
+///
+/// When two or more whole tiles fit, the first and last are pinned to the two
+/// edges and the leftover space is distributed evenly as equal gaps (the
+/// `position` offset is ignored on that axis, per spec). When at most one whole
+/// tile fits, a single tile is placed at the `position` offset and the axis does
+/// not repeat (identical to `no-repeat`).
+///
+/// Shared by every tiling path (femtovg + CPU via [`bg_tile_geometry`], and the
+/// GPU renderer's inline background/mask loops) so `space` places tiles
+/// identically everywhere.
+#[must_use]
+pub(crate) fn space_axis_geometry(
+    area_origin: f32,
+    area: f32,
+    tile: f32,
+    pos_off: f32,
+) -> (f32, f32, bool) {
+    if tile > 0.0 {
+        let n = (area / tile).floor();
+        if n >= 2.0 {
+            let gap = (area - n * tile) / (n - 1.0);
+            return (area_origin, tile + gap, true);
+        }
+    }
+    (area_origin + pos_off, tile, false)
+}
+
 /// Tile geometry for a background image from `background-size` /
 /// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
 ///
@@ -1185,11 +1221,13 @@ pub(crate) fn split_mixed_runs(text: &str) -> Vec<MixedSegment> {
 /// rasterizer derive identical placement. `img_w`/`img_h` — intrinsic image
 /// size; `oarea_*` — the `background-origin` positioning area (x/y/width/height).
 ///
-/// Returns `(tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)`:
-/// one tile's size, the top-left corner of the first tile, and the per-axis
-/// repeat flags. The caller tiles from `(tile_x_start, tile_y_start)` across the
-/// painting area, stepping by `(tile_w, tile_h)` while the corresponding repeat
-/// flag is set, clipping to the painting rect.
+/// Returns `(tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y,
+/// step_x, step_y)`: one tile's size, the top-left corner of the first tile, the
+/// per-axis repeat flags, and the per-axis step between successive tile origins.
+/// The caller tiles from `(tile_x_start, tile_y_start)` across the painting area,
+/// stepping by `(step_x, step_y)` while the corresponding repeat flag is set,
+/// clipping to the painting rect. `step_*` equals `tile_*` for every repeat mode
+/// except `space`, where it includes the inter-tile gap (CSS Backgrounds L3 §3.4).
 // BUG-235: only the femtovg window and the tiny-skia CPU snapshot tile
 // backgrounds via this helper; the wgpu renderer tiles on the GPU. Gate it to
 // its consumers so a wgpu-only build (e.g. lumen-driver default features) does
@@ -1207,7 +1245,7 @@ pub(crate) fn bg_tile_geometry(
     oarea_h: f32,
     oarea_x: f32,
     oarea_y: f32,
-) -> (f32, f32, f32, f32, bool, bool) {
+) -> (f32, f32, f32, f32, bool, bool, f32, f32) {
     let (tile_w, tile_h) = match size {
         BackgroundSize::Auto => (img_w, img_h),
         BackgroundSize::Cover => {
@@ -1270,21 +1308,40 @@ pub(crate) fn bg_tile_geometry(
     let tile_x0 = oarea_x + off_x;
     let tile_y0 = oarea_y + off_y;
 
-    let (tile_x_start, repeat_x, repeat_y) = match repeat {
-        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
-        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
-        BackgroundRepeat::RepeatY => (tile_x0, false, true),
-        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
-            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+    let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match repeat {
+        BackgroundRepeat::NoRepeat => (tile_x0, tile_w, false, tile_y0, tile_h, false),
+        BackgroundRepeat::RepeatX => (
+            tile_x0 - (off_x / tile_w).ceil() * tile_w,
+            tile_w,
+            true,
+            tile_y0,
+            tile_h,
+            false,
+        ),
+        BackgroundRepeat::RepeatY => (
+            tile_x0,
+            tile_w,
+            false,
+            tile_y0 - (off_y / tile_h).ceil() * tile_h,
+            tile_h,
+            true,
+        ),
+        BackgroundRepeat::Repeat | BackgroundRepeat::Round => (
+            tile_x0 - (off_x / tile_w).ceil() * tile_w,
+            tile_w,
+            true,
+            tile_y0 - (off_y / tile_h).ceil() * tile_h,
+            tile_h,
+            true,
+        ),
+        BackgroundRepeat::Space => {
+            let (sx, step_x, rx) = space_axis_geometry(oarea_x, oarea_w, tile_w, off_x);
+            let (sy, step_y, ry) = space_axis_geometry(oarea_y, oarea_h, tile_h, off_y);
+            (sx, step_x, rx, sy, step_y, ry)
         }
     };
-    let tile_y_start = if repeat_y {
-        tile_y0 - (off_y / tile_h).ceil() * tile_h
-    } else {
-        tile_y0
-    };
 
-    (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)
+    (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y, step_x, step_y)
 }
 
 /// Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
@@ -4718,18 +4775,37 @@ fn gradient_tile_rects(
     let tile_x0 = origin.x + off_x;
     let tile_y0 = origin.y + off_y;
 
-    let (tile_x_start, repeat_x, repeat_y) = match repeat {
-        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
-        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
-        BackgroundRepeat::RepeatY => (tile_x0, false, true),
-        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
-            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+    let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match repeat {
+        BackgroundRepeat::NoRepeat => (tile_x0, tile_w, false, tile_y0, tile_h, false),
+        BackgroundRepeat::RepeatX => (
+            tile_x0 - (off_x / tile_w).ceil() * tile_w,
+            tile_w,
+            true,
+            tile_y0,
+            tile_h,
+            false,
+        ),
+        BackgroundRepeat::RepeatY => (
+            tile_x0,
+            tile_w,
+            false,
+            tile_y0 - (off_y / tile_h).ceil() * tile_h,
+            tile_h,
+            true,
+        ),
+        BackgroundRepeat::Repeat | BackgroundRepeat::Round => (
+            tile_x0 - (off_x / tile_w).ceil() * tile_w,
+            tile_w,
+            true,
+            tile_y0 - (off_y / tile_h).ceil() * tile_h,
+            tile_h,
+            true,
+        ),
+        BackgroundRepeat::Space => {
+            let (sx, step_x, rx) = space_axis_geometry(origin.x, origin.width, tile_w, off_x);
+            let (sy, step_y, ry) = space_axis_geometry(origin.y, origin.height, tile_h, off_y);
+            (sx, step_x, rx, sy, step_y, ry)
         }
-    };
-    let tile_y_start = if repeat_y {
-        tile_y0 - (off_y / tile_h).ceil() * tile_h
-    } else {
-        tile_y0
     };
 
     // Cap, чтобы крошечная плитка с repeat не породила взрывное число команд.
@@ -4754,13 +4830,13 @@ fn gradient_tile_rects(
                 if !repeat_x {
                     break;
                 }
-                tx += tile_w;
+                tx += step_x;
             }
         }
         if !repeat_y {
             break;
         }
-        ty += tile_h;
+        ty += step_y;
     }
     rects
 }
@@ -8987,7 +9063,7 @@ mod tests {
         // A 30px tile in a 100px area: round(100/30) = 3 copies, so the tile is
         // stretched to 100/3 ≈ 33.33px on both axes (no clipped partial tile).
         let pos = ObjectPosition::background_initial();
-        let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
+        let (tw, th, x0, y0, rx, ry, sx, sy) = bg_tile_geometry(
             BackgroundSize::Auto,
             &pos,
             BackgroundRepeat::Round,
@@ -9004,6 +9080,8 @@ mod tests {
         assert!((x0 - 0.0).abs() < 1e-3, "tile_x_start: {x0}");
         assert!((y0 - 0.0).abs() < 1e-3, "tile_y_start: {y0}");
         assert!(rx && ry, "round repeats on both axes");
+        // `round` steps by the rescaled tile size (no inter-tile gap).
+        assert!((sx - tw).abs() < 1e-3 && (sy - th).abs() < 1e-3, "round step == tile");
     }
 
     // `round` must NOT rescale when the tile already fits a whole number of
@@ -9026,6 +9104,39 @@ mod tests {
         // 100/25 = 4 and 100/50 = 2 are already whole → tile size preserved.
         assert!((tw - 25.0).abs() < 1e-3, "tile_w: {tw}");
         assert!((th - 50.0).abs() < 1e-3, "tile_h: {th}");
+    }
+
+    // CSS Backgrounds L3 §3.4 — `space`: whole tiles pinned to both edges with
+    // equal gaps between them, first tile at the area origin, step = tile + gap.
+    #[test]
+    fn space_axis_geometry_distributes_gaps_between_whole_tiles() {
+        // 30px tile in a 100px area starting at x=10: floor(100/30) = 3 tiles,
+        // leftover 100 - 90 = 10 split across 2 gaps → 5px each, step = 35px.
+        let (start, step, repeat) = space_axis_geometry(10.0, 100.0, 30.0, 40.0);
+        assert!((start - 10.0).abs() < 1e-3, "start pinned to origin: {start}");
+        assert!((step - 35.0).abs() < 1e-3, "step = tile + gap: {step}");
+        assert!(repeat, "≥2 tiles repeat");
+    }
+
+    // `space` with room for at most one whole tile falls back to `no-repeat`:
+    // a single tile placed at the `position` offset, no repeat.
+    #[test]
+    fn space_axis_geometry_single_tile_honors_position() {
+        // 60px tile in a 100px area: floor(100/60) = 1 → no repeat, position kept.
+        let (start, step, repeat) = space_axis_geometry(10.0, 100.0, 60.0, 25.0);
+        assert!((start - 35.0).abs() < 1e-3, "start = origin + pos_off: {start}");
+        assert!((step - 60.0).abs() < 1e-3, "step == tile: {step}");
+        assert!(!repeat, "single tile does not repeat");
+    }
+
+    // Exact fit (no leftover) → gap is zero, step equals the tile, tiles repeat.
+    #[test]
+    fn space_axis_geometry_exact_fit_has_no_gap() {
+        // 25px tile in a 100px area: 4 tiles, leftover 0 → gap 0, step 25.
+        let (start, step, repeat) = space_axis_geometry(0.0, 100.0, 25.0, 0.0);
+        assert!((start - 0.0).abs() < 1e-3, "start: {start}");
+        assert!((step - 25.0).abs() < 1e-3, "step: {step}");
+        assert!(repeat, "4 tiles repeat");
     }
 
     #[test]
