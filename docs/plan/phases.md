@@ -123,7 +123,7 @@
   - **OCSP stapling + CT log enforcement + invalid cert UI** (`[P3]`).
   - **Safe Browsing equivalent** (`[P3]`, готово) — `SafeBrowsingList` (SQLite) + `SafeBrowsingFilter` поверх `RequestFilter`-точки; полные SHA-256 + 20 канонических вариантов на URL; без облачного API.
   - **Back/forward cache (bfcache)** (`[P4]`).
-  - **Navigation API + History API runtime** (`[P4]`).
+  - **Navigation API + History API runtime** (`[P4]`, готово) — History API полностью привязан к реальному back-forward стеку; `window.navigation` (entries/navigate/back/forward/traverseTo, intercept round-trip, `navigate`/`navigatesuccess`/`navigateerror`/`currententrychange`) читает/пишет тот же стек; multi-step `history.go(n)`/`traverseTo(key)`, пересекающий полнодокументную границу, корректно перезагружает нужный документ перед применением same-document destination.
   - **Web Animations API runtime** (`[P1+P2+P4]`) — compositor-driven для transform/opacity. P1 — value interpolation в момент t; P2 — compositor offload; P4 — animation timeline scheduling.
   - **`<contenteditable>` + Input Events Level 2 + Selection / Range API** (`[P1+P4]`) — P1 — DOM mutations + Selection/Range типы + `beforeinput`/`input` event firing; P4 — input dispatch (keyboard / IME / drag-drop / paste) + undo stack.
   - **Service Worker runtime** (`[P3+P4]`) — fetch interception / push / background sync. P3 — fetch interception API + push delivery + bg sync queue; P4 — отдельный JS worker context + lifecycle.
