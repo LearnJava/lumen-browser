@@ -22,6 +22,50 @@
 
 ---
 
+## 2026-07-17 — b7a951b7 — Windows 10, dev-release (первый прогон журнала)
+
+Прогон `scripts/perf_audit.py` (сырые данные: [runs/2026-07-17.json](runs/2026-07-17.json)).
+RAM/CPU-колонки добавлены в харнесс после этого прогона — появятся со следующего.
+
+| slug | статус | HTTP | source, с | layout, с | screenshot, с | доминирует | ошибки |
+|---|---|---|---|---|---|---|---|
+| example | OK | — | 0.08 | 0.09 | 0.14 | net_parse |  |
+| ya | OK | 200 | 0.61 | 2.01 | 1.29 | style_layout | script error: JS runtime error: Unable to find RenderContext state htm |
+| hn | OK | 200 | 1.35 | 1.46 | 2.49 | net_parse | script error: JS runtime error: el.getElementsByClassName is not a fun |
+| w3 | FAIL | 403 | 0.75 | 0.76 | 0.75 | - | Ошибка --screenshot https://www.w3.org/: network error: HTTP 403 |
+| rust-lang | OK | 200 | 2.27 | 5.74 | 3.85 | style_layout |  |
+| lenta | OK | 200 | 0.3 | 1.45 | 13.16 | paint | ✗ https://ssp.rambler.ru/capirs_async.js (dns: resolve ssp.rambler.ru: |
+| github | TIMEOUT | 200 | 0.7 | 240.29 | 240.29 | - | module error: JS runtime error: Automatic publicPath is not supported  |
+| stackoverflow | FAIL | 200 | 1.38 | 13.48 | 0.86 | - | Ошибка --screenshot https://stackoverflow.com/: network error: HTTP 42 |
+| crates | OK | 200 | 1.33 | 1.83 | 0.96 | net_parse | script error: JS runtime error: Cannot read properties of undefined (r |
+| docs-rs | OK | 200 | 1.12 | 1.64 | 0.98 | net_parse | script error: JS runtime error: Cannot read properties of undefined (r |
+| ria | OK | 200 | 0.26 | 4.57 | 4.36 | style_layout | script error: JS runtime error: Image is not defined |
+| habr | OK | 200 | 0.79 | 16.16 | 41.8 | paint | ✗ https://cdn.skcrtxr.com/roxot-wrapper/js/roxot-manager.js?pid=c42719 |
+| mdn | OK | 200 | 1.0 | 4.92 | 64.65 | paint | [JS warn] Unable to set theme TypeError: Cannot set properties of unde |
+| rbc | OK | 200 | 0.31 | 6.77 | 11.1 | style_layout | ✗ https://top-fwz1.mail.ru/counter?id=3081030;js=na (dns: resolve top- |
+
+**Сравнение с прошлым прогоном:** первый прогон журнала; против ручного аудита
+2026-07-02: lenta.ru 141.7 с → 13.2 с (~11×, срезы BUG-267/272 + параллельный
+fetch); crates.io, docs.rs, ria.ru открылись (в июле 403/500); w3.org наоборот
+стал 403 (в июле открывался), stackoverflow теперь 429 на повторных стадиях.
+
+**Находки:**
+- github.com висит ≥240 с и на V8 (сеть готова за 0.7 с) — гипотеза «медленный
+  QuickJS» опровергнута → BUG-303.
+- DNS 11004 (WSANO_DATA) на живых доменах бьёт по подресурсам 4+ сайтов
+  (mc.yandex.ru, ssp.rambler.ru, top-fwz1.mail.ru, …) → BUG-304.
+- Отсутствующие JS API валят site-скрипты целиком: `getElementsByClassName`
+  (HN) → BUG-302, конструктор `Image` (ria.ru) → BUG-305.
+- Paint по-прежнему доминирует на длинных страницах (CPU-путь): mdn 59.7 с
+  (32768 px — подозрительно ровный кламп высоты), habr 25.6 с (31315 px),
+  lenta 11.7 с. Известный класс (CPU-растеризация), новый баг не заводился.
+- style_layout тяжёлый на habr 15.4 с, rbc 6.5 с, ria 4.3 с, rust-lang 3.5 с —
+  кандидат на профилирование LUMEN_PROFILE_TREE в следующем прогоне.
+
+**Заведённые баги:** BUG-302, BUG-303, BUG-304, BUG-305.
+
+---
+
 ## Исторический контекст (до журнала)
 
 **2026-07-02 — ручной аудит 14 сайтов** (headless `--screenshot`, dev-release,

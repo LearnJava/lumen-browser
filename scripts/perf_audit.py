@@ -88,30 +88,70 @@ def load_corpus(path: Path, only: list[str]) -> list[tuple[str, str]]:
     return sites
 
 
+def _win_proc_stats(popen: subprocess.Popen) -> dict:
+    """Пиковая рабочая память и CPU-время завершившегося процесса (WinAPI, без зависимостей).
+
+    Работает, пока жив handle Popen (до GC объекта). На не-Windows возвращает {}.
+    """
+    if sys.platform != "win32":
+        return {}
+    import ctypes
+    from ctypes import wintypes
+
+    class PMC(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+
+    stats: dict = {}
+    try:
+        handle = wintypes.HANDLE(int(popen._handle))  # noqa: SLF001 — публичного API у Popen нет
+        pmc = PMC()
+        pmc.cb = ctypes.sizeof(pmc)
+        if ctypes.WinDLL("psapi").GetProcessMemoryInfo(handle, ctypes.byref(pmc), pmc.cb):
+            stats["peak_mb"] = round(pmc.PeakWorkingSetSize / 1048576, 1)
+        times = (wintypes.FILETIME * 4)()
+        if ctypes.WinDLL("kernel32").GetProcessTimes(
+            handle, ctypes.byref(times[0]), ctypes.byref(times[1]),
+            ctypes.byref(times[2]), ctypes.byref(times[3]),
+        ):
+            def ft_s(ft: wintypes.FILETIME) -> float:
+                return ((ft.dwHighDateTime << 32) | ft.dwLowDateTime) / 1e7
+            stats["cpu_s"] = round(ft_s(times[2]) + ft_s(times[3]), 2)  # kernel + user
+    except (OSError, AttributeError, ValueError):
+        pass
+    return stats
+
+
 def run_stage(
     exe: Path, args: list[str], log_path: Path, timeout: int, extra_env: dict | None = None
 ) -> dict:
-    """Запустить один headless-прогон lumen; вернуть тайминг + диагностику."""
+    """Запустить один headless-прогон lumen; вернуть тайминг + RAM/CPU + диагностику."""
     env = os.environ.copy()
     env.update(extra_env or {})
     t0 = time.monotonic()
     timed_out = False
+    proc = subprocess.Popen(
+        [str(exe), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        cwd=str(REPO_ROOT),
+    )
     try:
-        proc = subprocess.run(
-            [str(exe), *args],
-            capture_output=True,
-            timeout=timeout,
-            env=env,
-            cwd=str(REPO_ROOT),
-        )
+        stdout, stderr = proc.communicate(timeout=timeout)
         rc = proc.returncode
-        stdout, stderr = proc.stdout, proc.stderr
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         timed_out = True
         rc = None
-        stdout = e.stdout or b""
-        stderr = e.stderr or b""
+        proc.kill()
+        stdout, stderr = proc.communicate()
     wall = round(time.monotonic() - t0, 2)
+    proc_stats = _win_proc_stats(proc)
 
     stderr_text = stderr.decode("utf-8", errors="replace")
     log_path.write_bytes(stderr)
@@ -126,6 +166,7 @@ def run_stage(
         "stdout_bytes": len(stdout),
         "error_lines": error_lines[:8],
         "stderr_text": stderr_text,
+        **proc_stats,  # peak_mb / cpu_s (Windows)
     }
 
 
@@ -146,8 +187,10 @@ def audit_site(exe: Path, slug: str, url: str, out_dir: Path, timeout: int) -> d
     """Три замера одного сайта; вернуть запись results.json."""
     rec: dict = {"slug": slug, "url": url}
 
+    keys = ("wall_s", "rc", "timed_out", "stdout_bytes", "error_lines", "peak_mb", "cpu_s")
+
     src = run_stage(exe, ["--dump-source", url], out_dir / f"{slug}.source.stderr.log", timeout)
-    rec["source"] = {k: src[k] for k in ("wall_s", "rc", "timed_out", "stdout_bytes", "error_lines")}
+    rec["source"] = {k: src[k] for k in keys if k in src}
     # HTTP-статус главного документа из сетевого лога («← 403 https://…»)
     statuses = re.findall(r"←\s*(\d{3})\s", src["stderr_text"])
     rec["http_status"] = int(statuses[-1]) if statuses else None
@@ -159,13 +202,13 @@ def audit_site(exe: Path, slug: str, url: str, out_dir: Path, timeout: int) -> d
         timeout,
         extra_env={"LUMEN_PROFILE_TREE": "1"},
     )
-    rec["layout"] = {k: lay[k] for k in ("wall_s", "rc", "timed_out", "stdout_bytes", "error_lines")}
+    rec["layout"] = {k: lay[k] for k in keys if k in lay}
     # Топ-строки профиля каскада/layout — подсказка «куда смотреть», не точная разбивка
     rec["layout"]["profile_top"] = PROFILE_LINE_RE.findall(lay["stderr_text"])[:12]
 
     png = out_dir / f"{slug}.png"
     shot = run_stage(exe, ["--screenshot", str(png), url], out_dir / f"{slug}.screenshot.stderr.log", timeout)
-    rec["screenshot"] = {k: shot[k] for k in ("wall_s", "rc", "timed_out", "error_lines")}
+    rec["screenshot"] = {k: shot[k] for k in keys if k in shot}
     rec["screenshot"]["png_size"] = png_size(png)
 
     # Производные фазы (валидны только когда все стадии завершились сами)
@@ -200,8 +243,8 @@ def summary_md(results: list[dict], exe: Path, commit: str) -> str:
         f"- Бинарь: `{exe}`",
         f"- Коммит движка: `{commit}`",
         "",
-        "| slug | статус | HTTP | source, с | layout, с | screenshot, с | доминирует | ошибки |",
-        "|---|---|---|---|---|---|---|---|",
+        "| slug | статус | HTTP | source, с | layout, с | screenshot, с | RAM пик, МБ | CPU, с | доминирует | ошибки |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
         errs = r["screenshot"]["error_lines"] or r["layout"]["error_lines"]
@@ -210,7 +253,8 @@ def summary_md(results: list[dict], exe: Path, commit: str) -> str:
         lines.append(
             f"| {r['slug']} | {r['status']} | {r.get('http_status') or '—'} "
             f"| {r['source']['wall_s']} | {r['layout']['wall_s']} "
-            f"| {r['screenshot']['wall_s']} | {dom} | {err_note} |"
+            f"| {r['screenshot']['wall_s']} | {r['screenshot'].get('peak_mb', '—')} "
+            f"| {r['screenshot'].get('cpu_s', '—')} | {dom} | {err_note} |"
         )
     return "\n".join(lines) + "\n"
 

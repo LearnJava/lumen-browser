@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-17",
  "counts": {
-  "open": 34,
+  "open": 37,
   "fixed": 239,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 273,
+ "total_bugs": 276,
  "phases": [
   {
    "id": "P0",
@@ -3508,6 +3508,27 @@
    "component": "js (WEB_API_SHIM, dom.rs)",
    "date": null,
    "debtor": false
+  },
+  "BUG-303": {
+   "status": "open",
+   "title": "github.com: JS-исполнение не завершается ≥240с и на V8 (сеть готова за 0.7с) — гипотеза «медленный QuickJS» из аудита 2026-07-02 опровергнута; похоже на незавер…",
+   "component": "js (V8 / event loop)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-304": {
+   "status": "open",
+   "title": "DNS os error 11004 (WSANO_DATA) на живых доменах (mc.yandex.ru, top-fwz1.mail.ru, ssp.rambler.ru, static-mon.yandex.net, cdn.skcrtxr.com) — имя резолвится систе…",
+   "component": "network (резолвер)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-305": {
+   "status": "open",
+   "title": "Конструктор `Image`/`HTMLImageElement` отсутствует в шиме — `new Image()` (предзагрузка, трекинг-пиксели, canvas) валит скрипты ria.ru целиком (`Image is not de…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3573,8 +3594,12 @@
   "js (JS environment bootstrap, `WEB_API_SHIM`)": [
    "BUG-280"
   ],
+  "js (V8 / event loop)": [
+   "BUG-303"
+  ],
   "js (WEB_API_SHIM, dom.rs)": [
-   "BUG-302"
+   "BUG-302",
+   "BUG-305"
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"
@@ -3724,6 +3749,9 @@
   ],
   "network (`filter/easylist.rs` + filter context в `lib.rs`)": [
    "BUG-292"
+  ],
+  "network (резолвер)": [
+   "BUG-304"
   ],
   "network+shell": [
    "BUG-169"
