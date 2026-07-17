@@ -1288,12 +1288,6 @@ impl QuickJsRuntime {
                 eprintln!("ElementInternals API init failed: {}", e);
             }
 
-            // Phase 0: HTMLElement.prototype.inert getter/setter (HTML LS §6.7).
-            // Phase 1: _lumen_set_inert native binding propagates to DOM attr + triggers style recalc.
-            if let Err(e) = inert::install_inert_api(&ctx) {
-                eprintln!("Inert API init failed: {}", e);
-            }
-
             // Phase 0: navigator.presentation + PresentationRequest/Connection stubs.
             if let Err(e) = presentation_api::install_presentation_api(&ctx) {
                 eprintln!("Presentation API init failed: {}", e);

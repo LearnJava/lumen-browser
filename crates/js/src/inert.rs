@@ -16,16 +16,10 @@
 //! `Document::set_attr(node, "inert", "")` / `Document::remove_attr(node, "inert")`,
 //! then trigger a style recalc so that the UA `[inert] { pointer-events: none; }`
 //! rule (wired by P4) takes effect.
-use rquickjs::Ctx;
 
-/// Install `HTMLElement.prototype.inert` getter/setter into the JS context.
-pub fn install_inert_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(INERT_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_inert_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_inert_api` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-14): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_inert_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -33,6 +27,7 @@ pub(crate) fn install_inert_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const INERT_SHIM: &str = r#"
 (function() {
   'use strict';
@@ -74,116 +69,108 @@ const INERT_SHIM: &str = r#"
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
+    /// Set up minimal HTMLElement stub + inert bindings on a bare V8 runtime.
+    fn with_inert_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            var window = globalThis;
 
-    /// Set up minimal HTMLElement stub + inert bindings.
-    fn with_inert_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
+            function HTMLElement() {}
+            HTMLElement.prototype = Object.create(null);
+            window.HTMLElement = HTMLElement;
 
-                function HTMLElement() {}
-                HTMLElement.prototype = Object.create(null);
-                window.HTMLElement = HTMLElement;
-
-                window.makeEl = function() {
-                  var el = Object.create(HTMLElement.prototype);
-                  el.__nid = 42;
-                  return el;
-                };
-                "#,
-            )
-            .unwrap();
-            install_inert_api(&ctx).unwrap();
-            f(&ctx);
-        });
+            window.makeEl = function() {
+              var el = Object.create(HTMLElement.prototype);
+              el.__nid = 42;
+              return el;
+            };
+            "#,
+        )
+        .unwrap();
+        install_inert_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn inert_defaults_to_false() {
-        with_inert_api(|ctx| {
-            let ok: bool = ctx
-                .eval("var el = makeEl(); el.inert === false")
-                .unwrap();
-            assert!(ok);
+        with_inert_api(|rt| {
+            let ok = rt.eval("var el = makeEl(); el.inert === false").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn setting_inert_true_reflects_as_true() {
-        with_inert_api(|ctx| {
-            let ok: bool = ctx
+        with_inert_api(|rt| {
+            let ok = rt
                 .eval("var el = makeEl(); el.inert = true; el.inert === true")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn setting_inert_false_reflects_as_false() {
-        with_inert_api(|ctx| {
-            let ok: bool = ctx
+        with_inert_api(|rt| {
+            let ok = rt
                 .eval("var el = makeEl(); el.inert = true; el.inert = false; el.inert === false")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn inert_coerces_truthy_value() {
-        with_inert_api(|ctx| {
-            let ok: bool = ctx
+        with_inert_api(|rt| {
+            let ok = rt
                 .eval("var el = makeEl(); el.inert = 1; el.inert === true")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn inert_coerces_falsy_value() {
-        with_inert_api(|ctx| {
-            let ok: bool = ctx
+        with_inert_api(|rt| {
+            let ok = rt
                 .eval("var el = makeEl(); el.inert = 0; el.inert === false")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn lumen_set_inert_stub_exists() {
-        with_inert_api(|ctx| {
-            let ok: bool = ctx
+        with_inert_api(|rt| {
+            let ok = rt
                 .eval("typeof globalThis._lumen_set_inert === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn stub_does_not_throw() {
-        with_inert_api(|ctx| {
-            let ok: bool = ctx
+        with_inert_api(|rt| {
+            let ok = rt
                 .eval("globalThis._lumen_set_inert(42, true); true")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn inert_property_on_prototype_not_instance() {
-        with_inert_api(|ctx| {
-            let ok: bool = ctx
+        with_inert_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var el = makeEl();
@@ -194,7 +181,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }
