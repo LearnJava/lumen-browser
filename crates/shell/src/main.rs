@@ -16239,16 +16239,15 @@ impl Lumen {
         self.doc_pip_os = None;
     }
 
-    /// Document Picture-in-Picture (slice 2): redraw the OS floating window.
+    /// Document Picture-in-Picture (slice 3): redraw the OS floating window.
     /// Background fill (`build_docpip_content`) first, then — if the page has
     /// appended anything to `pipWindow.document.body` — the moved subtree's
     /// last-known markup (`pip.content_html`) is re-parsed into a fresh
     /// detached [`lumen_dom::Document`], laid out at the window's own size
-    /// with an empty (author-CSS-less) stylesheet, and painted on top. No-op
-    /// when no window is open. Known gap: no author stylesheet/UA cascade
-    /// carries over (default element display roles only), and images in the
-    /// moved subtree don't render (this window's renderer has its own image
-    /// cache, separate from the main page's).
+    /// against the main page's own author stylesheet (`self.layout_source`),
+    /// and painted on top. No-op when no window is open. Known gap: images in
+    /// the moved subtree don't render (this window's renderer has its own
+    /// image cache, separate from the main page's).
     fn render_doc_pip_os(&mut self) {
         let Some(pip) = self.doc_pip_os.as_mut() else {
             return;
@@ -16260,8 +16259,15 @@ impl Lumen {
         let mut content = panels::doc_pip_os_window::build_docpip_content(win_w, win_h);
         if !pip.content_html.is_empty() {
             let doc = lumen_html_parser::parse(&pip.content_html);
-            let sheet = lumen_css_parser::parse("");
-            let layout = lumen_layout::layout(&doc, &sheet, Size::new(win_w, win_h));
+            let empty_sheet;
+            let sheet = match self.layout_source.as_ref() {
+                Some(src) => src.stylesheet.as_ref(),
+                None => {
+                    empty_sheet = lumen_css_parser::parse("");
+                    &empty_sheet
+                }
+            };
+            let layout = lumen_layout::layout(&doc, sheet, Size::new(win_w, win_h));
             content.extend(paint_ordered(&layout));
         }
         if let Err(err) = pip.renderer.render(&[], &content, 0.0, 0.0) {

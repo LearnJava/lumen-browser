@@ -1,5 +1,5 @@
 //! Real OS-level Document Picture-in-Picture window (slice 1 lifecycle +
-//! slice 2 content).
+//! slice 2 content + slice 3 author CSS).
 //!
 //! Mirrors [`pip_os_window`](super::pip_os_window) (CC-7, video PiP): a
 //! separate, always-on-top, borderless `winit::Window` floating above every
