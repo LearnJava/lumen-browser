@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-16",
+ "generated": "2026-07-17",
  "counts": {
   "open": 31,
   "fixed": 235,
@@ -1077,14 +1077,14 @@
     {
      "id": "P3-customstate",
      "title": "ElementInternals + custom element states (:state())",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): ElementInternals + CustomStateSet готовы (element_internals.rs); дошить — CSS-селектор :state() в каскаде (P4-handoff)"
+     "status": "done",
+     "note": "реализовано (P1 2026-07-17): ElementInternals + CustomStateSet (element_internals.rs), CSS-селектор :state() в каскаде (style.rs, sentinel-атрибут data-lumen-state-<name>), CustomStateSet.add/delete/clear теперь реально отражают состояние в атрибут"
     },
     {
      "id": "P3-pointerfull",
      "title": "Pointer Events L3 (coalesced / predicted events)",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): base PointerEvent L2 работает; дошить — L3 getCoalescedEvents/getPredictedEvents (сейчас возвращают [])"
+     "status": "done",
+     "note": "DONE 2026-07-17 (P1): shell буферизует CursorMoved/injected pointer-move сэмплы (`pending_pointer_moves`), флашит покадрово в `about_to_wait` (и eagerly перед pointerdown/up/enter/leave для порядка) как один coalesced `pointermove`; `_lumen_dispatch_pointer_event` строит реальный `getCoalescedEvents()` из буфера, `getPredictedEvents()` — линейная экстраполяция по последним двум сэмплам (`crates/shell/src/main.rs`, `crates/js/src/dom.rs`)"
     },
     {
      "id": "P3-compressionstream",
