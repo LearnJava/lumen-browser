@@ -432,7 +432,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed; `mask-position` wired into `PushMaskImage` (initial `center`, CSS Masking L1 §4.4) 2026-06-22; `mask-repeat` tile geometry: `repeat`/`no-repeat`/`repeat-x`/`repeat-y`/`round`/`space` ✅ (shared `bg_tile_geometry` + `space_axis_geometry`, §3.4 round rescale 2026-07-12, `space` gap distribution 2026-07-18); femtovg url image-mask **render** still deferred (backend, scissor no-op) — round/space are visible via the wgpu mask path + background-image |
 | `mask-mode` | ✅ | `alpha` / `luminance` / `match-source` (CSS Masking L1 §6.4); gradient masks bake `luminance(rgb)·alpha` into stop alpha (BUG-218, 2026-06-19) |
 | `mask-origin` | 🟡 | wired: sets the mask positioning area (border/padding/content box) via `background_origin_rect`, initial `border-box` (§4.5) 2026-06-22 |
-| `mask-clip` / `mask-composite` | 🟡 | `mask-clip` painting-area clip ✅ (`padding-box`/`content-box` wrap the mask group in `PushClipRect`/`PopClip`, reuses the scissor path; `border-box` = no-op default, `no-clip`/`fill-box`/`stroke-box`/`view-box` ⬜) 2026-07-12; `mask-composite` multi-layer ⬜ |
+| `mask-clip` / `mask-composite` | 🟡 | `mask-clip` full `<coord-box> \| no-clip` grammar ✅: `padding-box`/`content-box`/`fill-box` wrap the mask group in `PushClipRect`/`PopClip` (scissor path; `fill-box` = content box for CSS boxes, CSS Box 4 §1); `border-box`/`stroke-box`/`view-box`/`no-clip` = no-op (border box or unclipped) 2026-07-18; `mask-composite` multi-layer ⬜ |
 
 ### [T2] Compositing
 

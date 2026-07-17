@@ -131,7 +131,7 @@ pub use style::{
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
     FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
-    MaskMode, MasonryAutoFlow,
+    MaskClip, MaskMode, MasonryAutoFlow,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient, Resize,

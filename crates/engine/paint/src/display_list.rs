@@ -19,7 +19,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
-    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind,
+    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
@@ -4542,20 +4542,26 @@ fn background_color_clip(b: &LayoutBox) -> BackgroundClip {
 
 /// CSS Masking L1 §4.6 — the `mask-clip` painting area for a masked element.
 ///
-/// Returns `Some(rect)` for `padding-box` / `content-box`, which shrink the area
-/// so the masked element's painting must be clipped to it; the caller wraps the
-/// mask group in a `PushClipRect` / `PopClip` pair around this rect.
+/// Returns `Some(rect)` for the boxes that shrink the painting area below the
+/// border box (`padding-box`, `content-box`, and `fill-box` — the latter maps
+/// to the content box for CSS boxes, CSS Box 4 §1); the caller wraps the mask
+/// group in a `PushClipRect` / `PopClip` pair around this rect.
 ///
-/// Returns `None` for the default `border-box` (whose clip equals the element's
-/// border-box `b.rect` and would be a no-op scissor) and for `Text` (treated as
-/// border-box, matching `background_clip_rect`) — so unmasked-default rendering
+/// Returns `None` for the values whose painting area equals the element's
+/// border-box `b.rect` (`border-box`, plus `stroke-box`/`view-box` which fall
+/// back to the border box for CSS boxes) and for `no-clip` (painting is not
+/// clipped) — the clip would be a no-op scissor, so unmasked-default rendering
 /// stays byte-identical.
 fn mask_clip_paint_rect(b: &LayoutBox) -> Option<Rect> {
     match b.style.mask_clip {
-        BackgroundClip::PaddingBox | BackgroundClip::ContentBox => {
-            Some(background_clip_rect(b, b.style.mask_clip))
+        MaskClip::PaddingBox => Some(background_clip_rect(b, BackgroundClip::PaddingBox)),
+        // fill-box has no SVG geometry on a CSS box → object bounding box = content box.
+        MaskClip::ContentBox | MaskClip::FillBox => {
+            Some(background_clip_rect(b, BackgroundClip::ContentBox))
         }
-        BackgroundClip::BorderBox | BackgroundClip::Text => None,
+        // border-box / stroke-box / view-box all reduce to the border box for a
+        // CSS box (= `b.rect`); no-clip disables the clip. All → no-op.
+        MaskClip::BorderBox | MaskClip::StrokeBox | MaskClip::ViewBox | MaskClip::NoClip => None,
     }
 }
 
@@ -11964,6 +11970,51 @@ mod tests {
             !dl.iter().any(|c| matches!(c, DisplayCommand::PushClipRect { .. })),
             "border-box mask-clip must not emit a PushClipRect"
         );
+    }
+
+    /// CSS Masking L1 §4.6 — `mask-clip: fill-box` on a CSS box has no SVG
+    /// geometry, so its object bounding box is the content box (CSS Box 4 §1).
+    /// It must clip the mask painting to the content-box rect, exactly like
+    /// `content-box`.
+    #[test]
+    fn ordered_mask_clip_fill_box_clips_to_content_box() {
+        let dl = build_ordered(
+            "<div class='m'></div>",
+            ".m { width: 100px; height: 100px; border: 10px solid #000; \
+             padding: 5px; background: #f00; \
+             mask-image: linear-gradient(to bottom, black, transparent); \
+             mask-clip: fill-box; }",
+        );
+        let clip_rect = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushClipRect { rect } => Some(*rect),
+                _ => None,
+            })
+            .expect("mask-clip: fill-box must emit a PushClipRect (content-box)");
+        // content-box width = border-box(130) − 2·border(10) − 2·padding(5) = 100.
+        assert_eq!(clip_rect.width, 100.0, "fill-box clip width must equal content-box width");
+        assert_eq!(clip_rect.height, 100.0, "fill-box clip height must equal content-box height");
+    }
+
+    /// CSS Masking L1 §4.6 — `stroke-box`/`view-box` fall back to the border box
+    /// for CSS boxes (= `b.rect`), and `no-clip` disables the clip. None of them
+    /// may emit an extra `PushClipRect`, matching the `border-box` no-op.
+    #[test]
+    fn ordered_mask_clip_border_equivalents_emit_no_clip() {
+        for value in ["stroke-box", "view-box", "no-clip"] {
+            let css = format!(
+                ".m {{ width: 100px; height: 100px; border: 10px solid #000; \
+                 background: #f00; \
+                 mask-image: linear-gradient(to bottom, black, transparent); \
+                 mask-clip: {value}; }}"
+            );
+            let dl = build_ordered("<div class='m'></div>", &css);
+            assert!(
+                !dl.iter().any(|c| matches!(c, DisplayCommand::PushClipRect { .. })),
+                "mask-clip: {value} must not emit a PushClipRect (border-box equivalent)"
+            );
+        }
     }
 
     /// BUG-200: under `border-collapse: collapse` a thick cell border must survive a
