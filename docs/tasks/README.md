@@ -186,7 +186,6 @@ git worktree remove .claude/worktrees/<kebab-name>
 | [ph3-webgl2.md](ph3-webgl2.md) | WebGL2 подмножество | ~65% (webgl2-контекст + present framebuffer) |
 | [ph3-avif.md](ph3-avif.md) | AVIF / JPEG XL | ~60% (дефолт-декод AVIF + jxl-oxide) |
 | [ph3-picture-in-picture.md](ph3-picture-in-picture.md) | Picture-in-Picture API | ~30% (Document PiP native window) |
-| [ph3-imagebitmap.md](ph3-imagebitmap.md) | createImageBitmap + bitmaprenderer | ~55% (ImageBitmapRenderingContext) |
 | [ph3-select-base.md](ph3-select-base.md) | Кастомизируемый `<select>` (base-select) | ~95% (почти с нуля) |
 | [ph3-view-transitions-mpa.md](ph3-view-transitions-mpa.md) | View Transitions для MPA | ~60% (@view-transition + snapshot между документами) |
 | [rp9-print-stylesheet-filter.md](rp9-print-stylesheet-filter.md) | RP-9: фильтр print-таблиц | ~15% (@import media=print аудит) |

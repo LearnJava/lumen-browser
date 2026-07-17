@@ -1294,7 +1294,31 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
         }),
     )?;
 
+    // ── ImageBitmapRenderingContext.transferFromImageBitmap (HTML LS §4.12.5.1) ──
+    //
+    // _lumen_bitmaprenderer_transfer_from_image_bitmap(nid, canvas_id) -> bool
+    // Takes ownership of the ImageBitmap's pixels (neutering it, same as a real
+    // transfer) and presents them into the `<canvas>` `nid`'s CPU buffer,
+    // resizing the backing bitmap to match. Returns false if `canvas_id` is
+    // already closed/transferred.
+    g.set(
+        "_lumen_bitmaprenderer_transfer_from_image_bitmap",
+        rquickjs::Function::new(ctx.clone(), bitmaprenderer_transfer_native),
+    )?;
+
     Ok(())
+}
+
+/// Native for `ImageBitmapRenderingContext.transferFromImageBitmap` — shared
+/// by both engines. See its native registration above for the contract.
+fn bitmaprenderer_transfer_native(nid: u32, canvas_id: u32) -> bool {
+    match crate::offscreen_canvas::take_offscreen_pixels(canvas_id) {
+        Some((w, h, pixels)) => {
+            present_rgba(nid, w, h, &pixels);
+            true
+        }
+        None => false,
+    }
 }
 
 /// V8 port of [`install_canvas2d_bindings`] (Ph3 V8 migration S8): all state
@@ -2097,9 +2121,9 @@ pub(crate) fn install_canvas2d_bindings_v8(
 
     // ── transferControlToOffscreen (HTML LS §4.12.14) ─────────────────────────
     //
-    // NOTE: the resulting OffscreenCanvas object is only partially functional
-    // under the v8-backend — `offscreen_canvas.rs` itself is not yet V8-ported
-    // (deferred past S8; the DOM canvas graphic tests don't exercise it).
+    // `offscreen_canvas.rs` is V8-ported (P1-imagebitmap,
+    // `offscreen_canvas::install_offscreen_canvas_bindings_v8`), so the
+    // resulting OffscreenCanvas object is fully functional under v8-backend too.
     rt.register_native(
         "_lumen_canvas_transfer_control_to_offscreen",
         into_v8_fn1(|nid: u32| -> String {
@@ -2120,6 +2144,12 @@ pub(crate) fn install_canvas2d_bindings_v8(
     rt.register_native(
         "_lumen_canvas_is_transferred",
         into_v8_fn1(|nid: u32| -> bool { TRANSFERRED.with(|t| t.borrow().contains(&nid)) }),
+    )?;
+
+    // ── ImageBitmapRenderingContext.transferFromImageBitmap (HTML LS §4.12.5.1) ──
+    rt.register_native(
+        "_lumen_bitmaprenderer_transfer_from_image_bitmap",
+        into_v8_fn2(bitmaprenderer_transfer_native),
     )?;
 
     Ok(())

@@ -615,14 +615,16 @@ const WORKER_SHIM: &str = r#"(function() {
   function _serializeObj(obj, transferSet) {
     if (!obj || typeof obj !== 'object') return obj;
     if (typeof obj.__canvas_id__ === 'number' && transferSet[obj.__canvas_id__]) {
-      // Serialize the pixel buffer via the existing native transfer binding.
-      var raw = _lumen_offscreen_canvas_transfer_to_image_bitmap(obj.__canvas_id__);
+      // Read the pixel buffer, then neuter the source canvas — matches the
+      // structured-clone transfer contract (the sender loses access).
+      var raw = _lumen_offscreen_canvas2d_get_image_data(obj.__canvas_id__);
       if (!raw) return null;
       var comma1 = raw.indexOf(',');
       var comma2 = raw.indexOf(',', comma1 + 1);
       var w = parseInt(raw.slice(0, comma1), 10);
       var h = parseInt(raw.slice(comma1 + 1, comma2), 10);
       var p = raw.slice(comma2 + 1);
+      _lumen_offscreen_canvas_bitmap_close(obj.__canvas_id__);
       return { __lumen_sentinel__: _OFFSCREEN_SENTINEL, w: w, h: h, p: p };
     }
     if (Array.isArray(obj)) {
@@ -873,8 +875,10 @@ fn spawn_worker_v8(
 /// pumps `WorkerInMsg`.
 ///
 /// `OffscreenCanvas` is NOT installed here (unlike the QuickJS worker
-/// thread): `offscreen_canvas.rs` has no V8 port yet — same known gap noted
-/// for S8's canvas2d/webgl_canvas slice. A V8-backed worker script that
+/// thread): this thread only calls [`install_worker_globals_v8`], not the
+/// full `install_dom` install list that wires `offscreen_canvas`'s V8 port
+/// (`offscreen_canvas::install_offscreen_canvas_bindings_v8`, P1-imagebitmap)
+/// for the main page context. A V8-backed worker script that
 /// references `OffscreenCanvas` sees `undefined`; `worker_global_shim`'s
 /// `_deserializeTransfers` already guards on `typeof
 /// _lumen_offscreen_canvas_from_image_data !== 'undefined'` and degrades to

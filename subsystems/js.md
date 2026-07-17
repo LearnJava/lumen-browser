@@ -509,6 +509,22 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   Full `rquickjs` removal from this crate (`QuickJsRuntime`, ~380 dual `install_*`
   bindings, `__lum_args__`) is S12b, not yet started — `rquickjs` is still a real
   dependency and `QuickJsRuntime` still the fallback engine behind `--features quickjs`.
+  P1-imagebitmap (2026-07-17): `offscreen_canvas.rs` V8-ported (`install_offscreen_canvas_bindings_v8`,
+  19 natives, same `into_v8_fnN`/`rt.register_native`/`rt.eval(OFFSCREEN_CANVAS_SHIM)` pattern as
+  `webgl_canvas_v8`) — closes the S8/S10 gap noted above; `OffscreenCanvas`/`createImageBitmap`
+  now exist under the default (V8) engine, not just QuickJS. Same commit implements
+  `createImageBitmap` + `ImageBitmapRenderingContext` (`getContext('bitmaprenderer')`,
+  HTML LS §4.12.5) end-to-end for both engines: bitmap shape unified to
+  `{width, height, __canvas_id__, close()}` across all sources (ImageData, OffscreenCanvas,
+  `<img>` via `img_bitmap_store`, `Blob` via new `lumen-js → lumen-image` dependency +
+  `lumen_image::decode`), `sx/sy/sw/sh` crop as a JS-side post-process over the existing
+  `get_image_data`/`from_image_data` natives, and `transferFromImageBitmap` presenting into a
+  page `<canvas>` via `canvas2d::present_rgba` (the pre-existing WebGPU-present helper) through
+  a new shared native `_lumen_bitmaprenderer_transfer_from_image_bitmap` in `canvas2d.rs`.
+  `createImageBitmap(OffscreenCanvas)` no longer reuses the destructive `transferToImageBitmap`
+  native (that neutered the source canvas as a side effect); it now snapshots via
+  `get_image_data`/`from_image_data` instead, matching spec (only `OffscreenCanvas.transferToImageBitmap()`
+  itself, called directly, still neuters).
 
 ## Invariants
 

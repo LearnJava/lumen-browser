@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-295)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-297)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -308,6 +308,7 @@
 | [BUG-293](bugs/BUG-293-OPEN.md) | OPEN | shell (`main.rs` — дренаж `window.open()` popup-запросов) | Вкладка, открытая `window.open('file:///…')`, не загружается: дренаж popup-запросов заворачивает URL как есть в `PageSource::Url` → сетевой путь → `unsupported scheme: file`. Разбор `file://`→путь уже существует (CLI `PageSource::from_arg`; automation-хелпер `main.rs:517` для BiDi/MCP), но в этом пути не переиспользован. Проверить заодно другие JS-навигации (`location.href`). Учесть security: web→file переход блокировать осознанно, file→file — разрешить. Найдено 2026-07-16 |
 | [BUG-294](bugs/BUG-294-OPEN.md) | OPEN | layout (`box_tree.rs`, `lay_out_flex`) | Flex-item с `margin-left` в row-контейнере позиционируется со сдвигом в 2× margin вместо 1×: `lay_out_flex`'s row-ветка передаёт `content_x + main_cursor + m_l` в `lay_out()`, но `lay_out_inner` сама добавляет `margin_left` к переданному `start_x` (как и все остальные вызовы `lay_out` в файле — они передают margin-box start без предварительного добавления margin). Похожая двойная-добавка вероятна и для `margin-top` row-item'ов, и для `margin-left` column-item'ов (тот же паттерн, непроверено — нет существующих flex-тестов с margin на item, все используют `gap`). Найдено P2-DEVX-2 2026-07-16 при написании golden-теста на flex-геометрию |
 | [BUG-295](bugs/BUG-295-OPEN.md) | OPEN | bidi-server (`protocol.rs`) + shell live-window wiring | Шесть BiDi-команд (`network.setOfflineStatus`/`addIntercept`/`continueRequest`/`failRequest`, `browser.setTimezoneOverride`, `emulation.setUserAgentOverride`) корректно отвечают по протоколу и реально пишут в `BidiState`, но ни одно поле (`offline`/`intercepts`/`timezone_override`/`*_ua_override`) не читается ничем, что управляет живым окном — `state.live` эти команды не трогают вовсе, в отличие от `browsingContext.navigate`/`script.evaluate`. Live-страница не видит offline-режим, перехват/провал запроса, смену часового пояса или UA. Найдено DEVX-6 2026-07-17 при написании `tests/wpt/verify_devx6_bidi_scenarios.py` |
+| [BUG-297](bugs/BUG-297-OPEN.md) | OPEN | test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`) | `cpu_snapshots_match_references` красный на 31 странице, эталоны устарели с 2026-06-30 (801d7640) — все P4-мержи с тех пор (writing-mode, @function, @color-profile, backface-visibility, revert-layer, counter-set, font-size-adjust, contain-intrinsic-size, interpolate-size…) сдвинули CPU-рендер несвязанных страниц без регенерации эталонов. Третий рецидив (BUG-118, BUG-149). Найдено P1-imagebitmap 2026-07-17 в scoped-test гейте перед мержем |
 
 ---
 
