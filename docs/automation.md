@@ -26,7 +26,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 | Layout/cascade phase timings as a call tree | `LUMEN_PROFILE_TREE=1` | stderr |
 | GUI timeline profiler | `cargo run --features tracy` | Tracy client needed |
 | Scroll performance benchmark | `scripts/scroll_perf.py`, `scripts/mt_stall_bench.py` | drives `--mcp-live-port` |
-| Real-site load perf: per-phase stats, journal, bug filing | `python scripts/perf_audit.py` over `docs/perf/corpus.txt`; full protocol = skill `/lumen-perf-audit` | dev-release build; full corpus 15–40 min; screenshot stage = CPU render path (BUG-221) |
+| Real-site load perf: live GUI run (tab per site), stats, journal, bug filing | `python scripts/perf_audit.py` over `docs/perf/corpus.txt` (default: one visible window, `new_tab` per site, cumulative RAM); `--phases` = headless per-phase decomposition; full protocol = skill `/lumen-perf-audit` | dev-release build; screenshots via CPU path (BUG-221) |
 | Cache/memory growth diagnosis | `LUMEN_MEM_REPORT=1` (~10 s cadence dump) | TEMP instrumentation from BUG-272 |
 | Print/pagination check | `lumen --print-to-pdf out.pdf <src>` | A4 |
 | Reproduce input-order bugs | `--activity-log` / `--click-log` → `activity.log` | |
@@ -44,7 +44,7 @@ Misc: `--no-scrollbar` (cleaner screenshot crops) · `--activity-log` / `--click
 
 ## MCP (`crates/mcp`) — the richest scripting surface
 
-`--mcp-live-port N <src>` runs MCP JSON-RPC over TCP against the **live window**. All 7 tools wired: `navigate`, `wait` (conditions: `document_ready` / `visible` / `stable` / `network_idle` / `js_idle`), `click`, `type`, `scroll`, `eval` (JS), `query` (CSS selector → DOM nodes). All 5 resources wired: `resource://screenshot` (PNG, CPU path), `resource://a11y_tree`, `resource://layout` (box model JSON), `resource://console`, `resource://network`.
+`--mcp-live-port N <src>` runs MCP JSON-RPC over TCP against the **live window**. All 8 tools wired: `navigate`, `new_tab` (opens a tab, makes it active, navigates — used by the live perf audit to give every site its own tab), `wait` (conditions: `document_ready` / `visible` / `stable` / `network_idle` / `js_idle`), `click`, `type`, `scroll`, `eval` (JS), `query` (CSS selector → DOM nodes). All 5 resources wired: `resource://screenshot` (PNG, CPU path), `resource://a11y_tree`, `resource://layout` (box model JSON), `resource://console`, `resource://network`.
 
 Headless variants `--mcp` / `--mcp-port` exist. DEVX-5 (complete): slice 1 gave `screenshot` (CPU tiny-skia path, `cpu-render` — a **default** feature of `lumen-driver`, no GPU adapter needed) and `scroll` (wired to the existing off-main-thread `scroll_page_by`) in `InProcessSession`. Slice 2 gave `eval`/`click`/`type` a persistent V8 runtime (`v8`, now also default) wired to `InProcessSession`'s DOM (`Arc<Mutex<Document>>`, re-installed on every `navigate()`), plus synthetic mouse/keyboard event dispatch and `lumen_paint::hit_test` for point-based `click`.
 

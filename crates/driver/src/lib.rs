@@ -143,6 +143,14 @@ pub trait BrowserSession {
     /// Блокируется до завершения загрузки и первого layout.
     fn navigate(&mut self, url: &str) -> Result<()>;
 
+    /// Открыть новую вкладку (она становится активной) и загрузить в неё `url`.
+    ///
+    /// Сессии без таб-стрипа (headless `InProcessSession`) по умолчанию
+    /// откатываются к обычному [`BrowserSession::navigate`] в текущем документе.
+    fn new_tab(&mut self, url: &str) -> Result<()> {
+        self.navigate(url)
+    }
+
     /// Кликнуть по цели. Для `Target::Selector` берётся центр первого
     /// совпадающего элемента. Для headless — обновляет layout без GPU.
     fn click(&mut self, target: &Target) -> Result<()>;

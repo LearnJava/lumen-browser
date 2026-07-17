@@ -866,7 +866,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/types.rs:275` **enum** `FingerprintProfile` — Профиль отпечатка браузера (fingerprint profile) для BrowserSession
 `crates/driver/src/types.rs:297` **fn** `to_http_profile` — Map this session-level profile to the network [`HttpProfile`] that drives
 `crates/driver/src/types.rs:312` **enum** `AutomationCommand` — Command for automation API — sent to shell via IPC channel (SDC-1a)
-`crates/driver/src/types.rs:337` **enum** `AutomationReply` — Reply from automation API — returned from shell after command execution
+`crates/driver/src/types.rs:339` **enum** `AutomationReply` — Reply from automation API — returned from shell after command execution
 `crates/driver/src/winit_session.rs:66` **struct** `WinitSession` — Оконная сессия браузера
 `crates/driver/src/winit_session.rs:93` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/winit_session.rs:108` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
@@ -1723,7 +1723,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:107` **fn** `unindex_semantic` — Remove a history entry's embedding from the semantic index, if present
 `crates/knowledge/src/store.rs:118` **fn** `search_semantic` — Semantic (embedding-similarity) search over history entries indexed
 
-## lumen-layout  (628 symbols)
+## lumen-layout  (629 symbols)
 
 `crates/engine/layout/src/anchor.rs:47` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:76` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -2038,12 +2038,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/selector_query.rs:278` **fn** `computed_style_by_selector` — Returns the computed style snapshot of the first matching `LayoutBox`
 `crates/engine/layout/src/selector_query.rs:294` **fn** `find_all_by_selector` — Returns references to **all** `LayoutBox`es (in document order) whose
 `crates/engine/layout/src/selector_query.rs:335` **fn** `query_all` — Returns all [`NodeId`]s in the document that match `sel`
-`crates/engine/layout/src/selector_query.rs:372` **fn** `matches_selector` — Returns `true` if `node` matches **any** selector in `sel`
-`crates/engine/layout/src/selector_query.rs:544` **fn** `computed_style_to_map` — Serialises a [`ComputedStyle`] to a CSS property → resolved-value map
-`crates/engine/layout/src/selector_query.rs:877` **fn** `computed_style_json` — Serialises a [`ComputedStyle`] into a deterministic JSON object string
-`crates/engine/layout/src/selector_query.rs:899` **fn** `computed_style_json_by_selector` — Like [`computed_style_by_selector`] but returns the full computed-style JSON
-`crates/engine/layout/src/selector_query.rs:914` **struct** `MatchedRule` — One CSS rule that matched a specific DOM node
-`crates/engine/layout/src/selector_query.rs:934` **fn** `matched_rules_for_node` — Return all CSS rules from `sheet` whose selectors match `node` in `doc`
+`crates/engine/layout/src/selector_query.rs:353` **fn** `query_all_within` — Returns all [`NodeId`]s among `start`'s descendants (excluding `start`
+`crates/engine/layout/src/selector_query.rs:392` **fn** `matches_selector` — Returns `true` if `node` matches **any** selector in `sel`
+`crates/engine/layout/src/selector_query.rs:564` **fn** `computed_style_to_map` — Serialises a [`ComputedStyle`] to a CSS property → resolved-value map
+`crates/engine/layout/src/selector_query.rs:897` **fn** `computed_style_json` — Serialises a [`ComputedStyle`] into a deterministic JSON object string
+`crates/engine/layout/src/selector_query.rs:919` **fn** `computed_style_json_by_selector` — Like [`computed_style_by_selector`] but returns the full computed-style JSON
+`crates/engine/layout/src/selector_query.rs:934` **struct** `MatchedRule` — One CSS rule that matched a specific DOM node
+`crates/engine/layout/src/selector_query.rs:954` **fn** `matched_rules_for_node` — Return all CSS rules from `sheet` whose selectors match `node` in `doc`
 `crates/engine/layout/src/snapshot.rs:63` **fn** `serialize_layout_tree` — Корневой entry-point: рекурсивно сериализует всё дерево
 `crates/engine/layout/src/stacking.rs:29` **struct** `StackingContextId` — Идентификатор stacking context-а. Монотонно растёт от 0; 0 = root
 `crates/engine/layout/src/stacking.rs:35` **fn** `raw`
@@ -5460,4 +5461,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5386 symbols in 23 crates*
+*Total: 5387 symbols in 23 crates*

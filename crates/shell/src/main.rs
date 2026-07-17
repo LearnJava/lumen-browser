@@ -10490,6 +10490,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.navigate_to(page_source_for_automation_url(&url));
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
+                AutomationCommand::NewTab(url) => {
+                    // Same console semantics as `Navigate`: the fresh tab becomes
+                    // active, so `ConsoleLog` stays scoped to the page being loaded.
+                    self.devtools_console.clear();
+                    self.open_new_tab();
+                    self.navigate_to(page_source_for_automation_url(&url));
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
                 AutomationCommand::Click(target) => {
                     let point = self.resolve_automation_target(&target);
                     if let Some((x, y)) = point {
