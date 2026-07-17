@@ -345,7 +345,11 @@ ROADMAP task title and DoD only name canvas2d + webgl_canvas, and
 `OffscreenCanvas` id under v8, but `.getContext('2d')` on that offscreen
 object won't work until `offscreen_canvas.rs` gets its own V8 port (left as a
 known gap, not currently claimed by any slice — `offscreen_canvas` is not
-covered by S9/S10 either).
+covered by S9/S10 either). **Update (P1-imagebitmap, 2026-07-17): this gap is
+now closed** — `offscreen_canvas::install_offscreen_canvas_bindings_v8` ported
+all 19 natives (same `into_v8_fnN`/`rt.register_native` pattern as this
+slice's `canvas2d`/`webgl_canvas`), so `OffscreenCanvas.getContext('2d')` and
+`createImageBitmap`/`ImageBitmapRenderingContext` now work under v8 too.
 
 **Verification**: `cargo test -p lumen-js --features v8-backend` — 2399 lib
 unit tests (includes the existing rquickjs `canvas2d`/`webgl_canvas` tests,
@@ -472,9 +476,13 @@ after firing the fetch event, no manual pump, and passes — the QuickJS
 version's `flush_jobs(&rt)` step is not needed under V8.
 
 `offscreen_canvas.rs` is **not** installed inside a V8-backed dedicated
-worker thread (same known gap as S8: `offscreen_canvas.rs` has no V8 port).
-A worker script referencing `OffscreenCanvas` sees `undefined`;
-`_deserializeTransfers`'s `typeof
+worker thread — `run_worker_thread_v8` only calls the stripped-down
+`install_worker_globals_v8`, not the full `install_dom` install list.
+(Update, P1-imagebitmap 2026-07-17: `offscreen_canvas.rs` *does* now have a
+V8 port — `install_offscreen_canvas_bindings_v8`, wired into `install_dom`'s
+install list for the main page context — this note is specifically about
+*worker threads*, which still skip it.) A worker script referencing
+`OffscreenCanvas` sees `undefined`; `_deserializeTransfers`'s `typeof
 _lumen_offscreen_canvas_from_image_data !== 'undefined'` guard already
 degrades gracefully (passes the raw, non-deserialized data through) since
 that check was already in the shared/reused JS shim.

@@ -3653,6 +3653,10 @@ impl V8JsRuntime {
             eprintln!("v8: webgl_canvas::install_webgl_canvas_v8 failed: {e}");
         }
         install_v8!(canvas2d::install_canvas2d_bindings_v8);
+        // P1-imagebitmap: OffscreenCanvas was deferred past S8 (see the note at
+        // canvas2d.rs's transferControlToOffscreen V8 port); ported now so
+        // createImageBitmap/ImageBitmapRenderingContext work under the default engine.
+        install_v8!(offscreen_canvas::install_offscreen_canvas_bindings_v8);
 
         install_v8!(async_context::install_async_context_v8);
         install_v8!(attribution_reporting::install_attribution_reporting_api_v8);

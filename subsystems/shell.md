@@ -1,5 +1,18 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Done (P3-navapi cross-document unification for multi-step traversal, 2026-07-17):**
+  a multi-step `history.go(n)`/`navigation.traverseTo(key)` (`Lumen::navigate_by`) that
+  silently shuttles through a full-document `NavEntry` before landing on a same-document
+  (`pushState`) destination used to fire `popstate`/update the address bar against the
+  still-loaded OLD document — the destination belongs to the document the shuffle passed
+  through, not whatever was loaded when the traversal started. `NavEntry::shift_multi_step`
+  (generalises `shift_history_entry`) now tracks whether the shuffle crossed a full-document
+  entry; when it did, `navigate_back`/`navigate_forward` skip the same-document fast path and
+  instead reload the correct document (`reload()` or bfcache thaw) first, deferring the
+  `popstate`/URL update via `Lumen::pending_post_reload_traversal` — applied in
+  `apply_loaded_page` once the new document's JS runtime actually exists (the bfcache-thaw
+  sync path applies it immediately). Closes the last remaining item of the Navigation API +
+  History API task (all 10 steps now done; `ROADMAP.md` `P3-navapi` → `done`).
 - **Fixed (BUG-296, session restore raced automation navigation, `P2-wpt`, 2026-07-17):**
   `lumen --bidi-port <N>`/`--mcp-live-port <N>` launched with no page argument
   (`PageSource::Empty`) unconditionally called `Lumen::restore_session()`, silently

@@ -4172,6 +4172,8 @@ var _canvas_webgpu_ctxs = {};
 // a brand-new object every time, breaking `===` node identity and silently
 // dropping any expando property set on a node between accesses.
 var _lumen_node_wrappers = {};
+// nid → cached ImageBitmapRenderingContext object (getContext('bitmaprenderer')).
+var _canvas_bitmaprenderer_ctxs = {};
 
 // ValidityState — readonly snapshot of one form control's validity.
 function ValidityState(flags) {
@@ -5035,6 +5037,34 @@ function _lumen_make_element(nid) {
                 var c2d = _lumen_make_canvas2d_ctx(this, nid);
                 _canvas2d_ctxs[nid] = c2d;
                 return c2d;
+            }
+            // 'bitmaprenderer' returns an ImageBitmapRenderingContext (HTML LS §4.12.5.1):
+            // transferFromImageBitmap(bitmap) replaces this canvas's displayed bitmap wholesale
+            // (no drawing operations of its own, unlike '2d').
+            if (t === 'bitmaprenderer') {
+                if (_canvas_bitmaprenderer_ctxs[nid]) return _canvas_bitmaprenderer_ctxs[nid];
+                if ((_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') return null;
+                if (typeof _lumen_canvas_is_transferred === 'function' && _lumen_canvas_is_transferred(nid)) return null;
+                var bd = _lumen_canvas_dims(nid);
+                _lumen_canvas2d_create(nid, bd[0], bd[1]);
+                var brctx = {
+                    canvas: this,
+                    transferFromImageBitmap: function(bitmap) {
+                        if (bitmap === null) {
+                            _lumen_canvas2d_clear_rect(nid, 0, 0, _lumen_canvas_dims(nid)[0], _lumen_canvas_dims(nid)[1]);
+                            return;
+                        }
+                        if (!bitmap || typeof bitmap.__canvas_id__ !== 'number') {
+                            throw new TypeError('transferFromImageBitmap: argument is not an ImageBitmap');
+                        }
+                        var ok = _lumen_bitmaprenderer_transfer_from_image_bitmap(nid, bitmap.__canvas_id__);
+                        if (!ok) {
+                            throw new DOMException('transferFromImageBitmap: the ImageBitmap has been detached', 'InvalidStateError');
+                        }
+                    }
+                };
+                _canvas_bitmaprenderer_ctxs[nid] = brctx;
+                return brctx;
             }
             // 'webgpu' returns a GPUCanvasContext bound to this canvas. configure() allocates a
             // render-target texture; rendered frames present into the canvas:{nid} 2D buffer the

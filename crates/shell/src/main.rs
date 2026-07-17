@@ -840,6 +840,8 @@ fn run_window_mode(
         stream_images_requested: std::collections::HashSet::new(),
         pending_restore_scroll: None,
         pending_pageshow_persisted: false,
+        pending_post_reload_traversal: None,
+        traversal_crossed_document: false,
         load_generation: 0,
         engine_thread: spawn_engine_thread_if_enabled(),
         engine_job_generation: 0,
@@ -2106,6 +2108,32 @@ impl NavEntry {
             nav_back.push(cur);
             popped
         }
+    }
+
+    /// Shuttle `cur` through `steps - 1` intermediate hops via
+    /// [`Self::shift_history_entry`], additionally tracking whether any hop
+    /// crossed a full-document entry (`same_doc_state_json.is_none()`) along
+    /// the way — i.e. whether the entry one hop short of the final
+    /// destination belongs to a different loaded document than `cur` started
+    /// in. `Lumen::navigate_by` uses the returned flag to decide whether a
+    /// same-document destination needs `Lumen::pending_post_reload_traversal`
+    /// (the loaded document is stale relative to it) instead of firing
+    /// `popstate` directly.
+    fn shift_multi_step(
+        nav_back: &mut Vec<NavEntry>,
+        nav_fwd: &mut Vec<NavEntry>,
+        mut cur: NavEntry,
+        steps: usize,
+        back: bool,
+    ) -> (NavEntry, bool) {
+        let mut crossed_document = false;
+        for _ in 1..steps {
+            cur = Self::shift_history_entry(nav_back, nav_fwd, cur, back);
+            if cur.same_doc_state_json.is_none() {
+                crossed_document = true;
+            }
+        }
+        (cur, crossed_document)
     }
 }
 
@@ -6826,6 +6854,23 @@ struct Lumen {
     /// consumed (and reset to `false`) in `apply_loaded_page` right after
     /// `notify_window_loaded`. `false` for ordinary fresh loads.
     pending_pageshow_persisted: bool,
+    /// Same-document (`pushState`) state JSON + display URL to apply once an
+    /// in-flight reload completes. Set by `navigate_back`/`navigate_forward`
+    /// when a multi-step `history.go(n)` traversal (`navigate_by`) silently
+    /// shuttled through a full-document entry before landing on a
+    /// same-document entry — the currently loaded document is not the one
+    /// that entry belongs to, so `popstate`/the URL update must wait for the
+    /// correct document to actually finish loading. `None` for the
+    /// overwhelmingly common case (destination belongs to the already-loaded
+    /// document); consumed in `apply_loaded_page`.
+    pending_post_reload_traversal: Option<(String, Option<String>)>,
+    /// Set by `navigate_by` immediately before calling `navigate_back`/
+    /// `navigate_forward` when the multi-step shuffle passed through a
+    /// full-document entry en route to the destination. Consumed (reset to
+    /// `false`) at the top of both functions; direct callers (single-step
+    /// Alt+Left/Right, not routed through `navigate_by`) always see `false`,
+    /// matching their existing single-hop behavior.
+    traversal_crossed_document: bool,
     /// U-1: monotonic navigation generation. Bumped on every async navigation
     /// (`reload` when a window exists) and on the initial streaming load. Each
     /// streaming `LoadEvent` carries the generation it was spawned under;
@@ -9265,6 +9310,13 @@ impl Lumen {
         self.sync_engine_js_state();
         // The new runtime starts empty; re-seed it with the current Navigation state.
         self.commit_nav_state();
+        // Cross-document unification (see `pending_post_reload_traversal`): a
+        // multi-step traversal landed on a same-document entry of the document
+        // that just finished loading — apply its popstate/URL update now, on
+        // top of the fresh runtime `commit_nav_state` just seeded.
+        if let Some((state_json, display_url)) = self.pending_post_reload_traversal.take() {
+            self.apply_post_reload_traversal(state_json, display_url);
+        }
         self.content_height = content_height_of(&page.display_list);
         self.content_width = content_width_of(&page.display_list);
         // Full page load: force all tiles dirty.
@@ -16393,6 +16445,23 @@ impl Lumen {
         });
     }
 
+    /// Apply a same-document `history.go(n)` destination whose containing
+    /// document had to be (re)loaded first (see `pending_post_reload_traversal`):
+    /// fires `popstate` with `state_json`, updates the address bar to
+    /// `display_url`, and fires `currententrychange` — the same tail as the
+    /// ordinary same-document branch in `navigate_back`/`navigate_forward`,
+    /// just run once the correct document's JS runtime actually exists.
+    fn apply_post_reload_traversal(&mut self, state_json: String, display_url: Option<String>) {
+        self.current_history_state_json = state_json.clone();
+        self.display_url = display_url.clone();
+        let url = display_url.unwrap_or_default();
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.fire_popstate(&state_json, &url);
+        });
+        self.fire_current_entry_change();
+        self.request_redraw();
+    }
+
     /// Whether the current page may be stored as a full bfcache freeze.
     ///
     /// `false` when the page has an open WebSocket/EventSource connection, a
@@ -16749,36 +16818,46 @@ impl Lumen {
             }
         }
         let Some(prev) = self.nav_back.pop() else { return };
+        let crossed_document = std::mem::take(&mut self.traversal_crossed_document);
 
+        let mut post_reload_traversal = None;
         if let Some(state_json) = prev.same_doc_state_json {
-            // Same-document navigation: fire popstate, update address bar, don't reload.
-            // Push current same-doc state to forward stack so Alt+Right restores it.
-            let cur_display = self.display_url.take();
-            let cur_state = std::mem::replace(
-                &mut self.current_history_state_json,
-                state_json.clone(),
-            );
-            self.nav_fwd.push(NavEntry {
-                source: self.source.clone(),
-                scroll_x: self.scroll_x,
-                scroll_y: self.scroll_y,
-                display_url: cur_display,
-                same_doc_state_json: Some(cur_state),
-                nav_key: self.current_nav_key.clone(),
-            });
-            let url = prev.display_url.unwrap_or_default();
-            self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
-            // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
-            // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
-            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                j.fire_popstate(&state_json, &url);
-            });
-            self.fire_current_entry_change();
-            self.request_redraw();
-            self.current_nav_key = prev.nav_key;
-            self.source = prev.source;
-            self.commit_nav_state();
-            return;
+            if !crossed_document {
+                // Same-document navigation: fire popstate, update address bar, don't reload.
+                // Push current same-doc state to forward stack so Alt+Right restores it.
+                let cur_display = self.display_url.take();
+                let cur_state = std::mem::replace(
+                    &mut self.current_history_state_json,
+                    state_json.clone(),
+                );
+                self.nav_fwd.push(NavEntry {
+                    source: self.source.clone(),
+                    scroll_x: self.scroll_x,
+                    scroll_y: self.scroll_y,
+                    display_url: cur_display,
+                    same_doc_state_json: Some(cur_state),
+                    nav_key: self.current_nav_key.clone(),
+                });
+                let url = prev.display_url.unwrap_or_default();
+                self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
+                // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+                // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    j.fire_popstate(&state_json, &url);
+                });
+                self.fire_current_entry_change();
+                self.request_redraw();
+                self.current_nav_key = prev.nav_key;
+                self.source = prev.source;
+                self.commit_nav_state();
+                return;
+            }
+            // Cross-document unification: the multi-step shuffle passed through
+            // a full-document entry before landing here, so the loaded document
+            // is not the one this same-document entry belongs to. Defer the
+            // popstate/URL update until the correct document (reloaded below,
+            // or thawed from bfcache) actually finishes loading.
+            post_reload_traversal = Some((state_json, prev.display_url.clone()));
         }
 
         // Full-document navigation: restore page and reload.
@@ -16812,6 +16891,9 @@ impl Lumen {
                         self.source = prev.source.clone();
                         self.current_nav_key = prev.nav_key.clone();
                         if self.bfcache_thaw(&entry, frozen) {
+                            if let Some((state_json, display_url)) = post_reload_traversal.clone() {
+                                self.apply_post_reload_traversal(state_json, display_url);
+                            }
                             return;
                         }
                         // Thaw failed (stylesheet evicted / DOM decode error):
@@ -16842,6 +16924,9 @@ impl Lumen {
         // it here — a direct assignment would be clobbered when LoadDone arrives.
         let (sx, sy) = restored_scroll.unwrap_or((prev.scroll_x, prev.scroll_y));
         self.pending_restore_scroll = Some((sx, sy));
+        if let Some(traversal) = post_reload_traversal {
+            self.pending_post_reload_traversal = Some(traversal);
+        }
         self.reload();
         if let Some(w) = self.window.as_ref() { w.request_redraw(); }
         self.commit_nav_state();
@@ -16879,35 +16964,41 @@ impl Lumen {
             }
         }
         let Some(next) = self.nav_fwd.pop() else { return };
+        let crossed_document = std::mem::take(&mut self.traversal_crossed_document);
 
+        let mut post_reload_traversal = None;
         if let Some(state_json) = next.same_doc_state_json {
-            // Same-document forward navigation: fire popstate, update address bar.
-            let cur_display = self.display_url.take();
-            let cur_state = std::mem::replace(
-                &mut self.current_history_state_json,
-                state_json.clone(),
-            );
-            self.nav_back.push(NavEntry {
-                source: self.source.clone(),
-                scroll_x: self.scroll_x,
-                scroll_y: self.scroll_y,
-                display_url: cur_display,
-                same_doc_state_json: Some(cur_state),
-                nav_key: self.current_nav_key.clone(),
-            });
-            let url = next.display_url.unwrap_or_default();
-            self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
-            // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
-            // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
-            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                j.fire_popstate(&state_json, &url);
-            });
-            self.fire_current_entry_change();
-            self.request_redraw();
-            self.current_nav_key = next.nav_key;
-            self.source = next.source;
-            self.commit_nav_state();
-            return;
+            if !crossed_document {
+                // Same-document forward navigation: fire popstate, update address bar.
+                let cur_display = self.display_url.take();
+                let cur_state = std::mem::replace(
+                    &mut self.current_history_state_json,
+                    state_json.clone(),
+                );
+                self.nav_back.push(NavEntry {
+                    source: self.source.clone(),
+                    scroll_x: self.scroll_x,
+                    scroll_y: self.scroll_y,
+                    display_url: cur_display,
+                    same_doc_state_json: Some(cur_state),
+                    nav_key: self.current_nav_key.clone(),
+                });
+                let url = next.display_url.unwrap_or_default();
+                self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
+                // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+                // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    j.fire_popstate(&state_json, &url);
+                });
+                self.fire_current_entry_change();
+                self.request_redraw();
+                self.current_nav_key = next.nav_key;
+                self.source = next.source;
+                self.commit_nav_state();
+                return;
+            }
+            // Cross-document unification: see `navigate_back`.
+            post_reload_traversal = Some((state_json, next.display_url.clone()));
         }
 
         // Full-document forward navigation.
@@ -16939,6 +17030,9 @@ impl Lumen {
                         self.source = next.source.clone();
                         self.current_nav_key = next.nav_key.clone();
                         if self.bfcache_thaw(&entry, frozen) {
+                            if let Some((state_json, display_url)) = post_reload_traversal.clone() {
+                                self.apply_post_reload_traversal(state_json, display_url);
+                            }
                             return;
                         }
                         // Thaw failed (stylesheet evicted / DOM decode error):
@@ -16967,6 +17061,9 @@ impl Lumen {
         // navigate_back for rationale).
         let (sx, sy) = restored_scroll.unwrap_or((next.scroll_x, next.scroll_y));
         self.pending_restore_scroll = Some((sx, sy));
+        if let Some(traversal) = post_reload_traversal {
+            self.pending_post_reload_traversal = Some(traversal);
+        }
         self.reload();
         self.commit_nav_state();
         if let Some(w) = self.window.as_ref() { w.request_redraw(); }
@@ -16984,10 +17081,14 @@ impl Lumen {
     /// `back` / `forward` queue a delta that the shell drains into this method, so
     /// the real `nav_back` / `nav_fwd` stacks (not the JS read-cache mirror) decide
     /// what actually happens — eliminating the multi-step `go` drift where the JS
-    /// mirror moved its cursor but the shell stacks did not. Known limitation: a
-    /// multi-step traversal that crosses a full-document boundary yet lands on a
-    /// same-document entry of a different document fires `popstate` without
-    /// re-rendering that document (the remaining cross-document unification).
+    /// mirror moved its cursor but the shell stacks did not.
+    ///
+    /// Cross-document unification: if the shuffle passes through a
+    /// full-document entry en route to a same-document destination, the
+    /// currently loaded document is stale relative to that destination —
+    /// `self.traversal_crossed_document` flags this for `navigate_back`/
+    /// `navigate_forward`, which reload the correct document first and defer
+    /// the `popstate`/URL update via `pending_post_reload_traversal`.
     #[cfg_attr(not(any(feature = "quickjs", feature = "v8")), allow(dead_code))]
     fn navigate_by(&mut self, delta: i32) {
         if delta == 0 {
@@ -17008,8 +17109,9 @@ impl Lumen {
         // entry and each crossed entry onto the opposite stack, leaving `self`
         // positioned at the entry just before the destination. The final
         // navigate_back/forward then performs the one real (popstate/reload) hop.
+        let mut crossed_document = false;
         if steps > 1 {
-            let mut cur = NavEntry {
+            let cur = NavEntry {
                 source: self.source.clone(),
                 scroll_x: self.scroll_x,
                 scroll_y: self.scroll_y,
@@ -17021,14 +17123,14 @@ impl Lumen {
                 },
                 nav_key: self.current_nav_key.clone(),
             };
-            for _ in 1..steps {
-                cur = NavEntry::shift_history_entry(
-                    &mut self.nav_back,
-                    &mut self.nav_fwd,
-                    cur,
-                    back,
-                );
-            }
+            let (cur, crossed) = NavEntry::shift_multi_step(
+                &mut self.nav_back,
+                &mut self.nav_fwd,
+                cur,
+                steps,
+                back,
+            );
+            crossed_document = crossed;
             self.source = cur.source;
             self.scroll_x = cur.scroll_x;
             self.scroll_y = cur.scroll_y;
@@ -17037,6 +17139,7 @@ impl Lumen {
                 cur.same_doc_state_json.unwrap_or_else(|| "null".to_string());
         }
 
+        self.traversal_crossed_document = crossed_document;
         if back {
             self.navigate_back();
         } else {
@@ -23330,6 +23433,16 @@ mod navigate_by_tests {
         }
     }
 
+    /// Build a full-document `NavEntry` tagged by `tag` (`same_doc_state_json:
+    /// None`) — a genuine page-load boundary, as opposed to [`entry`]'s
+    /// same-document `pushState` entries.
+    fn full_entry(tag: &str) -> NavEntry {
+        NavEntry {
+            same_doc_state_json: None,
+            ..entry(tag)
+        }
+    }
+
     #[test]
     fn shift_back_once() {
         let mut nav_back = vec![entry("e1"), entry("e2")];
@@ -23373,6 +23486,46 @@ mod navigate_by_tests {
         assert_eq!(nav_back.len(), 1);
         assert_eq!(nav_back[0].display_url, Some("c".to_string()));
         assert!(nav_fwd.is_empty());
+    }
+
+    #[test]
+    fn shift_multi_step_all_same_document_does_not_cross() {
+        // steps=2 → 1 hop: pops the top of `nav_back` ("e2") and stops there
+        // without ever reaching a full-document entry.
+        let mut nav_back = vec![entry("e1"), entry("e2")];
+        let mut nav_fwd = vec![];
+        let cur = entry("cur");
+
+        let (result, crossed) =
+            NavEntry::shift_multi_step(&mut nav_back, &mut nav_fwd, cur, 2, true);
+
+        assert_eq!(result.display_url, Some("e2".to_string()));
+        assert!(!crossed);
+    }
+
+    #[test]
+    fn shift_multi_step_through_full_document_crosses() {
+        // dest (same-doc, belongs to `full`) ← full (full-doc) ← mid1 ← mid2
+        // ← cur. steps=4 → 3 hops: pops mid2, mid1 (both same-doc, no cross),
+        // then `full` (full-doc) — the loaded document is now stale for
+        // `dest`, the entry left on top of `nav_back` for the caller's own
+        // (real destination) pop.
+        let mut nav_back = vec![
+            entry("dest"),
+            full_entry("full"),
+            entry("mid1"),
+            entry("mid2"),
+        ];
+        let mut nav_fwd = vec![];
+        let cur = entry("cur");
+
+        let (result, crossed) =
+            NavEntry::shift_multi_step(&mut nav_back, &mut nav_fwd, cur, 4, true);
+
+        assert_eq!(result.display_url, Some("full".to_string()));
+        assert!(crossed);
+        assert_eq!(nav_back.len(), 1);
+        assert_eq!(nav_back[0].display_url, Some("dest".to_string()));
     }
 
     #[test]
