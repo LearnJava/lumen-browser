@@ -66,6 +66,54 @@ fetch); crates.io, docs.rs, ria.ru открылись (в июле 403/500); w3.
 
 ---
 
+## 2026-07-17 (2) — живой базлайн — окно --maximized, вкладка на сайт
+
+Второй прогон того же дня, но в **живом режиме** (PERF-8 v2, по решению
+пользователя): одно GUI-окно `--maximized`, каждый сайт в новой вкладке
+(MCP `new_tab`), dwell 5 с + скролл, кумулятивная RAM, метрика «не отвечает»
+(IsHungAppWindow), авторестарт мёртвого окна. Сырые данные:
+[runs/2026-07-17-live.json](runs/2026-07-17-live.json). Числа НЕ сравнимы с
+headless-прогоном выше (другой режим); это первый живой базлайн.
+
+| slug | статус | готовность, с | RAM тек, МБ | RAM пик, МБ | не отвечает, с | первая ошибка |
+|---|---|---|---|---|---|---|
+| example | OK | 0.86 | 381.9 | 439.8 |  |  |
+| ya | OK | 2.32 | 496.6 | 515.6 |  | script error: JS runtime error: Unable to find RenderContext |
+| hn | OK | 1.65 | 506.0 | 527.2 |  | script error: JS runtime error: el.getElementsByClassName is |
+| w3 | OK | 128.92 | 506.3 | 527.2 |  | Ошибка загрузки https://www.w3.org/: network error: HTTP 403 |
+| rust-lang | OK | 6.65 | 563.7 | 585.6 |  |  |
+| lenta | OK | 7.15 | 610.5 | 651.8 | 2.5 | vite-plugin-css-injected-by-js TypeError: Cannot read proper |
+| github | OK | 45.0 | 2904.4 | 2918.1 |  | module error: JS runtime error: Automatic publicPath is not  |
+| stackoverflow | HUNG ↻ | — | — | — | 0.5 |  |
+| crates | OK | 1.73 | 398.7 | 461.6 |  | script error: JS runtime error: Cannot read properties of un |
+| docs-rs | OK | 1.12 | 448.2 | 462.0 |  | script error: JS runtime error: Cannot read properties of un |
+| ria | OK | 4.87 | — | — | 39.0 | Пропуск скрипта https://yandex.ru/ads/system/header-bidding. |
+| habr | HUNG ↻ | — | — | — | 60.0 |  |
+| mdn | OK | 3.19 | 628.4 | 768.9 |  | [JS warn] Unable to set theme TypeError: Cannot set properti |
+| rbc | OK | 23.45 | — | — | 47.5 | Пропуск картинки https://top-fwz1.mail.ru/counter?id=3081030 |
+
+↻ = харнесс перезапустил зависшее окно (перезапусков: 2 — stackoverflow, habr).
+
+**Находки:**
+- **github.com: +~2.3 ГБ RAM одной вкладкой** (610 → 2904 МБ) → BUG-306.
+- **UI-поток «не отвечает»**: обратимо 39–48 с (ria, rbc), необратимо после
+  вкладок-гигантов (stackoverflow, habr — окно мертво, восстановление только
+  рестартом процесса; в прогоне без рестартов сессия после stackoverflow не
+  загрузила больше ни одного сайта) → BUG-307. Наблюдалось пользователем
+  вживую («приложение не отвечает»).
+- **403-страница держит document_ready 129–205 с** (w3.org; headless отдаёт
+  тот же 403 за 0.75 с) → BUG-308.
+- В живом (wgpu) окне тяжёлые по CPU-paint сайты быстры: mdn ready 3.2 с
+  (headless paint был 59.7 с), lenta 7.2 с — CPU-растеризация скриншотного
+  пути не отражает живое окно; для юзер-скорости критичнее RAM и зависания.
+- github в живом окне ЗАГРУЖАЕТСЯ (ready 45 с) — зависание ≥240 с
+  воспроизводится только в headless-путях (--dump-layout/--screenshot);
+  уточнение к BUG-303.
+
+**Заведённые баги:** BUG-306, BUG-307, BUG-308.
+
+---
+
 ## Исторический контекст (до журнала)
 
 **2026-07-02 — ручной аудит 14 сайтов** (headless `--screenshot`, dev-release,

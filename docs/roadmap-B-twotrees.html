@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-17",
  "counts": {
-  "open": 37,
+  "open": 40,
   "fixed": 239,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 276,
+ "total_bugs": 279,
  "phases": [
   {
    "id": "P0",
@@ -3529,6 +3529,27 @@
    "component": "js (WEB_API_SHIM, dom.rs)",
    "date": null,
    "debtor": false
+  },
+  "BUG-306": {
+   "status": "open",
+   "title": "github.com раздувает процесс на ~2.3 ГБ одной вкладкой (610→2904 МБ в живом прогоне; воспроизводимо), после чего сессия умирает (BUG-307). Профиль иной, чем len…",
+   "component": "js/dom (атрибуция не сделана)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-307": {
+   "status": "open",
+   "title": "UI-поток «не отвечает» (IsHungAppWindow): обратимо 39–48 с на ria/rbc, НЕОБРАТИМО после вкладок-гигантов github+stackoverflow — сессия мертва, даже navigate по…",
+   "component": "shell (main thread)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-308": {
+   "status": "open",
+   "title": "Страница с HTTP-ошибкой (403 антибот, w3.org) держит document_ready 129–205 с в живом окне, хотя headless отдаёт тот же 403 за 0.75 с — вкладка «вечно грузится»…",
+   "component": "shell (навигация)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3615,6 +3636,9 @@
   ],
   "js (shell)": [
    "BUG-233"
+  ],
+  "js/dom (атрибуция не сделана)": [
+   "BUG-306"
   ],
   "layout": [
    "BUG-001",
@@ -3889,6 +3913,12 @@
   ],
   "shell (event loop) + js (таймер-шим)": [
    "BUG-271"
+  ],
+  "shell (main thread)": [
+   "BUG-307"
+  ],
+  "shell (навигация)": [
+   "BUG-308"
   ],
   "shell+font": [
    "BUG-170"

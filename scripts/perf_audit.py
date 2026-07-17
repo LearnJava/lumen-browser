@@ -46,6 +46,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -291,12 +292,99 @@ class Mcp:
         return self.call("resources/read", {"uri": uri}).get("contents") or []
 
 
+class HungMonitor(threading.Thread):
+    """Фоновый опрос IsHungAppWindow (WinAPI): та самая эвристика, по которой
+    Windows пишет «Не отвечает» (окно не качает сообщения >5 с). Копит
+    per-site сумму и максимальную серию зависания."""
+
+    def __init__(self) -> None:
+        super().__init__(daemon=True)
+        self._lock = threading.Lock()
+        self._pid: int | None = None
+        self._hwnd = None
+        self._stop = False
+        self._total = 0.0
+        self._streak = 0.0
+        self._max_streak = 0.0
+        if sys.platform == "win32":
+            self.start()
+
+    def watch_pid(self, pid: int) -> None:
+        """Начать следить за окном процесса pid (после спавна/рестарта)."""
+        with self._lock:
+            self._pid = pid
+            self._hwnd = None
+
+    def begin_site(self) -> None:
+        """Сбросить счётчики перед очередным сайтом."""
+        with self._lock:
+            self._total = self._streak = self._max_streak = 0.0
+
+    def site_stats(self) -> dict:
+        """Метрики зависания текущего сайта (сумма/максимальная серия, с)."""
+        with self._lock:
+            if self._total == 0.0:
+                return {}
+            return {
+                "hung_total_s": round(self._total, 1),
+                "hung_max_streak_s": round(max(self._max_streak, self._streak), 1),
+            }
+
+    def stop(self) -> None:
+        self._stop = True
+
+    def _find_hwnd(self, pid: int):
+        """Главное видимое top-level окно процесса pid."""
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32")
+        found = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def cb(hwnd, _lp):
+            wnd_pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wnd_pid))
+            if wnd_pid.value == pid and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+                return False
+            return True
+
+        user32.EnumWindows(cb, 0)
+        return found[0] if found else None
+
+    def run(self) -> None:
+        import ctypes
+        user32 = ctypes.WinDLL("user32")
+        step = 0.5
+        while not self._stop:
+            time.sleep(step)
+            with self._lock:
+                pid, hwnd = self._pid, self._hwnd
+            if pid is None:
+                continue
+            if hwnd is None:
+                hwnd = self._find_hwnd(pid)
+                if hwnd is None:
+                    continue
+                with self._lock:
+                    self._hwnd = hwnd
+            hung = bool(user32.IsHungAppWindow(hwnd))
+            with self._lock:
+                if hung:
+                    self._total += step
+                    self._streak += step
+                else:
+                    self._max_streak = max(self._max_streak, self._streak)
+                    self._streak = 0.0
+
+
 class LiveBrowser:
     """Одно GUI-окно lumen на весь прогон + перезапуск при смерти."""
 
     def __init__(self, exe: Path, out_dir: Path, timeout: float) -> None:
         self.exe, self.out_dir, self.timeout = exe, out_dir, timeout
         self.restarts = 0
+        self.hung = HungMonitor()
         self._spawn()
 
     def _spawn(self) -> None:
@@ -304,10 +392,11 @@ class LiveBrowser:
         self.log_path = self.out_dir / f"live.stderr.{self.restarts}.log"
         log = self.log_path.open("wb")
         self.proc = subprocess.Popen(
-            [str(self.exe), "--mcp-live-port", str(port), "about:blank"],
+            [str(self.exe), "--mcp-live-port", str(port), "--maximized", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=log, cwd=str(REPO_ROOT),
         )
         self.mcp = Mcp(port, self.timeout)
+        self.hung.watch_pid(self.proc.pid)
 
     def stderr_errors_since(self, pos: int) -> tuple[list[str], int]:
         """Ошибко-подобные строки stderr с позиции pos (per-site атрибуция) + новая позиция."""
@@ -334,6 +423,7 @@ class LiveBrowser:
         self._spawn()
 
     def close(self) -> None:
+        self.hung.stop()
         try:
             self.proc.terminate()
             self.proc.wait(timeout=5)
@@ -347,6 +437,7 @@ def audit_site_live(
     """Один сайт в живом окне: навигация → готовность → скролл → скриншот → консоль → RAM."""
     rec: dict = {"slug": slug, "url": url, "restarted": False}
     log_pos = br.log_path.stat().st_size if br.log_path.exists() else 0
+    br.hung.begin_site()
     t0 = time.monotonic()
     try:
         # Новая вкладка на сайт (MCP-инструмент new_tab: open_new_tab +
@@ -364,8 +455,17 @@ def audit_site_live(
         rec["ready_s"] = round(time.monotonic() - t0, 2)
         rec["status"] = "OK"
     except RuntimeError as e:  # error-ответ (чаще всего таймаут wait)
-        rec["status"] = "TIMEOUT"
         rec["error"] = str(e)[:200]
+        if "own_tab" not in rec or "command timed out" in rec.get("tab_error", "") + str(e):
+            # Даже new_tab/navigate не прошли — UI-поток мёртв необратимо
+            # (как для пользователя): перезапускаем окно, это находка.
+            rec["status"] = "HUNG"
+            rec.update(br.hung.site_stats())
+            br.restart()
+            rec["restarted"] = True
+            rec["stderr_errors"] = []
+            return rec
+        rec["status"] = "TIMEOUT"
     except (OSError, json.JSONDecodeError, socket.timeout) as e:  # окно умерло/зависло
         rec["status"] = "DEAD"
         rec["error"] = str(e)[:200]
@@ -406,6 +506,7 @@ def audit_site_live(
             br.restart()
             rec["restarted"] = True
     rec["stderr_errors"], _ = br.stderr_errors_since(log_pos)
+    rec.update(br.hung.site_stats())
     return rec
 
 
@@ -417,8 +518,8 @@ def summary_md_live(results: list[dict], exe: Path, commit: str, restarts: int) 
         f"- Бинарь: `{exe}` (GUI, один процесс, дефолтный рендер-бэкенд)",
         f"- Коммит движка: `{commit}`",
         "",
-        "| slug | статус | готовность, с | RAM тек, МБ | RAM пик, МБ | JS-ошибки | первая ошибка |",
-        "|---|---|---|---|---|---|---|",
+        "| slug | статус | готовность, с | RAM тек, МБ | RAM пик, МБ | не отвечает, с | JS-ошибки | первая ошибка |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
         all_errs = (r.get("console_errors") or []) + (r.get("stderr_errors") or [])
@@ -429,7 +530,7 @@ def summary_md_live(results: list[dict], exe: Path, commit: str, restarts: int) 
         lines.append(
             f"| {r['slug']} | {r['status']}{restarted} | {r.get('ready_s', '—')} "
             f"| {r.get('cur_mb', '—')} | {r.get('peak_mb', '—')} "
-            f"| {len(all_errs) or ''} | {err} |"
+            f"| {r.get('hung_total_s', '')} | {len(all_errs) or ''} | {err} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -535,7 +636,8 @@ def main() -> None:
             else:
                 rec = audit_site_live(br, slug, url, out_dir, args.timeout, args.dwell, args.scroll_ticks)
                 n_err = len(rec.get('console_errors', [])) + len(rec.get('stderr_errors', []))
-                note = (f"ready={rec.get('ready_s', '—')}s ram={rec.get('cur_mb', '—')}MB "
+                hung = f" hung={rec['hung_total_s']}s" if rec.get('hung_total_s') else ""
+                note = (f"ready={rec.get('ready_s', '—')}s ram={rec.get('cur_mb', '—')}MB{hung} "
                         f"err={n_err}"
                         + (" RESTARTED" if rec["restarted"] else ""))
             results.append(rec)

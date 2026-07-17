@@ -40,7 +40,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 Headless one-shot: `--dump-source` · `--dump-layout` · `--dump-display-list` · `--screenshot` · `--print-to-pdf`.
 Servers: `--ipc-server [--ipc-port N]` · `--mcp [url]` · `--mcp-port N` · `--mcp-live-port N <src>` · `--bidi-port N` · `--devtools-port N` (CDP, stub — see below).
 Determinism: `--deterministic` · `--rng-seed N` · `--monotonic-clock` (parsed into `DetConfig` but **not currently wired** to the JS runtime — only `--deterministic`'s plain on/off reaches `set_deterministic_mode`; the RNG seed always derives from the page URL hash regardless of `--rng-seed`'s value) · `--viewport WxH` (DEVX-1: pins the window's CSS content viewport, overriding `--deterministic`'s 1280×800 default — used by `graphic_tests/run.py --live` to combine determinism with the pipeline's calibrated 1024×720).
-Misc: `--no-scrollbar` (cleaner screenshot crops) · `--activity-log` / `--click-log` · `--import-session` · `--network-service` · `--proxy` · `--tor`.
+Misc: `--maximized` (window opens full-screen — live perf audit) · `--no-scrollbar` (cleaner screenshot crops) · `--activity-log` / `--click-log` · `--import-session` · `--network-service` · `--proxy` · `--tor`.
 
 ## MCP (`crates/mcp`) — the richest scripting surface
 

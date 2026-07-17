@@ -366,6 +366,7 @@ fn main() -> ExitCode {
         }
     };
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
+    let (maximized, rest_args) = extract_maximized(&rest_args);
     let (click_log_flag, rest_args) = extract_click_log(&rest_args);
     click_log::init(click_log_flag);
     let (det_cfg, rest_args) = deterministic::extract_deterministic(&rest_args);
@@ -507,7 +508,7 @@ fn main() -> ExitCode {
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, maximized, det_mode, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
@@ -634,6 +635,7 @@ fn run_window_mode(
     network_log: Arc<std::sync::Mutex<devtools::network_panel::NetworkLog>>,
     initial_scroll: (f32, f32),
     no_scrollbar: bool,
+    maximized: bool,
     deterministic: bool,
     viewport_override: Option<(f32, f32)>,
     automation_handle: AutomationHandle,
@@ -878,6 +880,7 @@ fn run_window_mode(
         raf_task_inflight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         raf_drain_gate: false,
         no_scrollbar,
+        maximized,
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
         nav_start: None,
@@ -1621,6 +1624,7 @@ fn print_usage() {
     eprintln!("  [--bidi-port <N>]                               — WebDriver BiDi WS сервер (любой режим)");
     eprintln!("  [--mcp-live-port <N>]                           — MCP-сервер (TCP) на живом окне (любой режим, SDC-2)");
     eprintln!("  [--viewport <W>x<H>]                            — фикс. CSS-размер окна (переопределяет --deterministic 1280×800)");
+    eprintln!("  [--maximized]                                   — развернуть окно на весь экран (живой перф-аудит)");
     eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
     eprintln!("  [--tor [--tor-port <N>]]                        — Tor-режим: TorBrowser fingerprint + SOCKS5 9050 (или N)");
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
@@ -1844,6 +1848,24 @@ fn extract_viewport_override(args: &[String]) -> (Option<(f32, f32)>, Vec<String
         }
     }
     (size, rest)
+}
+
+/// Извлечь `--maximized` из аргументов, вернуть (flag, остальные аргументы).
+///
+/// Разворачивает окно на весь экран при создании (перф-аудит: тестирование
+/// в развёрнутом окне по решению пользователя 2026-07-17). `--viewport` при
+/// этом игнорируется оконным менеджером — размер задаёт максимизация.
+fn extract_maximized(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = false;
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--maximized" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
 }
 
 /// Извлечь `--no-scrollbar` из аргументов, вернуть (flag, остальные аргументы).
@@ -7026,6 +7048,9 @@ struct Lumen {
     /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to
     /// avoid scrollbar pixels contaminating the diff against Edge headless.
     no_scrollbar: bool,
+    /// When true the window is created maximized (`--maximized` CLI flag;
+    /// live perf audit runs full-screen so the user can watch rendering).
+    maximized: bool,
     /// Guards for PerformancePaintTiming entries (W3C Paint Timing §2).
     /// `true` once the entry has been delivered to JS so we don't double-fire.
     first_paint_delivered: bool,
@@ -9671,7 +9696,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         let attrs = Window::default_attributes()
             .with_title(window_title(self.title.as_deref()))
             .with_inner_size(LogicalSize::new(win_w, win_h))
-            .with_position(LogicalPosition::new(0, 0));
+            .with_position(LogicalPosition::new(0, 0))
+            .with_maximized(self.maximized);
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
