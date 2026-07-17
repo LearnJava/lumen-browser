@@ -50,7 +50,7 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   Follow-up fix alongside: `File.prototype` now extends `Blob.prototype` (`file_input.rs`, W3C
   File API §4) — this fix made `window.File` reach the real global `File`, surfacing the missing
   prototype link. Fixing BUG-280 got the WPT smoke test far enough to expose a second, unrelated
-  blocker — see [BUG-291](../bugs/BUG-291-OPEN.md) under Deferred.
+  blocker — [BUG-291](../bugs/BUG-291-FIXED.md), now fixed (see below).
 - **`document.getElementsByTagName(tag)` (BUG-279 fix, [P2] P2-wpt S4, 2026-07-13).**
   Was missing entirely from `var document = {...}` in `dom.rs` — broke `testharness.js`'s own
   module-level setup (`test_timeout()`/`get_script_url()` call it unconditionally) with a
@@ -357,17 +357,24 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   - 11 new Rust unit tests; 40/40 total subtle_crypto tests pass.
   - New deps: `rsa = { version = "0.9", features = ["sha2"] }` (permanent, same crate as lumen-network), `rand_core = { version = "0.6", features = ["getrandom"] }` (companion to rsa, OsRng), `p256` updated: +`ecdh` feature.
 
+- **DOM node-wrapper interning fix** (BUG-291, [P2] P2-wpt, 2026-07-17). `_lumen_make_element(nid)`
+  (`crates/js/src/dom.rs`) minted a brand-new JS wrapper object on every call, so repeated access to
+  the same underlying node (`.lastChild`/`.firstChild`/`.parentElement`/`.children`/etc.) returned a
+  *different* object each time — broke `===` node identity (`tbody.lastChild === tr` was `false`) and
+  silently dropped expando properties set between accesses. This is what made `testharness.js`'s
+  built-in results renderer (`Output.show_results`) throw `TypeError: Cannot read properties of null
+  (reading 'appendChild')` on `tbody.lastChild.lastChild.appendChild(...)`, aborting
+  `notify_complete()` before `testharnessreport.js`'s own completion callback ran. Fix: new per-nid
+  cache `_lumen_node_wrappers` (same pattern as the existing `_validity_msg`/`_canvas2d_ctxs` maps) —
+  `_lumen_make_element` now returns the interned wrapper for a previously-wrapped `nid` instead of
+  building a fresh one. Safe for the life of one JS context: the DOM arena
+  (`crates/engine/dom/src/lib.rs`) allocates node ids append-only with no free-list reuse, and the
+  whole shim is re-evaluated fresh on every navigation/bfcache thaw. Shared `WEB_API_SHIM`, fixes both
+  engines. Regression test: `dom::tests::repeated_node_access_returns_identical_wrapper`. `tests/wpt/run_smoke.py`
+  still doesn't reach a real PASS — a separate, unrelated blocker, [BUG-296](../bugs/BUG-296-OPEN.md).
+
 ## Deferred
 
-- **`testharness.js`'s built-in results renderer throws, aborting harness completion**
-  ([BUG-291](../bugs/BUG-291-OPEN.md), found by [P2] P2-wpt S4/S5, 2026-07-16, after BUG-280 was
-  fixed). `Output.show_results` throws `TypeError: Cannot read properties of null (reading
-  'appendChild')` while building its results `<table>` (`crates/js` DOM child-node bindings,
-  `createElementNS`-created elements), which aborts `notify_complete()` before
-  `testharnessreport.js`'s own completion callback runs — blocks `tests/wpt/run_smoke.py` from
-  reaching a genuine PASS/FAIL. A related anomaly found while isolating this: DOM node references
-  returned by repeated property access (`parent.lastChild`) are not stable under `===` for the same
-  underlying node — see the bug file for the isolated repro.
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
 - `rusty_v8` backend porting (S12 remains; S0/S1/S2/S3/S4/S5-S7/S8/S9/S10/S11 done

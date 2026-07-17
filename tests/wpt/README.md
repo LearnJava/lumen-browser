@@ -8,17 +8,20 @@ bespoke test runner. See the task doc for the full architecture and slice plan.
 shim, smoke driver) is **implemented but blocked**: `tests/wpt/run_smoke.py` drives
 a real `lumen --bidi-port` through navigate + eval end to end, but the smoke test
 (`dom/nodes/Element-hasAttribute.html`) still doesn't PASS — blocked on
-[BUG-291](../../bugs/BUG-291-OPEN.md) (`testharness.js`'s built-in results renderer,
-`Output.show_results`, throws while building its results `<table>`, aborting harness
-completion before `testharnessreport.js`'s own callback runs). Three other real engine
-gaps surfaced and were fixed while proving this path: [BUG-278](../../bugs/BUG-278-FIXED.md)
-(HTTP client rejected `wptserve`'s close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
+[BUG-296](../../bugs/BUG-296-OPEN.md) (a plain `lumen --bidi-port <N>` process's own
+default-homepage navigation can land in the same top-level context *after* the test
+driver's explicit `browsingContext.navigate`, leaving `window`/`document` pointing at
+the homepage). Four other real engine gaps surfaced and were fixed while proving this
+path: [BUG-278](../../bugs/BUG-278-FIXED.md) (HTTP client rejected `wptserve`'s
+close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
 (`document.getElementsByTagName` was missing entirely — broke `testharness.js`'s
-own module-level setup), and [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't
+own module-level setup), [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't
 the JS engine's real global object, so `testharness.js`'s `expose()`-based public API
-was unreachable as bare identifiers — fixing it got far enough to expose BUG-291). See
-those bug files and the task doc's S4 section for the full diagnosis trail
-(BiDi-eval-based bisection of `testharness.js`'s execution).
+was unreachable as bare identifiers), and [BUG-291](../../bugs/BUG-291-FIXED.md) (DOM
+node wrappers weren't interned, breaking `===` node identity and crashing
+`testharness.js`'s built-in results renderer, `Output.show_results`). See those bug
+files and the task doc's S4 section for the full diagnosis trail (BiDi-eval-based
+bisection of `testharness.js`'s execution).
 
 ## What's here
 

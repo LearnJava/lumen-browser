@@ -310,30 +310,32 @@ option isn't lost — do not fold it into this task's scope.
 - [x] `tests/wpt/resources/testharnessreport.js` shim written; `LumenTestharnessExecutor.do_test`
       implemented (navigate + poll `script.evaluate` for its JSON result, tolerating the transient
       "JS context not available" error while the new document's JS runtime installs); `tests/wpt/run_smoke.py`
-      drives it end to end (see its docstring for why this isn't `tools/wpt/wpt`). **Blocked on a real
-      PASS** by [BUG-291](../../bugs/BUG-291-OPEN.md) (`testharness.js`'s built-in results renderer,
-      `Output.show_results`, throws while building its `<table>`, aborting `notify_complete()` before it
-      reaches `testharnessreport.js`'s own completion callback — the one `run_smoke.py` polls for).
-      [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't the JS engine's real global object, so
-      `testharness.js`'s `expose()`-based public API was unreachable as bare identifiers) was the
-      original blocker and is now fixed (`window`/`self`/`globalThis` are the same object, verified on
-      the default V8 build) — but fixing it only got far enough to expose BUG-291 as a second, unrelated
-      blocker. Two other real engine gaps surfaced and were fixed while proving the navigate/eval path
-      itself: [BUG-278](../../bugs/BUG-278-FIXED.md) (HTTP client rejected `wptserve`'s close-delimited
-      responses — every fetch to the reference test server failed) and
-      [BUG-279](../../bugs/BUG-279-FIXED.md) (`document.getElementsByTagName` was missing entirely,
-      breaking `testharness.js`'s own module-level setup). Diagnosis used BiDi `script.evaluate` to
-      bisect `testharness.js`'s execution live (marker-injected copies + scratch probe pages — see bug
-      files) rather than guessing.
+      drives it end to end (see its docstring for why this isn't `tools/wpt/wpt`). Three real engine gaps
+      surfaced and were fixed while proving the navigate/eval path itself: [BUG-278](../../bugs/BUG-278-FIXED.md)
+      (HTTP client rejected `wptserve`'s close-delimited responses — every fetch to the reference test
+      server failed), [BUG-279](../../bugs/BUG-279-FIXED.md) (`document.getElementsByTagName` was missing
+      entirely, breaking `testharness.js`'s own module-level setup), [BUG-280](../../bugs/BUG-280-FIXED.md)
+      (`window` wasn't the JS engine's real global object, so `testharness.js`'s `expose()`-based public
+      API was unreachable as bare identifiers), and [BUG-291](../../bugs/BUG-291-FIXED.md) (DOM node
+      wrappers weren't interned — `.lastChild`/`.firstChild`/etc. minted a fresh JS object per access,
+      breaking `===` identity and crashing `testharness.js`'s built-in results renderer,
+      `Output.show_results`, on `tbody.lastChild.lastChild.appendChild(...)`). All four are now fixed.
+      Diagnosis used BiDi `script.evaluate` to bisect `testharness.js`'s execution live (marker-injected
+      copies + scratch probe pages — see bug files) rather than guessing. **Blocked on a real PASS** by
+      [BUG-296](../../bugs/BUG-296-OPEN.md) (new, found re-verifying BUG-291's fix): a plain
+      `lumen --bidi-port <N>` process's own default-homepage navigation can land in the same top-level
+      context *after* the test driver's explicit `browsingContext.navigate`, leaving `window`/`document`
+      pointing at the homepage — unrelated to any of the four DOM/engine bugs above, which are all
+      confirmed fixed by direct unit test / isolated BiDi diagnostics.
 - [ ] A deliberately-failing assertion is observed as FAIL (harness genuinely checks assertions) —
-      blocked on BUG-291 above (no test reaches a genuine PASS/FAIL distinction yet).
+      blocked on BUG-296 above (no test reaches a genuine PASS/FAIL distinction yet).
 - [ ] `.ini` expectations committed for a curated ~15–20 synchronous DOM-test subset.
 - [ ] Async subset (S6) admitted, `awaitPromise` behavior verified against the implementation.
 - [ ] Suite runs fully offline.
 - [ ] `docs/plan/testing.md` updated; `ROADMAP.md:131` flipped to `done` (or split if S8 remains
       open); `tests/wpt/README.md` written.
 - [x] Any engine/BiDi gap found while running the harness filed as `BUG-NNN` (no test weakened to
-      pass) — BUG-278/279/280 (fixed), BUG-291 (open, blocks the remaining checkboxes above).
+      pass) — BUG-278/279/280/291 (fixed), BUG-296 (open, blocks the remaining checkboxes above).
 - [x] `cargo clippy -p lumen-bidi-server --all-targets -- -D warnings` clean; existing
       `bidi-server`/`driver` test suites still pass (verified 2026-07-17: bidi-server 96/96,
       driver 125/126 — the one failure, `cases::snapshot_cpu::cpu_snapshots_match_references`,

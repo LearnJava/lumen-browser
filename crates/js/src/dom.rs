@@ -4128,7 +4128,7 @@ function _lumen_fire_slotchange(host_nid) {
 
 // ── Form Constraint Validation API (HTML LS §4.10.21) ────────────────────────
 // Per-nid storage: persists across multiple _lumen_make_element calls for the
-// same node (elements are fresh objects each time; state lives in these maps).
+// same node.
 
 // nid → custom validity message set via setCustomValidity() ('' → no custom error)
 var _validity_msg = {};
@@ -4138,6 +4138,16 @@ var _input_values = {};
 var _canvas2d_ctxs = {};
 // nid → cached GPUCanvasContext object (getContext('webgpu'), persists across _lumen_make_element).
 var _canvas_webgpu_ctxs = {};
+// nid → cached element/text-node JS wrapper (BUG-291). The DOM node arena is
+// append-only for the lifetime of a document (crates/engine/dom/src/lib.rs
+// `alloc()`; no free-list reuse until a future Phase-3 compaction), and this
+// whole shim is re-evaluated from scratch on every navigation/bfcache thaw
+// (fresh V8 isolate), so caching by nid for the life of the JS context is
+// safe: it can never alias a stale wrapper onto an unrelated later node.
+// Without this, repeated access (`.firstChild`, `.parentElement`, ...) minted
+// a brand-new object every time, breaking `===` node identity and silently
+// dropping any expando property set on a node between accesses.
+var _lumen_node_wrappers = {};
 
 // ValidityState — readonly snapshot of one form control's validity.
 function ValidityState(flags) {
@@ -4588,6 +4598,13 @@ function _lumen_canvas_dims(nid) {
 
 function _lumen_make_element(nid) {
     if (nid === null || nid === undefined) return null;
+    // BUG-291: return the interned wrapper if this nid was already wrapped,
+    // so repeated access to the same underlying node (`.firstChild`,
+    // `.parentElement`, `getElementById` twice, ...) yields the same JS
+    // object — required for `===` node identity and for expando properties
+    // set on a node to survive later re-access.
+    var _existing = _lumen_node_wrappers[nid];
+    if (_existing !== undefined) return _existing;
     var _classList = _lumen_make_class_list(nid);
     var _style     = _lumen_make_style(nid);
     var _returnValue = '';
@@ -5471,6 +5488,7 @@ function _lumen_make_element(nid) {
         enumerable: false,
         configurable: true,
     });
+    _lumen_node_wrappers[nid] = _obj;
     return _obj;
 }
 
@@ -13035,6 +13053,38 @@ mod tests {
                  box.append('trailing text');\
                  var n = 0; while (box.firstChild) { box.removeChild(box.firstChild); if (++n > 20) break; }\
                  built && box.firstChild === null",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-291: repeated wraps of the same underlying node (via .lastChild,
+    // .parentElement, .children, etc.) must return the SAME JS object, not a
+    // fresh wrapper each time. `testharness.js`'s `Output.show_results` relies
+    // on `tbody.lastChild.lastChild.appendChild(...)` reading back the very
+    // node it just appended two statements earlier — with fresh wrappers each
+    // access, `tbody.lastChild` after appending a child-of-a-child came back
+    // stale/inconsistent and the nested `.lastChild` was `null`, throwing
+    // `TypeError: Cannot read properties of null (reading 'appendChild')` and
+    // aborting `notify_complete()` before the WPT result callback ran.
+    #[test]
+    fn repeated_node_access_returns_identical_wrapper() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var tbody = document.createElement('tbody');\
+                 var tr = document.createElement('tr');\
+                 var td = document.createElement('td');\
+                 tr.appendChild(td);\
+                 tbody.appendChild(tr);\
+                 var identityHolds = tbody.lastChild === tr && tr.lastChild === td;\
+                 var expando = tbody.lastChild;\
+                 expando._probe = 'kept';\
+                 var expandoSurvives = tbody.lastChild._probe === 'kept';\
+                 var nested = tbody.lastChild.lastChild;\
+                 var assertionsNode = document.createElement('div');\
+                 var appended = nested !== null && (nested.appendChild(assertionsNode), true);\
+                 identityHolds && expandoSurvives && appended",
             )
             .unwrap();
         assert_eq!(ok, lumen_core::JsValue::Bool(true));
