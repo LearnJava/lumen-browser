@@ -69,6 +69,17 @@ impl PipOsConfig {
         min_width: 192.0,
         min_height: 108.0,
     };
+
+    /// A window sized to `width`×`height` (e.g. `documentPictureInPicture
+    /// .requestWindow({width, height})`, P3-pip), keeping [`Self::DEFAULT`]'s
+    /// 192×108 floor so the user can't shrink it into nothing.
+    pub fn sized(width: f32, height: f32) -> Self {
+        Self {
+            width,
+            height,
+            ..Self::DEFAULT
+        }
+    }
 }
 
 impl Default for PipOsConfig {
@@ -234,6 +245,13 @@ mod tests {
         let c = PipOsConfig::DEFAULT;
         assert!((c.width / c.height - 16.0 / 9.0).abs() < 1e-3);
         assert!(c.min_width <= c.width && c.min_height <= c.height);
+    }
+
+    #[test]
+    fn sized_config_keeps_default_floor() {
+        let c = PipOsConfig::sized(800.0, 450.0);
+        assert_eq!((c.width, c.height), (800.0, 450.0));
+        assert_eq!((c.min_width, c.min_height), (PipOsConfig::DEFAULT.min_width, PipOsConfig::DEFAULT.min_height));
     }
 
     #[test]
