@@ -57,6 +57,25 @@ those bug files and the task doc's S4 section for the full diagnosis trail
   LUMEN_PROFILE=dev-release <venv>/python tests/wpt/verify_s3_bidi_session.py
   ```
 
+- `tests/wpt/verify_devx6_bidi_scenarios.py` — **ours** (DEVX-6, `ROADMAP.md`) —
+  integration scenario tests for six previously-unused BiDi commands
+  (`network.setOfflineStatus`, `network.addIntercept`+`failRequest`/
+  `continueRequest`, `browser.setTimezoneOverride`,
+  `emulation.setUserAgentOverride`) against a real spawned `lumen --bidi-port`
+  window, same raw `BidiSession` pattern as `verify_s3_bidi_session.py`
+  (not wptrunner). Checks two things per command: the protocol round-trip
+  (real verification value, catches `lumen-bidi-server` regressions) and
+  whether a live page actually observes the effect — confirmed **not wired**
+  today ([BUG-295](../../bugs/BUG-295-OPEN.md), reported as `XFAIL(BUG-295)`,
+  not a script failure). Also documents a separate, environment-dependent gap
+  found while writing it: the live window's JS runtime can fail to install at
+  all in some sessions (`SKIP(env)` — see `CLAUDE.md` "Known gotchas"). Run
+  with:
+
+  ```bash
+  LUMEN_PROFILE=dev-release <venv>/python tests/wpt/verify_devx6_bidi_scenarios.py
+  ```
+
 - `tests/wpt/run_smoke.py` — **ours** (S4) — minimal driver that calls
   `wptcommandline`/`wptrunner.run_tests` directly against the smoke test (see
   its own docstring for why this isn't `tools/wpt/wpt`). Run with:

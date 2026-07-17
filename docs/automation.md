@@ -55,7 +55,7 @@ Runs `lumen --dump-layout`/`--dump-display-list` over a fixed 6-page set (`sampl
 
 ## WebDriver BiDi (`crates/bidi-server`, `--bidi-port N`)
 
-Live-window MVP (SDC-2): `browsingContext.navigate` (blocks on real `document.readyState`) / `captureScreenshot` / `setViewport`, `script.evaluate` / `callFunction` / preload scripts, `input.performActions` (pointer+key subset), `session.*`. Also implemented and **unused by any tooling**: `network.addIntercept` / `continueRequest|Response` / `failRequest` / `setOfflineStatus`, `browser.setTimezoneOverride`, `emulation.setUserAgentOverride`, `storage.getCookies|setCookie|deleteCookies` (DEVX-6). Without a window the server falls back to an in-memory stub state. Consumer today: `tools/wptrunner` plugin (session negotiation only).
+Live-window MVP (SDC-2): `browsingContext.navigate` (blocks on real `document.readyState`) / `captureScreenshot` / `setViewport`, `script.evaluate` / `callFunction` / preload scripts, `input.performActions` (pointer+key subset), `session.*`. Also implemented but **accepted-and-stored only, no live-window effect** (protocol-correct, `BidiState` genuinely updated, but nothing reads it back — [BUG-295](../bugs/BUG-295-OPEN.md), found+tested by DEVX-6's `tests/wpt/verify_devx6_bidi_scenarios.py`): `network.addIntercept` / `continueRequest|Response` / `failRequest` / `setOfflineStatus`, `browser.setTimezoneOverride`, `emulation.setUserAgentOverride`. `storage.getCookies|setCookie|deleteCookies` likewise unverified against a live window (not covered by DEVX-6). Without a window the server falls back to an in-memory stub state. Consumer today: `tools/wptrunner` plugin (session negotiation only).
 
 ## IPC (`crates/ipc`, `--ipc-server`)
 
