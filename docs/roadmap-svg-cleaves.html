@@ -1156,7 +1156,7 @@
      "id": "P3-pip",
      "title": "Picture-in-Picture API",
      "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-17): Element.requestPictureInPicture — реальное OS-окно (CC-7, panels/pip_os_window.rs) + доставка реального размера через `_lumen_pip_deliver_resize` на открытие и на `WindowEvent::Resized` (было (0,0)-заглушкой, `resize`-событие никогда не летело) — ЗАВЕРШЕНО. Document PiP (`documentPictureInPicture.requestWindow`, document_pip.rs) остаётся JS-only заглушкой без нативного окна (`_lumen_pip_request_window` не забинжен, `.document` — фейковый mock-объект); дошить — реальное OS-окно для произвольного DOM-контента"
+     "note": "PARTIAL (сверка с кодом 2026-07-17): Element.requestPictureInPicture — реальное OS-окно (CC-7, panels/pip_os_window.rs) + доставка реального размера через `_lumen_pip_deliver_resize` на открытие и на `WindowEvent::Resized` (было (0,0)-заглушкой, `resize`-событие никогда не летело) — ЗАВЕРШЕНО. Document PiP срез 1 (P1 2026-07-17, ветка p1-docpip-os-window): `documentPictureInPicture.requestWindow()`/`.close()` открывают/закрывают реальное always-on-top OS-окно (panels/doc_pip_os_window.rs, `_lumen_docpip_request_window`/`_lumen_docpip_close`, зеркалит CC-7), реальный размер доставляется через `_lumen_docpip_deliver_resize` (открытие + `WindowEvent::Resized`), закрытие через системную кнопку синхронизируется в JS через `_lumen_docpip_deliver_close`. Контент — заливка-плейсхолдер; `.document` остаётся JS-only mock-объектом — дошить: layout+paint перенесённого DOM-поддерева в плавающее окно"
     },
     {
      "id": "P3-imagebitmap",

@@ -2,6 +2,13 @@
 //!
 //! Provides `documentPictureInPicture.requestWindow()` to create a floating window
 //! with DOM content, `.window` accessor to the PiP window, and `onenter` event listener.
+//!
+//! Slice 1 (this file + `documentpip_bindings.rs` + `shell/src/panels/doc_pip_os_window.rs`):
+//! `requestWindow()`/`.close()` now open/close a real always-on-top OS window
+//! (mirroring video PiP's CC-7), and its real size round-trips back into
+//! `PictureInPictureWindow.width`/`.height`/`resize`. `.document` is still the
+//! JS-only mock object below — laying out and painting the moved DOM subtree
+//! into the floating window is a separate follow-up slice.
 
 /// V8 port of the former rquickjs `install_document_pip_api` (Ph3 V8 migration S5-S7,
 /// rquickjs side removed in S12b-13): identical JS shim, evaluated via
@@ -61,7 +68,13 @@ const DOCUMENT_PIP_SHIM: &str = r#"(function() {
     }
 
     close() {
+      if (this._closed) {
+        return;
+      }
       this._closed = true;
+      if (typeof _lumen_docpip_close === 'function') {
+        _lumen_docpip_close();
+      }
     }
   }
 
@@ -99,9 +112,9 @@ const DOCUMENT_PIP_SHIM: &str = r#"(function() {
       const event = new DocumentPictureInPictureEvent(pipWindow);
       document.dispatchEvent(event);
 
-      // Call native binding to register PiP window with shell
-      if (typeof _lumen_pip_request_window === 'function') {
-        _lumen_pip_request_window(width, height);
+      // Call native binding to open the real OS floating window (slice 1).
+      if (typeof _lumen_docpip_request_window === 'function') {
+        _lumen_docpip_request_window(width, height);
       }
 
       return pipWindow;
@@ -123,6 +136,30 @@ const DOCUMENT_PIP_SHIM: &str = r#"(function() {
     },
     configurable: true,
   });
+
+  /// _lumen_docpip_deliver_resize(width, height) — shell calls this when the
+  /// real OS floating window is resized, so the active PictureInPictureWindow
+  /// reflects the true client size and fires 'resize' (mirrors video PiP's
+  /// `_lumen_pip_deliver_resize`).
+  globalThis._lumen_docpip_deliver_resize = function(width, height) {
+    const win = documentPictureInPicture._activeWindow;
+    if (!win || win._closed) {
+      return;
+    }
+    win._width = width;
+    win._height = height;
+    try { win.dispatchEvent(new Event('resize')); } catch (e) {}
+  };
+
+  /// _lumen_docpip_deliver_close() — shell calls this when the OS window is
+  /// closed via its own close button (not `.close()`), so `_closed` and
+  /// `pictureInPictureElement` reflect reality.
+  globalThis._lumen_docpip_deliver_close = function() {
+    const win = documentPictureInPicture._activeWindow;
+    if (win) {
+      win._closed = true;
+    }
+  };
 })();"#;
 
 #[cfg(all(test, feature = "v8-backend"))]

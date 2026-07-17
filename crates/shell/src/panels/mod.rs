@@ -11,6 +11,7 @@ pub mod command_palette;
 pub mod settings_panel;
 pub mod shortcuts_panel;
 pub mod history_panel;
+pub mod doc_pip_os_window;
 pub mod focus_panel;
 pub mod permission_panel;
 pub mod pip_os_window;
