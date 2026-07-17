@@ -93,7 +93,7 @@ pub struct InProcessSession {
     ///
     /// (Re-)installed against `SessionState::doc` on every `navigate()`/
     /// `navigate_html()`, mirroring the shell's per-navigate `V8JsRuntime::new()`
-    /// + `install_dom()` (`crates/shell/src/main.rs`). Backs `click`/`type_text`
+    /// and `install_dom()` (`crates/shell/src/main.rs`). Backs `click`/`type_text`
     /// (synthetic `_lumen_dispatch_*` event calls) and `eval`. `None` before the
     /// first successful navigation, or if V8 init/`install_dom` failed for the
     /// current page (`click`/`type_text`/`eval` then return `Err`).
