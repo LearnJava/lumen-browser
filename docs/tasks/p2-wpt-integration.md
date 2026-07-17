@@ -334,5 +334,8 @@ option isn't lost — do not fold it into this task's scope.
       open); `tests/wpt/README.md` written.
 - [x] Any engine/BiDi gap found while running the harness filed as `BUG-NNN` (no test weakened to
       pass) — BUG-278/279/280 (fixed), BUG-291 (open, blocks the remaining checkboxes above).
-- [ ] `cargo clippy -p lumen-bidi-server --all-targets -- -D warnings` clean; existing
-      `bidi-server`/`driver` test suites still pass.
+- [x] `cargo clippy -p lumen-bidi-server --all-targets -- -D warnings` clean; existing
+      `bidi-server`/`driver` test suites still pass (verified 2026-07-17: bidi-server 96/96,
+      driver 125/126 — the one failure, `cases::snapshot_cpu::cpu_snapshots_match_references`,
+      is pre-existing baseline drift unrelated to bidi/driver protocol code, see
+      `project_cpu_snapshot_baseline_stale` — confirmed red on clean `main` before this check).
