@@ -975,6 +975,29 @@ all 8 tests 1:1 to `V8JsRuntime` (bare `V8JsRuntime::new()` + the same HTMLEleme
 `cargo check -p lumen-js` on default + `v8-backend` features — green; `cargo clippy -p lumen-js
 --all-targets -- -D warnings` clean on both.
 
+### S12b-15 — `download_bindings.rs` (2026-07-18, branch p1-v8-s12b-15-download)
+
+Fifteenth slice, same systematic selection (`comm -12` on still-present rquickjs
+`fn install_*(…Ctx…)` sites vs `fn install_*_v8(` sites, sorted by file size): the smallest
+non-trap candidate is `download_bindings.rs` (202 lines) — the known traps `typed_om_api.rs`
+(S12b-9), `serial.rs`/`scroll_snap_events.rs` (S12b-10) sit below it. Clean by the file-stem
+method (**zero `dom.rs` hits** for `download`) with its own-file `mod tests`; call site in
+`lib.rs`'s `QuickJsRuntime::install_dom` is a plain one-liner (no `QuickJsRuntime`
+`fire_*`/`take_*` method). This module *does* have a native binding
+(`_lumen_network_download(url, filename)` → process-global `QUEUE` drained by the shell via
+`take_download_requests`), but the rquickjs path was a thin `Function::new` + `ctx.eval` shim
+whose V8 twin (`install_download_bindings_v8`, `into_v8_fn2` + `register_native` + the same
+`_lumen_download` convenience `eval`) already existed from the S5–S7 batch. Deleted the rquickjs
+`install_download_bindings` fn + its `use rquickjs::{Ctx, Function}`; the engine-agnostic
+`enqueue`/`take_download_requests`/`DownloadRequest`/`QUEUE` (shell-facing) stay untouched. No
+`SHIM` const to gate — the shim is inline in the eval string. Ported all 6 tests 1:1 to
+`V8JsRuntime` (bare `V8JsRuntime::new()` + `install_download_bindings_v8`, no `install_dom`
+needed since `_lumen_network_download` is a plain global; same process-global `TEST_LOCK` +
+`guard()` queue-drain pattern), gated `#[cfg(all(test, feature = "v8-backend"))]`; dropped the
+call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-js --features
+v8-backend download` — 6/6 green; `cargo check -p lumen-js` on default + `v8-backend` — green;
+`cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both.
+
 ---
 
 ## Risks (Rev 2)
