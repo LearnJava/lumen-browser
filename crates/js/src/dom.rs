@@ -20,7 +20,7 @@ use lumen_dom::{
     Selection,
     ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
-use lumen_layout::{matches_selector, query_all};
+use lumen_layout::{matches_selector, query_all, query_all_scoped};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
 use lumen_core::WebStorage;
@@ -608,6 +608,32 @@ fn install_primitives(
             move |sel: String| -> Vec<u32> {
                 let doc = d.lock().unwrap();
                 query_all(&doc, &sel)
+                    .into_iter()
+                    .map(|n| n.index() as u32)
+                    .collect()
+            }
+        );
+        // BUG-291: Element/DocumentFragment/ShadowRoot.querySelector(All) must be
+        // scoped to descendants of the calling node, not the whole document —
+        // the unscoped `_lumen_query_selector(_all)` above silently found nothing
+        // for subtrees not yet attached to the document (`testharness.js` builds
+        // its results table off-document before appending it).
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_scoped",
+            move |node_id: u32, sel: String| -> Option<u32> {
+                let doc = d.lock().unwrap();
+                let scope = NodeId::from_index(node_id as usize);
+                query_all_scoped(&doc, scope, &sel).into_iter().next().map(|n| n.index() as u32)
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_all_scoped",
+            move |node_id: u32, sel: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let scope = NodeId::from_index(node_id as usize);
+                query_all_scoped(&doc, scope, &sel)
                     .into_iter()
                     .map(|n| n.index() as u32)
                     .collect()
@@ -4027,12 +4053,13 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
         get textContent() { return _lumen_get_text_content(nid); },
         set textContent(v){ _lumen_set_text_content(nid, String(v)); },
         get style()       { return _style; },
+        // Scoped to this shadow tree's descendants — see BUG-291.
         querySelector:    function(sel) {
-            var n = _lumen_u2n(_lumen_query_selector(String(sel)));
+            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll: function(sel) {
-            return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
+            return _lumen_query_selector_all_scoped(nid, String(sel)).map(_lumen_make_element);
         },
         getElementById:   function(id) {
             var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
@@ -4082,12 +4109,13 @@ function _lumen_make_document_fragment(nid) {
         set textContent(v)    { _lumen_set_text_content(nid, String(v)); },
         get innerHTML()       { return _lumen_get_inner_html(nid); },
         set innerHTML(v)      { _lumen_set_inner_html(nid, String(v)); },
+        // Scoped to this fragment's descendants — see BUG-291.
         querySelector:        function(sel) {
-            var n = _lumen_u2n(_lumen_query_selector(String(sel)));
+            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll:     function(sel) {
-            return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
+            return _lumen_query_selector_all_scoped(nid, String(sel)).map(_lumen_make_element);
         },
         appendChild:          function(c) {
             if (c && c.__nid__ !== undefined) {
@@ -4132,8 +4160,9 @@ function _lumen_fire_slotchange(host_nid) {
 }
 
 // ── Form Constraint Validation API (HTML LS §4.10.21) ────────────────────────
-// Per-nid storage: persists across multiple _lumen_make_element calls for the
-// same node (elements are fresh objects each time; state lives in these maps).
+// Per-nid storage, keyed independently of the (now cached, see BUG-291)
+// `_lumen_make_element` wrapper object — kept as separate maps rather than
+// folded onto the wrapper to avoid coupling this state to wrapper lifetime.
 
 // nid → custom validity message set via setCustomValidity() ('' → no custom error)
 var _validity_msg = {};
@@ -4591,8 +4620,26 @@ function _lumen_canvas_dims(nid) {
 
 // ── Element factory ───────────────────────────────────────────────────────────
 
+// BUG-291: node wrappers must be stable under `===` for repeated access to the
+// same node (`tbody.lastChild === tr` etc.) — real-world JS (testharness.js's
+// results renderer among it) relies on reference identity. `_lumen_build_element`
+// used to run fresh on every `_lumen_make_element` call, minting a brand-new JS
+// object each time; this cache interns wrappers by nid so the same node always
+// yields the same object. Purged per-nid by `_lumen_gc_collect` (idle shell tick)
+// so detached, zero-JS-ref nodes don't retain memory here, same lifecycle as
+// `_input_values`/`_canvas2d_ctxs` below.
+var _lumen_element_wrappers = {};
+
 function _lumen_make_element(nid) {
     if (nid === null || nid === undefined) return null;
+    var cached = _lumen_element_wrappers[nid];
+    if (cached !== undefined) return cached;
+    var built = _lumen_build_element(nid);
+    _lumen_element_wrappers[nid] = built;
+    return built;
+}
+
+function _lumen_build_element(nid) {
     var _classList = _lumen_make_class_list(nid);
     var _style     = _lumen_make_style(nid);
     var _returnValue = '';
@@ -4903,6 +4950,38 @@ function _lumen_make_element(nid) {
                 }
             }
         },
+        // HTML LS 4.9.2 (old-fashioned but conforming markup) — insertAdjacent{Text,Element}.
+        // Delegates to the before/after/prepend/append methods above (same silent
+        // no-op-if-no-parent behavior as before/after for beforebegin/afterend).
+        // Found missing while closing BUG-291: testharness.js's results renderer
+        // (Output.prototype.show_results -> get_asserts_output) calls
+        // insertAdjacentText unconditionally for every test with no recorded asserts.
+        insertAdjacentText: function(where, data) {
+            var text = String(data);
+            switch (String(where).toLowerCase()) {
+                case 'beforebegin': this.before(text); break;
+                case 'afterbegin':  this.prepend(text); break;
+                case 'beforeend':   this.append(text); break;
+                case 'afterend':    this.after(text); break;
+                default:
+                    throw new DOMException(
+                        'The value provided (' + where + ') is not one of beforebegin, ' +
+                        'afterbegin, beforeend, or afterend.', 'SyntaxError');
+            }
+        },
+        insertAdjacentElement: function(where, element) {
+            if (!element || element.__nid__ === undefined) return null;
+            switch (String(where).toLowerCase()) {
+                case 'beforebegin': this.before(element); return element;
+                case 'afterbegin':  this.prepend(element); return element;
+                case 'beforeend':   this.append(element); return element;
+                case 'afterend':    this.after(element); return element;
+                default:
+                    throw new DOMException(
+                        'The value provided (' + where + ') is not one of beforebegin, ' +
+                        'afterbegin, beforeend, or afterend.', 'SyntaxError');
+            }
+        },
         // Replaces all children of this element.
         replaceChildren: function() {
             var old = _lumen_get_children(nid).slice();
@@ -4930,12 +5009,14 @@ function _lumen_make_element(nid) {
             var frag_nid = _lumen_u2n(_lumen_get_template_content(nid));
             return frag_nid !== null ? _lumen_make_document_fragment(frag_nid) : _lumen_make_document_fragment(_lumen_create_fragment());
         },
+        // Scoped to this element's descendants (DOM Parentnode §4.2.5) — works on
+        // detached subtrees too, unlike the document-global `_lumen_query_selector`.
         querySelector:    function(sel) {
-            var n = _lumen_u2n(_lumen_query_selector(String(sel)));
+            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll: function(sel) {
-            return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
+            return _lumen_query_selector_all_scoped(nid, String(sel)).map(_lumen_make_element);
         },
         matches: function(sel) {
             return _lumen_node_matches_selector(nid, String(sel));
@@ -12783,8 +12864,9 @@ window.reportError = reportError;
 // Called by the shell's GcTick every 30 s with an array of node IDs that
 // have been detached from the document and have zero live JS references.
 // Purges JS-side per-node caches so dead nodes don't retain memory through maps:
-//   - _lumen_listeners  keyed by 'nid:eventtype'
-//   - _input_values     keyed by nid
+//   - _lumen_listeners        keyed by 'nid:eventtype'
+//   - _input_values           keyed by nid
+//   - _lumen_element_wrappers keyed by nid (BUG-291 identity cache)
 // The arena itself is append-only in Phase 1; physical compaction is Phase 3.
 function _lumen_gc_collect(nids) {
     for (var i = 0; i < nids.length; i++) {
@@ -12798,6 +12880,7 @@ function _lumen_gc_collect(nids) {
         }
         delete _input_values[nid];
         delete _canvas2d_ctxs[nid];
+        delete _lumen_element_wrappers[nid];
     }
 }
 
@@ -13695,6 +13778,80 @@ mod tests {
     fn query_selector_by_tag() {
         let rt = runtime_with_dom(make_doc());
         let result = rt.eval("document.querySelector('span') !== null").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-291: Element.querySelector(All) must be scoped to the calling
+    // element's descendants, and must therefore also work on a subtree that
+    // is not (yet) attached to the document — `document.querySelector` has no
+    // path to reach such nodes at all. Before the fix, `_lumen_query_selector`
+    // ignored `this` and always searched from `document.root()`, so this
+    // returned `null` and crashed `testharness.js`'s results renderer
+    // (`Output.show_results`) with `Cannot read properties of null`.
+    #[test]
+    fn element_query_selector_finds_descendant_in_detached_subtree() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var table = document.createElement('table'); \
+                 var tbody = document.createElement('tbody'); \
+                 table.appendChild(tbody); \
+                 table.querySelector('tbody') === tbody",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_query_selector_all_finds_matches_in_detached_subtree() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var ul = document.createElement('ul'); \
+                 ul.appendChild(document.createElement('li')); \
+                 ul.appendChild(document.createElement('li')); \
+                 ul.querySelectorAll('li').length",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(2.0));
+    }
+
+    // BUG-291: Element.querySelector must be scoped to *descendants* — it
+    // must not match the calling element itself, nor elements outside its
+    // subtree (the pre-fix implementation searched the whole document).
+    #[test]
+    fn element_query_selector_excludes_self_and_siblings() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var a = document.createElement('div'); a.id = 'scope'; \
+                 var b = document.createElement('div'); b.id = 'outside'; \
+                 document.body.appendChild(a); document.body.appendChild(b); \
+                 a.querySelector('#scope') === null && a.querySelector('#outside') === null",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-291: repeated access to the same DOM node must yield the same JS
+    // wrapper object (`===` identity), matching real engines and required by
+    // `testharness.js`'s results renderer (`tbody.lastChild === row`-style
+    // checks). Before the fix, `_lumen_make_element` minted a fresh object on
+    // every call.
+    #[test]
+    fn repeated_node_access_yields_stable_identity() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var parent = document.createElement('div'); \
+                 var child = document.createElement('span'); \
+                 parent.appendChild(child); \
+                 parent.lastChild === child && \
+                 parent.firstChild === parent.lastChild && \
+                 parent.children[0] === child && \
+                 document.getElementById('main') === document.getElementById('main')",
+            )
+            .unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 

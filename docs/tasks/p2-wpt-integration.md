@@ -311,22 +311,26 @@ option isn't lost — do not fold it into this task's scope.
       implemented (navigate + poll `script.evaluate` for its JSON result, tolerating the transient
       "JS context not available" error while the new document's JS runtime installs); `tests/wpt/run_smoke.py`
       drives it end to end (see its docstring for why this isn't `tools/wpt/wpt`). **Blocked on a real
-      PASS** by [BUG-291](../../bugs/BUG-291-OPEN.md) (`testharness.js`'s built-in results renderer,
-      `Output.show_results`, throws while building its `<table>`, aborting `notify_complete()` before it
-      reaches `testharnessreport.js`'s own completion callback — the one `run_smoke.py` polls for).
+      PASS** by [BUG-295](../../bugs/BUG-295-OPEN.md) (the full `wptrunner` harness still times out on
+      `/dom/nodes/Element-hasAttribute.html`, though a direct BiDi probe of the same page against the same
+      binary now completes in ~1-2s — root cause not yet diagnosed).
       [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't the JS engine's real global object, so
       `testharness.js`'s `expose()`-based public API was unreachable as bare identifiers) was the
       original blocker and is now fixed (`window`/`self`/`globalThis` are the same object, verified on
-      the default V8 build) — but fixing it only got far enough to expose BUG-291 as a second, unrelated
-      blocker. Two other real engine gaps surfaced and were fixed while proving the navigate/eval path
-      itself: [BUG-278](../../bugs/BUG-278-FIXED.md) (HTTP client rejected `wptserve`'s close-delimited
-      responses — every fetch to the reference test server failed) and
-      [BUG-279](../../bugs/BUG-279-FIXED.md) (`document.getElementsByTagName` was missing entirely,
-      breaking `testharness.js`'s own module-level setup). Diagnosis used BiDi `script.evaluate` to
-      bisect `testharness.js`'s execution live (marker-injected copies + scratch probe pages — see bug
+      the default V8 build) — but fixing it only got far enough to expose
+      [BUG-291](../../bugs/BUG-291-FIXED.md) (`Element`/`DocumentFragment`/`ShadowRoot.querySelector(All)`
+      weren't scoped to the calling node — always searched from `doc.root()`, silently finding nothing on
+      the detached subtree `testharness.js`'s results renderer builds before attaching it — plus the
+      missing `insertAdjacentText`/`insertAdjacentElement` it exposed once `querySelector` was fixed),
+      now also fixed, which in turn exposed BUG-295 above. Two other real engine gaps surfaced and were
+      fixed while proving the navigate/eval path itself: [BUG-278](../../bugs/BUG-278-FIXED.md) (HTTP
+      client rejected `wptserve`'s close-delimited responses — every fetch to the reference test server
+      failed) and [BUG-279](../../bugs/BUG-279-FIXED.md) (`document.getElementsByTagName` was missing
+      entirely, breaking `testharness.js`'s own module-level setup). Diagnosis used BiDi `script.evaluate`
+      to bisect `testharness.js`'s execution live (marker-injected copies + scratch probe pages — see bug
       files) rather than guessing.
 - [ ] A deliberately-failing assertion is observed as FAIL (harness genuinely checks assertions) —
-      blocked on BUG-291 above (no test reaches a genuine PASS/FAIL distinction yet).
+      blocked on BUG-295 above (no test reaches a genuine PASS/FAIL distinction yet under the full harness).
 - [ ] `.ini` expectations committed for a curated ~15–20 synchronous DOM-test subset.
 - [ ] Async subset (S6) admitted, `awaitPromise` behavior verified against the implementation.
 - [ ] Suite runs fully offline.
