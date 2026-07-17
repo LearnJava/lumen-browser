@@ -953,6 +953,28 @@ relocated. `cargo test -p lumen-js --features v8-backend document_pip` - 7/7 gre
 `empty_line_after_doc_comments` trigger fixed — same pattern as S12b-5/8/10/12, module doc
 converted to `//!`); `cargo check -p lumen-shell` (default) green.
 
+### S12b-14 — `inert.rs` (2026-07-18, branch p1-v8-s12b-14-inert)
+
+Fourteenth slice, same systematic selection: `comm -12` on the still-present rquickjs
+`fn install_*(…Ctx…)` sites vs the `fn install_*_v8(` sites gives the remaining candidates;
+sorted by file size, the smallest non-trap candidate is `inert.rs` (200 lines) — the known traps
+`typed_om_api.rs` (S12b-9), `serial.rs`/`scroll_snap_events.rs` (S12b-10) sit below it. `inert.rs`
+is clean by the file-stem method: **zero `dom.rs` hits** for `inert`, and its call site in
+`lib.rs`'s `QuickJsRuntime::install_dom` is a plain one-liner (no `QuickJsRuntime` `fire_*`/`take_*`
+method, unlike `scroll_snap_events`). Pure JS-shim `eval` (no native bindings), the
+`HTMLElement.prototype.inert` getter/setter (HTML LS §6.7) Phase-0 stub — stores `_inert` on the
+element instance and calls a `globalThis._lumen_set_inert(nid, bool)` no-op stub the shell will
+wire in Phase 1. Exactly the S12b-1..8 shape (own-file `mod tests`, not `dom.rs`). Deleted the
+rquickjs `install_inert_api` fn + its `use rquickjs::Ctx`; gated `INERT_SHIM` behind
+`#[cfg(feature = "v8-backend")]` (only referenced from the v8 path now, same as S12b-12/13's SHIM
+consts); no `empty_line_after_doc_comments` fix needed — the module doc was already `//!`. Ported
+all 8 tests 1:1 to `V8JsRuntime` (bare `V8JsRuntime::new()` + the same HTMLElement-stub eval +
+`install_inert_api_v8`, `with_inert_api` single-helper pattern, gated
+`#[cfg(all(test, feature = "v8-backend"))]`); dropped the call site in `lib.rs`'s
+`QuickJsRuntime::install_dom`. `cargo test -p lumen-js --features v8-backend inert` — 8/8 green;
+`cargo check -p lumen-js` on default + `v8-backend` features — green; `cargo clippy -p lumen-js
+--all-targets -- -D warnings` clean on both.
+
 ---
 
 ## Risks (Rev 2)
