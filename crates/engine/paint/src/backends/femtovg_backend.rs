@@ -3109,7 +3109,7 @@ impl FemtovgBackend {
             return;
         }
 
-        let (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y) = bg_tile_geometry(
+        let (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y, step_x, step_y) = bg_tile_geometry(
             size,
             position,
             repeat,
@@ -3159,13 +3159,13 @@ impl FemtovgBackend {
                     if !repeat_x {
                         break;
                     }
-                    tx += tile_w;
+                    tx += step_x;
                 }
             }
             if !repeat_y {
                 break;
             }
-            ty += tile_h;
+            ty += step_y;
         }
         self.canvas.restore();
     }
@@ -5118,7 +5118,7 @@ mod tests {
             x: PositionComponent::Percent(0.0),
             y: PositionComponent::Percent(0.0),
         };
-        let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
+        let (tw, th, x0, y0, rx, ry, ..) = bg_tile_geometry(
             BackgroundSize::Length(BgSizeAxis::Px(80.0), BgSizeAxis::Px(60.0)),
             &pos,
             BackgroundRepeat::NoRepeat,
@@ -5224,7 +5224,7 @@ mod tests {
             x: PositionComponent::Percent(0.0),
             y: PositionComponent::Percent(0.0),
         };
-        let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
+        let (tw, th, x0, y0, rx, ry, ..) = bg_tile_geometry(
             BackgroundSize::Length(BgSizeAxis::Px(40.0), BgSizeAxis::Px(40.0)),
             &pos,
             BackgroundRepeat::Repeat,

@@ -429,7 +429,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `clip-rule` | 🟡 | evenodd/nonzero parsed + inherited + cascaded (`svg_clip_rule`, SVG §14.3.4) 2026-07-12; rendering deferred to SVG `clip-path: url(#id)` refs. CSS clip-path uses path()/polygon() fill-rule ✅ 2026-06-14 |
 | `mask` (shorthand) | 🟡 | |
 | `mask-image` | 🟡 | GPU mask composite pipeline ✅ (PushMask/PopMask + PushMaskLayer/PopMaskLayer); alpha compositing ✅; luminance mode ✅ 2026-05-29 |
-| `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed; `mask-position` wired into `PushMaskImage` (initial `center`, CSS Masking L1 §4.4) 2026-06-22; `mask-repeat` tile geometry: `repeat`/`no-repeat`/`repeat-x`/`repeat-y`/`round` ✅ (shared `bg_tile_geometry`, §3.4 round rescale 2026-07-12), `space` ⬜; femtovg url image-mask **render** still deferred (backend, scissor no-op) — round is visible via the wgpu mask path + background-image |
+| `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed; `mask-position` wired into `PushMaskImage` (initial `center`, CSS Masking L1 §4.4) 2026-06-22; `mask-repeat` tile geometry: `repeat`/`no-repeat`/`repeat-x`/`repeat-y`/`round`/`space` ✅ (shared `bg_tile_geometry` + `space_axis_geometry`, §3.4 round rescale 2026-07-12, `space` gap distribution 2026-07-18); femtovg url image-mask **render** still deferred (backend, scissor no-op) — round/space are visible via the wgpu mask path + background-image |
 | `mask-mode` | ✅ | `alpha` / `luminance` / `match-source` (CSS Masking L1 §6.4); gradient masks bake `luminance(rgb)·alpha` into stop alpha (BUG-218, 2026-06-19) |
 | `mask-origin` | 🟡 | wired: sets the mask positioning area (border/padding/content box) via `background_origin_rect`, initial `border-box` (§4.5) 2026-06-22 |
 | `mask-clip` / `mask-composite` | 🟡 | `mask-clip` painting-area clip ✅ (`padding-box`/`content-box` wrap the mask group in `PushClipRect`/`PopClip`, reuses the scissor path; `border-box` = no-op default, `no-clip`/`fill-box`/`stroke-box`/`view-box` ⬜) 2026-07-12; `mask-composite` multi-layer ⬜ |
@@ -459,7 +459,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `background` (shorthand) | 🟡 | single layer ✅; multiple ⬜ |
 | `background-color` | ✅ | |
 | `background-image` | 🟡 | url() ✅; linear/radial/repeating gradient GPU ✅; conic-gradient ✅ |
-| `background-repeat` / `background-position` / `background-size` | ✅ | `repeat`/`no-repeat`/`repeat-x`/`repeat-y` ✅; `round` ✅ (§3.4 tile rescale to whole count, `bg_tile_geometry` 2026-07-12); `space` 🟡 (falls back to `repeat` — needs per-axis gap in the tile-geometry contract) |
+| `background-repeat` / `background-position` / `background-size` | ✅ | `repeat`/`no-repeat`/`repeat-x`/`repeat-y` ✅; `round` ✅ (§3.4 tile rescale to whole count, `bg_tile_geometry` 2026-07-12); `space` ✅ (§3.4 whole tiles pinned to both edges, leftover distributed as equal gaps via `space_axis_geometry`; all tiling paths — femtovg/CPU/wgpu bg+mask; 2026-07-18, test 147) |
 | `background-attachment` | 🟡 | parsed; scroll/fixed ⬜ |
 | `background-origin` / `background-clip` | 🟡 | parsed; text clip ⬜ |
 | `image-rendering` | ✅ | bilinear/nearest sampler |

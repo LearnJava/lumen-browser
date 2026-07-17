@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 147 background-repeat space</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #12141a; width: 1022px; height: 718px; margin: 1px; padding: 40px; overflow: hidden; }
+
+    .row { display: flex; gap: 40px; margin-bottom: 40px; }
+
+    /* All boxes tile the same 80×80 image at a fixed size so only the
+       `background-repeat` value differs. The dark box shows the inter-tile gaps
+       introduced by `space`. */
+    .box {
+      width: 460px; height: 180px;
+      background-color: #1f2430;
+      background-image: url(../samples/images/perceptron.png);
+      background-size: 80px 80px;
+      background-position: 0 0;
+    }
+
+    /* space: floor(460/80) = 5 whole tiles pinned to both edges; leftover
+       460 - 400 = 60px split across 4 gaps = 15px each. Vertically floor(180/80)
+       = 2 tiles pinned top/bottom, leftover 20px as one gap. */
+    .space  { background-repeat: space; }
+
+    /* repeat: tiles butt together, last one clipped at the far edge. */
+    .repeat { background-repeat: repeat; }
+
+    /* round: tile rescaled so a whole number fits with no gap. */
+    .round  { background-repeat: round; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+    <div class="row">
+      <div class="box space"></div>
+      <div class="box repeat"></div>
+    </div>
+    <div class="row">
+      <div class="box round"></div>
+      <div class="box space" style="width: 300px;"></div>
+    </div>
+  </div>
+</body>
+</html>

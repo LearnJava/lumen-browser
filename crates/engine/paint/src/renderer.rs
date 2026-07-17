@@ -37,7 +37,9 @@ use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterF
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
-use crate::display_list::{fit_image_quad, fit_image_rect, BlendMode, CornerRadii, MaskMode};
+use crate::display_list::{
+    fit_image_quad, fit_image_rect, space_axis_geometry, BlendMode, CornerRadii, MaskMode,
+};
 use crate::fingerprint::GpuFingerprint;
 use lumen_image::{resize_area_avg, resize_bilinear};
 use crate::DisplayCommand;
@@ -6409,18 +6411,25 @@ impl Renderer {
                     let tile_x0 = oarea.x + off_x;
                     let tile_y0 = oarea.y + off_y;
 
-                    let (tile_x_start, repeat_x, repeat_y) = match repeat {
-                        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
-                        BackgroundRepeat::RepeatX  => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
-                        BackgroundRepeat::RepeatY  => (tile_x0, false, true),
-                        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
-                            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+                    let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match repeat {
+                        BackgroundRepeat::NoRepeat => (tile_x0, tile_w, false, tile_y0, tile_h, false),
+                        BackgroundRepeat::RepeatX => (
+                            tile_x0 - (off_x / tile_w).ceil() * tile_w, tile_w, true,
+                            tile_y0, tile_h, false,
+                        ),
+                        BackgroundRepeat::RepeatY => (
+                            tile_x0, tile_w, false,
+                            tile_y0 - (off_y / tile_h).ceil() * tile_h, tile_h, true,
+                        ),
+                        BackgroundRepeat::Repeat | BackgroundRepeat::Round => (
+                            tile_x0 - (off_x / tile_w).ceil() * tile_w, tile_w, true,
+                            tile_y0 - (off_y / tile_h).ceil() * tile_h, tile_h, true,
+                        ),
+                        BackgroundRepeat::Space => {
+                            let (sx, step_x, rx) = space_axis_geometry(oarea.x, oarea.width, tile_w, off_x);
+                            let (sy, step_y, ry) = space_axis_geometry(oarea.y, oarea.height, tile_h, off_y);
+                            (sx, step_x, rx, sy, step_y, ry)
                         }
-                    };
-                    let tile_y_start = if repeat_y {
-                        tile_y0 - (off_y / tile_h).ceil() * tile_h
-                    } else {
-                        tile_y0
                     };
 
                     let v_start = image_vertices.len() as u32;
@@ -6456,10 +6465,10 @@ impl Renderer {
                                     [u0, v0], [u1, v1], 1.0);
                             }
                             if !repeat_x { break; }
-                            tx += tile_w;
+                            tx += step_x;
                         }
                         if !repeat_y { break; }
-                        ty += tile_h;
+                        ty += step_y;
                     }
                     let v_count = image_vertices.len() as u32 - v_start;
                     if v_count > 0 {
@@ -6745,18 +6754,25 @@ impl Renderer {
                                 };
                                 let tile_x0 = area.x + off_x;
                                 let tile_y0 = area.y + off_y;
-                                let (tile_x_start, repeat_x, repeat_y) = match info.repeat {
-                                    BackgroundRepeat::NoRepeat => (tile_x0, false, false),
-                                    BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
-                                    BackgroundRepeat::RepeatY => (tile_x0, false, true),
-                                    BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
-                                        (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+                                let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match info.repeat {
+                                    BackgroundRepeat::NoRepeat => (tile_x0, tile_w, false, tile_y0, tile_h, false),
+                                    BackgroundRepeat::RepeatX => (
+                                        tile_x0 - (off_x / tile_w).ceil() * tile_w, tile_w, true,
+                                        tile_y0, tile_h, false,
+                                    ),
+                                    BackgroundRepeat::RepeatY => (
+                                        tile_x0, tile_w, false,
+                                        tile_y0 - (off_y / tile_h).ceil() * tile_h, tile_h, true,
+                                    ),
+                                    BackgroundRepeat::Repeat | BackgroundRepeat::Round => (
+                                        tile_x0 - (off_x / tile_w).ceil() * tile_w, tile_w, true,
+                                        tile_y0 - (off_y / tile_h).ceil() * tile_h, tile_h, true,
+                                    ),
+                                    BackgroundRepeat::Space => {
+                                        let (sx, step_x, rx) = space_axis_geometry(area.x, area.width, tile_w, off_x);
+                                        let (sy, step_y, ry) = space_axis_geometry(area.y, area.height, tile_h, off_y);
+                                        (sx, step_x, rx, sy, step_y, ry)
                                     }
-                                };
-                                let tile_y_start = if repeat_y {
-                                    tile_y0 - (off_y / tile_h).ceil() * tile_h
-                                } else {
-                                    tile_y0
                                 };
                                 let x_end = area.x + area.width;
                                 let y_end = area.y + area.height;
@@ -6785,10 +6801,10 @@ impl Renderer {
                                             ]);
                                         }
                                         if !repeat_x { break; }
-                                        tx += tile_w;
+                                        tx += step_x;
                                     }
                                     if !repeat_y { break; }
-                                    ty += tile_h;
+                                    ty += step_y;
                                 }
                             }
                         }

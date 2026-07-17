@@ -2456,7 +2456,7 @@ fn rasterize_background_image(
         return Ok(());
     }
 
-    let (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y) = bg_tile_geometry(
+    let (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y, step_x, step_y) = bg_tile_geometry(
         size,
         position,
         repeat,
@@ -2499,13 +2499,13 @@ fn rasterize_background_image(
                 if !repeat_x {
                     break;
                 }
-                tx += tile_w;
+                tx += step_x;
             }
         }
         if !repeat_y {
             break;
         }
-        ty += tile_h;
+        ty += step_y;
     }
     Ok(())
 }
