@@ -1,5 +1,16 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Done (Pointer Events L3 coalesced/predicted events — [P1] P3-pointerfull, 2026-07-17):**
+  `Lumen::pending_pointer_moves: Vec<(f32, f32)>` buffers raw `CursorMoved` CSS-pixel positions
+  (and injected automation `MouseMove` samples via `dispatch_mouse_move`) instead of dispatching
+  each one individually. `flush_pointer_moves()` hit-tests the last buffered sample, redirects to
+  any active pointer-capture target, and dispatches one coalesced `pointermove` (via the new
+  `js_pointer_event_coalesced`, which passes the older samples to `_lumen_dispatch_pointer_event`
+  in `lumen-js`) + `mousemove`. Flushed once per `about_to_wait` tick (safety net for plain moves
+  with no other state change) and eagerly right before `pointerdown`/`pointerup`/hover-change
+  (`pointerout`+`pointerleave`/`pointerover`+`pointerenter`)/`CursorLeft`, so buffered moves stay
+  ordered ahead of those events. See `subsystems/js.md` for the JS-side `getCoalescedEvents()`/
+  `getPredictedEvents()` implementation.
 - **Done (V8 cutover — Ph3-v8-migration S12a, 2026-07-14, ADR-018):** `default` feature
   flipped from `quickjs` to `v8` in `crates/shell/Cargo.toml` — a default `cargo build`/
   `cargo run -p lumen-shell` now runs V8, not QuickJS (supersedes the "default already

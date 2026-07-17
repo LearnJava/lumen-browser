@@ -806,6 +806,7 @@ fn run_window_mode(
         dark_mode: false,
         cursor_position: None,
         hovered_nid: None,
+        pending_pointer_moves: Vec::new(),
         hovered_tab_idx: None,
         active_nid: None,
         scroll_drag: None,
@@ -6706,6 +6707,13 @@ struct Lumen {
     /// Updated on every `CursorMoved`; triggers relayout when it changes so
     /// `:hover` rules re-evaluate. `None` when cursor is outside the content area.
     hovered_nid: Option<NodeId>,
+    /// CSS-pixel positions buffered from raw `CursorMoved` samples since the
+    /// last flushed `pointermove`/`mousemove` dispatch (Pointer Events Level 3
+    /// §4.1 coalesced events). Flushed once per `about_to_wait` tick and
+    /// before any press/release/enter/leave dispatch so event ordering is
+    /// preserved; the last buffered sample becomes the "main" dispatched
+    /// event, the rest are exposed via `PointerEvent.getCoalescedEvents()`.
+    pending_pointer_moves: Vec<(f32, f32)>,
     /// Tab bar: index of the hovered tab for displaying tier-tooltip. Updated on
     /// every `CursorMoved` when cursor is over the tab bar (y < TAB_BAR_HEIGHT).
     /// `None` when cursor is outside the tab bar or no tabs exist.
@@ -10523,6 +10531,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // Pointer Events L3 §4.1: flush pointer-move samples buffered this
+        // tick (real `CursorMoved` + injected `MouseMove`) as one coalesced
+        // `pointermove`/`mousemove` dispatch. Safety-net flush point: press/
+        // release/enter/leave dispatch sites flush eagerly for ordering, but a
+        // plain move with no state change only reaches JS here.
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
+        self.flush_pointer_moves();
+
         // Download manager: drain completion events from background threads.
         self.downloads.poll();
 
@@ -11246,6 +11262,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (position.x as f32) / dpr;
                     let y_css = (position.y as f32) / dpr;
+                    // Pointer Events L3 §4.1: buffer this raw sample instead of
+                    // dispatching immediately. Flushed as one coalesced
+                    // `pointermove` on the next `about_to_wait` tick, or sooner
+                    // (below) if hover changes so ordering vs enter/leave holds.
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
+                    self.pending_pointer_moves.push((x_css, y_css));
                     let new_hovered = if y_css < tabs::strip::TAB_BAR_HEIGHT {
                         None
                     } else {
@@ -11267,6 +11289,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // Dispatch hover-change events per W3C UI Events §17.5 / Pointer Events L2 §10.
                         #[cfg(any(feature = "quickjs", feature = "v8"))]
                         {
+                            // Flush buffered pointer moves (including this
+                            // sample) first so `pointermove` precedes the
+                            // enter/leave events, matching real UA ordering.
+                            self.flush_pointer_moves();
                             // Leave events on the element losing hover.
                             if let Some(old) = old_nid {
                                 let nid = old.index() as u32;
@@ -11382,6 +11408,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Dispatch leave events before clearing hovered state.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let Some(old) = self.hovered_nid {
+                        // Buffered moves from just before the cursor left must
+                        // fire ahead of the leave events.
+                        self.flush_pointer_moves();
                         let nid = old.index() as u32;
                         self.js_pointer_event(nid, "pointerout",   0.0, 0.0, 0, 0);
                         self.js_mouse_event(nid,   "mouseout",     0.0, 0.0, 0, 0);
@@ -11553,6 +11582,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // any default action (click). Only when cursor is over page content.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let Some(hov) = self.hovered_nid {
+                        // Buffered moves must fire ahead of pointerdown.
+                        self.flush_pointer_moves();
                         let nid = hov.index() as u32;
                         self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
                         self.js_mouse_event(nid, "mousedown", x_css, y_css, 0, 1);
@@ -12651,6 +12682,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         )
                         .flatten()
                         .unwrap_or(hit_nid);
+                        // Buffered moves must fire ahead of pointerup.
+                        self.flush_pointer_moves();
                         self.js_pointer_event(ptr_nid, "pointerup", xu, yu, 0, 0);
                         self.js_mouse_event(hit_nid, "mouseup", xu, yu, 0, 0);
                         // Pointer Events L3 §4.1: implicit release on pointerup.
@@ -14377,6 +14410,33 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
+    /// Dispatch a `pointermove` whose buffered intermediate samples are exposed
+    /// via `PointerEvent.getCoalescedEvents()` (Pointer Events L3 §4.1).
+    /// `coalesced` holds CSS-pixel positions strictly older than
+    /// `(x_css, y_css)`, oldest first; the dispatched event is appended last,
+    /// per spec. Always dispatches with button=0/buttons=0 — the only caller
+    /// is the plain-move flush path, which (like the rest of this file) does
+    /// not track held-button state for hover/move events.
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    fn js_pointer_event_coalesced(&self, nid: u32, x_css: f32, y_css: f32, coalesced: &[(f32, f32)]) {
+        let mut points_json = String::from("[");
+        for (i, (cx, cy)) in coalesced.iter().enumerate() {
+            if i > 0 {
+                points_json.push(',');
+            }
+            points_json.push_str(&format!("[{},{}]", *cx as i32, *cy as i32));
+        }
+        points_json.push(']');
+        let script = format!(
+            "_lumen_dispatch_pointer_event({}, 'pointermove', {}, {}, 0, 0, {}, {})",
+            nid,
+            x_css as i32, y_css as i32,
+            self.mod_flags(),
+            points_json,
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+    }
+
     /// Dispatch a `DragEvent` of the given `event_type` to DOM node `nid`.
     ///
     /// Calls the JS shim `_lumen_dispatch_drag_event` (defined in `lumen-js::dom`)
@@ -14402,22 +14462,46 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
-    /// Dispatch a synthetic `mousemove` event at CSS-pixel viewport coordinates.
-    ///
-    /// Hit-tests the position (accounting for current scroll offset) and fires
-    /// `_lumen_dispatch_mouse_event` with event type `"mousemove"`.  Used by
-    /// [`input::humanlike::HumanLikeSender`] to trace Bézier-curve paths before
-    /// a click.  No-op when there is no JS context or no element at the position.
-    /// Also fires the matching W3C `pointermove` event per Pointer Events L2 §10.
+    /// Buffer a synthetic pointer-move sample at CSS-pixel viewport
+    /// coordinates. Used by [`input::humanlike::HumanLikeSender`] to trace
+    /// Bézier-curve paths before a click. Real `CursorMoved` samples are
+    /// buffered the same way (see the `WindowEvent::CursorMoved` handler); both
+    /// sources are flushed together by [`Self::flush_pointer_moves`] as one
+    /// coalesced `pointermove` + `mousemove` dispatch (Pointer Events L3 §4.1).
     fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
+        self.pending_pointer_moves.push((x_css, y_css));
+        #[cfg(not(any(feature = "quickjs", feature = "v8")))]
+        {
+            let _ = x_css;
+            let _ = y_css;
+        }
+    }
+
+    /// Flush buffered pointer-move samples (`CursorMoved` + injected automation
+    /// moves accumulated since the last flush) as one coalesced `pointermove` +
+    /// `mousemove` dispatch (Pointer Events L3 §4.1). The last buffered sample
+    /// hit-tests the target and becomes the "main" dispatched event; earlier
+    /// samples are exposed via `PointerEvent.getCoalescedEvents()`. Called once
+    /// per `about_to_wait` tick, and before any press/release/enter/leave
+    /// dispatch so buffered moves stay ordered ahead of those events. No-op if
+    /// nothing is buffered or there is no element at the final position.
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    fn flush_pointer_moves(&mut self) {
+        if self.pending_pointer_moves.is_empty() {
+            return;
+        }
+        let samples = std::mem::take(&mut self.pending_pointer_moves);
+        let Some(&(x_css, y_css)) = samples.last() else {
+            return;
+        };
         let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
         let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
-        #[cfg(any(feature = "quickjs", feature = "v8"))]
-        if let Some(result) = hit.as_ref() {
+        if let Some(result) = hit {
             // Pointer Events L3 §4.1: if a pointer capture is active, redirect
             // pointermove (and all pointer events) to the captured element.
             let hit_nid = result.node.index() as u32;
@@ -14430,11 +14514,10 @@ impl Lumen {
             )
             .flatten()
             .unwrap_or(hit_nid);
-            self.js_pointer_event(ptr_nid, "pointermove", x_css, y_css, 0, 0);
+            let coalesced = &samples[..samples.len() - 1];
+            self.js_pointer_event_coalesced(ptr_nid, x_css, y_css, coalesced);
             self.js_mouse_event(hit_nid, "mousemove", x_css, y_css, 0, 0);
         }
-        #[cfg(not(any(feature = "quickjs", feature = "v8")))]
-        let _ = hit;
     }
 
     /// Handle a left-button click at CSS-pixel viewport coordinates `(x_css, y_css)`.

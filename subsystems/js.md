@@ -18,6 +18,21 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **Pointer Events L3 `getCoalescedEvents()`/`getPredictedEvents()` are real ([P1] P3-pointerfull, 2026-07-17).**
+  Previously stubs (`getCoalescedEvents` returned `[ev]` or `[]`, `getPredictedEvents` always `[]`).
+  `_lumen_dispatch_pointer_event` (`dom.rs`, shared shim) now accepts an optional trailing
+  `coalesced` argument — an array of `[x,y]` CSS-pixel samples buffered since the last dispatch —
+  and builds the real `PointerEvent` array (oldest first, main event last per spec §4.1);
+  `getPredictedEvents()` linearly extrapolates 1-2 future points from the last two samples
+  (`_lumen_predict_pointer_events`), `[]` when fewer than 2 are available. The buffering itself
+  lives in `lumen-shell`: `Lumen::pending_pointer_moves` accumulates raw `CursorMoved` positions
+  (and injected automation `MouseMove` samples) instead of dispatching each one individually;
+  `flush_pointer_moves()` drains the buffer as one coalesced `pointermove` + `mousemove` dispatch,
+  called once per `about_to_wait` tick and eagerly before `pointerdown`/`pointerup`/hover-change
+  (`pointerout`+`pointerleave`/`pointerover`+`pointerenter`)/`CursorLeft` so buffered moves stay
+  ordered ahead of those events. Calls without the `coalesced` argument (pointerdown/up/enter/
+  leave/capture events) are unaffected — same single-element/`[]` behavior as before. 2 new
+  `lumen-js` tests; unchanged existing regression test locks in the no-coalesced-arg path.
 - **`CustomStateSet` reflects into `data-lumen-state-<name>` ([P1] P3-customstate, 2026-07-17).**
   `element_internals.rs`'s `ELEMENT_INTERNALS_SHIM` (shared by both engines — QuickJS
   `install_element_internals_bindings` and V8 `install_element_internals_bindings_v8` eval the
