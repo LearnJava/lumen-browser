@@ -18,6 +18,14 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **`CustomStateSet` reflects into `data-lumen-state-<name>` ([P1] P3-customstate, 2026-07-17).**
+  `element_internals.rs`'s `ELEMENT_INTERNALS_SHIM` (shared by both engines — QuickJS
+  `install_element_internals_bindings` and V8 `install_element_internals_bindings_v8` eval the
+  same string) — `add`/`delete`/`clear` now call `_lumen_set_attr`/`_lumen_remove_attr` on the
+  host element, same sentinel-attribute bridge as `:fullscreen`/`:modal`. The CSS-side matcher
+  (`PseudoClass::State`, `layout/src/style.rs`) landed earlier (2026-07-15) on the mistaken
+  assumption this reflection already existed — it didn't; `CustomStateSet` only held an in-memory
+  `Set`. 2 new tests (add/delete/clear round-trip, delete-of-absent-state no-op).
 - **`window` is now the engine's real global object (BUG-280 fix, [P2] P2-wpt S4, 2026-07-16).**
   `WEB_API_SHIM` copies every own property of `window` onto `globalThis` (values via plain
   assignment — required because some quickjs-ng built-ins like `addEventListener` are
