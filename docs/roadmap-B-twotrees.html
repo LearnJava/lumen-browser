@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-17",
  "counts": {
-  "open": 32,
+  "open": 33,
   "fixed": 235,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 267,
+ "total_bugs": 268,
  "phases": [
   {
    "id": "P0",
@@ -3402,6 +3402,13 @@
    "component": "bidi-server (`protocol.rs`) + shell live-window wiring",
    "date": null,
    "debtor": false
+  },
+  "BUG-297": {
+   "status": "open",
+   "title": "`cpu_snapshots_match_references` красный на 31 странице, эталоны устарели с 2026-06-30 (801d7640) — все P4-мержи с тех пор (writing-mode, @function, @color-prof…",
+   "component": "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3774,6 +3781,9 @@
   "test/snapshot": [
    "BUG-118",
    "BUG-149"
+  ],
+  "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)": [
+   "BUG-297"
   ]
  }
 }
