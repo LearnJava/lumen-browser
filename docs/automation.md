@@ -19,6 +19,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 | Localize which paint optimization causes an artifact | `python graphic_tests/run.py --paint-bisect NN` (DEVX-4) | runs baseline + each `LUMEN_NO_*` flag (see table below) once, prints a diff% table |
 | Kill flake from `Date.now()` / `Math.random()` / rAF timestamps | `--deterministic` (+ `--viewport WxH` to keep a non-default window size, DEVX-1) | `--rng-seed`/`--monotonic-clock` are parsed but not wired (see CLI flags below); crates/shell/src/deterministic.rs |
 | Drive the real visible window from a script | `--mcp-live-port <N>` (MCP JSON-RPC over TCP) or `--bidi-port <N>` (WebDriver BiDi over WS) | both wired to the live window (SDC-2) |
+| Drive a page without a window (CI, no GPU) | `--mcp [url]` / `--mcp-port N` (MCP JSON-RPC, DEVX-5) | `InProcessSession`: CPU screenshot, persistent-V8 `eval`, DOM-level click/type/scroll (no relayout after mutation, BUG-221) |
 | Headless tab control (no GPU, CI) | `--ipc-server` (prints `LUMEN_IPC_PORT=<port>`) | CPU screenshots, BUG-221 parity |
 | Assert on geometry/cascade/a11y in Rust tests | `lumen-driver::BrowserSession`: `layout_box_by_selector`, `computed_style_snapshot`, `query_a11y` | InProcessSession = full headless pipeline |
 | Read console/network/a11y/layout of a live page | MCP resources `resource://console` / `network` / `a11y_tree` / `layout` / `screenshot` | live window only |
@@ -45,7 +46,7 @@ Misc: `--no-scrollbar` (cleaner screenshot crops) · `--activity-log` / `--click
 
 `--mcp-live-port N <src>` runs MCP JSON-RPC over TCP against the **live window**. All 7 tools wired: `navigate`, `wait` (conditions: `document_ready` / `visible` / `stable` / `network_idle` / `js_idle`), `click`, `type`, `scroll`, `eval` (JS), `query` (CSS selector → DOM nodes). All 5 resources wired: `resource://screenshot` (PNG, CPU path), `resource://a11y_tree`, `resource://layout` (box model JSON), `resource://console`, `resource://network`.
 
-Headless variants `--mcp` / `--mcp-port` exist but `screenshot`/`eval`/`click`/`type`/`scroll` return errors there (InProcessSession stubs — DEVX-5).
+Headless variants `--mcp` / `--mcp-port` (default build, `v8`+`cpu-render` features): `screenshot`/`eval`/`click`/`type`/`scroll` are wired against `InProcessSession` (DEVX-5) — `screenshot` uses the CPU rasterizer (no GPU adapter needed), `eval` runs against a persistent V8 runtime installed on the DOM at navigation time (JS-side mutations persist across `eval()` calls, unlike the live window's per-navigation-only runtime), `click`/`type`/`scroll` are DOM-level (link nav, checkbox/radio toggle, `value` overwrite, page scroll) — no synthetic JS event dispatch.
 
 `graphic_tests/run.py --live` (DEVX-1) also spawns with `--deterministic --viewport 1024x720` (kills Date.now/Math.random/rAF flake in JS tests like TEST-57/129-138 while keeping the pipeline's calibrated viewport) and reads `resource://console` after every test — a `console.error` FAILs the test and its text lands in the HTML report, independent of the pixel diff. `resource://console` for `LiveWindowSession` round-trips through a new `AutomationCommand::ConsoleLog` to the shell's DevTools console buffer (cleared on every `navigate()`). `network`/`layout` resources remain untapped for `--live` (still returns real data only via `InProcessSession`, not the live window — SDC-2 MVP scope).
 
@@ -65,6 +66,8 @@ Length-prefixed bincode over TCP loopback: `CreateTab` / `NavigateTab` / `Screen
 
 `BrowserSession` trait; `InProcessSession` runs the full headless pipeline. Read-only resources ideal for **non-pixel regression tests** (DEVX-2): `layout_snapshot`, `layout_box_by_selector`, `all_layout_boxes_by_selector`, `computed_style` / `computed_style_snapshot` (typed), `query_a11y` / `query_a11y_all` (`AxQuery::Role{role,name}` — Playwright-style getByRole), `a11y_tree`, `network_log`, `console_log`, `screenshot`. Setters: `set_fingerprint_profile`, `set_user_agent`, `set_clock`, `set_rng_seed`, `freeze_fingerprint`.
 
+Interaction (DEVX-5, cargo features `v8-backend`/`cpu-render`, both on by default in `lumen-shell`): `click`/`type_text` mutate the DOM directly (link nav, checkbox/radio toggle, `value` overwrite — no synthetic event dispatch), `scroll` drives the existing off-main-thread compositor scroll, `eval` runs against a **persistent** V8 runtime installed on the document at navigation time — unlike `WinitSession::eval`'s one-shot runtime, JS-side DOM mutations are visible to later `eval()`/`click`/`type_text` calls within the same navigation (shared `Arc<Mutex<Document>>`). None of this feeds back into `layout_root`/`flat_tree` — no relayout after a mutation, so `layout_snapshot`/`screenshot` still reflect the DOM as of `navigate()`.
+
 Snapshot-test env vars: `SNAPSHOT_VS_EDGE_STRICT=1` (hard-gate `crates/driver/tests/cases/snapshot_vs_edge.rs`), `SAVE_CPU_SNAPSHOTS`, `SAVE_SNAPSHOTS`, `UPDATE_SNAPSHOTS` (layout/paint golden tests).
 
 ## Env toggles (rendering / engine)
@@ -83,6 +86,5 @@ Snapshot-test env vars: `SNAPSHOT_VS_EDGE_STRICT=1` (hard-gate `crates/driver/te
 ## Known stubs — do NOT rely on these
 
 - **CDP `--devtools-port`**: only `Browser.getVersion` is real; `DOM.getDocument` returns an empty document, `*.enable` are ACK stubs, everything else → `-32601`. Use BiDi or MCP instead; no DEVX task (BiDi/MCP cover the need).
-- **Headless MCP** (`--mcp`/`--mcp-port`): `eval`/`screenshot`/`click`/`type`/`scroll` error out (DEVX-5).
-- **CPU screenshot path** (`--screenshot`, `--ipc`, `resource://screenshot`): no JS execution, rendering not at parity with the windowed backend (BUG-221) — fine for coarse checks, not for the Edge-diff gate.
+- **CPU screenshot path** (`--screenshot`, `--ipc`, `resource://screenshot`, and now headless MCP's `screenshot` tool — DEVX-5): no relayout after JS/DOM mutation, rendering not at parity with the windowed backend (BUG-221) — fine for coarse checks, not for the Edge-diff gate.
 - In-app DevTools panels (console/inspector/network in the shell UI) are interactive-only — not scriptable.

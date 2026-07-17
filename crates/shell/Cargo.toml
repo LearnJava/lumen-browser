@@ -30,7 +30,7 @@ default = ["backend-femtovg", "backend-wgpu", "v8"]
 # rquickjs implementation is deferred to the follow-up S12b slice. Without
 # either `quickjs` or `v8` the shell falls back to `NullJsRuntime`, which
 # silently ignores all inline scripts.
-quickjs = ["dep:lumen-js", "lumen-js/webgpu"]
+quickjs = ["dep:lumen-js", "lumen-js/webgpu", "lumen-driver/quickjs"]
 
 # Enable the V8 JavaScript engine (rusty_v8), Ph3 V8 migration (docs/tasks/ph3-v8-migration.md).
 # Default engine as of the S12 cutover (ADR-018). `quickjs` and `v8` may both be
@@ -39,7 +39,7 @@ quickjs = ["dep:lumen-js", "lumen-js/webgpu"]
 # main.rs, so the (non-default) `quickjs` feature is only useful for A/B rollback
 # testing: `cargo run -p lumen-shell --features quickjs` (with default `v8` still on,
 # quickjs wins) or `--no-default-features --features backend-femtovg,backend-wgpu,quickjs`.
-v8 = ["dep:lumen-js", "lumen-js/v8-backend"]
+v8 = ["dep:lumen-js", "lumen-js/v8-backend", "lumen-driver/v8-backend"]
 
 # femtovg rendering backend — the runtime fallback used only when the wgpu
 # probe fails to init, or via an explicit `LUMEN_BACKEND=femtovg` override
@@ -95,7 +95,10 @@ lumen-paint = { workspace = true, features = ["cpu-render"] }
 lumen-font.workspace = true
 lumen-encoding.workspace = true
 lumen-image = { workspace = true, features = ["avif"] }
-lumen-driver.workspace = true
+# cpu-render: DEVX-5 headless MCP (`--mcp`/`--mcp-port`) screenshots go through
+# InProcessSession's CPU rasterizer (tiny-skia), not the GPU headless renderer —
+# no GPU adapter required for `--mcp`.
+lumen-driver = { workspace = true, features = ["cpu-render"] }
 lumen-mcp.workspace = true
 
 # Exception #1 из §5: OS event loop + окна.

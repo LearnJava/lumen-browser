@@ -52,6 +52,13 @@ cpu-render = ["lumen-paint/cpu-render"]
 # QuickJS runtime for JS eval in headless mode (SDC-1a).
 quickjs = ["dep:lumen-js"]
 
+# V8 runtime for persistent JS-runtime automation (DEVX-5): InProcessSession
+# installs one V8JsRuntime per navigation, shared by eval/click/type_text via
+# the same Arc<Mutex<Document>> — unlike WinitSession::eval's one-shot QuickJS
+# runtime, JS-side DOM mutations persist across calls. Mirrors the shell's `v8`
+# feature mapping (crates/shell/Cargo.toml).
+v8-backend = ["dep:lumen-js", "lumen-js/v8-backend"]
+
 # CompareBackend integration tests (ADR-010 RB-8): enables CompareBackend + CpuBackend
 # for pixel-diff comparison between two headless backends.
 compare-backends = ["lumen-paint/compare"]

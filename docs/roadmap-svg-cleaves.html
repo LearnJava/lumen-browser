@@ -1461,10 +1461,10 @@
       },
       {
        "id": "DEVX-5",
-       "title": "DEVX-5: headless MCP/InProcessSession — снять заглушки",
-       "status": "planned",
+       "title": "DEVX-5: headless MCP/InProcessSession — сняты заглушки",
+       "status": "done",
        "size": "L",
-       "note": "Реализовать headless-заглушки автоматизации (сейчас Err): в `InProcessSession` (crates/driver) — `click`/`type_text`/`scroll`/`wait`/`eval` (persistent JS-runtime на снимке DOM через **дефолтный V8-движок** (ADR-018); паттерн — WinitSession SDC-1a, но НЕ его one-shot QuickJS-путь: rquickjs — rollback-only и сносится S12b) и CPU-`screenshot`; прокинуть в headless MCP (`--mcp`/`--mcp-port`), чтобы tools `eval`/`click`/`type`/`scroll`/`screenshot` работали без окна. Открывает MCP/agent-драйв и DEVX-2-тесты с интеракциями в CI без GPU"
+       "note": "DONE 2026-07-16: `InProcessSession` (crates/driver) — `click`/`type_text`/`scroll`/`eval`/`screenshot` сняты с заглушек. `SessionState.doc` стал `Arc<Mutex<Document>>`, персистентный `V8JsRuntime` (feature `v8-backend`) ставится на `navigate()` через `install_dom` и переживает несколько `eval()` в рамках одной навигации (в отличие от one-shot рантайма `WinitSession::eval`) — JS-мутации DOM видны последующим `eval`/`click`/`type_text`. `screenshot` идёт через CPU-растеризатор (`cpu-render`, tiny-skia), без GPU-адаптера. `click`/`type_text` повторяют DOM-семантику `WinitSession` (переход по `<a href>`, тоггл checkbox/radio, запись `value`); `scroll` подключён к существующему off-main-thread compositor scroll. `lumen-shell`: фичи `v8`/`quickjs` теперь пробрасывают `lumen-driver/v8-backend`/`lumen-driver/quickjs`, `lumen-driver` всегда собирается с `cpu-render` — headless `--mcp`/`--mcp-port` работает из коробки без доп. флагов. 9 новых тестов в `test_devx5_headless_automation.rs`"
       },
       {
        "id": "DEVX-6",
