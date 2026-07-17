@@ -17,12 +17,16 @@
 //! container's `innerHTML` and forwards it to the shell via
 //! `_lumen_docpip_set_content_html`, which parses it into a fresh detached
 //! `lumen_dom::Document` and lays out + paints it into the floating window.
+//! Slice 3 (`Lumen::render_doc_pip_os` only): the re-parsed detached document
+//! is now laid out against the main page's own author stylesheet
+//! (`self.layout_source.stylesheet`) instead of an empty one, so moved
+//! elements keep their page's CSS cascade.
+//!
 //! Known gap: this reuses the *same* underlying `Document` as the main page
 //! (there's no independent PiP-window global/document per spec) — moved
-//! elements are real DOM nodes with working attributes/`innerHTML`, but their
-//! styling comes from a fresh, stylesheet-less layout pass (no author CSS
-//! carries over) and embedded images don't render (the floating window's
-//! renderer has its own, separate image cache).
+//! elements are real DOM nodes with working attributes/`innerHTML`, and now
+//! keep their author CSS, but embedded images don't render (the floating
+//! window's renderer has its own, separate image cache).
 
 /// V8 port of the former rquickjs `install_document_pip_api` (Ph3 V8 migration S5-S7,
 /// rquickjs side removed in S12b-13): identical JS shim, evaluated via
