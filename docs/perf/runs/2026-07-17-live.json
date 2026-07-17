@@ -1,0 +1,309 @@
+{
+ "date": "20260717-133751",
+ "commit": "6401de32",
+ "exe": "D:\\RustProjects\\lumen-browser\\target\\dev-release\\lumen.exe",
+ "mode": "live",
+ "timeout_s": 240,
+ "results": [
+  {
+   "slug": "example",
+   "url": "https://example.com/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.71,
+   "ready_s": 0.86,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 439.8,
+   "cur_mb": 381.9,
+   "cpu_s": 1.16,
+   "stderr_errors": []
+  },
+  {
+   "slug": "ya",
+   "url": "https://ya.ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 2.32,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 515.6,
+   "cur_mb": 496.6,
+   "cpu_s": 3.09,
+   "stderr_errors": [
+    "script error: JS runtime error: Unable to find RenderContext state html element with id \"render-state\"",
+    "script error: JS runtime error: Missing module: load-mini-suggest.standalone.js",
+    "✗ https://static-mon.yandex.net/static/main.js?pid=yandex.portal&cb=desktop (dns: resolve static-mon.yandex.net:443: network error: resolve static-mon.yandex.net: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+    "fetch error: network error: resolve static-mon.yandex.net:443: network error: resolve static-mon.yandex.net: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+    "Пропуск картинки https://mc.yandex.ru/watch/723233: network error: blocked: easylist",
+    "Не декодируется https://yabs.yandex.ru/count/WImejI_zOoVX2LcZ0FK80FDEEJThBxezqh49TP44gZH1DFeThpVSuVgTh8wZrzbB6437gPBtN5S04TtF9PudYg8P72pTuUkXWpS1CIqtMnkljz4gbKgbKiCXZSqE6zthrNNvDZuoRkd1mKm01t406xX_GtIjXhtvvwDAgs7hppHWJxEbQR8RCZJw0B8t0UWRC9XlnaryOEqWvDjXOVjb6fLD67mXja28AfKV3f_OP5uCCcMUGjPJq3sCcO6jhiDuSmr2p4mC7mvXkZThBxezqh49JJrcS_U_CMPhYskGRlI5uwrSgLGgGzYWES7sOShVz9MbAIHapmaH_6jc50hGQFB8PC0pHx-bjHSREiwB97roGGicv5Gcgew0FHe_hH8rr1rkaCAvct3P6URQSAa0~2=WP0ejI_zOoVX2LaX0HKC0BCLKp5rriRM5BtMZP20VcWK2Gt5A11NmWcSWFbcxKMtHpes8O4gFW5k0di2UmBR1BG9QBrX0dhphpor0m6ltocBi4DUwZjZwFEvtDcp_SwTDzpvAfim-49iWH1LAZySFh79l1Xq7Cja_zHLOkK75CEh9WIC7Q2YelWc5UYbJC1OYSYGCHD_YP9ZEW_y6E1Bzs7qGHePu0Qm3XCcIJPiVHtXFgT1tFmRecirxCq_7rLQ3TiED6XfjZw3rcV8nbZOGK_jZJDR-gf2-UOAc89vZn7x6Dt3c2b0mP0pm8ZnCvXlha68cOdXmo5Cbzda-j_eYV00__0NSu5jOBtV-yLSuAzT0lPe_Da_o2pJIw-l8zpdlDc7VTcRXR5f_JY1mUmQeV_wfZql9x3VqhhErBJdvGJssWbUzqEsX6GnFac2HF4e04KGQ0XY7A09mA17YWe14Vn8bhnkOiV2TMNqm2Zx1lVF0ELmRz65hhWZrKpD5wtRRMEgyi_s2SzEFF7nAMM7JSmS~2?timestamp=1784284681305: формат изображения не распознан по сигнатуре",
+    "Пропуск bg-картинки data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' fill='none'%3E%3Crect width='40' height='40' fill='%23F8604A' rx='20'/%3E%3Cpath fill='%23fff' d='M22.776 31.5h4.178v-24h-6.078c-6.112 0-9.324 3.142-9.324 7.77 0 3.695 1.762 5.87 4.904 8.115L11 31.5h4.524l6.077-9.082-2.106-1.416c-2.555-1.726-3.799-3.073-3.799-5.974 0-2.555 1.796-4.282 5.215-4.282h1.864V31.5Z'/%3E%3C/svg%3E: network error: unsupported scheme: data"
+   ]
+  },
+  {
+   "slug": "hn",
+   "url": "https://news.ycombinator.com/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 1.65,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 527.2,
+   "cur_mb": 506.0,
+   "cpu_s": 4.66,
+   "stderr_errors": [
+    "script error: JS runtime error: el.getElementsByClassName is not a function"
+   ]
+  },
+  {
+   "slug": "w3",
+   "url": "https://www.w3.org/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 128.92,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 527.2,
+   "cur_mb": 506.3,
+   "cpu_s": 5.5,
+   "stderr_errors": [
+    "Ошибка загрузки https://www.w3.org/: network error: HTTP 403"
+   ]
+  },
+  {
+   "slug": "rust-lang",
+   "url": "https://www.rust-lang.org/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 6.65,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 585.6,
+   "cur_mb": 563.7,
+   "cpu_s": 9.22,
+   "stderr_errors": []
+  },
+  {
+   "slug": "lenta",
+   "url": "https://lenta.ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 7.15,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 1,
+   "console_errors": [
+    "vite-plugin-css-injected-by-js TypeError: Cannot read properties of undefined (reading 'appendChild')"
+   ],
+   "peak_mb": 651.8,
+   "cur_mb": 610.5,
+   "cpu_s": 28.89,
+   "stderr_errors": [
+    "Пропуск скрипта https://ssp.rambler.ru/capirs_async.js: network error: blocked: easylist",
+    "Пропуск скрипта https://yandex.ru/ads/system/context.js: network error: blocked: easylist",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'charAt')",
+    "[JS error] vite-plugin-css-injected-by-js TypeError: Cannot read properties of undefined (reading 'appendChild')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'length')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'protocol')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'insertBefore')",
+    "Пропуск картинки //mc.yandex.ru/watch/27714477: network error: blocked: easylist"
+   ],
+   "hung_total_s": 2.5,
+   "hung_max_streak_s": 2.5
+  },
+  {
+   "slug": "github",
+   "url": "https://github.com/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 45.0,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 2918.1,
+   "cur_mb": 2904.4,
+   "cpu_s": 88.69,
+   "stderr_errors": [
+    "module error: JS runtime error: Automatic publicPath is not supported in this browser"
+   ]
+  },
+  {
+   "slug": "stackoverflow",
+   "url": "https://stackoverflow.com/",
+   "restarted": true,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "error": "tools/call: {'code': -32603, 'message': 'Wait error: automation command timed out'}",
+   "status": "HUNG",
+   "hung_total_s": 0.5,
+   "hung_max_streak_s": 0.5,
+   "stderr_errors": []
+  },
+  {
+   "slug": "crates",
+   "url": "https://crates.io/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.73,
+   "ready_s": 1.73,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 461.6,
+   "cur_mb": 398.7,
+   "cpu_s": 1.39,
+   "stderr_errors": [
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'parentElement')"
+   ]
+  },
+  {
+   "slug": "docs-rs",
+   "url": "https://docs.rs/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 1.12,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 462.0,
+   "cur_mb": 448.2,
+   "cpu_s": 5.48,
+   "stderr_errors": [
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'setAttribute')"
+   ]
+  },
+  {
+   "slug": "ria",
+   "url": "https://ria.ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 4.87,
+   "status": "OK",
+   "network_idle": false,
+   "error": "tools/call: {'code': -32603, 'message': 'Scroll error: automation command timed out'}",
+   "stderr_errors": [
+    "Пропуск скрипта https://yandex.ru/ads/system/header-bidding.js: network error: blocked: easylist",
+    "Пропуск скрипта https://yandex.ru/ads/system/context.js: network error: blocked: easylist",
+    "script error: JS runtime error: Image is not defined",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'protocol')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'length')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'insertBefore')",
+    "script error: JS runtime error: a.getElementsByTagName is not a function",
+    "script error: JS runtime error: $ is not defined"
+   ],
+   "hung_total_s": 39.0,
+   "hung_max_streak_s": 39.0
+  },
+  {
+   "slug": "habr",
+   "url": "https://habr.com/ru/",
+   "restarted": true,
+   "own_tab": false,
+   "tab_error": "tools/call: {'code': -32603, 'message': 'NewTab error: automation command timed out'}",
+   "error": "tools/call: {'code': -32603, 'message': 'Navigate error: automation command timed out'}",
+   "status": "HUNG",
+   "hung_total_s": 60.0,
+   "hung_max_streak_s": 60.0,
+   "stderr_errors": []
+  },
+  {
+   "slug": "mdn",
+   "url": "https://developer.mozilla.org/en-US/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.79,
+   "ready_s": 3.19,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 1,
+   "console_errors": [],
+   "peak_mb": 768.9,
+   "cur_mb": 628.4,
+   "cpu_s": 37.89,
+   "stderr_errors": [
+    "[JS warn] Unable to set theme TypeError: Cannot set properties of undefined (setting 'theme')",
+    "module error: JS runtime error: Unexpected token 'export'"
+   ]
+  },
+  {
+   "slug": "rbc",
+   "url": "https://www.rbc.ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 23.45,
+   "status": "OK",
+   "network_idle": false,
+   "error": "tools/call: {'code': -32603, 'message': 'Scroll error: automation command timed out'}",
+   "stderr_errors": [
+    "Пропуск картинки https://top-fwz1.mail.ru/counter?id=3081030;js=na: network error: blocked: easylist",
+    "Пропуск картинки https://mc.yandex.ru/watch/16443139: network error: blocked: easylist",
+    "Пропуск картинки https://mc.yandex.ru/watch/98761308: network error: blocked: easylist",
+    "Пропуск картинки https://www.rbc.ru/track/ssr/: network error: HTTP 404"
+   ],
+   "hung_total_s": 47.5,
+   "hung_max_streak_s": 39.0
+  }
+ ]
+}

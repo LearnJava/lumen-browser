@@ -143,6 +143,20 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 }),
             },
             McpTool {
+                name: "new_tab".to_string(),
+                description: "Open a new tab (it becomes active) and navigate it to a URL".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["url"],
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL to load in the new tab"
+                        }
+                    }
+                }),
+            },
+            McpTool {
                 name: "click".to_string(),
                 description: "Click on an element".to_string(),
                 input_schema: json!({
@@ -337,6 +351,16 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 match self.session.navigate(url) {
                     Ok(()) => json!({ "success": true, "url": url }),
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("Navigate error: {e}")),
+                }
+            }
+            "new_tab" => {
+                let url = match args.get("url").and_then(|v| v.as_str()) {
+                    Some(u) => u,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing url argument"),
+                };
+                match self.session.new_tab(url) {
+                    Ok(()) => json!({ "success": true, "url": url }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("NewTab error: {e}")),
                 }
             }
             "click" => {
@@ -666,15 +690,16 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_seven_tools() {
+    fn tools_list_returns_eight_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 8);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
+        assert!(names.contains(&"new_tab"));
         assert!(names.contains(&"click"));
         assert!(names.contains(&"type"));
         assert!(names.contains(&"scroll"));

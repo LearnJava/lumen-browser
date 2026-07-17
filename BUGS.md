@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-305)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-308)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -317,6 +317,9 @@
 | [BUG-303](bugs/BUG-303-OPEN.md) | OPEN | js (V8 / event loop) | github.com: JS-исполнение не завершается ≥240с и на V8 (сеть готова за 0.7с) — гипотеза «медленный QuickJS» из аудита 2026-07-02 опровергнута; похоже на незавершающийся цикл из-за отсутствующего API (`Automatic publicPath is not supported`); сайт не должен уметь вешать пайплайн навсегда. Найден /lumen-perf-audit |
 | [BUG-304](bugs/BUG-304-OPEN.md) | OPEN | network (резолвер) | DNS os error 11004 (WSANO_DATA) на живых доменах (mc.yandex.ru, top-fwz1.mail.ru, ssp.rambler.ru, static-mon.yandex.net, cdn.skcrtxr.com) — имя резолвится системно, но Lumen просит не тот тип записи (нет фолбэка AAAA→A?); сайты теряют подресурсы. Замечен аудитом 2026-07-02, заведён /lumen-perf-audit 2026-07-17 |
 | [BUG-305](bugs/BUG-305-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | Конструктор `Image`/`HTMLImageElement` отсутствует в шиме — `new Image()` (предзагрузка, трекинг-пиксели, canvas) валит скрипты ria.ru целиком (`Image is not defined`). Реализация = алиас `document.createElement('img')`. Найден /lumen-perf-audit |
+| [BUG-306](bugs/BUG-306-OPEN.md) | OPEN | js/dom (атрибуция не сделана) | github.com раздувает процесс на ~2.3 ГБ одной вкладкой (610→2904 МБ в живом прогоне; воспроизводимо), после чего сессия умирает (BUG-307). Профиль иной, чем lenta-кэши BUG-272: JS-тяжёлый сайт, вероятно V8-хип/удержание DOM шимом. Найден живым /lumen-perf-audit |
+| [BUG-307](bugs/BUG-307-OPEN.md) | OPEN | shell (main thread) | UI-поток «не отвечает» (IsHungAppWindow): обратимо 39–48 с на ria/rbc, НЕОБРАТИМО после вкладок-гигантов github+stackoverflow — сессия мертва, даже navigate по таймауту; для пользователя «браузер завис, убивать процесс». Несмотря на ADR-016 M0–M4 часть путей блокирует event loop. Найден живым /lumen-perf-audit + наблюдение пользователя |
+| [BUG-308](bugs/BUG-308-OPEN.md) | OPEN | shell (навигация) | Страница с HTTP-ошибкой (403 антибот, w3.org) держит document_ready 129–205 с в живом окне, хотя headless отдаёт тот же 403 за 0.75 с — вкладка «вечно грузится» вместо мгновенной страницы ошибки. Найден живым /lumen-perf-audit |
 
 ---
 

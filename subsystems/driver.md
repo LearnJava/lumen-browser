@@ -6,7 +6,7 @@ headless pipeline without winit/wgpu/ffmpeg.
 ## Done
 
 - `BrowserSession` trait: 6 resources (screenshot, a11y_tree, layout_snapshot, computed_style,
-  network_log, console_log) + 6 tools (navigate, click, type_text, scroll, wait, eval, query).
+  network_log, console_log) + 8 tools (navigate, new_tab, click, type_text, scroll, wait, eval, query). `new_tab` (2026-07-17, live perf audit): `AutomationCommand::NewTab` -> shell `open_new_tab()` + `navigate_to`; trait default falls back to plain `navigate` for tab-less sessions (`InProcessSession`).
 - `InProcessSession`: full headless pipeline (encoding → HTML parse → CSS cascade → layout)
   using bundled Inter-Regular. Shares engine crates directly, no IPC.
 - Simple CSS selector engine: tag, `#id`, `.class`, `tag.class`, multi-class combinations.

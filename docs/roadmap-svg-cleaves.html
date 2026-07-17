@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-17",
  "counts": {
-  "open": 37,
+  "open": 40,
   "fixed": 239,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 276,
+ "total_bugs": 279,
  "phases": [
   {
    "id": "P0",
@@ -1538,7 +1538,7 @@
        "title": "PERF-8: skill /lumen-perf-audit — аудит корпуса реальных сайтов",
        "status": "done",
        "size": "S",
-       "note": "DONE 2026-07-17: scripts/perf_audit.py — 3 headless-замера на сайт (--dump-source / --dump-layout+LUMEN_PROFILE_TREE / --screenshot) → фазы сеть+парсинг / стиль+layout / paint, таймауты, error_lines, results.json+summary.md в .tmp/perf-audit/, --compare с дельтами (⚠ >20%); корпус docs/perf/corpus.txt (14 сайтов аудита 2026-07-02, вкл. антибот-403 намеренно); журнал docs/perf/journal.md + коммитируемые сырые прогоны docs/perf/runs/*.json; skill /lumen-perf-audit — полный автономный протокол прогон→анализ→журнал→BUG-NNN. Ручной предшественник PERF-2/PERF-7 (тот же корпус и журнал)"
+       "note": "DONE 2026-07-17: scripts/perf_audit.py — 3 headless-замера на сайт (--dump-source / --dump-layout+LUMEN_PROFILE_TREE / --screenshot) → фазы сеть+парсинг / стиль+layout / paint, таймауты, error_lines, results.json+summary.md в .tmp/perf-audit/, --compare с дельтами (⚠ >20%); корпус docs/perf/corpus.txt (14 сайтов аудита 2026-07-02, вкл. антибот-403 намеренно); журнал docs/perf/journal.md + коммитируемые сырые прогоны docs/perf/runs/*.json; skill /lumen-perf-audit — полный автономный протокол прогон→анализ→журнал→BUG-NNN. ОБНОВЛЕНО 2026-07-17 (вторая итерация): дефолт — ЖИВОЙ режим (одно GUI-окно, каждый сайт в новой вкладке через новый MCP-инструмент new_tab = AutomationCommand::NewTab + open_new_tab; пользователь видит рендер, dwell+скролл на сайт; кумулятивная RAM тек/пик через WinAPI; per-site stderr-дельта + console-ошибки; TIMEOUT/DEAD с авторестартом окна как находкой); старое пофазное headless-разложение — флаг --phases. Ручной предшественник PERF-2/PERF-7 (тот же корпус и журнал)"
       }
      ]
     }
@@ -3511,6 +3511,27 @@
    "component": "js (WEB_API_SHIM, dom.rs)",
    "date": null,
    "debtor": false
+  },
+  "BUG-306": {
+   "status": "open",
+   "title": "github.com раздувает процесс на ~2.3 ГБ одной вкладкой (610→2904 МБ в живом прогоне; воспроизводимо), после чего сессия умирает (BUG-307). Профиль иной, чем len…",
+   "component": "js/dom (атрибуция не сделана)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-307": {
+   "status": "open",
+   "title": "UI-поток «не отвечает» (IsHungAppWindow): обратимо 39–48 с на ria/rbc, НЕОБРАТИМО после вкладок-гигантов github+stackoverflow — сессия мертва, даже navigate по…",
+   "component": "shell (main thread)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-308": {
+   "status": "open",
+   "title": "Страница с HTTP-ошибкой (403 антибот, w3.org) держит document_ready 129–205 с в живом окне, хотя headless отдаёт тот же 403 за 0.75 с — вкладка «вечно грузится»…",
+   "component": "shell (навигация)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3597,6 +3618,9 @@
   ],
   "js (shell)": [
    "BUG-233"
+  ],
+  "js/dom (атрибуция не сделана)": [
+   "BUG-306"
   ],
   "layout": [
    "BUG-001",
@@ -3871,6 +3895,12 @@
   ],
   "shell (event loop) + js (таймер-шим)": [
    "BUG-271"
+  ],
+  "shell (main thread)": [
+   "BUG-307"
+  ],
+  "shell (навигация)": [
+   "BUG-308"
   ],
   "shell+font": [
    "BUG-170"
