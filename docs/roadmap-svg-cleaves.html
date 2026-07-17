@@ -57,8 +57,8 @@
 {
  "generated": "2026-07-17",
  "counts": {
-  "open": 33,
-  "fixed": 235,
+  "open": 32,
+  "fixed": 236,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -863,8 +863,8 @@
     {
      "id": "P3-navapi",
      "title": "Navigation API + History API runtime",
-     "status": "active",
-     "note": "АКТУАЛИЗАЦИЯ 2026-07-13: Phase 1 (History API completion) СДЕЛАНА и влита в main 2026-07-02 (старая нота про «работу в ветке не на main» устарела); остаток = Phase 2 — привязка Navigation API-шима к реальному стеку навигации (navigate event, popstate-унификация, SPA URL/title без reload) — бриф docs/tasks/ph3-navigation-history-api.md §Steps Phase 2"
+     "status": "done",
+     "note": "ЗАВЕРШЕНО 2026-07-17: Phase 1 (History API) + Phase 2 (Navigation API wiring, шаги 5-10) влиты; последний остаток — cross-document unification multi-step traversal (`Lumen::navigate_by` пересекает full-document границу перед same-document destination) — закрыт `NavEntry::shift_multi_step` + `Lumen::pending_post_reload_traversal`"
     },
     {
      "id": "PH3-8",
@@ -3351,10 +3351,10 @@
    "debtor": true
   },
   "BUG-291": {
-   "status": "open",
-   "title": "После фикса BUG-280 `tests/wpt/run_smoke.py` всё ещё не проходит целиком: встроенный рендерер результатов `testharness.js` (`Output.show_results`) падает с `Typ…",
+   "status": "fixed",
+   "title": "Корень — JS-обёртки DOM-узлов не были интернированы: `_lumen_make_element(nid)` строил новый JS-объект на каждый вызов, поэтому `.lastChild`/`.firstChild`/`.par…",
    "component": "js (DOM child-node bindings, `crates/js/src/dom.rs`)",
-   "date": null,
+   "date": "2026-07-17",
    "debtor": false
   },
   "BUG-292": {
