@@ -1,7 +1,7 @@
 # BUG-291 — `testharness.js`'s built-in results renderer (`Output.show_results`) throws `TypeError: Cannot read properties of null (reading 'appendChild')`, aborting harness completion
 
-**Статус:** OPEN — blocks `tests/wpt/run_smoke.py` from reaching a genuine PASS/FAIL result even after BUG-280 is fixed
-**Компонент:** js (DOM child-node bindings, `crates/js/src/dom.rs`) — most likely `appendChild`/`lastChild`/node-wrapper identity for `createElementNS`-created elements
+**Статус:** FIXED 2026-07-17
+**Компонент:** js (`crates/js/src/dom.rs`, `crates/engine/layout/src/selector_query.rs`) — `Element`/`DocumentFragment`/`ShadowRoot.querySelector(All)` scoping, plus missing `insertAdjacentText`/`insertAdjacentElement`
 **Найден:** P2-wpt S4/S5 (`docs/tasks/p2-wpt-integration.md`), re-running `tests/wpt/run_smoke.py` after landing the BUG-280 fix (`window === globalThis`)
 
 ## Симптом
@@ -78,11 +78,60 @@ misbehave if node wrappers aren't stable.
    poll `window.__lumen_wpt_results` — stays `null` indefinitely; `document.readyState` reaches
    `"complete"` immediately.
 
-## Что нужно для закрытия
+## Root cause (found by exact reproduction, not the `===`-identity anomaly above)
 
-Investigate `appendChild`/`lastChild`/`firstChild` (and the DOM node → JS wrapper mapping in general —
-`crates/js/src/dom.rs` and/or `crates/dom`) for `createElementNS`-created elements: confirm whether node
-wrappers are cached/interned (`===` should hold for repeated access to the same node) and whether
-`lastChild` can return `null`/stale data immediately after a same-tick `appendChild` sequence in a
-multi-child subtree. Re-run `tests/wpt/run_smoke.py` afterward — DoD unblocks the S4 checkbox at
-`docs/tasks/p2-wpt-integration.md:322` ("A deliberately-failing assertion is observed as FAIL").
+Copying `Output.show_results`'s real `render`/`substitute`/`make_dom` pipeline verbatim into an isolated
+Rust-level test (see Fix) and running it against a `section > table > tbody` tree built **off-document**
+(exactly what `show_results` does — the whole results table is assembled before being appended to `log`)
+reproduced the crash immediately, on the very first row: `section.querySelector("tbody")` itself returned
+`null`.
+
+Cause: `Element.prototype.querySelector`/`querySelectorAll` (and the `ShadowRoot`/`DocumentFragment`
+equivalents) all called the same native `_lumen_query_selector(_all)`, which takes **only a selector
+string** — no scope node — and always searches from `doc.root()`
+(`crates/engine/layout/src/selector_query.rs::query_all`). For an element that's part of the live
+document this over-broadly searches the *whole page*, not just the element's descendants (a separate,
+now also-fixed spec violation); for a **detached** subtree (no path to `doc.root()` at all) it finds
+nothing, ever, and silently returns `null` — no error, no signal that anything is wrong. `tbody =
+section.querySelector("tbody")` being `null` is exactly what makes the next line,
+`tbody.appendChild(...)`, throw `Cannot read properties of null (reading 'appendChild')` — matching the
+observed symptom precisely (this call, not the `tbody.lastChild.lastChild.appendChild(...)` call further
+down that the original stack trace pointed at — both throw the identical message, and the crash on the
+first row happens before that second call is ever reached).
+
+The `===`-identity anomaly documented above is real (see Fix) but is **not** what caused this crash — a
+faithful minimal repro without any `===` comparisons reproduced it, and disproving the identity theory
+required actually copying the real vendored code path.
+
+## Fix
+
+1. **`Element`/`DocumentFragment`/`ShadowRoot.querySelector(All)` are now scoped** to the calling node's
+   descendants (DOM Parentnode §4.2.5), not the whole document: new
+   `lumen_layout::query_all_scoped(doc, scope, sel)` walks only `scope`'s subtree (excluding `scope`
+   itself), with new natives `_lumen_query_selector_scoped`/`_lumen_query_selector_all_scoped` in both
+   engines. `document.querySelector(All)` is unchanged (still whole-document, which is correct for
+   `Document`). This also fixes the case that actually crashed: querying inside a subtree not yet attached
+   to the document.
+2. **`insertAdjacentText`/`insertAdjacentElement`** (HTML LS §4.9.2) were entirely missing — found because
+   fixing (1) let `Output.show_results` reach `get_asserts_output`, which calls
+   `asserts_output.querySelector("summary").insertAdjacentText("afterend", "No asserts ran")`
+   unconditionally for every test with no recorded asserts. Added, delegating to the existing
+   `before`/`after`/`prepend`/`append` methods.
+3. **Node-wrapper identity** (the `===` anomaly above) is also fixed: `_lumen_make_element` now interns
+   wrappers in a `_lumen_element_wrappers[nid]` cache instead of minting a fresh object every call,
+   purged per-nid by the existing idle `_lumen_gc_collect` tick alongside `_input_values`/`_canvas2d_ctxs`.
+   Real-world JS that compares DOM nodes by reference (`testharness.js`'s own results renderer among it)
+   now behaves like a real engine.
+
+Verified: a Rust-level reproduction of the exact `Output.show_results`/`get_asserts_output` code path
+(`crates/js/src/v8_runtime.rs::bug291_testharness_results_table_pattern_does_not_throw`) no longer throws;
+a standalone BiDi probe against a really-spawned `lumen.exe` (dev-release, default V8 backend) driving
+`/dom/nodes/Element-hasAttribute.html` reaches `window.__lumen_wpt_results` within ~1-2s. Full
+`cargo test -p lumen-js` (both engines, 2310 + 2433 tests) and `cargo test -p lumen-layout` green, no
+regressions.
+
+**Not fully closed:** `tests/wpt/run_smoke.py` (the full `wptrunner` harness, its own `wptserve` +
+multiprocess executor) still times out on the same page for a reason unrelated to this bug — the
+standalone probe above proves the page itself now completes quickly. Tracked separately as
+[BUG-295](BUG-295-OPEN.md); the S4 checkbox at `docs/tasks/p2-wpt-integration.md:328` stays open until
+that's resolved.
