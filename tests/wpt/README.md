@@ -7,23 +7,34 @@ bespoke test runner. See the task doc for the full architecture and slice plan.
 **Status:** S1–S3 done. S4 (`LumenTestharnessExecutor.do_test`, `testharnessreport.js`
 shim, smoke driver) is **implemented but blocked**: `tests/wpt/run_smoke.py` drives
 a real `lumen --bidi-port` through navigate + eval end to end, but the smoke test
-(`dom/nodes/Element-hasAttribute.html`) still doesn't PASS — blocked on a separate,
-pre-existing `script.evaluate`-install race (`CLAUDE.md` → "Known gotchas" →
-"Live-window BiDi/MCP `script.evaluate` can hang indefinitely..."), independent of
-page content and not yet root-caused. Five other real engine/shell gaps surfaced and
-were fixed while proving this path: [BUG-278](../../bugs/BUG-278-FIXED.md) (HTTP client
-rejected `wptserve`'s close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
+(`dom/nodes/Element-hasAttribute.html`) still doesn't PASS. Eight real engine/shell
+gaps surfaced and were fixed while proving this path: [BUG-278](../../bugs/BUG-278-FIXED.md)
+(HTTP client rejected `wptserve`'s close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
 (`document.getElementsByTagName` was missing entirely — broke `testharness.js`'s
 own module-level setup), [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't
 the JS engine's real global object, so `testharness.js`'s `expose()`-based public API
 was unreachable as bare identifiers), [BUG-291](../../bugs/BUG-291-FIXED.md) (DOM
 node wrappers weren't interned, breaking `===` node identity and crashing
-`testharness.js`'s built-in results renderer, `Output.show_results`), and
+`testharness.js`'s built-in results renderer, `Output.show_results`),
 [BUG-296](../../bugs/BUG-296-FIXED.md) (a stale on-disk `last_session.db` — session
 restore, not a "default homepage" feature — could reopen a leftover tab and race the
 test driver's explicit `browsingContext.navigate`; `--bidi-port`/`--mcp-live-port`
-launches now skip session restore). See those bug files and the task doc's S4 section
-for the full diagnosis trail (BiDi-eval-based bisection of `testharness.js`'s execution).
+launches now skip session restore), [BUG-298](../../bugs/BUG-298-FIXED.md)
+(`Element`/`DocumentFragment`/`ShadowRoot`.querySelector(All) searched the whole
+document instead of the calling node's subtree — `Output.show_results` builds a
+detached results tree and queries into it, always getting nothing),
+[BUG-299](../../bugs/BUG-299-FIXED.md) (`Element.prototype.insertAdjacentText` was
+missing entirely, thrown from the same code path), and [BUG-300](../../bugs/BUG-300-FIXED.md)
+(`browsingContext.navigate`'s `DocumentReady` wait could ACK using the *previous*
+page's stale `layout_box` before the new page had even started loading). Together
+BUG-298/299/300 fully explain (and disprove as environment-flaky) the
+"`script.evaluate`-install race" theory previously in `CLAUDE.md` → "Known gotchas" —
+a manual BiDi driver hitting the fixed binary through a plain HTTP server now
+completes the harness correctly end to end. `run_smoke.py` itself (driven through
+the vendored `wptrunner` + `wptserve`) still times out on a narrower, distinct gap
+only reproducing under that specific combination — see [BUG-301](../../bugs/BUG-301-OPEN.md).
+See those bug files and the task doc's S4 section for the full diagnosis trail
+(BiDi-eval-based bisection of `testharness.js`'s execution).
 
 ## What's here
 

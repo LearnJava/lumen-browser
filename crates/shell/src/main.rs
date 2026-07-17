@@ -20898,8 +20898,17 @@ impl Lumen {
                         // No JS context at all (quickjs disabled, or a
                         // JS-less blank tab) — fall back to the coarser
                         // layout signal so `Wait` doesn't hang forever on a
-                        // readiness signal that will never arrive.
-                        _ => self.layout_box.is_some(),
+                        // readiness signal that will never arrive. Still gated
+                        // on `nav_start.is_none()` (found while diagnosing
+                        // P2-wpt S4): without this gate, a navigation issued
+                        // from a JS-less blank tab (or racing the brief window
+                        // before the new page's JS context is installed) could
+                        // see `js_ctx` as the *old* tab's `None`, and report
+                        // ready from the *previous* page's already-populated
+                        // `layout_box` before the new page had even started
+                        // loading — the same "stale state wins the race"
+                        // pattern BUG-296 fixed for session restore.
+                        _ => self.nav_start.is_none() && self.layout_box.is_some(),
                     }
                 }
                 WaitCondition::Visible(selector) => {

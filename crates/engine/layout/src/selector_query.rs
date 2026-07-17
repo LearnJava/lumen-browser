@@ -342,6 +342,26 @@ pub fn query_all(doc: &Document, sel: &str) -> Vec<NodeId> {
     out
 }
 
+/// Returns all [`NodeId`]s among `start`'s descendants (excluding `start`
+/// itself) that match `sel`, in document order.
+///
+/// Implements `Element`/`DocumentFragment`/`ShadowRoot` `querySelector(All)`
+/// scoping (DOM LS §4.2.6), which searches only the subtree rooted at the
+/// calling node — unlike [`query_all`], which always searches from the
+/// document root and therefore never finds matches inside a detached
+/// subtree (a node created but not yet attached to the document).
+pub fn query_all_within(doc: &Document, start: NodeId, sel: &str) -> Vec<NodeId> {
+    let selectors = parse_selector_list(sel);
+    if selectors.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for &child in &doc.get(start).children.clone() {
+        query_all_rec(doc, child, &selectors, &mut out);
+    }
+    out
+}
+
 fn query_all_rec(
     doc: &Document,
     id: NodeId,
@@ -1072,6 +1092,29 @@ mod tests {
         );
         let all = find_all_by_selector(&tree, &doc, ".item");
         assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn query_all_within_only_matches_descendants_of_start() {
+        // BUG-298: `Element.querySelectorAll` must be scoped to the calling
+        // node's subtree — `#outer` has one `.item` inside it and there's a
+        // second `.item` sibling outside; `query_all_within` must find only
+        // the inner one, unlike `query_all` (document-wide) which finds both.
+        let (doc, tree) = layout_tree(
+            r#"<div id="outer"><span class="item">a</span></div><span class="item">b</span>"#,
+            "",
+        );
+        let outer = find_box_by_selector(&tree, &doc, "#outer").unwrap().node;
+        let scoped = query_all_within(&doc, outer, ".item");
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(query_all(&doc, ".item").len(), 2);
+    }
+
+    #[test]
+    fn query_all_within_excludes_start_itself() {
+        let (doc, tree) = layout_tree(r#"<div id="outer" class="item"></div>"#, "");
+        let outer = find_box_by_selector(&tree, &doc, "#outer").unwrap().node;
+        assert!(query_all_within(&doc, outer, ".item").is_empty());
     }
 
     #[test]

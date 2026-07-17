@@ -20,7 +20,7 @@ use lumen_dom::{
     Selection,
     ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
-use lumen_layout::{matches_selector, query_all};
+use lumen_layout::{matches_selector, query_all, query_all_within};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
 use lumen_core::WebStorage;
@@ -620,6 +620,30 @@ fn install_primitives(
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 matches_selector(&doc, nid, &sel)
+            }
+        );
+        // DOM LS §4.2.6: `Element`/`DocumentFragment`/`ShadowRoot` querySelector(All)
+        // must search only the calling node's descendants, not the whole document —
+        // mirrors the `v8_runtime.rs` registration (P2-wpt S4).
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_scoped",
+            move |node_id: u32, sel: String| -> Option<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                query_all_within(&doc, nid, &sel).into_iter().next().map(|n| n.index() as u32)
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_all_scoped",
+            move |node_id: u32, sel: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                query_all_within(&doc, nid, &sel)
+                    .into_iter()
+                    .map(|n| n.index() as u32)
+                    .collect()
             }
         );
     }
@@ -4023,11 +4047,11 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
         set textContent(v){ _lumen_set_text_content(nid, String(v)); },
         get style()       { return _style; },
         querySelector:    function(sel) {
-            var n = _lumen_u2n(_lumen_query_selector(String(sel)));
+            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll: function(sel) {
-            return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
+            return _lumen_query_selector_all_scoped(nid, String(sel)).map(_lumen_make_element);
         },
         getElementById:   function(id) {
             var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
@@ -4078,11 +4102,11 @@ function _lumen_make_document_fragment(nid) {
         get innerHTML()       { return _lumen_get_inner_html(nid); },
         set innerHTML(v)      { _lumen_set_inner_html(nid, String(v)); },
         querySelector:        function(sel) {
-            var n = _lumen_u2n(_lumen_query_selector(String(sel)));
+            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll:     function(sel) {
-            return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
+            return _lumen_query_selector_all_scoped(nid, String(sel)).map(_lumen_make_element);
         },
         appendChild:          function(c) {
             if (c && c.__nid__ !== undefined) {
@@ -4917,6 +4941,22 @@ function _lumen_make_element(nid) {
                 }
             }
         },
+        // Element.insertAdjacentText (DOM Parsing & Serialization §4): inserts a
+        // Text node at one of the four positions relative to this element. Built
+        // on the ChildNode/ParentNode primitives above rather than a new native
+        // binding — found missing while diagnosing P2-wpt S4 (`testharness.js`'s
+        // `Output.show_results` calls it unconditionally on tests with no
+        // recorded asserts).
+        insertAdjacentText: function(where, text) {
+            var t = String(text);
+            switch (String(where).toLowerCase()) {
+                case 'beforebegin': this.before(t); break;
+                case 'afterbegin':  this.prepend(t); break;
+                case 'beforeend':   this.append(t); break;
+                case 'afterend':    this.after(t); break;
+                default: throw new SyntaxError('insertAdjacentText: invalid position ' + where);
+            }
+        },
         // Replaces all children of this element.
         replaceChildren: function() {
             var old = _lumen_get_children(nid).slice();
@@ -4945,11 +4985,11 @@ function _lumen_make_element(nid) {
             return frag_nid !== null ? _lumen_make_document_fragment(frag_nid) : _lumen_make_document_fragment(_lumen_create_fragment());
         },
         querySelector:    function(sel) {
-            var n = _lumen_u2n(_lumen_query_selector(String(sel)));
+            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll: function(sel) {
-            return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
+            return _lumen_query_selector_all_scoped(nid, String(sel)).map(_lumen_make_element);
         },
         matches: function(sel) {
             return _lumen_node_matches_selector(nid, String(sel));
