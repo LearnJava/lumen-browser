@@ -3018,9 +3018,9 @@ pub struct ComputedStyle {
     /// CSS Masking L1 §4.5 — `mask-origin: border-box | padding-box | content-box`.
     /// Default `BorderBox`. Non-inherited.
     pub mask_origin: BackgroundOrigin,
-    /// CSS Masking L1 §4.6 — `mask-clip`. Same keywords as background-clip.
-    /// Default `BorderBox`. Non-inherited.
-    pub mask_clip: BackgroundClip,
+    /// CSS Masking L1 §4.6 — `mask-clip`. Superset of background-clip keywords
+    /// (`<coord-box> | no-clip`). Default `BorderBox`. Non-inherited.
+    pub mask_clip: MaskClip,
     /// CSS Masking L1 §4.7 — `mask-composite: add | subtract | intersect | exclude`.
     /// Non-inherited. Default `Add`.
     pub mask_composite: MaskComposite,
@@ -4675,6 +4675,51 @@ impl BackgroundClip {
     }
 }
 
+/// CSS Masking L1 §4.6 — `mask-clip: <coord-box> | no-clip`.
+///
+/// `<coord-box>` = `content-box | padding-box | border-box | fill-box |
+/// stroke-box | view-box`. Unlike `background-clip`, `mask-clip` also accepts
+/// the SVG reference boxes and the `no-clip` keyword. For elements laid out
+/// with the CSS box model (non-SVG HTML boxes) the SVG-specific boxes fall
+/// back to their box-model equivalents (CSS Box 4 §1 "Choosing the layout
+/// box"): `fill-box` → content box, `stroke-box`/`view-box` → border box.
+/// `no-clip` disables the mask painting-area clip entirely. Non-inherited,
+/// initial `border-box`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MaskClip {
+    /// `border-box` (initial) — mask painting area is the border box.
+    #[default]
+    BorderBox,
+    /// `padding-box` — clip to the inner border edge.
+    PaddingBox,
+    /// `content-box` — clip to the content area.
+    ContentBox,
+    /// `fill-box` — object bounding box; for CSS boxes equals the content box.
+    FillBox,
+    /// `stroke-box` — stroke bounding box; for CSS boxes equals the border box.
+    StrokeBox,
+    /// `view-box` — nearest SVG viewport; for CSS boxes equals the border box.
+    ViewBox,
+    /// `no-clip` — the mask painting area is not clipped.
+    NoClip,
+}
+
+impl MaskClip {
+    /// Parses a single `mask-clip` keyword (CSS Masking L1 §4.6).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "border-box" => Some(Self::BorderBox),
+            "padding-box" => Some(Self::PaddingBox),
+            "content-box" => Some(Self::ContentBox),
+            "fill-box" => Some(Self::FillBox),
+            "stroke-box" => Some(Self::StrokeBox),
+            "view-box" => Some(Self::ViewBox),
+            "no-clip" => Some(Self::NoClip),
+            _ => None,
+        }
+    }
+}
+
 /// CSS Backgrounds L3 §3 — один фоновый слой. Первый в Vec = верхний (рисуется последним).
 ///
 /// Все поля — initial values из спецификации. `background_color` не входит
@@ -5953,7 +5998,7 @@ impl ComputedStyle {
             mask_mode: MaskMode::Alpha,
             mask_position: ObjectPosition::default(),
             mask_origin: BackgroundOrigin::BorderBox,
-            mask_clip: BackgroundClip::BorderBox,
+            mask_clip: MaskClip::BorderBox,
             mask_composite: MaskComposite::Add,
             scrollbar_width: ScrollbarWidth::Auto,
             scrollbar_color: None,
@@ -6299,7 +6344,7 @@ pub fn compute_style(
         mask_mode: MaskMode::Alpha,
         mask_position: ObjectPosition::default(),
         mask_origin: BackgroundOrigin::BorderBox,
-        mask_clip: BackgroundClip::BorderBox,
+        mask_clip: MaskClip::BorderBox,
         mask_composite: MaskComposite::Add,
         // CSS Scrollbars — scrollbar-width/-color inherited;
         // scrollbar-gutter не наследуется.
@@ -14779,8 +14824,9 @@ fn apply_declaration(
             }
         }
         "mask-clip" => {
-            // CSS Masking L1 §4.6 — same keywords as background-clip.
-            if let Some(c) = BackgroundClip::parse(val.trim()) {
+            // CSS Masking L1 §4.6 — `<coord-box> | no-clip` (superset of
+            // background-clip: adds fill-box/stroke-box/view-box and no-clip).
+            if let Some(c) = MaskClip::parse(val.trim()) {
                 style.mask_clip = c;
             }
         }
@@ -21498,6 +21544,26 @@ mod tests {
 
     fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
         Color { r, g, b, a }
+    }
+
+    /// CSS Masking L1 §4.6 — `mask-clip` accepts the full `<coord-box> | no-clip`
+    /// grammar (superset of `background-clip`), unlike `BackgroundClip::parse`
+    /// which rejects the SVG boxes and `no-clip`.
+    #[test]
+    fn mask_clip_parses_full_coord_box_grammar() {
+        assert_eq!(MaskClip::parse("border-box"), Some(MaskClip::BorderBox));
+        assert_eq!(MaskClip::parse("padding-box"), Some(MaskClip::PaddingBox));
+        assert_eq!(MaskClip::parse("content-box"), Some(MaskClip::ContentBox));
+        assert_eq!(MaskClip::parse("fill-box"), Some(MaskClip::FillBox));
+        assert_eq!(MaskClip::parse("stroke-box"), Some(MaskClip::StrokeBox));
+        assert_eq!(MaskClip::parse("view-box"), Some(MaskClip::ViewBox));
+        assert_eq!(MaskClip::parse("no-clip"), Some(MaskClip::NoClip));
+        assert_eq!(MaskClip::parse("  VIEW-BOX  "), Some(MaskClip::ViewBox));
+        // `text` is a background-clip keyword only; `mask-clip` rejects it.
+        assert_eq!(MaskClip::parse("text"), None);
+        assert_eq!(MaskClip::parse("bogus"), None);
+        // Default is border-box (initial value).
+        assert_eq!(MaskClip::default(), MaskClip::BorderBox);
     }
 
     #[test]
