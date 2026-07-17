@@ -76,7 +76,7 @@ Full role definitions, workflows, collaboration rules, task tracking schema — 
 
 ## Project Skills
 
-5 skills in `.claude/skills/`. Use them instead of following protocols manually:
+6 skills in `.claude/skills/`. Use them instead of following protocols manually:
 
 | Skill | When to use |
 |---|---|
@@ -85,9 +85,10 @@ Full role definitions, workflows, collaboration rules, task tracking schema — 
 | `/lumen-task-finish <name>` | Task ready to merge (clippy → tests → merge --no-ff → worktree remove) |
 | `/lumen-new-crate <name>` | Creating a new Cargo crate in the workspace |
 | `/lumen-health-check [target]` | P5 maintenance sweep (`full`/`clippy`/`stubs`/`branches`/`docs`/`deps`/`dupes`) |
+| `/lumen-perf-audit` | Real-site performance audit (PERF track): run the corpus, collect per-phase stats, diff vs previous run, journal + file bugs |
 
 `lumen-task-start` — explicit invocation only (`/`).
-`lumen-add-css-property`, `lumen-new-crate`, `lumen-health-check`, and `lumen-task-finish` — Claude may invoke automatically from context.
+`lumen-add-css-property`, `lumen-new-crate`, `lumen-health-check`, `lumen-perf-audit`, and `lumen-task-finish` — Claude may invoke automatically from context.
 
 ---
 

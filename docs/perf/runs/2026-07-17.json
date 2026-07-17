@@ -1,0 +1,730 @@
+{
+ "date": "20260717-121153",
+ "commit": "b7a951b7",
+ "exe": "D:\\RustProjects\\lumen-browser\\target\\dev-release\\lumen.exe",
+ "timeout_s": 240,
+ "results": [
+  {
+   "slug": "example",
+   "url": "https://example.com/",
+   "source": {
+    "wall_s": 0.08,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 559,
+    "error_lines": []
+   },
+   "http_status": null,
+   "layout": {
+    "wall_s": 0.09,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 1380,
+    "error_lines": [],
+    "profile_top": [
+     "[profile]      0.80ms",
+     "[profile]      0.37ms",
+     "[profile]      0.25ms",
+     "[profile]      0.12ms",
+     "[profile]      0.02ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 0.14,
+    "rc": 0,
+    "timed_out": false,
+    "error_lines": [],
+    "png_size": [
+     1024,
+     720
+    ]
+   },
+   "phases": {
+    "net_parse_s": 0.08,
+    "style_layout_s": 0.01,
+    "paint_s": 0.05
+   },
+   "status": "OK"
+  },
+  {
+   "slug": "ya",
+   "url": "https://ya.ru/",
+   "source": {
+    "wall_s": 0.61,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 582931,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 2.01,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 39101,
+    "error_lines": [
+     "script error: JS runtime error: Unable to find RenderContext state html element with id \"render-state\"",
+     "script error: JS runtime error: Missing module: load-mini-suggest.standalone.js",
+     "✗ https://static-mon.yandex.net/static/main.js?pid=yandex.portal&cb=desktop (dns: resolve static-mon.yandex.net:443: network error: resolve static-mon.yandex.net: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "fetch error: network error: resolve static-mon.yandex.net:443: network error: resolve static-mon.yandex.net: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "✗ https://mc.yandex.ru/watch/723233 (dns: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск картинки https://mc.yandex.ru/watch/723233: network error: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "Не декодируется https://yabs.yandex.ru/count/WJSejI_zOoVX2LcZ04q90AFFF4M9Q4n99WGmM1T9e4eJHAFVyNh37QxVoUeuUfszX05qd2fvppN53HLF28Pu8821OWO7ItVuUkZWJK1CoytMnkjjj4gbKgdKS4XZiyD6ztfrNRwDZunRUd0m4y11_3T4rshOctz3TAs6RP3aN5NO8cHK4G4Q_Pa6x6csJnejJPFLaA7H1v2z2K3NWC5SfCNCspKM2nkqiFqoZSecZ3t78a9CA7s9cr18aGi6cJ9F8Uifw1x6N66hwp3UF8107njubBXXkaM9Q4n99WGmsDHZDdV_6sUalDJve1jzuNWhLogLoX0qo39e-p3bzo32oWLUODo81X3yQsOK2j1eyiXam3D7lqiBVXiw_aK2FhbS5_pt2L2NcXAOnt3j46vm-RdRaTGPPdm2jm00~2=WP0ejI_zOoVX2LaX0HKC0BCLKp5rriRM5BtMZP20VcWK2Gt5A11NmWcSWBae4OqfoOG01XEeuXFW9h0di2UmJK2RWDOR9g0t_wX86KJ0wtVA8koGb_hE6FfyBdVsRBzpvmrtliecZ3t78a9CA7s9cr18aGi67SSosJzrbLZv0SNmgWa1OmUeg2Y-IGLwAHCmLY8oPCp4NwBacCu3FmRuiWB7wAqE0Tm0rc729Cc6hQyZtESqY9j_GtIjXhtvDqJNQjXse45Bi_KPj3v3DiR23ff7Mj_CbhwgKBwv0gPWtcF4FaRtC6OAK33a331Y_0pccmSGw6C3Zn8tJ9VPvFhVw8dm0F_m5tE1RM2zt_l5NE2lNGBsQFpPtyOiqqklhoFSvxpPXttPcuMnQVquWS7i6g7_-gOzBoUmtzAwpjIqv-K4zje9NlT3jeHaCJv9WaJnA01546W8OXoW2PWIeaEL4Vn8bhnkOiV2TMNqm2Zx1lVF0ELmRz65hhWZrKpD5wtRRMEgyi_s2SzEFF7nAMM7JSmS~2?timestamp=1784279516497: формат изображения не распознан по сигнатуре",
+     "Пропуск bg-картинки data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' fill='none'%3E%3Crect width='40' height='40' fill='%23F8604A' rx='20'/%3E%3Cpath fill='%23fff' d='M22.776 31.5h4.178v-24h-6.078c-6.112 0-9.324 3.142-9.324 7.77 0 3.695 1.762 5.87 4.904 8.115L11 31.5h4.524l6.077-9.082-2.106-1.416c-2.555-1.726-3.799-3.073-3.799-5.974 0-2.555 1.796-4.282 5.215-4.282h1.864V31.5Z'/%3E%3C/svg%3E: network error: unsupported scheme: data"
+    ],
+    "profile_top": [
+     "[profile]    295.72ms",
+     "[profile]     76.33ms",
+     "[profile]     64.24ms",
+     "[profile]    132.08ms",
+     "[profile]     11.22ms",
+     "[profile]      0.31ms",
+     "[profile]      0.19ms",
+     "[profile]      0.10ms",
+     "[profile]      0.01ms",
+     "[profile]      0.00ms",
+     "[profile]      0.34ms",
+     "[profile]      0.17ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 1.29,
+    "rc": 0,
+    "timed_out": false,
+    "error_lines": [
+     "script error: JS runtime error: Unable to find RenderContext state html element with id \"render-state\"",
+     "script error: JS runtime error: Missing module: load-mini-suggest.standalone.js",
+     "✗ https://static-mon.yandex.net/static/main.js?pid=yandex.portal&cb=desktop (dns: resolve static-mon.yandex.net:443: network error: resolve static-mon.yandex.net: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "fetch error: network error: resolve static-mon.yandex.net:443: network error: resolve static-mon.yandex.net: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "✗ https://mc.yandex.ru/watch/723233 (dns: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск картинки https://mc.yandex.ru/watch/723233: network error: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "Не декодируется https://yabs.yandex.ru/count/WIuejI_zOoVX2LcY00K90EFEEGqmcTAK0oG2OLqaWIfD48r-n-iDTxX-9wlZw7Ns4WRGSQhaFTSKDoWO8Lh4Su6B2ZXOkiFNGmTl0c9QRhOsNc-ZLIgLIgM6GngR7JQwrwlhycryPDpIWuEP00xYlo6wLiFU_1kYQpLi_Pa6x6csJnejJPFLaA7H1v2z2K3NWC7SG9KkNhQc7L88BMo_JAEo2MFFyJ03LAbipe0IW3eIWqoPfv3r57GFOwwmrNKORnw04mr9b9epOBeDC9dIb0Ca0c5JZzdS_M-akKI-SQ4RVU5uArSgbSeGDCX2Q7imvIyB0NNrbA1E6X7yQcRK2T1OyeXam3F7lalZVHiw_aK2FhbS5_pt2L2NcWdyd7uQ98Zh2JT05-u6VEWCSqtUJG00~2=WP4ejI_zOoVX2LaX0HqC0BDLKp5rriRM5BtMZP20VcWK2Gt5A11NmWcSWBa19bEQSe1484oWYa-0cy2Um9x0DW5j0bflc83U_ACYXH01hzyfYx13NkexO-ZpkTpPi_tEdJVS-IgRCFOS3pD0bShc32W1g2Cnw3YMoVwfgyJA3oY6Lqq863j0HKNnJIhGIvc0iHAH8MCc_X8bntGU-370rqvQ06ET9i0DO1qcJ99isFewmdrEWxZvDqJNQjYRVqDqhOPj1ngqD5kVGUipP6CixA1vfFNDREch2kMRAs0AvZr6x6Dq3sEc00L3pW0ZnizWlda0JZGaKMhEWEaocrp_6pqH7k0V_c8ki0siztk_c0lyjKl07eq_-zkOPNhfzNM4-vmt-x0lUxCmDgqV9p2ONIFqNz-qv-K4zbjQrvcQzhoSm5uxmUj-o9QGBCOdIP0e7WMW208DGOm3D04qU7KZ117yI9QyRcB7mdLbzC0e-mRtpm3bS6_HXQwu8zLCpHUjssrZglBFzWdFJZpnyIbbXqtC7000~2?timestamp=1784279518623: формат изображения не распознан по сигнатуре",
+     "Пропуск bg-картинки data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' fill='none'%3E%3Crect width='40' height='40' fill='%23F8604A' rx='20'/%3E%3Cpath fill='%23fff' d='M22.776 31.5h4.178v-24h-6.078c-6.112 0-9.324 3.142-9.324 7.77 0 3.695 1.762 5.87 4.904 8.115L11 31.5h4.524l6.077-9.082-2.106-1.416c-2.555-1.726-3.799-3.073-3.799-5.974 0-2.555 1.796-4.282 5.215-4.282h1.864V31.5Z'/%3E%3C/svg%3E: network error: unsupported scheme: data"
+    ],
+    "png_size": [
+     1024,
+     720
+    ]
+   },
+   "phases": {
+    "net_parse_s": 0.61,
+    "style_layout_s": 1.4,
+    "paint_s": 0.0
+   },
+   "status": "OK"
+  },
+  {
+   "slug": "hn",
+   "url": "https://news.ycombinator.com/",
+   "source": {
+    "wall_s": 1.35,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 35014,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 1.46,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 87275,
+    "error_lines": [
+     "script error: JS runtime error: el.getElementsByClassName is not a function"
+    ],
+    "profile_top": [
+     "[profile]      0.49ms",
+     "[profile]      0.32ms",
+     "[profile]      0.11ms",
+     "[profile]      0.03ms",
+     "[profile]      0.00ms",
+     "[profile]     19.91ms",
+     "[profile]     11.96ms",
+     "[profile]      4.94ms",
+     "[profile]      2.12ms",
+     "[profile]      0.21ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 2.49,
+    "rc": 0,
+    "timed_out": false,
+    "error_lines": [
+     "script error: JS runtime error: el.getElementsByClassName is not a function"
+    ],
+    "png_size": [
+     1024,
+     720
+    ]
+   },
+   "phases": {
+    "net_parse_s": 1.35,
+    "style_layout_s": 0.11,
+    "paint_s": 1.03
+   },
+   "status": "OK"
+  },
+  {
+   "slug": "w3",
+   "url": "https://www.w3.org/",
+   "source": {
+    "wall_s": 0.75,
+    "rc": 1,
+    "timed_out": false,
+    "stdout_bytes": 0,
+    "error_lines": [
+     "Ошибка dump https://www.w3.org/: network error: HTTP 403"
+    ]
+   },
+   "http_status": 403,
+   "layout": {
+    "wall_s": 0.76,
+    "rc": 1,
+    "timed_out": false,
+    "stdout_bytes": 0,
+    "error_lines": [
+     "Ошибка dump https://www.w3.org/: network error: HTTP 403"
+    ],
+    "profile_top": []
+   },
+   "screenshot": {
+    "wall_s": 0.75,
+    "rc": 1,
+    "timed_out": false,
+    "error_lines": [
+     "Ошибка --screenshot https://www.w3.org/: network error: HTTP 403"
+    ],
+    "png_size": null
+   },
+   "phases": {
+    "net_parse_s": 0.75,
+    "style_layout_s": 0.01,
+    "paint_s": 0.0
+   },
+   "status": "FAIL"
+  },
+  {
+   "slug": "rust-lang",
+   "url": "https://www.rust-lang.org/",
+   "source": {
+    "wall_s": 2.27,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 18594,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 5.74,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 73709,
+    "error_lines": [],
+    "profile_top": [
+     "[profile]      0.46ms",
+     "[profile]      0.25ms",
+     "[profile]      0.14ms",
+     "[profile]      0.03ms",
+     "[profile]      0.00ms",
+     "[profile]      0.34ms",
+     "[profile]      0.14ms",
+     "[profile]      0.18ms",
+     "[profile]      0.01ms",
+     "[profile]      0.01ms",
+     "[profile]      0.24ms",
+     "[profile]      0.12ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 3.85,
+    "rc": 0,
+    "timed_out": false,
+    "error_lines": [],
+    "png_size": [
+     1024,
+     8844
+    ]
+   },
+   "phases": {
+    "net_parse_s": 2.27,
+    "style_layout_s": 3.47,
+    "paint_s": 0.0
+   },
+   "status": "OK"
+  },
+  {
+   "slug": "lenta",
+   "url": "https://lenta.ru/",
+   "source": {
+    "wall_s": 0.3,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 142059,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 1.45,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 412452,
+    "error_lines": [
+     "✗ https://ssp.rambler.ru/capirs_async.js (dns: resolve ssp.rambler.ru:443: network error: resolve ssp.rambler.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск скрипта https://ssp.rambler.ru/capirs_async.js: network error: resolve ssp.rambler.ru:443: network error: resolve ssp.rambler.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'charAt')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'indexOf')",
+     "[JS error] vite-plugin-css-injected-by-js TypeError: Cannot read properties of undefined (reading 'appendChild')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'length')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'protocol')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'insertBefore')"
+    ],
+    "profile_top": [
+     "[profile]    391.99ms",
+     "[profile]     61.28ms",
+     "[profile]     64.68ms",
+     "[profile]    260.57ms",
+     "[profile]      3.37ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 13.16,
+    "rc": 0,
+    "timed_out": false,
+    "error_lines": [
+     "✗ https://ssp.rambler.ru/capirs_async.js (dns: resolve ssp.rambler.ru:443: network error: resolve ssp.rambler.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск скрипта https://ssp.rambler.ru/capirs_async.js: network error: resolve ssp.rambler.ru:443: network error: resolve ssp.rambler.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'charAt')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'indexOf')",
+     "[JS error] vite-plugin-css-injected-by-js TypeError: Cannot read properties of undefined (reading 'appendChild')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'length')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'protocol')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'insertBefore')"
+    ],
+    "png_size": [
+     1024,
+     7330
+    ]
+   },
+   "phases": {
+    "net_parse_s": 0.3,
+    "style_layout_s": 1.15,
+    "paint_s": 11.71
+   },
+   "status": "OK"
+  },
+  {
+   "slug": "github",
+   "url": "https://github.com/",
+   "source": {
+    "wall_s": 0.7,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 576928,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 240.29,
+    "rc": null,
+    "timed_out": true,
+    "stdout_bytes": 0,
+    "error_lines": [
+     "module error: JS runtime error: Automatic publicPath is not supported in this browser"
+    ],
+    "profile_top": []
+   },
+   "screenshot": {
+    "wall_s": 240.29,
+    "rc": null,
+    "timed_out": true,
+    "error_lines": [
+     "module error: JS runtime error: Automatic publicPath is not supported in this browser"
+    ],
+    "png_size": null
+   },
+   "status": "TIMEOUT"
+  },
+  {
+   "slug": "stackoverflow",
+   "url": "https://stackoverflow.com/",
+   "source": {
+    "wall_s": 1.38,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 296385,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 13.48,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 395283,
+    "error_lines": [
+     "script error: JS runtime error: \"undefined\" is not valid JSON",
+     "script error: JS runtime error: Cannot set property type of #<Object> which has only a getter",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'Deferred')",
+     "script error: JS runtime error: $ is not defined",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'site')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'setCacheBreakers')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'replace')",
+     "script error: JS runtime error: Element is not defined"
+    ],
+    "profile_top": [
+     "[profile]   4866.13ms",
+     "[profile]    894.50ms",
+     "[profile]    791.49ms",
+     "[profile]   3046.98ms",
+     "[profile]     80.78ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 0.86,
+    "rc": 1,
+    "timed_out": false,
+    "error_lines": [
+     "Ошибка --screenshot https://stackoverflow.com/: network error: HTTP 429"
+    ],
+    "png_size": null
+   },
+   "phases": {
+    "net_parse_s": 1.38,
+    "style_layout_s": 12.1,
+    "paint_s": 0.0
+   },
+   "status": "FAIL"
+  },
+  {
+   "slug": "crates",
+   "url": "https://crates.io/",
+   "source": {
+    "wall_s": 1.33,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 5049,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 1.83,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 1124,
+    "error_lines": [
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'parentElement')"
+    ],
+    "profile_top": [
+     "[profile]      4.65ms",
+     "[profile]      3.48ms",
+     "[profile]      0.55ms",
+     "[profile]      0.31ms",
+     "[profile]      0.03ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 0.96,
+    "rc": 0,
+    "timed_out": false,
+    "error_lines": [
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'parentElement')"
+    ],
+    "png_size": [
+     1024,
+     720
+    ]
+   },
+   "phases": {
+    "net_parse_s": 1.33,
+    "style_layout_s": 0.5,
+    "paint_s": 0.0
+   },
+   "status": "OK"
+  },
+  {
+   "slug": "docs-rs",
+   "url": "https://docs.rs/",
+   "source": {
+    "wall_s": 1.12,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 17698,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 1.64,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 48195,
+    "error_lines": [
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'setAttribute')"
+    ],
+    "profile_top": [
+     "[profile]     44.99ms",
+     "[profile]     16.10ms",
+     "[profile]     19.67ms",
+     "[profile]      6.61ms",
+     "[profile]      1.83ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 0.98,
+    "rc": 0,
+    "timed_out": false,
+    "error_lines": [
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'setAttribute')"
+    ],
+    "png_size": [
+     1024,
+     956
+    ]
+   },
+   "phases": {
+    "net_parse_s": 1.12,
+    "style_layout_s": 0.52,
+    "paint_s": 0.0
+   },
+   "status": "OK"
+  },
+  {
+   "slug": "ria",
+   "url": "https://ria.ru/",
+   "source": {
+    "wall_s": 0.26,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 191536,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 4.57,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 318288,
+    "error_lines": [
+     "script error: JS runtime error: Image is not defined",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'protocol')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'length')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'insertBefore')",
+     "script error: JS runtime error: a.getElementsByTagName is not a function",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'indexOf')",
+     "script error: JS runtime error: $ is not defined",
+     "script error: JS runtime error: jQuery is not defined"
+    ],
+    "profile_top": [
+     "[profile]      1.14ms",
+     "[profile]      0.33ms",
+     "[profile]      0.53ms",
+     "[profile]      0.19ms",
+     "[profile]      0.03ms",
+     "[profile]      0.34ms",
+     "[profile]      0.15ms",
+     "[profile]      0.17ms",
+     "[profile]      0.01ms",
+     "[profile]      0.00ms",
+     "[profile]    849.12ms",
+     "[profile]    394.34ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 4.36,
+    "rc": 0,
+    "timed_out": false,
+    "error_lines": [
+     "script error: JS runtime error: Image is not defined",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'protocol')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'length')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'insertBefore')",
+     "script error: JS runtime error: a.getElementsByTagName is not a function",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'indexOf')",
+     "script error: JS runtime error: $ is not defined",
+     "script error: JS runtime error: jQuery is not defined"
+    ],
+    "png_size": [
+     1024,
+     3430
+    ]
+   },
+   "phases": {
+    "net_parse_s": 0.26,
+    "style_layout_s": 4.31,
+    "paint_s": 0.0
+   },
+   "status": "OK"
+  },
+  {
+   "slug": "habr",
+   "url": "https://habr.com/ru/",
+   "source": {
+    "wall_s": 0.79,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 308591,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 16.16,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 594621,
+    "error_lines": [
+     "✗ https://cdn.skcrtxr.com/roxot-wrapper/js/roxot-manager.js?pid=c427193e-c45c-4b31-b9de-0d5bc41115fd (dns: resolve cdn.skcrtxr.com:443: network error: resolve cdn.skcrtxr.com: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск скрипта https://cdn.skcrtxr.com/roxot-wrapper/js/roxot-manager.js?pid=c427193e-c45c-4b31-b9de-0d5bc41115fd: network error: resolve cdn.skcrtxr.com:443: network error: resolve cdn.skcrtxr.com: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "✗ https://rap.skcrtxr.com/pub/pg/e40a4600-273c-4ae8-a7fd-74ad2f469a15/run-rap.js (dns: resolve rap.skcrtxr.com:443: network error: resolve rap.skcrtxr.com: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск скрипта https://rap.skcrtxr.com/pub/pg/e40a4600-273c-4ae8-a7fd-74ad2f469a15/run-rap.js: network error: resolve rap.skcrtxr.com:443: network error: resolve rap.skcrtxr.com: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'length')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'indexOf')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'insertBefore')",
+     "module error: JS runtime error: Cannot use import statement outside a module"
+    ],
+    "profile_top": [
+     "[profile]   1314.82ms",
+     "[profile]    269.06ms",
+     "[profile]    337.34ms",
+     "[profile]    533.77ms",
+     "[profile]    159.21ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 41.8,
+    "rc": 0,
+    "timed_out": false,
+    "error_lines": [
+     "✗ https://cdn.skcrtxr.com/roxot-wrapper/js/roxot-manager.js?pid=c427193e-c45c-4b31-b9de-0d5bc41115fd (dns: resolve cdn.skcrtxr.com:443: network error: resolve cdn.skcrtxr.com: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "✗ https://rap.skcrtxr.com/pub/pg/e40a4600-273c-4ae8-a7fd-74ad2f469a15/run-rap.js (dns: resolve rap.skcrtxr.com:443: network error: resolve rap.skcrtxr.com: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск скрипта https://cdn.skcrtxr.com/roxot-wrapper/js/roxot-manager.js?pid=c427193e-c45c-4b31-b9de-0d5bc41115fd: network error: resolve cdn.skcrtxr.com:443: network error: resolve cdn.skcrtxr.com: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "Пропуск скрипта https://rap.skcrtxr.com/pub/pg/e40a4600-273c-4ae8-a7fd-74ad2f469a15/run-rap.js: network error: resolve rap.skcrtxr.com:443: network error: resolve rap.skcrtxr.com: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'length')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'indexOf')",
+     "script error: JS runtime error: Cannot read properties of undefined (reading 'insertBefore')",
+     "module error: JS runtime error: Cannot use import statement outside a module"
+    ],
+    "png_size": [
+     1024,
+     31315
+    ]
+   },
+   "phases": {
+    "net_parse_s": 0.79,
+    "style_layout_s": 15.37,
+    "paint_s": 25.64
+   },
+   "status": "OK"
+  },
+  {
+   "slug": "mdn",
+   "url": "https://developer.mozilla.org/en-US/",
+   "source": {
+    "wall_s": 1.0,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 121400,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 4.92,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 367911,
+    "error_lines": [
+     "[JS warn] Unable to set theme TypeError: Cannot set properties of undefined (setting 'theme')",
+     "module error: JS runtime error: Unexpected token 'export'"
+    ],
+    "profile_top": [
+     "[profile]   2010.41ms",
+     "[profile]    120.60ms",
+     "[profile]    144.93ms",
+     "[profile]   1724.48ms",
+     "[profile]      8.02ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 64.65,
+    "rc": 0,
+    "timed_out": false,
+    "error_lines": [
+     "[JS warn] Unable to set theme TypeError: Cannot set properties of undefined (setting 'theme')",
+     "module error: JS runtime error: Unexpected token 'export'"
+    ],
+    "png_size": [
+     1024,
+     32768
+    ]
+   },
+   "phases": {
+    "net_parse_s": 1.0,
+    "style_layout_s": 3.92,
+    "paint_s": 59.73
+   },
+   "status": "OK"
+  },
+  {
+   "slug": "rbc",
+   "url": "https://www.rbc.ru/",
+   "source": {
+    "wall_s": 0.31,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 329518,
+    "error_lines": []
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 6.77,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 197979,
+    "error_lines": [
+     "✗ https://top-fwz1.mail.ru/counter?id=3081030;js=na (dns: resolve top-fwz1.mail.ru:443: network error: resolve top-fwz1.mail.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "✗ https://mc.yandex.ru/watch/16443139 (dns: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск картинки https://top-fwz1.mail.ru/counter?id=3081030;js=na: network error: resolve top-fwz1.mail.ru:443: network error: resolve top-fwz1.mail.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "Пропуск картинки https://mc.yandex.ru/watch/16443139: network error: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "✗ https://mc.yandex.ru/watch/98761308 (dns: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск картинки https://mc.yandex.ru/watch/98761308: network error: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "Пропуск картинки https://www.rbc.ru/track/ssr/: network error: HTTP 404"
+    ],
+    "profile_top": [
+     "[profile]      0.85ms",
+     "[profile]      0.42ms",
+     "[profile]      0.33ms",
+     "[profile]      0.06ms",
+     "[profile]      0.01ms",
+     "[profile]      0.43ms",
+     "[profile]      0.22ms",
+     "[profile]      0.18ms",
+     "[profile]      0.01ms",
+     "[profile]      0.00ms",
+     "[profile]      0.22ms",
+     "[profile]      0.10ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 11.1,
+    "rc": 0,
+    "timed_out": false,
+    "error_lines": [
+     "✗ https://top-fwz1.mail.ru/counter?id=3081030;js=na (dns: resolve top-fwz1.mail.ru:443: network error: resolve top-fwz1.mail.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск картинки https://top-fwz1.mail.ru/counter?id=3081030;js=na: network error: resolve top-fwz1.mail.ru:443: network error: resolve top-fwz1.mail.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "✗ https://mc.yandex.ru/watch/16443139 (dns: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск картинки https://mc.yandex.ru/watch/16443139: network error: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "✗ https://mc.yandex.ru/watch/98761308 (dns: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+     "Пропуск картинки https://mc.yandex.ru/watch/98761308: network error: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+     "Пропуск картинки https://www.rbc.ru/track/ssr/: network error: HTTP 404"
+    ],
+    "png_size": [
+     1024,
+     10986
+    ]
+   },
+   "phases": {
+    "net_parse_s": 0.31,
+    "style_layout_s": 6.46,
+    "paint_s": 4.33
+   },
+   "status": "OK"
+  }
+ ]
+}

@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-301)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-305)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -313,6 +313,10 @@
 | [BUG-299](bugs/BUG-299-FIXED.md) | FIXED 2026-07-17 | js (`dom.rs` shim) | `Element.prototype.insertAdjacentText` отсутствовал вовсе — `testharness.js`'s `Output.show_results` вызывает его безусловно для тестов без записанных assert'ов, падение молча обрывало `completion`-коллбэк-цепочку. Реализован через существующие `before`/`prepend`/`append`/`after`. Найдено P2-wpt S4 |
 | [BUG-300](bugs/BUG-300-FIXED.md) | FIXED 2026-07-17 | shell (`main.rs`, `check_wait_condition`) | Фоллбэк-ветка `DocumentReady`-ожидания (`_ => self.layout_box.is_some()`) не проверяла `nav_start`, поэтому могла подтвердить готовность по **устаревшему** `layout_box` предыдущей/начальной вкладки ещё до начала реальной навигации — `browsingContext.navigate` ACK'ал за ~10мс вместо реального ожидания. Фикс — тот же гейт `nav_start.is_none()`, что и в основной ветке. Остаток (специфичный для wptrunner+wptserve) → [BUG-301](bugs/BUG-301-OPEN.md). Найдено P2-wpt S4 |
 | [BUG-301](bugs/BUG-301-OPEN.md) | OPEN | неясно — js (`testharness.js` completion) и/или wptrunner-интеграция (`executorlumen.py`) | `tests/wpt/run_smoke.py` всё ещё таймаутится после BUG-298/299/300: все внешние признаки (readyState, наличие тестовых глобалей, DOM) корректны, но `#log` (первый побочный эффект `Output.show_status`) не появляется вовсе — коллбэк-цепочка `testharness.js` не срабатывает целиком именно при driving через `wptrunner`+`wptserve`; ручной BiDi-драйвер с тем же файлом через простой HTTP-сервер проходит корректно. Причина не найдена. Найдено P2-wpt S4 2026-07-17 |
+| [BUG-302](bugs/BUG-302-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | `Element.getElementsByClassName` отсутствует в основном DOM-шиме (есть только в dom_parser.rs) — скрипты news.ycombinator.com падают целиком (`el.getElementsByClassName is not a function`), маскируя дальнейшие несовместимости. Та же семья, что BUG-299. Найден первым прогоном scripts/perf_audit.py (/lumen-perf-audit) |
+| [BUG-303](bugs/BUG-303-OPEN.md) | OPEN | js (V8 / event loop) | github.com: JS-исполнение не завершается ≥240с и на V8 (сеть готова за 0.7с) — гипотеза «медленный QuickJS» из аудита 2026-07-02 опровергнута; похоже на незавершающийся цикл из-за отсутствующего API (`Automatic publicPath is not supported`); сайт не должен уметь вешать пайплайн навсегда. Найден /lumen-perf-audit |
+| [BUG-304](bugs/BUG-304-OPEN.md) | OPEN | network (резолвер) | DNS os error 11004 (WSANO_DATA) на живых доменах (mc.yandex.ru, top-fwz1.mail.ru, ssp.rambler.ru, static-mon.yandex.net, cdn.skcrtxr.com) — имя резолвится системно, но Lumen просит не тот тип записи (нет фолбэка AAAA→A?); сайты теряют подресурсы. Замечен аудитом 2026-07-02, заведён /lumen-perf-audit 2026-07-17 |
+| [BUG-305](bugs/BUG-305-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | Конструктор `Image`/`HTMLImageElement` отсутствует в шиме — `new Image()` (предзагрузка, трекинг-пиксели, canvas) валит скрипты ria.ru целиком (`Image is not defined`). Реализация = алиас `document.createElement('img')`. Найден /lumen-perf-audit |
 
 ---
 
