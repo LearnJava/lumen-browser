@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-17",
  "counts": {
-  "open": 31,
+  "open": 32,
   "fixed": 235,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 266,
+ "total_bugs": 267,
  "phases": [
   {
    "id": "P0",
@@ -1443,7 +1443,7 @@
     {
      "id": "DEVX",
      "title": "DEVX: dev-tooling на готовых поверхностях браузера",
-     "status": "active",
+     "status": "done",
      "note": "Дорожка dev-tooling (владелец — P2): задействовать уже существующие automation/introspection-поверхности браузера для ускорения разработки. Полный каталог поверхностей и «что когда применять» — `docs/automation.md` (аудит 2026-07-16): MCP tools/resources, BiDi-команды, driver-API, `--deterministic`, `LUMEN_NO_*` paint-флаги — почти всё не задействовано тулингом",
      "tasks": [
       {
@@ -1487,9 +1487,12 @@
       {
        "id": "DEVX-6",
        "title": "DEVX-6: BiDi-сценарии offline/intercept/timezone/UA",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Интеграционные сценарные тесты на неиспользуемых BiDi-рычагах (`--bidi-port`, живое окно): `network.setOfflineStatus` (offline-поведение), `network.addIntercept`+`failRequest`/`continueRequest` (деградация при падении ресурса), `browser.setTimezoneOverride` и `emulation.setUserAgentOverride` (Date/navigator.userAgent на странице). Python-тесты рядом с tests/wpt-тулингом; заодно проверяет сами BiDi-команды end-to-end"
+       "note": "DONE 2026-07-17: `tests/wpt/verify_devx6_bidi_scenarios.py` (raw `BidiSession`, same pattern as `verify_s3_bidi_session.py`) drives a real spawned `lumen --bidi-port` window and checks two things per command — protocol round-trip (ACK/error shape) and live-page effect (fetch blocked, `Intl` timezone shift, `navigator.userAgent` shift). All six protocol round-trips pass; all four live-effect checks confirmed **not wired** (none of `network.setOfflineStatus`/`addIntercept`/`continueRequest`/`failRequest`, `browser.setTimezoneOverride`, `emulation.setUserAgentOverride` touch `state.live` — filed as [BUG-295](../bugs/BUG-295-OPEN.md) with full diagnosis; wiring them is real engine/shell feature work, out of this Python-tooling task's scope). Also found and handled a separate, environment-dependent gap: the live window's JS runtime can fail to finish installing at all in some working sessions (`script.evaluate` stuck on \"JS context not available\") — reported as `SKIP(env)`, documented in CLAUDE.md Known gotchas, not filed as part of BUG-295 (reproduced independent of these six commands).",
+       "bugs": [
+        "BUG-295"
+       ]
       }
      ]
     }
@@ -3390,6 +3393,13 @@
    "status": "open",
    "title": "Flex-item с `margin-left` в row-контейнере позиционируется со сдвигом в 2× margin вместо 1×: `lay_out_flex`'s row-ветка передаёт `content_x + main_cursor + m_l`…",
    "component": "layout (`box_tree.rs`, `lay_out_flex`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-295": {
+   "status": "open",
+   "title": "Шесть BiDi-команд (`network.setOfflineStatus`/`addIntercept`/`continueRequest`/`failRequest`, `browser.setTimezoneOverride`, `emulation.setUserAgentOverride`) к…",
+   "component": "bidi-server (`protocol.rs`) + shell live-window wiring",
    "date": null,
    "debtor": false
   }
