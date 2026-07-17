@@ -1,4 +1,5 @@
-//! Real OS-level Document Picture-in-Picture window (slice 1).
+//! Real OS-level Document Picture-in-Picture window (slice 1 lifecycle +
+//! slice 2 content + slice 3 author CSS).
 //!
 //! Mirrors [`pip_os_window`](super::pip_os_window) (CC-7, video PiP): a
 //! separate, always-on-top, borderless `winit::Window` floating above every
@@ -7,11 +8,11 @@
 //! (`documentpip_bindings.rs`, mirroring `pip_bindings.rs`).
 //!
 //! Unlike video PiP, `documentPictureInPicture.requestWindow()` is meant to
-//! host an arbitrary moved DOM subtree, not a single `<video>` frame. Laying
-//! out and painting that subtree into the floating window is a separate
-//! follow-up slice; for now [`build_docpip_content`] fills the window with a
-//! placeholder background so the window's lifecycle (open/resize/close) is
-//! real and end-to-end testable ahead of real content.
+//! host an arbitrary moved DOM subtree, not a single `<video>` frame.
+//! [`build_docpip_content`] builds only the window's opaque background fill;
+//! `Lumen::render_doc_pip_os` (`shell/src/main.rs`) lays out and paints the
+//! moved subtree's serialized markup on top of it each frame (slice 2 — see
+//! `document_pip.rs` module docs for the JS-side content bridge).
 //!
 //! [`PipOsConfig`], [`pip_window_attributes`] and [`physical_to_logical`] are
 //! shared verbatim with video PiP (`super::pip_os_window`) — they carry no
@@ -21,13 +22,13 @@ use lumen_core::geom::Rect;
 use lumen_layout::Color;
 use lumen_paint::{DisplayCommand, DisplayList};
 
-/// Background fill for the floating window until real DOM content is wired up.
+/// Background fill for the floating window, painted under the moved subtree.
 const DOC_PIP_BG: Color = Color { r: 24, g: 24, b: 30, a: 255 };
 
-/// Build the display list shown in the floating Document PiP window.
+/// Build the opaque background fill for the floating Document PiP window.
 ///
-/// Placeholder for slice 1: a single opaque fill. Once the moved DOM subtree
-/// gets its own layout + paint pass, this will render that subtree instead.
+/// `Lumen::render_doc_pip_os` paints the moved DOM subtree's own display list
+/// on top of this when `pipWindow.document.body` has content.
 pub fn build_docpip_content(win_w: f32, win_h: f32) -> DisplayList {
     let mut out = DisplayList::with_capacity(1);
     if win_w <= 0.0 || win_h <= 0.0 {

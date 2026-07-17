@@ -9558,9 +9558,9 @@ struct PipOsWindow {
     video_rect: Rect,
 }
 
-/// The live OS-level Document Picture-in-Picture window (slice 1): a separate
-/// always-on-top `winit::Window` with its own [`RenderBackend`] surface. Shows
-/// a placeholder background until real DOM mirroring lands (see
+/// The live OS-level Document Picture-in-Picture window (slice 2): a separate
+/// always-on-top `winit::Window` with its own [`RenderBackend`] surface,
+/// laying out and painting the moved DOM subtree's serialized markup (see
 /// `doc_pip_os_window.rs` module docs).
 ///
 /// Owned by [`Lumen::doc_pip_os`]; created from a
@@ -9570,8 +9570,12 @@ struct PipOsWindow {
 struct DocPipOsWindow {
     /// The floating OS window. Identified against `WindowEvent`s by its id.
     window: Arc<Window>,
-    /// Dedicated render backend drawing the (placeholder) content.
+    /// Dedicated render backend drawing the content.
     renderer: Box<dyn RenderBackend>,
+    /// Latest serialized markup of `pipWindow.document`'s hidden content
+    /// container (`_lumen_docpip_set_content_html`), re-parsed and laid out
+    /// on every redraw. Empty until the page appends its first node.
+    content_html: String,
 }
 
 impl ApplicationHandler<LoadEvent> for Lumen {
@@ -10717,6 +10721,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             let action = match req {
                 DocPipRequest::Open { width, height } => self.doc_pip_controller.on_open(width, height),
                 DocPipRequest::Close => self.doc_pip_controller.on_close(),
+                DocPipRequest::SetContent(html) => {
+                    if let Some(pip) = self.doc_pip_os.as_mut() {
+                        pip.content_html = html;
+                    }
+                    self.render_doc_pip_os();
+                    DocPipAction::None
+                }
             };
             match action {
                 DocPipAction::Open { width, height } => self.open_doc_pip_os(event_loop, width, height),
@@ -16216,7 +16227,7 @@ impl Lumen {
             window.inner_size().height,
             window.scale_factor() as f32,
         );
-        self.doc_pip_os = Some(DocPipOsWindow { window, renderer });
+        self.doc_pip_os = Some(DocPipOsWindow { window, renderer, content_html: String::new() });
         self.render_doc_pip_os();
         self.notify_docpip_window_resized(win_w, win_h);
     }
@@ -16228,9 +16239,15 @@ impl Lumen {
         self.doc_pip_os = None;
     }
 
-    /// Document Picture-in-Picture (slice 1): redraw the OS floating window.
-    /// Currently a placeholder fill (`build_docpip_content`) — real DOM
-    /// mirroring is a follow-up slice. No-op when no window is open.
+    /// Document Picture-in-Picture (slice 3): redraw the OS floating window.
+    /// Background fill (`build_docpip_content`) first, then — if the page has
+    /// appended anything to `pipWindow.document.body` — the moved subtree's
+    /// last-known markup (`pip.content_html`) is re-parsed into a fresh
+    /// detached [`lumen_dom::Document`], laid out at the window's own size
+    /// against the main page's own author stylesheet (`self.layout_source`),
+    /// and painted on top. No-op when no window is open. Known gap: images in
+    /// the moved subtree don't render (this window's renderer has its own
+    /// image cache, separate from the main page's).
     fn render_doc_pip_os(&mut self) {
         let Some(pip) = self.doc_pip_os.as_mut() else {
             return;
@@ -16239,7 +16256,20 @@ impl Lumen {
         let scale = pip.window.scale_factor() as f32;
         let (win_w, win_h) =
             panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
-        let content = panels::doc_pip_os_window::build_docpip_content(win_w, win_h);
+        let mut content = panels::doc_pip_os_window::build_docpip_content(win_w, win_h);
+        if !pip.content_html.is_empty() {
+            let doc = lumen_html_parser::parse(&pip.content_html);
+            let empty_sheet;
+            let sheet = match self.layout_source.as_ref() {
+                Some(src) => src.stylesheet.as_ref(),
+                None => {
+                    empty_sheet = lumen_css_parser::parse("");
+                    &empty_sheet
+                }
+            };
+            let layout = lumen_layout::layout(&doc, sheet, Size::new(win_w, win_h));
+            content.extend(paint_ordered(&layout));
+        }
         if let Err(err) = pip.renderer.render(&[], &content, 0.0, 0.0) {
             eprintln!("Document PiP OS render error: {err:?}");
         }
