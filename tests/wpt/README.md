@@ -7,21 +7,23 @@ bespoke test runner. See the task doc for the full architecture and slice plan.
 **Status:** S1–S3 done. S4 (`LumenTestharnessExecutor.do_test`, `testharnessreport.js`
 shim, smoke driver) is **implemented but blocked**: `tests/wpt/run_smoke.py` drives
 a real `lumen --bidi-port` through navigate + eval end to end, but the smoke test
-(`dom/nodes/Element-hasAttribute.html`) still doesn't PASS — blocked on
-[BUG-296](../../bugs/BUG-296-OPEN.md) (a plain `lumen --bidi-port <N>` process's own
-default-homepage navigation can land in the same top-level context *after* the test
-driver's explicit `browsingContext.navigate`, leaving `window`/`document` pointing at
-the homepage). Four other real engine gaps surfaced and were fixed while proving this
-path: [BUG-278](../../bugs/BUG-278-FIXED.md) (HTTP client rejected `wptserve`'s
-close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
+(`dom/nodes/Element-hasAttribute.html`) still doesn't PASS — blocked on a separate,
+pre-existing `script.evaluate`-install race (`CLAUDE.md` → "Known gotchas" →
+"Live-window BiDi/MCP `script.evaluate` can hang indefinitely..."), independent of
+page content and not yet root-caused. Five other real engine/shell gaps surfaced and
+were fixed while proving this path: [BUG-278](../../bugs/BUG-278-FIXED.md) (HTTP client
+rejected `wptserve`'s close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
 (`document.getElementsByTagName` was missing entirely — broke `testharness.js`'s
 own module-level setup), [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't
 the JS engine's real global object, so `testharness.js`'s `expose()`-based public API
-was unreachable as bare identifiers), and [BUG-291](../../bugs/BUG-291-FIXED.md) (DOM
+was unreachable as bare identifiers), [BUG-291](../../bugs/BUG-291-FIXED.md) (DOM
 node wrappers weren't interned, breaking `===` node identity and crashing
-`testharness.js`'s built-in results renderer, `Output.show_results`). See those bug
-files and the task doc's S4 section for the full diagnosis trail (BiDi-eval-based
-bisection of `testharness.js`'s execution).
+`testharness.js`'s built-in results renderer, `Output.show_results`), and
+[BUG-296](../../bugs/BUG-296-FIXED.md) (a stale on-disk `last_session.db` — session
+restore, not a "default homepage" feature — could reopen a leftover tab and race the
+test driver's explicit `browsingContext.navigate`; `--bidi-port`/`--mcp-live-port`
+launches now skip session restore). See those bug files and the task doc's S4 section
+for the full diagnosis trail (BiDi-eval-based bisection of `testharness.js`'s execution).
 
 ## What's here
 
@@ -89,7 +91,7 @@ bisection of `testharness.js`'s execution).
 
   Both scripts default to `target/<LUMEN_PROFILE>/lumen.exe` (`LUMEN_PROFILE`
   env var, default `release`), same convention as `graphic_tests/run.py`.
-  `run_smoke.py` currently exits non-zero — see Status above (BUG-291).
+  `run_smoke.py` currently exits non-zero — see Status above.
 - `tests/wpt/config.json` — **ours** (S4) — `wptserve` config override: pins
   `browser_host` to `127.0.0.1` (the default, `web-platform.test`, needs
   `/etc/hosts` entries this task's "no live network" rule can't rely on) and

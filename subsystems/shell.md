@@ -1,5 +1,24 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Fixed (BUG-296, session restore raced automation navigation, `P2-wpt`, 2026-07-17):**
+  `lumen --bidi-port <N>`/`--mcp-live-port <N>` launched with no page argument
+  (`PageSource::Empty`) unconditionally called `Lumen::restore_session()`, silently
+  reopening whatever tab was active in the last saved session — `last_session.db`
+  (`session_persist::SESSION_DB_PATH`) is a bare filename resolved against the
+  process's **current working directory**, not the portable `<exe_dir>/data/`
+  convention (`adblock::browser_data_dir`). Since automation harnesses spawn `lumen`
+  from the repo root — the same CWD an interactive `cargo run -p lumen-shell`
+  session would use — a leftover tab from manual testing could reopen and race the
+  automation driver's own `browsingContext.navigate`, sometimes landing after it and
+  leaving `window`/`document` pointed at the stale page. New pure helper
+  `should_restore_session(source: &PageSource, automation_mode: bool) -> bool` in
+  `crates/shell/src/main.rs`; `run_window_mode` gained an `automation_mode` parameter
+  (`bidi_port.is_some() || mcp_live_port.is_some()`) and now restores the session
+  only when both no explicit page arg *and* no automation front-end is attached —
+  matching `--bidi-port`'s own documented "пустое окно" (empty window) behavior.
+  See [BUG-296](../bugs/BUG-296-FIXED.md) for the full diagnosis (including why an
+  earlier "ruled out: fresh `data/` dir" attempt missed it — the session store isn't
+  under `data/`).
 - **Done (Pointer Events L3 coalesced/predicted moves, `P3-pointerfull`, 2026-07-17):**
   discovered while scoping the task that real `CursorMoved` never dispatched a
   continuous `pointermove`/`mousemove` at all — only hover-boundary events
