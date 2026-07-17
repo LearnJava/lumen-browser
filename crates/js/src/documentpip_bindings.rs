@@ -1,13 +1,14 @@
 //! Native Document Picture-in-Picture window bridge (`_lumen_docpip_request_window` /
-//! `_lumen_docpip_close`).
+//! `_lumen_docpip_close` / `_lumen_docpip_set_content_html`).
 //!
 //! The JS shim in [`document_pip`](crate::document_pip) implements
 //! `documentPictureInPicture.requestWindow()` / `PictureInPictureWindow.close()`
 //! and calls the native hooks registered here. Each hook pushes a
 //! [`DocPipRequest`] onto a process-global queue that the shell drains every
 //! event-loop tick (mirrors [`pip_bindings`](crate::pip_bindings) for video
-//! PiP) to open or close the real OS-level floating window (slice 1 of
-//! Document PiP — see `document_pip.rs` module docs).
+//! PiP) to open/close the real OS-level floating window (slice 1) and to feed
+//! it the serialized HTML of the moved DOM subtree (slice 2 — see
+//! `document_pip.rs` module docs).
 //!
 //! # Why a process-global queue
 //!
@@ -18,7 +19,7 @@
 use std::sync::{Mutex, OnceLock};
 
 /// A Document PiP request emitted by the JS API, awaiting the shell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocPipRequest {
     /// `documentPictureInPicture.requestWindow(width, height)` — open the OS
     /// floating window at this logical (CSS pixel) size.
@@ -30,6 +31,12 @@ pub enum DocPipRequest {
     },
     /// `PictureInPictureWindow.close()` — close the OS floating window.
     Close,
+    /// `pipWindow.document.body` was mutated (`appendChild`/`removeChild`/
+    /// `innerHTML` setter) — the JS shim re-serialized its hidden content
+    /// container and forwards the resulting markup, which the shell parses
+    /// into a fresh detached [`lumen_dom::Document`] and lays out/paints into
+    /// the floating window on the next redraw.
+    SetContent(String),
 }
 
 /// Process-global queue of Document PiP requests awaiting the shell's drain.
@@ -63,7 +70,7 @@ pub fn take_docpip_requests() -> Vec<DocPipRequest> {
 pub(crate) fn install_docpip_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
 ) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::{into_v8_fn0, into_v8_fn2};
+    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2};
 
     let request_window = into_v8_fn2(move |width: f64, height: f64| {
         enqueue(DocPipRequest::Open {
@@ -77,6 +84,11 @@ pub(crate) fn install_docpip_bindings_v8(
         enqueue(DocPipRequest::Close);
     });
     rt.register_native("_lumen_docpip_close", close)?;
+
+    let set_content_html = into_v8_fn1(move |html: String| {
+        enqueue(DocPipRequest::SetContent(html));
+    });
+    rt.register_native("_lumen_docpip_set_content_html", set_content_html)?;
     Ok(())
 }
 
@@ -114,16 +126,17 @@ mod tests {
     }
 
     #[test]
-    fn install_registers_both_hooks() {
+    fn install_registers_all_hooks() {
         let _g = guard();
         with_docpip_bindings(|rt| {
             let ok = rt
                 .eval(
                     "typeof _lumen_docpip_request_window === 'function' && \
-                     typeof _lumen_docpip_close === 'function'",
+                     typeof _lumen_docpip_close === 'function' && \
+                     typeof _lumen_docpip_set_content_html === 'function'",
                 )
                 .unwrap();
-            assert_eq!(ok, lumen_core::JsValue::Bool(true), "both Document PiP hooks must be installed");
+            assert_eq!(ok, lumen_core::JsValue::Bool(true), "all Document PiP hooks must be installed");
         });
     }
 
@@ -145,5 +158,15 @@ mod tests {
         });
         let reqs = take_docpip_requests();
         assert_eq!(reqs, vec![DocPipRequest::Close]);
+    }
+
+    #[test]
+    fn js_set_content_html_call_reaches_queue() {
+        let _g = guard();
+        with_docpip_bindings(|rt| {
+            rt.eval("_lumen_docpip_set_content_html('<div>hi</div>');").unwrap();
+        });
+        let reqs = take_docpip_requests();
+        assert_eq!(reqs, vec![DocPipRequest::SetContent("<div>hi</div>".to_owned())]);
     }
 }

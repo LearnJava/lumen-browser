@@ -836,20 +836,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/lib.rs:66` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
 `crates/driver/src/live_session.rs:43` **struct** `LiveWindowSession` — [`BrowserSession`] adapter that drives a live `lumen-shell` window through
 `crates/driver/src/live_session.rs:51` **fn** `new` — Bind a new session to `handle`, the sending half of a live window's
-`crates/driver/src/session.rs:54` **struct** `InProcessSession` — Headless in-process сессия браузера
-`crates/driver/src/session.rs:92` **fn** `new` — Создать сессию с viewport 1024×720
-`crates/driver/src/session.rs:108` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
-`crates/driver/src/session.rs:140` **fn** `with_origin_isolation` — Create a session with per-origin-group isolation (Phase 1: 8E)
-`crates/driver/src/session.rs:159` **fn** `isolation_context` — Access the per-origin-group isolation context, if this session was
-`crates/driver/src/session.rs:164` **fn** `isolation_context_mut` — Mutable access to the per-origin-group isolation context
-`crates/driver/src/session.rs:174` **fn** `set_pending_js_tasks` — Установить количество pending JS microtask/callback для условия `JsIdle`
-`crates/driver/src/session.rs:205` **fn** `active_property_trees` — Active property trees snapshot from the compositor (PH1-7)
-`crates/driver/src/session.rs:217` **fn** `scroll_page_by` — Off-main-thread page scroll (PH1-7)
-`crates/driver/src/session.rs:237` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
-`crates/driver/src/session.rs:313` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
-`crates/driver/src/session.rs:331` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
-`crates/driver/src/session.rs:345` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
-`crates/driver/src/session.rs:1136` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
+`crates/driver/src/session.rs:58` **struct** `InProcessSession` — Headless in-process сессия браузера
+`crates/driver/src/session.rs:106` **fn** `new` — Создать сессию с viewport 1024×720
+`crates/driver/src/session.rs:124` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
+`crates/driver/src/session.rs:158` **fn** `with_origin_isolation` — Create a session with per-origin-group isolation (Phase 1: 8E)
+`crates/driver/src/session.rs:179` **fn** `isolation_context` — Access the per-origin-group isolation context, if this session was
+`crates/driver/src/session.rs:184` **fn** `isolation_context_mut` — Mutable access to the per-origin-group isolation context
+`crates/driver/src/session.rs:194` **fn** `set_pending_js_tasks` — Установить количество pending JS microtask/callback для условия `JsIdle`
+`crates/driver/src/session.rs:225` **fn** `active_property_trees` — Active property trees snapshot from the compositor (PH1-7)
+`crates/driver/src/session.rs:237` **fn** `scroll_page_by` — Off-main-thread page scroll (PH1-7)
+`crates/driver/src/session.rs:257` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
+`crates/driver/src/session.rs:428` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
+`crates/driver/src/session.rs:446` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
+`crates/driver/src/session.rs:460` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
+`crates/driver/src/session.rs:1362` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
 `crates/driver/src/types.rs:15` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
 `crates/driver/src/types.rs:30` **enum** `Target` — Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
 `crates/driver/src/types.rs:41` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
@@ -1295,9 +1295,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/css_properties_values_api.rs:64` **fn** `install_css_properties_values_api` — Install CSS.registerProperty bindings into the JS context
 `crates/js/src/decorators.rs:39` **fn** `install_decorator_shim` — Install the decorator transformer shim and well-known symbols into `ctx`
 `crates/js/src/decorators.rs:59` **fn** `maybe_transform_decorators` — Pre-process `source` through the JS decorator transformer
-`crates/js/src/documentpip_bindings.rs:22` **enum** `DocPipRequest` — A Document PiP request emitted by the JS API, awaiting the shell
-`crates/js/src/documentpip_bindings.rs:43` **fn** `enqueue` — Enqueue a Document PiP request. Public so non-JS engine paths can reuse the channel
-`crates/js/src/documentpip_bindings.rs:50` **fn** `take_docpip_requests` — Drain and return all pending Document PiP requests
+`crates/js/src/documentpip_bindings.rs:23` **enum** `DocPipRequest` — A Document PiP request emitted by the JS API, awaiting the shell
+`crates/js/src/documentpip_bindings.rs:50` **fn** `enqueue` — Enqueue a Document PiP request. Public so non-JS engine paths can reuse the channel
+`crates/js/src/documentpip_bindings.rs:57` **fn** `take_docpip_requests` — Drain and return all pending Document PiP requests
 `crates/js/src/dom.rs:111` **enum** `NavigateRequest` — Navigation request emitted by JS (`location.href =`, `location.assign()`,
 `crates/js/src/dom.rs:128` **enum** `HistoryUrlUpdate` — Notification emitted by `history.pushState`/`history.replaceState` so the
 `crates/js/src/dom.rs:158` **enum** `NavAction` — Discriminant embedded in `pending_navigation_updates` to tell the shell
@@ -4402,13 +4402,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/command_palette.rs:427` **enum** `PaletteHit` — Result of a click inside the modal palette
 `crates/shell/src/panels/command_palette.rs:451` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the modal palette in a
 `crates/shell/src/panels/command_palette.rs:477` **fn** `build_panel` — Build the display list for the modal palette over a `viewport_w`×`viewport_h`
-`crates/shell/src/panels/doc_pip_os_window.rs:31` **fn** `build_docpip_content` — Build the display list shown in the floating Document PiP window
-`crates/shell/src/panels/doc_pip_os_window.rs:47` **enum** `DocPipAction` — What the shell should do after feeding a request into [`DocPipController`]
-`crates/shell/src/panels/doc_pip_os_window.rs:68` **struct** `DocPipController` — Tracks whether the OS Document PiP window is currently open
-`crates/shell/src/panels/doc_pip_os_window.rs:74` **fn** `new` — Create an idle controller with no open window
-`crates/shell/src/panels/doc_pip_os_window.rs:80` **fn** `is_open` — `true` while the OS Document PiP window should be shown
-`crates/shell/src/panels/doc_pip_os_window.rs:85` **fn** `on_open` — Handle `_lumen_docpip_request_window(width, height)`
-`crates/shell/src/panels/doc_pip_os_window.rs:94` **fn** `on_close` — Handle `_lumen_docpip_close()` or an OS close button
+`crates/shell/src/panels/doc_pip_os_window.rs:32` **fn** `build_docpip_content` — Build the opaque background fill for the floating Document PiP window
+`crates/shell/src/panels/doc_pip_os_window.rs:48` **enum** `DocPipAction` — What the shell should do after feeding a request into [`DocPipController`]
+`crates/shell/src/panels/doc_pip_os_window.rs:69` **struct** `DocPipController` — Tracks whether the OS Document PiP window is currently open
+`crates/shell/src/panels/doc_pip_os_window.rs:75` **fn** `new` — Create an idle controller with no open window
+`crates/shell/src/panels/doc_pip_os_window.rs:81` **fn** `is_open` — `true` while the OS Document PiP window should be shown
+`crates/shell/src/panels/doc_pip_os_window.rs:86` **fn** `on_open` — Handle `_lumen_docpip_request_window(width, height)`
+`crates/shell/src/panels/doc_pip_os_window.rs:95` **fn** `on_close` — Handle `_lumen_docpip_close()` or an OS close button
 `crates/shell/src/panels/focus_panel.rs:74` **struct** `PomodoroTimer` — Wall-clock-driven countdown timer
 `crates/shell/src/panels/focus_panel.rs:90` **fn** `new` — Create a running timer of `duration_min` minutes with zero elapsed time
 `crates/shell/src/panels/focus_panel.rs:102` **fn** `tick` — Advance the timer to wall-clock `now_ms`.  Adds the delta since the last
