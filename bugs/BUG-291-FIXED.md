@@ -1,6 +1,6 @@
 # BUG-291 — `testharness.js`'s built-in results renderer (`Output.show_results`) throws `TypeError: Cannot read properties of null (reading 'appendChild')`, aborting harness completion
 
-**Статус:** OPEN — blocks `tests/wpt/run_smoke.py` from reaching a genuine PASS/FAIL result even after BUG-280 is fixed
+**Статус:** FIXED 2026-07-17 — root cause (unstable node-wrapper identity) fixed and verified in isolation; the S4 DoD checkbox this was blocking is now blocked instead by an unrelated, pre-existing BiDi JS-context-install race (see "Остаток" below)
 **Компонент:** js (DOM child-node bindings, `crates/js/src/dom.rs`) — most likely `appendChild`/`lastChild`/node-wrapper identity for `createElementNS`-created elements
 **Найден:** P2-wpt S4/S5 (`docs/tasks/p2-wpt-integration.md`), re-running `tests/wpt/run_smoke.py` after landing the BUG-280 fix (`window === globalThis`)
 
@@ -78,11 +78,44 @@ misbehave if node wrappers aren't stable.
    poll `window.__lumen_wpt_results` — stays `null` indefinitely; `document.readyState` reaches
    `"complete"` immediately.
 
-## Что нужно для закрытия
+## Фикс (2026-07-17)
 
-Investigate `appendChild`/`lastChild`/`firstChild` (and the DOM node → JS wrapper mapping in general —
-`crates/js/src/dom.rs` and/or `crates/dom`) for `createElementNS`-created elements: confirm whether node
-wrappers are cached/interned (`===` should hold for repeated access to the same node) and whether
-`lastChild` can return `null`/stale data immediately after a same-tick `appendChild` sequence in a
-multi-child subtree. Re-run `tests/wpt/run_smoke.py` afterward — DoD unblocks the S4 checkbox at
-`docs/tasks/p2-wpt-integration.md:322` ("A deliberately-failing assertion is observed as FAIL").
+Node wrappers were never interned: `_lumen_make_element(nid)` (`crates/js/src/dom.rs`) built a brand-new
+JS object on every call, so `.lastChild`/`.firstChild`/`.parentElement`/`.children`/etc. minted a fresh
+wrapper each access — exactly the `tbody.lastChild === tr` anomaly this bug's investigation isolated.
+Confirmed against the DOM arena (`crates/engine/dom/src/lib.rs`): node ids are allocated append-only
+(`alloc()`, `NodeId(self.nodes.len())`) with no free-list reuse until a future Phase-3 compaction, and the
+whole JS shim (`WEB_API_SHIM`) is re-evaluated from scratch on every navigation/bfcache thaw (fresh V8
+isolate) — so caching a wrapper by `nid` for the life of one JS context can never alias a stale wrapper
+onto an unrelated later node. Added `_lumen_node_wrappers` (a plain `{nid: wrapper}` object, following the
+same per-nid-storage pattern already used for `_validity_msg`/`_input_values`/`_canvas2d_ctxs`):
+`_lumen_make_element` now returns the interned wrapper if `nid` was already wrapped, and stores the new
+one before returning otherwise. This is the shared, engine-agnostic shim (`WEB_API_SHIM`), so the fix
+applies to both the default V8 build and the QuickJS rollback path identically.
+
+As a side effect this also fixes silent loss of expando properties: previously `el.foo = 1; el.foo` (via
+two separate accesses of the same underlying node, e.g. through `parentNode.firstChild` twice) could
+silently read back `undefined`, since each access was a different object.
+
+Regression test: `dom::tests::repeated_node_access_returns_identical_wrapper`
+(`crates/js/src/dom.rs`) — reproduces this bug's own two isolated repros (`tbody.lastChild === tr` identity,
+and the `tbody.lastChild.lastChild.appendChild(...)` nested-access pattern from `Output.show_results`)
+directly against the shared shim via the QuickJS unit-test harness already used by neighboring tests in
+this file (`element_append_and_first_child_round_trip`, `create_element_ns_builds_native_svg_tree`).
+`cargo test -p lumen-js --lib` and `cargo clippy -p lumen-js --all-targets -- -D warnings` clean.
+
+## Остаток
+
+Re-running `tests/wpt/run_smoke.py` (and a hand-rolled direct BiDi driver, bypassing wptrunner) after this
+fix still times out — but *not* on the `Output.show_results` crash this bug diagnosed. Diagnostics
+(`document.readyState` + polling `window.__lumen_wpt_results` directly) show a **separate, pre-existing**
+issue: a plain `lumen --bidi-port <N>` process (no other flags) races its own default-homepage navigation
+(observed loading `ria.ru`) against the explicit `browsingContext.navigate` the test driver issues — the
+homepage load appears to land in the same top-level context *after* the intended navigation, leaving
+`window`/`document` pointing at the homepage instead of the test page, so `__lumen_wpt_results` is never
+set (reproduces with a freshly emptied `data/` dir, i.e. not `last_session.db`/`settings.db` state — ruled
+out explicitly). This matches the class of issue already logged in `CLAUDE.md` → "Known gotchas" ("Live
+window BiDi/MCP `script.evaluate` can hang indefinitely..."), reproduced independent of this fix. Filing a
+dedicated bug and root-causing the homepage/navigate race is out of scope here (P2-wpt is not this task);
+`docs/tasks/p2-wpt-integration.md`'s S4 checkbox note has been updated to point at this new blocker instead
+of BUG-291.

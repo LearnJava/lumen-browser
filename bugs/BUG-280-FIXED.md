@@ -121,7 +121,7 @@ listeners registered through the (now-shared) `addEventListener`.
 `File`, which surfaced that it never had the prototype link; unrelated to the window/global
 mechanism itself, fixed alongside since it was found by the same repointing.
 
-## Известный остаток — не фиксится здесь: [BUG-291](BUG-291-OPEN.md)
+## Известный остаток — не фиксится здесь: [BUG-291](BUG-291-FIXED.md)
 
 `tests/wpt/run_smoke.py` still times out after this fix — but for a **different, unrelated**
 reason confirmed by re-running the smoke test and bisecting further: `testharness.js`'s
