@@ -26,6 +26,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 | Layout/cascade phase timings as a call tree | `LUMEN_PROFILE_TREE=1` | stderr |
 | GUI timeline profiler | `cargo run --features tracy` | Tracy client needed |
 | Scroll performance benchmark | `scripts/scroll_perf.py`, `scripts/mt_stall_bench.py` | drives `--mcp-live-port` |
+| Real-site load perf: per-phase stats, journal, bug filing | `python scripts/perf_audit.py` over `docs/perf/corpus.txt`; full protocol = skill `/lumen-perf-audit` | dev-release build; full corpus 15–40 min; screenshot stage = CPU render path (BUG-221) |
 | Cache/memory growth diagnosis | `LUMEN_MEM_REPORT=1` (~10 s cadence dump) | TEMP instrumentation from BUG-272 |
 | Print/pagination check | `lumen --print-to-pdf out.pdf <src>` | A4 |
 | Reproduce input-order bugs | `--activity-log` / `--click-log` → `activity.log` | |

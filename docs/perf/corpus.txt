@@ -1,0 +1,19 @@
+# Корпус реальных сайтов для перф-аудита (scripts/perf_audit.py, skill /lumen-perf-audit).
+# Формат: <slug> <url>. Строки с # — комментарии.
+# Восстановлен из аудита 2026-07-02 (14 сайтов, память project_realworld_site_audit_2026_07).
+# Сайты с известным антиботом (403 на TLS-фингерпринт rustls) оставлены НАМЕРЕННО —
+# аудит отслеживает совместимость во времени; 403 = «известное ограничение», не регрессия.
+example        https://example.com/
+ya             https://ya.ru/
+hn             https://news.ycombinator.com/
+w3             https://www.w3.org/
+rust-lang      https://www.rust-lang.org/
+lenta          https://lenta.ru/
+github         https://github.com/
+stackoverflow  https://stackoverflow.com/
+crates         https://crates.io/
+docs-rs        https://docs.rs/
+ria            https://ria.ru/
+habr           https://habr.com/ru/
+mdn            https://developer.mozilla.org/en-US/
+rbc            https://www.rbc.ru/

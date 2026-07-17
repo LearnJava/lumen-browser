@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-17",
  "counts": {
-  "open": 32,
-  "fixed": 236,
+  "open": 34,
+  "fixed": 239,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 268,
+ "total_bugs": 273,
  "phases": [
   {
    "id": "P0",
@@ -1481,7 +1481,7 @@
     {
      "id": "PERF",
      "title": "PERF: перф-наблюдаемость глазами пользователя",
-     "status": "planned",
+     "status": "active",
      "note": "Дорожка перф-наблюдаемости (тулинг/бенчи — P2, движковые правки по находкам — P1): метрики, которые чувствует пользователь, поверх уже существующих поверхностей (`docs/automation.md`: LUMEN_FRAME_LOG, LUMEN_PROFILE_TREE, LUMEN_MEM_REPORT, MCP resources, crates/bench, scripts/scroll_perf.py, scripts/bench_chromium.py). Контекст: аудит 14 реальных сайтов 2026-07 нашёл два главных тормоза (CPU-растеризация; последовательный fetch подресурсов в UI-потоке) вручную — цель дорожки находить такое автоматически и ловить перф-регрессии так же, как graphic_tests ловят пиксельные. Рекомендуемый порядок: PERF-1 (самый большой рычаг) → PERF-2/3/4 (метрики) → PERF-5/6 → PERF-7 (гейт поверх всего)",
      "tasks": [
       {
@@ -1532,6 +1532,13 @@
        "status": "planned",
        "size": "S",
        "note": "Регрессионный перф-гейт поверх PERF-2/3/4/5: ночной (или пред-мержевый для тяжёлых веток) прогон корпуса, запись метрик в журнал, пороги в crates/bench/src/ci_gate.rs (механизм гейта уже существует — расширить новыми метриками). Аналог храповика KNOWN_DEBTORS, но для миллисекунд и мегабайт"
+      },
+      {
+       "id": "PERF-8",
+       "title": "PERF-8: skill /lumen-perf-audit — аудит корпуса реальных сайтов",
+       "status": "done",
+       "size": "S",
+       "note": "DONE 2026-07-17: scripts/perf_audit.py — 3 headless-замера на сайт (--dump-source / --dump-layout+LUMEN_PROFILE_TREE / --screenshot) → фазы сеть+парсинг / стиль+layout / paint, таймауты, error_lines, results.json+summary.md в .tmp/perf-audit/, --compare с дельтами (⚠ >20%); корпус docs/perf/corpus.txt (14 сайтов аудита 2026-07-02, вкл. антибот-403 намеренно); журнал docs/perf/journal.md + коммитируемые сырые прогоны docs/perf/runs/*.json; skill /lumen-perf-audit — полный автономный протокол прогон→анализ→журнал→BUG-NNN. Ручной предшественник PERF-2/PERF-7 (тот же корпус и журнал)"
       }
      ]
     }
@@ -3448,6 +3455,41 @@
    "component": "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-298": {
+   "status": "fixed",
+   "title": "`Element`/`DocumentFragment`/`ShadowRoot`.querySelector(All) делегировали в тот же нативный биндинг, что и `document.querySelector` — искали от корня документа,…",
+   "component": "js (`dom.rs` shim, `v8_runtime.rs`, `selector_query.rs`)",
+   "date": "2026-07-17",
+   "debtor": false
+  },
+  "BUG-299": {
+   "status": "fixed",
+   "title": "`Element.prototype.insertAdjacentText` отсутствовал вовсе — `testharness.js`'s `Output.show_results` вызывает его безусловно для тестов без записанных assert'ов…",
+   "component": "js (`dom.rs` shim)",
+   "date": "2026-07-17",
+   "debtor": false
+  },
+  "BUG-300": {
+   "status": "fixed",
+   "title": "Фоллбэк-ветка `DocumentReady`-ожидания (`_ => self.layout_box.is_some()`) не проверяла `nav_start`, поэтому могла подтвердить готовность по **устаревшему** `lay…",
+   "component": "shell (`main.rs`, `check_wait_condition`)",
+   "date": "2026-07-17",
+   "debtor": false
+  },
+  "BUG-301": {
+   "status": "open",
+   "title": "`tests/wpt/run_smoke.py` всё ещё таймаутится после BUG-298/299/300: все внешние признаки (readyState, наличие тестовых глобалей, DOM) корректны, но `#log` (перв…",
+   "component": "неясно — js (`testharness.js` completion) и/или wptrunner-интеграция (`executorlumen.py`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-302": {
+   "status": "open",
+   "title": "`Element.getElementsByClassName` отсутствует в основном DOM-шиме (есть только в dom_parser.rs) — скрипты news.ycombinator.com падают целиком (`el.getElementsByC…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3513,8 +3555,17 @@
   "js (JS environment bootstrap, `WEB_API_SHIM`)": [
    "BUG-280"
   ],
+  "js (WEB_API_SHIM, dom.rs)": [
+   "BUG-302"
+  ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"
+  ],
+  "js (`dom.rs` shim)": [
+   "BUG-299"
+  ],
+  "js (`dom.rs` shim, `v8_runtime.rs`, `selector_query.rs`)": [
+   "BUG-298"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
@@ -3784,6 +3835,9 @@
   "shell (`main.rs` — дренаж `window.open()` popup-запросов)": [
    "BUG-293"
   ],
+  "shell (`main.rs`, `check_wait_condition`)": [
+   "BUG-300"
+  ],
   "shell (`main.rs`, `maybe_expand_cv_relevant`)": [
    "BUG-286"
   ],
@@ -3823,6 +3877,9 @@
   ],
   "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)": [
    "BUG-297"
+  ],
+  "неясно — js (`testharness.js` completion) и/или wptrunner-интеграция (`executorlumen.py`)": [
+   "BUG-301"
   ]
  }
 }
