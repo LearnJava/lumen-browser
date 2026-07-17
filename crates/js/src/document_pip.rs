@@ -6,9 +6,23 @@
 //! Slice 1 (this file + `documentpip_bindings.rs` + `shell/src/panels/doc_pip_os_window.rs`):
 //! `requestWindow()`/`.close()` now open/close a real always-on-top OS window
 //! (mirroring video PiP's CC-7), and its real size round-trips back into
-//! `PictureInPictureWindow.width`/`.height`/`resize`. `.document` is still the
-//! JS-only mock object below — laying out and painting the moved DOM subtree
-//! into the floating window is a separate follow-up slice.
+//! `PictureInPictureWindow.width`/`.height`/`resize`.
+//!
+//! Slice 2 (this file + `documentpip_bindings.rs` + `shell/src/panels/doc_pip_os_window.rs` +
+//! `Lumen::render_doc_pip_os`): `.document` is now backed by a real (but
+//! hidden — never attached to the visible page tree) `<div>` element in the
+//! main document, so `pipWindow.document.body.appendChild(el)` performs a
+//! genuine DOM move (`el` really leaves wherever it was, per spec) instead of
+//! pushing into a plain JS array. Every mutation re-serializes that hidden
+//! container's `innerHTML` and forwards it to the shell via
+//! `_lumen_docpip_set_content_html`, which parses it into a fresh detached
+//! `lumen_dom::Document` and lays out + paints it into the floating window.
+//! Known gap: this reuses the *same* underlying `Document` as the main page
+//! (there's no independent PiP-window global/document per spec) — moved
+//! elements are real DOM nodes with working attributes/`innerHTML`, but their
+//! styling comes from a fresh, stylesheet-less layout pass (no author CSS
+//! carries over) and embedded images don't render (the floating window's
+//! renderer has its own, separate image cache).
 
 /// V8 port of the former rquickjs `install_document_pip_api` (Ph3 V8 migration S5-S7,
 /// rquickjs side removed in S12b-13): identical JS shim, evaluated via
@@ -47,21 +61,44 @@ const DOCUMENT_PIP_SHIM: &str = r#"(function() {
       if (this._closed) {
         return null;
       }
-      // Create a lightweight DOM container for the PiP content
+      // The PiP content lives in a real, but hidden, DOM container: a plain
+      // <div> never attached under document.documentElement, so it never
+      // paints into the main window. appendChild()-ing an existing page
+      // element into it is a genuine DOM move (the element really leaves its
+      // old parent), matching the spec's "moved subtree" semantics as
+      // closely as a single-Document engine allows (slice 2, see module docs).
       if (!this._document) {
+        const container = document.createElement('div');
+        const syncContent = () => {
+          if (typeof _lumen_docpip_set_content_html === 'function') {
+            _lumen_docpip_set_content_html(container.innerHTML);
+          }
+        };
         this._document = {
           body: {
-            children: [],
+            get children() {
+              return container.children;
+            },
             appendChild: (child) => {
-              this._document.body.children.push(child);
+              container.appendChild(child);
+              syncContent();
+              return child;
             },
             removeChild: (child) => {
-              this._document.body.children = this._document.body.children.filter(c => c !== child);
+              container.removeChild(child);
+              syncContent();
+              return child;
             },
-            innerHTML: '',
+            get innerHTML() {
+              return container.innerHTML;
+            },
+            set innerHTML(html) {
+              container.innerHTML = String(html);
+              syncContent();
+            },
           },
-          createElement: (tag) => ({ tagName: tag, children: [], innerHTML: '' }),
-          createTextNode: (text) => ({ nodeValue: text }),
+          createElement: (tag) => document.createElement(tag),
+          createTextNode: (text) => document.createTextNode(text),
         };
       }
       return this._document;
