@@ -331,7 +331,26 @@ fn main() -> ExitCode {
     bench_frames::mark_process_start();
     // Load the fingerprint profile (9F.1) once, before any network or JS setup.
     // Absent config → engine defaults, so behaviour is unchanged out of the box.
-    config::init_global(config::load().unwrap_or_default());
+    let mut startup_profile = config::load().unwrap_or_default();
+    // BUG-295: automation sessions (BiDi / MCP) use an in-memory HTTP cache, never
+    // the persistent on-disk one. The disk cache is keyed by URL and survives across
+    // runs, so on the fixed ports an automation server reuses (e.g. wptserve's
+    // 8000/8001) a resource fetched in one run is replayed stale in the next — even
+    // after the served file changed on disk. That silently broke
+    // `tests/wpt/run_smoke.py`: the first run (before the wptrunner `env_options` fix
+    // served the right file) cached the wrong `testharnessreport.js` with its
+    // `Cache-Control: max-age=3600`, and every later run kept serving that stale copy
+    // from disk, setting the wrong result global forever, so the harness timed out no
+    // matter what else was fixed. In-memory cache = fresh per process, deterministic.
+    // This must be decided BEFORE `init_global` — the profile `OnceLock` is set-once,
+    // so a later `init_global` is a no-op — hence a raw arg scan here rather than
+    // reusing the `extract_*` parsers below.
+    if std::env::args()
+        .any(|a| matches!(a.as_str(), "--bidi-port" | "--mcp-live-port" | "--mcp" | "--mcp-port"))
+    {
+        startup_profile.no_persistent_state = true;
+    }
+    config::init_global(startup_profile);
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (devtools_port, rest_args) = match extract_devtools_port(&args) {

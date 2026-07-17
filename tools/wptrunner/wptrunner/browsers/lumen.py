@@ -11,6 +11,8 @@ session endpoint and `binary` doubles as `webdriver_binary` — there is no
 separate driver process to point `--webdriver-binary` at.
 """
 
+import os
+
 from .base import ExecutorBrowser, WebDriverBrowser, get_timeout_multiplier, require_arg  # noqa: F401
 from ..executors import executor_kwargs as base_executor_kwargs
 from ..executors.executorlumen import LumenTestharnessExecutor  # noqa: F401
@@ -55,7 +57,31 @@ def env_options():
     # is same-origin `dom/` tests) — a literal IP needs no resolution at all,
     # sidestepping the `[Errno 11001] getaddrinfo failed` this produced
     # against the default hostname (found while implementing S4).
-    return {"browser_host": "127.0.0.1", "bind_address": True}
+    #
+    # BUG-295: `TestEnvironment.get_routes` (environment.py) ALWAYS registers a
+    # static route for `/resources/testharnessreport.js`, defaulting to
+    # wptrunner's own generic `executors/message-queue.js` + `testharnessreport.js`
+    # (the postMessage/testdriver-message-queue based one) unless the product's
+    # `env_options()` supplies a `"testharnessreport"` override — this default
+    # unconditionally shadows whatever is on disk at
+    # `tests/wpt/resources/testharnessreport.js`, including our own
+    # Lumen-specific one that stashes results on `window.__lumen_wpt_results`
+    # (`LumenTestharnessExecutor` in `executorlumen.py` polls exactly that
+    # global). Without this override, wptserve silently serves the wrong
+    # file: no crash, no error — the page just never sets the global the
+    # executor is polling for, which manifested as an unconditional
+    # `run_smoke.py` TIMEOUT no matter what else was fixed (found chasing
+    # BUG-291 — a direct BiDi probe against a plain `http.server` for the same
+    # page succeeded quickly, isolating the fault to something wptserve-specific
+    # once BUG-291 itself was ruled out).
+    testharnessreport_path = os.path.normpath(os.path.join(
+        os.path.dirname(__file__), os.pardir, os.pardir, os.pardir, os.pardir,
+        "tests", "wpt", "resources", "testharnessreport.js"))
+    return {
+        "browser_host": "127.0.0.1",
+        "bind_address": True,
+        "testharnessreport": [testharnessreport_path],
+    }
 
 
 def env_extras(**kwargs):

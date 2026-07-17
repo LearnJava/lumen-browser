@@ -4,21 +4,25 @@ P2-wpt (`docs/tasks/p2-wpt-integration.md`, slices S1–S8). Runs the real, unmo
 `wptrunner` against Lumen over WebDriver BiDi (`lumen --bidi-port N`) — not a
 bespoke test runner. See the task doc for the full architecture and slice plan.
 
-**Status:** S1–S3 done. S4 (`LumenTestharnessExecutor.do_test`, `testharnessreport.js`
-shim, smoke driver) is **implemented but blocked**: `tests/wpt/run_smoke.py` drives
-a real `lumen --bidi-port` through navigate + eval end to end, but the smoke test
-(`dom/nodes/Element-hasAttribute.html`) still doesn't PASS — blocked on
-[BUG-291](../../bugs/BUG-291-OPEN.md) (`testharness.js`'s built-in results renderer,
-`Output.show_results`, throws while building its results `<table>`, aborting harness
-completion before `testharnessreport.js`'s own callback runs). Three other real engine
-gaps surfaced and were fixed while proving this path: [BUG-278](../../bugs/BUG-278-FIXED.md)
-(HTTP client rejected `wptserve`'s close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
-(`document.getElementsByTagName` was missing entirely — broke `testharness.js`'s
-own module-level setup), and [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't
-the JS engine's real global object, so `testharness.js`'s `expose()`-based public API
-was unreachable as bare identifiers — fixing it got far enough to expose BUG-291). See
-those bug files and the task doc's S4 section for the full diagnosis trail
-(BiDi-eval-based bisection of `testharness.js`'s execution).
+**Status:** S1–S4 done. `tests/wpt/run_smoke.py` drives a real `lumen --bidi-port`
+through navigate + eval end to end and now reaches a genuine per-subtest PASS/FAIL
+result (`dom/nodes/Element-hasAttribute.html`: 1/2 subtests PASS, 1 FAIL on a real,
+separate engine gap — [BUG-297](../../bugs/BUG-297-OPEN.md), `setAttributeNS`
+unimplemented). Getting here took five real engine/tooling gaps, fixed in order:
+[BUG-278](../../bugs/BUG-278-FIXED.md) (HTTP client rejected `wptserve`'s
+close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
+(`document.getElementsByTagName` missing, broke `testharness.js`'s own module-level
+setup), [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't the JS engine's real
+global object, so `testharness.js`'s `expose()`-based public API was unreachable),
+[BUG-291](../../bugs/BUG-291-FIXED.md) (`Element`/`DocumentFragment`/
+`ShadowRoot.querySelector(All)` weren't scoped to the calling node, so the results
+renderer's detached-subtree build silently found nothing), and
+[BUG-295](../../bugs/BUG-295-FIXED.md) (two independent causes stacked on one TIMEOUT
+symptom: `wptrunner`'s vendored harness silently served its own generic
+`testharnessreport.js` instead of Lumen's, and Lumen's persistent on-disk HTTP cache
+replayed that wrong file across every subsequent run on `wptserve`'s fixed ports,
+regardless of later fixes). See those bug files and the task doc's S4 section for the
+full diagnosis trail (BiDi-eval-based bisection of `testharness.js`'s execution).
 
 ## What's here
 
@@ -67,7 +71,8 @@ those bug files and the task doc's S4 section for the full diagnosis trail
 
   Both scripts default to `target/<LUMEN_PROFILE>/lumen.exe` (`LUMEN_PROFILE`
   env var, default `release`), same convention as `graphic_tests/run.py`.
-  `run_smoke.py` currently exits non-zero — see Status above (BUG-291).
+  `run_smoke.py` currently exits non-zero — see Status above (the one real subtest
+  FAIL, BUG-297, has no `.ini` expectation yet, so it counts as "unexpected").
 - `tests/wpt/config.json` — **ours** (S4) — `wptserve` config override: pins
   `browser_host` to `127.0.0.1` (the default, `web-platform.test`, needs
   `/etc/hosts` entries this task's "no live network" rule can't rely on) and
