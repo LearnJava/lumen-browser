@@ -1445,15 +1445,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/notifications_bindings.rs:34` **type** `NotificationQueue` — Shared queue of pending notification requests
 `crates/js/src/notifications_bindings.rs:52` **fn** `install_notifications_bindings` — Install Web Notifications API globals into the JS context
 `crates/js/src/notifications_bindings.rs:108` **fn** `drain_notifications` — Drain all pending notification requests from the queue
-`crates/js/src/offscreen_canvas.rs:33` **struct** `OffscreenCanvas` — Wrapper class for OffscreenCanvas JS object
-`crates/js/src/offscreen_canvas.rs:44` **fn** `new` — Create a new OffscreenCanvas with the given dimensions
-`crates/js/src/offscreen_canvas.rs:57` **fn** `id` — Get the canvas ID (internal use only)
-`crates/js/src/offscreen_canvas.rs:62` **fn** `width` — Get canvas width in CSS pixels
-`crates/js/src/offscreen_canvas.rs:67` **fn** `height` — Get canvas height in CSS pixels
-`crates/js/src/offscreen_canvas.rs:72` **fn** `transfer_to_image_bitmap` — Transfer pixel buffer to ImageBitmap and clear the canvas
-`crates/js/src/offscreen_canvas.rs:113` **fn** `create_offscreen_from_pixels` — Create a new OffscreenCanvas pre-filled with existing RGBA8 pixel data
-`crates/js/src/offscreen_canvas.rs:127` **fn** `flush_dirty` — Drain dirty offscreen canvases and return their RGBA buffers
-`crates/js/src/offscreen_canvas.rs:151` **fn** `install_offscreen_canvas_bindings` — Install OffscreenCanvas bindings and JS shim into the QuickJS runtime
+`crates/js/src/offscreen_canvas.rs:41` **struct** `OffscreenCanvas` — Wrapper class for OffscreenCanvas JS object
+`crates/js/src/offscreen_canvas.rs:52` **fn** `new` — Create a new OffscreenCanvas with the given dimensions
+`crates/js/src/offscreen_canvas.rs:65` **fn** `id` — Get the canvas ID (internal use only)
+`crates/js/src/offscreen_canvas.rs:70` **fn** `width` — Get canvas width in CSS pixels
+`crates/js/src/offscreen_canvas.rs:75` **fn** `height` — Get canvas height in CSS pixels
+`crates/js/src/offscreen_canvas.rs:80` **fn** `transfer_to_image_bitmap` — Transfer pixel buffer to ImageBitmap and clear the canvas
+`crates/js/src/offscreen_canvas.rs:121` **fn** `create_offscreen_from_pixels` — Create a new OffscreenCanvas pre-filled with existing RGBA8 pixel data
+`crates/js/src/offscreen_canvas.rs:197` **fn** `flush_dirty` — Drain dirty offscreen canvases and return their RGBA buffers
+`crates/js/src/offscreen_canvas.rs:221` **fn** `install_offscreen_canvas_bindings` — Install OffscreenCanvas bindings and JS shim into the QuickJS runtime
 `crates/js/src/paint_worklet.rs:13` **struct** `PaintWorkletRegistry` — Maps worklet name (e.g. "my-paint") to its definition
 `crates/js/src/paint_worklet.rs:18` **fn** `new`
 `crates/js/src/paint_worklet.rs:23` **fn** `register` — Register a paint worklet definition
