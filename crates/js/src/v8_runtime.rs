@@ -31,7 +31,7 @@ use lumen_dom::{
     DomPosition, Namespace, NodeData, NodeId, QualName, Range as DomRange, Selection,
     ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
-use lumen_layout::{matches_selector, query_all};
+use lumen_layout::{matches_selector, query_all, query_all_within};
 use std::collections::HashMap;
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -1097,6 +1097,33 @@ impl V8JsRuntime {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 matches_selector(&doc, nid, &sel)
+            }
+        );
+        // DOM LS §4.2.6: `Element`/`DocumentFragment`/`ShadowRoot` querySelector(All)
+        // must search only the calling node's descendants, not the whole document
+        // (found while diagnosing P2-wpt S4 — `document.querySelectorAll` above was
+        // wrongly reused for these scoped call sites, so a query against a detached
+        // subtree — e.g. `testharness.js`'s `render()` template builder — always
+        // returned nothing).
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_scoped",
+            move |node_id: u32, sel: String| -> Option<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                query_all_within(&doc, nid, &sel).into_iter().next().map(|n| n.index() as u32)
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_all_scoped",
+            move |node_id: u32, sel: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                query_all_within(&doc, nid, &sel)
+                    .into_iter()
+                    .map(|n| n.index() as u32)
+                    .collect()
             }
         );
     }

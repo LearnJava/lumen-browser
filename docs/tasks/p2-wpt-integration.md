@@ -328,19 +328,29 @@ option isn't lost — do not fold it into this task's scope.
       `--mcp-live-port` launches now skip session restore entirely (`should_restore_session`,
       `crates/shell/src/main.rs`), matching their documented "empty window" behavior.
 - [ ] A deliberately-failing assertion is observed as FAIL (harness genuinely checks assertions) —
-      still blocked: `run_smoke.py` doesn't reach a real PASS in this environment even after BUG-296's
-      fix (confirmed via direct BiDi repro that the stale-session race itself is gone — see BUG-296-FIXED's
-      "Остаток"), because of a separate, pre-existing `script.evaluate`-install race (`CLAUDE.md` → "Known
-      gotchas" → "Live-window BiDi/MCP `script.evaluate` can hang indefinitely..."), independent of page
-      content and not yet root-caused.
+      still blocked, but the "`script.evaluate`-install race" theory (`CLAUDE.md` → "Known gotchas")
+      is now disproven: re-diagnosed 2026-07-17 and found to be three fully deterministic, non-flaky
+      bugs, all now fixed — [BUG-298](../../bugs/BUG-298-FIXED.md) (`Element`/`DocumentFragment`/
+      `ShadowRoot`.querySelector(All) searched the whole document instead of the calling node's
+      subtree, so `testharness.js`'s own results-table renderer — which builds a detached subtree and
+      queries into it — always got nothing), [BUG-299](../../bugs/BUG-299-FIXED.md)
+      (`Element.prototype.insertAdjacentText` was missing entirely, thrown from the same code path
+      whenever a test has no recorded assertions), and [BUG-300](../../bugs/BUG-300-FIXED.md)
+      (`browsingContext.navigate`'s `DocumentReady` wait could ACK using the *previous* page's stale
+      `layout_box` before the new page had even started loading). A manual BiDi driver hitting the
+      fixed binary and the identical vendored test file through a plain HTTP server now completes the
+      harness correctly end to end (`window.__lumen_wpt_results` populated within ~2s). `run_smoke.py`
+      itself (driven through the vendored `wptrunner` + `wptserve`) still times out — a narrower,
+      distinct gap only reproducing under that specific combination, root cause not found — filed as
+      [BUG-301](../../bugs/BUG-301-OPEN.md) for follow-up.
 - [ ] `.ini` expectations committed for a curated ~15–20 synchronous DOM-test subset.
 - [ ] Async subset (S6) admitted, `awaitPromise` behavior verified against the implementation.
 - [ ] Suite runs fully offline.
 - [ ] `docs/plan/testing.md` updated; `ROADMAP.md:131` flipped to `done` (or split if S8 remains
       open); `tests/wpt/README.md` written.
 - [x] Any engine/BiDi gap found while running the harness filed as `BUG-NNN` (no test weakened to
-      pass) — BUG-278/279/280/291/296 (all fixed); the remaining checkboxes above are blocked by the
-      separate, pre-existing `script.evaluate`-install race noted in `CLAUDE.md` → "Known gotchas".
+      pass) — BUG-278/279/280/291/296/298/299/300 (all fixed); the remaining checkboxes above are
+      blocked by [BUG-301](../../bugs/BUG-301-OPEN.md), a narrower `wptrunner`+`wptserve`-specific gap.
 - [x] `cargo clippy -p lumen-bidi-server --all-targets -- -D warnings` clean; existing
       `bidi-server`/`driver` test suites still pass (verified 2026-07-17: bidi-server 96/96,
       driver 125/126 — the one failure, `cases::snapshot_cpu::cpu_snapshots_match_references`,
