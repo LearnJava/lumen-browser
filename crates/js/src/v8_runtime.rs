@@ -3644,6 +3644,7 @@ impl V8JsRuntime {
         install_v8!(device_sensors::install_device_sensors_bindings_v8);
         install_v8!(digital_credentials::install_digital_credentials_api_v8);
         install_v8!(document_pip::install_document_pip_api_v8);
+        install_v8!(documentpip_bindings::install_docpip_bindings_v8);
         install_v8!(dom_parser::install_dom_parser_v8);
         install_v8!(download_bindings::install_download_bindings_v8);
         install_v8!(element_internals::install_element_internals_bindings_v8);

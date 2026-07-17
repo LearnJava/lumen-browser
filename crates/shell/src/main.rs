@@ -931,6 +931,8 @@ fn run_window_mode(
         pip: panels::pip_window::PipWindow::new(),
         pip_controller: panels::pip_os_window::PipController::new(),
         pip_os: None,
+        doc_pip_controller: panels::doc_pip_os_window::DocPipController::new(),
+        doc_pip_os: None,
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
@@ -7237,6 +7239,19 @@ struct Lumen {
     /// Falls back to the in-window [`Self::pip`] overlay when a second GPU
     /// surface cannot be created.
     pip_os: Option<PipOsWindow>,
+    /// Document Picture-in-Picture open/closed state machine, driven by the JS
+    /// `_lumen_docpip_request_window` / `_lumen_docpip_close` requests. Pure
+    /// data; the live window + backend it tracks live in [`Self::doc_pip_os`].
+    doc_pip_controller: panels::doc_pip_os_window::DocPipController,
+    /// The live always-on-top OS window backing `documentPictureInPicture`
+    /// (Document PiP slice 1), with its own render backend, or `None` when no
+    /// Document PiP window is open. Created on `_lumen_docpip_request_window`;
+    /// dropped on `.close()` / OS close button. Unlike [`Self::pip_os`] there
+    /// is no in-window overlay fallback — window/backend creation failure just
+    /// leaves the request unfulfilled (the JS `PictureInPictureWindow` promise
+    /// still resolves; `.document` stays a JS-only mock either way, see
+    /// `document_pip.rs`).
+    doc_pip_os: Option<DocPipOsWindow>,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -9543,6 +9558,22 @@ struct PipOsWindow {
     video_rect: Rect,
 }
 
+/// The live OS-level Document Picture-in-Picture window (slice 1): a separate
+/// always-on-top `winit::Window` with its own [`RenderBackend`] surface. Shows
+/// a placeholder background until real DOM mirroring lands (see
+/// `doc_pip_os_window.rs` module docs).
+///
+/// Owned by [`Lumen::doc_pip_os`]; created from a
+/// `_lumen_docpip_request_window` request and dropped on close. The drop
+/// closes the OS window (winit destroys the window when the last
+/// `Arc<Window>` is released) and frees the GPU surface.
+struct DocPipOsWindow {
+    /// The floating OS window. Identified against `WindowEvent`s by its id.
+    window: Arc<Window>,
+    /// Dedicated render backend drawing the (placeholder) content.
+    renderer: Box<dyn RenderBackend>,
+}
+
 impl ApplicationHandler<LoadEvent> for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let (win_w, win_h) = if let Some((w, h)) = self.viewport_override {
@@ -10676,6 +10707,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // Document Picture-in-Picture (slice 1) — open/close the real OS floating
+        // window. Drained from the process-global queue fed by
+        // `_lumen_docpip_request_window` / `_lumen_docpip_close` (see
+        // `lumen_js::documentpip_bindings`).
+        for req in lumen_js::documentpip_bindings::take_docpip_requests() {
+            use lumen_js::documentpip_bindings::DocPipRequest;
+            use panels::doc_pip_os_window::DocPipAction;
+            let action = match req {
+                DocPipRequest::Open { width, height } => self.doc_pip_controller.on_open(width, height),
+                DocPipRequest::Close => self.doc_pip_controller.on_close(),
+            };
+            match action {
+                DocPipAction::Open { width, height } => self.open_doc_pip_os(event_loop, width, height),
+                DocPipAction::Close => self.close_doc_pip_os(),
+                DocPipAction::None => {}
+            }
+        }
+
         // Print API: window.print() exports current document as PDF (W-2).
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(any(feature = "quickjs", feature = "v8"))]
@@ -10997,6 +11046,56 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 WindowEvent::RedrawRequested => {
                     self.render_pip_os();
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Document Picture-in-Picture (slice 1): same routing as video PiP
+        // above — events for this second window are fully handled here and
+        // never fall through to the main-window logic.
+        if self.doc_pip_os.as_ref().is_some_and(|p| p.window.id() == window_id) {
+            match event {
+                WindowEvent::CloseRequested => {
+                    self.close_doc_pip_os();
+                    self.doc_pip_controller.on_close();
+                    // Mirror the close into JS so `_closed` / `pictureInPictureElement`
+                    // reflect reality when the user closes via the OS window chrome
+                    // rather than calling `.close()`.
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
+                    route_eval_js(
+                        self.engine_thread.as_ref(),
+                        self.js_ctx.as_ref(),
+                        "if(typeof _lumen_docpip_deliver_close==='function')\
+                         {_lumen_docpip_deliver_close();}"
+                            .to_string(),
+                    );
+                }
+                WindowEvent::Resized(size) => {
+                    if size.width == 0 || size.height == 0 {
+                        return;
+                    }
+                    let scale = self
+                        .doc_pip_os
+                        .as_ref()
+                        .map_or(1.0, |p| p.window.scale_factor() as f32);
+                    if let Some(p) = self.doc_pip_os.as_mut() {
+                        p.renderer.resize(size.width, size.height);
+                    }
+                    self.render_doc_pip_os();
+                    let (win_w, win_h) =
+                        panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
+                    self.notify_docpip_window_resized(win_w, win_h);
+                }
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    if let Some(p) = self.doc_pip_os.as_mut() {
+                        p.renderer.set_scale_factor(scale_factor);
+                    }
+                    self.render_doc_pip_os();
+                }
+                WindowEvent::RedrawRequested => {
+                    self.render_doc_pip_os();
                 }
                 _ => {}
             }
@@ -16065,6 +16164,100 @@ impl Lumen {
             format!(
                 "if(typeof _lumen_pip_deliver_resize==='function')\
                  {{_lumen_pip_deliver_resize({win_w},{win_h});}}"
+            ),
+        );
+    }
+
+    /// Document Picture-in-Picture (slice 1): open the real OS-level floating
+    /// window at the requested logical size. Mirrors [`Self::open_pip_os`]
+    /// minus the `<video>` forwarding and the in-window overlay fallback — on
+    /// window/backend creation failure the request is simply dropped (the JS
+    /// `requestWindow()` promise already resolved with a `PictureInPictureWindow`
+    /// whose `.document` stays a JS-only mock either way, see `document_pip.rs`).
+    fn open_doc_pip_os(&mut self, event_loop: &ActiveEventLoop, width: u32, height: u32) {
+        use panels::doc_pip_os_window::DocPipController;
+        use panels::pip_os_window::{pip_window_attributes, PipOsConfig};
+
+        let cfg = PipOsConfig {
+            width: width as f32,
+            height: height as f32,
+            min_width: PipOsConfig::DEFAULT.min_width,
+            min_height: PipOsConfig::DEFAULT.min_height,
+        };
+        let title = self
+            .title
+            .clone()
+            .unwrap_or_else(|| "Picture-in-Picture".to_owned());
+        let attrs = pip_window_attributes(&title, cfg);
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(err) => {
+                eprintln!("Document PiP: не удалось создать OS-окно ({err})");
+                self.doc_pip_controller = DocPipController::new();
+                return;
+            }
+        };
+        let renderer = match backend_factory::create_backend(
+            window.clone(),
+            INTER_FONT.to_vec(),
+            self.target_color_space(),
+        ) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("Document PiP: не удалось создать рендер OS-окна ({err})");
+                self.doc_pip_controller = DocPipController::new();
+                return;
+            }
+        };
+
+        let (win_w, win_h) = panels::pip_os_window::physical_to_logical(
+            window.inner_size().width,
+            window.inner_size().height,
+            window.scale_factor() as f32,
+        );
+        self.doc_pip_os = Some(DocPipOsWindow { window, renderer });
+        self.render_doc_pip_os();
+        self.notify_docpip_window_resized(win_w, win_h);
+    }
+
+    /// Document Picture-in-Picture (slice 1): tear down the OS floating window.
+    /// Releasing the last `Arc<Window>` makes winit destroy the OS window and
+    /// free its GPU surface.
+    fn close_doc_pip_os(&mut self) {
+        self.doc_pip_os = None;
+    }
+
+    /// Document Picture-in-Picture (slice 1): redraw the OS floating window.
+    /// Currently a placeholder fill (`build_docpip_content`) — real DOM
+    /// mirroring is a follow-up slice. No-op when no window is open.
+    fn render_doc_pip_os(&mut self) {
+        let Some(pip) = self.doc_pip_os.as_mut() else {
+            return;
+        };
+        let size = pip.window.inner_size();
+        let scale = pip.window.scale_factor() as f32;
+        let (win_w, win_h) =
+            panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
+        let content = panels::doc_pip_os_window::build_docpip_content(win_w, win_h);
+        if let Err(err) = pip.renderer.render(&[], &content, 0.0, 0.0) {
+            eprintln!("Document PiP OS render error: {err:?}");
+        }
+    }
+
+    /// Push the OS Document PiP window's current logical size into JS via
+    /// `_lumen_docpip_deliver_resize` (`document_pip.rs`), so
+    /// `PictureInPictureWindow.width`/`.height` reflect the real floating
+    /// window and its `resize` event fires when the user drags the window's
+    /// edge. Called once right after the OS window is created and again on
+    /// every `WindowEvent::Resized`, mirroring [`Self::notify_pip_window_resized`].
+    fn notify_docpip_window_resized(&mut self, win_w: f32, win_h: f32) {
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!(
+                "if(typeof _lumen_docpip_deliver_resize==='function')\
+                 {{_lumen_docpip_deliver_resize({win_w},{win_h});}}"
             ),
         );
     }

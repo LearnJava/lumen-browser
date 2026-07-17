@@ -28,6 +28,7 @@ pub mod payment_request;
 pub mod credentials;
 pub mod device_sensors;
 pub mod document_pip;
+pub mod documentpip_bindings;
 pub mod eye_dropper;
 pub mod dom;
 pub mod filesystem_access;
