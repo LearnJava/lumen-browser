@@ -1,5 +1,18 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Done (Document Picture-in-Picture OS window — [P1] P3-pip, 2026-07-17):** the PiP request
+  drain (`about_to_wait`, ~`main.rs:10663`) now handles a third `PipRequest::OpenDocument
+  { width, height }` variant (Document PiP) alongside `Enter`/`Exit` (video PiP). It calls the
+  new `open_pip_os_document`, which reuses the `pip_os_window.rs` infra
+  (`PipOsConfig::sized(w,h)` — requested size, `DEFAULT`'s 192×108 floor) to create a real
+  always-on-top borderless winit window with its own `RenderBackend`, rendered via the existing
+  `PipOsWindow`/`render_pip_os` path (empty `poster_url` → `build_pip_content` draws just the
+  background fill; forwarding real page DOM content is a follow-up). `deliver_pip_resize` calls
+  `_lumen_pip_deliver_resize(w,h)` in JS on the PiP window's `Resized`/`ScaleFactorChanged`
+  events, and the PiP `CloseRequested` handler now also closes a Document-PiP window
+  (`documentPictureInPicture._activeWindow.close()`) in addition to video PiP's
+  `exitPictureInPicture()`. Unlike video PiP there is no overlay fallback for the document path
+  (Phase 0: logs and gives up on window/backend failure).
 - **Done (Pointer Events L3 coalesced/predicted events — [P1] P3-pointerfull, 2026-07-17):**
   `Lumen::pending_pointer_moves: Vec<(f32, f32)>` buffers raw `CursorMoved` CSS-pixel positions
   (and injected automation `MouseMove` samples via `dispatch_mouse_move`) instead of dispatching

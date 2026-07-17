@@ -52,19 +52,27 @@ const VIDEO_PIP_SHIM: &str = r#"(function() {
   }());
 
   /// PictureInPictureWindow — the floating mini-player window object.
-  class PictureInPictureWindow extends _EventTargetBase {
-    constructor(width, height) {
-      super();
-      this._width = width || 0;
-      this._height = height || 0;
-    }
-
-    /// Width of the PiP window in CSS pixels (0 = Phase 0 stub).
-    get width() { return this._width; }
-
-    /// Height of the PiP window in CSS pixels (0 = Phase 0 stub).
-    get height() { return this._height; }
-  }
+  ///
+  /// P3-pip slice 4: reuse the class `document_pip.rs` already installed (it
+  /// runs first and defines the full document/close-capable version) so
+  /// `instanceof PictureInPictureWindow` is consistent between video- and
+  /// document-PiP. Falls back to this minimal width/height-only definition
+  /// only when evaluated without `document_pip.rs` (e.g. this module's own
+  /// unit tests, which install `VIDEO_PIP_SHIM` in isolation).
+  var PictureInPictureWindow = (typeof globalThis.PictureInPictureWindow === 'function')
+    ? globalThis.PictureInPictureWindow
+    : (function() {
+        class Fallback extends _EventTargetBase {
+          constructor(width, height) {
+            super();
+            this._width = width || 0;
+            this._height = height || 0;
+          }
+          get width() { return this._width; }
+          get height() { return this._height; }
+        }
+        return Fallback;
+      }());
 
   globalThis.PictureInPictureWindow = PictureInPictureWindow;
 
@@ -103,6 +111,9 @@ const VIDEO_PIP_SHIM: &str = r#"(function() {
 
       _pipVideo = el;
       _pipWindow = new PictureInPictureWindow(0, 0);
+      // Shared with document_pip.rs: whichever PiP session is open, so
+      // `_lumen_pip_deliver_resize` below can update it uniformly.
+      globalThis.__lumen_pip_active_window = _pipWindow;
 
       // Fire enterpictureinpicture on the video element.
       try {
@@ -123,6 +134,9 @@ const VIDEO_PIP_SHIM: &str = r#"(function() {
   function exitCurrentPip() {
     var prev = _pipVideo;
     _pipVideo = null;
+    if (globalThis.__lumen_pip_active_window === _pipWindow) {
+      globalThis.__lumen_pip_active_window = null;
+    }
     _pipWindow = null;
     if (prev) {
       try { prev.dispatchEvent(new Event('leavepictureinpicture')); } catch(e) {}
@@ -178,12 +192,16 @@ const VIDEO_PIP_SHIM: &str = r#"(function() {
   }
 
   /// _lumen_pip_deliver_resize(width, height) — shell calls this when the OS
-  /// PiP window is resized (Phase 1). Fires 'resize' on the active PictureInPictureWindow.
+  /// PiP window is resized. Fires 'resize' on whichever `PictureInPictureWindow`
+  /// is active — video PiP's `_pipWindow` or Document PiP's `_activeWindow`
+  /// (`document_pip.rs`), tracked via the shared `__lumen_pip_active_window`
+  /// (P3-pip slice 5; only one PiP session can be open at a time).
   globalThis._lumen_pip_deliver_resize = function(width, height) {
-    if (!_pipWindow) return;
-    _pipWindow._width = width;
-    _pipWindow._height = height;
-    try { _pipWindow.dispatchEvent(new Event('resize')); } catch(e) {}
+    var w = globalThis.__lumen_pip_active_window;
+    if (!w) return;
+    w._width = width;
+    w._height = height;
+    try { w.dispatchEvent(new Event('resize')); } catch(e) {}
   };
 })();"#;
 

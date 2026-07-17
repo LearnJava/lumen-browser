@@ -10657,20 +10657,27 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
-        // CC-7: Video Picture-in-Picture — open/close the real OS floating window.
-        // Drained from the process-global queue fed by `_lumen_pip_enter` /
-        // `_lumen_pip_exit` (see `lumen_js::pip_bindings`).
+        // CC-7 / P3-pip: Video and Document Picture-in-Picture — open/close the
+        // real OS floating window. Drained from the process-global queue fed
+        // by `_lumen_pip_enter` / `_lumen_pip_exit` / `_lumen_pip_request_window`
+        // (see `lumen_js::pip_bindings`).
         for req in lumen_js::pip_bindings::take_pip_requests() {
             use lumen_js::pip_bindings::PipRequest;
             use panels::pip_os_window::PipAction;
-            let action = match req {
-                PipRequest::Enter { nid } => self.pip_controller.on_enter(nid),
-                PipRequest::Exit { .. } => self.pip_controller.on_exit(),
-            };
-            match action {
-                PipAction::Open(nid) => self.open_pip_os(event_loop, nid),
-                PipAction::Close => self.close_pip_os(),
-                PipAction::None => {}
+            match req {
+                PipRequest::Enter { nid } => match self.pip_controller.on_enter(nid) {
+                    PipAction::Open(nid) => self.open_pip_os(event_loop, nid),
+                    PipAction::Close => self.close_pip_os(),
+                    PipAction::None => {}
+                },
+                PipRequest::Exit { .. } => match self.pip_controller.on_exit() {
+                    PipAction::Open(nid) => self.open_pip_os(event_loop, nid),
+                    PipAction::Close => self.close_pip_os(),
+                    PipAction::None => {}
+                },
+                PipRequest::OpenDocument { width, height } => {
+                    self.open_pip_os_document(event_loop, width, height);
+                }
             }
         }
 
@@ -10959,15 +10966,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.close_pip_os();
                     self.pip_controller.on_exit();
                     // Mirror the close into JS so `leavepictureinpicture` fires
-                    // and `document.pictureInPictureElement` clears. ADR-016
-                    // M2.2c-2d: fire-and-forget void eval через маршрутизатор —
-                    // под флагом off-UI-thread, без флага байт-идентично.
+                    // and `document.pictureInPictureElement` clears (video PiP),
+                    // and so Document PiP's `PictureInPictureWindow.close()`
+                    // runs too (P3-pip) — the same OS window may have been
+                    // opened by either side, and each guards itself so only
+                    // the truly-active one does anything. ADR-016 M2.2c-2d:
+                    // fire-and-forget void eval через маршрутизатор — под
+                    // флагом off-UI-thread, без флага байт-идентично.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     route_eval_js(
                         self.engine_thread.as_ref(),
                         self.js_ctx.as_ref(),
                         "if(typeof document!=='undefined'&&document.pictureInPictureElement)\
-                         {try{document.exitPictureInPicture();}catch(e){}}"
+                         {try{document.exitPictureInPicture();}catch(e){}}\
+                         if(typeof documentPictureInPicture!=='undefined'&&\
+                         documentPictureInPicture._activeWindow&&\
+                         !documentPictureInPicture._activeWindow._closed)\
+                         {try{documentPictureInPicture._activeWindow.close();}catch(e){}}"
                             .to_string(),
                     );
                 }
@@ -10979,12 +10994,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         p.renderer.resize(size.width, size.height);
                     }
                     self.render_pip_os();
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
+                    self.deliver_pip_resize();
                 }
                 WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                     if let Some(p) = self.pip_os.as_mut() {
                         p.renderer.set_scale_factor(scale_factor);
                     }
                     self.render_pip_os();
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
+                    self.deliver_pip_resize();
                 }
                 WindowEvent::RedrawRequested => {
                     self.render_pip_os();
@@ -15998,6 +16017,57 @@ impl Lumen {
         self.render_pip_os();
     }
 
+    /// P3-pip: open a real OS floating window for Document Picture-in-Picture
+    /// (`documentPictureInPicture.requestWindow({width, height})`) — no
+    /// `<video>` is involved, so the window shows a plain sized container
+    /// (empty poster → [`panels::pip_os_window::build_pip_content`] draws just
+    /// the background fill). Forwarding the requesting document's actual DOM
+    /// content into the window is a follow-up — see
+    /// `docs/tasks/ph3-picture-in-picture.md`. Unlike [`Self::open_pip_os`]
+    /// there is no video overlay to fall back to on window/backend failure —
+    /// this Phase 0 slice just logs and gives up.
+    fn open_pip_os_document(&mut self, event_loop: &ActiveEventLoop, width: f32, height: f32) {
+        use panels::pip_os_window::{pip_window_attributes, PipOsConfig};
+
+        let cfg = if width > 0.0 && height > 0.0 {
+            PipOsConfig::sized(width, height)
+        } else {
+            PipOsConfig::DEFAULT
+        };
+        let title = self
+            .title
+            .clone()
+            .unwrap_or_else(|| "Picture-in-Picture".to_owned());
+        let attrs = pip_window_attributes(&title, cfg);
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(err) => {
+                eprintln!("Document PiP: не удалось создать OS-окно ({err})");
+                return;
+            }
+        };
+        let renderer = match backend_factory::create_backend(
+            window.clone(),
+            INTER_FONT.to_vec(),
+            self.target_color_space(),
+        ) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("Document PiP: не удалось создать рендер OS-окна ({err})");
+                return;
+            }
+        };
+
+        self.pip_os = Some(PipOsWindow {
+            window,
+            renderer,
+            poster_url: String::new(),
+            video_rect: Rect::new(0.0, 0.0, cfg.width, cfg.height),
+        });
+        self.render_pip_os();
+    }
+
     /// CC-7: tear down the OS PiP window. Releasing the last `Arc<Window>` makes
     /// winit destroy the OS window and free its GPU surface; the overlay fallback
     /// (if it was used instead) is cleared too.
@@ -16029,6 +16099,33 @@ impl Lumen {
         if let Err(err) = pip.renderer.render(&[], &content, 0.0, 0.0) {
             eprintln!("PiP OS render error: {err:?}");
         }
+    }
+
+    /// P3-pip slice 5: notify JS of the OS PiP window's current CSS-pixel size
+    /// via `_lumen_pip_deliver_resize(width, height)` (`video_pip.rs`) — updates
+    /// whichever `PictureInPictureWindow` is active (video or Document PiP) and
+    /// fires its `resize` event. No-op when no OS PiP window is open.
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    fn deliver_pip_resize(&self) {
+        let Some(pip) = self.pip_os.as_ref() else {
+            return;
+        };
+        let size = pip.window.inner_size();
+        let scale = pip.window.scale_factor() as f32;
+        let (win_w, win_h) = if scale > 0.0 {
+            (size.width as f32 / scale, size.height as f32 / scale)
+        } else {
+            (size.width as f32, size.height as f32)
+        };
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!(
+                "if(typeof _lumen_pip_deliver_resize==='function'){{\
+                 _lumen_pip_deliver_resize({},{});}}",
+                win_w as i32, win_h as i32,
+            ),
+        );
     }
 
     /// Commit the current navigation state to the JS side so that

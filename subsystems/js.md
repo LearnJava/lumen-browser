@@ -18,6 +18,21 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **Document Picture-in-Picture reaches a real OS window ([P1] P3-pip, 2026-07-17).**
+  `documentPictureInPicture.requestWindow({width,height})` (`document_pip.rs`) called
+  `_lumen_pip_request_window(width,height)` — but that native was never registered, so the
+  call silently no-op'd and no window ever opened. `pip_bindings.rs` now registers it
+  (`into_v8_fn2`), enqueuing a new `PipRequest::OpenDocument { width, height }` the shell drains
+  into `open_pip_os_document` (real sized always-on-top winit window). `PictureInPictureWindow`
+  is unified: `document_pip.rs` defines the class (it installs first, alphabetically) and
+  `video_pip.rs` reuses `globalThis.PictureInPictureWindow` rather than defining a rival one
+  (falling back to its own minimal definition only when evaluated in isolation, e.g. its own
+  rquickjs unit tests). Both PiP paths publish the active window as
+  `globalThis.__lumen_pip_active_window`, so `_lumen_pip_deliver_resize(w,h)` (shell → JS on
+  OS-window resize) updates whichever session is open and fires its `resize` event. Follow-up:
+  forwarding the page's real DOM content into the document-PiP window (`PictureInPictureWindow
+  .document` is still an in-memory stub; the window shows a plain background). 6 new tests
+  across `pip_bindings.rs` + `document_pip.rs`.
 - **Pointer Events L3 `getCoalescedEvents()`/`getPredictedEvents()` are real ([P1] P3-pointerfull, 2026-07-17).**
   Previously stubs (`getCoalescedEvents` returned `[ev]` or `[]`, `getPredictedEvents` always `[]`).
   `_lumen_dispatch_pointer_event` (`dom.rs`, shared shim) now accepts an optional trailing

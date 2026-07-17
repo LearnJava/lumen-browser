@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-17",
  "counts": {
-  "open": 31,
-  "fixed": 235,
+  "open": 32,
+  "fixed": 236,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 266,
+ "total_bugs": 268,
  "phases": [
   {
    "id": "P0",
@@ -1173,8 +1173,8 @@
     {
      "id": "P3-pip",
      "title": "Picture-in-Picture API",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): Document PiP requestWindow готов (document_pip.rs), Element.requestPictureInPicture частично; дошить — element-PiP + полноценное OS-окно"
+     "status": "done",
+     "note": "DONE 2026-07-17 (P1): video-PiP уже имел реальное always-on-top OS-окно; дошит Document PiP — `_lumen_pip_request_window` зарегистрирован (pip_bindings.rs), `PipRequest::OpenDocument{w,h}` → `open_pip_os_document` открывает реальное sized OS floating-окно (main.rs, PipOsConfig::sized); `PictureInPictureWindow` унифицирован между video/document PiP; `_lumen_pip_deliver_resize` round-trip на resize окна (обе ветки через `__lumen_pip_active_window`). Follow-up: форвардинг DOM-контента внутрь document-PiP окна (сейчас пустой фон)"
     },
     {
      "id": "P3-imagebitmap",
@@ -3366,9 +3366,23 @@
    "debtor": true
   },
   "BUG-291": {
+   "status": "fixed",
+   "title": "Корень был не `appendChild`/`lastChild`, а `Element`/`DocumentFragment`/`ShadowRoot.querySelector(All)`: не scoped к вызывающему узлу, всегда искали от `doc.roo…",
+   "component": "js (`crates/js/src/dom.rs`, `crates/engine/layout/src/selector_query.rs`)",
+   "date": "2026-07-17",
+   "debtor": false
+  },
+  "BUG-295": {
    "status": "open",
-   "title": "После фикса BUG-280 `tests/wpt/run_smoke.py` всё ещё не проходит целиком: встроенный рендерер результатов `testharness.js` (`Output.show_results`) падает с `Typ…",
-   "component": "js (DOM child-node bindings, `crates/js/src/dom.rs`)",
+   "title": "После фикса BUG-291 `tests/wpt/run_smoke.py` всё ещё TIMEOUT на `/dom/nodes/Element-hasAttribute.html`, хотя прямой BiDi-проб (без `wptserve`/`wptrunner`, обычн…",
+   "component": "unknown (`tools/wptrunner` serving/executor overhead vs Lumen HTTP/JS)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-296": {
+   "status": "open",
+   "title": "`cases::snapshot_cpu::cpu_snapshots_match_references` падает (~30 страниц, большие расхождения в байтах) при совместном тестировании `lumen-driver`+`lumen-shell…",
+   "component": "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)",
    "date": null,
    "debtor": false
   },
@@ -3418,6 +3432,9 @@
    "BUG-064",
    "BUG-112"
   ],
+  "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)": [
+   "BUG-296"
+  ],
   "encoding": [
    "BUG-162"
   ],
@@ -3451,14 +3468,14 @@
    "BUG-155",
    "BUG-243"
   ],
-  "js (DOM child-node bindings, `crates/js/src/dom.rs`)": [
-   "BUG-291"
-  ],
   "js (JS environment bootstrap, `WEB_API_SHIM`)": [
    "BUG-280"
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"
+  ],
+  "js (`crates/js/src/dom.rs`, `crates/engine/layout/src/selector_query.rs`)": [
+   "BUG-291"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
@@ -3764,6 +3781,9 @@
   "test/snapshot": [
    "BUG-118",
    "BUG-149"
+  ],
+  "unknown (`tools/wptrunner` serving/executor overhead vs Lumen HTTP/JS)": [
+   "BUG-295"
   ]
  }
 }
