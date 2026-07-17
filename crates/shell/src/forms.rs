@@ -13,13 +13,16 @@
 use std::collections::HashMap;
 
 use lumen_core::form::{encode_form_multipart, encode_form_urlencoded, FormEntry, FormValue};
-use lumen_core::geom::Rect;
+use lumen_core::geom::{Rect, Size};
 use lumen_dom::{
     check_validity_form, collect_dom_form_fields, element_validity, find_ancestor_form,
     invalid_controls_in_form, submit_form, Attribute, Document, FormSubmitEvent, InputType,
     NodeData, NodeId, QualName,
 };
-use lumen_layout::{BorderStyle, BoxKind, Color, FontStyle, FontWeight, LayoutBox, Mat4};
+use lumen_layout::{
+    compute_style, BorderStyle, BoxKind, Color, ComputedStyle, FontStyle, FontWeight, LayoutBox,
+    Mat4,
+};
 use lumen_paint::{build_display_list, DisplayCommand, DisplayList};
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -879,6 +882,161 @@ pub fn build_select_dropdown(
             font_family: vec![],
             font_weight: FontWeight(400),
             font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            highlight_name: None,
+            text_orientation: None,
+        });
+    }
+
+    out
+}
+
+/// Resolved per-`<option>` visual style for a base-select dropdown row.
+///
+/// Only the properties that do **not** change row geometry are honoured, so the
+/// shared [`hit_select_option`] geometry stays valid for both the native and the
+/// base-select dropdown.
+struct OptionRowStyle {
+    /// Author `color` (falls back to the native option text colour).
+    text: Color,
+    /// Author `background-color`, if any (row is left transparent otherwise).
+    background: Option<Color>,
+    /// Author `font-size` (px).
+    font_size: f32,
+    /// Author `font-weight`.
+    font_weight: FontWeight,
+    /// Author `font-style`.
+    font_style: FontStyle,
+}
+
+/// Resolve the author style of an `<option>` node, inheriting from `parent`
+/// (the `<select>`'s computed style). Returns `None` when the node has no box
+/// (e.g. `display:none`), so the caller can skip the row.
+fn resolve_option_row_style(
+    doc: &Document,
+    sheet: &lumen_css_parser::Stylesheet,
+    option_id: NodeId,
+    parent: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+) -> OptionRowStyle {
+    let s = compute_style(doc, option_id, sheet, parent, viewport, dark_mode);
+    OptionRowStyle {
+        text: s.color,
+        background: s.background_color.map(|c| c.resolve(s.color)),
+        font_size: s.font_size,
+        font_weight: s.font_weight,
+        font_style: s.font_style,
+    }
+}
+
+/// Build the option-list popover for a `<select appearance: base-select>`.
+///
+/// Unlike [`build_select_dropdown`] (fixed native colours), this honours author
+/// CSS on each `<option>`: `color`, `background-color`, `font-size`,
+/// `font-weight`, `font-style`. The selected row keeps the native highlight
+/// unless the author set an explicit `background-color` on that option.
+///
+/// Row geometry is intentionally identical to the native dropdown so
+/// [`hit_select_option`] stays valid for both paths. Author-driven per-row
+/// heights and full `::picker(select)` container styling are deferred
+/// (see `docs/tasks/ph3-select-base.md`, slice 4 follow-up).
+#[allow(clippy::too_many_arguments)]
+pub fn build_base_select_dropdown(
+    anchor: Rect,
+    doc: &Document,
+    sheet: &lumen_css_parser::Stylesheet,
+    select_style: &ComputedStyle,
+    options: &[SelectOption],
+    scroll_y: f32,
+    viewport_w: f32,
+    viewport_h: f32,
+    dark_mode: bool,
+) -> DisplayList {
+    let mut out: DisplayList = Vec::new();
+    if options.is_empty() {
+        return out;
+    }
+
+    let viewport = Size::new(viewport_w, viewport_h);
+    let rows = options.len().min(DROPDOWN_MAX_ROWS_VISIBLE);
+    let w = (anchor.width).max(DROPDOWN_MIN_W).min(viewport_w);
+    let h = rows as f32 * DROPDOWN_ROW_H + DROPDOWN_PAD_Y * 2.0;
+
+    // Position: below anchor, flip above if it would overflow viewport bottom
+    // (identical to `build_select_dropdown` / `hit_select_option`).
+    let anchor_bottom_vp = anchor.y - scroll_y + anchor.height;
+    let vp_y = if anchor_bottom_vp + h > viewport_h && anchor.y - scroll_y >= h {
+        anchor.y - scroll_y - h
+    } else {
+        anchor_bottom_vp + 1.0
+    };
+    let vp_x = anchor.x.min(viewport_w - w).max(0.0);
+
+    let bg = Rect::new(vp_x, vp_y, w, h);
+
+    // Container: author `background-color`/`color` on the `<select>` bleed into
+    // the picker surface; otherwise the native white/grey chrome.
+    let container_bg = select_style
+        .background_color
+        .map(|c| c.resolve(select_style.color))
+        .filter(|c| c.a != 0)
+        .unwrap_or(Color { r: 255, g: 255, b: 255, a: 255 });
+    out.push(DisplayCommand::FillRect { rect: bg, color: container_bg });
+    out.push(DisplayCommand::DrawBorder {
+        rect: bg,
+        widths: [1.0; 4],
+        colors: [Color { r: 180, g: 180, b: 180, a: 255 }; 4],
+        styles: [BorderStyle::Solid; 4],
+        radii: lumen_paint::CornerRadii::default(),
+    });
+
+    for (i, opt) in options.iter().take(DROPDOWN_MAX_ROWS_VISIBLE).enumerate() {
+        let row_y = vp_y + DROPDOWN_PAD_Y + i as f32 * DROPDOWN_ROW_H;
+        let row_rect = Rect::new(vp_x, row_y, w, DROPDOWN_ROW_H);
+        let os = resolve_option_row_style(doc, sheet, opt.node_id, select_style, viewport, dark_mode);
+
+        // Row background: author `background-color` wins; else the native blue
+        // highlight for the selected row; else transparent.
+        if let Some(bg_col) = os.background {
+            out.push(DisplayCommand::FillRect { rect: row_rect, color: bg_col });
+        } else if opt.selected {
+            out.push(DisplayCommand::FillRect {
+                rect: row_rect,
+                color: Color { r: 0, g: 120, b: 215, a: 255 },
+            });
+        }
+
+        // Text colour: disabled greys out; else author `color`; the native blue
+        // highlight forces white only when the author left the row background at
+        // its initial (transparent) value.
+        let text_color = if opt.disabled {
+            Color { r: 150, g: 150, b: 150, a: 255 }
+        } else if opt.selected && os.background.is_none() {
+            Color { r: 255, g: 255, b: 255, a: 255 }
+        } else {
+            os.text
+        };
+
+        let font_size = os.font_size.max(1.0);
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(
+                vp_x + DROPDOWN_PAD_X,
+                row_y + (DROPDOWN_ROW_H - font_size) * 0.5,
+                w - DROPDOWN_PAD_X * 2.0,
+                font_size,
+            ),
+            text: opt.label.clone(),
+            font_size,
+            color: text_color,
+            // Author `font-family` on the popover chrome is deferred with the
+            // rest of `::picker(select)` styling — use the UA font.
+            font_family: Vec::new(),
+            font_weight: os.font_weight,
+            font_style: os.font_style,
             font_variation_axes: vec![],
             font_features: Vec::new(),
             font_palette: None,
@@ -1780,6 +1938,34 @@ mod tests {
         let anchor = Rect::new(10.0, 10.0, 100.0, 22.0);
         let dl = build_select_dropdown(anchor, &opts, 0.0, 1024.0, 720.0);
         assert!(!dl.is_empty(), "dropdown display list should not be empty");
+    }
+
+    #[test]
+    fn base_select_dropdown_honors_author_option_background() {
+        // `appearance: base-select` must let author CSS on `<option>` reach the
+        // picker: a per-option `background-color` becomes a FillRect in the
+        // dropdown display list (unlike the fixed-colour native dropdown).
+        let (doc, sel) = make_select_doc();
+        let opts = collect_select_options(&doc, sel);
+        let sheet = lumen_css_parser::parse("option { background-color: rgb(10, 20, 30); }");
+        let sel_style = ComputedStyle::root();
+        let anchor = Rect::new(10.0, 10.0, 100.0, 22.0);
+        let dl = build_base_select_dropdown(
+            anchor, &doc, &sheet, &sel_style, &opts, 0.0, 1024.0, 720.0, false,
+        );
+        let has_author_bg = dl.iter().any(|cmd| {
+            matches!(
+                cmd,
+                DisplayCommand::FillRect {
+                    color: Color { r: 10, g: 20, b: 30, a: 255 },
+                    ..
+                }
+            )
+        });
+        assert!(
+            has_author_bg,
+            "author option background-color must reach the base-select dropdown display list"
+        );
     }
 
     // ── <details>/<summary> tests ─────────────────────────────────────────────

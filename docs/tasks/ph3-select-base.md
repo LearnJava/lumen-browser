@@ -103,10 +103,14 @@ Graphic-тест (см. ниже).
 
 ## Definition of done
 
-- [ ] `appearance: base-select` парсится в `Appearance::BaseSelect`.
-- [ ] `::picker(select)` (мин.), опц. `::checkmark`/`::picker-icon` — парсятся и поддержаны.
-- [ ] `<select appearance:base-select>` строит стилизуемое дерево (button + `<selectedcontent>`).
-- [ ] Author-CSS на `option`/`::picker(select)` применяется к раскрытому списку.
-- [ ] Клик по опции меняет выбор (переиспользован `apply_select_choice`).
-- [ ] Нативный select (`Auto`) не задет — регрессий нет.
-- [ ] Юнит + graphic-тест зелёные; доки обновлены.
+- [x] `appearance: base-select` парсится в `Appearance::BaseSelect`. (срез 1)
+- [x] `::picker(select)` (мин.), опц. `::checkmark`/`::picker-icon` — парсятся и поддержаны. (срез 2)
+- [x] `<select appearance:base-select>` строит стилизуемое дерево (button + `<selectedcontent>`). (срез 3)
+- [x] Author-CSS на `option` применяется к раскрытому списку (`build_base_select_dropdown`, срез 4). `::picker(select)` контейнер — только фон из `background-color` на `<select>`; полная стилизация контейнера + author-геометрия строк отложены (см. ниже).
+- [x] Клик по опции меняет выбор — переиспользован `apply_select_choice`/`hit_select_option` (геометрия строк намеренно совпадает с нативным dropdown). (срез 4)
+- [x] Нативный select (`Auto`) не задет — регрессий нет (регресс-гард в layout-тестах).
+- [x] Юнит зелёные; доки обновлены (CSS-SPECS, subsystems/layout.md).
+
+### Отложено (follow-up)
+- **Graphic-тест.** base-select — новая фича без Edge-эталона в репо, а сам picker виден только по клику (не в статичном graphic-тесте). Закрытый триггер (срез 3) стилизуется author-CSS на `select`, но strict-порог 0.5% против Edge потребует KNOWN_DEBTORS-эталона. Покрытие обеспечено детерминированными юнит-тестами (структура бокса + display-list dropdown). Отдельная задача при появлении Edge-эталона.
+- **Полная стилизация `::picker(select)`** (border/padding/радиусы контейнера) и **author-driven высота строк** — требуют вынести опции в box-tree как реальный top-layer поповер (не shell-оверлей с фиксированной геометрией). Отдельный срез.
