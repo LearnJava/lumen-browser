@@ -60,6 +60,20 @@ headless pipeline without winit/wgpu/ffmpeg.
   fingerprint-isolation methods are local stub defaults (documented per-method) — the
   automation channel doesn't carry those commands yet.
 
+- `InProcessSession::click/type_text/eval` (DEVX-5 slice 2, `crates/driver/src/session.rs`):
+  `SessionState::doc` changed from an owning `Document` to `Arc<Mutex<Document>>`, shared with a
+  persistent V8 runtime (`js_runtime: Option<lumen_js::v8_runtime::V8JsRuntime>`, feature `v8`,
+  now default) re-installed on every `navigate()`/`navigate_html()` (mirrors the shell's
+  per-navigate `V8JsRuntime::new()` + `install_dom()`, `crates/shell/src/main.rs`). `click`
+  resolves the `Target` to a `NodeId` (`Target::Point` via `lumen_paint::hit_test` against the
+  current layout tree; `Selector`/`NodeId` resolve directly) and dispatches
+  `mousedown`→`mouseup`→`click` through `_lumen_dispatch_mouse_event` eval calls. `type_text`
+  fires per-character `keydown`→(native `value` mutation)→`input`→`keyup` — the JS shim's
+  `KeyboardEvent` dispatch alone doesn't insert text into an input, so the `value` attribute is
+  written directly between `keydown`/`input`, matching `WinitSession::type_text`'s native-mutation
+  approach. `eval` returns `JsValue::to_json_string()`. A V8 init/`install_dom` failure is
+  best-effort (matches the shell): navigation still succeeds, only `click`/`type_text`/`eval`
+  return `Err` for that page. DEVX-5 is now complete (all of slice 1 + slice 2).
 - DEVX-2: non-pixel golden regression layer (`crates/driver/tests/cases/test_devx2_golden.rs`),
   modeled on `graphic_tests` but asserted through `BrowserSession` (`layout_box_by_selector`,
   `computed_style_snapshot`, `query_a11y`/`query_a11y_all`) instead of pixel diffing — runs via
@@ -71,7 +85,6 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Deferred
 
-- `InProcessSession::click/type_text/eval` remain no-op/Err stubs (DEVX-5, remaining scope) — no persistent JS runtime wired there yet (unlike `WinitSession`, above); needs `Document` → `Arc<Mutex<_>>` plus a persistent V8 runtime (default engine, ADR-018), synthetic-event dispatch, and `lumen_paint::hit_test` for `click`. `wait` already works (poll loop); `scroll` and `screenshot` were fixed in DEVX-5 slice 1 (see Invariants below).
 - `WinitSession::eval` without `--features quickjs` still errors.
 - Native OS-level input dispatch (isTrusted mouse/keyboard events) for click/type — that's the live shell window's job (SDC-1b), not this headless session.
 - Full auto-wait (`WaitCondition::Visible/Stable/NetworkIdle/JsIdle`) beyond `WinitSession::wait`'s existing poll loop — task 8D refinements.
