@@ -6808,14 +6808,12 @@ pub fn compute_style(
     }
     // CSS Cascade L6 §5 — @scope rules: apply only when node is in scope.
     for scope_rule in &sheet.scope_rules {
-        if !node_is_in_scope(doc, node, &scope_rule.root) {
-            next_rule_idx += scope_rule.rules.len();
-            continue;
-        }
-        // Scope limit: if `to (<limit>)` is set, skip nodes that are
-        // descendants of the limit selector *within* this scope.
-        if let Some(ref limit_sel) = scope_rule.limit
-            && node_is_in_scope(doc, node, limit_sel) {
+        // Donut scoping (§3): `node` is in scope when it is an inclusive
+        // descendant of the scope root but *not* of a scope limit that lies
+        // within that same root subtree. `node_in_scope` resolves root and
+        // limit together (nearest boundary wins) so a limit-matching element
+        // *above* the root no longer removes the node from scope.
+        if !node_in_scope(doc, node, &scope_rule.root, scope_rule.limit.as_deref()) {
             next_rule_idx += scope_rule.rules.len();
             continue;
         }
@@ -10983,29 +10981,58 @@ impl StyleEnvSnapshot {
     }
 }
 
-/// CSS Cascade L6 §5.1 — true when `node` is a descendant of (or is) an element
-/// matching any selector in `root_sel_str`. Empty `root_sel_str` → always true
-/// (implicit scope = document root, i.e. the rule applies everywhere).
-fn node_is_in_scope(doc: &Document, node: NodeId, root_sel_str: &str) -> bool {
-    if root_sel_str.trim().is_empty() {
-        return true;
-    }
-    let selectors = lumen_css_parser::parse_selector_list(root_sel_str);
-    if selectors.is_empty() {
+/// CSS Cascade L6 §3 — donut scoping. Returns `true` when `node` is inside the
+/// scope rooted at `root_sel_str` and bounded (below, in the tree) by the
+/// optional `limit_sel_str` (`@scope (<root>) to (<limit>)`).
+///
+/// An element is *in scope* iff it is an inclusive descendant of a scoping-root
+/// element and it is **not** an inclusive descendant of a scoping limit that
+/// lies *within that same root subtree* (the donut hole, §3.2). Root and limit
+/// are resolved in a single ancestor walk so the **nearest** boundary wins: a
+/// limit-matching element *above* the scope root does not remove `node` from
+/// scope (walking up, the root is reached first).
+///
+/// Empty `root_sel_str` (`@scope { … }` without an explicit `(<root>)`) →
+/// implicit scope = document root: every element is in scope unless it sits
+/// under a limit.
+fn node_in_scope(
+    doc: &Document,
+    node: NodeId,
+    root_sel_str: &str,
+    limit_sel_str: Option<&str>,
+) -> bool {
+    let root_empty = root_sel_str.trim().is_empty();
+    let root_selectors = if root_empty {
+        Vec::new()
+    } else {
+        lumen_css_parser::parse_selector_list(root_sel_str)
+    };
+    if !root_empty && root_selectors.is_empty() {
         return false;
     }
-    // Walk node and its ancestors; return true if any matches the scope root.
+    let limit_selectors = limit_sel_str
+        .filter(|s| !s.trim().is_empty())
+        .map(lumen_css_parser::parse_selector_list)
+        .unwrap_or_default();
+    // Walk `node` and its ancestors. The first boundary encountered decides:
+    // a limit (inclusive) → out of scope; a root (inclusive) → in scope.
     let mut cur = Some(node);
     while let Some(n) = cur {
         if n == doc.root() { break; }
-        for complex in &selectors {
+        for complex in &limit_selectors {
+            if matches_complex(complex, doc, n) {
+                return false;
+            }
+        }
+        for complex in &root_selectors {
             if matches_complex(complex, doc, n) {
                 return true;
             }
         }
         cur = doc.get(n).parent;
     }
-    false
+    // No explicit root: implicit document-root scope (only limits cut off).
+    root_empty
 }
 
 /// Returns `true` if `ancestor` is `node` itself, or a proper ancestor of `node` in the tree.
@@ -31420,6 +31447,87 @@ mod tests {
         let span = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, span, &sheet, &root, Size::new(400.0, 400.0), false);
         assert_eq!(style.color.r, 255, "empty-root scope should apply everywhere");
+    }
+
+    #[test]
+    fn scope_limit_excludes_donut_hole() {
+        // CSS Cascade L6 §3.2 — `to (<limit>)` carves a donut hole: elements
+        // that are inclusive descendants of a limit *within* the scope are out.
+        let html = r#"<div class="card"><p class="a">A</p><section class="content"><p class="b">B</p></section></div>"#;
+        let sheet = lumen_css_parser::parse(
+            r#"@scope (.card) to (.content) {
+                .a { color: blue; }
+                .b { color: blue; }
+                .content { color: blue; }
+            }"#,
+        );
+        let doc = lumen_html_parser::parse(html);
+        let root = ComputedStyle::root();
+        let card = doc.get(doc.body().unwrap()).children[0];
+        let a = doc.get(card).children[0];
+        let content = doc.get(card).children[1];
+        let b = doc.get(content).children[0];
+        let vp = Size::new(400.0, 400.0);
+        // .a is above the limit → in scope.
+        assert_eq!(
+            compute_style(&doc, a, &sheet, &root, vp, false).color.b, 255,
+            ".a above the limit should be in scope"
+        );
+        // The limit element itself is inclusive → out of scope.
+        assert_eq!(
+            compute_style(&doc, content, &sheet, &root, vp, false).color.b, 0,
+            "the limit element itself should be out of scope"
+        );
+        // .b is a descendant of the limit → out of scope (the donut hole).
+        assert_eq!(
+            compute_style(&doc, b, &sheet, &root, vp, false).color.b, 0,
+            ".b inside the limit should be out of scope"
+        );
+    }
+
+    #[test]
+    fn scope_limit_above_root_does_not_exclude() {
+        // A limit-matching element that sits *above* the scope root must not
+        // remove a node from scope — walking up, the root is reached first.
+        let html = r#"<section class="content"><div class="card"><p class="a">A</p></div></section>"#;
+        let sheet = lumen_css_parser::parse(
+            r#"@scope (.card) to (.content) { .a { color: blue; } }"#,
+        );
+        let doc = lumen_html_parser::parse(html);
+        let root = ComputedStyle::root();
+        let content = doc.get(doc.body().unwrap()).children[0];
+        let card = doc.get(content).children[0];
+        let a = doc.get(card).children[0];
+        let style = compute_style(&doc, a, &sheet, &root, Size::new(400.0, 400.0), false);
+        assert_eq!(
+            style.color.b, 255,
+            ".a should stay in scope: the .content limit is above the .card root"
+        );
+    }
+
+    #[test]
+    fn scope_empty_root_with_limit_carves_hole() {
+        // `@scope { … } to (<limit>)` — implicit document-root scope still
+        // honours the limit: descendants of the limit are excluded.
+        let html = r#"<div class="wrap"><p class="a">A</p><section class="stop"><p class="b">B</p></section></div>"#;
+        let sheet = lumen_css_parser::parse(
+            r#"@scope to (.stop) { .a { color: red; } .b { color: red; } }"#,
+        );
+        let doc = lumen_html_parser::parse(html);
+        let root = ComputedStyle::root();
+        let wrap = doc.get(doc.body().unwrap()).children[0];
+        let a = doc.get(wrap).children[0];
+        let stop = doc.get(wrap).children[1];
+        let b = doc.get(stop).children[0];
+        let vp = Size::new(400.0, 400.0);
+        assert_eq!(
+            compute_style(&doc, a, &sheet, &root, vp, false).color.r, 255,
+            ".a should be in the implicit document scope"
+        );
+        assert_eq!(
+            compute_style(&doc, b, &sheet, &root, vp, false).color.r, 0,
+            ".b under the limit should be excluded even with an empty root"
+        );
     }
 
     #[test]
