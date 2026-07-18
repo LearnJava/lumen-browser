@@ -599,7 +599,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |------|--------|-------|
 | `@charset` | ✅ | parsed; ignored (UTF-8 only) |
 | `@namespace` | ✅ | parsed; no XML namespaces |
-| `@import` | 🟡 | URL extracted; file loading ⬜ |
+| `@import` | ✅ | URL extracted + file loaded (shell `inline_css_imports`): recursive fetch (file/http via prefetch cache), imported rules prepended (Cascade L4 §6.5), media-query gate, cycle/depth guard; nested imports resolve against the sheet's own URL. Streaming progressive frames apply on the final layout pass |
 | `@media` | 🟡 | condition eval partial; resize hook ⬜ |
 | `@supports` | 🟡 | parsed; feature detection ⬜ |
 | `@font-face` | 🟡 | descriptors parsed; loading ⬜ |
