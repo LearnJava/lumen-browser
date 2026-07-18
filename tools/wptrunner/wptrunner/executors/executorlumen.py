@@ -117,6 +117,14 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         expression = f"window.{RESULTS_GLOBAL} !== undefined ? window.{RESULTS_GLOBAL} : null"
         while True:
             try:
+                # `await_promise=False` is deliberate: async tests
+                # (`promise_test`/`async_test`) complete via the page's own
+                # event loop + testharness completion callback, which stashes
+                # the final result on `RESULTS_GLOBAL` — we poll that global
+                # synchronously rather than awaiting a promise here. BiDi
+                # `awaitPromise=True` is a separate, currently-unimplemented
+                # path (BUG-317, pinned by `tests/wpt/verify_s6_await_promise.py`)
+                # this executor does not depend on (P2-wpt S6).
                 value = await session.script.evaluate(
                     expression=expression,
                     target=ContextTarget(context),

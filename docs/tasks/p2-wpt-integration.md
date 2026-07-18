@@ -356,7 +356,23 @@ option isn't lost — do not fold it into this task's scope.
       cross-global iframe subtests the BiDi-only executor doesn't drive yet). Port note (Windows):
       `config.json` moved off the WPT default 8000/8001 to 8300/8301 (the 8000-range fell into a
       Windows dynamic excluded-port range → `WinError 10013`).
-- [ ] Async subset (S6) admitted, `awaitPromise` behavior verified against the implementation.
+- [x] Async subset (S6) admitted, `awaitPromise` behavior verified against the implementation —
+      **done 2026-07-18.** Three `promise_test`/`async_test`-based `dom/nodes/MutationObserver-*`
+      tests admitted with genuine `.ini` expectations (the only self-contained async tests in the
+      vendored `dom/` corpus): `MutationObserver-callback-arguments.html` (harness `OK`, 1 `FAIL`)
+      proves the async completion + polling pipeline end to end — the observer callback fires
+      asynchronously (microtask delivery works) and the harness reaches `OK`, not `TIMEOUT`;
+      `MutationObserver-takeRecords.html` (harness `OK`, 3 `FAIL`); `MutationObserver-disconnect.html`
+      (harness `TIMEOUT`, 2 subtests `TIMEOUT`) proves wptrunner's async-timeout driving against
+      Lumen is reported correctly. Full subset green under `run_smoke.py` (**0 unexpected**), no test
+      weakened. Three genuine gaps filed: [BUG-315](../../bugs/BUG-315-OPEN.md) (`MutationRecord`
+      global missing), [BUG-316](../../bugs/BUG-316-OPEN.md) (MutationObserver record bookkeeping +
+      subtree delivery), [BUG-317](../../bugs/BUG-317-OPEN.md). `awaitPromise` verified independently
+      via `tests/wpt/verify_s6_await_promise.py` (a spawned `lumen --bidi-port` probe, like
+      `verify_s3`): `script.evaluate` **ignores** `awaitPromise` — a promise-valued expression returns
+      the unsettled promise object regardless (BUG-317). The WPT pipeline does not depend on it: the
+      executor deliberately uses `awaitPromise=false` + polls `window.__lumen_wpt_results` (async
+      tests complete via the page's own event loop + testharness completion callback).
 - [ ] Suite runs fully offline.
 - [ ] `docs/plan/testing.md` updated; `ROADMAP.md:131` flipped to `done` (or split if S8 remains
       open); `tests/wpt/README.md` written.

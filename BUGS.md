@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-314)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-317)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -326,6 +326,9 @@
 | [BUG-312](bugs/BUG-312-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | `Element.prototype.hasAttributes()` отсутствует — `el.hasAttributes is not a function`. WPT `dom/nodes/Element-hasAttributes.html`, `expected: FAIL`. Найдено P2-wpt S5 2026-07-18 |
 | [BUG-313](bugs/BUG-313-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | `document.createProcessingInstruction` отсутствует + нет валидации Name/`?>` (`InvalidCharacterError`). WPT `dom/nodes/Document-createProcessingInstruction.html` 11/12 `expected: FAIL`. Найдено P2-wpt S5 2026-07-18 |
 | [BUG-314](bugs/BUG-314-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | DOM-конструкторы (`Comment`/`Text`/`DocumentFragment`/`DocumentType`/`Document`/`ProcessingInstruction`/`HTML*Element`) не выставлены как глобальные интерфейсы — `X is not defined`/`window[ctor] is not a constructor`. Семья [BUG-305](bugs/BUG-305-OPEN.md). WPT `DocumentFragment-constructor`/`Document-doctype`, `expected: FAIL`. Найдено P2-wpt S5 2026-07-18 |
+| [BUG-315](bugs/BUG-315-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | `MutationRecord` не выставлен как глобальный интерфейс — `MutationRecord is not defined` (колбэк MutationObserver срабатывает асинхронно, но записи нельзя проверить через `instanceof`). Семья [BUG-314](bugs/BUG-314-OPEN.md). WPT `dom/nodes/MutationObserver-callback-arguments.html`, `expected: FAIL`. Найдено P2-wpt S6 2026-07-18 |
+| [BUG-316](bugs/BUG-316-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | MutationObserver: некорректный учёт записей (дубли/лишние, `takeRecords()` не очищает очередь) + subtree-мутации не наблюдаются (async-тест уходит в TIMEOUT). WPT `dom/nodes/MutationObserver-takeRecords.html` (`expected: FAIL`), `MutationObserver-disconnect.html` (`expected: TIMEOUT`). Найдено P2-wpt S6 2026-07-18 |
+| [BUG-317](bugs/BUG-317-OPEN.md) | OPEN | bidi-server (protocol.rs) | `script.evaluate` игнорирует `awaitPromise`: при `awaitPromise:true` возвращает сам объект промиса (`{}`), а не разрешённое значение. Пайплайн WPT не затронут (executor использует `awaitPromise=false`+polling). Проверено `tests/wpt/verify_s6_await_promise.py`. Найдено P2-wpt S6 2026-07-18 |
 
 ---
 
