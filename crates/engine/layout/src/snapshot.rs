@@ -21,6 +21,8 @@ fn fmt_len(l: &Length) -> String {
         Length::Px(v) => format!("{v:.2}"),
         Length::Em(v) => format!("{v:.2}em"),
         Length::Rem(v) => format!("{v:.2}rem"),
+        Length::Ch(v) => format!("{v:.2}ch"),
+        Length::Ex(v) => format!("{v:.2}ex"),
         Length::Percent(v) => format!("{v:.2}%"),
         Length::Vh(v) => format!("{v:.2}vh"),
         Length::Vw(v) => format!("{v:.2}vw"),
