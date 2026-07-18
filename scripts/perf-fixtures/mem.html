@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lumen mem-perf fixture</title>
+<style>
+  body { margin: 0; font: 14px/1.4 sans-serif; color: #222; }
+  .row { padding: 6px 10px; border-bottom: 1px solid #e0e0e0; }
+  .row:nth-child(even) { background: #f6f6f6; }
+  .box { display: inline-block; width: 40px; height: 40px; margin: 2px;
+         background: linear-gradient(45deg, #4a90d9, #d94a90); border-radius: 6px; }
+  h2 { margin: 12px 10px 4px; }
+</style>
+</head>
+<body>
+<!--
+  Детерминированная офлайн-фикстура для scripts/mem_perf.py (PERF-5).
+  Строит умеренный DOM (несколько тысяч узлов + canvas-битмап), чтобы КАЖДАЯ
+  открытая вкладка потребляла заметную, воспроизводимую память — так виден
+  per-tab прирост RSS и плато. Ничего не грузится по сети (принцип офлайн-ворот).
+-->
+<h2>Lumen memory fixture</h2>
+<canvas id="cv" width="512" height="512"></canvas>
+<div id="grid"></div>
+<div id="list"></div>
+<script>
+  // Canvas-битмап 512×512×4 = 1 МБ пиксельного буфера на вкладку.
+  const cv = document.getElementById("cv");
+  const ctx = cv.getContext("2d");
+  if (ctx) {
+    for (let y = 0; y < 512; y += 16) {
+      for (let x = 0; x < 512; x += 16) {
+        ctx.fillStyle = `rgb(${x % 256},${y % 256},${(x + y) % 256})`;
+        ctx.fillRect(x, y, 16, 16);
+      }
+    }
+  }
+  // ~1600 градиентных боксов.
+  const grid = document.getElementById("grid");
+  let gh = "";
+  for (let i = 0; i < 1600; i++) gh += '<span class="box"></span>';
+  grid.innerHTML = gh;
+  // ~2000 текстовых строк — нагрузка на DOM/стиль/раскладку.
+  const list = document.getElementById("list");
+  let lh = "";
+  for (let i = 0; i < 2000; i++) {
+    lh += '<div class="row">Row ' + i + ' — lumen memory time-series fixture, '
+        + 'deterministic offline content for the PERF-5 harness.</div>';
+  }
+  list.innerHTML = lh;
+</script>
+</body>
+</html>
