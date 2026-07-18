@@ -1541,9 +1541,9 @@
       {
        "id": "PERF-6",
        "title": "PERF-6: локальный журнал здоровья сессии",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Локальный privacy-first «журнал здоровья сессии» (ничего не покидает машину — принцип privacy.md): паники/крэши с бэктрейсом, страницы с console.error, сайты со сломанным рендером/белым экраном; расширение существующего --activity-log. Выход: приоритизация P3-багфиксов по частоте встречаемости в реальном браузинге, а не по случайным находкам"
+       "note": "DONE 2026-07-18: локальный privacy-first «журнал здоровья сессии» — расширение поверхности `--activity-log` новым модулем [`crates/shell/src/health_log.rs`](crates/shell/src/health_log.rs), пишет `health.log` (JSON Lines, только проблемы) под `--health-log`/`--activity-log`/`LUMEN_HEALTH_LOG=1`. Четыре сигнала: `panic` (panic-hook, цепляется к прежнему — message+location+backtrace+открытая страница, ловится в ЛЮБОМ режиме), `console_error` (дренаж консоли живого окна, level==2), `load_error` (три пути ошибки навигации), `broken_render` (эвристика белого экрана: `dom_nodes≥20` И `rendered_units==0` — ни печатаемого inline-текста, ни replaced-элемента; `count_rendered_units`/`count_layout_boxes` в шелле, `Document::node_count`). Агрегатор [`scripts/health_report.py`](scripts/health_report.py) (0 кода в движке) группирует записи в сигнатуры (kind+хост+нормализ. текст: числа→`#`, URL→`<url>`) и ранжирует по `повторы×вес` (panic=10/broken=5/load=3/console=1) → очередь P3-багфиксов по частоте; `--selftest` (в воротах), `--json`, `--kind`, `--top`. Журнал [`docs/perf/health.md`](docs/perf/health.md) + фикстура `scripts/perf-fixtures/health.html`. Ограничения честно: console/render-сигналы — только живое окно (headless `--screenshot` не проходит); белый экран через CSS-фон не ловится"
       },
       {
        "id": "PERF-7",

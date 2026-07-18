@@ -1,5 +1,26 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Done (PERF-6 session-health journal, 2026-07-18):** new module
+  [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
+  `--activity-log` surface with a privacy-first, local-only journal of *problems*
+  (`health.log`, JSON Lines, truncated per session). Enabled by `--health-log`,
+  `--activity-log`/`--click-log`, or `LUMEN_HEALTH_LOG=1` (`extract_health_log`,
+  `health_log::init`). Four record kinds: `panic` (a chained `std::panic::set_hook`
+  captures message + location + `Backtrace::force_capture` + the page open at panic
+  time via `set_current_url`, fires in **any** run mode), `console_error` (the two
+  console-drain sites in the winit/automation loop record every `level==2` message
+  with the current page URL — each message drains exactly once, so no double count),
+  `load_error` (mirrored at all three navigation-error sites next to
+  `click_log::log_load_err`), and `broken_render` (white-screen heuristic in
+  `record_render_health`, called after `log_page_ready`: fires only when
+  `Document::node_count() >= 20` **and** `count_rendered_units(layout_box) == 0` —
+  no printable inline text and no replaced `<img>/<canvas>/<video>/<iframe>` box).
+  Aggregated by [`scripts/health_report.py`](../scripts/health_report.py) (0 engine
+  code) into frequency-ranked P3 fix priorities. **Gotcha:** console/render signals
+  ride the *live-window* event loop only — headless `--screenshot` uses the separate
+  `render_source_to_png` path and won't emit them (panic capture and the startup
+  `session_start` record still work headless). Journal:
+  [`docs/perf/health.md`](../docs/perf/health.md).
 - **Done (PERF-1 `--trace-nav`, 2026-07-18):** `lumen --trace-nav <out.json> <url>`
   (`run_trace_nav` + `extract_trace_nav`, mirrors `--screenshot`) runs one navigation
   through the shared headless CPU path (`render_source_to_png`) with the

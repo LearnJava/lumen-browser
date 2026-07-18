@@ -39,6 +39,8 @@ last_session.db
 /scripts/vision-reports/
 /.jobstatus-*
 __pycache__/
+# PERF-6 session-health journal — local, per-session, never committed.
+/health.log
 
 # Графические тесты: рабочие скрины (Edge-эталон, Lumen-захват, diff) — не коммитим.
 # См. CLAUDE.md → «Графические тесты», правило №1.
