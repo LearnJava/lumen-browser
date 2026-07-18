@@ -419,11 +419,62 @@ backdrop_rgba.len()` в `composite_blend_layer` из-за существующе
 случайно обходит этот баг — branch корректно рендерит все 17 ячеек TEST-56 (визуально проверено),
 diff отражает **фикс плохого baseline**, не регрессию от этого среза.
 
+## Срез 15 — `PushMaskLayer` (SVG `<mask>` content): viewport-cull — исследовательский, фикса нет
+
+Пункт 3(c) остатка, последний класс опенера. Отличие от срезов 7–9: `PushMaskLayer`/
+`PopMaskLayer` — не самодостаточная скобка (в отличие от `PushMask{Image,Gradient}`, которые
+скиссорят/композитят **своё собственное** поддерево внутри `rect`). Как явно задокументировано
+в `DisplayCommand::PushMaskLayer`: команды между `PushMaskLayer`/`PopMaskLayer` рендерят
+**содержимое маски** в отдельный offscreen-слой, а `PopMaskLayer` применяет его как множитель
+к **родительскому** слою (`parent_pixel *= mask_value(mask_layer_pixel, mode)`), ограниченный
+`rect`. Композит `PopMaskLayer` не трогает пиксели вне `rect` — то есть чисто с точки зрения
+композит-семантики off-viewport `rect` ⇒ композит невидим, тот же довод, что уже применялся
+к `PushMask*` в срезе 9.
+
+Проверка боем показала, что вопрос не в семантике композита, а в том, что куллить нечего:
+
+1. `PushMaskLayer`/`PopMaskLayer` **не эмитируются нигде в продакшен-коде**. Единственный
+   эмиттер mask-команд — `emit_push_mask` (`display_list.rs`) — покрывает только
+   `PushMaskImage`/`PushMaskLinearGradient`/`PushMaskRadialGradient`/`PushMaskConicGradient`
+   (по `b.style.mask_image`); ветки на `PushMaskLayer` там нет. Репозиторий-wide grep
+   (`PushMaskLayer {` конструкторы) подтверждает: единственные места, где команда
+   **строится**, — юнит-тесты `display_list.rs` (не реальный контент). SVG `<mask>` с
+   произвольным rendered-содержимым (в отличие от `mask-image: url()`/градиента) — заявленная
+   в докстринге, но не подключённая end-to-end фича CSS Masking L1 §5.
+2. Как следствие, у двух бэкендов **разная** (и в одном случае — неверная относительно
+   докстринга) реализация одной и той же команды, ни разу не пройденная реальным рендером:
+   `renderer.rs` (wgpu) реализует полную семантику (отдельный offscreen-уровень
+   `mask_layer_stack`, `MaskLayerComposite`-план, множительный композит по `rect`);
+   `femtovg_backend.rs`'s `PushMaskLayer`/`PopMaskLayer` (`render_command`, строки ~4966–4976)
+   — это просто `canvas.save()` + `canvas.scissor(rect)` + `canvas.restore()`, т.е. никакого
+   отдельного mask-слоя и множительного композита нет вовсе, что противоречит докстрингу
+   и семантике, которую wgpu-путь действительно исполняет.
+3. Ни `graphic_tests/COVERAGE.md`, ни `TESTS` в `graphic_tests/run.py` не содержат отдельного
+   теста на этот путь (маски покрыты через `mask-image`/градиенты, срез 9 и раньше).
+
+Вывод: безопасный viewport-cull для `PushMaskLayer` семантически возможен (тот же аргумент
+среза 9 — композит ограничен `rect`), но добавлять его сейчас означало бы писать код куллинга
+поверх недостижимого в продакшене, ни разу не отрендеренного end-to-end пути с уже разошедшейся
+между бэкендами (и одним из них — некорректной относительно докстринга) семантикой; нет ни
+одной реальной страницы или графического теста, способных подтвердить, что cull ничего не
+ломает. Это противоречит принципу проекта «не писать код под гипотетические future
+requirements». Пункт остаётся **открытым до тех пор, пока не появится реальный эмиттер**
+SVG-`<mask>`-контента (отдельная, более крупная задача — подключить произвольное поддерево как
+источник маски, а не просто зафиксировать существующие Push/Pop-обработчики) — на этом этапе
+тот же bbox-cull-паттерн срезов 7–9, вероятнее всего, ляжет без переработки. Femtovg-бэкенда
+несоответствие докстрингу (п. 2 выше) зафиксировано здесь как находка, вне скоупа фикса этого
+среза — фиксить нечего рендерить, чинить стаб под несуществующий вызывающий код не имеет
+смысла.
+
+Корректность: изменений в коде нет (чисто исследовательский срез, как и предусмотрено брифом
+`docs/tasks/bug-272-remaining-slices.md:77-85`); `cargo check -p lumen-paint` не запускался
+повторно — код не менялся.
+
 ## Остаток (следующие срезы)
 
 1. ~~Blend-слои (PREMULTIPLIED) вне пула~~ — закрыто срезами 2–4 (src-слой, blend-result, colour-matrix filter, backdrop-filter — все теперь в едином `cpu_upload_pool`). Glyph atlas на тексте страницы — GPU на lenta всё ещё ~509 МБ против ~224 МБ baseline (~285 МБ страничных); требует того же счётчика GPU-памяти, срезы 2–4 его не меняли (lenta не использует blend-mode/backdrop-filter/цветовые CSS-фильтры).
 2. Baseline пустого окна 224 МБ GPU — сам по себе жирный (framebuffers/шрифтовой атлас/драйвер).
-3. Слои по bounding box вместо full-frame — **срез 5 (влит) сделал backdrop-filter's `filtered_backdrop_id` bbox-сайзингом**; визуально подтверждён (A/B gdigrab branch-vs-main, TEST-30/103 побайтово идентичны — см. срез 5 выше); **срез 7 (влит) добавил `bounds` в `PushOpacity` и включил viewport-cull off-screen opacity-групп** (см. срез 7 выше); **срез 8 (влит) включил viewport-cull off-screen clip-групп** (`PushClipRoundedRect`/`PushClipPath`, см. срез 8 ниже); **срез 9 (влит) включил viewport-cull off-screen mask-групп** (`PushMask{Image,LinearGradient,RadialGradient,ConicGradient}`, см. срез 9 ниже); **срез 10 (влит) сделал backdrop-filter's `elem_image_id` bbox-сайзингом** (пункт (b), см. срез 10 выше); **срез 11 (влит) сделал `PushOpacity`'s видимый слой bbox-сайзингом** через общий `bbox_layer_pool` (пункт (c), см. срез 11 выше); **срез 12 (влит) сделал `PushClipRoundedRect`/`PushClipPath`'s видимый слой bbox-сайзингом** тем же механизмом (пункт (c, продолжение), см. срез 12 выше); **срез 13 (влит) сделал gradient-mask-опенеров (`PushMask{LinearGradient,RadialGradient,ConicGradient}`) видимый слой bbox-сайзингом** тем же механизмом (`PushMaskImage` слой не открывает — тронуть было нечего, см. срез 13 выше); **срез 14 (влит) сделал `PushBlendMode`'s (безусловно) и `PushFilter`'s colour-matrix-only (без blur) видимый слой bbox-сайзингом** через новый общий `bbox_cpu_upload_pool` (пункт (c), последний, см. срез 14 выше); `PushFilter`'s blur-цепочка осознанно оставлена full-framebuffer (нет запаса под GPU-blur-сэмплинг за краем bbox — см. срез 14); остаётся: viewport-cull для `PushMaskLayer` (SVG-`<mask>` content, сложнее — применяется к родительскому слою, исследовательский срез 15).
+3. Слои по bounding box вместо full-frame — **срез 5 (влит) сделал backdrop-filter's `filtered_backdrop_id` bbox-сайзингом**; визуально подтверждён (A/B gdigrab branch-vs-main, TEST-30/103 побайтово идентичны — см. срез 5 выше); **срез 7 (влит) добавил `bounds` в `PushOpacity` и включил viewport-cull off-screen opacity-групп** (см. срез 7 выше); **срез 8 (влит) включил viewport-cull off-screen clip-групп** (`PushClipRoundedRect`/`PushClipPath`, см. срез 8 ниже); **срез 9 (влит) включил viewport-cull off-screen mask-групп** (`PushMask{Image,LinearGradient,RadialGradient,ConicGradient}`, см. срез 9 ниже); **срез 10 (влит) сделал backdrop-filter's `elem_image_id` bbox-сайзингом** (пункт (b), см. срез 10 выше); **срез 11 (влит) сделал `PushOpacity`'s видимый слой bbox-сайзингом** через общий `bbox_layer_pool` (пункт (c), см. срез 11 выше); **срез 12 (влит) сделал `PushClipRoundedRect`/`PushClipPath`'s видимый слой bbox-сайзингом** тем же механизмом (пункт (c, продолжение), см. срез 12 выше); **срез 13 (влит) сделал gradient-mask-опенеров (`PushMask{LinearGradient,RadialGradient,ConicGradient}`) видимый слой bbox-сайзингом** тем же механизмом (`PushMaskImage` слой не открывает — тронуть было нечего, см. срез 13 выше); **срез 14 (влит) сделал `PushBlendMode`'s (безусловно) и `PushFilter`'s colour-matrix-only (без blur) видимый слой bbox-сайзингом** через новый общий `bbox_cpu_upload_pool` (пункт (c), последний, см. срез 14 выше); `PushFilter`'s blur-цепочка осознанно оставлена full-framebuffer (нет запаса под GPU-blur-сэмплинг за краем bbox — см. срез 14); **срез 15 (исследовательский, фикса нет)** установил, что `PushMaskLayer` (SVG-`<mask>` content) не эмитируется нигде в продакшене — семантически cull возможен (тот же довод, что срез 9), но писать его сейчас не над чем проверить; пункт остаётся открытым до появления реального эмиттера SVG-`<mask>`-контента (см. срез 15 выше).
 4. Отложенные многокопийные image-кэши (см. диагностику 2026-07-07 в истории файла): femtovg `raw_images` deep-copy, `@WxH`-варианты, GIF все кадры, ~~font `bytes_store.cloned()`~~ (закрыто срезом 6 — `Arc<[u8]>`), canvas2d thread-local — актуально для image-heavy сайтов.
 
 ## Инструменты (остались в коде)
