@@ -116,7 +116,24 @@ impl RuleOptions {
     /// Unknown context fields ([`RequestContext::unknown`]) satisfy any
     /// restriction (conservative block) — matching the pre-Phase-2 behaviour
     /// where options were stripped entirely.
+    ///
+    /// Exception: a top-level document navigation ([`RequestContext::is_top_level`])
+    /// is never matched by a rule carrying resource-type `$`-options — see the
+    /// inline note below.
     fn matches(&self, ctx: &RequestContext) -> bool {
+        // Top-level document navigation: rules carrying explicit resource-type
+        // options (`$script`, `$image`, …) describe subresources only. In ABP
+        // semantics a main-frame document is blocked solely by an explicit
+        // `$document` rule — which this filter does not model as a type bit —
+        // so any typed rule must NOT apply to a top-level navigation. Skipping
+        // them here removes the over-block where a narrow easylist regex
+        // (`/^https?:\/\/[0-9a-z]{5,}\.com\/.*/$script,xhr,domain=…`) matched a
+        // bare `example.com`/`github.com` document because its unknown resource
+        // type conservatively satisfied the type mask (BUG-292). Untyped rules
+        // (plain `||host^`) still apply — a domain block covers its document.
+        if ctx.is_top_level && self.types.is_some() {
+            return false;
+        }
         if let (Some(mask), Some(rt)) = (self.types, ctx.resource_type)
             && resource_type_bit(rt) & mask == 0
         {
@@ -592,7 +609,7 @@ mod tests {
 
     /// Context with a known resource type and unknown party.
     fn ctx_type(rt: ResourceType) -> RequestContext {
-        RequestContext { resource_type: Some(rt), third_party: None }
+        RequestContext { resource_type: Some(rt), third_party: None, is_top_level: false }
     }
 
     #[test]
@@ -640,8 +657,8 @@ mod tests {
     #[test]
     fn third_party_option_respects_party() {
         let f = filter("||widget.net^$third-party");
-        let third = RequestContext { resource_type: None, third_party: Some(true) };
-        let first = RequestContext { resource_type: None, third_party: Some(false) };
+        let third = RequestContext { resource_type: None, third_party: Some(true), is_top_level: false };
+        let first = RequestContext { resource_type: None, third_party: Some(false), is_top_level: false };
         assert!(f.should_block_ctx(&url("https://widget.net/x"), &third).is_some());
         assert!(f.should_block_ctx(&url("https://widget.net/x"), &first).is_none());
     }
@@ -649,8 +666,8 @@ mod tests {
     #[test]
     fn first_party_option_respects_party() {
         let f = filter("||widget.net^$~third-party");
-        let third = RequestContext { resource_type: None, third_party: Some(true) };
-        let first = RequestContext { resource_type: None, third_party: Some(false) };
+        let third = RequestContext { resource_type: None, third_party: Some(true), is_top_level: false };
+        let first = RequestContext { resource_type: None, third_party: Some(false), is_top_level: false };
         assert!(f.should_block_ctx(&url("https://widget.net/x"), &first).is_some());
         assert!(f.should_block_ctx(&url("https://widget.net/x"), &third).is_none());
     }
@@ -682,6 +699,43 @@ mod tests {
             &ctx_type(ResourceType::Image)).is_none());
         assert!(f.should_block_ctx(&url("https://cdn.net/a.js"),
             &ctx_type(ResourceType::Script)).is_some());
+    }
+
+    /// A top-level document navigation context (BUG-292).
+    fn ctx_top_level() -> RequestContext {
+        RequestContext { resource_type: None, third_party: None, is_top_level: true }
+    }
+
+    #[test]
+    fn top_level_navigation_not_blocked_by_typed_rule() {
+        // BUG-292 repro: the narrow easylist regex rule carries `$script,xhr`
+        // options — it must NOT block a top-level document navigation to a bare
+        // `<word≥5>.com` domain, even though the document's resource type is
+        // unknown (which would otherwise conservatively satisfy the type mask).
+        let f = filter("/^https?:\\/\\/[0-9a-z]{5,}\\.com\\/.*/$script,xmlhttprequest,domain=streaming.example");
+        assert!(
+            f.should_block_ctx(&url("https://example.com/"), &ctx_top_level()).is_none(),
+            "typed rule must not block a top-level document navigation"
+        );
+        assert!(
+            f.should_block_ctx(&url("https://github.com/"), &ctx_top_level()).is_none(),
+            "typed rule must not block a top-level document navigation"
+        );
+        // The same rule still blocks a matching `$script` subresource — the fix
+        // only exempts top-level documents, not subresources.
+        assert!(
+            f.should_block_ctx(&url("https://example.com/track.js"),
+                &ctx_type(ResourceType::Script)).is_some(),
+            "typed rule must still block a matching subresource"
+        );
+    }
+
+    #[test]
+    fn top_level_navigation_still_blocked_by_untyped_rule() {
+        // A plain domain block (no `$`-type options) covers the document too —
+        // exempting only typed rules keeps intentional domain blocking working.
+        let f = filter("||malware.net^");
+        assert!(f.should_block_ctx(&url("https://malware.net/"), &ctx_top_level()).is_some());
     }
 
     #[test]

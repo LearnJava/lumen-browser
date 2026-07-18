@@ -2085,6 +2085,11 @@ fn fetch_with_redirect(
     // Threaded to the actual-request `fetch_single` and along redirect hops;
     // `None` for every fetch path except top-level navigation streaming.
     mut stream_sink: Option<ChunkSink<'_>>,
+    // BUG-292: `true` when this is a top-level document navigation (main frame),
+    // not a subresource. Propagated verbatim across redirect hops (a redirected
+    // navigation is still a navigation) and passed into the EasyList filter
+    // context so typed `$`-option rules do not over-block the main document.
+    is_top_level: bool,
 ) -> Result<Response> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
@@ -2153,6 +2158,7 @@ fn fetch_with_redirect(
     let filter_ctx = lumen_core::ext::RequestContext {
         resource_type: destination.map(destination_to_resource_type),
         third_party: top_level_site.map(|tls| !host_ascii.ends_with(tls) && host_ascii != tls),
+        is_top_level,
     };
     if let Some(f) = effective_filter
         && let Some(reason) = f.should_block_ctx(url, &filter_ctx)
@@ -2457,6 +2463,8 @@ fn fetch_with_redirect(
                     h3_alt_svc,
                     h3_pool,
                     stream_sink,
+                    // Redirected navigation is still the same navigation.
+                    is_top_level,
                 );
             }
             401 if authorization.is_none() && credentials.is_some() => {
@@ -3050,6 +3058,7 @@ impl HttpClient {
                     self.h3_alt_svc(),
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
+                    false, // BUG-292: subresource, not a document navigation
         )
         .map(|resp| resp.body)
     }
@@ -3091,6 +3100,7 @@ impl HttpClient {
                     self.h3_alt_svc(),
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
+                    false, // BUG-292: subresource, not a document navigation
         )?;
         let content_range = if resp.status == 206 {
             header_value(&resp.headers, "content-range").and_then(parse_content_range)
@@ -3166,6 +3176,7 @@ impl HttpClient {
                     self.h3_alt_svc(),
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
+                    false, // BUG-292: subresource, not a document navigation
         )?;
         Ok(parse_multi_range_response(resp))
     }
@@ -3258,6 +3269,7 @@ impl HttpClient {
                     self.h3_alt_svc(),
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
+                    false, // BUG-292: subresource, not a document navigation
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -3296,6 +3308,7 @@ impl HttpClient {
                     self.h3_alt_svc(),
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
+                    false, // BUG-292: subresource, not a document navigation
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -3359,6 +3372,7 @@ impl HttpClient {
             self.h3_alt_svc(),
             self.h3_pool(),
             None, // PH1-2a: conditional GET is not streamed
+            false, // BUG-292: subresource, not a document navigation
         )?;
         if resp.status == 304 {
             return Ok(ConditionalFetch::NotModified);
@@ -3423,6 +3437,7 @@ impl HttpClient {
                     self.h3_alt_svc(),
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
+                    true, // BUG-292: top-level document navigation
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -3443,6 +3458,7 @@ impl HttpClient {
             self.h3_alt_svc(),
             self.h3_pool(),
             None, // PH1-2a: streaming sink — only fetch_page_streaming streams
+            true, // BUG-292: top-level document navigation
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -3494,6 +3510,7 @@ impl HttpClient {
                     self.h3_alt_svc(),
                     self.h3_pool(),
                     Some(on_chunk),
+                    true, // BUG-292: top-level document navigation
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -3517,6 +3534,7 @@ impl HttpClient {
             self.h3_alt_svc(),
             self.h3_pool(),
             Some(on_chunk),
+            true, // BUG-292: top-level document navigation
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -3580,6 +3598,7 @@ impl NetworkTransport for HttpClient {
                     self.h3_alt_svc(),
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
+                    true, // BUG-292: top-level document navigation
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -3618,6 +3637,7 @@ impl NetworkTransport for HttpClient {
                     self.h3_alt_svc(),
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
+                    true, // BUG-292: top-level document navigation
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -3696,6 +3716,7 @@ impl JsFetchProvider for HttpClient {
                     self.h3_alt_svc(),
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
+                    false, // BUG-292: subresource, not a document navigation
         )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
