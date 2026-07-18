@@ -143,7 +143,7 @@ pub struct TabEntry {
     /// (at its left edge). Synced into the process-global toggle
     /// (`lumen_network::set_global_adblock_enabled`) when the tab becomes active
     /// or its checkbox is flipped, so the filter that governs the tab's page
-    /// fetches reflects this flag. Default `true`.
+    /// fetches reflects this flag. Default `false`.
     pub adblock: bool,
 }
 
@@ -174,7 +174,7 @@ impl TabStrip {
                 last_activated_ms: 0.0,
                 pinned: false,
                 group_id: None,
-                adblock: true,
+                adblock: false,
             }],
             active: 0,
             next_id: 1,
@@ -204,7 +204,7 @@ impl TabStrip {
             last_activated_ms: now_ms,
             pinned: false,
             group_id: None,
-            adblock: true,
+            adblock: false,
         });
         self.tabs.len() - 1
     }
@@ -228,7 +228,7 @@ impl TabStrip {
             last_activated_ms: now_ms,
             pinned: false,
             group_id: None,
-            adblock: true,
+            adblock: false,
         });
         self.tabs.len() - 1
     }
