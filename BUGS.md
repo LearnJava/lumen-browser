@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-309)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-314)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -321,6 +321,11 @@
 | [BUG-307](bugs/BUG-307-OPEN.md) | OPEN | shell (main thread) | UI-поток «не отвечает» (IsHungAppWindow): обратимо 39–48 с на ria/rbc, НЕОБРАТИМО после вкладок-гигантов github+stackoverflow — сессия мертва, даже navigate по таймауту; для пользователя «браузер завис, убивать процесс». Несмотря на ADR-016 M0–M4 часть путей блокирует event loop. Найден живым /lumen-perf-audit + наблюдение пользователя |
 | [BUG-308](bugs/BUG-308-OPEN.md) | OPEN | shell (навигация) | Страница с HTTP-ошибкой (403 антибот, w3.org) держит document_ready 129–205 с в живом окне, хотя headless отдаёт тот же 403 за 0.75 с — вкладка «вечно грузится» вместо мгновенной страницы ошибки. Найден живым /lumen-perf-audit |
 | [BUG-309](bugs/BUG-309-OPEN.md) | OPEN | js (`dom.rs` `WEB_API_SHIM`) | `Element.prototype.setAttributeNS`/`getAttributeNS`/`removeAttributeNS` и прочие `*NS`-аксессоры атрибутов отсутствуют — `el.setAttributeNS(...)` кидает `TypeError`. Первый реальный движковый пробел, всплывший после починки [BUG-301](bugs/BUG-301-FIXED.md): WPT `dom/nodes/Element-hasAttribute.html` гоняется до конца, subtest 1 честно FAIL. Записан `expected: FAIL` в metadata. Найдено P2-wpt 2026-07-18 |
+| [BUG-310](bugs/BUG-310-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | ElementTraversal (`childElementCount`/`firstElementChild`/`lastElementChild`/`nextElementSibling`/`previousElementSibling`) и `ParentNode.children` отсутствуют в шиме — возвращают `undefined`, `.children` — голый массив без `.item()`. 10 WPT `dom/nodes` тестов, `expected: FAIL`. Найдено P2-wpt S5 2026-07-18 |
+| [BUG-311](bugs/BUG-311-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | `Node.prototype.isConnected` отсутствует — возвращает `undefined` вместо булева. WPT `dom/nodes/Node-isConnected.html`, `expected: FAIL`. Найдено P2-wpt S5 2026-07-18 |
+| [BUG-312](bugs/BUG-312-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | `Element.prototype.hasAttributes()` отсутствует — `el.hasAttributes is not a function`. WPT `dom/nodes/Element-hasAttributes.html`, `expected: FAIL`. Найдено P2-wpt S5 2026-07-18 |
+| [BUG-313](bugs/BUG-313-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | `document.createProcessingInstruction` отсутствует + нет валидации Name/`?>` (`InvalidCharacterError`). WPT `dom/nodes/Document-createProcessingInstruction.html` 11/12 `expected: FAIL`. Найдено P2-wpt S5 2026-07-18 |
+| [BUG-314](bugs/BUG-314-OPEN.md) | OPEN | js (WEB_API_SHIM, dom.rs) | DOM-конструкторы (`Comment`/`Text`/`DocumentFragment`/`DocumentType`/`Document`/`ProcessingInstruction`/`HTML*Element`) не выставлены как глобальные интерфейсы — `X is not defined`/`window[ctor] is not a constructor`. Семья [BUG-305](bugs/BUG-305-OPEN.md). WPT `DocumentFragment-constructor`/`Document-doctype`, `expected: FAIL`. Найдено P2-wpt S5 2026-07-18 |
 
 ---
 

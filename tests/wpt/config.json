@@ -1,6 +1,6 @@
 {
   "ports": {
-    "http": [8000, 8001],
+    "http": [8300, 8301],
     "http-local": [null],
     "http-public": [null],
     "https": [null, null],
