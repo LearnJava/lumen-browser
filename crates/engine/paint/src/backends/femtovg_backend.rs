@@ -531,20 +531,20 @@ pub struct FemtovgBackend {
     /// `cpu_upload_pool_size`.
     backdrop_bbox_pool_size: (usize, usize),
     /// BUG-272 срез 10 (item 3(b), last full-framebuffer piece of the
-    /// backdrop-filter path): pool of reusable render-target FBOs the
-    /// element's own content (background/border etc., captured between
-    /// `PushBackdropFilter`/`PopBackdropFilter`) draws into, sized to the same
-    /// bbox as `backdrop_bbox_pool`'s `filtered_backdrop_id` instead of the
-    /// full framebuffer. Kept separate from `layer_pool` because its size
-    /// varies per element (like `backdrop_bbox_pool` vs `cpu_upload_pool`).
-    /// `offscreen_layer_image_flags()` — `FLIP_Y` needed, a render target
-    /// later `Paint::image`-sampled directly in `composite_backdrop_filter_layer`
-    /// (placed at `BackdropFilterLayerEntry::true_elem_x/y` — see that field's
-    /// doc for why that position, not `filtered_backdrop_x/y`, is correct here).
-    elem_bbox_pool: Vec<femtovg::ImageId>,
-    /// Device-pixel size `elem_bbox_pool` images were created for; see
+    /// backdrop-filter path), generalised in срез 11 (item 3(c)): pool of
+    /// reusable render-target FBOs sized to a group's own bbox instead of the
+    /// full framebuffer, shared by every Push opener whose visible (on-viewport)
+    /// layer only ever needs to cover its own `bounds` — срез 10's
+    /// `PushBackdropFilter` element-content capture (`elem_image_id`) and срез
+    /// 11's `PushOpacity` visible layer, with срезы 12–14 (clip/mask/filter
+    /// openers) reusing it unchanged. Kept separate from `layer_pool` because
+    /// its size varies per group (like `backdrop_bbox_pool` vs
+    /// `cpu_upload_pool`). `offscreen_layer_image_flags()` — `FLIP_Y` needed, a
+    /// render target later `Paint::image`-sampled directly at composite time.
+    bbox_layer_pool: Vec<femtovg::ImageId>,
+    /// Device-pixel size `bbox_layer_pool` images were created for; see
     /// `backdrop_bbox_pool_size`.
-    elem_bbox_pool_size: (usize, usize),
+    bbox_layer_pool_size: (usize, usize),
     /// Offscreen opacity group layer stack (BUG-133). Each entry holds an
     /// offscreen ImageId that subtree draws render into; PopOpacity composites
     /// it once with the group alpha (CSS Color L3 §3.2: opacity is atomic —
@@ -760,6 +760,17 @@ struct OpacityLayerEntry {
     alpha: f32,
     /// Render target active before PushOpacity — restored on PopOpacity.
     prev_render_target: femtovg::RenderTarget,
+    /// BUG-272 срез 11: when `image_id` was acquired bbox-sized via
+    /// [`FemtovgBackend::acquire_bbox_layer`] instead of full-framebuffer via
+    /// [`FemtovgBackend::acquire_layer`], the device-pixel `(x0, y0, w, h)` the
+    /// layer was sized/positioned for — screen-space origin plus extent, same
+    /// convention as [`FemtovgBackend::screen_bbox_device_px`]'s return value.
+    /// `None` for the full-framebuffer path (`bounds` was `None`, the bbox
+    /// landed off-target, or acquiring a bbox layer failed and the
+    /// full-framebuffer fallback was used instead). `PopOpacity` uses this to
+    /// undo the Push-time bbox `translate`/`scissor` and to composite/release
+    /// the layer at the right device-pixel rect instead of the full canvas.
+    bbox: Option<(f32, f32, usize, usize)>,
 }
 
 // ─── Gradient mask support (BUG-183) ─────────────────────────────────────────
@@ -1544,8 +1555,8 @@ impl FemtovgBackend {
             cpu_upload_pool_size: (0, 0),
             backdrop_bbox_pool: Vec::new(),
             backdrop_bbox_pool_size: (0, 0),
-            elem_bbox_pool: Vec::new(),
-            elem_bbox_pool_size: (0, 0),
+            bbox_layer_pool: Vec::new(),
+            bbox_layer_pool_size: (0, 0),
             backdrop_filter_layer_stack: Vec::new(),
             clip_stack: Vec::new(),
             active_rt_image: None,
@@ -1778,18 +1789,21 @@ impl FemtovgBackend {
         }
     }
 
-    /// BUG-272 срез 10: same contract as [`Self::acquire_layer`] (a
-    /// render-target FBO, `offscreen_layer_image_flags()`), but sized `w × h`
-    /// instead of the full framebuffer and backed by `elem_bbox_pool` — a
-    /// dedicated slot for `elem_image_id`, kept separate for the same reason
-    /// [`Self::acquire_backdrop_bbox_image`] is: its per-element varying size
-    /// would thrash the full-framebuffer-sized `layer_pool`.
-    fn acquire_elem_bbox_layer(&mut self, w: usize, h: usize) -> Option<femtovg::ImageId> {
-        if self.elem_bbox_pool_size != (w, h) {
-            self.filter_layer_pending_delete.append(&mut self.elem_bbox_pool);
-            self.elem_bbox_pool_size = (w, h);
+    /// BUG-272 срез 10, generalised in срез 11: same contract as
+    /// [`Self::acquire_layer`] (a render-target FBO,
+    /// `offscreen_layer_image_flags()`), but sized `w × h` instead of the full
+    /// framebuffer and backed by `bbox_layer_pool` — a dedicated slot for any
+    /// group's own visible-layer FBO (backdrop-filter's `elem_image_id`,
+    /// opacity's bbox-sized layer, and срезы 12–14's clip/mask/filter layers),
+    /// kept separate for the same reason [`Self::acquire_backdrop_bbox_image`]
+    /// is: its per-group varying size would thrash the full-framebuffer-sized
+    /// `layer_pool`.
+    fn acquire_bbox_layer(&mut self, w: usize, h: usize) -> Option<femtovg::ImageId> {
+        if self.bbox_layer_pool_size != (w, h) {
+            self.filter_layer_pending_delete.append(&mut self.bbox_layer_pool);
+            self.bbox_layer_pool_size = (w, h);
         }
-        if let Some(id) = self.elem_bbox_pool.pop() {
+        if let Some(id) = self.bbox_layer_pool.pop() {
             return Some(id);
         }
         self.canvas
@@ -1797,14 +1811,14 @@ impl FemtovgBackend {
             .ok()
     }
 
-    /// Returns an image acquired via [`Self::acquire_elem_bbox_layer`] to the
+    /// Returns an image acquired via [`Self::acquire_bbox_layer`] to the
     /// pool for reuse; see [`Self::release_layer`].
-    fn release_elem_bbox_layer(&mut self, id: femtovg::ImageId, w: usize, h: usize) {
-        /// Same cap as `release_backdrop_bbox_image` — the two pools hold
-        /// paired images for the same backdrop-filter group.
-        const MAX_POOLED_ELEM_BBOX: usize = 4;
-        if self.elem_bbox_pool_size == (w, h) && self.elem_bbox_pool.len() < MAX_POOLED_ELEM_BBOX {
-            self.elem_bbox_pool.push(id);
+    fn release_bbox_layer(&mut self, id: femtovg::ImageId, w: usize, h: usize) {
+        /// Same cap as `release_backdrop_bbox_image` — these pools hold
+        /// paired images for the same offscreen-composite group.
+        const MAX_POOLED_BBOX_LAYERS: usize = 4;
+        if self.bbox_layer_pool_size == (w, h) && self.bbox_layer_pool.len() < MAX_POOLED_BBOX_LAYERS {
+            self.bbox_layer_pool.push(id);
         } else {
             self.filter_layer_pending_delete.push(id);
         }
@@ -2717,24 +2731,57 @@ impl FemtovgBackend {
         self.release_layer(src_id);
     }
 
+    /// Composites an opacity group's offscreen layer onto `prev_render_target`.
+    ///
+    /// `bbox` distinguishes the two layer shapes `PushOpacity` can have
+    /// produced (BUG-272 срез 11): `Some((x0, y0, w, h))` — device px — for a
+    /// bbox-sized layer acquired via [`Self::acquire_bbox_layer`], `None` for
+    /// the full-framebuffer layer from [`Self::acquire_layer`] (used when
+    /// `bounds` was `None`, e.g. the full-page view-transition fade, or the
+    /// bbox path fell back). The bbox path must first undo the Push-time
+    /// `save()` + bbox `translate`/`scissor` (mirrors
+    /// [`Self::composite_backdrop_filter_layer`]'s own `restore()` for the same
+    /// reason — that state lives on the canvas stack, independent of which FBO
+    /// is bound) before switching back to `prev_render_target`.
     fn composite_opacity_layer(
         &mut self,
         src_id: femtovg::ImageId,
         alpha: f32,
         prev_render_target: femtovg::RenderTarget,
+        bbox: Option<(f32, f32, usize, usize)>,
     ) {
-        self.switch_render_target(prev_render_target);
-        self.canvas.save();
-        self.canvas.reset_transform();
-        let css_w = (self.width as f64 / self.scale) as f32;
-        let css_h = (self.height as f64 / self.scale) as f32;
-        let paint = femtovg::Paint::image(src_id, 0.0, 0.0, css_w, css_h, 0.0, alpha);
-        let mut path = femtovg::Path::new();
-        path.rect(0.0, 0.0, css_w, css_h);
-        self.canvas.fill_path(&path, &paint);
-        self.canvas.restore();
-        // BUG-272: back to the pool (see composite_clip_layer).
-        self.release_layer(src_id);
+        match bbox {
+            Some((x0, y0, w, h)) => {
+                self.canvas.restore();
+                self.switch_render_target(prev_render_target);
+                self.canvas.save();
+                self.canvas.reset_transform();
+                let x = x0 / self.scale as f32;
+                let y = y0 / self.scale as f32;
+                let cw = w as f32 / self.scale as f32;
+                let ch = h as f32 / self.scale as f32;
+                let paint = femtovg::Paint::image(src_id, x, y, cw, ch, 0.0, alpha);
+                let mut path = femtovg::Path::new();
+                path.rect(x, y, cw, ch);
+                self.canvas.fill_path(&path, &paint);
+                self.canvas.restore();
+                self.release_bbox_layer(src_id, w, h);
+            }
+            None => {
+                self.switch_render_target(prev_render_target);
+                self.canvas.save();
+                self.canvas.reset_transform();
+                let css_w = (self.width as f64 / self.scale) as f32;
+                let css_h = (self.height as f64 / self.scale) as f32;
+                let paint = femtovg::Paint::image(src_id, 0.0, 0.0, css_w, css_h, 0.0, alpha);
+                let mut path = femtovg::Path::new();
+                path.rect(0.0, 0.0, css_w, css_h);
+                self.canvas.fill_path(&path, &paint);
+                self.canvas.restore();
+                // BUG-272: back to the pool (see composite_clip_layer).
+                self.release_layer(src_id);
+            }
+        }
     }
 
     /// CSS Masking L1 §4 (BUG-183) — opens an offscreen layer for a gradient
@@ -2791,7 +2838,9 @@ impl FemtovgBackend {
             self.canvas.restore();
         }
         // Composite the masked layer (alpha already folded in) onto prev_rt.
-        self.composite_opacity_layer(img_id, 1.0, prev_render_target);
+        // `push_mask_gradient_layer` always acquires this layer full-framebuffer
+        // (`acquire_layer`), never bbox-sized — `bbox: None`.
+        self.composite_opacity_layer(img_id, 1.0, prev_render_target, None);
     }
 
     /// Paints `gradient` over `rect` using the current canvas transform. Used by
@@ -3140,9 +3189,9 @@ impl FemtovgBackend {
         // full-framebuffer consumers — see field doc).
         self.release_backdrop_bbox_image(filtered_backdrop_id, filtered_backdrop_w, filtered_backdrop_h);
         // BUG-272 срез 10: `elem_image_id` is now bbox-sized and pooled via
-        // `elem_bbox_pool` (separate from `layer_pool`'s full-framebuffer
+        // `bbox_layer_pool` (separate from `layer_pool`'s full-framebuffer
         // consumers — see field doc).
-        self.release_elem_bbox_layer(elem_image_id, filtered_backdrop_w, filtered_backdrop_h);
+        self.release_bbox_layer(elem_image_id, filtered_backdrop_w, filtered_backdrop_h);
     }
 
     /// Рисует изображение из зарегистрированного URL в content box `rect`
@@ -3526,6 +3575,56 @@ impl FemtovgBackend {
             || max_y < -slop
             || min_x > self.cull_css_w + slop
             || min_y > self.cull_css_h + slop
+    }
+
+    /// BUG-272 срез 11: screen-space device-pixel axis-aligned bounding box of
+    /// `local` (a group's own bbox in document-space CSS px, pre-transform —
+    /// same convention as [`Self::group_bounds`]/[`Self::is_command_culled`]),
+    /// mapped through the current canvas transform and clamped to the active
+    /// render target's device-pixel extent (`self.width × self.height` — the
+    /// screen, or on the scroll-blit band path, the band FBO). This is the
+    /// bbox-sizing counterpart to [`Self::is_command_culled`]'s AABB test:
+    /// where that method only asks "does this footprint touch the viewport",
+    /// this one returns the actual device-pixel rect a bbox-sized offscreen
+    /// layer must cover to hold every pixel the group can paint this frame.
+    ///
+    /// Returns `(x0, y0, w, h)` — device-pixel origin within the framebuffer
+    /// plus extent — or `None` for a degenerate `local` or an extent that
+    /// clamps to empty (the transformed box landed fully outside the target;
+    /// callers fall back to a full-framebuffer layer, which stays correct —
+    /// just not bbox-optimised — for that frame).
+    fn screen_bbox_device_px(&self, local: Rect) -> Option<(f32, f32, usize, usize)> {
+        if local.width <= 0.0 || local.height <= 0.0 {
+            return None;
+        }
+        let t = self.canvas.transform();
+        let (x0, y0) = (local.x, local.y);
+        let (x1, y1) = (local.x + local.width, local.y + local.height);
+        let corners = [
+            t.transform_point(x0, y0),
+            t.transform_point(x1, y0),
+            t.transform_point(x0, y1),
+            t.transform_point(x1, y1),
+        ];
+        let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+        let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+        for (sx, sy) in corners {
+            min_x = min_x.min(sx);
+            min_y = min_y.min(sy);
+            max_x = max_x.max(sx);
+            max_y = max_y.max(sy);
+        }
+        let scale = self.scale as f32;
+        let dev_x0 = (min_x * scale).floor().max(0.0);
+        let dev_y0 = (min_y * scale).floor().max(0.0);
+        let dev_x1 = (max_x * scale).ceil().min(self.width as f32);
+        let dev_y1 = (max_y * scale).ceil().min(self.height as f32);
+        let w = dev_x1 - dev_x0;
+        let h = dev_y1 - dev_y0;
+        if w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+        Some((dev_x0, dev_y0, w.round() as usize, h.round() as usize))
     }
 
     /// BUG-273 срез 1: document-space CSS px bbox of the offscreen-composite
@@ -4056,32 +4155,83 @@ impl FemtovgBackend {
             // alpha. Per-draw set_global_alpha double-blends overlaps, lets
             // negative-z children show through siblings, and a nested group
             // replaces (not multiplies) the outer alpha.
-            DisplayCommand::PushOpacity { alpha, .. } => {
+            //
+            // BUG-272 срез 11: when `bounds` is known, the layer is sized to its
+            // screen-space device-pixel bbox instead of the full framebuffer
+            // (`screen_bbox_device_px` + `acquire_bbox_layer`) — the same
+            // bbox-sizing move срез 10 made for `elem_image_id`. Children draw
+            // with the ambient transform still active plus an extra translate
+            // mapping the bbox's screen origin to the layer's local `(0, 0)`
+            // (mirrors `PushBackdropFilter`'s `true_elem_x/y` convention, not
+            // `apply_backdrop_filters`'s ambient-blind crop — see
+            // `BackdropFilterLayerEntry`'s doc for why that distinction
+            // matters). The explicit `scissor(bounds)` re-establishes the clip
+            // against the NEW (translated) transform: femtovg bakes a scissor
+            // against whatever transform was active when it was set, so an
+            // ancestor's `overflow: hidden` scissor — baked pre-translate —
+            // would otherwise clip this layer's content using coordinates that
+            // belong to the full framebuffer, not this bbox-local image.
+            DisplayCommand::PushOpacity { alpha, bounds } => {
                 let prev_rt = self.current_rt();
-                let entry = match self.acquire_layer() {
-                    Some(img_id) => {
-                        // Redirect subtree draws into the transparent offscreen layer.
-                        self.switch_render_target(femtovg::RenderTarget::Image(img_id));
-                        self.canvas.clear_rect(
-                            0, 0, self.width, self.height,
-                            femtovg::Color::rgba(0, 0, 0, 0),
-                        );
-                        OpacityLayerEntry {
-                            image_id: Some(img_id),
-                            alpha: alpha.clamp(0.0, 1.0),
-                            prev_render_target: prev_rt,
+                let screen_bbox = bounds.and_then(|b| self.screen_bbox_device_px(b));
+                let entry = match screen_bbox {
+                    Some((x0, y0, w, h)) => match self.acquire_bbox_layer(w, h) {
+                        Some(img_id) => {
+                            self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                            self.canvas.clear_rect(
+                                0, 0, w as u32, h as u32,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            self.canvas.save();
+                            self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                            let b = bounds.expect("screen_bbox_device_px came from Some(bounds)");
+                            self.canvas.scissor(b.x, b.y, b.width, b.height);
+                            OpacityLayerEntry {
+                                image_id: Some(img_id),
+                                alpha: alpha.clamp(0.0, 1.0),
+                                prev_render_target: prev_rt,
+                                bbox: Some((x0, y0, w, h)),
+                            }
                         }
-                    }
-                    None => {
-                        // Fallback: per-draw alpha (pre-BUG-133 behaviour).
-                        self.canvas.save();
-                        self.canvas.set_global_alpha(alpha.clamp(0.0, 1.0));
-                        OpacityLayerEntry {
-                            image_id: None,
-                            alpha: alpha.clamp(0.0, 1.0),
-                            prev_render_target: prev_rt,
+                        None => {
+                            // Fallback: per-draw alpha (pre-BUG-133 behaviour).
+                            self.canvas.save();
+                            self.canvas.set_global_alpha(alpha.clamp(0.0, 1.0));
+                            OpacityLayerEntry {
+                                image_id: None,
+                                alpha: alpha.clamp(0.0, 1.0),
+                                prev_render_target: prev_rt,
+                                bbox: None,
+                            }
                         }
-                    }
+                    },
+                    None => match self.acquire_layer() {
+                        Some(img_id) => {
+                            // Redirect subtree draws into the transparent offscreen layer.
+                            self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                            self.canvas.clear_rect(
+                                0, 0, self.width, self.height,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            OpacityLayerEntry {
+                                image_id: Some(img_id),
+                                alpha: alpha.clamp(0.0, 1.0),
+                                prev_render_target: prev_rt,
+                                bbox: None,
+                            }
+                        }
+                        None => {
+                            // Fallback: per-draw alpha (pre-BUG-133 behaviour).
+                            self.canvas.save();
+                            self.canvas.set_global_alpha(alpha.clamp(0.0, 1.0));
+                            OpacityLayerEntry {
+                                image_id: None,
+                                alpha: alpha.clamp(0.0, 1.0),
+                                prev_render_target: prev_rt,
+                                bbox: None,
+                            }
+                        }
+                    },
                 };
                 self.opacity_layer_stack.push(entry);
                 self.layer_stack_depth += 1;
@@ -4096,6 +4246,7 @@ impl FemtovgBackend {
                             img_id,
                             entry.alpha,
                             entry.prev_render_target,
+                            entry.bbox,
                         ),
                         None => self.canvas.restore(),
                     }
@@ -4294,7 +4445,7 @@ impl FemtovgBackend {
                     // landed in the wrong row, `viewport_h - bounds.bottom`).
                     // `filtered_backdrop_id` is a CPU pixel upload (top-down) and
                     // correctly stays flag-free per `offscreen_layer_image_flags`.
-                    match self.acquire_elem_bbox_layer(filt_w, filt_h) {
+                    match self.acquire_bbox_layer(filt_w, filt_h) {
                         Some(elem_id) => {
                             self.switch_render_target(femtovg::RenderTarget::Image(elem_id));
                             self.canvas.clear_rect(
@@ -4481,7 +4632,7 @@ impl RenderBackend for FemtovgBackend {
     fn debug_mem_report(&self) -> String {
         let raw_bytes: usize = self.raw_images.values().map(|i| i.data.len()).sum();
         format!(
-            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}, cpu_upload_pool={}, backdrop_bbox_pool={}, elem_bbox_pool={}",
+            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}, cpu_upload_pool={}, backdrop_bbox_pool={}, bbox_layer_pool={}",
             self.raw_images.len(),
             raw_bytes as f64 / 1e6,
             self.images.len(),
@@ -4489,7 +4640,7 @@ impl RenderBackend for FemtovgBackend {
             self.content_band_pool.len(),
             self.cpu_upload_pool.len(),
             self.backdrop_bbox_pool.len(),
-            self.elem_bbox_pool.len()
+            self.bbox_layer_pool.len()
         )
     }
 
