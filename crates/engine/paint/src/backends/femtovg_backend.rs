@@ -2216,10 +2216,10 @@ impl FemtovgBackend {
         if let Some(&id) = self.loaded_fonts.get(path) {
             return Some(id);
         }
-        let bytes = if let Some(mem) = provider.read_face_bytes(path) {
+        let bytes: Arc<[u8]> = if let Some(mem) = provider.read_face_bytes(path) {
             mem
         } else {
-            std::fs::read(path).ok()?
+            Arc::from(std::fs::read(path).ok()?)
         };
         let id = self.canvas.add_font_mem(&bytes).ok()?;
         self.loaded_fonts.insert(path.to_owned(), id);
@@ -2380,7 +2380,7 @@ impl FemtovgBackend {
             };
             let Some(bytes) = provider
                 .read_face_bytes(&rec.path)
-                .or_else(|| std::fs::read(&rec.path).ok())
+                .or_else(|| std::fs::read(&rec.path).ok().map(Arc::from))
             else {
                 continue;
             };
