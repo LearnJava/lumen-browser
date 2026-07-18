@@ -807,6 +807,17 @@ struct MaskLayerEntry {
     rect: lumen_core::geom::Rect,
     /// Render target active before the matching `PushMask*` — restored on `PopMask`.
     prev_render_target: femtovg::RenderTarget,
+    /// BUG-272 срез 13: same convention as [`OpacityLayerEntry::bbox`] — when
+    /// `image_id` was acquired bbox-sized via
+    /// [`FemtovgBackend::acquire_bbox_layer`] instead of full-framebuffer via
+    /// [`FemtovgBackend::acquire_layer`], the device-pixel `(x0, y0, w, h)` the
+    /// layer was sized/positioned for. `None` for the full-framebuffer path
+    /// (the bbox landed off-target, or acquiring a bbox layer failed and the
+    /// full-framebuffer fallback was used instead) or the scissor fallback.
+    /// `PopMask` passes this through to [`FemtovgBackend::composite_opacity_layer`]
+    /// to undo the Push-time bbox `translate`/`scissor` and composite/release
+    /// the layer at the right device-pixel rect instead of the full canvas.
+    bbox: Option<(f32, f32, usize, usize)>,
 }
 
 // ─── Clip-path shape clip support (BUG-140) ──────────────────────────────────
@@ -2901,12 +2912,59 @@ impl FemtovgBackend {
     }
 
     /// CSS Masking L1 §4 (BUG-183) — opens an offscreen layer for a gradient
-    /// `mask-image`. The masked subtree renders into a transparent full-RT FBO;
-    /// the matching `PopMask` multiplies that FBO's alpha by the gradient.
+    /// `mask-image`. The masked subtree renders into a transparent FBO; the
+    /// matching `PopMask` multiplies that FBO's alpha by the gradient.
     ///
-    /// On FBO-allocation failure falls back to a rect scissor (mask no-op).
+    /// BUG-272 срез 13: reuses срез 11/12's bbox-sizing move
+    /// (`screen_bbox_device_px` + `acquire_bbox_layer`) — `rect` is the same
+    /// masked-element border-box already used for culling in срез 9, so the
+    /// layer is sized to its screen-space device-pixel bbox instead of the
+    /// full framebuffer. Content draws with the ambient transform plus a
+    /// translate mapping the bbox's screen origin to the layer's local
+    /// `(0, 0)`, matching `PushOpacity`'s bbox convention (see its doc for why
+    /// the explicit `scissor` re-establishment after the translate matters).
     fn push_mask_gradient_layer(&mut self, rect: lumen_core::geom::Rect, gradient: MaskGradient) {
         let prev_rt = self.current_rt();
+        let screen_bbox = self.screen_bbox_device_px(rect);
+        let entry = match screen_bbox {
+            Some((x0, y0, w, h)) => match self.acquire_bbox_layer(w, h) {
+                Some(img_id) => {
+                    self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                    self.canvas.clear_rect(
+                        0, 0, w as u32, h as u32,
+                        femtovg::Color::rgba(0, 0, 0, 0),
+                    );
+                    self.canvas.save();
+                    self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                    self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                    MaskLayerEntry {
+                        image_id: Some(img_id),
+                        gradient: Some(gradient),
+                        rect,
+                        prev_render_target: prev_rt,
+                        bbox: Some((x0, y0, w, h)),
+                    }
+                }
+                None => self.push_mask_gradient_fallback(rect, gradient, prev_rt),
+            },
+            None => self.push_mask_gradient_fallback(rect, gradient, prev_rt),
+        };
+        self.mask_layer_stack.push(entry);
+        self.layer_stack_depth += 1;
+    }
+
+    /// BUG-272 срез 13: `PushMask*Gradient` fallback when
+    /// `screen_bbox_device_px` returned `None` (degenerate/off-target bbox) or
+    /// `acquire_bbox_layer` failed — same two-tier fallback as
+    /// [`Self::push_clip_rounded_rect_fallback`]: a full-framebuffer layer via
+    /// [`Self::acquire_layer`], or (if even that fails) a plain rect scissor
+    /// (gradient mask becomes a hard rect clip — pre-срез-13 behaviour).
+    fn push_mask_gradient_fallback(
+        &mut self,
+        rect: lumen_core::geom::Rect,
+        gradient: MaskGradient,
+        prev_rt: femtovg::RenderTarget,
+    ) -> MaskLayerEntry {
         match self.acquire_layer() {
             Some(img_id) => {
                 self.switch_render_target(femtovg::RenderTarget::Image(img_id));
@@ -2914,26 +2972,26 @@ impl FemtovgBackend {
                     0, 0, self.width, self.height,
                     femtovg::Color::rgba(0, 0, 0, 0),
                 );
-                self.mask_layer_stack.push(MaskLayerEntry {
+                MaskLayerEntry {
                     image_id: Some(img_id),
                     gradient: Some(gradient),
                     rect,
                     prev_render_target: prev_rt,
-                });
+                    bbox: None,
+                }
             }
             None => {
-                // Fallback: rect scissor (gradient mask becomes a hard rect clip).
                 self.canvas.save();
                 self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
-                self.mask_layer_stack.push(MaskLayerEntry {
+                MaskLayerEntry {
                     image_id: None,
                     gradient: None,
                     rect,
                     prev_render_target: prev_rt,
-                });
+                    bbox: None,
+                }
             }
         }
-        self.layer_stack_depth += 1;
     }
 
     /// CSS Masking L1 §4 (BUG-183) — applies the gradient mask to the offscreen
@@ -2944,9 +3002,11 @@ impl FemtovgBackend {
     /// alpha by the gradient's alpha (`mask-mode: alpha`, the default), then the
     /// masked layer is composited down exactly like an opacity group.
     fn composite_mask_layer(&mut self, entry: MaskLayerEntry) {
-        let MaskLayerEntry { image_id, gradient, rect, prev_render_target } = entry;
+        let MaskLayerEntry { image_id, gradient, rect, prev_render_target, bbox } = entry;
         let Some(img_id) = image_id else { return };
-        // RT is currently the FBO: multiply its alpha by the gradient.
+        // RT is currently the FBO, with the Push-time transform (translated
+        // to bbox-local origin when `bbox` is `Some`) still active: multiply
+        // its alpha by the gradient, painted in that same coordinate space.
         if let Some(g) = gradient {
             self.canvas.save();
             self.canvas.global_composite_operation(femtovg::CompositeOperation::DestinationIn);
@@ -2954,9 +3014,11 @@ impl FemtovgBackend {
             self.canvas.restore();
         }
         // Composite the masked layer (alpha already folded in) onto prev_rt.
-        // `push_mask_gradient_layer` always acquires this layer full-framebuffer
-        // (`acquire_layer`), never bbox-sized — `bbox: None`.
-        self.composite_opacity_layer(img_id, 1.0, prev_render_target, None);
+        // BUG-272 срез 13: `bbox` — see `MaskLayerEntry::bbox` — threads
+        // through the bbox vs. full-framebuffer distinction so
+        // `composite_opacity_layer` undoes the right Push-time state and
+        // releases the layer to the matching pool.
+        self.composite_opacity_layer(img_id, 1.0, prev_render_target, bbox);
     }
 
     /// Paints `gradient` over `rect` using the current canvas transform. Used by
@@ -4667,6 +4729,7 @@ impl FemtovgBackend {
                     gradient: None,
                     rect: *rect,
                     prev_render_target: self.current_rt(),
+                    bbox: None,
                 });
                 self.layer_stack_depth += 1;
             }
