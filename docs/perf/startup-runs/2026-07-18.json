@@ -1,0 +1,1 @@
+{"bench":"startup","cold_minus_warm_median_ms":11.4999,"cold_ms":136.8203,"exe":"D:/RustProjects/lumen-browser/target/dev-release/lumen.exe","iters":12,"url":"samples/page.html","warm_max_ms":140.745,"warm_median_ms":125.32039999999999,"warm_min_ms":123.3117,"warm_p95_ms":140.745}

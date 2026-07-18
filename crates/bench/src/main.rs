@@ -18,6 +18,10 @@
 //! CI gate (выход 1 при регрессии):
 //!   cargo run -p lumen-bench --release -- --ci
 //!
+//! Cold/warm start bench (PERF-4) — процессный, не in-process; порождает
+//! собранный shell-бинарь и меряет старт до первого кадра (см. `startup`):
+//!   cargo run -p lumen-bench --release -- --startup
+//!
 //! Намеренно не используем `cargo bench` / nightly `test::Bencher`: первое
 //! требует exception в политике зависимостей (criterion), второе — nightly
 //! toolchain. Простой Instant-loop достаточен для baseline-цифр; статистики
@@ -26,6 +30,7 @@
 
 mod bfcache_restore;
 mod ci_gate;
+mod startup;
 mod util;
 
 use std::hint::black_box;
@@ -52,6 +57,12 @@ fn main() {
     if args.iter().any(|a| a == "--ci") {
         let passed = ci_gate::run_ci_gate();
         std::process::exit(if passed { 0 } else { 1 });
+    }
+    // Cold/warm start bench (PERF-4): порождает собранный shell-бинарь, а не
+    // гоняет pipeline in-process — потому обрабатывается до общего пути.
+    if let Some(pos) = args.iter().position(|a| a == "--startup") {
+        let code = startup::run(&args[pos + 1..]);
+        std::process::exit(code);
     }
 
     let iters = std::env::var("LUMEN_BENCH_ITERS")
