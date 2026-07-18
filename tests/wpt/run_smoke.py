@@ -10,8 +10,10 @@ out to mean S7's polished wrapper instead; this script is the minimal S4
 stand-in). It builds the same `wptcommandline`/`wptrunner.run_tests` call
 `tools/wpt/wpt run` makes internally, with just the flags our nonstandard
 `tests/wpt/` layout needs (`--tests`, `--metadata`, no ini-file test root).
-S7 ("CI wrapper + docs") is where this either grows into that thin wrapper or
-gets replaced by a documented direct invocation — see the task doc.
+S7 ("CI wrapper + docs") added `tests/wpt/run_suite.py` on top of this: a thin
+wrapper that runs the *whole* curated subset (auto-discovered from the committed
+`.ini` expectations) as one pass/fail gate, reusing this module's `run()`. Use
+this script directly only to run an ad-hoc test-id list.
 
 Usage (from repo root, after `pip install -r tests/wpt/requirements.txt` in a
 venv — see tests/wpt/README.md):
@@ -53,21 +55,23 @@ def default_binary() -> str:
     return os.path.join(REPO_ROOT, "target", profile, "lumen.exe")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", default=default_binary())
-    parser.add_argument("test_ids", nargs="*", default=["/dom/nodes/Element-hasAttribute.html"])
-    args = parser.parse_args()
+def run(binary: str, test_ids: list) -> int:
+    """Run the vendored `wptrunner` against `test_ids` using `binary`.
 
-    if not os.path.isfile(args.binary):
-        print(f"lumen binary not found: {args.binary}", file=sys.stderr)
+    Shared by this script's `--binary`/`test_ids` CLI and S7's `run_suite.py`
+    (the whole-curated-subset gate). Returns wptrunner's exit code: 0 iff every
+    included test matched its committed expectation (0 unexpected results),
+    non-zero otherwise.
+    """
+    if not os.path.isfile(binary):
+        print(f"lumen binary not found: {binary}", file=sys.stderr)
         return 1
 
     os.makedirs(METADATA_ROOT, exist_ok=True)
 
     argv = [
         "--product=lumen",
-        f"--binary={args.binary}",
+        f"--binary={binary}",
         f"--tests={TESTS_ROOT}",
         f"--metadata={METADATA_ROOT}",
         "--log-mach=-",
@@ -77,7 +81,7 @@ def main() -> int:
         # (`LumenBidiProtocol` has no ProtocolParts, see executorlumen.py),
         # crashing the runner. Not needed for an automated smoke run.
         "--no-pause-after-test",
-    ] + args.test_ids
+    ] + list(test_ids)
 
     cmd_parser = wptcommandline.create_parser()
     kwargs = vars(cmd_parser.parse_args(argv))
@@ -86,6 +90,15 @@ def main() -> int:
     with wptrunner.GlobalLogger(kwargs, {"raw": sys.stdout}):
         rv = wptrunner.start(**kwargs)
     return rv
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--binary", default=default_binary())
+    parser.add_argument("test_ids", nargs="*", default=["/dom/nodes/Element-hasAttribute.html"])
+    args = parser.parse_args()
+
+    return run(args.binary, args.test_ids)
 
 
 if __name__ == "__main__":

@@ -73,6 +73,21 @@ fn test_05_margin_visual() {
 #### Уровень 5 — Top 1000 sites + Web Platform Tests
 
 - **WPT subset** — DOM, CSS, fetch. Цель: 60% pass к v1.0.
+  - **Реализовано (P2-wpt, `docs/tasks/p2-wpt-integration.md`, срезы S1–S7):**
+    настоящий, немодифицированный `wptrunner` гоняется против Lumen через
+    WebDriver BiDi (`lumen --bidi-port N`) — тот же путь, что у Firefox в WPT
+    CI, а не самописный раннер. Инфраструктура и инструкции — `tests/wpt/README.md`;
+    вендоренный snapshot WPT (пиннутый хеш) — `tests/wpt/VENDOR.md`.
+  - **Гейт:** `tests/wpt/run_suite.py` прогоняет курированный сабсет (21 тест
+    `dom/nodes/`: 18 синхронных + 3 async `MutationObserver-*`), сверяет с
+    закоммиченными `.ini`-ожиданиями и выходит с кодом 0 при 0 unexpected —
+    храповик в духе `KNOWN_DEBTORS` из `graphic_tests/`, но tool-native
+    (`wpt update-expectations`). Каждый реальный движковый пробел записан как
+    `expected: FAIL` с BUG-NNN в шапке `.ini`; ослаблять вендоренный тест
+    запрещено. Полностью офлайн: всё вендорится, никаких сетевых обращений к
+    `github.com/web-platform-tests/wpt` во время прогона.
+  - **Reftests (S8)** — отдельная follow-up-задача (пиксельное сравнение через
+    `browsingContext.captureScreenshot`), не входит в DoD P2-wpt.
 - **Top sites test** — на каждом релизе автоматический прогон, скриншоты, сравнение с Chromium как baseline.
 - **Fuzzing** — 10 минут на PR.
 

@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-18",
  "counts": {
-  "open": 40,
+  "open": 48,
   "fixed": 240,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 280,
+ "total_bugs": 288,
  "phases": [
   {
    "id": "P0",
@@ -578,8 +578,13 @@
     },
     {
      "id": "P2-wpt",
-     "title": "WPT pass rate ≥ 60% (docs/tasks/p2-wpt-integration.md)",
-     "status": "planned"
+     "title": "WPT-интеграция через wptrunner+BiDi (курированный сабсет, гейт)",
+     "status": "done",
+     "size": "XXL",
+     "note": "DONE 2026-07-18 (срезы S1–S7, docs/tasks/p2-wpt-integration.md): настоящий немодифицированный wptrunner гоняется против Lumen через WebDriver BiDi (lumen --bidi-port, путь как у Firefox в WPT CI). Гейт tests/wpt/run_suite.py — курированный сабсет 21 тест dom/nodes (18 sync S5 + 3 async MutationObserver S6), 64 проверки, сверка с закоммиченными .ini, exit0 при 0 unexpected, полностью офлайн (вендоренный snapshot, tests/wpt/VENDOR.md). Каждый движковый пробел = expected:FAIL + BUG-NNN (BUG-309..317), вендоренный тест не ослабляется. Цель фазы «WPT pass rate ≥ 60%» НЕ достигнута — это метрика на весь корпус; поставлена инфраструктура+курированный ратчет, рост pass-rate идёт через движковые фиксы багов. Reftests (S8, captureScreenshot) — отдельная follow-up-задача, не в DoD",
+     "bugs": [
+      "BUG-309..317"
+     ]
     }
    ],
    "date": "app v0.5.0"
@@ -3553,9 +3558,68 @@
    "component": "js (`dom.rs` `WEB_API_SHIM`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-310": {
+   "status": "open",
+   "title": "ElementTraversal (`childElementCount`/`firstElementChild`/`lastElementChild`/`nextElementSibling`/`previousElementSibling`) и `ParentNode.children` отсутствуют…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-311": {
+   "status": "open",
+   "title": "`Node.prototype.isConnected` отсутствует — возвращает `undefined` вместо булева. WPT `dom/nodes/Node-isConnected.html`, `expected: FAIL`. Найдено P2-wpt S5 2026…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-312": {
+   "status": "open",
+   "title": "`Element.prototype.hasAttributes()` отсутствует — `el.hasAttributes is not a function`. WPT `dom/nodes/Element-hasAttributes.html`, `expected: FAIL`. Найдено P2…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-313": {
+   "status": "open",
+   "title": "`document.createProcessingInstruction` отсутствует + нет валидации Name/`?>` (`InvalidCharacterError`). WPT `dom/nodes/Document-createProcessingInstruction.html…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-314": {
+   "status": "open",
+   "title": "DOM-конструкторы (`Comment`/`Text`/`DocumentFragment`/`DocumentType`/`Document`/`ProcessingInstruction`/`HTML*Element`) не выставлены как глобальные интерфейсы…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-315": {
+   "status": "open",
+   "title": "`MutationRecord` не выставлен как глобальный интерфейс — `MutationRecord is not defined` (колбэк MutationObserver срабатывает асинхронно, но записи нельзя прове…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-316": {
+   "status": "open",
+   "title": "MutationObserver: некорректный учёт записей (дубли/лишние, `takeRecords()` не очищает очередь) + subtree-мутации не наблюдаются (async-тест уходит в TIMEOUT). W…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-317": {
+   "status": "open",
+   "title": "`script.evaluate` игнорирует `awaitPromise`: при `awaitPromise:true` возвращает сам объект промиса (`{}`), а не разрешённое значение. Пайплайн WPT не затронут (…",
+   "component": "bidi-server (protocol.rs)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
+  "bidi-server (protocol.rs)": [
+   "BUG-317"
+  ],
   "css-parser": [
    "BUG-022",
    "BUG-041",
@@ -3623,7 +3687,14 @@
   ],
   "js (WEB_API_SHIM, dom.rs)": [
    "BUG-302",
-   "BUG-305"
+   "BUG-305",
+   "BUG-310",
+   "BUG-311",
+   "BUG-312",
+   "BUG-313",
+   "BUG-314",
+   "BUG-315",
+   "BUG-316"
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"

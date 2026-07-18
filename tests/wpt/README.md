@@ -4,12 +4,14 @@ P2-wpt (`docs/tasks/p2-wpt-integration.md`, slices S1–S8). Runs the real, unmo
 `wptrunner` against Lumen over WebDriver BiDi (`lumen --bidi-port N`) — not a
 bespoke test runner. See the task doc for the full architecture and slice plan.
 
-**Status:** S1–S5 done. `tests/wpt/run_smoke.py` drives the real, unmodified
-`wptrunner` against `lumen --bidi-port` (navigate + eval) end to end, and the
-curated **18-test synchronous `dom/nodes/` subset** (S5, see "The curated
-subset" below) runs **green** against its committed `.ini` expectations
-(0 unexpected). Remaining: S6 (async tests) and S7 (CI wrapper + docs +
-`ROADMAP.md` flip). Nine real engine/shell gaps surfaced and were fixed while
+**Status:** S1–S7 done (this task complete; S8 reftests is a separate
+follow-up). `tests/wpt/run_smoke.py` drives the real, unmodified `wptrunner`
+against `lumen --bidi-port` (navigate + eval) end to end; `tests/wpt/run_suite.py`
+(S7) runs the **whole curated subset** — the 18 synchronous `dom/nodes/` tests
+(S5) plus the 3 async `MutationObserver-*` tests (S6), 21 tests / 64 checks —
+as one pass/fail gate against its committed `.ini` expectations, **green**
+(0 unexpected), fully offline. See "The curated subset" and "Running the whole
+suite" below. Nine real engine/shell gaps surfaced and were fixed while
 proving the S4 path (the last blocker, [BUG-301](../../bugs/BUG-301-FIXED.md),
 was fixed 2026-07-18): [BUG-278](../../bugs/BUG-278-FIXED.md)
 (HTTP client rejected `wptserve`'s close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
@@ -106,7 +108,12 @@ section for the full diagnosis trail (BiDi-eval-based bisection of
 
   Both scripts default to `target/<LUMEN_PROFILE>/lumen.exe` (`LUMEN_PROFILE`
   env var, default `release`), same convention as `graphic_tests/run.py`.
-  `run_smoke.py` currently exits non-zero — see Status above.
+- `tests/wpt/run_suite.py` — **ours** (S7) — the CI wrapper: discovers the
+  curated subset from the committed `metadata/dom/nodes/*.ini` expectations
+  (one test id per `.ini`) and runs them all through `run_smoke.run()` as a
+  single pass/fail gate — exit 0 iff 0 unexpected results. This is the
+  repeatable local/CI invocation (see "Running the whole suite" below). Adding
+  an `.ini` grows the gate; there is no separate list to maintain.
 - `tests/wpt/config.json` — **ours** (S4) — `wptserve` config override: pins
   `browser_host` to `127.0.0.1` (the default, `web-platform.test`, needs
   `/etc/hosts` entries this task's "no live network" rule can't rely on) and
@@ -169,30 +176,40 @@ Once `pip install -r tests/wpt/requirements.txt` has populated the venv, nothing
 above touches the network — the vendored tree in `tools/`/`tests/wpt/` is a
 committed snapshot (`tests/wpt/VENDOR.md`), not a submodule or a runtime clone.
 
-## The curated subset (S5)
+## The curated subset (S5 + S6)
 
 `metadata/dom/nodes/*.html.ini` pins the expected result of a curated set of
-**18 fully-synchronous `dom/nodes/` tests** (no iframes / XHR / `testdriver` /
-`async_test`). Every genuine failure is recorded as `expected: FAIL`, so the
-whole set runs **green** (0 unexpected) and acts as a regression ratchet —
-same idea as `KNOWN_DEBTORS` in `graphic_tests/`, but tool-native. Each `.ini`
+**21 `dom/nodes/` tests** — 18 fully-synchronous ones (S5; no iframes / XHR /
+`testdriver` / `async_test`) plus 3 async `MutationObserver-*` tests (S6;
+`promise_test`/`async_test`, the only self-contained async tests in the
+vendored `dom/` corpus). Every genuine failure is recorded as `expected: FAIL`
+(and one whole-harness `expected: TIMEOUT`, `MutationObserver-disconnect.html`),
+so the whole set runs **green** (0 unexpected) and acts as a regression ratchet
+— same idea as `KNOWN_DEBTORS` in `graphic_tests/`, but tool-native. Each `.ini`
 is header-commented with the engine bug it tracks (BUG-302/309/310/311/312/
-313/314); flip a `FAIL` to `PASS` in the same commit that lands the fix.
+313/314 for S5; BUG-315/316/317 for S6); flip a `FAIL` to `PASS` in the same
+commit that lands the fix.
 
-Run the whole curated set (Windows Git Bash; `MSYS2_ARG_CONV_EXCL='/dom'` stops
-Git Bash from mangling the leading-slash test IDs into Windows paths):
+## Running the whole suite (S7 gate)
+
+`tests/wpt/run_suite.py` is the repeatable local/CI invocation: it discovers
+the curated subset from the committed `.ini` files (no hand-kept test list) and
+runs it as one pass/fail gate. On Windows Git Bash set
+`MSYS2_ARG_CONV_EXCL='/dom'` so the leading-slash test IDs the runner emits
+aren't mangled into Windows paths:
 
 ```bash
 export LUMEN_PROFILE=dev-release MSYS2_ARG_CONV_EXCL='/dom'
 BIN=$(cygpath -w "$PWD/target/dev-release/lumen.exe")
-tests/wpt/.venv/Scripts/python.exe tests/wpt/run_smoke.py --binary "$BIN" \
-  /dom/nodes/Element-hasAttribute.html /dom/nodes/Node-isConnected.html ...
-# → "Ran N checks ... Unexpected results: 0", exit 0
+tests/wpt/.venv/Scripts/python.exe tests/wpt/run_suite.py --binary "$BIN"
+# → "running 21 curated WPT tests" then
+#   "Ran 64 checks (43 subtests, 21 tests) ... Unexpected results: 0", exit 0
 ```
 
 (Omit `--binary` and it defaults to `target/$LUMEN_PROFILE/lumen.exe`; pass it
 explicitly when running the script from a `git worktree`, whose own `target/`
-is empty.)
+is empty. Use `run_smoke.py` with an explicit test-id list instead only to run
+an ad-hoc subset.)
 
 ## Adding a test / growing the suite
 
