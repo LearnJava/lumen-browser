@@ -96,8 +96,17 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   `TypeError`. Delegates to the existing `_lumen_query_selector_all` bridge, same pattern as
   `querySelectorAll` (a bare tag name / `*` is already a valid CSS type/universal selector).
   Returns a static array, not a live `HTMLCollection` (same simplification `querySelectorAll`
-  already makes). `Element.prototype.getElementsByTagName` and
-  `document.getElementsByClassName` are still missing (out of this fix's scope).
+  already makes). `Element.prototype.getElementsByTagName` is still missing (out of scope).
+- **`getElementsByClassName(names)` on `document` + `Element` (BUG-302 fix, [P3] 2026-07-19).**
+  Was missing from the main `WEB_API_SHIM` (only `dom_parser.rs`'s `VElement`/`VDocument` had it)
+  — `news.ycombinator.com` scripts died wholesale on `el.getElementsByClassName is not a function`.
+  Helper `_lumen_class_selector(names)` splits the whitespace-separated token list, drops empties
+  and builds a compound class selector (`.a.b`); an empty token list returns `null` so callers
+  short-circuit to `[]` (a `''` selector would throw). The `document` variant delegates to
+  `_lumen_query_selector_all`, the `Element` variant to the scoped `_lumen_query_selector_all_scoped`
+  (descendants only). Static array, not a live `HTMLCollection`, same as `getElementsByTagName`.
+  Known limitation (as with `getElementsByTagName`): class tokens are spliced into the selector
+  without CSS escaping — exotic class names with special chars are unsupported.
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has
