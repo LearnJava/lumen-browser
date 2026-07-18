@@ -18,6 +18,21 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **`structuredClone` — spec-conformant cycles/typed-arrays/DataCloneError
+  (`P3-structclone` partial, [P1] 2026-07-18).** The shared `WEB_API_SHIM`
+  implementation (`dom.rs`) now threads a `memory` Map (original → clone) through
+  a nested `clone()` recursion, so self-referential and diamond-shared object
+  graphs round-trip with preserved identity instead of overflowing the stack.
+  Added: BigInt passthrough; `Boolean`/`Number`/`String` wrapper objects;
+  `ArrayBuffer` (deep-copied via `slice(0)`) and every typed-array/`DataView`
+  view (re-viewed over a single cloned backing buffer, so two views of one
+  buffer stay one buffer after cloning); `SharedArrayBuffer` passed by reference.
+  Non-serializable values (functions, symbols) now throw a `DataCloneError`
+  `DOMException` per HTML LS §2.7, instead of the old silent passthrough/drop.
+  Still deferred: the `transfer` option (transferables aren't detached — they're
+  copied). Validated by 9 new `dom::tests::structured_clone_*` (rquickjs) plus a
+  consolidated V8 mirror `v8_runtime::tests::structured_clone_cycles_typed_arrays_and_dataclone_error`
+  (`--features v8-backend`, the default engine per ADR-018).
 - **`_lumen_dispatch_pointer_move_coalesced` — real Pointer Events L3 §4.1
   `getCoalescedEvents()`/`getPredictedEvents()` (`P3-pointerfull`, 2026-07-17).**
   New engine-agnostic `WEB_API_SHIM` function (`dom.rs`, registered on
