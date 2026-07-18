@@ -5438,7 +5438,7 @@ fn lay_out(
     // `lay_out_inner` is the one site that propagates a parent `FloatContext`.
     lay_out_inner(
         b, start_x, start_y, available_width, available_height,
-        measurer, viewport, pcb, hp, in_block_flow, None,
+        measurer, viewport, pcb, hp, in_block_flow, None, AlignValue::Auto,
     );
 }
 
@@ -5447,6 +5447,12 @@ fn lay_out(
 /// an in-flow non-BFC block child laid out beside the parent's floats. When set,
 /// `b`'s own float context inherits those floats so its (and its descendants')
 /// line boxes are shortened by them, instead of the box itself being clipped.
+///
+/// `parent_justify_items` carries the enclosing block container's `justify-items`
+/// value (CSS Box Alignment L3 §6.3), threaded only from the in-flow block-child
+/// recursion. When `b`'s own `justify-self` is `auto`, it resolves to this value
+/// (the container default); every independent-formatting-context call site passes
+/// `AlignValue::Auto`, so those boxes fall back to the inline-start behaviour.
 #[allow(clippy::too_many_arguments)]
 fn lay_out_inner(
     b: &mut LayoutBox,
@@ -5462,6 +5468,7 @@ fn lay_out_inner(
     hp: &dyn HyphenationProvider,
     in_block_flow: bool,
     outer_floats: Option<&FloatContext>,
+    parent_justify_items: AlignValue,
 ) {
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
@@ -5720,17 +5727,26 @@ fn lay_out_inner(
     // CSS Box Alignment L3 §5.2 — `justify-self` for block-level boxes in normal
     // flow with a definite inline size and no auto inline margins. Distributes the
     // free inline space (containing block − box margin box) within the containing
-    // block: `center` centres, `end` flushes to the inline-end. `auto`/`normal`/
-    // `stretch`/`start` leave the box at the inline-start (current behaviour), so
-    // pages that don't set `justify-self` are unaffected. Auto margins take
-    // precedence (handled above), matching the spec's alignment/margin ordering.
-    // Same box class as auto-margin centring: non-replaced block-level in flow.
-    // Container-default via the parent's `justify-items` (for `justify-self: auto`)
-    // is deferred — the parent style isn't threaded here (Phase 0).
+    // block: `center` centres, `end` flushes to the inline-end. `start` (and
+    // `stretch`/`normal`, whose block-level behaviour is inline-start) leave the box
+    // at the inline-start (current behaviour), so pages that don't align are
+    // unaffected. Auto margins take precedence (handled above), matching the spec's
+    // alignment/margin ordering. Same box class as auto-margin centring:
+    // non-replaced block-level in flow.
+    //
+    // §6.3: `justify-self: auto` resolves to the parent's `justify-items`
+    // (`parent_justify_items`, threaded from the in-flow block-child recursion).
+    // Independent-formatting-context call sites pass `AlignValue::Auto`, so their
+    // boxes keep the inline-start default.
+    let effective_justify = if matches!(s.justify_self, AlignValue::Auto) {
+        parent_justify_items
+    } else {
+        s.justify_self
+    };
     if !ml_is_auto
         && !mr_is_auto
         && s.width.is_some()
-        && matches!(s.justify_self, AlignValue::Center | AlignValue::End)
+        && matches!(effective_justify, AlignValue::Center | AlignValue::End)
         && !is_replaced
         && !matches!(
             s.display,
@@ -5744,7 +5760,7 @@ fn lay_out_inner(
         && !matches!(s.position, Position::Absolute | Position::Fixed)
     {
         let remaining = (available_width - b.rect.width - margin_left - margin_right).max(0.0);
-        let shift = match s.justify_self {
+        let shift = match effective_justify {
             AlignValue::Center => remaining / 2.0,
             AlignValue::End => remaining,
             _ => 0.0,
@@ -6486,7 +6502,7 @@ fn lay_out_inner(
 
                     lay_out_inner(child, eff_left, start_y, eff_w,
                             children_available_height, measurer, viewport, children_pcb, hp,
-                            !child_is_root_element, outer_for_child);
+                            !child_is_root_element, outer_for_child, s.justify_items);
                     if matches!(child.kind, BoxKind::Skip) {
                         // Zero-height; does not break the collapsing chain.
                         continue;
@@ -11686,6 +11702,64 @@ mod tests {
             "body{margin:0}#box { width: 200px; height: 50px; margin-left: 40px; justify-self: end; }",
         );
         assert_eq!(x, 600.0, "justify-self:end with left margin x expected 600, got {x}");
+    }
+
+    // ── CSS Box Alignment L3 §6.3 — block container `justify-items` default ───
+
+    /// Lays out `<div id="wrap" style="{wrap_css}"><div id="box" style="{box_css}">`
+    /// in an 800×600 viewport (body margin reset) and returns the inner box's x.
+    /// The wrap has no width, so it fills the 800px content area (content_x = 0),
+    /// making the child's absolute x directly comparable to the shift.
+    fn nested_box_x(wrap_css: &str, box_css: &str) -> f32 {
+        let html = r#"<div id="wrap"><div id="box"></div></div>"#;
+        let css = format!(
+            "body{{margin:0}} #wrap {{ {wrap_css} }} #box {{ {box_css} }}"
+        );
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        find_by_id_all(&root, &doc, "box").expect("box not found").rect.x
+    }
+
+    #[test]
+    fn justify_items_center_centers_block_child() {
+        // Parent justify-items:center + child with definite width and default
+        // (auto) justify-self → child centres: (800 - 200) / 2 = 300.
+        let x = nested_box_x("justify-items: center;", "width: 200px; height: 50px;");
+        assert_eq!(x, 300.0, "justify-items:center child x expected 300, got {x}");
+    }
+
+    #[test]
+    fn justify_items_end_flushes_block_child_to_inline_end() {
+        // Parent justify-items:end → child right edge at 800 → x = 600.
+        let x = nested_box_x("justify-items: end;", "width: 200px; height: 50px;");
+        assert_eq!(x, 600.0, "justify-items:end child x expected 600, got {x}");
+    }
+
+    #[test]
+    fn justify_self_overrides_parent_justify_items() {
+        // Child justify-self:start is a specified (non-auto) value → it wins over
+        // the parent's justify-items:center, leaving the child flush-start (x=0).
+        let x = nested_box_x(
+            "justify-items: center;",
+            "width: 200px; height: 50px; justify-self: start;",
+        );
+        assert_eq!(x, 0.0, "explicit justify-self:start must override parent, got {x}");
+    }
+
+    #[test]
+    fn justify_items_start_leaves_block_child_at_inline_start() {
+        // Parent justify-items:start (explicit) → no shift, x=0.
+        let x = nested_box_x("justify-items: start;", "width: 200px; height: 50px;");
+        assert_eq!(x, 0.0, "justify-items:start child x expected 0, got {x}");
+    }
+
+    #[test]
+    fn justify_items_ignored_without_definite_child_width() {
+        // Auto-width child fills the container → no free inline space for the
+        // parent's justify-items:end to distribute, so x stays 0.
+        let x = nested_box_x("justify-items: end;", "height: 50px;");
+        assert_eq!(x, 0.0, "auto-width child must not shift, got {x}");
     }
 
     #[test]
