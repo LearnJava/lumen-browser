@@ -34,6 +34,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 | Cache/memory growth diagnosis | `LUMEN_MEM_REPORT=1` (~10 s cadence dump) | TEMP instrumentation from BUG-272 |
 | Print/pagination check | `lumen --print-to-pdf out.pdf <src>` | A4 |
 | Reproduce input-order bugs | `--activity-log` / `--click-log` → `activity.log` | |
+| Session-health journal (panics/console.error/load fails/white-screen) → prioritize P3 fixes by frequency | `--health-log` (or `--activity-log` / `LUMEN_HEALTH_LOG=1`) → `health.log` (JSONL); report via `python scripts/health_report.py` (PERF-6) | console/render signals fire in live window only; panic in any mode |
 | Reproduce a user session | `--import-session <file.lsession>` | URL + scroll restored |
 | Network isolation / proxy / Tor testing | `--network-service`, `--proxy <url>`, `--tor [--tor-port N]` | |
 
@@ -44,7 +45,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 Headless one-shot: `--dump-source` · `--dump-layout` · `--dump-display-list` · `--screenshot` · `--trace-nav <out.json>` (PERF-1, load waterfall as Chrome-trace JSON) · `--print-to-pdf`.
 Servers: `--ipc-server [--ipc-port N]` · `--mcp [url]` · `--mcp-port N` · `--mcp-live-port N <src>` · `--bidi-port N` · `--devtools-port N` (CDP, stub — see below).
 Determinism: `--deterministic` · `--rng-seed N` · `--monotonic-clock` (parsed into `DetConfig` but **not currently wired** to the JS runtime — only `--deterministic`'s plain on/off reaches `set_deterministic_mode`; the RNG seed always derives from the page URL hash regardless of `--rng-seed`'s value) · `--viewport WxH` (DEVX-1: pins the window's CSS content viewport, overriding `--deterministic`'s 1280×800 default — used by `graphic_tests/run.py --live` to combine determinism with the pipeline's calibrated 1024×720).
-Misc: `--maximized` (window opens full-screen — live perf audit) · `--no-scrollbar` (cleaner screenshot crops) · `--activity-log` / `--click-log` · `--import-session` · `--network-service` · `--proxy` · `--tor`.
+Misc: `--maximized` (window opens full-screen — live perf audit) · `--no-scrollbar` (cleaner screenshot crops) · `--activity-log` / `--click-log` · `--health-log` (PERF-6 session-health journal → `health.log`; also on with `--activity-log`) · `--import-session` · `--network-service` · `--proxy` · `--tor`.
 
 ## MCP (`crates/mcp`) — the richest scripting surface
 

@@ -29,6 +29,7 @@ mod adblock;
 mod address_bar;
 mod animation_scheduler;
 mod click_log;
+mod health_log;
 mod backend_factory;
 mod bench_frames;
 use lumen_bidi_server::spawn as bidi_spawn;
@@ -389,6 +390,10 @@ fn main() -> ExitCode {
     let (maximized, rest_args) = extract_maximized(&rest_args);
     let (click_log_flag, rest_args) = extract_click_log(&rest_args);
     click_log::init(click_log_flag);
+    // PERF-6: session health journal. Turned on by `--activity-log`/`--click-log`
+    // (shared surface), the dedicated `--health-log`, or `LUMEN_HEALTH_LOG=1`.
+    let (health_log_flag, rest_args) = extract_health_log(&rest_args);
+    health_log::init(click_log_flag || health_log_flag);
     let (det_cfg, rest_args) = deterministic::extract_deterministic(&rest_args);
     let det_mode = det_cfg.enabled;
     let (viewport_override, rest_args) = extract_viewport_override(&rest_args);
@@ -2054,6 +2059,49 @@ fn extract_click_log(args: &[String]) -> (bool, Vec<String>) {
         }
     }
     (found, rest)
+}
+
+/// Извлечь `--health-log` из аргументов (PERF-6, журнал здоровья сессии).
+/// Также активируется переменной окружения `LUMEN_HEALTH_LOG=1`.
+fn extract_health_log(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = std::env::var("LUMEN_HEALTH_LOG").is_ok_and(|v| v == "1");
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--health-log" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
+}
+
+/// PERF-6: recursively count every box in a laid-out tree (render-health metric).
+fn count_layout_boxes(b: &lumen_layout::LayoutBox) -> usize {
+    1 + b.children.iter().map(count_layout_boxes).sum::<usize>()
+}
+
+/// PERF-6: count "rendered units" — things that actually paint: non-whitespace
+/// characters across inline text runs plus replaced elements
+/// (`<img>`/`<canvas>`/`<video>`/`<iframe>`). Zero means the page painted
+/// nothing visible, which for a content-bearing DOM signals a white screen.
+fn count_rendered_units(b: &lumen_layout::LayoutBox) -> usize {
+    use lumen_layout::BoxKind;
+    let mut n = match &b.kind {
+        BoxKind::InlineRun { segments, .. } => segments
+            .iter()
+            .map(|s| s.text.chars().filter(|c| !c.is_whitespace()).count())
+            .sum(),
+        BoxKind::Image { .. }
+        | BoxKind::Video { .. }
+        | BoxKind::Canvas { .. }
+        | BoxKind::Iframe { .. } => 1,
+        _ => 0,
+    };
+    for c in &b.children {
+        n += count_rendered_units(c);
+    }
+    n
 }
 
 /// Извлечь `--devtools-port N` из аргументов, вернуть (port, остальные аргументы).
@@ -9305,10 +9353,12 @@ impl Lumen {
                 }
                 click_log::log_load_ok(&self.source.describe(), title);
                 click_log::log_page_ready(&self.source.describe(), self.scroll_y);
+                self.record_render_health();
             }
             Err(err) => {
                 self.nav_start = None;
                 click_log::log_load_err(&self.source.describe(), &err.to_string());
+                health_log::log_load_error(&self.source.describe(), &err.to_string());
                 eprintln!("Ошибка reload {}: {err}", self.source.describe());
             }
         }
@@ -9602,6 +9652,33 @@ impl Lumen {
                 }
             });
         }
+    }
+
+    /// PERF-6: emit a broken-render / white-screen health signal for the page
+    /// that just finished loading. No-op unless the health journal is enabled.
+    /// The signal fires only when a content-bearing DOM painted nothing at all
+    /// (see [`health_log::log_render_health`] for the heuristic and its limits).
+    fn record_render_health(&self) {
+        if !health_log::is_enabled() {
+            return;
+        }
+        let layout_boxes = self.layout_box.as_ref().map(count_layout_boxes).unwrap_or(0);
+        let rendered_units = self
+            .layout_box
+            .as_ref()
+            .map(count_rendered_units)
+            .unwrap_or(0);
+        let dom_nodes = self
+            .layout_source
+            .as_ref()
+            .and_then(|ls| ls.document.lock().ok().map(|d| d.node_count()))
+            .unwrap_or(0);
+        health_log::log_render_health(
+            &self.source.describe(),
+            dom_nodes,
+            layout_boxes,
+            rendered_units,
+        );
     }
 
     /// Применить результат полного pipeline (fetch + parse + CSS + images).
@@ -10258,10 +10335,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             }
                         }
                         click_log::log_page_ready(&self.source.describe(), self.scroll_y);
+                        self.record_render_health();
                     }
                     Err(e) => {
                         self.nav_start = None;
                         click_log::log_load_err(&self.source.describe(), &e);
+                        health_log::log_load_error(&self.source.describe(), &e);
                         eprintln!("Ошибка финального render {}: {e}", self.source.describe());
                     }
                 }
@@ -10270,6 +10349,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if generation != self.load_generation { return; }
                 self.nav_start = None;
                 click_log::log_load_err(&self.source.describe(), &msg);
+                health_log::log_load_error(&self.source.describe(), &msg);
                 eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
                 self.stream_builder = None;
                 self.stream_sheet = lumen_css_parser::Stylesheet::default();
@@ -10888,6 +10968,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // so a message logged earlier this frame isn't missed).
                     let msgs = self.drain_query_js(|j| j.take_console_messages()).unwrap_or_default();
                     if !msgs.is_empty() {
+                        // PERF-6: record page `console.error(...)` calls as health signals.
+                        if health_log::is_enabled() {
+                            let url = self.source.describe();
+                            for (level, text) in &msgs {
+                                if *level == 2 {
+                                    health_log::log_console_error(&url, text);
+                                }
+                            }
+                        }
                         self.devtools_console.push_batch(msgs);
                     }
                     let entries: Vec<ConsoleEntry> = self
@@ -11217,6 +11306,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         {
             let msgs = self.drain_query_js(|j| j.take_console_messages()).unwrap_or_default();
             if !msgs.is_empty() {
+                // PERF-6: record page `console.error(...)` calls as health signals.
+                if health_log::is_enabled() {
+                    let url = self.source.describe();
+                    for (level, text) in &msgs {
+                        if *level == 2 {
+                            health_log::log_console_error(&url, text);
+                        }
+                    }
+                }
                 self.devtools_console.push_batch(msgs);
                 if self.devtools_console.visible {
                     self.request_redraw();
@@ -17095,6 +17193,9 @@ impl Lumen {
             }
         }
         click_log::log_nav(&source.describe());
+        // PERF-6: remember the page under navigation so a panic on any thread can
+        // be attributed to it in the health journal.
+        health_log::set_current_url(&source.describe());
         self.hint.close();
         // Phase-3 freeze: serialize live DOM arena + shell-side stylesheet.
         // JS heap suspend is gated on 10C.2, so event handlers are NOT retained.

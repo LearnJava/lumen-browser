@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen health-log fixture (PERF-6)</title>
+  <style>
+    /* Every content node is display:none: the DOM is content-bearing
+       (>20 nodes) but the layout paints nothing → white-screen heuristic. */
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <!-- 24 hidden content nodes: real DOM, zero rendered units. -->
+  <div class="hidden">alpha</div>
+  <div class="hidden">bravo</div>
+  <div class="hidden">charlie</div>
+  <div class="hidden">delta</div>
+  <div class="hidden">echo</div>
+  <div class="hidden">foxtrot</div>
+  <div class="hidden">golf</div>
+  <div class="hidden">hotel</div>
+  <div class="hidden">india</div>
+  <div class="hidden">juliet</div>
+  <div class="hidden">kilo</div>
+  <div class="hidden">lima</div>
+  <div class="hidden">mike</div>
+  <div class="hidden">november</div>
+  <div class="hidden">oscar</div>
+  <div class="hidden">papa</div>
+  <div class="hidden">quebec</div>
+  <div class="hidden">romeo</div>
+  <div class="hidden">sierra</div>
+  <div class="hidden">tango</div>
+  <div class="hidden">uniform</div>
+  <div class="hidden">victor</div>
+  <div class="hidden">whiskey</div>
+  <div class="hidden">xray</div>
+  <script>
+    // A page-emitted error — recorded by the health journal as a console_error.
+    console.error("PERF-6 fixture: intentional console.error for health-log smoke");
+  </script>
+</body>
+</html>
