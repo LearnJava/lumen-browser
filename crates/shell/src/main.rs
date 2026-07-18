@@ -574,6 +574,36 @@ fn page_source_for_automation_url(url: &str) -> PageSource {
     PageSource::File(PathBuf::from(url))
 }
 
+/// Resolve a JS-initiated navigation URL (`window.open`, `location.href=`,
+/// `location.assign/replace`) to a `PageSource`, honouring `file://` (BUG-293).
+///
+/// Only `file://` URLs get special treatment: they resolve to a
+/// `PageSource::File` so the local page loads from disk instead of hitting the
+/// http-only network path (which rejects them as `unsupported scheme: file`).
+/// Every other URL — http(s), `about:*`, and relative URLs already resolved to
+/// absolute by the JS engine — keeps the existing `PageSource::Url` path
+/// untouched.
+///
+/// Security: a web page (`opener` is an http/https `PageSource::Url`) may not
+/// navigate to a local `file://` resource — that returns `Err(reason)` and the
+/// caller surfaces a clear diagnostic instead of loading the file. `file→file`
+/// (a local page opening another local page) and non-web openers are allowed.
+fn resolve_js_navigation(url: &str, opener: &PageSource) -> Result<PageSource, String> {
+    if !url.starts_with("file://") {
+        return Ok(PageSource::Url(url.to_owned()));
+    }
+    let opener_is_web = matches!(
+        opener,
+        PageSource::Url(u) if u.starts_with("http://") || u.starts_with("https://")
+    );
+    if opener_is_web {
+        return Err(format!(
+            "переход web-страницы на локальный файл заблокирован политикой безопасности: {url}"
+        ));
+    }
+    Ok(page_source_for_automation_url(url))
+}
+
 /// Collect the concatenated text content of `id`'s subtree (SDC-2 `Query` support).
 fn collect_automation_text(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
     let node = doc.get(id);
@@ -11126,13 +11156,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         {
             let popups = self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default();
             for (url, _target, _width, _height) in popups {
-                self.open_new_tab();
-                let url = if url.is_empty() {
-                    "about:blank".to_owned()
+                // BUG-293: resolve `file://` popups to a `PageSource::File` (load
+                // from disk) rather than the http-only network path. Read the
+                // opener's scheme from `self.source` BEFORE `open_new_tab()`
+                // resets it, so the web→file security check sees the real opener.
+                let resolved = if url.is_empty() {
+                    Ok(PageSource::Url("about:blank".to_owned()))
                 } else {
-                    url
+                    resolve_js_navigation(&url, &self.source)
                 };
-                self.navigate_to(PageSource::Url(url));
+                self.open_new_tab();
+                match resolved {
+                    Ok(source) => self.navigate_to(source),
+                    Err(reason) => eprintln!("window.open заблокирован: {reason}"),
+                }
             }
         }
 
@@ -11453,11 +11490,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             match nav {
                 JsNavigateRequest::Push(url) => {
                     click_log::log_js_nav("pushState/location.href", &url);
-                    self.navigate_to(PageSource::Url(url));
+                    // BUG-293: same file://-resolution + web→file guard as popups.
+                    match resolve_js_navigation(&url, &self.source) {
+                        Ok(source) => self.navigate_to(source),
+                        Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
+                    }
                 }
                 JsNavigateRequest::Replace(url) => {
                     click_log::log_js_nav("replaceState/location.replace", &url);
-                    self.navigate_replace(PageSource::Url(url));
+                    match resolve_js_navigation(&url, &self.source) {
+                        Ok(source) => self.navigate_replace(source),
+                        Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
+                    }
                 }
                 JsNavigateRequest::Reload => {
                     click_log::log_js_nav("location.reload", &self.source.describe());
@@ -22007,6 +22051,61 @@ mod tests {
     fn cache_control_no_store_false_when_header_missing() {
         let headers = vec![("Content-Type".to_owned(), "text/html".to_owned())];
         assert!(!cache_control_no_store(&headers));
+    }
+
+    // ── BUG-293: JS-navigation URL resolution (window.open / location.href) ──
+
+    #[test]
+    fn resolve_js_nav_file_from_local_page_loads_from_disk() {
+        // file→file: a local page opening a local file resolves to PageSource::File.
+        let opener = PageSource::File(PathBuf::from("/home/x/index.html"));
+        let src = resolve_js_navigation("file:///home/x/page.html", &opener)
+            .expect("file→file must be allowed");
+        match src {
+            PageSource::File(p) => assert_eq!(p, PathBuf::from("/home/x/page.html")),
+            other => panic!("expected PageSource::File, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_js_nav_file_strips_windows_drive_slash() {
+        // file:///D:/… → D:/… (leading slash before the drive letter dropped).
+        let opener = PageSource::File(PathBuf::from("D:/proj/index.html"));
+        let src = resolve_js_navigation("file:///D:/proj/page.html", &opener)
+            .expect("file→file must be allowed");
+        match src {
+            PageSource::File(p) => assert_eq!(p, PathBuf::from("D:/proj/page.html")),
+            other => panic!("expected PageSource::File, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_js_nav_web_to_file_is_blocked() {
+        // web→file: an http(s) page must not open a local file:// resource.
+        let opener = PageSource::Url("https://example.com/".to_owned());
+        let err = resolve_js_navigation("file:///etc/passwd", &opener)
+            .expect_err("web→file must be blocked");
+        assert!(err.contains("политикой безопасности"), "reason: {err}");
+    }
+
+    #[test]
+    fn resolve_js_nav_http_url_untouched() {
+        // Non-file URLs keep the existing PageSource::Url path regardless of opener.
+        let opener = PageSource::Url("https://example.com/".to_owned());
+        let src = resolve_js_navigation("https://example.org/next", &opener)
+            .expect("http navigation stays on the network path");
+        match src {
+            PageSource::Url(u) => assert_eq!(u, "https://example.org/next"),
+            other => panic!("expected PageSource::Url, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_js_nav_file_from_about_blank_allowed() {
+        // A non-web opener (about:blank / Empty) may open a file:// resource.
+        let src = resolve_js_navigation("file:///home/x/page.html", &PageSource::AboutBlank)
+            .expect("non-web opener → file is allowed");
+        assert!(matches!(src, PageSource::File(_)));
     }
 
     // ── RP-2: live layout viewport tracks window size, minus chrome ─────────

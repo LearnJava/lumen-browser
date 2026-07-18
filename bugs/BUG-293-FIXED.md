@@ -1,6 +1,6 @@
 # BUG-293 — Вкладка, открытая `window.open()`, не может загрузить `file://` URL («unsupported scheme: file»)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-19 (P3)
 **Компонент:** shell (`crates/shell/src/main.rs` — дренаж popup-запросов + `navigate_to`)
 **Найден:** 2026-07-16, при попытке открыть локальный сэмпл во второй вкладке через `window.open('file:///…')`
 
@@ -46,3 +46,33 @@ Reload: file:///D:/RustProjects/lumen-browser/samples/page.html
 открывает локальную), решение для web→file зафиксировать осознанно (по умолчанию — блокировать
 с внятной ошибкой, а не «unsupported scheme»). Регрессионный тест: сценарий Repro открывает
 вторую вкладку с содержимым файла.
+
+## Фикс (2026-07-19, P3)
+
+Новая свободная функция `resolve_js_navigation(url, opener) -> Result<PageSource, String>`
+(`crates/shell/src/main.rs`, рядом с `page_source_for_automation_url`):
+
+- **Только `file://`** URL получают спец-обработку — резолвятся в `PageSource::File` через
+  уже существующий `page_source_for_automation_url` (тот же разбор `file:///D:/…` → `D:/…`
+  для Windows). Всё остальное (http(s), `about:*`, относительные URL, уже разрешённые
+  JS-движком в абсолютные) идёт прежним `PageSource::Url`-путём **без изменений** — это
+  сознательно узкий фикс, чтобы не превратить произвольный не-file URL в путь на диске
+  (fallback `page_source_for_automation_url` трактует любой не-http/не-file как `File`).
+- **Security web→file:** если `opener` — http/https `PageSource::Url`, переход на `file://`
+  возвращает `Err(reason)`; вызывающая сторона печатает внятный диагностик вместо загрузки.
+  `file→file` (локальная страница открывает локальную) и не-web-openers (`about:blank`/`Empty`)
+  разрешены.
+
+Применён в двух точках `poll_*`-дренажа:
+
+1. **Дренаж popup-запросов** (`window.open()`): opener-схема читается из `self.source`
+   **до** `open_new_tab()` (который сбрасывает `self.source` на blank); пустой URL → `about:blank`.
+2. **Дренаж `location.href=`/`location.replace()`** (`JsNavigateRequest::Push/Replace`): тот же
+   резолвер с `self.source` как opener — раньше эти пути тоже слепо заворачивали URL в
+   `PageSource::Url` и ломались на `file://`.
+
+Пути automation-навигации (BiDi/MCP, `main.rs:10908/10916`) уже использовали
+`page_source_for_automation_url` и не затронуты.
+
+**Тесты:** 5 юнит-тестов в `mod tests` (`resolve_js_nav_*`): file→file грузит с диска,
+Windows drive-slash strip, web→file блокируется, http URL нетронут, file от `about:blank` разрешён.
