@@ -331,11 +331,48 @@ headless-скриншотами (`LUMEN_BACKEND=femtovg`, main `target/dev-relea
 circle/ellipse клипы с opacity) — также побайтово идентична main; визуально корректна (см. подробнее
 `docs/tasks/bug-272-remaining-slices.md:54`).
 
+## Срез 13 — `PushMask{Image,LinearGradient,RadialGradient,ConicGradient}`: bbox-сайзинг видимого слоя (влит 2026-07-18)
+
+Пункт 3(c) остатка, третья часть. Тот же механизм срезов 11–12 (`screen_bbox_device_px` +
+`acquire_bbox_layer`/`release_bbox_layer` через общий `bbox_layer_pool`), применённый к трём
+gradient-mask-опенерам — той же bbox-геометрии (`rect`, масштаб-бокс маскируемого элемента), что уже
+используется для куллинга в срезе 9. `PushMaskImage` из заголовка среза layer не открывает вовсе (нет
+декодированной mask-текстуры на этом пути — approx через rect scissor, как и раньше) — тронуть было
+нечего, менять только gradient-опенеры (`push_mask_gradient_layer`, единая точка для всех трёх).
+
+`MaskLayerEntry` получила новое поле `bbox: Option<(f32, f32, usize, usize)>` — тот же конвент, что
+`OpacityLayerEntry::bbox`/`ClipEntry::{PathLayer,RoundedRectLayer}::bbox`. `push_mask_gradient_layer`
+пробует `screen_bbox_device_px` → `acquire_bbox_layer(w, h)`; при `None`/промахе аллокации
+откатывается на существующий двухуровневый fallback (full-framebuffer `acquire_layer()`, а если и он
+промахнётся — плоский прямоугольный scissor) — вынесен в `push_mask_gradient_fallback`, зеркалит
+`push_clip_rounded_rect_fallback`.
+
+Отличие от clip-срезов: `PopMask` (`composite_mask_layer`) должен сперва домножить alpha
+offscreen-слоя на градиент (`DestinationIn`-заливка `rect`), и только потом композитить —
+`fill_mask_gradient(&g, rect)` выполняется, пока Push-time `save()+translate` (bbox-путь) ещё не
+откачен, поэтому `rect` красится в той же bbox-локальной системе координат, в которой рисовалась
+маскируемая subtree — то же самое, что происходило в full-framebuffer-пути (там transform не
+транслируется, ambient-канва совпадает с экранной). Затем `composite_mask_layer` передаёт `bbox`
+дальше в `composite_opacity_layer` (уже bbox-aware с среза 11) вместо жёсткого `None` — тот
+откатывает Push-time `save()+translate+scissor` через `canvas.restore()`, переключает render-таргет и
+композитит `Paint::image` по `(x0/scale, y0/scale, w/scale, h/scale)` вместо `(0, 0, css_w, css_h)`.
+
+Корректность: `cargo check -p lumen-paint --features backend-femtovg` зелёный; `cargo test -p
+lumen-paint --lib --features backend-femtovg` 937 passed, 0 failed, 2 ignored;
+`cargo clippy -p lumen-paint --features backend-femtovg --all-targets -- -D warnings` зелёный.
+Визуальная приёмка headless-скриншотами (`--screenshot`, main vs branch, оба на `dev-release`
+профиле, собраны на этой машине): TEST-26 (mask-image: linear/radial gradient mask, control,
+mask-mode alpha/luminance), TEST-104 (mask × gradients × radius interaction) — **побайтово идентичны
+main** (`PIL.ImageChops.difference` bbox = `None` на обоих). Edge headless-скриншот в этой
+sandbox-среде не запускается вовсе (`msedge.exe --headless --screenshot=...` возвращает пустой вывод
+без создания файла что на main, что на ветке — окружение, не регрессия), поэтому `run.py`'s
+Edge-vs-Lumen путь недоступен; A/B main-vs-branch выше — эквивалентная замена для этого среза.
+
 ## Остаток (следующие срезы)
 
 1. ~~Blend-слои (PREMULTIPLIED) вне пула~~ — закрыто срезами 2–4 (src-слой, blend-result, colour-matrix filter, backdrop-filter — все теперь в едином `cpu_upload_pool`). Glyph atlas на тексте страницы — GPU на lenta всё ещё ~509 МБ против ~224 МБ baseline (~285 МБ страничных); требует того же счётчика GPU-памяти, срезы 2–4 его не меняли (lenta не использует blend-mode/backdrop-filter/цветовые CSS-фильтры).
 2. Baseline пустого окна 224 МБ GPU — сам по себе жирный (framebuffers/шрифтовой атлас/драйвер).
-3. Слои по bounding box вместо full-frame — **срез 5 (влит) сделал backdrop-filter's `filtered_backdrop_id` bbox-сайзингом**; визуально подтверждён (A/B gdigrab branch-vs-main, TEST-30/103 побайтово идентичны — см. срез 5 выше); **срез 7 (влит) добавил `bounds` в `PushOpacity` и включил viewport-cull off-screen opacity-групп** (см. срез 7 выше); **срез 8 (влит) включил viewport-cull off-screen clip-групп** (`PushClipRoundedRect`/`PushClipPath`, см. срез 8 ниже); **срез 9 (влит) включил viewport-cull off-screen mask-групп** (`PushMask{Image,LinearGradient,RadialGradient,ConicGradient}`, см. срез 9 ниже); **срез 10 (влит) сделал backdrop-filter's `elem_image_id` bbox-сайзингом** (пункт (b), см. срез 10 выше); **срез 11 (влит) сделал `PushOpacity`'s видимый слой bbox-сайзингом** через общий `bbox_layer_pool` (пункт (c), см. срез 11 выше); **срез 12 (влит) сделал `PushClipRoundedRect`/`PushClipPath`'s видимый слой bbox-сайзингом** тем же механизмом (пункт (c, продолжение), см. срез 12 выше); остаётся: (c, продолжение) тот же bbox-сайзинг видимого слоя для `PushMask*` (срез 13, тот же механизм — `screen_bbox_device_px`/`acquire_bbox_layer` — переиспользуется без изменений), viewport-cull для `PushMaskLayer` (SVG-`<mask>` content, сложнее — применяется к родительскому слою), а также `PushFilter`/`PushBlendMode` уже куллятся off-viewport (BUG-273 срез 1), но их видимый слой тоже full-framebuffer (срез 14).
+3. Слои по bounding box вместо full-frame — **срез 5 (влит) сделал backdrop-filter's `filtered_backdrop_id` bbox-сайзингом**; визуально подтверждён (A/B gdigrab branch-vs-main, TEST-30/103 побайтово идентичны — см. срез 5 выше); **срез 7 (влит) добавил `bounds` в `PushOpacity` и включил viewport-cull off-screen opacity-групп** (см. срез 7 выше); **срез 8 (влит) включил viewport-cull off-screen clip-групп** (`PushClipRoundedRect`/`PushClipPath`, см. срез 8 ниже); **срез 9 (влит) включил viewport-cull off-screen mask-групп** (`PushMask{Image,LinearGradient,RadialGradient,ConicGradient}`, см. срез 9 ниже); **срез 10 (влит) сделал backdrop-filter's `elem_image_id` bbox-сайзингом** (пункт (b), см. срез 10 выше); **срез 11 (влит) сделал `PushOpacity`'s видимый слой bbox-сайзингом** через общий `bbox_layer_pool` (пункт (c), см. срез 11 выше); **срез 12 (влит) сделал `PushClipRoundedRect`/`PushClipPath`'s видимый слой bbox-сайзингом** тем же механизмом (пункт (c, продолжение), см. срез 12 выше); **срез 13 (влит) сделал gradient-mask-опенеров (`PushMask{LinearGradient,RadialGradient,ConicGradient}`) видимый слой bbox-сайзингом** тем же механизмом (`PushMaskImage` слой не открывает — тронуть было нечего, см. срез 13 выше); остаётся: viewport-cull для `PushMaskLayer` (SVG-`<mask>` content, сложнее — применяется к родительскому слою), а также `PushFilter`/`PushBlendMode` уже куллятся off-viewport (BUG-273 срез 1), но их видимый слой тоже full-framebuffer (срез 14).
 4. Отложенные многокопийные image-кэши (см. диагностику 2026-07-07 в истории файла): femtovg `raw_images` deep-copy, `@WxH`-варианты, GIF все кадры, ~~font `bytes_store.cloned()`~~ (закрыто срезом 6 — `Arc<[u8]>`), canvas2d thread-local — актуально для image-heavy сайтов.
 
 ## Инструменты (остались в коде)
