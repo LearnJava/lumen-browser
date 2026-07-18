@@ -95,9 +95,9 @@ fn scrollbar_gutter_inline(s: &ComputedStyle) -> f32 {
 /// `scrollbar-gutter: stable`). `both-edges` is not defined for the block axis
 /// by the spec, so only one gutter unit is reserved regardless.
 ///
-// CSS: scrollbar-width, scrollbar-gutter — P4 handoff: wire block-axis gutter
-// reduction into height calculations when implementing full scrollbar-gutter.
-#[allow(dead_code)]
+// CSS: scrollbar-width, scrollbar-gutter — the block-axis gutter reduces the
+// content height handed to children (see `children_available_height`), mirroring
+// the inline-axis `scrollbar_gutter_inline` reduction of `content_width`.
 fn scrollbar_gutter_block(s: &ComputedStyle) -> f32 {
     let can_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
     if !can_scroll_x {
@@ -6062,11 +6062,18 @@ fn lay_out_inner(
             let children_available_height: Option<f32> = if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
             {
-                Some(match s.box_sizing {
+                let content_h = match s.box_sizing {
                     BoxSizing::ContentBox => h,
                     BoxSizing::BorderBox => (h - padding_top - padding_bottom
                         - s.border_top_width - s.border_bottom_width).max(0.0),
-                })
+                };
+                // CSS Scrollbars L1 §6.2: reserve the block-axis gutter (space for a
+                // horizontal scrollbar at the block-end edge) so `%`-height children
+                // don't shift when the scrollbar appears. Symmetric to the inline
+                // `content_width -= scrollbar_gutter_inline(&s)` reduction above; the
+                // box's own border-box height is unchanged, only the content area seen
+                // by children shrinks.
+                Some((content_h - scrollbar_gutter_block(&s)).max(0.0))
             } else {
                 None
             };
