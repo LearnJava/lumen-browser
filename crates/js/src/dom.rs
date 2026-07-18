@@ -11824,34 +11824,89 @@ if (typeof _lumen_idb_load === 'function') {
     window.Crypto = function Crypto() {};
 })();
 
-// ── structuredClone (HTML LS §2.7) ─────────────────────────────────────────
-// Handles: primitives, plain objects, arrays, Date, RegExp, Map, Set.
-// Not handled: typed arrays as values, circular refs, functions, symbols.
+// ── structuredClone (HTML LS §2.7 — StructuredSerialize/Deserialize) ─────────
+// Handles: primitives (incl. BigInt), plain objects, arrays, Date, RegExp,
+// Map, Set, Boolean/Number/String wrapper objects, ArrayBuffer, typed arrays
+// (Int8..Float64, BigInt64/BigUint64), DataView. Preserves shared references
+// and cycles via a memory map (same original → same clone). Throws a
+// DataCloneError DOMException for non-serializable values (functions, symbols).
+// Not handled: the `transfer` option (transferables are copied, not detached),
+// Blob/File/ImageData/Error and other platform objects.
 function structuredClone(val) {
-    if (val === null || val === undefined) return val;
-    var t = typeof val;
-    if (t !== 'object') return val;
-    if (val instanceof Date) return new Date(val.getTime());
-    if (val instanceof RegExp) return new RegExp(val.source, val.flags);
-    if (val instanceof Map) {
-        var m = new Map();
-        val.forEach(function(v, k) { m.set(structuredClone(k), structuredClone(v)); });
-        return m;
+    // memory: original object → its clone, so shared refs and cycles round-trip.
+    var memory = new Map();
+    function clone(v) {
+        if (v === null) return null;
+        var t = typeof v;
+        if (t === 'undefined' || t === 'boolean' || t === 'number' ||
+            t === 'string' || t === 'bigint') {
+            return v;
+        }
+        if (t === 'symbol' || t === 'function') {
+            throw new DOMException(
+                'structuredClone: value could not be cloned', 'DataCloneError');
+        }
+        // t === 'object' from here on.
+        if (memory.has(v)) return memory.get(v);
+        // Value-immutable objects: no interior references → no cycle to register.
+        if (v instanceof Date) return new Date(v.getTime());
+        if (v instanceof RegExp) return new RegExp(v.source, v.flags);
+        if (v instanceof Boolean) return new Boolean(v.valueOf());
+        if (v instanceof Number) return new Number(v.valueOf());
+        if (v instanceof String) return new String(v.valueOf());
+        // Binary data: copy the backing buffer, then re-view it.
+        if (v instanceof ArrayBuffer) {
+            var abClone = v.slice(0);
+            memory.set(v, abClone);
+            return abClone;
+        }
+        if (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer) {
+            // A SharedArrayBuffer is shared by reference, never copied.
+            memory.set(v, v);
+            return v;
+        }
+        if (ArrayBuffer.isView(v)) {
+            var srcBuf = v.buffer;
+            var bufClone = memory.get(srcBuf);
+            if (bufClone === undefined) {
+                bufClone = srcBuf.slice(0);
+                memory.set(srcBuf, bufClone);
+            }
+            var viewClone = (v instanceof DataView)
+                ? new DataView(bufClone, v.byteOffset, v.byteLength)
+                : new v.constructor(bufClone, v.byteOffset, v.length);
+            memory.set(v, viewClone);
+            return viewClone;
+        }
+        if (v instanceof Map) {
+            var m = new Map();
+            memory.set(v, m);
+            v.forEach(function(entryVal, entryKey) {
+                m.set(clone(entryKey), clone(entryVal));
+            });
+            return m;
+        }
+        if (v instanceof Set) {
+            var s = new Set();
+            memory.set(v, s);
+            v.forEach(function(entryVal) { s.add(clone(entryVal)); });
+            return s;
+        }
+        if (Array.isArray(v)) {
+            var arr = new Array(v.length);
+            memory.set(v, arr);
+            for (var i = 0; i < v.length; i++) arr[i] = clone(v[i]);
+            return arr;
+        }
+        // Plain object: own enumerable string-keyed properties only (symbol keys
+        // are dropped, matching the spec's serialization of ordinary objects).
+        var out = {};
+        memory.set(v, out);
+        var keys = Object.keys(v);
+        for (var k = 0; k < keys.length; k++) out[keys[k]] = clone(v[keys[k]]);
+        return out;
     }
-    if (val instanceof Set) {
-        var s = new Set();
-        val.forEach(function(v) { s.add(structuredClone(v)); });
-        return s;
-    }
-    if (Array.isArray(val)) {
-        var arr = [];
-        for (var i = 0; i < val.length; i++) arr[i] = structuredClone(val[i]);
-        return arr;
-    }
-    var out = {};
-    var keys = Object.keys(val);
-    for (var k = 0; k < keys.length; k++) out[keys[k]] = structuredClone(val[keys[k]]);
-    return out;
+    return clone(val);
 }
 window.structuredClone = structuredClone;
 
@@ -21660,6 +21715,128 @@ mod tests {
                  var clone = structuredClone(orig);
                  clone instanceof RegExp && clone.source === 'hello' && clone.flags === 'gi'",
             )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_circular_reference() {
+        // A self-referential object must not overflow the stack and must
+        // preserve the cycle: clone.self === clone.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var o = { name: 'a' };
+                 o.self = o;
+                 var c = structuredClone(o);
+                 c.name === 'a' && c.self === c && c !== o",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_shared_reference_identity() {
+        // The same object referenced twice clones to a single shared clone.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var shared = { v: 1 };
+                 var orig = { a: shared, b: shared };
+                 var c = structuredClone(orig);
+                 c.a === c.b && c.a !== shared && c.a.v === 1",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_array_buffer() {
+        // ArrayBuffer is deep-copied (independent backing store).
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var buf = new ArrayBuffer(4);
+                 new Uint8Array(buf).set([1, 2, 3, 4]);
+                 var c = structuredClone(buf);
+                 var cv = new Uint8Array(c);
+                 c instanceof ArrayBuffer && c !== buf && c.byteLength === 4 &&
+                 cv[0] === 1 && cv[3] === 4 &&
+                 (cv[0] = 99, new Uint8Array(buf)[0] === 1)",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_typed_array() {
+        // Typed array clones its element type, length and values; original
+        // stays independent.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var ta = new Uint16Array([10, 20, 30]);
+                 var c = structuredClone(ta);
+                 c[1] = 999;
+                 c instanceof Uint16Array && c.length === 3 &&
+                 c[0] === 10 && ta[1] === 20 && c.buffer !== ta.buffer",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_typed_array_shares_buffer_identity() {
+        // Two views over one buffer must, after cloning, still share one buffer.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var buf = new ArrayBuffer(8);
+                 var a = new Uint8Array(buf);
+                 var b = new Uint8Array(buf);
+                 var c = structuredClone({ a: a, b: b });
+                 c.a.buffer === c.b.buffer && c.a.buffer !== buf",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_function_throws_data_clone_error() {
+        // Functions are not serializable → DataCloneError DOMException.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var threw = false, name = '';
+                 try { structuredClone(function(){}); }
+                 catch (e) { threw = true; name = e.name; }
+                 threw && name === 'DataCloneError'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_symbol_throws_data_clone_error() {
+        // Symbols are not serializable → DataCloneError DOMException.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var threw = false, name = '';
+                 try { structuredClone(Symbol('x')); }
+                 catch (e) { threw = true; name = e.name; }
+                 threw && name === 'DataCloneError'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_bigint_primitive() {
+        // BigInt round-trips as a value.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("structuredClone(9007199254740993n) === 9007199254740993n")
             .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }

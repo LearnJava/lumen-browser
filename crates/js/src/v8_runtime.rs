@@ -4644,6 +4644,36 @@ mod tests {
         assert_eq!(ok, JsValue::Bool(true));
     }
 
+    // P3-structclone (mirrors the rquickjs `dom::tests::structured_clone_*`
+    // suite): the shared `WEB_API_SHIM` structuredClone must preserve cycles and
+    // shared references, deep-copy ArrayBuffers/typed arrays, and throw a
+    // DataCloneError DOMException for non-serializable values. V8 is the default
+    // engine (ADR-018), so this is the authoritative validation surface.
+    #[test]
+    fn structured_clone_cycles_typed_arrays_and_dataclone_error() {
+        let rt = runtime_with_dom(make_doc(), "");
+        let ok = rt
+            .eval(
+                "var o = { name: 'a' }; o.self = o; \
+                 var c = structuredClone(o); \
+                 var cyclesOk = c.self === c && c !== o && c.name === 'a'; \
+                 var shared = { v: 1 }; \
+                 var sc = structuredClone({ a: shared, b: shared }); \
+                 var sharedOk = sc.a === sc.b && sc.a !== shared && sc.a.v === 1; \
+                 var ta = new Uint16Array([10, 20, 30]); \
+                 var tc = structuredClone(ta); tc[1] = 999; \
+                 var taOk = tc instanceof Uint16Array && tc.length === 3 \
+                     && tc[0] === 10 && ta[1] === 20 && tc.buffer !== ta.buffer; \
+                 var threw = false, ename = ''; \
+                 try { structuredClone(function(){}); } \
+                 catch (e) { threw = true; ename = e.name; } \
+                 var errOk = threw && ename === 'DataCloneError'; \
+                 cyclesOk && sharedOk && taOk && errOk",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
+    }
+
     #[test]
     fn timeout_is_deferred_until_tick() {
         let rt = runtime_with_dom(make_doc(), "");
