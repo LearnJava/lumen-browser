@@ -3410,32 +3410,15 @@ impl V8JsRuntime {
         );
 
         // Decompress `data` using the named format.
-        // `format`: "deflate-raw", "deflate", "gzip". Returns empty Vec on error.
+        // `format`: "deflate-raw", "deflate", "gzip".
+        // Returns a status-prefixed byte array (see `crate::dom::_decompress_status_prefixed`)
+        // so the JS `DecompressionStream` shim can tell a decode error apart from a
+        // valid empty result: `out[0] == 1` → success + `out[1..]` decompressed bytes,
+        // `out[0] == 0` → corrupt/truncated/unknown-format input (shim errors the stream).
         reg!(
             "_lumen_decompress_bytes",
             |data: Vec<u8>, format: String| -> Vec<u8> {
-                use std::io::Read as _;
-                match format.as_str() {
-                    "deflate-raw" => {
-                        let mut dec = flate2::read::DeflateDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    "deflate" => {
-                        let mut dec = flate2::read::ZlibDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    "gzip" => {
-                        let mut dec = flate2::read::GzDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    _ => Vec::new(),
-                }
+                crate::dom::_decompress_status_prefixed(&data, &format)
             }
         );
     }

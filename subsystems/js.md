@@ -375,6 +375,27 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   DOM/JS gap — see [BUG-296](../bugs/BUG-296-FIXED.md)'s "Остаток"; the stale-session mechanism BUG-296
   itself diagnosed is fixed).
 
+- **Compression Streams — error signalling** (`crates/js/src/dom.rs`, WHATWG Compression Streams). 2026-07-18.
+  - `CompressionStream`/`DecompressionStream` were already functional for the three spec formats
+    (`deflate-raw`/`deflate`/`gzip`, buffer-then-flush over `TransformStream`, native `flate2`
+    bindings `_lumen_compress_bytes`/`_lumen_decompress_bytes`). Gap: `_lumen_decompress_bytes`
+    swallowed decode errors (`.ok()`) and returned an empty `Vec`, so a corrupt/truncated stream
+    closed silently with no output instead of erroring the readable side (spec violation).
+  - Fix: the two per-engine `_lumen_decompress_bytes` natives now both delegate to one shared
+    `crate::dom::_decompress_status_prefixed(data, format)` that returns a **status-prefixed** byte
+    array — `out[0]==1` → success (`out[1..]` are the inflated bytes, possibly empty for a valid
+    stream that decompresses to nothing), `out[0]==0` → decode error (corrupt/truncated/unknown
+    format). The shared `WEB_API_SHIM` `DecompressionStream.flush` calls `controller.error(TypeError)`
+    on status `0`, so `reader.read()` rejects. A status prefix (rather than throwing across the FFI
+    boundary, which the `reg!` macros don't uniformly support) keeps the fix engine-agnostic and lets
+    a genuine empty result stay distinct from an error.
+  - `brotli` is intentionally **not** implemented — it is not part of the WHATWG Compression Streams
+    spec (only `deflate-raw`/`deflate`/`gzip`; `zstd` is a newer, not-yet-universal addition).
+  - Tests (`dom.rs` mod tests): the pre-existing round-trip tests still pass through the stripped
+    prefix; new `decompression_stream_corrupt_input_errors_stream` (bad gzip bytes → `reader.read()`
+    rejects, does not resolve) and `decompression_stream_multi_chunk_matches_single_chunk`
+    (split-write body decodes identically to a single chunk).
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
