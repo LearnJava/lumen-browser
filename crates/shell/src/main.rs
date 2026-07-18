@@ -9,6 +9,7 @@
 //! - `lumen --dump-display-list <path-or-url>` — печать display list в stdout.
 //! - `lumen --print-to-pdf <out.pdf> <path-or-url>` — сохранить страницу как PDF (A4).
 //! - `lumen --screenshot <out.png> <path-or-url>` — детерминированный CPU-снимок страницы в PNG.
+//! - `lumen --trace-nav <out.json> <path-or-url>` — таймлайн одной навигации в Chrome-trace формате (Perfetto/chrome://tracing).
 //! - `lumen --devtools-port <N>` — запустить DevTools WebSocket сервер на порту N.
 //! - `lumen --bidi-port <N>` — запустить WebDriver BiDi WebSocket сервер на порту N
 //!   (SDC-2: если совмещён с открытым окном — реальные navigate/eval/captureScreenshot).
@@ -393,6 +394,7 @@ fn main() -> ExitCode {
     let (viewport_override, rest_args) = extract_viewport_override(&rest_args);
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (screenshot_output, rest_args) = extract_screenshot(&rest_args);
+    let (trace_nav_output, rest_args) = extract_trace_nav(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
     let (use_network_service, rest_args) = extract_network_service(&rest_args);
     let (ipc_server, rest_args) = extract_ipc_server(&rest_args);
@@ -439,6 +441,9 @@ fn main() -> ExitCode {
     } else if let Some(output) = screenshot_output {
         let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
         CliMode::Screenshot { source, output }
+    } else if let Some(output) = trace_nav_output {
+        let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
+        CliMode::TraceNav { source, output }
     } else if let Some(port) = ipc_server {
         CliMode::IpcServer { port }
     } else if let Some(mcp) = mcp_mode {
@@ -530,6 +535,7 @@ fn main() -> ExitCode {
         CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, maximized, det_mode, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
+        CliMode::TraceNav { source, output } => run_trace_nav(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
         CliMode::IpcServer { port } => run_ipc_server(port, event_sink),
     }
@@ -1138,6 +1144,50 @@ fn run_screenshot(
     }
 }
 
+/// Запустить `--trace-nav <out.json> <url>` (PERF-1): прогнать одну навигацию
+/// через тот же headless CPU-путь, что `--screenshot`, но с включённым
+/// трейсером [`lumen_core::trace`], и сохранить собранный таймлайн как
+/// Chrome-trace JSON (открывается в Perfetto / `chrome://tracing` /
+/// `edge://tracing`). PNG растеризуется как побочный эффект пути и
+/// отбрасывается — важен только таймлайн фаз (fetch-document → parse-html →
+/// run-scripts → fetch-*/layout → paint → first-paint) и по-ресурсные fetch-спаны.
+fn run_trace_nav(
+    source: &PageSource,
+    output: &std::path::Path,
+    event_sink: Arc<dyn EventSink>,
+) -> ExitCode {
+    lumen_core::trace::enable();
+    let render = {
+        // Корневой спан всей навигации; закрывается до `finish`, поэтому попадает
+        // в таймлайн как охватывающая полоса.
+        let _nav = lumen_core::trace::span("navigation", "nav");
+        render_source_to_png(source, event_sink)
+    };
+    let json = match lumen_core::trace::finish() {
+        Some(j) => j,
+        None => {
+            eprintln!("Ошибка --trace-nav: трейсер не собрал данных");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(err) = render {
+        // Рендер мог упасть (битый URL, сеть) — но частичный таймлайн всё равно
+        // полезен, поэтому пишем его и сообщаем об ошибке.
+        eprintln!("Предупреждение --trace-nav: рендер завершился с ошибкой: {err}");
+    }
+    match std::fs::write(output, json) {
+        Ok(()) => {
+            eprintln!("Трейс навигации сохранён: {}", output.display());
+            eprintln!("  Открыть в Perfetto (ui.perfetto.dev) или chrome://tracing");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("Ошибка записи трейса {}: {err}", output.display());
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Headless CPU-снимок страницы целиком (включая контент ниже первого экрана).
 ///
 /// Использует тот же полный pipeline, что `--dump-layout`/`--print-to-pdf`
@@ -1182,7 +1232,13 @@ fn render_source_to_png(
     // guarantee no stale cross-page reuse. No streaming path here, so this pass
     // just decodes each image once.
     crate::image_cache::IMAGE_CACHE.reset_new();
-    let raw = source.load_bytes(event_sink.clone(), None)?;
+    // PERF-1: `--trace-nav` records this headless load as a timeline. Each
+    // `trace::span` is a no-op unless the tracer is enabled, so instrumenting
+    // this shared path costs nothing for `--screenshot`/`--ipc-server`.
+    let raw = {
+        let _s = lumen_core::trace::span("fetch-document", "net");
+        source.load_bytes(event_sink.clone(), None)?
+    };
     let vp = Size::new(SCREENSHOT_VP_W, SCREENSHOT_MIN_H);
     let parsed = parse_and_layout(
         &raw.bytes,
@@ -1215,9 +1271,15 @@ fn render_source_to_png(
     let width = SCREENSHOT_VP_W as u32;
     let height = content_h.ceil() as u32;
 
-    let dl = paint_ordered(&parsed.layout);
-    let image = Renderer::render_to_image_cpu(width, height, &dl, &parsed.images, 0.0, 0.0)?;
-    let png = lumen_image::encode_png_rgba8(&image)?;
+    let (png, width, height) = {
+        let _s = lumen_core::trace::span("paint", "paint");
+        let dl = paint_ordered(&parsed.layout);
+        let image = Renderer::render_to_image_cpu(width, height, &dl, &parsed.images, 0.0, 0.0)?;
+        let png = lumen_image::encode_png_rgba8(&image)?;
+        (png, width, height)
+    };
+    // Pixels are ready — mark the moment the page is first fully rendered.
+    lumen_core::trace::instant("first-paint", "paint");
     Ok((png, width, height))
 }
 
@@ -1639,6 +1701,7 @@ fn print_usage() {
     eprintln!("  lumen --dump-display-list <path-or-url>         — display list в stdout");
     eprintln!("  lumen --print-to-pdf <out.pdf> <path-or-url>   — сохранить страницу как PDF");
     eprintln!("  lumen --screenshot <out.png> <path-or-url>     — CPU-снимок страницы в PNG (без окна)");
+    eprintln!("  lumen --trace-nav <out.json> <path-or-url>     — таймлайн одной навигации в Chrome-trace JSON");
     eprintln!("  [--devtools-port <N>]                           — DevTools WS сервер (любой режим)");
     eprintln!("  [--bidi-port <N>]                               — WebDriver BiDi WS сервер (любой режим)");
     eprintln!("  [--mcp-live-port <N>]                           — MCP-сервер (TCP) на живом окне (любой режим, SDC-2)");
@@ -1692,6 +1755,35 @@ fn extract_screenshot(args: &[String]) -> (Option<std::path::PathBuf>, Vec<Strin
 
     while i < args.len() {
         if args[i] == "--screenshot" && output.is_none() {
+            i += 1;
+            if let Some(path) = args.get(i) {
+                output = Some(std::path::PathBuf::from(path));
+            }
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+
+    if output.is_some() {
+        (output, rest)
+    } else {
+        (None, args.to_vec())
+    }
+}
+
+/// Извлечь `--trace-nav <output.json>` из аргументов (PERF-1).
+///
+/// Возвращает `(Some(output_path), остальные_аргументы)` или `(None, все_аргументы)`.
+/// Порядок аргументов зеркалит `--screenshot`: путь вывода идёт сразу за флагом,
+/// источник страницы — позиционный остаток (`--trace-nav out.json <url>`).
+fn extract_trace_nav(args: &[String]) -> (Option<std::path::PathBuf>, Vec<String>) {
+    let mut i = 0;
+    let mut output: Option<std::path::PathBuf> = None;
+    let mut rest = Vec::new();
+
+    while i < args.len() {
+        if args[i] == "--trace-nav" && output.is_none() {
             i += 1;
             if let Some(path) = args.get(i) {
                 output = Some(std::path::PathBuf::from(path));
@@ -3331,7 +3423,11 @@ impl PageSource {
                     );
                 }
                 let client = crate::config::global().apply_http(builder);
+                // PERF-1: HTTP request for the main document (nested inside the
+                // `fetch-document` span); its `size` arg is the response body.
+                let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
                 let (bytes, resp_headers) = client.fetch_page(&lumen_url)?;
+                fetch_span.set_bytes(bytes.len());
                 eprintln!("Получено {} байт", bytes.len());
                 let coop = resp_headers.iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-opener-policy"))
@@ -3482,6 +3578,10 @@ enum CliMode {
     PrintToPdf { source: PageSource, output: std::path::PathBuf },
     /// Headless: страница рендерится CPU-растеризатором и сохраняется как PNG.
     Screenshot { source: PageSource, output: std::path::PathBuf },
+    /// Headless (PERF-1): одна навигация прогоняется через тот же CPU-путь, что и
+    /// `--screenshot`, но с включённым трейсером; таймлайн сохраняется как
+    /// Chrome-trace JSON для Perfetto / `chrome://tracing`.
+    TraceNav { source: PageSource, output: std::path::PathBuf },
     /// Headless: MCP-сервер для AI-агентов (Claude, Browser Use…).
     Mcp(McpMode),
     /// Headless: IPC-сервер таб-команд (TAB-5). Контроллер драйвит вкладки и
@@ -4271,6 +4371,8 @@ fn fetch_stylesheet_text(
             // BUG-171: read through the prefetch cache — the streaming thread
             // warms linked stylesheets with this same client, so the cascade
             // concatenation here reuses identical bytes without a second fetch.
+            // PERF-1: one span per stylesheet fetch.
+            let mut fetch_span = lumen_core::trace::span(format!("css {url}"), "net");
             let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
                 let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
                 client
@@ -4278,10 +4380,13 @@ fn fetch_stylesheet_text(
                     .map_err(|e| e.to_string())
             });
             match bytes {
-                Ok(bytes) => Some((
-                    String::from_utf8_lossy(&bytes[..]).into_owned(),
-                    ResourceBase::Url(url),
-                )),
+                Ok(bytes) => {
+                    fetch_span.set_bytes(bytes.len());
+                    Some((
+                        String::from_utf8_lossy(&bytes[..]).into_owned(),
+                        ResourceBase::Url(url),
+                    ))
+                }
                 Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); None }
             }
         }
@@ -4561,7 +4666,12 @@ fn fetch_image_bytes(
             // mixed-content enforcement still applies for HTTPS pages.
             let lumen_url = Url::parse(&url)?;
             let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
-            Ok(client.fetch_subresource(&lumen_url, RequestDestination::Image)?)
+            // PERF-1: one span per image fetch — back-to-back spans on a lane
+            // reveal sequential UI-thread subresource loading.
+            let mut fetch_span = lumen_core::trace::span(format!("img {url}"), "net");
+            let bytes = client.fetch_subresource(&lumen_url, RequestDestination::Image)?;
+            fetch_span.set_bytes(bytes.len());
+            Ok(bytes)
         }
     }
 }
@@ -4920,7 +5030,10 @@ fn parse_and_layout(
     let preload_hints = lumen_html_parser::scan_preload_hints(&source);
     dispatch_preload_hints(&preload_hints, base, sink, preload_seen);
 
-    let doc = lumen_html_parser::parse(&source);
+    let doc = {
+        let _s = lumen_core::trace::span("parse-html", "parse");
+        lumen_html_parser::parse(&source)
+    };
     let title = extract_title(&doc);
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
@@ -4953,6 +5066,7 @@ fn parse_and_layout(
     // external `<script src>` bodies via the subresource fetcher, so SPA
     // bundles execute (lenta.ru owlBundle.js etc.), not just inline scripts.
     let (classic_scripts, module_scripts) = {
+        let _s = lumen_core::trace::span("fetch-scripts", "net");
         let mut classic_items = Vec::new();
         let mut module_items = Vec::new();
         collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut module_items);
@@ -4961,6 +5075,7 @@ fn parse_and_layout(
             resolve_script_sources(&module_items, base, sink, cookie_jar.clone()),
         )
     };
+    let run_scripts_span = lumen_core::trace::span("run-scripts", "script");
     let (doc_arc, js_nav, js_ctx) = run_scripts_with_dom(
         doc,
         lumen_core::SandboxFlags::empty(),
@@ -4980,6 +5095,7 @@ fn parse_and_layout(
         classic_scripts,
         module_scripts,
     );
+    drop(run_scripts_span);
     // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
     #[cfg(any(feature = "quickjs", feature = "v8"))]
@@ -5016,6 +5132,7 @@ fn parse_and_layout(
     // всю страницу, layout нарисует серый placeholder.
     // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
     let (images, animated_gifs, lazy_pairs) = {
+        let _s = lumen_core::trace::span("fetch-images", "net");
         let mut d = doc_arc.lock().unwrap();
         fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone(), target)
     };
@@ -5055,6 +5172,7 @@ fn parse_and_layout(
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let css = {
+        let _s = lumen_core::trace::span("fetch-css", "net");
         let d = doc_arc.lock().unwrap();
         let link_media_ctx = if media_print {
             print_media_context(viewport, dark_mode)
@@ -5084,7 +5202,10 @@ fn parse_and_layout(
         css
     };
 
-    let sheet = lumen_css_parser::parse(&css);
+    let sheet = {
+        let _s = lumen_core::trace::span("parse-css", "parse");
+        lumen_css_parser::parse(&css)
+    };
 
     // PH3-19: @font-face загрузка разделена на два прохода.
     // local()-источники загружаются синхронно (из системного индекса, быстро).
@@ -5134,6 +5255,7 @@ fn parse_and_layout(
     // чтобы последующие экранные проходы на этом же потоке не наследовали print.
     lumen_layout::set_print_media(media_print);
     let layout = {
+        let _s = lumen_core::trace::span("layout", "layout");
         let d = doc_arc.lock().unwrap();
         lumen_layout::layout_measured_hyp(&d, &sheet, viewport, &measurer, hp, dark_mode)
     };
@@ -5144,8 +5266,11 @@ fn parse_and_layout(
     // и добавляем к `images` тем же ключом, что эмиттер кладёт в
     // `DisplayCommand::DrawBackgroundImage.src`.
     let mut images = images;
-    for (src, image) in fetch_and_decode_background_images(&layout, base, sink, cookie_jar.clone(), target) {
-        images.push((src, image));
+    {
+        let _s = lumen_core::trace::span("fetch-bg-images", "net");
+        for (src, image) in fetch_and_decode_background_images(&layout, base, sink, cookie_jar.clone(), target) {
+            images.push((src, image));
+        }
     }
 
     let rule_count = sheet.rules.len();
@@ -6221,6 +6346,8 @@ fn resolve_script_sources(
                 // warmed by the streaming thread returns instantly instead of
                 // blocking the UI thread on the socket. On a miss this fetches the
                 // exact same bytes via the same client (script order preserved).
+                // PERF-1: one span per external script fetch.
+                let mut fetch_span = lumen_core::trace::span(format!("script {url}"), "net");
                 let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
                     let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
                     client
@@ -6230,6 +6357,7 @@ fn resolve_script_sources(
                 match bytes {
                     Ok(bytes) => {
                         eprintln!("Загружен скрипт: {url}");
+                        fetch_span.set_bytes(bytes.len());
                         Some(String::from_utf8_lossy(&bytes[..]).into_owned())
                     }
                     Err(e) => {
@@ -23162,6 +23290,30 @@ mod tests {
             extract_screenshot(&args(&["--screenshot", "a.png", "--screenshot", "b.png"]));
         assert_eq!(output.as_deref(), Some(std::path::Path::new("a.png")));
         assert_eq!(rest, args(&["--screenshot", "b.png"]));
+    }
+
+    // ── extract_trace_nav (PERF-1) ───────────────────────────────────────────
+
+    #[test]
+    fn extract_trace_nav_basic() {
+        let (output, rest) = extract_trace_nav(&args(&["--trace-nav", "out.json", "page.html"]));
+        assert_eq!(output.as_deref(), Some(std::path::Path::new("out.json")));
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn extract_trace_nav_no_flag() {
+        let (output, rest) = extract_trace_nav(&args(&["page.html"]));
+        assert!(output.is_none());
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn extract_trace_nav_with_url_source() {
+        let (output, rest) =
+            extract_trace_nav(&args(&["--trace-nav", "t.json", "https://example.com"]));
+        assert_eq!(output.as_deref(), Some(std::path::Path::new("t.json")));
+        assert_eq!(rest, args(&["https://example.com"]));
     }
 
     #[test]

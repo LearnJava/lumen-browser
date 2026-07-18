@@ -15,6 +15,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 | Check paint order / colors / z-index | `lumen --dump-display-list <src>` | headless, stdout; text-diffable |
 | Catch layout/paint-order regressions without GPU/Edge | `python graphic_tests/dump_golden.py` (`--update` to promote, DEVX-3) | fixed page set, text-diff vs `graphic_tests/dump-golden/`; complements the pixel pipeline, doesn't replace it |
 | Deterministic screenshot without a window | `lumen --screenshot out.png <src>` | CPU path: no JS execution, not at parity with windowed render (BUG-221) |
+| See the load waterfall of one navigation (find the next bottleneck) | `lumen --trace-nav out.json <src>` (PERF-1) | headless CPU path (same as `--screenshot`); Chrome Trace Event Format → open in Perfetto / chrome://tracing / edge://tracing. Phase spans (`fetch-document`→`parse-html`→`fetch-*`/`layout`→`paint`→`first-paint`) + per-resource fetch spans with byte `size`. No DNS/TLS/TTFB sub-split yet |
 | Full visual regression vs Edge | `python graphic_tests/run.py` (`--live` = one window per run; SDC-4 will make it default) | see docs/graphic-tests.md |
 | Localize which paint optimization causes an artifact | `python graphic_tests/run.py --paint-bisect NN` (DEVX-4) | runs baseline + each `LUMEN_NO_*` flag (see table below) once, prints a diff% table |
 | Kill flake from `Date.now()` / `Math.random()` / rAF timestamps | `--deterministic` (+ `--viewport WxH` to keep a non-default window size, DEVX-1) | `--rng-seed`/`--monotonic-clock` are parsed but not wired (see CLI flags below); crates/shell/src/deterministic.rs |
@@ -38,7 +39,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 
 ## CLI flags (crates/shell/src/main.rs, `print_usage()`)
 
-Headless one-shot: `--dump-source` · `--dump-layout` · `--dump-display-list` · `--screenshot` · `--print-to-pdf`.
+Headless one-shot: `--dump-source` · `--dump-layout` · `--dump-display-list` · `--screenshot` · `--trace-nav <out.json>` (PERF-1, load waterfall as Chrome-trace JSON) · `--print-to-pdf`.
 Servers: `--ipc-server [--ipc-port N]` · `--mcp [url]` · `--mcp-port N` · `--mcp-live-port N <src>` · `--bidi-port N` · `--devtools-port N` (CDP, stub — see below).
 Determinism: `--deterministic` · `--rng-seed N` · `--monotonic-clock` (parsed into `DetConfig` but **not currently wired** to the JS runtime — only `--deterministic`'s plain on/off reaches `set_deterministic_mode`; the RNG seed always derives from the page URL hash regardless of `--rng-seed`'s value) · `--viewport WxH` (DEVX-1: pins the window's CSS content viewport, overriding `--deterministic`'s 1280×800 default — used by `graphic_tests/run.py --live` to combine determinism with the pipeline's calibrated 1024×720).
 Misc: `--maximized` (window opens full-screen — live perf audit) · `--no-scrollbar` (cleaner screenshot crops) · `--activity-log` / `--click-log` · `--import-session` · `--network-service` · `--proxy` · `--tor`.
