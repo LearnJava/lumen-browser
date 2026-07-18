@@ -260,6 +260,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('145', '145-writing-mode.html', 0.5, 'P3-vertical CSS Writing Modes L4 §3-4: writing-mode vertical-rl/vertical-lr × text-orientation mixed/upright/sideways, Latin+CJK (日本語) text. Проверяет per-glyph поворот (CPU/wgpu рендереры) — mixed держит CJK upright и поворачивает латиницу на 90°, upright не поворачивает ничего, sideways поворачивает всё. Текстовый тест — ожидаем font-parity debtor (rule 3, Inter vs Edge sans metrics)'),
     ('146', '146-imagebitmap.html', 0.5, 'P1-imagebitmap createImageBitmap + ImageBitmapRenderingContext (HTML LS §4.12.5): ImageData → createImageBitmap → getContext(\'bitmaprenderer\').transferFromImageBitmap presents an identical copy on a second <canvas>, plus a cropped (sx,sy,sw,sh) variant; createImageBitmap(OffscreenCanvas) snapshots without detaching the source (drawn again and re-presented afterwards). Только solid-боксы/векторная заливка, без текста'),
     ('147', '147-background-repeat-space.html', 0.5, 'P4-mask-repeat-space CSS Backgrounds L3 §3.4 background-repeat: space — целые плитки прижаты к обоим краям, остаток распределён равными зазорами (space_axis_geometry, общий с mask-repeat: space); рядом repeat/round для сравнения. Только картинка-плитка, без текста'),
+    ('148', '148-isolation.html', 0.5, 'P4-isolation CSS Compositing & Blending L1 §2.1 isolation: isolate — изолированная группа: mix-blend-mode детей композитится с прозрачным фоном группы, а не с фоном страницы; слева блендинг с amber-фоном, справа изоляция (чистый цвет квадрата). Multiply/difference + вложенные квадраты. Только solid-боксы, без текста'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
@@ -319,6 +320,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '116': ('BUG-277', 2.40),
     '140': ('BUG-277', 2.17),
     '141': ('BUG-277', 1.59),
+    '148': ('BUG-277', 6.30),   # P4-isolation: isolation:isolate blend-группа. Фича КОРРЕКТНА — CPU-снимок (cpu_raster, `lumen --screenshot`) пиксельно совпадает с Edge (изолированные ячейки = чистый цвет, неизолированные = блендинг), unit-тесты зелёные. Дивергенция целиком wgpu mix-blend (BUG-277, тот же класс, что TEST-56): в wgpu-окне неизолированный mix-blend не композитится (source-over вместо multiply), а изолирующий offscreen-слой делает multiply-против-прозрачного фоном чёрным. Уйдёт в PASS вместе с фиксом BUG-277.
     # --- BUG-243 dynamic-SVG suite (JS-built SVG, gdigrab): tests are CORRECT; these
     #     fail until the SVG-engine gaps they uncovered are fixed. Do NOT edit the tests
     #     (user rule) — fix the engine, then delete these entries. ---

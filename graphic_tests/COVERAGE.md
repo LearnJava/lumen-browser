@@ -239,6 +239,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 
 - **mix-blend-mode** — ✅ реализован (все 16 CSS-режимов + plus-lighter; элемент блендится с backdrop в своём stacking-context через PushBlendMode/PopBlendMode; CPU snapshot-путь композитит off-screen layer вниз с tiny-skia BlendMode), тест 56
 
+- **isolation** — ✅ реализован (CSS Compositing & Blending L1 §2.1): `isolate` формирует изолированную группу — mix-blend-mode детей композитится с прозрачным фоном группы, а не с фоном страницы. Уже создавал stacking-context; теперь `box_layer_ops` эмитит offscreen-слой (`PushOpacity` при alpha 1.0) когда `isolate` — единственный триггер (opacity<1/filter/backdrop-filter/mix-blend-mode уже изолируют сами). Тест 148
+
 - **image-set()** — ✅ реализован (CSS Images L4 §5): raw функция хранится в BackgroundImage::Url, paint выбирает лучший вариант по DPR через select_image_set_url; -webkit-image-set() тоже поддержан; тест 59
 - **cross-fade()** — ✅ реализован (CSS Images L4 §4): BackgroundImage::CrossFade { a, b, t } вариант; при двух URL-sides эмитирует DrawCrossFade; -webkit-cross-fade() тоже поддержан; тест 59
 
