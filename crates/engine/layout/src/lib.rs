@@ -303,9 +303,10 @@ fn collect_clickable_rec(
         return;
     }
 
-    // CSS: inert — P4 should add `[inert] { pointer-events: none; }` to the UA
-    // stylesheet. This guard provides the complementary layout-level filter:
-    // inert elements are never included in the clickable set.
+    // The UA rule `[inert] { pointer-events: none; }` is applied by
+    // `apply_ua_inert` in style.rs. This guard provides the complementary
+    // layout-level filter: inert elements are never included in the clickable
+    // set regardless of an author `pointer-events` override.
     if inert::is_inert(doc, b.node) {
         return;
     }
@@ -11744,6 +11745,39 @@ mod tests {
         // НЕ наследуется — у p default Auto.
         assert_eq!(p.style.pointer_events, PointerEvents::Auto);
         assert_eq!(div.style.pointer_events, PointerEvents::None);
+    }
+
+    #[test]
+    fn inert_sets_pointer_events_none() {
+        // UA rule `[inert] { pointer-events: none; }` (HTML Rendering §15.4.2).
+        let root = lay("<p inert>x</p>", "");
+        assert_eq!(first_p_style(&root).pointer_events, PointerEvents::None);
+    }
+
+    #[test]
+    fn inert_inherited_to_descendant_pointer_events() {
+        // Inertness is inherited down the DOM tree: a descendant of an inert
+        // element is inert too, so its pointer-events is forced to none even
+        // though it carries no `inert` attribute of its own.
+        let root = lay("<div inert><p>x</p></div>", "");
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(div.style.pointer_events, PointerEvents::None);
+        assert_eq!(p.style.pointer_events, PointerEvents::None);
+    }
+
+    #[test]
+    fn inert_author_pointer_events_wins() {
+        // The inert rule lives in the UA origin, so an author `pointer-events`
+        // declaration overrides it.
+        let root = lay("<p inert>x</p>", "p { pointer-events: auto; }");
+        assert_eq!(first_p_style(&root).pointer_events, PointerEvents::Auto);
+    }
+
+    #[test]
+    fn non_inert_keeps_pointer_events_auto() {
+        let root = lay("<p>x</p>", "");
+        assert_eq!(first_p_style(&root).pointer_events, PointerEvents::Auto);
     }
 
     #[test]

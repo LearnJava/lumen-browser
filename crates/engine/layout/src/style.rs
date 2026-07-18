@@ -6556,6 +6556,9 @@ pub fn compute_style(
     // UA stylesheet: <td>/<th> → padding: 1px (HTML Rendering §15.3.8); the
     // ancestor <table cellpadding=N> overrides it. Author `padding` wins.
     apply_ua_table_cell_padding(doc, node, &mut style);
+    // UA stylesheet (HTML Rendering §15.4.2): `[inert] { pointer-events: none; }`.
+    // Applied during the pre-cascade UA phase so author `pointer-events` wins.
+    apply_ua_inert(doc, node, &mut style);
 
     // CSS Quirks Mode — Quirks-only UA-rule для `<table>`: сбрасывает
     // font / color / text-align / white-space к initial-values, чтобы
@@ -10567,6 +10570,25 @@ fn apply_ua_table_cell_padding(doc: &Document, node: NodeId, style: &mut Compute
     style.padding_right = Length::Px(pad);
     style.padding_bottom = Length::Px(pad);
     style.padding_left = Length::Px(pad);
+}
+
+/// UA stylesheet (HTML Rendering §15.4.2): `[inert] { pointer-events: none; }`.
+///
+/// An element carrying the `inert` boolean attribute — and, because inertness is
+/// inherited down the DOM tree, every descendant of such an element — is made
+/// non-interactive. The UA origin sets `pointer-events: none` so that
+/// `ComputedStyle.pointer_events` reflects inertness (e.g. for `getComputedStyle`
+/// and cursor resolution), complementing the layout-level hit-test filter in
+/// `collect_clickable_elements` (lumen-layout `lib.rs`, see `// CSS: inert`).
+///
+/// Applied during the pre-cascade UA phase, so an author `pointer-events`
+/// declaration overrides it (UA origin has the lowest cascade priority).
+/// [`inert::is_inert`] walks the ancestor chain, so a node nested inside an
+/// inert subtree is matched even when it carries no `inert` attribute itself.
+fn apply_ua_inert(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    if crate::inert::is_inert(doc, node) {
+        style.pointer_events = PointerEvents::None;
+    }
 }
 
 /// Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют

@@ -17,10 +17,11 @@
 //!   inert subtrees so the shell can exclude them from pointer hit-testing and
 //!   focus traversal without re-walking the DOM on every event.
 //!
-//! **P4 (CSS: inert)** — UA stylesheet entry:
-//! - Add `[inert] { pointer-events: none; }` to the UA stylesheet so that
-//!   `ComputedStyle.pointer_events` is already `none` for inert nodes.
-//!   Use the comment `// CSS: inert` in `style.rs` as the wiring point.
+//! **P4 (CSS: inert)** — UA stylesheet entry (done):
+//! - `[inert] { pointer-events: none; }` is applied by `apply_ua_inert` in the
+//!   pre-cascade UA phase (`style.rs`), so `ComputedStyle.pointer_events` is
+//!   `none` for inert nodes and their descendants. Author `pointer-events`
+//!   overrides it (UA origin).
 //!
 //! **P3 (shell wiring)** — event routing:
 //! - Call `collect_inert_regions(root, doc)` after each layout pass and store
@@ -79,11 +80,10 @@ pub struct InertRegion {
 /// be inert, its descendants are skipped because they are transitively inert.
 /// This avoids O(depth) redundant lookups for deeply nested inert subtrees.
 ///
-/// # CSS: inert
-/// P4 should add `[inert] { pointer-events: none; }` to the UA stylesheet so
-/// that `ComputedStyle.pointer_events` reflects inertness during cascade. This
-/// function provides the complementary layout-level information (bounding boxes)
-/// that the shell needs for hit-test filtering.
+/// The UA rule `[inert] { pointer-events: none; }` is applied separately by
+/// `apply_ua_inert` in `style.rs`, so `ComputedStyle.pointer_events` already
+/// reflects inertness. This function provides the complementary layout-level
+/// information (bounding boxes) that the shell needs for hit-test filtering.
 pub fn collect_inert_regions(root: &LayoutBox, doc: &Document) -> Vec<InertRegion> {
     let mut out = Vec::new();
     collect_inert_rec(root, doc, false, &mut out);
