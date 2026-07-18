@@ -1,8 +1,29 @@
 # BUG-294 — flex row items with `margin-left`/column items with `margin-top` are positioned with the margin applied twice
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-19
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs`, `lay_out_flex`)
 **Найден:** P2-DEVX-2, писал non-pixel golden-regression тест на `.item-b { margin-left: 10px }` внутри `display:flex` row-контейнера
+
+## Фикс (P3, 2026-07-19)
+
+Both the row and the column arm of `lay_out_flex`'s final-positioning loop now pass the
+item's **bare margin-box origin** to `lay_out` (`content_x` / `content_y + main_cursor` in
+the column arm; `content_x + main_cursor` / `content_y + cross_cursor` in the row arm),
+matching every other `lay_out` call site in the file. `lay_out_inner` adds the box's own
+`margin_left`/`margin_top` exactly once. The main-axis accumulator was already correct and
+is untouched.
+
+Observability of the double-add differed per axis, which is why the regression tests target
+specific axes:
+- **Row `margin-left`** (main axis) — never rewritten after layout → double-add surfaced
+  directly in `rect.x` (`flex_row_item_margin_left_applied_once`).
+- **Column `margin-top`** (main axis) — column containers skip the cross-alignment pass →
+  `rect.y` double-add observable (`flex_column_item_margin_top_applied_once`).
+- **Column `margin-left`** (cross axis, no cross-alignment pass for column) → `rect.x`
+  double-add observable (`flex_column_item_margin_left_applied_once`).
+- **Row `margin-top`** was *not* observable in the item's own `rect.y` (the cross-alignment
+  pass overwrites it to `content_y + cross_cursor + m_t`), but the extra offset leaked into
+  the item's already-positioned descendants — fixed by the same change.
 
 ## Симптом
 
