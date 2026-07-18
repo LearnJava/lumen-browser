@@ -4,11 +4,14 @@ P2-wpt (`docs/tasks/p2-wpt-integration.md`, slices S1–S8). Runs the real, unmo
 `wptrunner` against Lumen over WebDriver BiDi (`lumen --bidi-port N`) — not a
 bespoke test runner. See the task doc for the full architecture and slice plan.
 
-**Status:** S1–S3 done. S4 (`LumenTestharnessExecutor.do_test`, `testharnessreport.js`
-shim, smoke driver) is **implemented but blocked**: `tests/wpt/run_smoke.py` drives
-a real `lumen --bidi-port` through navigate + eval end to end, but the smoke test
-(`dom/nodes/Element-hasAttribute.html`) still doesn't PASS. Eight real engine/shell
-gaps surfaced and were fixed while proving this path: [BUG-278](../../bugs/BUG-278-FIXED.md)
+**Status:** S1–S5 done. `tests/wpt/run_smoke.py` drives the real, unmodified
+`wptrunner` against `lumen --bidi-port` (navigate + eval) end to end, and the
+curated **18-test synchronous `dom/nodes/` subset** (S5, see "The curated
+subset" below) runs **green** against its committed `.ini` expectations
+(0 unexpected). Remaining: S6 (async tests) and S7 (CI wrapper + docs +
+`ROADMAP.md` flip). Nine real engine/shell gaps surfaced and were fixed while
+proving the S4 path (the last blocker, [BUG-301](../../bugs/BUG-301-FIXED.md),
+was fixed 2026-07-18): [BUG-278](../../bugs/BUG-278-FIXED.md)
 (HTTP client rejected `wptserve`'s close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
 (`document.getElementsByTagName` was missing entirely — broke `testharness.js`'s
 own module-level setup), [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't
@@ -30,11 +33,12 @@ page's stale `layout_box` before the new page had even started loading). Togethe
 BUG-298/299/300 fully explain (and disprove as environment-flaky) the
 "`script.evaluate`-install race" theory previously in `CLAUDE.md` → "Known gotchas" —
 a manual BiDi driver hitting the fixed binary through a plain HTTP server now
-completes the harness correctly end to end. `run_smoke.py` itself (driven through
-the vendored `wptrunner` + `wptserve`) still times out on a narrower, distinct gap
-only reproducing under that specific combination — see [BUG-301](../../bugs/BUG-301-OPEN.md).
-See those bug files and the task doc's S4 section for the full diagnosis trail
-(BiDi-eval-based bisection of `testharness.js`'s execution).
+completes the harness correctly end to end. The last `run_smoke.py`-only
+timeout ([BUG-301](../../bugs/BUG-301-FIXED.md)) was `wptrunner` serving its own
+`/resources/testharnessreport.js` static route over Lumen's vendored one; fixed
+via `browsers/lumen.py::env_options`. See those bug files and the task doc's S4
+section for the full diagnosis trail (BiDi-eval-based bisection of
+`testharness.js`'s execution).
 
 ## What's here
 
@@ -108,9 +112,14 @@ See those bug files and the task doc's S4 section for the full diagnosis trail
   `/etc/hosts` entries this task's "no live network" rule can't rely on) and
   disables the `wss`/`h2`/`webtransport-h3`/`dns` servers the smoke test
   doesn't need (Python 3.14's `ssl` module dropped `wrap_socket`, breaking
-  `wptserve`'s `wss` server; unrelated to Lumen).
+  `wptserve`'s `wss` server; unrelated to Lumen). HTTP ports are `8300`/`8301`,
+  not the WPT default `8000`/`8001` — the 8000-range falls inside a Windows
+  dynamic excluded-port range here (`netsh interface ipv4 show
+  excludedportrange protocol=tcp`), so `wptserve` failed to bind with
+  `WinError 10013`.
 - `tests/wpt/metadata/` — `--metadata` root; holds the generated (gitignored)
-  `MANIFEST.json` and will hold `.ini` expectations from S5 onward.
+  `MANIFEST.json` and the committed `.ini` expectations (S5 onward, under
+  `metadata/dom/nodes/`).
 
 ## Python setup
 
@@ -160,11 +169,49 @@ Once `pip install -r tests/wpt/requirements.txt` has populated the venv, nothing
 above touches the network — the vendored tree in `tools/`/`tests/wpt/` is a
 committed snapshot (`tests/wpt/VENDOR.md`), not a submodule or a runtime clone.
 
+## The curated subset (S5)
+
+`metadata/dom/nodes/*.html.ini` pins the expected result of a curated set of
+**18 fully-synchronous `dom/nodes/` tests** (no iframes / XHR / `testdriver` /
+`async_test`). Every genuine failure is recorded as `expected: FAIL`, so the
+whole set runs **green** (0 unexpected) and acts as a regression ratchet —
+same idea as `KNOWN_DEBTORS` in `graphic_tests/`, but tool-native. Each `.ini`
+is header-commented with the engine bug it tracks (BUG-302/309/310/311/312/
+313/314); flip a `FAIL` to `PASS` in the same commit that lands the fix.
+
+Run the whole curated set (Windows Git Bash; `MSYS2_ARG_CONV_EXCL='/dom'` stops
+Git Bash from mangling the leading-slash test IDs into Windows paths):
+
+```bash
+export LUMEN_PROFILE=dev-release MSYS2_ARG_CONV_EXCL='/dom'
+BIN=$(cygpath -w "$PWD/target/dev-release/lumen.exe")
+tests/wpt/.venv/Scripts/python.exe tests/wpt/run_smoke.py --binary "$BIN" \
+  /dom/nodes/Element-hasAttribute.html /dom/nodes/Node-isConnected.html ...
+# → "Ran N checks ... Unexpected results: 0", exit 0
+```
+
+(Omit `--binary` and it defaults to `target/$LUMEN_PROFILE/lumen.exe`; pass it
+explicitly when running the script from a `git worktree`, whose own `target/`
+is empty.)
+
 ## Adding a test / growing the suite
 
-Not yet applicable — S5 ("Expectations + curated subset") is where the included
-test set grows past the single vendored `dom/nodes/` category and `.ini`
-expectations get introduced. This section will be filled in then.
+1. Pick a **synchronous** `test()`-based test (grep the candidate for
+   `async_test`/`promise_test`/`test_driver`/`<iframe>`/`XMLHttpRequest` — skip
+   if any match; those wait on machinery the BiDi-only executor doesn't drive
+   yet). Confirm any `<script src=...>` helpers it pulls are vendored under
+   `tests/wpt/` (a missing helper makes the test error, not fail cleanly).
+2. Run it through `run_smoke.py` (above) with an **empty** `--metadata` dir to
+   see the raw per-subtest result (all results show as "unexpected"), or read a
+   `--log-wptreport=out.json` dump.
+3. For each genuinely-failing subtest, add an `[<subtest name>]` /
+   `expected: FAIL` block to `metadata/dom/nodes/<test>.html.ini` (escape `\`,
+   `[`, `]` in the heading). File a `BUG-NNN` for the underlying engine gap and
+   name it in the `.ini` header comment — **never edit the vendored test to
+   make it pass.** A whole-test `TIMEOUT`/`ERROR` (harness never completed) is a
+   deeper gap: prefer excluding the test and filing the bug over pinning
+   `expected: TIMEOUT`.
+4. Re-run the curated set and confirm it's still green (0 unexpected).
 
 ## Re-vendoring
 

@@ -338,9 +338,24 @@ option isn't lost — do not fold it into this task's scope.
       hence "works manually over a plain server, times out under wptrunner". Fixed by
       `browsers/lumen.py::env_options` setting `testharnessreport` to Lumen's own report file. The
       earlier BUG-298/299/300 fixes (2026-07-17) were prerequisites, not this blocker.
-- [ ] `.ini` expectations committed for a curated ~15–20 synchronous DOM-test subset — **started
-      2026-07-18** with the first one (`tests/wpt/metadata/dom/nodes/Element-hasAttribute.html.ini`,
-      `expected: FAIL` for the BUG-309 subtest). Curating the full ~15–20-test subset remains.
+- [x] `.ini` expectations committed for a curated ~15–20 synchronous DOM-test subset — **done
+      2026-07-18.** 18 synchronous `dom/nodes/` tests (`tests/wpt/metadata/dom/nodes/*.html.ini`),
+      each `.ini` header-commented with its tracking bug. The full subset runs green under
+      `run_smoke.py` (55 checks / 37 subtests / 18 tests, **0 unexpected**) — every genuine
+      failure is recorded as `expected: FAIL`, no test weakened. Nine genuine engine gaps surfaced
+      and filed (grouped): [BUG-310](../../bugs/BUG-310-OPEN.md) (ElementTraversal +
+      `ParentNode.children` — 10 tests), [BUG-311](../../bugs/BUG-311-OPEN.md) (`Node.isConnected`),
+      [BUG-312](../../bugs/BUG-312-OPEN.md) (`Element.hasAttributes()`),
+      [BUG-313](../../bugs/BUG-313-OPEN.md) (`document.createProcessingInstruction`),
+      [BUG-314](../../bugs/BUG-314-OPEN.md) (DOM interface constructors not exposed as globals),
+      plus the pre-existing [BUG-302](../../bugs/BUG-302-OPEN.md) (`getElementsByClassName`) and
+      [BUG-309](../../bugs/BUG-309-OPEN.md) (`setAttributeNS`). Excluded from the curated subset
+      (not weakened — filed/noted separately): `Element-classlist.html` (1420 subtests, DOMTokenList
+      broken — too large for a hand-maintained `.ini`, bug to file when DOMTokenList is worked) and
+      the constructor/`createComment`/`createTextNode` tests that end in `TIMEOUT` (BUG-314 family +
+      cross-global iframe subtests the BiDi-only executor doesn't drive yet). Port note (Windows):
+      `config.json` moved off the WPT default 8000/8001 to 8300/8301 (the 8000-range fell into a
+      Windows dynamic excluded-port range → `WinError 10013`).
 - [ ] Async subset (S6) admitted, `awaitPromise` behavior verified against the implementation.
 - [ ] Suite runs fully offline.
 - [ ] `docs/plan/testing.md` updated; `ROADMAP.md:131` flipped to `done` (or split if S8 remains
