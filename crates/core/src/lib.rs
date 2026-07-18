@@ -24,6 +24,7 @@ pub mod punycode;
 pub mod sandbox;
 pub mod spell;
 pub mod sri;
+pub mod trace;
 pub mod url;
 pub mod web_storage;
 

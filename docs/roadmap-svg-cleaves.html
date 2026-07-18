@@ -1506,9 +1506,9 @@
       {
        "id": "PERF-1",
        "title": "PERF-1: --trace-nav — waterfall загрузки страницы",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "`lumen --trace-nav out.json <url>`: сквозная временная шкала одной навигации в Chrome-trace-формате (открывается в Perfetto / chrome://tracing / edge://tracing — свой UI не нужен): DNS/TLS/TTFB → парсинг HTML → fetch каждого подресурса (очередь/старт/длительность/размер) → cascade → layout → paint → first paint → interactive. Базис уже есть: LUMEN_PROFILE_TREE даёт дерево layout/cascade, `resource://network` даёт лог запросов — нет только единой шкалы одной загрузки. Оба известных тормоза (CPU-растр, последовательный fetch) были бы видны на этой шкале сразу — это инструмент поиска СЛЕДУЮЩЕГО тормоза"
+       "note": "DONE 2026-07-18: `lumen --trace-nav <out.json> <url>` прогоняет одну навигацию через тот же headless CPU-путь, что `--screenshot` (`render_source_to_png`), но с включённым трейсером `lumen_core::trace` (новый zero-dep модуль, глобальный `Mutex`-рекордер, per-thread lane, Chrome Trace Event Format через `lumen_core::json::JsonValue`). Спаны: `navigation` (root) → `fetch-document`/`GET <url>` → `parse-html` → `fetch-scripts`/`run-scripts` → `fetch-images`/`fetch-css`/`parse-css` → `layout` → `fetch-bg-images` → `paint` → инстант `first-paint`; по-ресурсные fetch-спаны (`img/css/script <url>` с arg `size`) на choke-точках (`fetch_image_bytes`/`fetch_stylesheet_text`/`resolve_script_sources`/`load_bytes`). Открывается в Perfetto / chrome://tracing / edge://tracing. Инструментация — no-op вне трейса (один relaxed atomic), поэтому висит на общем пути даром. Проверено на samples/page.html: доминирует `paint` (~150мс, CPU-растр) — ровно известный тормоз. Отложено: тонкая разбивка DNS/TLS/TTFB (сеть не отдаёт под-тайминги) и cascade-отдельно-от-layout"
       },
       {
        "id": "PERF-2",

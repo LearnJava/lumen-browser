@@ -1,5 +1,20 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Done (PERF-1 `--trace-nav`, 2026-07-18):** `lumen --trace-nav <out.json> <url>`
+  (`run_trace_nav` + `extract_trace_nav`, mirrors `--screenshot`) runs one navigation
+  through the shared headless CPU path (`render_source_to_png`) with the
+  `lumen_core::trace` tracer enabled, then writes the collected timeline as Chrome
+  Trace Event Format JSON (open in Perfetto / chrome://tracing). Phase spans live on
+  the shared path (`render_source_to_png`: `fetch-document`/`paint` + `first-paint`
+  instant; `parse_and_layout`: `parse-html`/`fetch-scripts`/`run-scripts`/`fetch-images`/
+  `fetch-css`/`parse-css`/`layout`/`fetch-bg-images`) and per-resource fetch spans with
+  a `size` arg on the fetch choke points (`load_bytes` main doc, `fetch_image_bytes`,
+  `fetch_stylesheet_text`, `resolve_script_sources`). All `trace::span` calls are no-ops
+  unless the tracer is enabled, so `--screenshot`/`--ipc-server` pay nothing. The PNG
+  the path produces is discarded — only the timeline matters. Verified on
+  `samples/page.html`: `paint` dominates (~150 ms, CPU raster) — the known bottleneck
+  the tool exists to surface. Deferred: DNS/TLS/TTFB sub-split (network layer exposes no
+  sub-timings), cascade split out from layout.
 - **Done (P3-navapi cross-document unification for multi-step traversal, 2026-07-17):**
   a multi-step `history.go(n)`/`navigation.traverseTo(key)` (`Lumen::navigate_by`) that
   silently shuttles through a full-document `NavEntry` before landing on a same-document
