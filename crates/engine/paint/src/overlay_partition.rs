@@ -752,7 +752,7 @@ mod tests {
 
     /// A `PushOpacity`/`PopOpacity` pair to stand in for a compositing ancestor.
     fn push_opacity() -> DisplayCommand {
-        DisplayCommand::PushOpacity { alpha: 0.5 }
+        DisplayCommand::PushOpacity { alpha: 0.5, bounds: None }
     }
 
     #[test]

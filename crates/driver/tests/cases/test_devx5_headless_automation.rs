@@ -3,7 +3,7 @@
 //!
 //! Covers: click-follows-link navigation, checkbox toggle-on-click,
 //! type_text writing into an input's `value`, page scroll, and (under
-//! `--features v8-backend`) `eval()` against the **persistent** V8 runtime
+//! `--features v8`) `eval()` against the **persistent** V8 runtime
 //! installed on the document at `navigate()` time — unlike
 //! `WinitSession::eval`'s one-shot runtime, JS-side DOM mutations persist
 //! across `eval()` calls within the same navigation.
@@ -98,7 +98,7 @@ fn scroll_updates_compositor_offset() {
     assert_eq!(offset_y, 200.0);
 }
 
-#[cfg(feature = "v8-backend")]
+#[cfg(feature = "v8")]
 #[test]
 fn eval_reads_back_dom_state_after_click_and_type() {
     let mut session = InProcessSession::new();
@@ -129,7 +129,7 @@ fn eval_reads_back_dom_state_after_click_and_type() {
     assert_eq!(value, "\"Lumen\"");
 }
 
-#[cfg(feature = "v8-backend")]
+#[cfg(feature = "v8")]
 #[test]
 fn eval_runs_plain_expression() {
     let mut session = InProcessSession::new();
@@ -145,7 +145,7 @@ fn eval_runs_plain_expression() {
 /// a DOM mutation made by one `eval()` call must be visible to the next
 /// `eval()` call within the same navigation, since both share one persistent
 /// V8 runtime installed on the same `Arc<Mutex<Document>>`.
-#[cfg(feature = "v8-backend")]
+#[cfg(feature = "v8")]
 #[test]
 fn eval_mutations_persist_across_calls() {
     let mut session = InProcessSession::new();
@@ -163,14 +163,14 @@ fn eval_mutations_persist_across_calls() {
     assert_eq!(mark, "\"seen\"");
 }
 
-#[cfg(not(feature = "v8-backend"))]
+#[cfg(not(feature = "v8"))]
 #[test]
-fn eval_errors_without_v8_backend_feature() {
+fn eval_errors_without_v8_feature() {
     let mut session = InProcessSession::new();
     session
         .navigate_html("<html><body></body></html>")
         .expect("navigate_html failed");
 
-    let err = session.eval("1 + 1").expect_err("eval must error without v8-backend");
+    let err = session.eval("1 + 1").expect_err("eval must error without v8");
     let _ = err;
 }

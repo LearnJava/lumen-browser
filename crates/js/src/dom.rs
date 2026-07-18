@@ -20,7 +20,7 @@ use lumen_dom::{
     Selection,
     ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
-use lumen_layout::{matches_selector, query_all, query_all_scoped};
+use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
 use lumen_core::WebStorage;
@@ -397,6 +397,50 @@ fn _camel_to_kebab(prop: &str) -> String {
     result
 }
 
+/// Decompresses `data` with the given Compression Streams `format` and returns a
+/// status-prefixed byte array shared by the `_lumen_decompress_bytes` native in
+/// both JS engines (rquickjs and V8).
+///
+/// A leading status byte lets the `DecompressionStream` JS shim tell a decode
+/// error apart from a valid empty result (a well-formed stream may legitimately
+/// decompress to zero bytes): `out[0] == 1` → success with `out[1..]` the
+/// decompressed bytes; `out[0] == 0` → the input was corrupt/truncated or the
+/// format unknown, and the shim errors the readable side per
+/// <https://compression.spec.whatwg.org/>.
+pub(crate) fn _decompress_status_prefixed(data: &[u8], format: &str) -> Vec<u8> {
+    use std::io::Read as _;
+    let inflated: std::io::Result<Vec<u8>> = match format {
+        "deflate-raw" => {
+            let mut dec = flate2::read::DeflateDecoder::new(data);
+            let mut out = Vec::new();
+            dec.read_to_end(&mut out).map(|_| out)
+        }
+        "deflate" => {
+            let mut dec = flate2::read::ZlibDecoder::new(data);
+            let mut out = Vec::new();
+            dec.read_to_end(&mut out).map(|_| out)
+        }
+        "gzip" => {
+            let mut dec = flate2::read::GzDecoder::new(data);
+            let mut out = Vec::new();
+            dec.read_to_end(&mut out).map(|_| out)
+        }
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "unknown compression format",
+        )),
+    };
+    match inflated {
+        Ok(mut bytes) => {
+            let mut out = Vec::with_capacity(bytes.len() + 1);
+            out.push(1u8);
+            out.append(&mut bytes);
+            out
+        }
+        Err(_) => vec![0u8],
+    }
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn install_primitives(
     ctx: &Ctx<'_>,
@@ -646,6 +690,30 @@ fn install_primitives(
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 matches_selector(&doc, nid, &sel)
+            }
+        );
+        // DOM LS §4.2.6: `Element`/`DocumentFragment`/`ShadowRoot` querySelector(All)
+        // must search only the calling node's descendants, not the whole document —
+        // mirrors the `v8_runtime.rs` registration (P2-wpt S4).
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_scoped",
+            move |node_id: u32, sel: String| -> Option<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                query_all_within(&doc, nid, &sel).into_iter().next().map(|n| n.index() as u32)
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_all_scoped",
+            move |node_id: u32, sel: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                query_all_within(&doc, nid, &sel)
+                    .into_iter()
+                    .map(|n| n.index() as u32)
+                    .collect()
             }
         );
     }
@@ -2935,32 +3003,18 @@ fn install_primitives(
         );
 
         // Decompress `data` using the named format.
-        // `format`: "deflate-raw", "deflate", "gzip". Returns empty Vec on error.
+        // `format`: "deflate-raw", "deflate", "gzip".
+        // Returns a status-prefixed byte array so the JS `DecompressionStream` shim
+        // can distinguish a decode error from a valid empty result (a well-formed
+        // stream may legitimately decompress to zero bytes). Layout: `out[0] == 1`
+        // → success and `out[1..]` are the decompressed bytes; `out[0] == 0` → the
+        // input was corrupt/truncated or the format unknown, and the shim errors the
+        // stream (https://compression.spec.whatwg.org/, a decode error errors the
+        // readable side).
         reg!(
             "_lumen_decompress_bytes",
             |data: Vec<u8>, format: String| -> Vec<u8> {
-                use std::io::Read as _;
-                match format.as_str() {
-                    "deflate-raw" => {
-                        let mut dec = flate2::read::DeflateDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    "deflate" => {
-                        let mut dec = flate2::read::ZlibDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    "gzip" => {
-                        let mut dec = flate2::read::GzDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    _ => Vec::new(),
-                }
+                _decompress_status_prefixed(&data, &format)
             }
         );
     }
@@ -3873,7 +3927,9 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
     });
     // Level 3 §4.1: intermediate samples buffered since the last dispatch,
     // then this event appended last (spec order: oldest..newest, main event
-    // last). Without `coalesced` (non-move event types) this is just [ev].
+    // last). Without `coalesced` (non-move event types, or callers using the
+    // dedicated `_lumen_dispatch_pointer_move_coalesced` instead) this is
+    // just [ev], with no predicted events — same as the non-coalescing case.
     var coalescedEvents = [];
     if (Array.isArray(coalesced)) {
         for (var i = 0; i < coalesced.length; i++) {
@@ -3888,6 +3944,56 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
+// Ph3 pointer-events-l3, Срез 3-4 — called from shell with every raw
+// `CursorMoved` sample buffered since the last flush (Pointer Events Level 3
+// §4.1 coalesced events). `points_json` is a JSON array of `[x, y]`
+// CSS-pixel pairs in chronological order; the last pair is the main event
+// actually dispatched to `nid`. Builds one `PointerEvent` per point (shared
+// pointerId/pointerType/button state, own clientX/Y) and exposes the full
+// list via `getCoalescedEvents()` on the main event — main event last, per
+// spec. `getPredictedEvents()` linearly extrapolates two future points from
+// the last two samples' velocity (the spec does not mandate a specific
+// prediction algorithm); fewer than 2 samples → no prediction.
+// mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
+function _lumen_dispatch_pointer_move_coalesced(nid, points_json, button, buttons, mod) {
+    var points = JSON.parse(points_json);
+    if (points.length === 0) return;
+    function makeMoveEvent(x, y) {
+        return new PointerEvent('pointermove', {
+            bubbles: true, cancelable: true, isTrusted: true,
+            clientX: x, clientY: y,
+            screenX: x, screenY: y,
+            pageX:   x, pageY:   y,
+            button: button, buttons: buttons,
+            ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+            altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
+            pointerId: 1, pointerType: 'mouse', isPrimary: true,
+            pressure: buttons ? 0.5 : 0.0,
+            altitudeAngle: Math.PI / 2, azimuthAngle: 0,
+            width: 1, height: 1,
+            tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
+        });
+    }
+    var coalesced = [];
+    for (var i = 0; i < points.length - 1; i++) {
+        coalesced.push(makeMoveEvent(points[i][0], points[i][1]));
+    }
+    var last = points[points.length - 1];
+    var main = makeMoveEvent(last[0], last[1]);
+    coalesced.push(main); // main event is last, per Pointer Events L3 §4.1
+    main.getCoalescedEvents = function() { return coalesced; };
+    var predicted = [];
+    if (points.length >= 2) {
+        var a = points[points.length - 2];
+        var dx = last[0] - a[0];
+        var dy = last[1] - a[1];
+        predicted.push(makeMoveEvent(last[0] + dx, last[1] + dy));
+        predicted.push(makeMoveEvent(last[0] + dx * 2, last[1] + dy * 2));
+    }
+    main.getPredictedEvents = function() { return predicted; };
+    return _lumen_dispatch_rich(nid, main);
+}
+
 // _lumen_dispatch_capture_event — fire gotpointercapture / lostpointercapture on a node.
 // W3C Pointer Events L3 §4.1: these events do NOT bubble.
 function _lumen_dispatch_capture_event(nid, type) {
@@ -3898,6 +4004,8 @@ function _lumen_dispatch_capture_event(nid, type) {
         width: 1, height: 1,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
+    // gotpointercapture/lostpointercapture never coalesce (not a move event);
+    // an empty sequence is the spec-correct answer, not a placeholder.
     ev.getCoalescedEvents = function() { return []; };
     ev.getPredictedEvents = function() { return []; };
     _lumen_dispatch_rich(nid, ev);
@@ -4172,6 +4280,8 @@ var _input_values = {};
 var _canvas2d_ctxs = {};
 // nid → cached GPUCanvasContext object (getContext('webgpu'), persists across _lumen_make_element).
 var _canvas_webgpu_ctxs = {};
+// nid → cached ImageBitmapRenderingContext object (getContext('bitmaprenderer')).
+var _canvas_bitmaprenderer_ctxs = {};
 
 // ValidityState — readonly snapshot of one form control's validity.
 function ValidityState(flags) {
@@ -4627,11 +4737,25 @@ function _lumen_canvas_dims(nid) {
 // object each time; this cache interns wrappers by nid so the same node always
 // yields the same object. Purged per-nid by `_lumen_gc_collect` (idle shell tick)
 // so detached, zero-JS-ref nodes don't retain memory here, same lifecycle as
-// `_input_values`/`_canvas2d_ctxs` below.
+// `_input_values`/`_canvas2d_ctxs` below. Caching by nid for the life of the JS
+// context is safe even though this covers element *and* text-node wrappers: the
+// DOM node arena is append-only for the lifetime of a document
+// (`crates/engine/dom/src/lib.rs` `alloc()`; no free-list reuse until a future
+// Phase-3 compaction), and this whole shim is re-evaluated from scratch on
+// every navigation/bfcache thaw (fresh V8 isolate), so a cached wrapper can
+// never alias onto an unrelated later node.
 var _lumen_element_wrappers = {};
 
 function _lumen_make_element(nid) {
     if (nid === null || nid === undefined) return null;
+    // BUG-291: return the interned wrapper if this nid was already wrapped,
+    // so repeated access to the same underlying node (`.firstChild`,
+    // `.parentElement`, `getElementById` twice, ...) yields the same JS
+    // object — required for `===` node identity and for expando properties
+    // set on a node to survive later re-access. Split from the actual
+    // builder (`_lumen_build_element`) so the cache write below is the one
+    // and only place a wrapper gets interned, matching what `_lumen_gc_collect`
+    // purges.
     var cached = _lumen_element_wrappers[nid];
     if (cached !== undefined) return cached;
     var built = _lumen_build_element(nid);
@@ -4953,9 +5077,10 @@ function _lumen_build_element(nid) {
         // HTML LS 4.9.2 (old-fashioned but conforming markup) — insertAdjacent{Text,Element}.
         // Delegates to the before/after/prepend/append methods above (same silent
         // no-op-if-no-parent behavior as before/after for beforebegin/afterend).
-        // Found missing while closing BUG-291: testharness.js's results renderer
-        // (Output.prototype.show_results -> get_asserts_output) calls
-        // insertAdjacentText unconditionally for every test with no recorded asserts.
+        // Found missing (BUG-299) while diagnosing testharness.js's results
+        // renderer / P2-wpt S4 (`Output.show_results` -> `get_asserts_output`)
+        // calling insertAdjacentText unconditionally for every test with no
+        // recorded asserts.
         insertAdjacentText: function(where, data) {
             var text = String(data);
             switch (String(where).toLowerCase()) {
@@ -5064,6 +5189,34 @@ function _lumen_build_element(nid) {
                 var c2d = _lumen_make_canvas2d_ctx(this, nid);
                 _canvas2d_ctxs[nid] = c2d;
                 return c2d;
+            }
+            // 'bitmaprenderer' returns an ImageBitmapRenderingContext (HTML LS §4.12.5.1):
+            // transferFromImageBitmap(bitmap) replaces this canvas's displayed bitmap wholesale
+            // (no drawing operations of its own, unlike '2d').
+            if (t === 'bitmaprenderer') {
+                if (_canvas_bitmaprenderer_ctxs[nid]) return _canvas_bitmaprenderer_ctxs[nid];
+                if ((_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') return null;
+                if (typeof _lumen_canvas_is_transferred === 'function' && _lumen_canvas_is_transferred(nid)) return null;
+                var bd = _lumen_canvas_dims(nid);
+                _lumen_canvas2d_create(nid, bd[0], bd[1]);
+                var brctx = {
+                    canvas: this,
+                    transferFromImageBitmap: function(bitmap) {
+                        if (bitmap === null) {
+                            _lumen_canvas2d_clear_rect(nid, 0, 0, _lumen_canvas_dims(nid)[0], _lumen_canvas_dims(nid)[1]);
+                            return;
+                        }
+                        if (!bitmap || typeof bitmap.__canvas_id__ !== 'number') {
+                            throw new TypeError('transferFromImageBitmap: argument is not an ImageBitmap');
+                        }
+                        var ok = _lumen_bitmaprenderer_transfer_from_image_bitmap(nid, bitmap.__canvas_id__);
+                        if (!ok) {
+                            throw new DOMException('transferFromImageBitmap: the ImageBitmap has been detached', 'InvalidStateError');
+                        }
+                    }
+                };
+                _canvas_bitmaprenderer_ctxs[nid] = brctx;
+                return brctx;
             }
             // 'webgpu' returns a GPUCanvasContext bound to this canvas. configure() allocates a
             // render-target texture; rendered frames present into the canvas:{nid} 2D buffer the
@@ -7675,8 +7828,19 @@ function DecompressionStream(format) {
     TransformStream.call(this, {
         transform: function(chunk, _c) { buf.push(_csToU8(chunk)); },
         flush: function(c) {
-            var result = _lumen_decompress_bytes(Array.from(_csConcat(buf)), fmt);
-            if (result && result.length > 0) c.enqueue(new Uint8Array(result));
+            // Native returns a status-prefixed byte array: [1, ...data] on success
+            // (data may be empty for a valid stream that decompresses to nothing),
+            // [0] on a corrupt/truncated input. Per
+            // https://compression.spec.whatwg.org/ a decode error must error the
+            // readable side, so it is distinguished from a valid empty result
+            // instead of silently terminating the stream.
+            var raw = _lumen_decompress_bytes(Array.from(_csConcat(buf)), fmt);
+            var u = (raw instanceof Uint8Array) ? raw : new Uint8Array(raw);
+            if (u.length < 1 || u[0] !== 1) {
+                c.error(new TypeError('DecompressionStream: corrupt or truncated ' + fmt + ' input'));
+                return;
+            }
+            if (u.length > 1) c.enqueue(u.slice(1));
             c.terminate();
         }
     });
@@ -9303,6 +9467,7 @@ var window = {
     _lumen_dispatch_mouse_event:        _lumen_dispatch_mouse_event,
     _lumen_dispatch_locked_mousemove:   _lumen_dispatch_locked_mousemove,
     _lumen_dispatch_pointer_event:      _lumen_dispatch_pointer_event,
+    _lumen_dispatch_pointer_move_coalesced: _lumen_dispatch_pointer_move_coalesced,
     _lumen_dispatch_capture_event:      _lumen_dispatch_capture_event,
     _lumen_dispatch_key_event:     _lumen_dispatch_key_event,
     _lumen_dispatch_rich:          _lumen_dispatch_rich,
@@ -11780,34 +11945,89 @@ if (typeof _lumen_idb_load === 'function') {
     window.Crypto = function Crypto() {};
 })();
 
-// ── structuredClone (HTML LS §2.7) ─────────────────────────────────────────
-// Handles: primitives, plain objects, arrays, Date, RegExp, Map, Set.
-// Not handled: typed arrays as values, circular refs, functions, symbols.
+// ── structuredClone (HTML LS §2.7 — StructuredSerialize/Deserialize) ─────────
+// Handles: primitives (incl. BigInt), plain objects, arrays, Date, RegExp,
+// Map, Set, Boolean/Number/String wrapper objects, ArrayBuffer, typed arrays
+// (Int8..Float64, BigInt64/BigUint64), DataView. Preserves shared references
+// and cycles via a memory map (same original → same clone). Throws a
+// DataCloneError DOMException for non-serializable values (functions, symbols).
+// Not handled: the `transfer` option (transferables are copied, not detached),
+// Blob/File/ImageData/Error and other platform objects.
 function structuredClone(val) {
-    if (val === null || val === undefined) return val;
-    var t = typeof val;
-    if (t !== 'object') return val;
-    if (val instanceof Date) return new Date(val.getTime());
-    if (val instanceof RegExp) return new RegExp(val.source, val.flags);
-    if (val instanceof Map) {
-        var m = new Map();
-        val.forEach(function(v, k) { m.set(structuredClone(k), structuredClone(v)); });
-        return m;
+    // memory: original object → its clone, so shared refs and cycles round-trip.
+    var memory = new Map();
+    function clone(v) {
+        if (v === null) return null;
+        var t = typeof v;
+        if (t === 'undefined' || t === 'boolean' || t === 'number' ||
+            t === 'string' || t === 'bigint') {
+            return v;
+        }
+        if (t === 'symbol' || t === 'function') {
+            throw new DOMException(
+                'structuredClone: value could not be cloned', 'DataCloneError');
+        }
+        // t === 'object' from here on.
+        if (memory.has(v)) return memory.get(v);
+        // Value-immutable objects: no interior references → no cycle to register.
+        if (v instanceof Date) return new Date(v.getTime());
+        if (v instanceof RegExp) return new RegExp(v.source, v.flags);
+        if (v instanceof Boolean) return new Boolean(v.valueOf());
+        if (v instanceof Number) return new Number(v.valueOf());
+        if (v instanceof String) return new String(v.valueOf());
+        // Binary data: copy the backing buffer, then re-view it.
+        if (v instanceof ArrayBuffer) {
+            var abClone = v.slice(0);
+            memory.set(v, abClone);
+            return abClone;
+        }
+        if (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer) {
+            // A SharedArrayBuffer is shared by reference, never copied.
+            memory.set(v, v);
+            return v;
+        }
+        if (ArrayBuffer.isView(v)) {
+            var srcBuf = v.buffer;
+            var bufClone = memory.get(srcBuf);
+            if (bufClone === undefined) {
+                bufClone = srcBuf.slice(0);
+                memory.set(srcBuf, bufClone);
+            }
+            var viewClone = (v instanceof DataView)
+                ? new DataView(bufClone, v.byteOffset, v.byteLength)
+                : new v.constructor(bufClone, v.byteOffset, v.length);
+            memory.set(v, viewClone);
+            return viewClone;
+        }
+        if (v instanceof Map) {
+            var m = new Map();
+            memory.set(v, m);
+            v.forEach(function(entryVal, entryKey) {
+                m.set(clone(entryKey), clone(entryVal));
+            });
+            return m;
+        }
+        if (v instanceof Set) {
+            var s = new Set();
+            memory.set(v, s);
+            v.forEach(function(entryVal) { s.add(clone(entryVal)); });
+            return s;
+        }
+        if (Array.isArray(v)) {
+            var arr = new Array(v.length);
+            memory.set(v, arr);
+            for (var i = 0; i < v.length; i++) arr[i] = clone(v[i]);
+            return arr;
+        }
+        // Plain object: own enumerable string-keyed properties only (symbol keys
+        // are dropped, matching the spec's serialization of ordinary objects).
+        var out = {};
+        memory.set(v, out);
+        var keys = Object.keys(v);
+        for (var k = 0; k < keys.length; k++) out[keys[k]] = clone(v[keys[k]]);
+        return out;
     }
-    if (val instanceof Set) {
-        var s = new Set();
-        val.forEach(function(v) { s.add(structuredClone(v)); });
-        return s;
-    }
-    if (Array.isArray(val)) {
-        var arr = [];
-        for (var i = 0; i < val.length; i++) arr[i] = structuredClone(val[i]);
-        return arr;
-    }
-    var out = {};
-    var keys = Object.keys(val);
-    for (var k = 0; k < keys.length; k++) out[keys[k]] = structuredClone(val[keys[k]]);
-    return out;
+    return clone(val);
 }
 window.structuredClone = structuredClone;
 
@@ -13122,6 +13342,38 @@ mod tests {
                  box.append('trailing text');\
                  var n = 0; while (box.firstChild) { box.removeChild(box.firstChild); if (++n > 20) break; }\
                  built && box.firstChild === null",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-291: repeated wraps of the same underlying node (via .lastChild,
+    // .parentElement, .children, etc.) must return the SAME JS object, not a
+    // fresh wrapper each time. `testharness.js`'s `Output.show_results` relies
+    // on `tbody.lastChild.lastChild.appendChild(...)` reading back the very
+    // node it just appended two statements earlier — with fresh wrappers each
+    // access, `tbody.lastChild` after appending a child-of-a-child came back
+    // stale/inconsistent and the nested `.lastChild` was `null`, throwing
+    // `TypeError: Cannot read properties of null (reading 'appendChild')` and
+    // aborting `notify_complete()` before the WPT result callback ran.
+    #[test]
+    fn repeated_node_access_returns_identical_wrapper() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var tbody = document.createElement('tbody');\
+                 var tr = document.createElement('tr');\
+                 var td = document.createElement('td');\
+                 tr.appendChild(td);\
+                 tbody.appendChild(tr);\
+                 var identityHolds = tbody.lastChild === tr && tr.lastChild === td;\
+                 var expando = tbody.lastChild;\
+                 expando._probe = 'kept';\
+                 var expandoSurvives = tbody.lastChild._probe === 'kept';\
+                 var nested = tbody.lastChild.lastChild;\
+                 var assertionsNode = document.createElement('div');\
+                 var appended = nested !== null && (nested.appendChild(assertionsNode), true);\
+                 identityHolds && expandoSurvives && appended",
             )
             .unwrap();
         assert_eq!(ok, lumen_core::JsValue::Bool(true));
@@ -21664,6 +21916,128 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
+    #[test]
+    fn structured_clone_circular_reference() {
+        // A self-referential object must not overflow the stack and must
+        // preserve the cycle: clone.self === clone.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var o = { name: 'a' };
+                 o.self = o;
+                 var c = structuredClone(o);
+                 c.name === 'a' && c.self === c && c !== o",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_shared_reference_identity() {
+        // The same object referenced twice clones to a single shared clone.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var shared = { v: 1 };
+                 var orig = { a: shared, b: shared };
+                 var c = structuredClone(orig);
+                 c.a === c.b && c.a !== shared && c.a.v === 1",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_array_buffer() {
+        // ArrayBuffer is deep-copied (independent backing store).
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var buf = new ArrayBuffer(4);
+                 new Uint8Array(buf).set([1, 2, 3, 4]);
+                 var c = structuredClone(buf);
+                 var cv = new Uint8Array(c);
+                 c instanceof ArrayBuffer && c !== buf && c.byteLength === 4 &&
+                 cv[0] === 1 && cv[3] === 4 &&
+                 (cv[0] = 99, new Uint8Array(buf)[0] === 1)",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_typed_array() {
+        // Typed array clones its element type, length and values; original
+        // stays independent.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var ta = new Uint16Array([10, 20, 30]);
+                 var c = structuredClone(ta);
+                 c[1] = 999;
+                 c instanceof Uint16Array && c.length === 3 &&
+                 c[0] === 10 && ta[1] === 20 && c.buffer !== ta.buffer",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_typed_array_shares_buffer_identity() {
+        // Two views over one buffer must, after cloning, still share one buffer.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var buf = new ArrayBuffer(8);
+                 var a = new Uint8Array(buf);
+                 var b = new Uint8Array(buf);
+                 var c = structuredClone({ a: a, b: b });
+                 c.a.buffer === c.b.buffer && c.a.buffer !== buf",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_function_throws_data_clone_error() {
+        // Functions are not serializable → DataCloneError DOMException.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var threw = false, name = '';
+                 try { structuredClone(function(){}); }
+                 catch (e) { threw = true; name = e.name; }
+                 threw && name === 'DataCloneError'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_symbol_throws_data_clone_error() {
+        // Symbols are not serializable → DataCloneError DOMException.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var threw = false, name = '';
+                 try { structuredClone(Symbol('x')); }
+                 catch (e) { threw = true; name = e.name; }
+                 threw && name === 'DataCloneError'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_bigint_primitive() {
+        // BigInt round-trips as a value.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("structuredClone(9007199254740993n) === 9007199254740993n")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
     // ─── btoa / atob tests ────────────────────────────────────────────────────
 
     #[test]
@@ -24944,6 +25318,59 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
+    #[test]
+    fn decompression_stream_corrupt_input_errors_stream() {
+        let rt = runtime_with_dom(make_doc());
+        // Feeding non-gzip bytes to a gzip DecompressionStream must error the
+        // readable side (https://compression.spec.whatwg.org/), so reader.read()
+        // rejects rather than resolving with an empty/undefined chunk.
+        let r = rt
+            .eval(
+                "var ds = new DecompressionStream('gzip'); \
+                 var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
+                 dw.write(new Uint8Array([1,2,3,4,5,6,7,8])); dw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var errored = false, resolved = false; \
+                 dr.read().then(function() { resolved = true; }, function() { errored = true; }); \
+                 _lumen_drain_microtasks(); \
+                 errored && !resolved",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn decompression_stream_multi_chunk_matches_single_chunk() {
+        let rt = runtime_with_dom(make_doc());
+        // Splitting the compressed body across several writes must decode to the
+        // same bytes as feeding it in one chunk (buffer-then-flush model).
+        let r = rt
+            .eval(
+                "var input = new Uint8Array([9,8,7,6,5,4,3,2,1,0]); \
+                 var cs = new CompressionStream('deflate'); \
+                 var cw = cs.writable.getWriter(); var cr = cs.readable.getReader(); \
+                 cw.write(input); cw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var compressed = null; \
+                 cr.read().then(function(r) { compressed = r.value; }); \
+                 _lumen_drain_microtasks(); \
+                 var ds = new DecompressionStream('deflate'); \
+                 var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
+                 var mid = compressed.length >> 1; \
+                 dw.write(compressed.slice(0, mid)); \
+                 dw.write(compressed.slice(mid)); \
+                 dw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var result = null; \
+                 dr.read().then(function(r) { result = r.value; }); \
+                 _lumen_drain_microtasks(); \
+                 result instanceof Uint8Array && result.length === 10 && \
+                 result[0] === 9 && result[9] === 0",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
     // ── Fullscreen API tests (WHATWG Fullscreen §4) ───────────────────────────
 
     #[test]
@@ -26827,6 +27254,65 @@ mod tests {
              _lumen_dispatch_pointer_event(el.__nid__, 'pointermove', 5, 5, 0, 0, 0); \
              Array.isArray(got.getCoalescedEvents()) && got.getCoalescedEvents().length === 1 && \
              Array.isArray(got.getPredictedEvents()) && got.getPredictedEvents().length === 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Pointer Events Level 3 §4.1 — real coalesced/predicted pointermove ───
+
+    #[test]
+    fn pointer_move_coalesced_dispatch_single_point() {
+        // A single-point batch behaves like the non-coalescing dispatcher:
+        // getCoalescedEvents() === [the event itself], no predicted events.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var got = null; \
+             el.addEventListener('pointermove', function(e) { got = e; }); \
+             _lumen_dispatch_pointer_move_coalesced(el.__nid__, '[[5,5]]', 0, 0, 0); \
+             var ce = got.getCoalescedEvents(); \
+             ce.length === 1 && ce[0] === got && \
+             got.clientX === 5 && got.clientY === 5 && \
+             got.getPredictedEvents().length === 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pointer_move_coalesced_dispatch_multi_point() {
+        // A 3-point batch: getCoalescedEvents() has all 3 in order, main event
+        // (dispatched, matches the last point) is last in the list by identity;
+        // getPredictedEvents() linearly extrapolates 2 points from the last leg.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var got = null; \
+             el.addEventListener('pointermove', function(e) { got = e; }); \
+             _lumen_dispatch_pointer_move_coalesced(el.__nid__, '[[0,0],[10,0],[20,0]]', 0, 0, 0); \
+             var ce = got.getCoalescedEvents(); \
+             var okCoalesced = ce.length === 3 && \
+                 ce[0].clientX === 0  && ce[1].clientX === 10 && ce[2].clientX === 20 && \
+                 ce[2] === got; \
+             var pe = got.getPredictedEvents(); \
+             var okPredicted = pe.length === 2 && \
+                 pe[0].clientX === 30 && pe[1].clientX === 40 && \
+                 pe[0].clientY === 0  && pe[1].clientY === 0; \
+             var okMain = got.clientX === 20 && got.clientY === 0 && got.type === 'pointermove'; \
+             okCoalesced && okPredicted && okMain"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pointer_move_coalesced_dispatch_empty_batch_is_noop() {
+        // An empty batch must not throw and must not dispatch anything.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var fired = false; \
+             el.addEventListener('pointermove', function(e) { fired = true; }); \
+             _lumen_dispatch_pointer_move_coalesced(el.__nid__, '[]', 0, 0, 0); \
+             !fired"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }

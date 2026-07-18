@@ -10,6 +10,7 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::error::Result;
 use crate::event::Event;
@@ -493,7 +494,11 @@ pub trait FontProvider: Send + Sync {
     /// Реализации, которые хранят шрифты в памяти (@font-face из URL),
     /// возвращают `Some(bytes)` — рендер минует `fs::read`. Default → None:
     /// рендер тогда читает через `std::fs::read(&rec.path)`.
-    fn read_face_bytes(&self, _path: &Path) -> Option<Vec<u8>> {
+    ///
+    /// Возвращает `Arc<[u8]>` (BUG-272 срез 6): буфер шрифта разделяется между
+    /// хранилищем провайдера и `LoadedFace` рендера без полного клона — вызов
+    /// лишь увеличивает счётчик ссылок вместо копирования всего файла шрифта.
+    fn read_face_bytes(&self, _path: &Path) -> Option<Arc<[u8]>> {
         None
     }
 }

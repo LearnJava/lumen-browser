@@ -88,11 +88,11 @@ pub use property_trees::{
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use selection::{caret_at_point, selection_rects};
-pub use style::{compute_selection_style, compute_style_from_declarations};
+pub use style::{compute_selection_style, compute_style, compute_style_from_declarations};
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
     computed_style_to_map, find_all_by_selector, find_box_by_selector, matched_rules_for_node,
-    matches_selector, query_all, query_all_scoped, ComputedStyleSnapshot, MatchedRule,
+    matches_selector, query_all, query_all_scoped, query_all_within, ComputedStyleSnapshot, MatchedRule,
 };
 pub use anchor::{
     collect_anchors, register_anchor, resolve_anchor_function, resolve_inset_area,
@@ -131,7 +131,7 @@ pub use style::{
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
     FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
-    MaskMode, MasonryAutoFlow,
+    MaskClip, MaskMode, MasonryAutoFlow,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient, Resize,
@@ -303,9 +303,10 @@ fn collect_clickable_rec(
         return;
     }
 
-    // CSS: inert — P4 should add `[inert] { pointer-events: none; }` to the UA
-    // stylesheet. This guard provides the complementary layout-level filter:
-    // inert elements are never included in the clickable set.
+    // The UA rule `[inert] { pointer-events: none; }` is applied by
+    // `apply_ua_inert` in style.rs. This guard provides the complementary
+    // layout-level filter: inert elements are never included in the clickable
+    // set regardless of an author `pointer-events` override.
     if inert::is_inert(doc, b.node) {
         return;
     }
@@ -10757,6 +10758,69 @@ mod tests {
         assert!((p.rect.width - 200.0).abs() < 0.01, "p child={}", p.rect.width);
     }
 
+    /// Block-axis gutter: `overflow-x: scroll` + `scrollbar-gutter: stable` reserves
+    /// space for the horizontal scrollbar, so a `%`-height child shrinks by 12 px
+    /// while the container's own border-box height stays put.
+    #[test]
+    fn scrollbar_gutter_block_stable_reduces_child_height() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { height: 200px; overflow-x: scroll; scrollbar-gutter: stable; } p { height: 100%; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // 200 content-box → minus 12 block gutter = 188.
+        assert!((div.rect.height - 200.0).abs() < 0.01, "div={}", div.rect.height);
+        assert!((p.rect.height - 188.0).abs() < 0.01, "p child={}", p.rect.height);
+    }
+
+    /// `both-edges` is undefined for the block axis: only one gutter unit reserved
+    /// (unlike the inline axis, which doubles it). 200 − 12 = 188.
+    #[test]
+    fn scrollbar_gutter_block_both_edges_single_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { height: 200px; overflow-x: scroll; scrollbar-gutter: stable both-edges; } p { height: 100%; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert!((p.rect.height - 188.0).abs() < 0.01, "p child={}", p.rect.height);
+    }
+
+    /// `scrollbar-width: thin` uses a 6 px block-axis gutter. 200 − 6 = 194.
+    #[test]
+    fn scrollbar_gutter_block_thin_reduces_by_6() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { height: 200px; overflow-x: scroll; scrollbar-gutter: stable; scrollbar-width: thin; } p { height: 100%; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert!((p.rect.height - 194.0).abs() < 0.01, "p child={}", p.rect.height);
+    }
+
+    /// Without `overflow-x: scroll/auto`, block-axis `scrollbar-gutter: stable` has
+    /// no effect: the `%`-height child fills the full content height.
+    #[test]
+    fn scrollbar_gutter_block_no_scroll_no_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { height: 200px; scrollbar-gutter: stable; } p { height: 100%; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert!((p.rect.height - 200.0).abs() < 0.01, "p child={}", p.rect.height);
+    }
+
+    /// `scrollbar-width: none` suppresses the block-axis gutter even with
+    /// `overflow-x: scroll` + `scrollbar-gutter: stable`.
+    #[test]
+    fn scrollbar_gutter_block_width_none_no_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { height: 200px; overflow-x: scroll; scrollbar-gutter: stable; scrollbar-width: none; } p { height: 100%; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert!((p.rect.height - 200.0).abs() < 0.01, "p child={}", p.rect.height);
+    }
+
     // ──────── transform-origin / perspective / list-style-* / transition-* ────────
 
     #[test]
@@ -11681,6 +11745,39 @@ mod tests {
         // НЕ наследуется — у p default Auto.
         assert_eq!(p.style.pointer_events, PointerEvents::Auto);
         assert_eq!(div.style.pointer_events, PointerEvents::None);
+    }
+
+    #[test]
+    fn inert_sets_pointer_events_none() {
+        // UA rule `[inert] { pointer-events: none; }` (HTML Rendering §15.4.2).
+        let root = lay("<p inert>x</p>", "");
+        assert_eq!(first_p_style(&root).pointer_events, PointerEvents::None);
+    }
+
+    #[test]
+    fn inert_inherited_to_descendant_pointer_events() {
+        // Inertness is inherited down the DOM tree: a descendant of an inert
+        // element is inert too, so its pointer-events is forced to none even
+        // though it carries no `inert` attribute of its own.
+        let root = lay("<div inert><p>x</p></div>", "");
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(div.style.pointer_events, PointerEvents::None);
+        assert_eq!(p.style.pointer_events, PointerEvents::None);
+    }
+
+    #[test]
+    fn inert_author_pointer_events_wins() {
+        // The inert rule lives in the UA origin, so an author `pointer-events`
+        // declaration overrides it.
+        let root = lay("<p inert>x</p>", "p { pointer-events: auto; }");
+        assert_eq!(first_p_style(&root).pointer_events, PointerEvents::Auto);
+    }
+
+    #[test]
+    fn non_inert_keeps_pointer_events_auto() {
+        let root = lay("<p>x</p>", "");
+        assert_eq!(first_p_style(&root).pointer_events, PointerEvents::Auto);
     }
 
     #[test]

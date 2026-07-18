@@ -8,13 +8,14 @@ use std::sync::{Arc, Mutex};
 
 use lumen_core::error::{Error, Result};
 use lumen_core::ext::NoopEventSink;
-use lumen_core::geom::{Rect, Size};
+use lumen_core::geom::{Point, Rect, Size};
 use serde_json;
 use lumen_dom::Document;
 use lumen_dom::NodeData;
 use lumen_dom::NodeId;
 use lumen_layout::{computed_style_by_selector, LayoutBox, PaintOrder, PropertyTrees, StackingTree};
 use lumen_paint::compositor::{BasicLayerTree, Compositor, InProcessCompositor};
+use lumen_paint::hit_test;
 
 use crate::{
     A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
@@ -31,23 +32,19 @@ const DEFAULT_VIEWPORT: Size = Size::new(1024.0, 720.0);
 
 /// Состояние после успешной загрузки страницы.
 struct SessionState {
-    /// DOM документа. За `Mutex`, чтобы `js` (persistent V8 runtime, DEVX-5)
-    /// и `click`/`type_text` мутировали один и тот же документ — в отличие от
-    /// `WinitSession::eval`'а, JS-мутации видны последующим `eval()`-вызовам.
+    /// DOM — shared with the persistent V8 runtime (DEVX-5 slice 2) so that
+    /// JS-dispatched events (`click`/`type_text`) can mutate it via `eval`,
+    /// mirroring the shell's `LayoutSource::document` (`crates/shell/src/main.rs`).
     doc: Arc<Mutex<Document>>,
     layout_root: LayoutBox,
     flat_tree: lumen_dom::FlatTree,
-    /// Persistent V8 runtime, установленный на `doc` при навигации (DEVX-5).
-    /// Переиспользуется для каждого `eval()` в рамках этой навигации.
-    /// Отсутствует в сборках без `v8-backend` — тогда `eval()` возвращает `Err`.
-    #[cfg(feature = "v8-backend")]
-    js: lumen_js::v8_runtime::V8JsRuntime,
 }
 
 /// Headless in-process сессия браузера.
 ///
 /// Запускает полный pipeline движка (HTML parse → CSS cascade → layout) без GPU.
-/// `screenshot` недоступен до реализации задачи 8A.5 (tinyskia-cpu-raster).
+/// `screenshot` рендерит через CPU-растеризатор tiny-skia (`cpu-render`, default
+/// feature этого crate) — работает без GPU-адаптера, детерминированно на всех ОС.
 ///
 /// # Пример
 /// ```rust,no_run
@@ -92,6 +89,16 @@ pub struct InProcessSession {
     /// scroll mutates only the scroll offsets in a cloned `PropertyTrees` and
     /// recommits — no relayout.
     compositor: InProcessCompositor,
+    /// Persistent V8 JS runtime bound to the current page's DOM (DEVX-5 slice 2).
+    ///
+    /// (Re-)installed against `SessionState::doc` on every `navigate()`/
+    /// `navigate_html()`, mirroring the shell's per-navigate `V8JsRuntime::new()`
+    /// and `install_dom()` (`crates/shell/src/main.rs`). Backs `click`/`type_text`
+    /// (synthetic `_lumen_dispatch_*` event calls) and `eval`. `None` before the
+    /// first successful navigation, or if V8 init/`install_dom` failed for the
+    /// current page (`click`/`type_text`/`eval` then return `Err`).
+    #[cfg(feature = "v8")]
+    js_runtime: Option<lumen_js::v8_runtime::V8JsRuntime>,
 }
 
 impl InProcessSession {
@@ -108,6 +115,8 @@ impl InProcessSession {
             active_network_requests: 0,
             pending_js_microtasks: 0,
             compositor: InProcessCompositor::new(),
+            #[cfg(feature = "v8")]
+            js_runtime: None,
         }
     }
 
@@ -124,6 +133,8 @@ impl InProcessSession {
             active_network_requests: 0,
             pending_js_microtasks: 0,
             compositor: InProcessCompositor::new(),
+            #[cfg(feature = "v8")]
+            js_runtime: None,
         }
     }
 
@@ -156,6 +167,8 @@ impl InProcessSession {
             active_network_requests: 0,
             pending_js_microtasks: 0,
             compositor: InProcessCompositor::new(),
+            #[cfg(feature = "v8")]
+            js_runtime: None,
         }
     }
 
@@ -265,37 +278,8 @@ impl InProcessSession {
         let measurer = lumen_paint::FontMeasurer::new(&font)
             .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
 
-        let (layout_root, flat_tree) = {
-            // Layout/flat-tree строятся по снимку документа до его оборачивания
-            // в Arc<Mutex<>> — единственный владелец на этот момент, лишний lock не нужен.
-            let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
-            let flat_tree = lumen_dom::build_flat_tree(&doc);
-            (layout_root, flat_tree)
-        };
-        let doc = Arc::new(Mutex::new(doc));
-
-        // DEVX-5: persistent V8 runtime installed on `doc` — shared by
-        // eval()/click()/type_text() for the lifetime of this navigation.
-        #[cfg(feature = "v8-backend")]
-        let js = {
-            use lumen_js::v8_runtime::V8JsRuntime;
-            let rt = V8JsRuntime::new().map_err(|e| Error::Other(format!("V8 init: {e}")))?;
-            rt.install_dom(
-                Arc::clone(&doc),
-                &url,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                false,
-            )
-            .map_err(|e| Error::Other(format!("install_dom: {e}")))?;
-            rt
-        };
+        let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
+        let flat_tree = lumen_dom::build_flat_tree(&doc);
 
         // Build property trees (PH1-7): four parallel trees (Transform / Scroll /
         // Effect / Clip) from the completed layout root. Committed to the in-process
@@ -314,14 +298,19 @@ impl InProcessSession {
         // current after navigation (no separate compositor tick needed).
         self.compositor.flush_pending();
 
+        let doc = Arc::new(Mutex::new(doc));
+        // DEVX-5 slice 2: (re-)install a fresh V8 runtime against this navigation's
+        // `doc`, mirroring the shell's per-navigate `V8JsRuntime::new()` +
+        // `install_dom()` (`crates/shell/src/main.rs`). Best-effort: a V8/install
+        // failure must not fail the navigation itself (matches shell), it only
+        // leaves `click`/`type_text`/`eval` returning `Err` for this page.
+        #[cfg(feature = "v8")]
+        {
+            self.js_runtime = new_v8_runtime(Arc::clone(&doc), &url);
+        }
+
         self.current_url = url;
-        self.state = Some(SessionState {
-            doc,
-            layout_root,
-            flat_tree,
-            #[cfg(feature = "v8-backend")]
-            js,
-        });
+        self.state = Some(SessionState { doc, layout_root, flat_tree });
         Ok(())
     }
 
@@ -330,6 +319,90 @@ impl InProcessSession {
         self.state.as_ref().ok_or_else(|| {
             Error::Other("сессия не инициализирована — вызовите navigate() первым".into())
         })
+    }
+
+    /// Lock `state.doc`, converting mutex poisoning into `Error::Other`
+    /// (the persistent V8 runtime holds its own clone of the same `Arc`).
+    fn lock_doc(state: &SessionState) -> Result<std::sync::MutexGuard<'_, Document>> {
+        state.doc.lock().map_err(|e| Error::Other(format!("mutex poisoned: {e}")))
+    }
+
+    /// Synthesize `mousedown` → `mouseup` → `click` on `node` at CSS viewport
+    /// coordinates `(x, y)` via the persistent V8 runtime (DEVX-5 slice 2).
+    ///
+    /// Mirrors the live shell's per-event `_lumen_dispatch_mouse_event` calls
+    /// (`handle_click_at`/`js_mouse_event`, `crates/shell/src/main.rs`), but
+    /// fires all three as one call since there's no OS event loop here to
+    /// split press/release across frames.
+    #[cfg(feature = "v8")]
+    fn dispatch_click(&self, node: NodeId, x: f32, y: f32) -> Result<()> {
+        use lumen_core::ext::JsRuntime as _;
+        let rt = self.js_runtime.as_ref().ok_or_else(|| {
+            Error::Other("click: V8 runtime не инициализирован для текущей страницы".into())
+        })?;
+        for (event_type, button, buttons) in [("mousedown", 0u8, 1u8), ("mouseup", 0u8, 0u8), ("click", 0u8, 1u8)] {
+            let script = format!(
+                "_lumen_dispatch_mouse_event({}, '{}', {}, {}, {}, {}, 0)",
+                node.index(), event_type, x as i32, y as i32, button, buttons,
+            );
+            rt.eval(&script)
+                .map_err(|e| Error::Other(format!("click: {event_type} dispatch: {e}")))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "v8"))]
+    fn dispatch_click(&self, _node: NodeId, _x: f32, _y: f32) -> Result<()> {
+        Err(Error::Other("click требует пересборку с --features v8".into()))
+    }
+
+    /// Fire `keydown` → (native `value` append) → `input` → `keyup` for each
+    /// char of `text` on `node` via the persistent V8 runtime (DEVX-5 slice 2).
+    ///
+    /// Mirrors the live shell's `inject_char` (`crates/shell/src/main.rs`) for
+    /// the event sequence, and `WinitSession::type_text` for the native
+    /// `value`-attribute mutation: a generic `KeyboardEvent` dispatch alone
+    /// doesn't insert text into an input — that's a native default action
+    /// this engine implements in Rust, not something the JS shim does.
+    #[cfg(feature = "v8")]
+    fn dispatch_type(&self, node: NodeId, text: &str) -> Result<()> {
+        use lumen_core::ext::JsRuntime as _;
+        let rt = self.js_runtime.as_ref().ok_or_else(|| {
+            Error::Other("type_text: V8 runtime не инициализирован для текущей страницы".into())
+        })?;
+        let dispatch_key = |event_type: &str, key: &str| -> Result<()> {
+            let script = format!(
+                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
+                node.index(), event_type, key, key,
+            );
+            rt.eval(&script)
+                .map(|_| ())
+                .map_err(|e| Error::Other(format!("type_text: {event_type} dispatch: {e}")))
+        };
+
+        let mut value = {
+            let state = self.state()?;
+            let doc = Self::lock_doc(state)?;
+            doc.get(node).get_attr("value").unwrap_or("").to_owned()
+        };
+        for ch in text.chars() {
+            let key = escape_js_single_quoted(ch);
+            dispatch_key("keydown", &key)?;
+            value.push(ch);
+            {
+                let state = self.state()?;
+                let mut doc = Self::lock_doc(state)?;
+                set_attr(doc.get_mut(node), "value", &value);
+            }
+            dispatch_key("input", &key)?;
+            dispatch_key("keyup", &key)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "v8"))]
+    fn dispatch_type(&self, _node: NodeId, _text: &str) -> Result<()> {
+        Err(Error::Other("type_text требует пересборку с --features v8".into()))
     }
 
     /// Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia).
@@ -403,10 +476,11 @@ impl Default for InProcessSession {
 impl BrowserSession for InProcessSession {
     // ── Ресурсы ────────────────────────────────────────────────────────────
 
-    // DEVX-5: headless MCP (`--mcp`/`--mcp-port`) needs a screenshot without a
-    // GPU adapter, so this path prefers the CPU rasterizer (tiny-skia) when
-    // `cpu-render` is compiled in; the GPU headless renderer remains the
-    // fallback for builds without it (e.g. plain `cargo test -p lumen-driver`).
+    // DEVX-5: headless MCP/CI runs have no GPU adapter, so the trait method
+    // rasterizes via the deterministic tiny-skia CPU path (`screenshot_cpu_png`,
+    // `cpu-render` — a default feature of this crate, see Cargo.toml) instead of
+    // `Renderer::new_headless` (wgpu), which fails at runtime without a GPU.
+    // `--no-default-features` builds fall back to the GPU path unchanged.
     #[cfg(feature = "cpu-render")]
     fn screenshot(&self) -> Result<Vec<u8>> {
         self.screenshot_cpu_png()
@@ -436,7 +510,7 @@ impl BrowserSession for InProcessSession {
 
     fn a11y_tree(&self) -> Result<A11yNode> {
         let state = self.state()?;
-        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let doc = Self::lock_doc(state)?;
         let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &state.flat_tree);
         Ok(ax_node_to_a11y(&ax_tree.root))
     }
@@ -455,7 +529,7 @@ impl BrowserSession for InProcessSession {
 
     fn layout_snapshot(&self) -> Result<Vec<BoxModel>> {
         let state = self.state()?;
-        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let doc = Self::lock_doc(state)?;
         let mut out = Vec::new();
         collect_boxes(&state.layout_root, &doc, &mut out);
         Ok(out)
@@ -463,7 +537,7 @@ impl BrowserSession for InProcessSession {
 
     fn computed_style(&self, selector: &str) -> Result<Option<ComputedProperties>> {
         let state = self.state()?;
-        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let doc = Self::lock_doc(state)?;
         let Some(node_id) = find_first_by_selector(&doc, selector) else {
             return Ok(None);
         };
@@ -484,7 +558,7 @@ impl BrowserSession for InProcessSession {
 
     fn computed_style_snapshot(&self, selector: &str) -> Result<Option<ComputedStyleSnapshot>> {
         let state = self.state()?;
-        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let doc = Self::lock_doc(state)?;
         Ok(computed_style_by_selector(&state.layout_root, &doc, selector))
     }
 
@@ -522,91 +596,71 @@ impl BrowserSession for InProcessSession {
         self.run_pipeline(&bytes, None, format!("file://{url}"))
     }
 
-    // DEVX-5: headless click semantics (no OS window / no JS event dispatch —
-    // that path is the live shell window). Mirrors `WinitSession::click`: a
-    // real `<a href>` follows the link, a checkbox/radio toggles `checked`.
-    // `Target::Point` has no coordinate→node hit-testing yet, so it's a
-    // harmless no-op (matches pre-DEVX-5 behavior for viewport-only callers).
     fn click(&mut self, target: &Target) -> Result<()> {
-        let (Target::Selector(_) | Target::NodeId(_)) = target else {
-            return Ok(());
+        let state = self.state()?;
+        let (node, x, y) = {
+            let doc = Self::lock_doc(state)?;
+            resolve_click_target(state, &doc, target)?
         };
-
-        let navigate_url = {
+        self.dispatch_click(node, x, y)?;
+        // Native default action for checkbox/radio activation — mirrors
+        // `WinitSession::click` and the live shell's `activate_node`
+        // (`forms::FormClickAction::ToggleCheckbox`/`ToggleRadio`): the JS
+        // click dispatch above fires listeners, but toggling `checked` on
+        // activation is this engine's native default action, not something
+        // the JS shim implements itself.
+        #[cfg(feature = "v8")]
+        {
             let state = self.state()?;
-            let mut doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
-            let id = resolve_target_node(&doc, target)?;
-
-            let node = doc.get(id);
-            let is_link = node
-                .element_name()
-                .is_some_and(|n| n.local.eq_ignore_ascii_case("a"));
-            let href = is_link.then(|| node.get_attr("href").map(str::to_owned)).flatten();
-            let input_type = node.input_type();
-
-            if let Some(href) = href
-                && is_navigable_href(&href)
-            {
-                Some(resolve_href(&self.current_url, &href))
-            } else {
-                match input_type {
-                    Some(lumen_dom::InputType::Checkbox) | Some(lumen_dom::InputType::Radio) => {
-                        let node = doc.get_mut(id);
-                        if node.get_attr("checked").is_some() {
-                            remove_attr(node, "checked");
-                        } else {
-                            set_attr(node, "checked", "checked");
-                        }
-                        None
-                    }
-                    _ => None,
+            let mut doc = Self::lock_doc(state)?;
+            let el = doc.get(node);
+            if matches!(
+                el.input_type(),
+                Some(lumen_dom::InputType::Checkbox) | Some(lumen_dom::InputType::Radio)
+            ) {
+                let el = doc.get_mut(node);
+                if el.get_attr("checked").is_some() {
+                    remove_attr(el, "checked");
+                } else {
+                    set_attr(el, "checked", "checked");
                 }
             }
-        };
-
-        if let Some(url) = navigate_url {
-            return self.navigate(&url);
         }
         Ok(())
     }
 
-    // DEVX-5: headless keystroke semantics — overwrite the DOM `value`
-    // attribute directly (no separate "clear" command, no per-char
-    // keydown/input/keyup dispatch; that's the live shell window's job).
     fn type_text(&mut self, target: &Target, text: &str) -> Result<()> {
         let state = self.state()?;
-        let mut doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
-        let id = resolve_target_node(&doc, target)?;
-
-        let node = doc.get(id);
-        let is_typeable = node
-            .element_name()
-            .is_some_and(|n| n.local.eq_ignore_ascii_case("textarea"))
-            || matches!(
-                node.input_type(),
-                Some(lumen_dom::InputType::Text)
-                    | Some(lumen_dom::InputType::Password)
-                    | Some(lumen_dom::InputType::Email)
-                    | Some(lumen_dom::InputType::Tel)
-                    | Some(lumen_dom::InputType::Url)
-                    | Some(lumen_dom::InputType::Number)
-                    | Some(lumen_dom::InputType::Search)
-            );
-        if !is_typeable {
-            return Err(Error::Other(
-                "type_text: target не является текстовым input/textarea".into(),
-            ));
-        }
-
-        let node = doc.get_mut(id);
-        set_attr(node, "value", text);
-        Ok(())
+        let node = {
+            let doc = Self::lock_doc(state)?;
+            let (node, _x, _y) = resolve_click_target(state, &doc, target)?;
+            let el = doc.get(node);
+            let is_typeable = el
+                .element_name()
+                .is_some_and(|n| n.local.eq_ignore_ascii_case("textarea"))
+                || matches!(
+                    el.input_type(),
+                    Some(lumen_dom::InputType::Text)
+                        | Some(lumen_dom::InputType::Password)
+                        | Some(lumen_dom::InputType::Email)
+                        | Some(lumen_dom::InputType::Tel)
+                        | Some(lumen_dom::InputType::Url)
+                        | Some(lumen_dom::InputType::Number)
+                        | Some(lumen_dom::InputType::Search)
+                );
+            if !is_typeable {
+                return Err(Error::Other(
+                    "type_text: target не является текстовым input/textarea".into(),
+                ));
+            }
+            node
+        };
+        self.dispatch_type(node, text)
     }
 
     fn scroll(&mut self, _target: &Target, delta: ScrollDelta) -> Result<()> {
-        // DEVX-5: wire to the existing off-main-thread compositor scroll —
-        // `_target` is unused (matches WinitSession: only page-level scroll
-        // is supported today, no per-element scroll containers).
+        // Whole-page scroll only (matches WinitSession — `_target` is unused
+        // there too): off-main-thread compositor update, no relayout.
         self.scroll_page_by(delta.x, delta.y);
         Ok(())
     }
@@ -642,29 +696,26 @@ impl BrowserSession for InProcessSession {
         }
     }
 
-    // DEVX-5: persistent V8 runtime installed on `state.js` at navigation time
-    // (see `run_pipeline`) — reused across every `eval()` call for this
-    // navigation, so JS-side DOM mutations persist between calls (unlike
-    // `WinitSession::eval`'s one-shot runtime).
-    #[cfg(feature = "v8-backend")]
+    #[cfg(feature = "v8")]
     fn eval(&self, js: &str) -> Result<String> {
         use lumen_core::ext::JsRuntime as _;
-
-        let state = self.state()?;
-        let value = state.js.eval(js).map_err(|e| Error::Other(format!("eval: {e}")))?;
+        let rt = self.js_runtime.as_ref().ok_or_else(|| {
+            Error::Other(
+                "eval: V8 runtime не инициализирован (navigate() ещё не вызывался или V8 init упал)".into(),
+            )
+        })?;
+        let value = rt.eval(js).map_err(|e| Error::Other(format!("eval: {e}")))?;
         Ok(value.to_json_string())
     }
 
-    #[cfg(not(feature = "v8-backend"))]
+    #[cfg(not(feature = "v8"))]
     fn eval(&self, _js: &str) -> Result<String> {
-        Err(Error::Other(
-            "eval требует пересборку с --features v8-backend".into(),
-        ))
+        Err(Error::Other("eval требует пересборку с --features v8".into()))
     }
 
     fn query(&self, selector: &str) -> Result<Vec<NodeRef>> {
         let state = self.state()?;
-        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let doc = Self::lock_doc(state)?;
         let ids = find_all_by_selector(&doc, selector);
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
@@ -689,7 +740,7 @@ impl BrowserSession for InProcessSession {
 
     fn layout_box_by_selector(&self, selector: &str) -> Result<Option<BoxModel>> {
         let state = self.state()?;
-        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let doc = Self::lock_doc(state)?;
         let Some(lb) = lumen_layout::find_box_by_selector(&state.layout_root, &doc, selector) else {
             return Ok(None);
         };
@@ -724,7 +775,7 @@ impl BrowserSession for InProcessSession {
 
     fn all_layout_boxes_by_selector(&self, selector: &str) -> Result<Vec<BoxModel>> {
         let state = self.state()?;
-        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let doc = Self::lock_doc(state)?;
         let boxes = lumen_layout::find_all_by_selector(&state.layout_root, &doc, selector);
         let mut out = Vec::with_capacity(boxes.len());
 
@@ -816,7 +867,6 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
     }
 
     fn click(&mut self, selector: &str) -> Result<Option<String>> {
-        // Phase 1: найти элемент, но неDispatchEvent (требует JS runtime).
         <Self as BrowserSession>::click(self, &Target::Selector(selector.to_string()))?;
         Ok(None)
     }
@@ -826,7 +876,7 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
         let selector = "input:not([type='hidden']), textarea, [contenteditable]";
         let node_id = {
             let state = self.state()?;
-            let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+            let doc = Self::lock_doc(state)?;
             find_first_by_selector(&doc, selector)
         };
         if let Some(node_id) = node_id {
@@ -930,6 +980,34 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
 }
 
 // ── Вспомогательные функции ─────────────────────────────────────────────────
+
+/// Construct and install a fresh V8 runtime against `doc` for `page_url`
+/// (DEVX-5 slice 2). Mirrors `crates/shell/src/main.rs`'s per-navigate
+/// `V8JsRuntime::new()` + `install_dom()` sequence, scoped to DOM-core only
+/// (no fetch/WebSocket/SSE/storage/service-worker providers — headless
+/// automation doesn't need them yet). Returns `None` on any failure, logging
+/// to stderr like the shell does, so a broken V8 init degrades `click`/
+/// `type_text`/`eval` to an error instead of failing navigation.
+#[cfg(feature = "v8")]
+fn new_v8_runtime(
+    doc: Arc<Mutex<Document>>,
+    page_url: &str,
+) -> Option<lumen_js::v8_runtime::V8JsRuntime> {
+    let rt = match lumen_js::v8_runtime::V8JsRuntime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("InProcessSession: V8 init failed: {e}");
+            return None;
+        }
+    };
+    if let Err(e) = rt.install_dom(
+        doc, page_url, None, None, None, None, None, None, None, None, false,
+    ) {
+        eprintln!("InProcessSession: V8 install_dom failed: {e}");
+        return None;
+    }
+    Some(rt)
+}
 
 /// Извлечь содержимое всех `<style>` блоков из документа (рекурсивный обход).
 fn extract_style_blocks(doc: &Document) -> String {
@@ -1222,23 +1300,70 @@ fn format_length_or_auto(l: &lumen_layout::LengthOrAuto) -> String {
     }
 }
 
-/// Разрешить `Target` в `NodeId` элемента (без требования layout-бокса —
-/// `Target::Point` не может быть разрешён в узел). DEVX-5: параметризована
-/// над `&Document`, а не `&SessionState`, чтобы вызываться под уже взятым
-/// локом `state.doc.lock()` (сам `Mutex` не реентерабелен).
-fn resolve_target_node(doc: &Document, target: &Target) -> Result<NodeId> {
+/// Resolve `target` to the DOM node to dispatch `click`/`type_text` events
+/// at, plus CSS viewport coordinates to report on the synthesized
+/// `MouseEvent` (`clientX`/`clientY`).
+///
+/// `Target::Point` does the coordinate → node hit-test that `WinitSession::click`
+/// explicitly defers (DEVX-5 slice 2: [`hit_test`] against the current layout
+/// tree). `Target::Selector`/`Target::NodeId` resolve directly to their own
+/// box — no re-hit-testing an already-identified element — matching
+/// `WinitSession::resolve_target_node`/`resolve_target_point`.
+fn resolve_click_target(
+    state: &SessionState,
+    doc: &Document,
+    target: &Target,
+) -> Result<(NodeId, f32, f32)> {
     match target {
-        Target::Point { x, y } => Err(Error::NotFound(format!(
-            "Target::Point({x}, {y}) не привязан к узлу DOM"
-        ))),
-        Target::Selector(sel) => find_first_by_selector(doc, sel)
-            .ok_or_else(|| Error::NotFound(format!("элемент не найден: {sel}"))),
-        Target::NodeId(raw_id) => Ok(NodeId::from_index(*raw_id as usize)),
+        Target::Point { x, y } => {
+            let hit = hit_test(Point::new(*x, *y), &state.layout_root)
+                .ok_or_else(|| Error::NotFound(format!("нет элемента в точке ({x}, {y})")))?;
+            Ok((hit.node, *x, *y))
+        }
+        Target::Selector(sel) => {
+            let id = find_first_by_selector(doc, sel).ok_or_else(|| {
+                Error::NotFound(format!("элемент не найден: {sel}"))
+            })?;
+            let lb = find_layout_box_or_ancestor(&state.layout_root, doc, id).ok_or_else(|| {
+                Error::NotFound(format!("layout-бокс не найден для: {sel}"))
+            })?;
+            Ok((id, lb.rect.x + lb.rect.width / 2.0, lb.rect.y + lb.rect.height / 2.0))
+        }
+        Target::NodeId(raw_id) => {
+            let id = NodeId::from_index(*raw_id as usize);
+            let lb = find_layout_box_or_ancestor(&state.layout_root, doc, id).ok_or_else(|| {
+                Error::NotFound(format!("layout-бокс не найден для node_id={raw_id}"))
+            })?;
+            Ok((id, lb.rect.x + lb.rect.width / 2.0, lb.rect.y + lb.rect.height / 2.0))
+        }
+    }
+}
+
+/// `find_layout_box`, falling back to the nearest ancestor's box when `id`
+/// itself has none — purely inline elements (e.g. a bare `<a>` wrapping text,
+/// with no block/replaced box of its own) don't get a dedicated `LayoutBox`,
+/// but `dispatch_click`/`dispatch_type` target the *original* node id via
+/// `_lumen_dispatch_mouse_event`/`_lumen_dispatch_key_event` regardless — the
+/// `(x, y)` returned here only becomes `clientX`/`clientY` on the synthesized
+/// event, it does not re-hit-test, so an ancestor's on-screen position is a
+/// safe stand-in.
+fn find_layout_box_or_ancestor<'a>(
+    root: &'a LayoutBox,
+    doc: &Document,
+    mut id: NodeId,
+) -> Option<&'a LayoutBox> {
+    loop {
+        if let Some(lb) = find_layout_box(root, id) {
+            return Some(lb);
+        }
+        id = doc.get(id).parent?;
     }
 }
 
 /// Записать/перезаписать значение атрибута элемента (element-only; no-op на
-/// текстовых/комментарных узлах).
+/// текстовых/комментарных узлах). Copied from `winit_session.rs` — no shared
+/// helper module exists between the two session implementations yet.
+#[cfg(feature = "v8")]
 fn set_attr(node: &mut lumen_dom::Node, name: &str, value: &str) {
     if let NodeData::Element { attrs, .. } = &mut node.data {
         if let Some(a) = attrs.iter_mut().find(|a| a.name.local.eq_ignore_ascii_case(name)) {
@@ -1252,47 +1377,30 @@ fn set_attr(node: &mut lumen_dom::Node, name: &str, value: &str) {
     }
 }
 
-/// Удалить атрибут элемента, если он присутствует.
+/// Удалить атрибут элемента, если он присутствует. Copied from
+/// `winit_session.rs` — see `set_attr` above.
+#[cfg(feature = "v8")]
 fn remove_attr(node: &mut lumen_dom::Node, name: &str) {
     if let NodeData::Element { attrs, .. } = &mut node.data {
         attrs.retain(|a| !a.name.local.eq_ignore_ascii_case(name));
     }
 }
 
-/// Упрощённое (не RFC 3986) разрешение относительного `href` против текущего
-/// URL сессии — достаточно для навигации по `<a>` в headless-автоматизации:
-/// абсолютные URL (содержат `://`) возвращаются как есть, абсолютные пути
-/// (`/foo`) наследуют scheme+host базового URL, относительные — резолвятся
-/// против директории базового URL.
-fn resolve_href(base_url: &str, href: &str) -> String {
-    if href.contains("://") {
-        return href.to_string();
+/// Escape a single character for embedding in a single-quoted JS string
+/// literal — the `_lumen_dispatch_*` call convention used throughout this
+/// module. Mirrors `escape_js_string_char` in `crates/shell/src/main.rs`,
+/// but escapes `'` instead of `"` since these call sites use single quotes.
+#[cfg(feature = "v8")]
+fn escape_js_single_quoted(ch: char) -> String {
+    match ch {
+        '\'' => "\\'".to_owned(),
+        '\\' => r"\\".to_owned(),
+        '\n' => r"\n".to_owned(),
+        '\r' => r"\r".to_owned(),
+        '\t' => r"\t".to_owned(),
+        c if (c as u32) < 0x20 || (c as u32) > 0x7E => format!("\\u{:04X}", c as u32),
+        c => c.to_string(),
     }
-    if let Some(stripped) = href.strip_prefix('/') {
-        if let Some(scheme_end) = base_url.find("://") {
-            let (scheme, rest) = base_url.split_at(scheme_end + 3);
-            if let Some(host_end) = rest.find('/') {
-                return format!("{scheme}{}/{stripped}", &rest[..host_end]);
-            }
-        }
-        return format!("file:///{stripped}");
-    }
-    match base_url.rfind('/') {
-        Some(idx) => format!("{}{}", &base_url[..=idx], href),
-        None => href.to_string(),
-    }
-}
-
-/// `href` не должен запускать навигацию: пустой, javascript:, mailto:/tel:,
-/// или чисто фрагментный (`#...`) — как в реальном браузере, эти формы не
-/// приводят к document navigation.
-fn is_navigable_href(href: &str) -> bool {
-    let h = href.trim();
-    !h.is_empty()
-        && !h.starts_with('#')
-        && !h.starts_with("javascript:")
-        && !h.starts_with("mailto:")
-        && !h.starts_with("tel:")
 }
 
 impl InProcessSession {
@@ -1307,7 +1415,7 @@ impl InProcessSession {
     /// Ошибка [`Error::NotFound`], если ни один элемент не совпал с селектором.
     pub fn computed_style_json(&self, selector: &str) -> Result<String> {
         let state = self.state()?;
-        let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let doc = Self::lock_doc(state)?;
         lumen_layout::computed_style_json_by_selector(&state.layout_root, &doc, selector)
             .ok_or_else(|| Error::NotFound(format!("элемент не найден: {selector}")))
     }
@@ -1338,7 +1446,7 @@ impl InProcessSession {
                 // (Реальная реализация через layout-change tracking — в WinitSession + shell)
                 // Сначала проверяем что элемент существует в DOM, затем report stable.
                 let state = self.state()?;
-                let doc = state.doc.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+                let doc = Self::lock_doc(state)?;
                 let ids = find_all_by_selector(&doc, selector);
                 Ok(!ids.is_empty())
             }
@@ -1822,5 +1930,95 @@ mod tests {
         assert_eq!(sess.context.rng_seed(), Some(99));
         assert_eq!(sess.fingerprint_profile(), FingerprintProfile::Strict);
         assert!(sess.context.is_fingerprint_frozen());
+    }
+
+    // ── DEVX-5 slice 2: click/type_text/eval via persistent V8 runtime ──────
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn eval_returns_json_value() {
+        let s = make_session("<html><body></body></html>");
+        assert_eq!(s.eval("1 + 1").expect("eval"), "2");
+    }
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn eval_without_navigate_errors() {
+        let s = InProcessSession::new();
+        let err = s.eval("1").expect_err("eval before navigate must fail");
+        assert!(err.to_string().contains("V8"), "unexpected error: {err}");
+    }
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn eval_can_read_dom_via_shim() {
+        let s = make_session(r#"<html><body><div id="x">hi</div></body></html>"#);
+        assert_eq!(
+            s.eval("document.getElementById('x').textContent").expect("eval"),
+            "\"hi\""
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn click_dispatches_mouse_events_to_listener() {
+        let mut s = make_session(r#"<html><body><button id="btn">Go</button></body></html>"#);
+        s.eval(
+            "document.getElementById('btn').addEventListener('click', \
+             function() { window.__clicks = (window.__clicks || 0) + 1; });",
+        )
+        .expect("register listener");
+        s.click(&Target::Selector("#btn".into())).expect("click");
+        assert_eq!(s.eval("window.__clicks").expect("eval"), "1");
+    }
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn click_point_hit_tests_layout_tree() {
+        let mut s = make_session(
+            r#"<html><body style="margin:0"><div id="box" style="width:200px;height:100px;"></div></body></html>"#,
+        );
+        s.eval(
+            "document.getElementById('box').addEventListener('click', \
+             function() { window.__hit = true; });",
+        )
+        .expect("register listener");
+        s.click(&Target::Point { x: 50.0, y: 50.0 }).expect("click point");
+        assert_eq!(s.eval("window.__hit").expect("eval"), "true");
+    }
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn click_point_outside_any_box_errors() {
+        let mut s = make_session("<html><body></body></html>");
+        let err = s
+            .click(&Target::Point { x: 9999.0, y: 9999.0 })
+            .expect_err("click on empty area must fail");
+        assert!(err.to_string().contains("нет элемента"), "unexpected error: {err}");
+    }
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn type_text_sets_value_and_dispatches_input() {
+        let mut s = make_session(r#"<html><body><input id="inp" type="text"></body></html>"#);
+        s.eval(
+            "document.getElementById('inp').addEventListener('input', \
+             function() { window.__inputs = (window.__inputs || 0) + 1; });",
+        )
+        .expect("register listener");
+        s.type_text(&Target::Selector("#inp".into()), "hi").expect("type_text");
+        assert_eq!(s.eval("document.getElementById('inp').value").expect("eval"), "\"hi\"");
+        // One 'input' event per dispatched character.
+        assert_eq!(s.eval("window.__inputs").expect("eval"), "2");
+    }
+
+    #[test]
+    #[cfg(feature = "v8")]
+    fn type_text_rejects_non_typeable_target() {
+        let mut s = make_session(r#"<html><body><div id="d">x</div></body></html>"#);
+        let err = s
+            .type_text(&Target::Selector("#d".into()), "hi")
+            .expect_err("type_text on a div must fail");
+        assert!(err.to_string().contains("не является"), "unexpected error: {err}");
     }
 }

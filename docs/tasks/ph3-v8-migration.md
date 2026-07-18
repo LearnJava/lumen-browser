@@ -345,7 +345,11 @@ ROADMAP task title and DoD only name canvas2d + webgl_canvas, and
 `OffscreenCanvas` id under v8, but `.getContext('2d')` on that offscreen
 object won't work until `offscreen_canvas.rs` gets its own V8 port (left as a
 known gap, not currently claimed by any slice — `offscreen_canvas` is not
-covered by S9/S10 either).
+covered by S9/S10 either). **Update (P1-imagebitmap, 2026-07-17): this gap is
+now closed** — `offscreen_canvas::install_offscreen_canvas_bindings_v8` ported
+all 19 natives (same `into_v8_fnN`/`rt.register_native` pattern as this
+slice's `canvas2d`/`webgl_canvas`), so `OffscreenCanvas.getContext('2d')` and
+`createImageBitmap`/`ImageBitmapRenderingContext` now work under v8 too.
 
 **Verification**: `cargo test -p lumen-js --features v8-backend` — 2399 lib
 unit tests (includes the existing rquickjs `canvas2d`/`webgl_canvas` tests,
@@ -472,9 +476,13 @@ after firing the fetch event, no manual pump, and passes — the QuickJS
 version's `flush_jobs(&rt)` step is not needed under V8.
 
 `offscreen_canvas.rs` is **not** installed inside a V8-backed dedicated
-worker thread (same known gap as S8: `offscreen_canvas.rs` has no V8 port).
-A worker script referencing `OffscreenCanvas` sees `undefined`;
-`_deserializeTransfers`'s `typeof
+worker thread — `run_worker_thread_v8` only calls the stripped-down
+`install_worker_globals_v8`, not the full `install_dom` install list.
+(Update, P1-imagebitmap 2026-07-17: `offscreen_canvas.rs` *does* now have a
+V8 port — `install_offscreen_canvas_bindings_v8`, wired into `install_dom`'s
+install list for the main page context — this note is specifically about
+*worker threads*, which still skip it.) A worker script referencing
+`OffscreenCanvas` sees `undefined`; `_deserializeTransfers`'s `typeof
 _lumen_offscreen_canvas_from_image_data !== 'undefined'` guard already
 degrades gracefully (passes the raw, non-deserialized data through) since
 that check was already in the shared/reused JS shim.
@@ -944,6 +952,51 @@ relocated. `cargo test -p lumen-js --features v8-backend document_pip` - 7/7 gre
 -p lumen-js --all-targets -- -D warnings` clean on both default and `v8-backend` features (one
 `empty_line_after_doc_comments` trigger fixed — same pattern as S12b-5/8/10/12, module doc
 converted to `//!`); `cargo check -p lumen-shell` (default) green.
+
+### S12b-14 — `inert.rs` (2026-07-18, branch p1-v8-s12b-14-inert)
+
+Fourteenth slice, same systematic selection: `comm -12` on the still-present rquickjs
+`fn install_*(…Ctx…)` sites vs the `fn install_*_v8(` sites gives the remaining candidates;
+sorted by file size, the smallest non-trap candidate is `inert.rs` (200 lines) — the known traps
+`typed_om_api.rs` (S12b-9), `serial.rs`/`scroll_snap_events.rs` (S12b-10) sit below it. `inert.rs`
+is clean by the file-stem method: **zero `dom.rs` hits** for `inert`, and its call site in
+`lib.rs`'s `QuickJsRuntime::install_dom` is a plain one-liner (no `QuickJsRuntime` `fire_*`/`take_*`
+method, unlike `scroll_snap_events`). Pure JS-shim `eval` (no native bindings), the
+`HTMLElement.prototype.inert` getter/setter (HTML LS §6.7) Phase-0 stub — stores `_inert` on the
+element instance and calls a `globalThis._lumen_set_inert(nid, bool)` no-op stub the shell will
+wire in Phase 1. Exactly the S12b-1..8 shape (own-file `mod tests`, not `dom.rs`). Deleted the
+rquickjs `install_inert_api` fn + its `use rquickjs::Ctx`; gated `INERT_SHIM` behind
+`#[cfg(feature = "v8-backend")]` (only referenced from the v8 path now, same as S12b-12/13's SHIM
+consts); no `empty_line_after_doc_comments` fix needed — the module doc was already `//!`. Ported
+all 8 tests 1:1 to `V8JsRuntime` (bare `V8JsRuntime::new()` + the same HTMLElement-stub eval +
+`install_inert_api_v8`, `with_inert_api` single-helper pattern, gated
+`#[cfg(all(test, feature = "v8-backend"))]`); dropped the call site in `lib.rs`'s
+`QuickJsRuntime::install_dom`. `cargo test -p lumen-js --features v8-backend inert` — 8/8 green;
+`cargo check -p lumen-js` on default + `v8-backend` features — green; `cargo clippy -p lumen-js
+--all-targets -- -D warnings` clean on both.
+
+### S12b-15 — `download_bindings.rs` (2026-07-18, branch p1-v8-s12b-15-download)
+
+Fifteenth slice, same systematic selection (`comm -12` on still-present rquickjs
+`fn install_*(…Ctx…)` sites vs `fn install_*_v8(` sites, sorted by file size): the smallest
+non-trap candidate is `download_bindings.rs` (202 lines) — the known traps `typed_om_api.rs`
+(S12b-9), `serial.rs`/`scroll_snap_events.rs` (S12b-10) sit below it. Clean by the file-stem
+method (**zero `dom.rs` hits** for `download`) with its own-file `mod tests`; call site in
+`lib.rs`'s `QuickJsRuntime::install_dom` is a plain one-liner (no `QuickJsRuntime`
+`fire_*`/`take_*` method). This module *does* have a native binding
+(`_lumen_network_download(url, filename)` → process-global `QUEUE` drained by the shell via
+`take_download_requests`), but the rquickjs path was a thin `Function::new` + `ctx.eval` shim
+whose V8 twin (`install_download_bindings_v8`, `into_v8_fn2` + `register_native` + the same
+`_lumen_download` convenience `eval`) already existed from the S5–S7 batch. Deleted the rquickjs
+`install_download_bindings` fn + its `use rquickjs::{Ctx, Function}`; the engine-agnostic
+`enqueue`/`take_download_requests`/`DownloadRequest`/`QUEUE` (shell-facing) stay untouched. No
+`SHIM` const to gate — the shim is inline in the eval string. Ported all 6 tests 1:1 to
+`V8JsRuntime` (bare `V8JsRuntime::new()` + `install_download_bindings_v8`, no `install_dom`
+needed since `_lumen_network_download` is a plain global; same process-global `TEST_LOCK` +
+`guard()` queue-drain pattern), gated `#[cfg(all(test, feature = "v8-backend"))]`; dropped the
+call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-js --features
+v8-backend download` — 6/6 green; `cargo check -p lumen-js` on default + `v8-backend` — green;
+`cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both.
 
 ---
 

@@ -2,12 +2,13 @@
 /// Phase 0: JS-shim without real a11y integration.
 /// `element.attachInternals()` returns an ElementInternals with a CustomStateSet,
 /// validity API (setValidity/checkValidity/reportValidity), and ARIA reflection.
-/// Native binding `_lumen_element_internals_get_states(nid)` exposes states to Rust.
-/// `CustomStateSet.add`/`delete`/`clear` reflect each active state into a
-/// `data-lumen-state-<name>` attribute on the host element (`_lumen_set_attr`/
-/// `_lumen_remove_attr`), which `PseudoClass::State` matches in the cascade
-/// (`crates/engine/layout/src/style.rs`) — same sentinel-attribute pattern as
-/// `:fullscreen`/`:modal`.
+/// `CustomStateSet.add/delete/clear` reflect each active state into a
+/// `data-lumen-state-<name>` attribute on the host element via `_lumen_set_attr`/
+/// `_lumen_remove_attr`, which `:state(<name>)` (`crates/engine/css-parser`,
+/// `crates/engine/layout/src/style.rs`) matches directly — layout never calls
+/// into the JS engine during selector matching. Native binding
+/// `_lumen_element_internals_get_states(nid)` additionally exposes the active
+/// states of a given node id back to Rust for debugging/introspection.
 use rquickjs::Ctx;
 
 /// Install ElementInternals and CustomStateSet bindings into the JS context.
@@ -31,26 +32,21 @@ const ELEMENT_INTERNALS_SHIM: &str = r#"
 
   // CustomStateSet — set-like collection of custom element states (§4.13.2)
   // Implements iterable Set-like interface: add/has/delete/clear/values/forEach.
-  // Each mutation reflects into a `data-lumen-state-<name>` sentinel attribute
-  // on the owning element so the `:state()` selector can match it in the cascade.
+  // `nid` (host element's node id) drives the `data-lumen-state-<name>` sentinel
+  // attribute the layout `:state()` matcher reads — same push-style reflection
+  // pattern as `:fullscreen`/`:modal`/`:popover-open`.
   class CustomStateSet {
-    constructor(element) {
+    constructor(nid) {
+      this._nid = nid;
       this._states = new Set();
-      this._element = element || null;
-    }
-
-    _reflect(state, active) {
-      const el = this._element;
-      if (!el || el.__nid__ === undefined || typeof _lumen_set_attr !== 'function') return;
-      const attr = 'data-lumen-state-' + state;
-      if (active) _lumen_set_attr(el.__nid__, attr, '');
-      else _lumen_remove_attr(el.__nid__, attr);
     }
 
     add(state) {
       if (typeof state !== 'string') throw new TypeError('State must be a string');
-      this._states.add(state);
-      this._reflect(state, true);
+      if (!this._states.has(state)) {
+        this._states.add(state);
+        if (this._nid !== undefined) _lumen_set_attr(this._nid, 'data-lumen-state-' + state, '');
+      }
       return this;
     }
 
@@ -59,13 +55,15 @@ const ELEMENT_INTERNALS_SHIM: &str = r#"
     }
 
     delete(state) {
-      const had = this._states.delete(state);
-      if (had) this._reflect(state, false);
-      return had;
+      const existed = this._states.delete(state);
+      if (existed && this._nid !== undefined) _lumen_remove_attr(this._nid, 'data-lumen-state-' + state);
+      return existed;
     }
 
     clear() {
-      for (const state of this._states) this._reflect(state, false);
+      if (this._nid !== undefined) {
+        for (const state of this._states) _lumen_remove_attr(this._nid, 'data-lumen-state-' + state);
+      }
       this._states.clear();
     }
 
@@ -91,7 +89,7 @@ const ELEMENT_INTERNALS_SHIM: &str = r#"
   class ElementInternals {
     constructor(element) {
       this._element = element;
-      this._states = new CustomStateSet(element);
+      this._states = new CustomStateSet(element ? element.__nid__ : undefined);
       // validity state (Phase 0: always valid until setValidity called)
       this._validityFlags = {};
       this._validationMessage = '';
@@ -199,8 +197,9 @@ const ELEMENT_INTERNALS_SHIM: &str = r#"
 
   // Native binding: returns JSON array of active states for a given node id.
   // Debugging/introspection only — the `:state()` selector itself matches the
-  // `data-lumen-state-<name>` sentinel attribute directly (see `_reflect` above),
-  // so layout never needs to call into the JS engine during style computation.
+  // `data-lumen-state-<name>` sentinel attribute directly (see the reflection
+  // in `add`/`delete`/`clear` above), so layout never needs to call into the
+  // JS engine during style computation.
   globalThis._lumen_element_internals_get_states = function _lumen_element_internals_get_states(nid) {
     // Walk registered internals by nid — Phase 0: linear scan via __nid property.
     // Phase 1: replace with a WeakMap keyed on element objects.
@@ -245,21 +244,16 @@ mod tests {
                 Element.prototype.dispatchEvent = function(ev) { return true; };
                 window.Element = Element;
 
-                // Minimal attribute-table stub for _lumen_set_attr/_lumen_remove_attr,
-                // so CustomStateSet's sentinel-attribute reflection is testable.
-                var _attrs = {};
-                window._lumen_set_attr = function(nid, name, value) { _attrs[nid + ':' + name] = value; };
-                window._lumen_remove_attr = function(nid, name) { delete _attrs[nid + ':' + name]; };
-                window._lumen_get_attr = function(nid, name) {
-                  var key = nid + ':' + name;
-                  return Object.prototype.hasOwnProperty.call(_attrs, key) ? _attrs[key] : undefined;
-                };
+                // Sentinel-attribute stubs, tracked in window.__attrs (mirrors dom.rs
+                // `_lumen_set_attr`/`_lumen_remove_attr` for the `:state()` reflection test).
+                window.__attrs = {};
+                window._lumen_set_attr = function(nid, name, value) { window.__attrs[nid + ':' + name] = value; };
+                window._lumen_remove_attr = function(nid, name) { delete window.__attrs[nid + ':' + name]; };
 
                 // Factory: element with Element prototype
-                var _nextNid = 1;
-                window.makeEl = function() {
+                window.makeEl = function(nid) {
                   var el = Object.create(Element.prototype);
-                  el.__nid__ = _nextNid++;
+                  el.__nid__ = nid;
                   el._listeners = {};
                   el.dispatchEvent = function(ev) {
                     var hs = this._listeners[ev.type] || [];
@@ -316,41 +310,15 @@ mod tests {
     }
 
     #[test]
-    fn custom_state_set_reflects_sentinel_attr_on_add_delete_clear() {
-        with_element_internals_api(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var el = makeEl();
-                    var internals = el.attachInternals();
-                    internals.states.add('open');
-                    var afterAdd = _lumen_get_attr(el.__nid__, 'data-lumen-state-open') === '';
-                    internals.states.delete('open');
-                    var afterDelete = _lumen_get_attr(el.__nid__, 'data-lumen-state-open') === undefined;
-                    internals.states.add('checked');
-                    internals.states.add('loading');
-                    internals.states.clear();
-                    var afterClear =
-                        _lumen_get_attr(el.__nid__, 'data-lumen-state-checked') === undefined &&
-                        _lumen_get_attr(el.__nid__, 'data-lumen-state-loading') === undefined;
-                    afterAdd && afterDelete && afterClear
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
     fn custom_state_set_delete_of_absent_state_does_not_touch_attr() {
         with_element_internals_api(|ctx| {
             let ok: bool = ctx
                 .eval(
                     r#"
-                    var el = makeEl();
+                    var el = makeEl(7);
                     var internals = el.attachInternals();
                     var had = internals.states.delete('never-added');
-                    !had && _lumen_get_attr(el.__nid__, 'data-lumen-state-never-added') === undefined
+                    !had && window.__attrs['7:data-lumen-state-never-added'] === undefined
                     "#,
                 )
                 .unwrap();
@@ -390,6 +358,33 @@ mod tests {
                     internals.setValidity({ customError: true }, 'oops');
                     internals.setValidity({});
                     internals.validity.valid && internals.validationMessage === ''
+                    "#,
+                )
+                .unwrap();
+            assert!(ok);
+        });
+    }
+
+    #[test]
+    fn custom_state_set_reflects_into_sentinel_attribute() {
+        // `internals.states.add/delete/clear` must push `data-lumen-state-<name>`
+        // via `_lumen_set_attr`/`_lumen_remove_attr` — the `:state(name)` layout
+        // matcher (`crates/engine/layout/src/style.rs`) reads only this attribute.
+        with_element_internals_api(|ctx| {
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var el = makeEl(42);
+                    var internals = el.attachInternals();
+                    internals.states.add('loading');
+                    var setOpen = window.__attrs['42:data-lumen-state-loading'] === '';
+                    internals.states.add('checked');
+                    internals.states.delete('loading');
+                    var removedLoading = window.__attrs['42:data-lumen-state-loading'] === undefined;
+                    var checkedStillSet = window.__attrs['42:data-lumen-state-checked'] === '';
+                    internals.states.clear();
+                    var clearedChecked = window.__attrs['42:data-lumen-state-checked'] === undefined;
+                    setOpen && removedLoading && checkedStillSet && clearedChecked
                     "#,
                 )
                 .unwrap();

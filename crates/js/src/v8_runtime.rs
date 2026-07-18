@@ -31,7 +31,7 @@ use lumen_dom::{
     DomPosition, Namespace, NodeData, NodeId, QualName, Range as DomRange, Selection,
     ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
-use lumen_layout::{matches_selector, query_all, query_all_scoped};
+use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
 use std::collections::HashMap;
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -1123,6 +1123,33 @@ impl V8JsRuntime {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 matches_selector(&doc, nid, &sel)
+            }
+        );
+        // DOM LS §4.2.6: `Element`/`DocumentFragment`/`ShadowRoot` querySelector(All)
+        // must search only the calling node's descendants, not the whole document
+        // (found while diagnosing P2-wpt S4 — `document.querySelectorAll` above was
+        // wrongly reused for these scoped call sites, so a query against a detached
+        // subtree — e.g. `testharness.js`'s `render()` template builder — always
+        // returned nothing).
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_scoped",
+            move |node_id: u32, sel: String| -> Option<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                query_all_within(&doc, nid, &sel).into_iter().next().map(|n| n.index() as u32)
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_all_scoped",
+            move |node_id: u32, sel: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                query_all_within(&doc, nid, &sel)
+                    .into_iter()
+                    .map(|n| n.index() as u32)
+                    .collect()
             }
         );
     }
@@ -3409,32 +3436,15 @@ impl V8JsRuntime {
         );
 
         // Decompress `data` using the named format.
-        // `format`: "deflate-raw", "deflate", "gzip". Returns empty Vec on error.
+        // `format`: "deflate-raw", "deflate", "gzip".
+        // Returns a status-prefixed byte array (see `crate::dom::_decompress_status_prefixed`)
+        // so the JS `DecompressionStream` shim can tell a decode error apart from a
+        // valid empty result: `out[0] == 1` → success + `out[1..]` decompressed bytes,
+        // `out[0] == 0` → corrupt/truncated/unknown-format input (shim errors the stream).
         reg!(
             "_lumen_decompress_bytes",
             |data: Vec<u8>, format: String| -> Vec<u8> {
-                use std::io::Read as _;
-                match format.as_str() {
-                    "deflate-raw" => {
-                        let mut dec = flate2::read::DeflateDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    "deflate" => {
-                        let mut dec = flate2::read::ZlibDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    "gzip" => {
-                        let mut dec = flate2::read::GzDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    _ => Vec::new(),
-                }
+                crate::dom::_decompress_status_prefixed(&data, &format)
             }
         );
     }
@@ -3652,6 +3662,10 @@ impl V8JsRuntime {
             eprintln!("v8: webgl_canvas::install_webgl_canvas_v8 failed: {e}");
         }
         install_v8!(canvas2d::install_canvas2d_bindings_v8);
+        // P1-imagebitmap: OffscreenCanvas was deferred past S8 (see the note at
+        // canvas2d.rs's transferControlToOffscreen V8 port); ported now so
+        // createImageBitmap/ImageBitmapRenderingContext work under the default engine.
+        install_v8!(offscreen_canvas::install_offscreen_canvas_bindings_v8);
 
         install_v8!(async_context::install_async_context_v8);
         install_v8!(attribution_reporting::install_attribution_reporting_api_v8);
@@ -3670,6 +3684,7 @@ impl V8JsRuntime {
         install_v8!(device_sensors::install_device_sensors_bindings_v8);
         install_v8!(digital_credentials::install_digital_credentials_api_v8);
         install_v8!(document_pip::install_document_pip_api_v8);
+        install_v8!(documentpip_bindings::install_docpip_bindings_v8);
         install_v8!(dom_parser::install_dom_parser_v8);
         install_v8!(download_bindings::install_download_bindings_v8);
         install_v8!(element_internals::install_element_internals_bindings_v8);
@@ -4650,6 +4665,36 @@ mod tests {
                 "self.__bug280_probe2 = 'hi'; \
                  typeof __bug280_probe2 !== 'undefined' && __bug280_probe2 === 'hi' \
                  && window === globalThis",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
+    }
+
+    // P3-structclone (mirrors the rquickjs `dom::tests::structured_clone_*`
+    // suite): the shared `WEB_API_SHIM` structuredClone must preserve cycles and
+    // shared references, deep-copy ArrayBuffers/typed arrays, and throw a
+    // DataCloneError DOMException for non-serializable values. V8 is the default
+    // engine (ADR-018), so this is the authoritative validation surface.
+    #[test]
+    fn structured_clone_cycles_typed_arrays_and_dataclone_error() {
+        let rt = runtime_with_dom(make_doc(), "");
+        let ok = rt
+            .eval(
+                "var o = { name: 'a' }; o.self = o; \
+                 var c = structuredClone(o); \
+                 var cyclesOk = c.self === c && c !== o && c.name === 'a'; \
+                 var shared = { v: 1 }; \
+                 var sc = structuredClone({ a: shared, b: shared }); \
+                 var sharedOk = sc.a === sc.b && sc.a !== shared && sc.a.v === 1; \
+                 var ta = new Uint16Array([10, 20, 30]); \
+                 var tc = structuredClone(ta); tc[1] = 999; \
+                 var taOk = tc instanceof Uint16Array && tc.length === 3 \
+                     && tc[0] === 10 && ta[1] === 20 && tc.buffer !== ta.buffer; \
+                 var threw = false, ename = ''; \
+                 try { structuredClone(function(){}); } \
+                 catch (e) { threw = true; ename = e.name; } \
+                 var errOk = threw && ename === 'DataCloneError'; \
+                 cyclesOk && sharedOk && taOk && errOk",
             )
             .unwrap();
         assert_eq!(ok, JsValue::Bool(true));

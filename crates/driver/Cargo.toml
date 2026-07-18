@@ -44,20 +44,29 @@ serde_json = "1.0"
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [features]
-# Deterministic CPU rasterization for snapshot tests (8A.6): forwards to
-# lumen-paint's tiny-skia path so InProcessSession can render cross-OS-identical
-# pixels without a GPU. Off by default; enable with --features cpu-render.
+# DEVX-5: InProcessSession is the backing session for headless MCP
+# (`--mcp`/`--mcp-port`, no window/GPU adapter) — its `BrowserSession::screenshot`
+# needs the CPU path by default, not opt-in, or the MCP `screenshot` tool fails
+# at runtime on any machine without a usable GPU adapter (CI, most servers).
+# `v8` is also default (slice 2): `lumen-mcp`'s standalone binary builds a plain
+# `InProcessSession::new()` with crate defaults, so `click`/`type_text`/`eval`
+# need the persistent V8 runtime on by default, not opt-in, to actually work.
+default = ["cpu-render", "v8"]
+
+# Deterministic CPU rasterization for snapshot tests (8A.6) and the default
+# headless screenshot path (DEVX-5): forwards to lumen-paint's tiny-skia path
+# so InProcessSession can render cross-OS-identical pixels without a GPU.
 cpu-render = ["lumen-paint/cpu-render"]
 
-# QuickJS runtime for JS eval in headless mode (SDC-1a).
+# QuickJS runtime for JS eval in headless mode (SDC-1a, WinitSession only).
 quickjs = ["dep:lumen-js"]
 
-# V8 runtime for persistent JS-runtime automation (DEVX-5): InProcessSession
-# installs one V8JsRuntime per navigation, shared by eval/click/type_text via
-# the same Arc<Mutex<Document>> — unlike WinitSession::eval's one-shot QuickJS
-# runtime, JS-side DOM mutations persist across calls. Mirrors the shell's `v8`
-# feature mapping (crates/shell/Cargo.toml).
-v8-backend = ["dep:lumen-js", "lumen-js/v8-backend"]
+# DEVX-5 slice 2: persistent V8 runtime for InProcessSession's click/type_text/
+# eval (ADR-018 — V8 is the default JS engine). Unlike `quickjs`'s one-shot,
+# DOM-snapshot-bound `WinitSession::eval`, this runtime is installed once per
+# `navigate()` against the same `Arc<Mutex<Document>>` the session's layout
+# reads, so JS-driven DOM mutations from dispatched events stay visible.
+v8 = ["dep:lumen-js", "lumen-js/v8-backend"]
 
 # CompareBackend integration tests (ADR-010 RB-8): enables CompareBackend + CpuBackend
 # for pixel-diff comparison between two headless backends.

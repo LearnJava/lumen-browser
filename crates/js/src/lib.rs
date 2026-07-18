@@ -28,6 +28,7 @@ pub mod payment_request;
 pub mod credentials;
 pub mod device_sensors;
 pub mod document_pip;
+pub mod documentpip_bindings;
 pub mod eye_dropper;
 pub mod dom;
 pub mod filesystem_access;
@@ -1055,12 +1056,6 @@ impl QuickJsRuntime {
                 eprintln!("BroadcastChannel bindings init failed: {}", e);
             }
 
-            // Install _lumen_network_download(url, filename) — lets page scripts
-            // and <a download> ask the shell to start a background download.
-            if let Err(e) = download_bindings::install_download_bindings(&ctx) {
-                eprintln!("Download bindings init failed: {}", e);
-            }
-
             // Install _lumen_log_network_request(method, url, status, duration_ms)
             // — lets page scripts record requests in the DevTools Network panel.
             if let Err(e) = network_log_bindings::install_network_log_bindings(&ctx) {
@@ -1285,12 +1280,6 @@ impl QuickJsRuntime {
             // element.attachInternals() + CustomStateSet, incl. :state() sentinel-attribute reflection.
             if let Err(e) = element_internals::install_element_internals_bindings(&ctx) {
                 eprintln!("ElementInternals API init failed: {}", e);
-            }
-
-            // Phase 0: HTMLElement.prototype.inert getter/setter (HTML LS §6.7).
-            // Phase 1: _lumen_set_inert native binding propagates to DOM attr + triggers style recalc.
-            if let Err(e) = inert::install_inert_api(&ctx) {
-                eprintln!("Inert API init failed: {}", e);
             }
 
             // Phase 0: navigator.presentation + PresentationRequest/Connection stubs.

@@ -3018,9 +3018,9 @@ pub struct ComputedStyle {
     /// CSS Masking L1 §4.5 — `mask-origin: border-box | padding-box | content-box`.
     /// Default `BorderBox`. Non-inherited.
     pub mask_origin: BackgroundOrigin,
-    /// CSS Masking L1 §4.6 — `mask-clip`. Same keywords as background-clip.
-    /// Default `BorderBox`. Non-inherited.
-    pub mask_clip: BackgroundClip,
+    /// CSS Masking L1 §4.6 — `mask-clip`. Superset of background-clip keywords
+    /// (`<coord-box> | no-clip`). Default `BorderBox`. Non-inherited.
+    pub mask_clip: MaskClip,
     /// CSS Masking L1 §4.7 — `mask-composite: add | subtract | intersect | exclude`.
     /// Non-inherited. Default `Add`.
     pub mask_composite: MaskComposite,
@@ -3652,6 +3652,11 @@ pub enum Appearance {
     /// `menulist-button` / `searchfield` / `textfield` / `button` и прочие
     /// platform-специфичные значения — хранятся как Compat.
     Compat,
+    /// `base-select` (HTML/CSS «Customizable Select») — `<select>` рендерится
+    /// как author-стилизуемое дерево (кнопка-триггер + `<selectedcontent>` +
+    /// `::picker(select)` со списком опций) вместо непрозрачного нативного
+    /// контрола. См. `box_tree.rs` (построение дерева) и `forms.rs` (поповер).
+    BaseSelect,
 }
 
 /// CSS Basic UI L4 §4.4 — `field-sizing`. NOT inherited. Initial: `Fixed`.
@@ -4665,6 +4670,51 @@ impl BackgroundClip {
             "padding-box" => Some(Self::PaddingBox),
             "content-box" => Some(Self::ContentBox),
             "text" => Some(Self::Text),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Masking L1 §4.6 — `mask-clip: <coord-box> | no-clip`.
+///
+/// `<coord-box>` = `content-box | padding-box | border-box | fill-box |
+/// stroke-box | view-box`. Unlike `background-clip`, `mask-clip` also accepts
+/// the SVG reference boxes and the `no-clip` keyword. For elements laid out
+/// with the CSS box model (non-SVG HTML boxes) the SVG-specific boxes fall
+/// back to their box-model equivalents (CSS Box 4 §1 "Choosing the layout
+/// box"): `fill-box` → content box, `stroke-box`/`view-box` → border box.
+/// `no-clip` disables the mask painting-area clip entirely. Non-inherited,
+/// initial `border-box`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MaskClip {
+    /// `border-box` (initial) — mask painting area is the border box.
+    #[default]
+    BorderBox,
+    /// `padding-box` — clip to the inner border edge.
+    PaddingBox,
+    /// `content-box` — clip to the content area.
+    ContentBox,
+    /// `fill-box` — object bounding box; for CSS boxes equals the content box.
+    FillBox,
+    /// `stroke-box` — stroke bounding box; for CSS boxes equals the border box.
+    StrokeBox,
+    /// `view-box` — nearest SVG viewport; for CSS boxes equals the border box.
+    ViewBox,
+    /// `no-clip` — the mask painting area is not clipped.
+    NoClip,
+}
+
+impl MaskClip {
+    /// Parses a single `mask-clip` keyword (CSS Masking L1 §4.6).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "border-box" => Some(Self::BorderBox),
+            "padding-box" => Some(Self::PaddingBox),
+            "content-box" => Some(Self::ContentBox),
+            "fill-box" => Some(Self::FillBox),
+            "stroke-box" => Some(Self::StrokeBox),
+            "view-box" => Some(Self::ViewBox),
+            "no-clip" => Some(Self::NoClip),
             _ => None,
         }
     }
@@ -5948,7 +5998,7 @@ impl ComputedStyle {
             mask_mode: MaskMode::Alpha,
             mask_position: ObjectPosition::default(),
             mask_origin: BackgroundOrigin::BorderBox,
-            mask_clip: BackgroundClip::BorderBox,
+            mask_clip: MaskClip::BorderBox,
             mask_composite: MaskComposite::Add,
             scrollbar_width: ScrollbarWidth::Auto,
             scrollbar_color: None,
@@ -6294,7 +6344,7 @@ pub fn compute_style(
         mask_mode: MaskMode::Alpha,
         mask_position: ObjectPosition::default(),
         mask_origin: BackgroundOrigin::BorderBox,
-        mask_clip: BackgroundClip::BorderBox,
+        mask_clip: MaskClip::BorderBox,
         mask_composite: MaskComposite::Add,
         // CSS Scrollbars — scrollbar-width/-color inherited;
         // scrollbar-gutter не наследуется.
@@ -6506,6 +6556,9 @@ pub fn compute_style(
     // UA stylesheet: <td>/<th> → padding: 1px (HTML Rendering §15.3.8); the
     // ancestor <table cellpadding=N> overrides it. Author `padding` wins.
     apply_ua_table_cell_padding(doc, node, &mut style);
+    // UA stylesheet (HTML Rendering §15.4.2): `[inert] { pointer-events: none; }`.
+    // Applied during the pre-cascade UA phase so author `pointer-events` wins.
+    apply_ua_inert(doc, node, &mut style);
 
     // CSS Quirks Mode — Quirks-only UA-rule для `<table>`: сбрасывает
     // font / color / text-align / white-space к initial-values, чтобы
@@ -7390,6 +7443,9 @@ fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
         PseudoElementKind::Selection => name.eq_ignore_ascii_case("selection"),
         PseudoElementKind::Placeholder => name.eq_ignore_ascii_case("placeholder"),
         PseudoElementKind::Highlight(_) => name.eq_ignore_ascii_case("highlight"),
+        PseudoElementKind::Picker(_) => name.eq_ignore_ascii_case("picker"),
+        PseudoElementKind::Checkmark => name.eq_ignore_ascii_case("checkmark"),
+        PseudoElementKind::PickerIcon => name.eq_ignore_ascii_case("picker-icon"),
         PseudoElementKind::Unknown(s) => s.eq_ignore_ascii_case(name),
     }
 }
@@ -10514,6 +10570,25 @@ fn apply_ua_table_cell_padding(doc: &Document, node: NodeId, style: &mut Compute
     style.padding_right = Length::Px(pad);
     style.padding_bottom = Length::Px(pad);
     style.padding_left = Length::Px(pad);
+}
+
+/// UA stylesheet (HTML Rendering §15.4.2): `[inert] { pointer-events: none; }`.
+///
+/// An element carrying the `inert` boolean attribute — and, because inertness is
+/// inherited down the DOM tree, every descendant of such an element — is made
+/// non-interactive. The UA origin sets `pointer-events: none` so that
+/// `ComputedStyle.pointer_events` reflects inertness (e.g. for `getComputedStyle`
+/// and cursor resolution), complementing the layout-level hit-test filter in
+/// `collect_clickable_elements` (lumen-layout `lib.rs`, see `// CSS: inert`).
+///
+/// Applied during the pre-cascade UA phase, so an author `pointer-events`
+/// declaration overrides it (UA origin has the lowest cascade priority).
+/// [`inert::is_inert`] walks the ancestor chain, so a node nested inside an
+/// inert subtree is matched even when it carries no `inert` attribute itself.
+fn apply_ua_inert(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    if crate::inert::is_inert(doc, node) {
+        style.pointer_events = PointerEvents::None;
+    }
 }
 
 /// Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
@@ -14185,6 +14260,10 @@ fn apply_declaration(
             style.appearance = match val.trim() {
                 "auto" => Appearance::Auto,
                 "none" => Appearance::None,
+                // HTML/CSS «Customizable Select»: opt into the author-styleable
+                // widget tree. `base` is the shorthand that also resets other
+                // appearance-related UA styling; treat both as `BaseSelect`.
+                "base-select" | "base" => Appearance::BaseSelect,
                 _ => Appearance::Compat,
             };
         }
@@ -14767,8 +14846,9 @@ fn apply_declaration(
             }
         }
         "mask-clip" => {
-            // CSS Masking L1 §4.6 — same keywords as background-clip.
-            if let Some(c) = BackgroundClip::parse(val.trim()) {
+            // CSS Masking L1 §4.6 — `<coord-box> | no-clip` (superset of
+            // background-clip: adds fill-box/stroke-box/view-box and no-clip).
+            if let Some(c) = MaskClip::parse(val.trim()) {
                 style.mask_clip = c;
             }
         }
@@ -21486,6 +21566,26 @@ mod tests {
 
     fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
         Color { r, g, b, a }
+    }
+
+    /// CSS Masking L1 §4.6 — `mask-clip` accepts the full `<coord-box> | no-clip`
+    /// grammar (superset of `background-clip`), unlike `BackgroundClip::parse`
+    /// which rejects the SVG boxes and `no-clip`.
+    #[test]
+    fn mask_clip_parses_full_coord_box_grammar() {
+        assert_eq!(MaskClip::parse("border-box"), Some(MaskClip::BorderBox));
+        assert_eq!(MaskClip::parse("padding-box"), Some(MaskClip::PaddingBox));
+        assert_eq!(MaskClip::parse("content-box"), Some(MaskClip::ContentBox));
+        assert_eq!(MaskClip::parse("fill-box"), Some(MaskClip::FillBox));
+        assert_eq!(MaskClip::parse("stroke-box"), Some(MaskClip::StrokeBox));
+        assert_eq!(MaskClip::parse("view-box"), Some(MaskClip::ViewBox));
+        assert_eq!(MaskClip::parse("no-clip"), Some(MaskClip::NoClip));
+        assert_eq!(MaskClip::parse("  VIEW-BOX  "), Some(MaskClip::ViewBox));
+        // `text` is a background-clip keyword only; `mask-clip` rejects it.
+        assert_eq!(MaskClip::parse("text"), None);
+        assert_eq!(MaskClip::parse("bogus"), None);
+        // Default is border-box (initial value).
+        assert_eq!(MaskClip::default(), MaskClip::BorderBox);
     }
 
     #[test]
@@ -29276,6 +29376,16 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.appearance, Appearance::None);
+    }
+
+    #[test]
+    fn appearance_base_select() {
+        let doc = lumen_html_parser::parse("<select></select>");
+        let sheet = lumen_css_parser::parse("select { appearance: base-select; }");
+        let root = ComputedStyle::root();
+        let sel = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, sel, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.appearance, Appearance::BaseSelect);
     }
 
     #[test]

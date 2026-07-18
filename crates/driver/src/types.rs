@@ -312,6 +312,8 @@ impl FingerprintProfile {
 pub enum AutomationCommand {
     /// Navigate to a URL.
     Navigate(String),
+    /// Open a new tab (it becomes active) and navigate it to a URL.
+    NewTab(String),
     /// Click at element center (resolved from Target).
     Click(Target),
     /// Type text into an input element.

@@ -6,7 +6,7 @@ headless pipeline without winit/wgpu/ffmpeg.
 ## Done
 
 - `BrowserSession` trait: 6 resources (screenshot, a11y_tree, layout_snapshot, computed_style,
-  network_log, console_log) + 6 tools (navigate, click, type_text, scroll, wait, eval, query).
+  network_log, console_log) + 8 tools (navigate, new_tab, click, type_text, scroll, wait, eval, query). `new_tab` (2026-07-17, live perf audit): `AutomationCommand::NewTab` -> shell `open_new_tab()` + `navigate_to`; trait default falls back to plain `navigate` for tab-less sessions (`InProcessSession`).
 - `InProcessSession`: full headless pipeline (encoding → HTML parse → CSS cascade → layout)
   using bundled Inter-Regular. Shares engine crates directly, no IPC.
 - Simple CSS selector engine: tag, `#id`, `.class`, `tag.class`, multi-class combinations.
@@ -60,33 +60,42 @@ headless pipeline without winit/wgpu/ffmpeg.
   fingerprint-isolation methods are local stub defaults (documented per-method) — the
   automation channel doesn't carry those commands yet.
 
-- DEVX-5: `InProcessSession::click/type_text/scroll/eval/screenshot` (cargo features
-  `v8-backend`/`cpu-render`, both on by default in `lumen-shell`) — the headless MCP
+- DEVX-5 (complete): `InProcessSession::click/type_text/scroll/eval/screenshot` (cargo features
+  `v8`/`cpu-render`, both on by default in `lumen-driver`/`lumen-shell`) — the headless MCP
   (`--mcp`/`--mcp-port`) stubs from the table above. `SessionState.doc` changed from a plain
   `Document` to `Arc<Mutex<Document>>` (`crates/driver/src/session.rs`) so it can be shared
-  with a **persistent** `lumen_js::v8_runtime::V8JsRuntime` installed via `install_dom` once
-  per `navigate()`/`run_pipeline()` call and stored on `SessionState.js` (cfg-gated on
-  `v8-backend`) — every method that previously borrowed `&state.doc` now locks the mutex
-  first. `click`/`type_text` port `WinitSession`'s DOM-level semantics verbatim (own copies of
-  `resolve_target_node`/`set_attr`/`remove_attr`/`resolve_href`/`is_navigable_href` — same
-  per-session-type duplication convention as the rest of this file, not shared with
-  `winit_session.rs`); `scroll` now calls the existing `scroll_page_by` instead of a no-op.
-  `eval(js)` is the key difference from `WinitSession::eval`'s **one-shot** runtime: because
-  `state.js` is created once and reused for every `eval()` call in the same navigation, and it
-  shares the same `Arc<Mutex<Document>>` that `click`/`type_text` mutate, a DOM mutation from
-  one `eval()` call (or a prior `click`/`type_text`) is visible to the next `eval()` call —
-  proven by `eval_mutations_persist_across_calls` in
-  `crates/driver/tests/cases/test_devx5_headless_automation.rs`. `screenshot()` is cfg-gated:
-  with `cpu-render` it calls `screenshot_cpu_png()` (no GPU adapter needed — this is what makes
-  headless MCP `screenshot` work without a window); without it, the old GPU `Renderer::new_headless`
-  path is unchanged. None of this triggers a relayout — `layout_root`/`flat_tree` stay fixed
-  from `navigate()` time, so `layout_snapshot`/`computed_style*`/`screenshot` don't reflect
-  DOM mutations made via `click`/`type_text`/`eval` (matches `WinitSession`'s existing
-  limitation; full interactive-JS-driven relayout is a separate, much larger slice).
-  `crates/shell/Cargo.toml`: `v8`/`quickjs` features now also enable
-  `lumen-driver/v8-backend`/`lumen-driver/quickjs` respectively, and `lumen-driver` always
-  gets `cpu-render` — so a plain `cargo build -p lumen-shell` (default features) ships a
-  headless MCP that Just Works.
+  with a **persistent** `lumen_js::v8_runtime::V8JsRuntime` (`js_runtime: Option<..>`, cfg-gated
+  on feature `v8`) re-installed via `install_dom` on every `navigate()`/`navigate_html()`
+  (mirrors the shell's per-navigate `V8JsRuntime::new()` + `install_dom()`,
+  `crates/shell/src/main.rs`) — every method that previously borrowed `&state.doc` now locks
+  the mutex first. `click` resolves the `Target` to a `NodeId` (`Target::Point` via
+  `lumen_paint::hit_test` against the current layout tree; `Selector`/`NodeId` resolve
+  directly) and dispatches `mousedown`→`mouseup`→`click` through `_lumen_dispatch_mouse_event`
+  eval calls. `type_text` fires per-character `keydown`→(native `value` mutation)→`input`→
+  `keyup` — the JS shim's `KeyboardEvent` dispatch alone doesn't insert text into an input, so
+  the `value` attribute is written directly between `keydown`/`input`, matching
+  `WinitSession::type_text`'s native-mutation approach (same per-session-type duplication
+  convention as the rest of this file, not shared with `winit_session.rs`). `scroll` now calls
+  the existing `scroll_page_by` instead of a no-op. `eval(js)` is the key difference from
+  `WinitSession::eval`'s **one-shot** runtime: because `state.js` is created once and reused
+  for every `eval()` call in the same navigation, and it shares the same
+  `Arc<Mutex<Document>>` that `click`/`type_text` mutate, a DOM mutation from one `eval()` call
+  (or a prior `click`/`type_text`) is visible to the next `eval()` call — proven by
+  `eval_mutations_persist_across_calls` in
+  `crates/driver/tests/cases/test_devx5_headless_automation.rs` — and returns
+  `JsValue::to_json_string()`. A V8 init/`install_dom` failure is best-effort (matches the
+  shell): navigation still succeeds, only `click`/`type_text`/`eval` return `Err` for that
+  page. `screenshot()` is cfg-gated: with `cpu-render` it calls `screenshot_cpu_png()` (no GPU
+  adapter needed — this is what makes headless MCP `screenshot` work without a window);
+  without it, the old GPU `Renderer::new_headless` path is unchanged. None of this triggers a
+  relayout — `layout_root`/`flat_tree` stay fixed from `navigate()` time, so
+  `layout_snapshot`/`computed_style*`/`screenshot` don't reflect DOM mutations made via
+  `click`/`type_text`/`eval` (matches `WinitSession`'s existing limitation; full
+  interactive-JS-driven relayout is a separate, much larger slice). `crates/shell/Cargo.toml`:
+  `v8`/`quickjs` features now also enable `lumen-driver/v8-backend`/`lumen-driver/quickjs`
+  respectively, and `lumen-driver` always gets `cpu-render` — so a plain
+  `cargo build -p lumen-shell` (default features) ships a headless MCP that Just Works.
+
 
 - DEVX-2: non-pixel golden regression layer (`crates/driver/tests/cases/test_devx2_golden.rs`),
   modeled on `graphic_tests` but asserted through `BrowserSession` (`layout_box_by_selector`,
@@ -113,8 +122,9 @@ headless pipeline without winit/wgpu/ffmpeg.
 ## Invariants
 
 - `InProcessSession` is single-threaded (`!Send`-interior `FontMeasurer` lifetime).
-- `InProcessSession::screenshot()`: with `cpu-render` (default in `lumen-shell`) calls `screenshot_cpu_png()` — deterministic, no GPU adapter needed; without it, falls back to the GPU `Renderer::new_headless` path (needs a real adapter — fine for `cargo test -p lumen-driver` with no extra features, since that path is exercised there today).
-- `InProcessSession` never opens a winit window or wgpu surface — keeps it usable in CI without GPU (with `cpu-render` on; without it, `screenshot()` still needs a wgpu adapter, see above).
+- `InProcessSession::screenshot()` (DEVX-5 slice 1) renders through the CPU tiny-skia path by default — `screenshot_cpu_png()`, deterministic, no GPU adapter needed. `cpu-render` is now a **default feature** of `lumen-driver` (was opt-in), so headless MCP (`--mcp`/`--mcp-port`) works without a GPU adapter; `--no-default-features` builds fall back to the old GPU `Renderer::new_headless` path (needs a real adapter — fine for `cargo test -p lumen-driver` with no extra features, since that path is exercised there today). `WinitSession::screenshot()` is a separate implementation and always uses the GPU path (headless-window renderer).
+- `InProcessSession::scroll()` (DEVX-5 slice 1) is wired to `scroll_page_by` — off-main-thread compositor update, no relayout; whole-page only (`Target` argument ignored, matches `WinitSession`).
+- `InProcessSession` never opens a winit window or wgpu surface, and this crate has no winit/wgpu dependency — keeps it usable in CI without GPU (with `cpu-render` on; without it, `screenshot()` still needs a wgpu adapter, see above).
 - `navigate()` clears `net_log` and `con_log` — callers must read logs before next navigate.
 - `screenshot_cpu_rgba/png` (feature `cpu-render`): renders through the deterministic tiny-skia CPU path for cross-OS pixel-identical snapshots.
 - `SessionState.doc: Arc<Mutex<Document>>` (DEVX-5) — every read/write site locks it; the lock is never held across a `navigate()`/`self.` call that could re-enter (`resolve_target_node` and friends take `&Document` directly, not `&SessionState`, so they can run under an already-held lock without deadlocking).
@@ -123,4 +133,4 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Test counts
 
-12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 5 (+2 under `--features quickjs`) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8-backend`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`.
+12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 5 (+2 under `--features quickjs`) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`.

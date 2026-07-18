@@ -1,4 +1,6 @@
-# BUG-295 — `tests/wpt/run_smoke.py` timed out after the BUG-291 fix, despite the same page reaching a genuine result over a direct BiDi probe
+# BUG-310 — `tests/wpt/run_smoke.py` timed out after the BUG-291 fix, despite the same page reaching a genuine result over a direct BiDi probe
+
+**Renumbered 2026-07-18** from `BUG-295` during the merge that reconciled two independent parallel sessions — `BUG-295` was independently assigned by another session to a different bug (six BiDi commands with no live-window effect, see [BUG-295](BUG-295-OPEN.md)); this bug kept its content but moved to the next free number.
 
 **Статус:** FIXED 2026-07-17
 **Компонент:** `tools/wptrunner/wptrunner/browsers/lumen.py` (product plugin, wrong report.js route) + `crates/shell/src/main.rs` (persistent HTTP cache poisoned automation runs)
@@ -88,7 +90,7 @@ Ran 3 checks (2 subtests, 1 tests)
 ```
 
 The harness genuinely runs and reports per-subtest PASS/FAIL — one subtest PASSes,
-one FAILs on a real engine gap ([BUG-297](BUG-297-OPEN.md), `setAttributeNS`
+one FAILs on a real engine gap ([BUG-309](BUG-309-OPEN.md), `setAttributeNS`
 unimplemented). Re-running **without** clearing the cache reproduces the identical
 genuine result (previously the second run always timed out), and the disk cache DB
 stays empty during automation runs — confirming fix #2 engages. This is exactly the

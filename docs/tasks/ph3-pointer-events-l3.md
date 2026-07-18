@@ -89,6 +89,56 @@ Events Level 3 §4.1: собирать промежуточные `pointermove`-
 - Регрессия: одиночное движение по-прежнему даёт `length === 1`
   (обновить существующий тест `dom.rs:26125`).
 
+## Progress (2026-07-17) — реализовано полностью
+
+**Обнаружено при сверке с кодом:** бриф (2026-07-05) утверждал, что каждый
+`CursorMoved` уже диспетчит одиночный `pointermove`. Это устарело — реальный
+код на момент старта задачи диспетчил `pointermove`/`mousemove` только для
+инъецированного (`InputCommand::MouseMove`, automation) пути через
+`dispatch_mouse_move`; настоящий `CursorMoved` от winit диспетчил только
+hover-переходы (`pointerover`/`pointerout`/`pointerenter`/`pointerleave`), а
+не сам факт движения. Срез 1 поэтому не просто «добавил буфер», а завёл
+первый в принципе flush непрерывного `pointermove` для реального ввода мыши.
+
+- `crates/shell/src/main.rs`: новое поле `Lumen::pending_pointer_moves:
+  Vec<(f32, f32)>` (CSS-px, хронологический порядок). `CursorMoved`-обработчик
+  кладёт в него каждый сырой сэмпл (в блоке CSS `:hover`-трекинга, после
+  панели resize/DnD/Pointer-Lock ранних `return`). Новый метод
+  `flush_pointer_moves()` — hit-test по ПОСЛЕДНЕЙ точке буфера (как
+  `dispatch_mouse_move`, включая `pointer_capture_nid()`-редирект), сериализует
+  весь буфер в JSON-массив `[[x,y],...]` и вызывает
+  `_lumen_dispatch_pointer_move_coalesced`; no-op на пустом буфере или если
+  последняя точка не попадает ни в один элемент (курсор над chrome).
+  Флашится: раз за тик в `about_to_wait` (после ожидания `pending_waits`, до
+  инъецированного input) — «раз за кадр»; и до-события в hover-переходе
+  (`pointerout`/`leave`/`over`/`enter`), `pointerdown`, `pointerup`,
+  `CursorLeft` — везде «flush перед событием», порядок сохранён.
+- `crates/js/src/dom.rs`: новая `_lumen_dispatch_pointer_move_coalesced(nid,
+  points_json, button, buttons, mod)` — строит один `PointerEvent` на точку,
+  главное событие (последняя точка) диспетчится через `_lumen_dispatch_rich`;
+  `getCoalescedEvents()` — весь список, главное событие последним (по
+  ссылке, не копия). `getPredictedEvents()` — линейная экстраполяция по
+  вектору последних двух точек (2 прогнозные точки; < 2 сэмплов → `[]`).
+  Зарегистрирована в объекте `window` рядом с сестринскими
+  `_lumen_dispatch_*`.
+- `_lumen_dispatch_pointer_event` (не-move типы: down/up/enter/leave/over/out
+  + одноразовый синтетический pointermove из pointer-lock/automation) и
+  `_lumen_dispatch_capture_event` — заглушки `[ev]`/`[]` оставлены как есть:
+  они уже были спек-корректны для одиночного/некоалесцируемого события, не
+  требовали замены (комментарии уточнены, чтобы это не читалось как TODO).
+- 3 новых JS-теста (`dom.rs`, рядом с `pointer_event_get_coalesced_events_returns_array`):
+  `pointer_move_coalesced_dispatch_single_point`,
+  `pointer_move_coalesced_dispatch_multi_point` (3 точки — коалесцированный
+  список верный по порядку, главное событие последнее по ссылке,
+  предсказанные точки соответствуют линейной экстраполяции),
+  `pointer_move_coalesced_dispatch_empty_batch_is_noop`. Все зелёные на
+  default (QuickJS) и `--features v8-backend`.
+- Существующие тесты `pointer_event_get_coalesced_events_returns_array`
+  (single-event через `_lumen_dispatch_pointer_event`) не менялись — их
+  поведение не затронуто (не регрессия). Строки `dom.rs:21554`/`26117` из
+  исходного брифа относились к File API тестам — дрейф номеров строк
+  (бриф от 2026-07-05), не Pointer Events.
+
 ## Definition of done
 - [x] Shell копит промежуточные `pointermove` и флашит покадрово
       (`pending_pointer_moves` + `flush_pointer_moves`, флаш в `about_to_wait`).
@@ -102,9 +152,10 @@ Events Level 3 §4.1: собирать промежуточные `pointermove`-
       `_lumen_dispatch_locked_mousemove`, `_lumen_dispatch_capture_event`)
       выверены: главный путь дошит, pointer-lock/capture пути оставлены
       односэмпловыми/пустыми — корректно по спеку (нет батчинга между кадрами
-      для них).
+      для них); комментарии уточнены — некоалесцируемые типы не требовали
+      замены.
 - [x] Тесты обновлены/добавлены: `pointer_event_get_coalesced_events_returns_array`
       (регрессия — одиночное событие) + новый
       `pointer_event_coalesced_events_real_batch_and_prediction` (реальный батч
-      + предсказание).
-- [x] `CAPABILITIES.md` — Pointer Events L3 🟡 → ✅.
+      + предсказание). Все зелёные на default (QuickJS) и `--features v8-backend`.
+- [x] `CAPABILITIES.md` — Pointer Events L3 🟡 → ✅ (уточнено: coalesced/predicted).

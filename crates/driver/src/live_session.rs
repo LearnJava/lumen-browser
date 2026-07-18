@@ -145,6 +145,14 @@ impl BrowserSession for LiveWindowSession {
         Ok(())
     }
 
+    fn new_tab(&mut self, url: &str) -> Result<()> {
+        self.execute(AutomationCommand::NewTab(url.to_owned()))?;
+        if let Ok(mut cur) = self.current_url.lock() {
+            *cur = url.to_owned();
+        }
+        Ok(())
+    }
+
     fn click(&mut self, target: &Target) -> Result<()> {
         self.execute(AutomationCommand::Click(target.clone()))?;
         Ok(())

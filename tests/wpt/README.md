@@ -5,24 +5,38 @@ P2-wpt (`docs/tasks/p2-wpt-integration.md`, slices S1–S8). Runs the real, unmo
 bespoke test runner. See the task doc for the full architecture and slice plan.
 
 **Status:** S1–S4 done. `tests/wpt/run_smoke.py` drives a real `lumen --bidi-port`
-through navigate + eval end to end and now reaches a genuine per-subtest PASS/FAIL
+through navigate + eval end to end and reaches a genuine per-subtest PASS/FAIL
 result (`dom/nodes/Element-hasAttribute.html`: 1/2 subtests PASS, 1 FAIL on a real,
-separate engine gap — [BUG-297](../../bugs/BUG-297-OPEN.md), `setAttributeNS`
-unimplemented). Getting here took five real engine/tooling gaps, fixed in order:
+separate engine gap — [BUG-309](../../bugs/BUG-309-OPEN.md), `setAttributeNS`
+unimplemented). Getting here took several real engine/tooling gaps, fixed in order:
 [BUG-278](../../bugs/BUG-278-FIXED.md) (HTTP client rejected `wptserve`'s
 close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
-(`document.getElementsByTagName` missing, broke `testharness.js`'s own module-level
-setup), [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't the JS engine's real
-global object, so `testharness.js`'s `expose()`-based public API was unreachable),
-[BUG-291](../../bugs/BUG-291-FIXED.md) (`Element`/`DocumentFragment`/
-`ShadowRoot.querySelector(All)` weren't scoped to the calling node, so the results
-renderer's detached-subtree build silently found nothing), and
-[BUG-295](../../bugs/BUG-295-FIXED.md) (two independent causes stacked on one TIMEOUT
-symptom: `wptrunner`'s vendored harness silently served its own generic
-`testharnessreport.js` instead of Lumen's, and Lumen's persistent on-disk HTTP cache
-replayed that wrong file across every subsequent run on `wptserve`'s fixed ports,
-regardless of later fixes). See those bug files and the task doc's S4 section for the
-full diagnosis trail (BiDi-eval-based bisection of `testharness.js`'s execution).
+(`document.getElementsByTagName` was missing entirely — broke `testharness.js`'s
+own module-level setup), [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't
+the JS engine's real global object, so `testharness.js`'s `expose()`-based public API
+was unreachable as bare identifiers), [BUG-291](../../bugs/BUG-291-FIXED.md) (DOM
+node wrappers weren't interned, breaking `===` node identity and crashing
+`testharness.js`'s built-in results renderer, `Output.show_results`),
+[BUG-296](../../bugs/BUG-296-FIXED.md) (a stale on-disk `last_session.db` — session
+restore, not a "default homepage" feature — could reopen a leftover tab and race the
+test driver's explicit `browsingContext.navigate`; `--bidi-port`/`--mcp-live-port`
+launches now skip session restore), [BUG-298](../../bugs/BUG-298-FIXED.md)
+(`Element`/`DocumentFragment`/`ShadowRoot`.querySelector(All) searched the whole
+document instead of the calling node's subtree — `Output.show_results` builds a
+detached results tree and queries into it, always getting nothing),
+[BUG-299](../../bugs/BUG-299-FIXED.md) (`Element.prototype.insertAdjacentText` was
+missing entirely, thrown from the same code path), [BUG-300](../../bugs/BUG-300-FIXED.md)
+(`browsingContext.navigate`'s `DocumentReady` wait could ACK using the *previous*
+page's stale `layout_box` before the new page had even started loading), and
+[BUG-301](../../bugs/BUG-301-FIXED.md) (`wptrunner`'s vendored harness registers its
+own static route for `/resources/testharnessreport.js`, winning over Lumen's
+vendored file that sets `window.__lumen_wpt_results` — plus a related, independently
+found persistent-on-disk-HTTP-cache angle on the same symptom, see
+[BUG-310](../../bugs/BUG-310-FIXED.md)). Together BUG-298/299/300 fully explain (and
+disprove as environment-flaky) the "`script.evaluate`-install race" theory
+previously in `CLAUDE.md` → "Known gotchas". See those bug files and the task doc's
+S4 section for the full diagnosis trail (BiDi-eval-based bisection of
+`testharness.js`'s execution).
 
 ## What's here
 
@@ -61,6 +75,25 @@ full diagnosis trail (BiDi-eval-based bisection of `testharness.js`'s execution)
   LUMEN_PROFILE=dev-release <venv>/python tests/wpt/verify_s3_bidi_session.py
   ```
 
+- `tests/wpt/verify_devx6_bidi_scenarios.py` — **ours** (DEVX-6, `ROADMAP.md`) —
+  integration scenario tests for six previously-unused BiDi commands
+  (`network.setOfflineStatus`, `network.addIntercept`+`failRequest`/
+  `continueRequest`, `browser.setTimezoneOverride`,
+  `emulation.setUserAgentOverride`) against a real spawned `lumen --bidi-port`
+  window, same raw `BidiSession` pattern as `verify_s3_bidi_session.py`
+  (not wptrunner). Checks two things per command: the protocol round-trip
+  (real verification value, catches `lumen-bidi-server` regressions) and
+  whether a live page actually observes the effect — confirmed **not wired**
+  today ([BUG-295](../../bugs/BUG-295-OPEN.md), reported as `XFAIL(BUG-295)`,
+  not a script failure). Also documents a separate, environment-dependent gap
+  found while writing it: the live window's JS runtime can fail to install at
+  all in some sessions (`SKIP(env)` — see `CLAUDE.md` "Known gotchas"). Run
+  with:
+
+  ```bash
+  LUMEN_PROFILE=dev-release <venv>/python tests/wpt/verify_devx6_bidi_scenarios.py
+  ```
+
 - `tests/wpt/run_smoke.py` — **ours** (S4) — minimal driver that calls
   `wptcommandline`/`wptrunner.run_tests` directly against the smoke test (see
   its own docstring for why this isn't `tools/wpt/wpt`). Run with:
@@ -72,7 +105,8 @@ full diagnosis trail (BiDi-eval-based bisection of `testharness.js`'s execution)
   Both scripts default to `target/<LUMEN_PROFILE>/lumen.exe` (`LUMEN_PROFILE`
   env var, default `release`), same convention as `graphic_tests/run.py`.
   `run_smoke.py` currently exits non-zero — see Status above (the one real subtest
-  FAIL, BUG-297, has no `.ini` expectation yet, so it counts as "unexpected").
+  FAIL, BUG-309, had no `.ini` expectation until 2026-07-18 — see `tests/wpt/metadata/`
+  below; curation of the full ~15–20-test subset continues).
 - `tests/wpt/config.json` — **ours** (S4) — `wptserve` config override: pins
   `browser_host` to `127.0.0.1` (the default, `web-platform.test`, needs
   `/etc/hosts` entries this task's "no live network" rule can't rely on) and

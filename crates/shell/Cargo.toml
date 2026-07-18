@@ -30,7 +30,7 @@ default = ["backend-femtovg", "backend-wgpu", "v8"]
 # rquickjs implementation is deferred to the follow-up S12b slice. Without
 # either `quickjs` or `v8` the shell falls back to `NullJsRuntime`, which
 # silently ignores all inline scripts.
-quickjs = ["dep:lumen-js", "lumen-js/webgpu", "lumen-driver/quickjs"]
+quickjs = ["dep:lumen-js", "lumen-js/webgpu"]
 
 # Enable the V8 JavaScript engine (rusty_v8), Ph3 V8 migration (docs/tasks/ph3-v8-migration.md).
 # Default engine as of the S12 cutover (ADR-018). `quickjs` and `v8` may both be
@@ -39,7 +39,7 @@ quickjs = ["dep:lumen-js", "lumen-js/webgpu", "lumen-driver/quickjs"]
 # main.rs, so the (non-default) `quickjs` feature is only useful for A/B rollback
 # testing: `cargo run -p lumen-shell --features quickjs` (with default `v8` still on,
 # quickjs wins) or `--no-default-features --features backend-femtovg,backend-wgpu,quickjs`.
-v8 = ["dep:lumen-js", "lumen-js/v8-backend", "lumen-driver/v8-backend"]
+v8 = ["dep:lumen-js", "lumen-js/v8-backend"]
 
 # femtovg rendering backend — the runtime fallback used only when the wgpu
 # probe fails to init, or via an explicit `LUMEN_BACKEND=femtovg` override

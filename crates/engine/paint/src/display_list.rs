@@ -19,10 +19,10 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
-    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind,
+    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
-    GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
+    GradientStop, ImageRendering, Isolation, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, Resize,
     ScrollbarWidth, SelectionHighlight,
@@ -563,7 +563,14 @@ pub enum DisplayCommand {
     /// и накладываются с `alpha`. Используется для `opacity != 1`. Phase 0:
     /// эмиттер не выпускает (нужен compositor с layer-pipeline-ом —
     /// roadmap-задача), renderer игнорирует.
-    PushOpacity { alpha: f32 },
+    ///
+    /// `bounds` — document-space CSS px bbox of the element this group belongs
+    /// to (same convention as [`Self::PushBlendMode`]/[`Self::PushFilter`]).
+    /// BUG-272 (bbox-layer track): backends use it to skip the whole
+    /// offscreen-composite bracket when it lands outside the viewport (same
+    /// mechanism as BUG-273 срез 1 for blend groups). `None` — the group has no
+    /// element bbox (e.g. a full-page view-transition fade) and is never culled.
+    PushOpacity { alpha: f32, bounds: Option<Rect> },
     /// Закрывает opacity-группу.
     PopOpacity,
     /// Открывает blend-группу с указанным режимом смешения
@@ -1178,6 +1185,42 @@ pub(crate) fn split_mixed_runs(text: &str) -> Vec<MixedSegment> {
     out
 }
 
+/// Per-axis tiling geometry for `background-repeat: space` /
+/// `mask-repeat: space` (CSS Backgrounds L3 §3.4, CSS Masking L1 §4.4).
+///
+/// Given the positioning-area leading edge `area_origin`, its extent `area`
+/// along the axis, the tile size `tile`, and the `position` offset `pos_off`
+/// (from the leading edge), returns `(start, step, repeat)`:
+/// * `start` — absolute coordinate of the first tile's leading edge;
+/// * `step` — distance between successive tile origins (tile size + gap);
+/// * `repeat` — whether more than one tile is laid out along the axis.
+///
+/// When two or more whole tiles fit, the first and last are pinned to the two
+/// edges and the leftover space is distributed evenly as equal gaps (the
+/// `position` offset is ignored on that axis, per spec). When at most one whole
+/// tile fits, a single tile is placed at the `position` offset and the axis does
+/// not repeat (identical to `no-repeat`).
+///
+/// Shared by every tiling path (femtovg + CPU via [`bg_tile_geometry`], and the
+/// GPU renderer's inline background/mask loops) so `space` places tiles
+/// identically everywhere.
+#[must_use]
+pub(crate) fn space_axis_geometry(
+    area_origin: f32,
+    area: f32,
+    tile: f32,
+    pos_off: f32,
+) -> (f32, f32, bool) {
+    if tile > 0.0 {
+        let n = (area / tile).floor();
+        if n >= 2.0 {
+            let gap = (area - n * tile) / (n - 1.0);
+            return (area_origin, tile + gap, true);
+        }
+    }
+    (area_origin + pos_off, tile, false)
+}
+
 /// Tile geometry for a background image from `background-size` /
 /// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
 ///
@@ -1185,11 +1228,13 @@ pub(crate) fn split_mixed_runs(text: &str) -> Vec<MixedSegment> {
 /// rasterizer derive identical placement. `img_w`/`img_h` — intrinsic image
 /// size; `oarea_*` — the `background-origin` positioning area (x/y/width/height).
 ///
-/// Returns `(tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)`:
-/// one tile's size, the top-left corner of the first tile, and the per-axis
-/// repeat flags. The caller tiles from `(tile_x_start, tile_y_start)` across the
-/// painting area, stepping by `(tile_w, tile_h)` while the corresponding repeat
-/// flag is set, clipping to the painting rect.
+/// Returns `(tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y,
+/// step_x, step_y)`: one tile's size, the top-left corner of the first tile, the
+/// per-axis repeat flags, and the per-axis step between successive tile origins.
+/// The caller tiles from `(tile_x_start, tile_y_start)` across the painting area,
+/// stepping by `(step_x, step_y)` while the corresponding repeat flag is set,
+/// clipping to the painting rect. `step_*` equals `tile_*` for every repeat mode
+/// except `space`, where it includes the inter-tile gap (CSS Backgrounds L3 §3.4).
 // BUG-235: only the femtovg window and the tiny-skia CPU snapshot tile
 // backgrounds via this helper; the wgpu renderer tiles on the GPU. Gate it to
 // its consumers so a wgpu-only build (e.g. lumen-driver default features) does
@@ -1207,7 +1252,7 @@ pub(crate) fn bg_tile_geometry(
     oarea_h: f32,
     oarea_x: f32,
     oarea_y: f32,
-) -> (f32, f32, f32, f32, bool, bool) {
+) -> (f32, f32, f32, f32, bool, bool, f32, f32) {
     let (tile_w, tile_h) = match size {
         BackgroundSize::Auto => (img_w, img_h),
         BackgroundSize::Cover => {
@@ -1270,21 +1315,40 @@ pub(crate) fn bg_tile_geometry(
     let tile_x0 = oarea_x + off_x;
     let tile_y0 = oarea_y + off_y;
 
-    let (tile_x_start, repeat_x, repeat_y) = match repeat {
-        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
-        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
-        BackgroundRepeat::RepeatY => (tile_x0, false, true),
-        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
-            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+    let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match repeat {
+        BackgroundRepeat::NoRepeat => (tile_x0, tile_w, false, tile_y0, tile_h, false),
+        BackgroundRepeat::RepeatX => (
+            tile_x0 - (off_x / tile_w).ceil() * tile_w,
+            tile_w,
+            true,
+            tile_y0,
+            tile_h,
+            false,
+        ),
+        BackgroundRepeat::RepeatY => (
+            tile_x0,
+            tile_w,
+            false,
+            tile_y0 - (off_y / tile_h).ceil() * tile_h,
+            tile_h,
+            true,
+        ),
+        BackgroundRepeat::Repeat | BackgroundRepeat::Round => (
+            tile_x0 - (off_x / tile_w).ceil() * tile_w,
+            tile_w,
+            true,
+            tile_y0 - (off_y / tile_h).ceil() * tile_h,
+            tile_h,
+            true,
+        ),
+        BackgroundRepeat::Space => {
+            let (sx, step_x, rx) = space_axis_geometry(oarea_x, oarea_w, tile_w, off_x);
+            let (sy, step_y, ry) = space_axis_geometry(oarea_y, oarea_h, tile_h, off_y);
+            (sx, step_x, rx, sy, step_y, ry)
         }
     };
-    let tile_y_start = if repeat_y {
-        tile_y0 - (off_y / tile_h).ceil() * tile_h
-    } else {
-        tile_y0
-    };
 
-    (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)
+    (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y, step_x, step_y)
 }
 
 /// Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
@@ -1527,7 +1591,12 @@ pub(crate) fn hash_command_into(
             h_f32(h, *offset);
         }
         DisplayCommand::PushClipRect { rect } => h_rect(h, rect),
-        DisplayCommand::PushOpacity { alpha } => h_f32(h, *alpha),
+        DisplayCommand::PushOpacity { alpha, bounds } => {
+            h_f32(h, *alpha);
+            if let Some(r) = bounds {
+                h_rect(h, r);
+            }
+        }
         DisplayCommand::PushTransform { matrix } => {
             for v in matrix.0 {
                 h_f32(h, v);
@@ -2637,7 +2706,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::PopClip => {
                 out.push_str("PopClip\n");
             }
-            DisplayCommand::PushOpacity { alpha } => {
+            DisplayCommand::PushOpacity { alpha, .. } => {
                 out.push_str(&format!("PushOpacity {alpha:.3}\n"));
             }
             DisplayCommand::PopOpacity => {
@@ -4014,7 +4083,25 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
         ov.and_then(|o| o.opacity).unwrap_or(s.opacity)
     };
     if effective_opacity < 1.0 {
-        pre.push(DisplayCommand::PushOpacity { alpha: effective_opacity });
+        pre.push(DisplayCommand::PushOpacity { alpha: effective_opacity, bounds: Some(b.rect) });
+        post.push(DisplayCommand::PopOpacity);
+    } else if s.isolation == Isolation::Isolate
+        && box_can_own_stacking_context(b)
+        && s.filter.is_empty()
+        && s.backdrop_filter.is_empty()
+        && s.mix_blend_mode == LayoutBlendMode::Normal
+    {
+        // CSS Compositing & Blending L1 §2.1 — `isolation: isolate` turns the
+        // element into an isolated group: descendant `mix-blend-mode`s must
+        // composite against a transparent backdrop that only contains the
+        // group's own content, never the page behind it. When any of
+        // opacity/filter/backdrop-filter/mix-blend-mode is present the element
+        // already renders through an offscreen group layer (which is isolated),
+        // so the dedicated layer is only needed when `isolate` is the sole
+        // trigger. Reuse the opacity offscreen layer at full alpha: it clears a
+        // transparent backdrop, redirects the subtree into it, then composites
+        // the result back unchanged — exactly the isolated-group semantics.
+        pre.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) });
         post.push(DisplayCommand::PopOpacity);
     }
     // Transform: animation override wins over style value.
@@ -4485,20 +4572,26 @@ fn background_color_clip(b: &LayoutBox) -> BackgroundClip {
 
 /// CSS Masking L1 §4.6 — the `mask-clip` painting area for a masked element.
 ///
-/// Returns `Some(rect)` for `padding-box` / `content-box`, which shrink the area
-/// so the masked element's painting must be clipped to it; the caller wraps the
-/// mask group in a `PushClipRect` / `PopClip` pair around this rect.
+/// Returns `Some(rect)` for the boxes that shrink the painting area below the
+/// border box (`padding-box`, `content-box`, and `fill-box` — the latter maps
+/// to the content box for CSS boxes, CSS Box 4 §1); the caller wraps the mask
+/// group in a `PushClipRect` / `PopClip` pair around this rect.
 ///
-/// Returns `None` for the default `border-box` (whose clip equals the element's
-/// border-box `b.rect` and would be a no-op scissor) and for `Text` (treated as
-/// border-box, matching `background_clip_rect`) — so unmasked-default rendering
+/// Returns `None` for the values whose painting area equals the element's
+/// border-box `b.rect` (`border-box`, plus `stroke-box`/`view-box` which fall
+/// back to the border box for CSS boxes) and for `no-clip` (painting is not
+/// clipped) — the clip would be a no-op scissor, so unmasked-default rendering
 /// stays byte-identical.
 fn mask_clip_paint_rect(b: &LayoutBox) -> Option<Rect> {
     match b.style.mask_clip {
-        BackgroundClip::PaddingBox | BackgroundClip::ContentBox => {
-            Some(background_clip_rect(b, b.style.mask_clip))
+        MaskClip::PaddingBox => Some(background_clip_rect(b, BackgroundClip::PaddingBox)),
+        // fill-box has no SVG geometry on a CSS box → object bounding box = content box.
+        MaskClip::ContentBox | MaskClip::FillBox => {
+            Some(background_clip_rect(b, BackgroundClip::ContentBox))
         }
-        BackgroundClip::BorderBox | BackgroundClip::Text => None,
+        // border-box / stroke-box / view-box all reduce to the border box for a
+        // CSS box (= `b.rect`); no-clip disables the clip. All → no-op.
+        MaskClip::BorderBox | MaskClip::StrokeBox | MaskClip::ViewBox | MaskClip::NoClip => None,
     }
 }
 
@@ -4718,18 +4811,37 @@ fn gradient_tile_rects(
     let tile_x0 = origin.x + off_x;
     let tile_y0 = origin.y + off_y;
 
-    let (tile_x_start, repeat_x, repeat_y) = match repeat {
-        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
-        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
-        BackgroundRepeat::RepeatY => (tile_x0, false, true),
-        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
-            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+    let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match repeat {
+        BackgroundRepeat::NoRepeat => (tile_x0, tile_w, false, tile_y0, tile_h, false),
+        BackgroundRepeat::RepeatX => (
+            tile_x0 - (off_x / tile_w).ceil() * tile_w,
+            tile_w,
+            true,
+            tile_y0,
+            tile_h,
+            false,
+        ),
+        BackgroundRepeat::RepeatY => (
+            tile_x0,
+            tile_w,
+            false,
+            tile_y0 - (off_y / tile_h).ceil() * tile_h,
+            tile_h,
+            true,
+        ),
+        BackgroundRepeat::Repeat | BackgroundRepeat::Round => (
+            tile_x0 - (off_x / tile_w).ceil() * tile_w,
+            tile_w,
+            true,
+            tile_y0 - (off_y / tile_h).ceil() * tile_h,
+            tile_h,
+            true,
+        ),
+        BackgroundRepeat::Space => {
+            let (sx, step_x, rx) = space_axis_geometry(origin.x, origin.width, tile_w, off_x);
+            let (sy, step_y, ry) = space_axis_geometry(origin.y, origin.height, tile_h, off_y);
+            (sx, step_x, rx, sy, step_y, ry)
         }
-    };
-    let tile_y_start = if repeat_y {
-        tile_y0 - (off_y / tile_h).ceil() * tile_h
-    } else {
-        tile_y0
     };
 
     // Cap, чтобы крошечная плитка с repeat не породила взрывное число команд.
@@ -4754,13 +4866,13 @@ fn gradient_tile_rects(
                 if !repeat_x {
                     break;
                 }
-                tx += tile_w;
+                tx += step_x;
             }
         }
         if !repeat_y {
             break;
         }
-        ty += tile_h;
+        ty += step_y;
     }
     rects
 }
@@ -7219,7 +7331,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             // CSS Color L3 §3: opacity < 1.0 creates compositing layer.
             let has_opacity = b.style.opacity < 1.0; // >0.0 already checked above
             if has_opacity {
-                out.push(DisplayCommand::PushOpacity { alpha: b.style.opacity });
+                out.push(DisplayCommand::PushOpacity { alpha: b.style.opacity, bounds: Some(b.rect) });
             }
             // CSS Transforms L1 §13: forward-матрица применяется до родителя,
             // т.е. PushTransform — ВНУТРИ opacity-layer-а. Применяется ко
@@ -8518,7 +8630,7 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
         BoxKind::Block => {
             let has_opacity = effective_opacity < 1.0;
             if has_opacity {
-                out.push(DisplayCommand::PushOpacity { alpha: effective_opacity });
+                out.push(DisplayCommand::PushOpacity { alpha: effective_opacity, bounds: Some(b.rect) });
             }
 
             // Determine effective transform: animated override wins over style.
@@ -8934,7 +9046,7 @@ mod tests {
             DisplayCommand::PopClip,
             DisplayCommand::PushTransform { matrix: Mat4::translation_2d(0.0, 0.0) },
             DisplayCommand::PopTransform,
-            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: None },
             DisplayCommand::PopOpacity,
             DisplayCommand::PopScrollLayer,
             DisplayCommand::PageBreak,
@@ -8987,7 +9099,7 @@ mod tests {
         // A 30px tile in a 100px area: round(100/30) = 3 copies, so the tile is
         // stretched to 100/3 ≈ 33.33px on both axes (no clipped partial tile).
         let pos = ObjectPosition::background_initial();
-        let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
+        let (tw, th, x0, y0, rx, ry, sx, sy) = bg_tile_geometry(
             BackgroundSize::Auto,
             &pos,
             BackgroundRepeat::Round,
@@ -9004,6 +9116,8 @@ mod tests {
         assert!((x0 - 0.0).abs() < 1e-3, "tile_x_start: {x0}");
         assert!((y0 - 0.0).abs() < 1e-3, "tile_y_start: {y0}");
         assert!(rx && ry, "round repeats on both axes");
+        // `round` steps by the rescaled tile size (no inter-tile gap).
+        assert!((sx - tw).abs() < 1e-3 && (sy - th).abs() < 1e-3, "round step == tile");
     }
 
     // `round` must NOT rescale when the tile already fits a whole number of
@@ -9026,6 +9140,39 @@ mod tests {
         // 100/25 = 4 and 100/50 = 2 are already whole → tile size preserved.
         assert!((tw - 25.0).abs() < 1e-3, "tile_w: {tw}");
         assert!((th - 50.0).abs() < 1e-3, "tile_h: {th}");
+    }
+
+    // CSS Backgrounds L3 §3.4 — `space`: whole tiles pinned to both edges with
+    // equal gaps between them, first tile at the area origin, step = tile + gap.
+    #[test]
+    fn space_axis_geometry_distributes_gaps_between_whole_tiles() {
+        // 30px tile in a 100px area starting at x=10: floor(100/30) = 3 tiles,
+        // leftover 100 - 90 = 10 split across 2 gaps → 5px each, step = 35px.
+        let (start, step, repeat) = space_axis_geometry(10.0, 100.0, 30.0, 40.0);
+        assert!((start - 10.0).abs() < 1e-3, "start pinned to origin: {start}");
+        assert!((step - 35.0).abs() < 1e-3, "step = tile + gap: {step}");
+        assert!(repeat, "≥2 tiles repeat");
+    }
+
+    // `space` with room for at most one whole tile falls back to `no-repeat`:
+    // a single tile placed at the `position` offset, no repeat.
+    #[test]
+    fn space_axis_geometry_single_tile_honors_position() {
+        // 60px tile in a 100px area: floor(100/60) = 1 → no repeat, position kept.
+        let (start, step, repeat) = space_axis_geometry(10.0, 100.0, 60.0, 25.0);
+        assert!((start - 35.0).abs() < 1e-3, "start = origin + pos_off: {start}");
+        assert!((step - 60.0).abs() < 1e-3, "step == tile: {step}");
+        assert!(!repeat, "single tile does not repeat");
+    }
+
+    // Exact fit (no leftover) → gap is zero, step equals the tile, tiles repeat.
+    #[test]
+    fn space_axis_geometry_exact_fit_has_no_gap() {
+        // 25px tile in a 100px area: 4 tiles, leftover 0 → gap 0, step 25.
+        let (start, step, repeat) = space_axis_geometry(0.0, 100.0, 25.0, 0.0);
+        assert!((start - 0.0).abs() < 1e-3, "start: {start}");
+        assert!((step - 25.0).abs() < 1e-3, "step: {step}");
+        assert!(repeat, "4 tiles repeat");
     }
 
     #[test]
@@ -11485,7 +11632,7 @@ mod tests {
 
     #[test]
     fn push_opacity_serializes_with_alpha() {
-        let dl = vec![DisplayCommand::PushOpacity { alpha: 0.5 }];
+        let dl = vec![DisplayCommand::PushOpacity { alpha: 0.5, bounds: None }];
         assert_eq!(serialize_display_list(&dl), "PushOpacity 0.500\n");
     }
 
@@ -11581,7 +11728,7 @@ mod tests {
             DisplayCommand::PushClipRect {
                 rect: Rect::new(0.0, 0.0, 100.0, 100.0),
             },
-            DisplayCommand::PushOpacity { alpha: 0.7 },
+            DisplayCommand::PushOpacity { alpha: 0.7, bounds: None },
             DisplayCommand::FillRect {
                 rect: Rect::new(10.0, 10.0, 50.0, 50.0),
                 color: Color::BLACK,
@@ -11753,7 +11900,7 @@ mod tests {
             "",
         );
         let alpha = dl.iter().find_map(|c| match c {
-            DisplayCommand::PushOpacity { alpha } => Some(*alpha),
+            DisplayCommand::PushOpacity { alpha, .. } => Some(*alpha),
             _ => None,
         });
         assert_eq!(alpha, Some(0.0), "backface-hidden rotated box must force PushOpacity 0");
@@ -11767,7 +11914,7 @@ mod tests {
             "",
         );
         assert!(
-            !dl.iter().any(|c| matches!(c, DisplayCommand::PushOpacity { alpha } if *alpha == 0.0)),
+            !dl.iter().any(|c| matches!(c, DisplayCommand::PushOpacity { alpha, .. } if *alpha == 0.0)),
             "front-facing box must not be forced to zero opacity"
         );
     }
@@ -11853,6 +12000,51 @@ mod tests {
             !dl.iter().any(|c| matches!(c, DisplayCommand::PushClipRect { .. })),
             "border-box mask-clip must not emit a PushClipRect"
         );
+    }
+
+    /// CSS Masking L1 §4.6 — `mask-clip: fill-box` on a CSS box has no SVG
+    /// geometry, so its object bounding box is the content box (CSS Box 4 §1).
+    /// It must clip the mask painting to the content-box rect, exactly like
+    /// `content-box`.
+    #[test]
+    fn ordered_mask_clip_fill_box_clips_to_content_box() {
+        let dl = build_ordered(
+            "<div class='m'></div>",
+            ".m { width: 100px; height: 100px; border: 10px solid #000; \
+             padding: 5px; background: #f00; \
+             mask-image: linear-gradient(to bottom, black, transparent); \
+             mask-clip: fill-box; }",
+        );
+        let clip_rect = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushClipRect { rect } => Some(*rect),
+                _ => None,
+            })
+            .expect("mask-clip: fill-box must emit a PushClipRect (content-box)");
+        // content-box width = border-box(130) − 2·border(10) − 2·padding(5) = 100.
+        assert_eq!(clip_rect.width, 100.0, "fill-box clip width must equal content-box width");
+        assert_eq!(clip_rect.height, 100.0, "fill-box clip height must equal content-box height");
+    }
+
+    /// CSS Masking L1 §4.6 — `stroke-box`/`view-box` fall back to the border box
+    /// for CSS boxes (= `b.rect`), and `no-clip` disables the clip. None of them
+    /// may emit an extra `PushClipRect`, matching the `border-box` no-op.
+    #[test]
+    fn ordered_mask_clip_border_equivalents_emit_no_clip() {
+        for value in ["stroke-box", "view-box", "no-clip"] {
+            let css = format!(
+                ".m {{ width: 100px; height: 100px; border: 10px solid #000; \
+                 background: #f00; \
+                 mask-image: linear-gradient(to bottom, black, transparent); \
+                 mask-clip: {value}; }}"
+            );
+            let dl = build_ordered("<div class='m'></div>", &css);
+            assert!(
+                !dl.iter().any(|c| matches!(c, DisplayCommand::PushClipRect { .. })),
+                "mask-clip: {value} must not emit a PushClipRect (border-box equivalent)"
+            );
+        }
     }
 
     /// BUG-200: under `border-collapse: collapse` a thick cell border must survive a
@@ -12147,7 +12339,7 @@ mod tests {
             .iter()
             .find(|c| matches!(c, DisplayCommand::PushOpacity { .. }))
             .unwrap();
-        if let DisplayCommand::PushOpacity { alpha } = push {
+        if let DisplayCommand::PushOpacity { alpha, .. } = push {
             assert!((alpha - 0.25).abs() < 1e-6);
         } else {
             panic!("expected PushOpacity");
@@ -13716,6 +13908,54 @@ mod tests {
     }
 
     #[test]
+    fn isolation_isolate_emits_full_alpha_group_layer() {
+        // CSS Compositing L1 §2.1 — `isolation: isolate` must open an isolated
+        // group so descendant blend modes composite against a transparent
+        // backdrop. We reuse the opacity offscreen layer at alpha 1.0.
+        let dl = build_ordered(
+            r#"<div style="background: red; isolation: isolate;">x</div>"#,
+            "",
+        );
+        let iso = count_variant(&dl, |c| {
+            matches!(c, DisplayCommand::PushOpacity { alpha, .. } if (*alpha - 1.0).abs() < 1e-6)
+        });
+        let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopOpacity));
+        assert_eq!(iso, 1, "isolate must open one full-alpha group layer");
+        assert_eq!(pops, 1, "the group layer must be balanced");
+    }
+
+    #[test]
+    fn isolation_auto_emits_no_group_layer() {
+        // The initial value `isolation: auto` never forms a group on its own.
+        let dl = build_ordered(
+            r#"<div style="background: red; isolation: auto;">x</div>"#,
+            "",
+        );
+        let opacity = count_variant(&dl, |c| matches!(c, DisplayCommand::PushOpacity { .. }));
+        assert_eq!(opacity, 0, "isolation:auto must not open an opacity group");
+    }
+
+    #[test]
+    fn isolation_with_opacity_reuses_the_opacity_layer() {
+        // When `opacity < 1` already opens an (isolated) offscreen group, the
+        // dedicated isolation layer is redundant — only the opacity layer at
+        // its real alpha should be emitted, not a second full-alpha one.
+        let dl = build_ordered(
+            r#"<div style="background: red; isolation: isolate; opacity: 0.5;">x</div>"#,
+            "",
+        );
+        let pushes: Vec<f32> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushOpacity { alpha, .. } => Some(*alpha),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pushes.len(), 1, "exactly one opacity group, got {pushes:?}");
+        assert!((pushes[0] - 0.5).abs() < 1e-6, "must keep the real opacity, got {pushes:?}");
+    }
+
+    #[test]
     fn ordered_scroll_container_emits_scrollbar() {
         // BUG-220: scroll containers painted through the ordered (stacking-
         // context) path lost their scrollbar — box_layer_ops emitted
@@ -13934,7 +14174,7 @@ mod tests {
         assert_eq!(push_count, 1, "should emit one PushOpacity for the animated node");
         assert_eq!(pop_count, 1, "PushOpacity/PopOpacity must be balanced");
 
-        if let Some(DisplayCommand::PushOpacity { alpha }) = anim_dl.iter().find(|c| matches!(c, DisplayCommand::PushOpacity { .. })) {
+        if let Some(DisplayCommand::PushOpacity { alpha, .. }) = anim_dl.iter().find(|c| matches!(c, DisplayCommand::PushOpacity { .. })) {
             assert!((*alpha - 0.5).abs() < 1e-5, "opacity should be 0.5, got {alpha}");
         }
     }
@@ -14267,7 +14507,7 @@ mod tests {
         // Сегмент внутри opacity-группы: реплей исказил бы групповую
         // композицию — план не строится.
         let content = vec![
-            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: None },
             DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 40.0, 40.0), color: red },
             DisplayCommand::PopOpacity,
         ];
@@ -16146,8 +16386,8 @@ mod tests {
             // Clip / opacity / transform.
             DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0) },
             DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 10.0, 11.0) },
-            DisplayCommand::PushOpacity { alpha: 0.5 },
-            DisplayCommand::PushOpacity { alpha: 0.5001 },
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: None },
+            DisplayCommand::PushOpacity { alpha: 0.5001, bounds: None },
             DisplayCommand::PushTransform { matrix: Mat4::IDENTITY },
             DisplayCommand::PushTransform { matrix: Mat4::translation_2d(1.0, 0.0) },
             DisplayCommand::PushTransform { matrix: Mat4::translation_2d(0.0, 1.0) },

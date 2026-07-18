@@ -64,8 +64,17 @@ brotli реализовывать в CompressionStream не нужно и зап
   что и один большой чанк.
 
 ## Definition of done
-- [ ] Round-trip тесты gzip/deflate/deflate-raw зелёные (приёмка).
-- [ ] (опц.) Битый вход в DecompressionStream → errored-стрим, а не пустой чанк.
-- [ ] `ROADMAP.md` строка исправлена (не «throw», без brotli).
-- [ ] `CAPABILITIES.md` / `subsystems/js.md` отмечают ✅.
-- [ ] Явно зафиксировано в описании коммита: brotli вне спеки Compression Streams.
+- [x] Round-trip тесты gzip/deflate/deflate-raw зелёные (приёмка).
+- [x] Битый вход в DecompressionStream → errored-стрим, а не пустой чанк (срез 3).
+- [x] `ROADMAP.md` строка исправлена (не «throw», без brotli).
+- [x] `CAPABILITIES.md` / `subsystems/js.md` отмечают ✅.
+- [x] Явно зафиксировано в описании коммита: brotli вне спеки Compression Streams.
+
+**ЗАВЕРШЕНО 2026-07-18 (P1, ветка `p1-compression-streams`).** Реализован срез 3
+(errored-стрим на битый вход) через статус-префикс в общем нативе
+`crate::dom::_decompress_status_prefixed` (оба движка делегируют в него) + обработка
+в `WEB_API_SHIM` `DecompressionStream.flush` (`controller.error(TypeError)`). Срез 2
+(инкрементальный стриминг) НЕ делался — по брифу опционален, текущая buffer-then-flush
+модель spec-конформна по результату. Добавлены тесты
+`decompression_stream_corrupt_input_errors_stream` и
+`decompression_stream_multi_chunk_matches_single_chunk`.

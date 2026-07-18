@@ -57,3 +57,5 @@ __pycache__/
 # from S5 onward are NOT covered by these patterns.
 /tests/wpt/metadata/MANIFEST.json
 /tests/wpt/metadata/.cache/
+last_session.db-shm
+last_session.db-wal

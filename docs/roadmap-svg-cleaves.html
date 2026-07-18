@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-17",
+ "generated": "2026-07-18",
  "counts": {
-  "open": 32,
-  "fixed": 236,
+  "open": 41,
+  "fixed": 241,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 268,
+ "total_bugs": 282,
  "phases": [
   {
    "id": "P0",
@@ -219,6 +219,18 @@
      "title": "CSS writing-mode: вертикальный текст (полный layout)",
      "status": "done",
      "note": "ЗАВЕРШЕНО 2026-07-16 (P1, срезы 1-5): layout (axis-swap + вертикальный inline-поток) был готов; paint — CPU-рендерер (срез 1) и wgpu-рендерер (срез 2, live default, ADR-017) поворачивают глифы, mixed-режим различает CJK-upright/латиница-повёрнута per-glyph (срез 3); BUG-264 layout-реордер закрыт (срез 4); graphic-тест 145-writing-mode.html (срез 5) вскрыл и закрыл BUG-289 (vertical InlineRun текст никогда не рисовался на реальном DOM — emit_inline_run игнорировал writing_mode); остаток — font-parity + upright per-glyph advance, KNOWN_DEBTOR BUG-290. femtovg (fallback-бэкенд) по-прежнему игнорирует text_orientation — вне скоупа. Бриф docs/tasks/ph3-writing-mode-vertical.md"
+    },
+    {
+     "id": "P3-compressionstream",
+     "title": "Compression Streams (deflate-raw/deflate/gzip)",
+     "status": "done",
+     "note": "DONE 2026-07-18 (P1, p1-compression-streams): CompressionStream/DecompressionStream реально жмут/разжимают все три формата спеки — deflate-raw/deflate/gzip (через flate2, buffer-then-flush поверх TransformStream); битый/усечённый вход в DecompressionStream переводит readable-сторону в errored (реджект reader.read()) вместо тихого пустого чанка — статус-префикс в общем нативе `_decompress_status_prefixed` отличает ошибку от валидного пустого результата. brotli в спеку Compression Streams НЕ входит (только deflate-raw/deflate/gzip) — не реализуется."
+    },
+    {
+     "id": "P3-selectmenu",
+     "title": "Кастомизируемый <select> (appearance: base-select)",
+     "status": "done",
+     "note": "DONE 2026-07-17 (p1-select-base): appearance:base-select — стилизуемое дерево <select> + author-стилизуемый picker (option), псевдо ::picker(select)/::checkmark/::picker-icon; отложены graphic-тест + полная стилизация контейнера"
     },
     {
      "id": "SDC",
@@ -752,6 +764,20 @@
          "status": "done",
          "size": "S",
          "note": "Влит в main (branch p1-v8-s12b-13-document-pip, 9fb02a37): rquickjs-путь Document Picture-in-Picture API удалён, 7 тестов (жили в dom.rs::mod tests) портированы в document_pip.rs на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-14",
+         "title": "S12b-14: HTMLElement.inert API",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-14-inert): rquickjs-путь `HTMLElement.inert` (HTML LS §6.7) удалён, INERT_SHIM гейтнут за v8-backend, 8 own-file тестов портированы на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-15",
+         "title": "S12b-15: download bindings",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-15-download): rquickjs-путь `_lumen_network_download`/`_lumen_download` (программный download-триггер) удалён, 6 own-file тестов портированы на V8JsRuntime"
         }
        ]
       }
@@ -863,8 +889,8 @@
     {
      "id": "P3-navapi",
      "title": "Navigation API + History API runtime",
-     "status": "active",
-     "note": "АКТУАЛИЗАЦИЯ 2026-07-13: Phase 1 (History API completion) СДЕЛАНА и влита в main 2026-07-02 (старая нота про «работу в ветке не на main» устарела); остаток = Phase 2 — привязка Navigation API-шима к реальному стеку навигации (navigate event, popstate-унификация, SPA URL/title без reload) — бриф docs/tasks/ph3-navigation-history-api.md §Steps Phase 2"
+     "status": "done",
+     "note": "ЗАВЕРШЕНО 2026-07-17: Phase 1 (History API) + Phase 2 (Navigation API wiring, шаги 5-10) влиты; последний остаток — cross-document unification multi-step traversal (`Lumen::navigate_by` пересекает full-document границу перед same-document destination) — закрыт `NavEntry::shift_multi_step` + `Lumen::pending_post_reload_traversal`"
     },
     {
      "id": "PH3-8",
@@ -1036,7 +1062,7 @@
      "id": "P3-structclone",
      "title": "structuredClone + Transferable objects",
      "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): structuredClone (примитивы/Map/Set/массивы/объекты) — dom.rs; дошить — Transferable (ArrayBuffer/ImageBitmap/OffscreenCanvas transfer)"
+     "note": "PARTIAL: structuredClone (примитивы/Map/Set/массивы/объекты) — dom.rs; 2026-07-18 [P1] дошиты циклические+разделяемые ссылки (memory map), BigInt, Boolean/Number/String-обёртки, ArrayBuffer+типизированные массивы/DataView (deep-copy backing buffer, общая идентичность буфера у нескольких вью), DataCloneError DOMException для функций/символов; остаётся только опция `transfer` (Transferable: ArrayBuffer/ImageBitmap/OffscreenCanvas detach)"
     },
     {
      "id": "P3-ricallback",
@@ -1060,19 +1086,13 @@
      "id": "P3-customstate",
      "title": "ElementInternals + custom element states (:state())",
      "status": "done",
-     "note": "реализовано (P1 2026-07-17): ElementInternals + CustomStateSet (element_internals.rs), CSS-селектор :state() в каскаде (style.rs, sentinel-атрибут data-lumen-state-<name>), CustomStateSet.add/delete/clear теперь реально отражают состояние в атрибут"
+     "note": "DONE 2026-07-17 (P1 + P4): ElementInternals + CustomStateSet (element_internals.rs) с реальным отражением состояния в sentinel-атрибут data-lumen-state-<name> через _lumen_set_attr/_lumen_remove_attr (CustomStateSet.add/delete/clear); CSS-селектор :state() в каскаде замкнут — матчер влит P4 (30af60e0, парсер+матчер) поверх P1-атрибута — цепочка end-to-end"
     },
     {
      "id": "P3-pointerfull",
      "title": "Pointer Events L3 (coalesced / predicted events)",
      "status": "done",
-     "note": "DONE 2026-07-17 (P1): shell буферизует CursorMoved/injected pointer-move сэмплы (`pending_pointer_moves`), флашит покадрово в `about_to_wait` (и eagerly перед pointerdown/up/enter/leave для порядка) как один coalesced `pointermove`; `_lumen_dispatch_pointer_event` строит реальный `getCoalescedEvents()` из буфера, `getPredictedEvents()` — линейная экстраполяция по последним двум сэмплам (`crates/shell/src/main.rs`, `crates/js/src/dom.rs`)"
-    },
-    {
-     "id": "P3-compressionstream",
-     "title": "Compression Streams (gzip/deflate/brotli)",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): классы CompressionStream/DecompressionStream есть, но throw для всех форматов; дошить — реальный gzip/deflate/brotli (переиспользовать декодеры lumen-network flate/brotli)"
+     "note": "DONE 2026-07-17 (P1): shell буферизует CursorMoved/injected pointer-move сэмплы (`pending_pointer_moves`), флашит покадрово в `about_to_wait` (и eagerly перед pointerdown/up/enter/leave для порядка) как один coalesced `pointermove`; `_lumen_dispatch_pointer_event`/`_lumen_dispatch_pointer_move_coalesced` строит реальный `getCoalescedEvents()` из буфера (главное событие последним), `getPredictedEvents()` — линейная экстраполяция по последним двум сэмплам (`crates/shell/src/main.rs`, `crates/js/src/dom.rs`); см. docs/tasks/ph3-pointer-events-l3.md"
     },
     {
      "id": "P3-cookiestore",
@@ -1156,13 +1176,13 @@
      "id": "P3-pip",
      "title": "Picture-in-Picture API",
      "status": "done",
-     "note": "DONE 2026-07-17 (P1): video-PiP уже имел реальное always-on-top OS-окно; дошит Document PiP — `_lumen_pip_request_window` зарегистрирован (pip_bindings.rs), `PipRequest::OpenDocument{w,h}` → `open_pip_os_document` открывает реальное sized OS floating-окно (main.rs, PipOsConfig::sized); `PictureInPictureWindow` унифицирован между video/document PiP; `_lumen_pip_deliver_resize` round-trip на resize окна (обе ветки через `__lumen_pip_active_window`). Follow-up: форвардинг DOM-контента внутрь document-PiP окна (сейчас пустой фон)"
+     "note": "DONE 2026-07-17 (P1): Element.requestPictureInPicture — реальное OS-окно (CC-7, panels/pip_os_window.rs) + доставка реального размера через `_lumen_pip_deliver_resize` на открытие и на `WindowEvent::Resized` (было (0,0)-заглушкой, `resize`-событие никогда не летело); `PictureInPictureWindow` унифицирован между video/document PiP. Document PiP срез 1 (ветка p1-docpip-os-window): реальное always-on-top OS-окно (panels/doc_pip_os_window.rs, `_lumen_docpip_request_window`/`_lumen_docpip_close`, зеркалит CC-7) + реальный размер через `_lumen_docpip_deliver_resize`/`_lumen_docpip_deliver_close`. Document PiP срез 2 (ветка p1-docpip-content): `.document` перестал быть JS-only mock-объектом — `pipWindow.document.body.appendChild(el)` перемещает настоящий DOM-узел в скрытый `<div>`-контейнер (реальный DOM move, узел покидает прежнего родителя), каждая мутация сериализует контейнер (`innerHTML`) и шлёт в шелл через `_lumen_docpip_set_content_html`; `Lumen::render_doc_pip_os` парсит разметку `lumen_html_parser::parse`, гоняет `lumen_layout::layout` + `paint_ordered` в размер плавающего окна и красит поверх фона. Document PiP срез 3 (ветка p1-docpip-authorcss): `Lumen::render_doc_pip_os` кладёт перемещённое поддерево против `self.layout_source.stylesheet` (реальный авторский stylesheet главной страницы) вместо пустого — CSS-каскад перемещённого узла теперь подхватывается. Известные ограничения: один и тот же `Document`, что и у главной страницы (нет независимого per-PiP-window документа), картинки внутри поддерева не рисуются (у окна свой image-кэш) — дошить в следующем срезе"
     },
     {
      "id": "P3-imagebitmap",
      "title": "createImageBitmap + ImageBitmapRenderingContext",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): createImageBitmap(ImageData) + transferToImageBitmap (offscreen_canvas.rs); дошить — ImageBitmapRenderingContext (bitmaprenderer)"
+     "status": "done",
+     "note": "DONE 2026-07-17 (P1-imagebitmap): createImageBitmap (ImageData/OffscreenCanvas/`<img>`/Blob via lumen_image::decode) + ImageBitmapRenderingContext (bitmaprenderer, transferFromImageBitmap) для обоих движков (QuickJS и V8 — offscreen_canvas.rs V8-портирован); sx/sy/sw/sh crop; тест 146"
     },
     {
      "id": "P3-dialog",
@@ -1175,12 +1195,6 @@
      "title": "Popover API (атрибут popover + ::backdrop)",
      "status": "done",
      "note": "реализовано (сверка с кодом 2026-07-02): Popover API showPopover/hidePopover/togglePopover + :popover-open — dom.rs + parser"
-    },
-    {
-     "id": "P3-selectmenu",
-     "title": "Кастомизируемый <select> (appearance: base-select)",
-     "status": "planned",
-     "note": "OPEN (сверка с кодом 2026-07-02, отдан P4): кастомный <select> appearance:base-select — CSS есть, HTMLSelectMenu нет"
     },
     {
      "id": "P3-lazyembed",
@@ -1425,7 +1439,7 @@
     {
      "id": "DEVX",
      "title": "DEVX: dev-tooling на готовых поверхностях браузера",
-     "status": "active",
+     "status": "done",
      "note": "Дорожка dev-tooling (владелец — P2): задействовать уже существующие automation/introspection-поверхности браузера для ускорения разработки. Полный каталог поверхностей и «что когда применять» — `docs/automation.md` (аудит 2026-07-16): MCP tools/resources, BiDi-команды, driver-API, `--deterministic`, `LUMEN_NO_*` paint-флаги — почти всё не задействовано тулингом",
      "tasks": [
       {
@@ -1461,17 +1475,84 @@
       },
       {
        "id": "DEVX-5",
-       "title": "DEVX-5: headless MCP/InProcessSession — сняты заглушки",
+       "title": "DEVX-5: headless MCP/InProcessSession — снять заглушки",
        "status": "done",
        "size": "L",
-       "note": "DONE 2026-07-16: `InProcessSession` (crates/driver) — `click`/`type_text`/`scroll`/`eval`/`screenshot` сняты с заглушек. `SessionState.doc` стал `Arc<Mutex<Document>>`, персистентный `V8JsRuntime` (feature `v8-backend`) ставится на `navigate()` через `install_dom` и переживает несколько `eval()` в рамках одной навигации (в отличие от one-shot рантайма `WinitSession::eval`) — JS-мутации DOM видны последующим `eval`/`click`/`type_text`. `screenshot` идёт через CPU-растеризатор (`cpu-render`, tiny-skia), без GPU-адаптера. `click`/`type_text` повторяют DOM-семантику `WinitSession` (переход по `<a href>`, тоггл checkbox/radio, запись `value`); `scroll` подключён к существующему off-main-thread compositor scroll. `lumen-shell`: фичи `v8`/`quickjs` теперь пробрасывают `lumen-driver/v8-backend`/`lumen-driver/quickjs`, `lumen-driver` всегда собирается с `cpu-render` — headless `--mcp`/`--mcp-port` работает из коробки без доп. флагов. 9 новых тестов в `test_devx5_headless_automation.rs`"
+       "note": "Срез 1 DONE 2026-07-16/17: `InProcessSession` (crates/driver) — `click`/`type_text`/`scroll`/`eval`/`screenshot` сняты с заглушек; `scroll` подключён к существующему `scroll_page_by` (off-main-thread, без релейаута); `screenshot` рендерит через CPU tiny-skia путь (`cpu-render` стал default-фичей `lumen-driver` вместо opt-in) — работает без GPU-адаптера, детерминированно на всех ОС; `click`/`type_text` изначально повторяли DOM-семантику `WinitSession` (переход по `<a href>`, тоггл checkbox/radio, запись `value`). Срез 2 DONE 2026-07-17: `SessionState::doc` стал `Arc<Mutex<Document>>`, разделяемым с персистентным V8-рантаймом (feature `v8`, теперь тоже default), переустанавливаемым на каждый `navigate()` (паттерн `V8JsRuntime::new()`+`install_dom()` из `crates/shell/src/main.rs`); `click` — hit-test (`lumen_paint::hit_test`) + `_lumen_dispatch_mouse_event` (mousedown/mouseup/click); `type_text` — посимвольные keydown/input/keyup + нативная мутация `value`; `eval` — JSON значение через `JsValue::to_json_string`. DEVX-5 завершена."
       },
       {
        "id": "DEVX-6",
        "title": "DEVX-6: BiDi-сценарии offline/intercept/timezone/UA",
+       "status": "done",
+       "size": "M",
+       "note": "DONE 2026-07-17: `tests/wpt/verify_devx6_bidi_scenarios.py` (raw `BidiSession`, same pattern as `verify_s3_bidi_session.py`) drives a real spawned `lumen --bidi-port` window and checks two things per command — protocol round-trip (ACK/error shape) and live-page effect (fetch blocked, `Intl` timezone shift, `navigator.userAgent` shift). All six protocol round-trips pass; all four live-effect checks confirmed **not wired** (none of `network.setOfflineStatus`/`addIntercept`/`continueRequest`/`failRequest`, `browser.setTimezoneOverride`, `emulation.setUserAgentOverride` touch `state.live` — filed as [BUG-295](../bugs/BUG-295-OPEN.md) with full diagnosis; wiring them is real engine/shell feature work, out of this Python-tooling task's scope). Also found and handled a separate, environment-dependent gap: the live window's JS runtime can fail to finish installing at all in some working sessions (`script.evaluate` stuck on \"JS context not available\") — reported as `SKIP(env)`, documented in CLAUDE.md Known gotchas, not filed as part of BUG-295 (reproduced independent of these six commands).",
+       "bugs": [
+        "BUG-295"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "PERF",
+     "title": "PERF: перф-наблюдаемость глазами пользователя",
+     "status": "active",
+     "note": "Дорожка перф-наблюдаемости (тулинг/бенчи — P2, движковые правки по находкам — P1): метрики, которые чувствует пользователь, поверх уже существующих поверхностей (`docs/automation.md`: LUMEN_FRAME_LOG, LUMEN_PROFILE_TREE, LUMEN_MEM_REPORT, MCP resources, crates/bench, scripts/scroll_perf.py, scripts/bench_chromium.py). Контекст: аудит 14 реальных сайтов 2026-07 нашёл два главных тормоза (CPU-растеризация; последовательный fetch подресурсов в UI-потоке) вручную — цель дорожки находить такое автоматически и ловить перф-регрессии так же, как graphic_tests ловят пиксельные. Рекомендуемый порядок: PERF-1 (самый большой рычаг) → PERF-2/3/4 (метрики) → PERF-5/6 → PERF-7 (гейт поверх всего)",
+     "tasks": [
+      {
+       "id": "PERF-1",
+       "title": "PERF-1: --trace-nav — waterfall загрузки страницы",
        "status": "planned",
        "size": "M",
-       "note": "Интеграционные сценарные тесты на неиспользуемых BiDi-рычагах (`--bidi-port`, живое окно): `network.setOfflineStatus` (offline-поведение), `network.addIntercept`+`failRequest`/`continueRequest` (деградация при падении ресурса), `browser.setTimezoneOverride` и `emulation.setUserAgentOverride` (Date/navigator.userAgent на странице). Python-тесты рядом с tests/wpt-тулингом; заодно проверяет сами BiDi-команды end-to-end"
+       "note": "`lumen --trace-nav out.json <url>`: сквозная временная шкала одной навигации в Chrome-trace-формате (открывается в Perfetto / chrome://tracing / edge://tracing — свой UI не нужен): DNS/TLS/TTFB → парсинг HTML → fetch каждого подресурса (очередь/старт/длительность/размер) → cascade → layout → paint → first paint → interactive. Базис уже есть: LUMEN_PROFILE_TREE даёт дерево layout/cascade, `resource://network` даёт лог запросов — нет только единой шкалы одной загрузки. Оба известных тормоза (CPU-растр, последовательный fetch) были бы видны на этой шкале сразу — это инструмент поиска СЛЕДУЮЩЕГО тормоза"
+      },
+      {
+       "id": "PERF-2",
+       "title": "PERF-2: user-centric метрики на корпусе реальных сайтов",
+       "status": "planned",
+       "size": "M",
+       "note": "User-centric метрики по образцу FCP/LCP/TTI + total blocking time, замеряемые на фиксированном корпусе реальных сайтов (14 сайтов аудита 2026-07 + tier-список) с журналом «метрика ↔ коммит» — по модели docs/build-speed.md (протокол замера + журнал). JS-каркас частично готов (performance.now, long-animation-frames, soft-navigation в crates/js). Внешний ориентир: scripts/bench_chromium.py на том же корпусе — отчёт «где и насколько мы медленнее Chromium»"
+      },
+      {
+       "id": "PERF-3",
+       "title": "PERF-3: input latency + p95/p99 плавность кадра",
+       "status": "planned",
+       "size": "M",
+       "note": "Латентность ввода: клик/клавиша → hit-test → dispatch → видимый repaint, конец-в-конец. Плавность скролла как p95/p99 frame time + счётчик дропнутых кадров — пользователь замечает хвост распределения, не среднее. Базис: scripts/scroll_perf.py + LUMEN_FRAME_LOG=1 покрывают скролл средними; добавить перцентильный отчёт и покрыть typing/click (MCP `click`/`type` уже умеют синтетический ввод)"
+      },
+      {
+       "id": "PERF-4",
+       "title": "PERF-4: бенч холодного/тёплого старта",
+       "status": "planned",
+       "size": "S",
+       "note": "Холодный/тёплый старт: запуск exe → окно на экране → первая страница готова (document_ready). Замер в crates/bench + журнал по коммитам. Дёшево мерить, заметно пользователю при каждом запуске, легко регрессирует незаметно (рост числа инициализаций при старте)"
+      },
+      {
+       "id": "PERF-5",
+       "title": "PERF-5: память — постоянная метрика с разбивкой",
+       "status": "planned",
+       "size": "M",
+       "note": "Память как временной ряд, а не разовый дамп: LUMEN_MEM_REPORT (временная инструментация из BUG-272) → постоянная метрика: плато после загрузки N вкладок, рост при длинной сессии (leak-детектор), разбивка Rust-heap / GPU / C-heap. Мотивация: неатрибуцированное RAM-плато ~850МБ в ветке exp-wgpu-only — прямое следствие отсутствия такой разбивки; см. также reference_memory_diagnosis_toolkit"
+      },
+      {
+       "id": "PERF-6",
+       "title": "PERF-6: локальный журнал здоровья сессии",
+       "status": "planned",
+       "size": "M",
+       "note": "Локальный privacy-first «журнал здоровья сессии» (ничего не покидает машину — принцип privacy.md): паники/крэши с бэктрейсом, страницы с console.error, сайты со сломанным рендером/белым экраном; расширение существующего --activity-log. Выход: приоритизация P3-багфиксов по частоте встречаемости в реальном браузинге, а не по случайным находкам"
+      },
+      {
+       "id": "PERF-7",
+       "title": "PERF-7: ночной перф-гейт на новых метриках",
+       "status": "planned",
+       "size": "S",
+       "note": "Регрессионный перф-гейт поверх PERF-2/3/4/5: ночной (или пред-мержевый для тяжёлых веток) прогон корпуса, запись метрик в журнал, пороги в crates/bench/src/ci_gate.rs (механизм гейта уже существует — расширить новыми метриками). Аналог храповика KNOWN_DEBTORS, но для миллисекунд и мегабайт"
+      },
+      {
+       "id": "PERF-8",
+       "title": "PERF-8: skill /lumen-perf-audit — аудит корпуса реальных сайтов",
+       "status": "done",
+       "size": "S",
+       "note": "DONE 2026-07-17: scripts/perf_audit.py — 3 headless-замера на сайт (--dump-source / --dump-layout+LUMEN_PROFILE_TREE / --screenshot) → фазы сеть+парсинг / стиль+layout / paint, таймауты, error_lines, results.json+summary.md в .tmp/perf-audit/, --compare с дельтами (⚠ >20%); корпус docs/perf/corpus.txt (14 сайтов аудита 2026-07-02, вкл. антибот-403 намеренно); журнал docs/perf/journal.md + коммитируемые сырые прогоны docs/perf/runs/*.json; skill /lumen-perf-audit — полный автономный протокол прогон→анализ→журнал→BUG-NNN. ОБНОВЛЕНО 2026-07-17 (вторая итерация): дефолт — ЖИВОЙ режим (одно GUI-окно, каждый сайт в новой вкладке через новый MCP-инструмент new_tab = AutomationCommand::NewTab + open_new_tab; пользователь видит рендер, dwell+скролл на сайт; кумулятивная RAM тек/пик через WinAPI; per-site stderr-дельта + console-ошибки; TIMEOUT/DEAD с авторестартом окна как находкой); старое пофазное headless-разложение — флаг --phases. Ручной предшественник PERF-2/PERF-7 (тот же корпус и журнал)"
       }
      ]
     }
@@ -3224,7 +3305,7 @@
   "BUG-272": {
    "status": "open",
    "title": "lenta.ru держала 1371 МБ WS при одной картинке. **Корень:** каждый Push{ClipRoundedRect,ClipPath,Opacity,Filter,Mask,Backdrop,BlendMode} создавал offscreen-текс…",
-   "component": "paint (femtovg, offscreen-слои)",
+   "component": "paint (femtovg, offscreen-слои) + font (bytes_store)",
    "date": null,
    "debtor": false
   },
@@ -3349,23 +3430,9 @@
   },
   "BUG-291": {
    "status": "fixed",
-   "title": "Корень был не `appendChild`/`lastChild`, а `Element`/`DocumentFragment`/`ShadowRoot.querySelector(All)`: не scoped к вызывающему узлу, всегда искали от `doc.roo…",
-   "component": "js (`crates/js/src/dom.rs`, `crates/engine/layout/src/selector_query.rs`)",
+   "title": "Корень — JS-обёртки DOM-узлов не были интернированы: `_lumen_make_element(nid)` строил новый JS-объект на каждый вызов, поэтому `.lastChild`/`.firstChild`/`.par…",
+   "component": "js (DOM child-node bindings, `crates/js/src/dom.rs`)",
    "date": "2026-07-17",
-   "debtor": false
-  },
-  "BUG-295": {
-   "status": "open",
-   "title": "После фикса BUG-291 `tests/wpt/run_smoke.py` всё ещё TIMEOUT на `/dom/nodes/Element-hasAttribute.html`, хотя прямой BiDi-проб (без `wptserve`/`wptrunner`, обычн…",
-   "component": "unknown (`tools/wptrunner` serving/executor overhead vs Lumen HTTP/JS)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-296": {
-   "status": "open",
-   "title": "`cases::snapshot_cpu::cpu_snapshots_match_references` падает (~30 страниц, большие расхождения в байтах) при совместном тестировании `lumen-driver`+`lumen-shell…",
-   "component": "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)",
-   "date": null,
    "debtor": false
   },
   "BUG-292": {
@@ -3388,9 +3455,124 @@
    "component": "layout (`box_tree.rs`, `lay_out_flex`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-295": {
+   "status": "open",
+   "title": "Шесть BiDi-команд (`network.setOfflineStatus`/`addIntercept`/`continueRequest`/`failRequest`, `browser.setTimezoneOverride`, `emulation.setUserAgentOverride`) к…",
+   "component": "bidi-server (`protocol.rs`) + shell live-window wiring",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-297": {
+   "status": "open",
+   "title": "`cpu_snapshots_match_references` красный на 31 странице, эталоны устарели с 2026-06-30 (801d7640) — все P4-мержи с тех пор (writing-mode, @function, @color-prof…",
+   "component": "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-298": {
+   "status": "fixed",
+   "title": "`Element`/`DocumentFragment`/`ShadowRoot`.querySelector(All) делегировали в тот же нативный биндинг, что и `document.querySelector` — искали от корня документа,…",
+   "component": "js (`dom.rs` shim, `v8_runtime.rs`, `selector_query.rs`)",
+   "date": "2026-07-17",
+   "debtor": false
+  },
+  "BUG-299": {
+   "status": "fixed",
+   "title": "`Element.prototype.insertAdjacentText` отсутствовал вовсе — `testharness.js`'s `Output.show_results` вызывает его безусловно для тестов без записанных assert'ов…",
+   "component": "js (`dom.rs` shim)",
+   "date": "2026-07-17",
+   "debtor": false
+  },
+  "BUG-300": {
+   "status": "fixed",
+   "title": "Фоллбэк-ветка `DocumentReady`-ожидания (`_ => self.layout_box.is_some()`) не проверяла `nav_start`, поэтому могла подтвердить готовность по **устаревшему** `lay…",
+   "component": "shell (`main.rs`, `check_wait_condition`)",
+   "date": "2026-07-17",
+   "debtor": false
+  },
+  "BUG-301": {
+   "status": "fixed",
+   "title": "`run_smoke.py` таймаутился, потому что `wptrunner` статик-роутом перекрывает `/resources/testharnessreport.js` своим отчётом (`__wptrunner_message_queue`), а на…",
+   "component": "wptrunner-интеграция (`browsers/lumen.py` `env_options`)",
+   "date": "2026-07-18",
+   "debtor": false
+  },
+  "BUG-302": {
+   "status": "open",
+   "title": "`Element.getElementsByClassName` отсутствует в основном DOM-шиме (есть только в dom_parser.rs) — скрипты news.ycombinator.com падают целиком (`el.getElementsByC…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-303": {
+   "status": "open",
+   "title": "github.com: JS-исполнение не завершается ≥240с и на V8 (сеть готова за 0.7с) — гипотеза «медленный QuickJS» из аудита 2026-07-02 опровергнута; похоже на незавер…",
+   "component": "js (V8 / event loop)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-304": {
+   "status": "open",
+   "title": "DNS os error 11004 (WSANO_DATA) на живых доменах (mc.yandex.ru, top-fwz1.mail.ru, ssp.rambler.ru, static-mon.yandex.net, cdn.skcrtxr.com) — имя резолвится систе…",
+   "component": "network (резолвер)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-305": {
+   "status": "open",
+   "title": "Конструктор `Image`/`HTMLImageElement` отсутствует в шиме — `new Image()` (предзагрузка, трекинг-пиксели, canvas) валит скрипты ria.ru целиком (`Image is not de…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-306": {
+   "status": "open",
+   "title": "github.com раздувает процесс на ~2.3 ГБ одной вкладкой (610→2904 МБ в живом прогоне; воспроизводимо), после чего сессия умирает (BUG-307). Профиль иной, чем len…",
+   "component": "js/dom (атрибуция не сделана)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-307": {
+   "status": "open",
+   "title": "UI-поток «не отвечает» (IsHungAppWindow): обратимо 39–48 с на ria/rbc, НЕОБРАТИМО после вкладок-гигантов github+stackoverflow — сессия мертва, даже navigate по…",
+   "component": "shell (main thread)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-308": {
+   "status": "open",
+   "title": "Страница с HTTP-ошибкой (403 антибот, w3.org) держит document_ready 129–205 с в живом окне, хотя headless отдаёт тот же 403 за 0.75 с — вкладка «вечно грузится»…",
+   "component": "shell (навигация)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-309": {
+   "status": "open",
+   "title": "`Element.prototype.setAttributeNS`/`getAttributeNS`/`removeAttributeNS` и прочие `*NS`-аксессоры атрибутов отсутствуют — `el.setAttributeNS(...)` кидает `TypeEr…",
+   "component": "js (`dom.rs` `WEB_API_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-310": {
+   "status": "fixed",
+   "title": "Две независимые причины на один симптом (`run_smoke.py` TIMEOUT): (1) `TestEnvironment.get_routes` в вендоренном `environment.py` всегда подменяет `/resources/t…",
+   "component": "`tools/wptrunner/wptrunner/browsers/lumen.py` + `crates/shell/src/main.rs`",
+   "date": "2026-07-17",
+   "debtor": false
+  },
+  "BUG-311": {
+   "status": "open",
+   "title": "`cases::snapshot_cpu::cpu_snapshots_match_references` падает (~30 страниц, большие расхождения в байтах) при совместном тестировании `lumen-driver`+`lumen-shell…",
+   "component": "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
+  "`tools/wptrunner/wptrunner/browsers/lumen.py` + `crates/shell/src/main.rs`": [
+   "BUG-310"
+  ],
   "css-parser": [
    "BUG-022",
    "BUG-041",
@@ -3415,7 +3597,7 @@
    "BUG-112"
   ],
   "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)": [
-   "BUG-296"
+   "BUG-311"
   ],
   "encoding": [
    "BUG-162"
@@ -3450,20 +3632,39 @@
    "BUG-155",
    "BUG-243"
   ],
+  "js (DOM child-node bindings, `crates/js/src/dom.rs`)": [
+   "BUG-291"
+  ],
   "js (JS environment bootstrap, `WEB_API_SHIM`)": [
    "BUG-280"
+  ],
+  "js (V8 / event loop)": [
+   "BUG-303"
+  ],
+  "js (WEB_API_SHIM, dom.rs)": [
+   "BUG-302",
+   "BUG-305"
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"
   ],
-  "js (`crates/js/src/dom.rs`, `crates/engine/layout/src/selector_query.rs`)": [
-   "BUG-291"
+  "js (`dom.rs` `WEB_API_SHIM`)": [
+   "BUG-309"
+  ],
+  "js (`dom.rs` shim)": [
+   "BUG-299"
+  ],
+  "js (`dom.rs` shim, `v8_runtime.rs`, `selector_query.rs`)": [
+   "BUG-298"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
   ],
   "js (shell)": [
    "BUG-233"
+  ],
+  "js/dom (атрибуция не сделана)": [
+   "BUG-306"
   ],
   "layout": [
    "BUG-001",
@@ -3599,6 +3800,9 @@
   "network (`filter/easylist.rs` + filter context в `lib.rs`)": [
    "BUG-292"
   ],
+  "network (резолвер)": [
+   "BUG-304"
+  ],
   "network+shell": [
    "BUG-169"
   ],
@@ -3680,7 +3884,7 @@
   "paint (femtovg, blend/filter-композитинг)": [
    "BUG-273"
   ],
-  "paint (femtovg, offscreen-слои)": [
+  "paint (femtovg, offscreen-слои) + font (bytes_store)": [
    "BUG-272"
   ],
   "paint (font-metrics)": [
@@ -3727,11 +3931,20 @@
   "shell (`main.rs` — дренаж `window.open()` popup-запросов)": [
    "BUG-293"
   ],
+  "shell (`main.rs`, `check_wait_condition`)": [
+   "BUG-300"
+  ],
   "shell (`main.rs`, `maybe_expand_cv_relevant`)": [
    "BUG-286"
   ],
   "shell (event loop) + js (таймер-шим)": [
    "BUG-271"
+  ],
+  "shell (main thread)": [
+   "BUG-307"
+  ],
+  "shell (навигация)": [
+   "BUG-308"
   ],
   "shell+font": [
    "BUG-170"
@@ -3764,8 +3977,11 @@
    "BUG-118",
    "BUG-149"
   ],
-  "unknown (`tools/wptrunner` serving/executor overhead vs Lumen HTTP/JS)": [
-   "BUG-295"
+  "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)": [
+   "BUG-297"
+  ],
+  "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
+   "BUG-301"
   ]
  }
 }

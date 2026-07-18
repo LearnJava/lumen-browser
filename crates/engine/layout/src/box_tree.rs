@@ -95,9 +95,9 @@ fn scrollbar_gutter_inline(s: &ComputedStyle) -> f32 {
 /// `scrollbar-gutter: stable`). `both-edges` is not defined for the block axis
 /// by the spec, so only one gutter unit is reserved regardless.
 ///
-// CSS: scrollbar-width, scrollbar-gutter — P4 handoff: wire block-axis gutter
-// reduction into height calculations when implementing full scrollbar-gutter.
-#[allow(dead_code)]
+// CSS: scrollbar-width, scrollbar-gutter — the block-axis gutter reduces the
+// content height handed to children (see `children_available_height`), mirroring
+// the inline-axis `scrollbar_gutter_inline` reduction of `content_width`.
 fn scrollbar_gutter_block(s: &ComputedStyle) -> f32 {
     let can_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
     if !can_scroll_x {
@@ -3752,6 +3752,94 @@ fn flatten_contents(children: &mut Vec<LayoutBox>) {
     }
 }
 
+/// True when `node` is a `<select>`/`<selectlist>` host that opts into the
+/// HTML/CSS «Customizable Select» rendering (`appearance: base-select`).
+fn is_base_select_host(doc: &Document, node: NodeId) -> bool {
+    matches!(
+        &doc.get(node).data,
+        NodeData::Element { name, .. }
+            if matches!(name.local.as_str(), "select" | "selectlist")
+    )
+}
+
+/// Build the author-styleable box subtree for a `<select>`/`<selectlist>` with
+/// `appearance: base-select` (HTML/CSS «Customizable Select»).
+///
+/// Structure (Phase 0 — closed state):
+/// ```text
+/// FlowRoot (the <select> box, styled by author rules on `select`)
+/// └── Block  trigger button — holds the `<selectedcontent>` label text
+/// ```
+/// Unlike the opaque native `FormControlKind::Select`, this is a real box tree,
+/// so author CSS on the `<select>` (and, later, on `option`/`::picker(select)`)
+/// cascades into it. The pop-up option list (`::picker(select)`) is revealed by
+/// the shell as a popover on click — see `forms.rs`.
+#[allow(clippy::too_many_arguments)]
+fn build_base_select_box(
+    doc: &Document,
+    style: &ComputedStyle,
+    id: NodeId,
+) -> LayoutBox {
+    // The trigger button shows the currently-selected option's label, mirroring
+    // the `<selectedcontent>` element of the Customizable Select spec.
+    let label = if is_selectlist(doc, id) {
+        collect_selectlist_label(doc, id)
+    } else {
+        collect_select_label(doc, id)
+    };
+
+    let mut trigger_children = Vec::new();
+    if !label.is_empty() {
+        let seg = InlineSegment {
+            text: label,
+            style: anon_style(style),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_is_lazy: false,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: id,
+            source_char_offset: 0,
+        };
+        trigger_children.push(anon_inline_run(id, style, vec![seg]));
+    }
+
+    let mut trigger_style = anon_style(style);
+    trigger_style.display = Display::Block;
+    let trigger = LayoutBox {
+        node: id,
+        rect: Rect::ZERO,
+        style: trigger_style,
+        kind: BoxKind::Block,
+        children: trigger_children,
+        col_span: 1,
+        row_span: 1,
+        svg_group_transform: None,
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        dirty: Default::default(),
+    };
+
+    LayoutBox {
+        node: id,
+        rect: Rect::ZERO,
+        style: style.clone(),
+        // FlowRoot: establishes a BFC and lays out the trigger as a block child,
+        // regardless of the select's own (inline-block) UA display.
+        kind: BoxKind::FlowRoot,
+        children: vec![trigger],
+        col_span: 1,
+        row_span: 1,
+        svg_group_transform: None,
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        dirty: Default::default(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_box(
     doc: &Document,
@@ -3772,6 +3860,15 @@ fn build_box(
         .style_for(id)
         .cloned()
         .unwrap_or_else(|| compute_style(doc, id, sheet, inherited, viewport, dark_mode));
+
+    // HTML/CSS «Customizable Select»: a `<select appearance:base-select>` renders
+    // as an author-styleable widget tree instead of the opaque native control.
+    if style.appearance == crate::style::Appearance::BaseSelect
+        && style.display != Display::None
+        && is_base_select_host(doc, id)
+    {
+        return build_base_select_box(doc, &style, id);
+    }
 
     let kind = match &doc.get(id).data {
         // Shadow root nodes are infrastructure — never rendered directly.
@@ -5341,7 +5438,7 @@ fn lay_out(
     // `lay_out_inner` is the one site that propagates a parent `FloatContext`.
     lay_out_inner(
         b, start_x, start_y, available_width, available_height,
-        measurer, viewport, pcb, hp, in_block_flow, None,
+        measurer, viewport, pcb, hp, in_block_flow, None, AlignValue::Auto,
     );
 }
 
@@ -5350,6 +5447,12 @@ fn lay_out(
 /// an in-flow non-BFC block child laid out beside the parent's floats. When set,
 /// `b`'s own float context inherits those floats so its (and its descendants')
 /// line boxes are shortened by them, instead of the box itself being clipped.
+///
+/// `parent_justify_items` carries the enclosing block container's `justify-items`
+/// value (CSS Box Alignment L3 §6.3), threaded only from the in-flow block-child
+/// recursion. When `b`'s own `justify-self` is `auto`, it resolves to this value
+/// (the container default); every independent-formatting-context call site passes
+/// `AlignValue::Auto`, so those boxes fall back to the inline-start behaviour.
 #[allow(clippy::too_many_arguments)]
 fn lay_out_inner(
     b: &mut LayoutBox,
@@ -5365,6 +5468,7 @@ fn lay_out_inner(
     hp: &dyn HyphenationProvider,
     in_block_flow: bool,
     outer_floats: Option<&FloatContext>,
+    parent_justify_items: AlignValue,
 ) {
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
@@ -5623,17 +5727,26 @@ fn lay_out_inner(
     // CSS Box Alignment L3 §5.2 — `justify-self` for block-level boxes in normal
     // flow with a definite inline size and no auto inline margins. Distributes the
     // free inline space (containing block − box margin box) within the containing
-    // block: `center` centres, `end` flushes to the inline-end. `auto`/`normal`/
-    // `stretch`/`start` leave the box at the inline-start (current behaviour), so
-    // pages that don't set `justify-self` are unaffected. Auto margins take
-    // precedence (handled above), matching the spec's alignment/margin ordering.
-    // Same box class as auto-margin centring: non-replaced block-level in flow.
-    // Container-default via the parent's `justify-items` (for `justify-self: auto`)
-    // is deferred — the parent style isn't threaded here (Phase 0).
+    // block: `center` centres, `end` flushes to the inline-end. `start` (and
+    // `stretch`/`normal`, whose block-level behaviour is inline-start) leave the box
+    // at the inline-start (current behaviour), so pages that don't align are
+    // unaffected. Auto margins take precedence (handled above), matching the spec's
+    // alignment/margin ordering. Same box class as auto-margin centring:
+    // non-replaced block-level in flow.
+    //
+    // §6.3: `justify-self: auto` resolves to the parent's `justify-items`
+    // (`parent_justify_items`, threaded from the in-flow block-child recursion).
+    // Independent-formatting-context call sites pass `AlignValue::Auto`, so their
+    // boxes keep the inline-start default.
+    let effective_justify = if matches!(s.justify_self, AlignValue::Auto) {
+        parent_justify_items
+    } else {
+        s.justify_self
+    };
     if !ml_is_auto
         && !mr_is_auto
         && s.width.is_some()
-        && matches!(s.justify_self, AlignValue::Center | AlignValue::End)
+        && matches!(effective_justify, AlignValue::Center | AlignValue::End)
         && !is_replaced
         && !matches!(
             s.display,
@@ -5647,7 +5760,7 @@ fn lay_out_inner(
         && !matches!(s.position, Position::Absolute | Position::Fixed)
     {
         let remaining = (available_width - b.rect.width - margin_left - margin_right).max(0.0);
-        let shift = match s.justify_self {
+        let shift = match effective_justify {
             AlignValue::Center => remaining / 2.0,
             AlignValue::End => remaining,
             _ => 0.0,
@@ -5965,11 +6078,18 @@ fn lay_out_inner(
             let children_available_height: Option<f32> = if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
             {
-                Some(match s.box_sizing {
+                let content_h = match s.box_sizing {
                     BoxSizing::ContentBox => h,
                     BoxSizing::BorderBox => (h - padding_top - padding_bottom
                         - s.border_top_width - s.border_bottom_width).max(0.0),
-                })
+                };
+                // CSS Scrollbars L1 §6.2: reserve the block-axis gutter (space for a
+                // horizontal scrollbar at the block-end edge) so `%`-height children
+                // don't shift when the scrollbar appears. Symmetric to the inline
+                // `content_width -= scrollbar_gutter_inline(&s)` reduction above; the
+                // box's own border-box height is unchanged, only the content area seen
+                // by children shrinks.
+                Some((content_h - scrollbar_gutter_block(&s)).max(0.0))
             } else {
                 None
             };
@@ -6382,7 +6502,7 @@ fn lay_out_inner(
 
                     lay_out_inner(child, eff_left, start_y, eff_w,
                             children_available_height, measurer, viewport, children_pcb, hp,
-                            !child_is_root_element, outer_for_child);
+                            !child_is_root_element, outer_for_child, s.justify_items);
                     if matches!(child.kind, BoxKind::Skip) {
                         // Zero-height; does not break the collapsing chain.
                         continue;
@@ -11584,6 +11704,64 @@ mod tests {
         assert_eq!(x, 600.0, "justify-self:end with left margin x expected 600, got {x}");
     }
 
+    // ── CSS Box Alignment L3 §6.3 — block container `justify-items` default ───
+
+    /// Lays out `<div id="wrap" style="{wrap_css}"><div id="box" style="{box_css}">`
+    /// in an 800×600 viewport (body margin reset) and returns the inner box's x.
+    /// The wrap has no width, so it fills the 800px content area (content_x = 0),
+    /// making the child's absolute x directly comparable to the shift.
+    fn nested_box_x(wrap_css: &str, box_css: &str) -> f32 {
+        let html = r#"<div id="wrap"><div id="box"></div></div>"#;
+        let css = format!(
+            "body{{margin:0}} #wrap {{ {wrap_css} }} #box {{ {box_css} }}"
+        );
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        find_by_id_all(&root, &doc, "box").expect("box not found").rect.x
+    }
+
+    #[test]
+    fn justify_items_center_centers_block_child() {
+        // Parent justify-items:center + child with definite width and default
+        // (auto) justify-self → child centres: (800 - 200) / 2 = 300.
+        let x = nested_box_x("justify-items: center;", "width: 200px; height: 50px;");
+        assert_eq!(x, 300.0, "justify-items:center child x expected 300, got {x}");
+    }
+
+    #[test]
+    fn justify_items_end_flushes_block_child_to_inline_end() {
+        // Parent justify-items:end → child right edge at 800 → x = 600.
+        let x = nested_box_x("justify-items: end;", "width: 200px; height: 50px;");
+        assert_eq!(x, 600.0, "justify-items:end child x expected 600, got {x}");
+    }
+
+    #[test]
+    fn justify_self_overrides_parent_justify_items() {
+        // Child justify-self:start is a specified (non-auto) value → it wins over
+        // the parent's justify-items:center, leaving the child flush-start (x=0).
+        let x = nested_box_x(
+            "justify-items: center;",
+            "width: 200px; height: 50px; justify-self: start;",
+        );
+        assert_eq!(x, 0.0, "explicit justify-self:start must override parent, got {x}");
+    }
+
+    #[test]
+    fn justify_items_start_leaves_block_child_at_inline_start() {
+        // Parent justify-items:start (explicit) → no shift, x=0.
+        let x = nested_box_x("justify-items: start;", "width: 200px; height: 50px;");
+        assert_eq!(x, 0.0, "justify-items:start child x expected 0, got {x}");
+    }
+
+    #[test]
+    fn justify_items_ignored_without_definite_child_width() {
+        // Auto-width child fills the container → no free inline space for the
+        // parent's justify-items:end to distribute, so x stays 0.
+        let x = nested_box_x("justify-items: end;", "height: 50px;");
+        assert_eq!(x, 0.0, "auto-width child must not shift, got {x}");
+    }
+
     #[test]
     fn margin_auto_position_sticky_centers() {
         // position:sticky element with margin: 20px auto 0 in 1022px container.
@@ -15482,6 +15660,54 @@ mod tests {
             }
         }
         None
+    }
+
+    /// Collect the concatenated text of every `InlineRun` segment in the tree.
+    fn collect_inline_text(root: &super::LayoutBox, out: &mut Vec<String>) {
+        if let super::BoxKind::InlineRun { segments, .. } = &root.kind {
+            for seg in segments {
+                out.push(seg.text.clone());
+            }
+        }
+        for child in &root.children {
+            collect_inline_text(child, out);
+        }
+    }
+
+    #[test]
+    fn base_select_builds_styleable_tree_not_native_widget() {
+        // `appearance: base-select` must render an author-styleable box tree
+        // (FlowRoot → trigger Block → InlineRun with the selected label), not the
+        // opaque `FormControlKind::Select` native widget.
+        let html = r#"<select><option>Apple</option><option selected>Banana</option></select>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("select { appearance: base-select; }");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        assert!(
+            find_form_kind(&root).is_none(),
+            "base-select must NOT produce a native FormControl::Select box"
+        );
+        let mut texts = Vec::new();
+        collect_inline_text(&root, &mut texts);
+        assert!(
+            texts.iter().any(|t| t.contains("Banana")),
+            "trigger should show the selected option label, got {texts:?}"
+        );
+    }
+
+    #[test]
+    fn native_select_still_uses_form_control_widget() {
+        // Regression guard: without `appearance: base-select`, a `<select>` keeps
+        // rendering as the opaque native widget.
+        let html = r#"<select><option selected>Only</option></select>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        assert!(
+            matches!(find_form_kind(&root), Some(super::FormControlKind::Select { .. })),
+            "plain <select> should still be a native FormControl::Select"
+        );
     }
 
     #[test]

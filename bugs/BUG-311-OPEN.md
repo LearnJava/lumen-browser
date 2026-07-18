@@ -1,4 +1,6 @@
-# BUG-296 — `cases::snapshot_cpu::cpu_snapshots_match_references` fails on `main`, only surfaces when tested alongside `lumen-shell`
+# BUG-311 — `cases::snapshot_cpu::cpu_snapshots_match_references` fails on `main`, only surfaces when tested alongside `lumen-shell`
+
+**Renumbered 2026-07-18** from `BUG-296` during the merge that reconciled two independent parallel sessions — `BUG-296` was independently assigned by another session to a different bug (session-restore race, see [BUG-296](BUG-296-FIXED.md)); this bug kept its content but moved to the next free number. Likely the same underlying reference-staleness as [BUG-297](BUG-297-OPEN.md) (found independently around the same time) — worth checking for a duplicate before investigating both.
 
 **Статус:** OPEN
 **Компонент:** driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`) — CPU-rasterizer snapshot references, or `scripts/scoped-test.sh` gate coverage

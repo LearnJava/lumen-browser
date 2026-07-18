@@ -380,6 +380,17 @@ pub enum PseudoElementKind {
     /// Аргумент `name` — ключ в `CSS.highlights` реестре. Phase 0: парсирует имя,
     /// Phase 1: вызывает `emit_text_with_highlights()` для рендеринга.
     Highlight(String),
+    /// `::picker(select)` (HTML/CSS «Customizable Select») — the pop-up picker
+    /// part of a `<select>` rendered with `appearance: base-select`. The
+    /// argument is the picker ident (currently only `select`); stored so future
+    /// picker kinds stay distinguishable.
+    Picker(String),
+    /// `::checkmark` (HTML «Customizable Select») — the tick shown next to the
+    /// currently-selected `<option>` inside a `base-select` picker.
+    Checkmark,
+    /// `::picker-icon` (HTML «Customizable Select») — the disclosure/arrow icon
+    /// on the `base-select` trigger button.
+    PickerIcon,
     /// Неизвестный pseudo-element (например, `::custom-pseudo` или typo).
     /// Хранится имя для диагностики.
     Unknown(String),
@@ -694,6 +705,9 @@ fn pe_to_css_str(pe: &PseudoElementKind) -> String {
         PseudoElementKind::Selection => "::selection".into(),
         PseudoElementKind::Placeholder => "::placeholder".into(),
         PseudoElementKind::Highlight(name) => format!("::highlight({name})"),
+        PseudoElementKind::Picker(name) => format!("::picker({name})"),
+        PseudoElementKind::Checkmark => "::checkmark".into(),
+        PseudoElementKind::PickerIcon => "::picker-icon".into(),
         PseudoElementKind::Unknown(name) => format!("::{name}"),
     }
 }
@@ -4067,6 +4081,8 @@ impl<'a> Parser<'a> {
                 "marker" => PseudoElementKind::Marker,
                 "selection" => PseudoElementKind::Selection,
                 "placeholder" => PseudoElementKind::Placeholder,
+                "checkmark" => PseudoElementKind::Checkmark,
+                "picker-icon" => PseudoElementKind::PickerIcon,
                 _ => PseudoElementKind::Unknown(name),
             };
             return Some(SimpleSelector::PseudoElement(pe));
@@ -4327,6 +4343,18 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 Some(PseudoElementKind::Highlight(name))
+            }
+            "picker" => {
+                // HTML/CSS «Customizable Select»: `::picker(select)` targets the
+                // pop-up picker part of a `base-select` `<select>`. Only the
+                // `select` ident is defined today; store it for forward-compat.
+                self.skip_ws_and_comments();
+                let arg = self.parse_ident().unwrap_or_default();
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')') || arg.is_empty() {
+                    return None;
+                }
+                Some(PseudoElementKind::Picker(arg.to_ascii_lowercase()))
             }
             _ => None,
         }
@@ -8266,6 +8294,39 @@ mod tests {
                 assert_eq!(name, "spelling");
             }
             _ => panic!("Expected Highlight pseudo-element, got {:?}", sel.head.parts[1]),
+        }
+    }
+
+    // ── Customizable Select pseudo-elements (HTML/CSS «base-select») ─────────
+
+    #[test]
+    fn picker_select_pseudo_element() {
+        // `::picker(select) { ... }` — functional picker pseudo-element.
+        let s = parse("select::picker(select) { background: white; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        assert_eq!(sel.head.parts.len(), 2);
+        assert_eq!(sel.head.parts[0], SimpleSelector::Type("select".into()));
+        match &sel.head.parts[1] {
+            SimpleSelector::PseudoElement(PseudoElementKind::Picker(arg)) => {
+                assert_eq!(arg, "select");
+            }
+            _ => panic!("Expected Picker(\"select\"), got {:?}", sel.head.parts[1]),
+        }
+    }
+
+    #[test]
+    fn checkmark_and_picker_icon_pseudo_elements() {
+        // Simple `::checkmark` and `::picker-icon` pseudo-elements.
+        let s = parse("option::checkmark { color: green; } select::picker-icon { color: blue; }");
+        assert_eq!(s.rules.len(), 2);
+        match &s.rules[0].selectors[0].head.parts[1] {
+            SimpleSelector::PseudoElement(PseudoElementKind::Checkmark) => {}
+            other => panic!("Expected Checkmark, got {other:?}"),
+        }
+        match &s.rules[1].selectors[0].head.parts[1] {
+            SimpleSelector::PseudoElement(PseudoElementKind::PickerIcon) => {}
+            other => panic!("Expected PickerIcon, got {other:?}"),
         }
     }
 

@@ -1560,6 +1560,15 @@
   <div style="width:300px;height:150px;background-image:url(../samples/images/perceptron.png);background-size:70px 70px;background-repeat:round;"></div>
 </div>
 
+<!-- ── background-repeat: space (CSS Backgrounds L3 §3.4) ─────────────────────── -->
+<!-- Same 70px tile in a 300px-wide box. `space` fits floor(300/70)=4 whole tiles,
+     pins the first and last to the edges, and distributes the leftover
+     300-280=20px as equal gaps (≈6.7px) between them — no clipped partial tiles.
+     Shared `space_axis_geometry` with `mask-repeat: space`. -->
+<div style="margin-top:24px;padding:12px;background:#1a2035;border-radius:8px;display:flex;gap:18px;align-items:flex-start;">
+  <div style="width:300px;height:150px;background-image:url(../samples/images/perceptron.png);background-size:70px 70px;background-repeat:space;"></div>
+</div>
+
 <!-- writing-mode demo card -->
 <!-- CSS Writing Modes L4 §3-4: vertical-rl/vertical-lr axis-swap layout ×
      text-orientation mixed/upright/sideways glyph rotation (Latin + CJK). -->
@@ -1579,6 +1588,31 @@
     <div class="wm-box wm-vrl-sideways">Vertical 日本語</div>
   </div>
 </div><!-- /writing-mode card -->
+
+<!-- createImageBitmap + ImageBitmapRenderingContext demo card -->
+<!-- HTML LS §4.12.5: ImageData -> createImageBitmap -> getContext('bitmaprenderer')
+     .transferFromImageBitmap presents an identical copy on a second <canvas>. -->
+<div class="card">
+  <h4>createImageBitmap + bitmaprenderer (HTML LS §4.12.5)</h4>
+  <div style="display:flex;gap:14px;align-items:flex-start;">
+    <canvas id="ib-src" width="120" height="90" style="background:#1e293b;"></canvas>
+    <canvas id="ib-dst" width="120" height="90" style="background:#1e293b;"></canvas>
+  </div>
+</div>
+<script>
+  (function () {
+    var srcCtx = document.getElementById('ib-src').getContext('2d');
+    srcCtx.fillStyle = '#0f172a';
+    srcCtx.fillRect(0, 0, 120, 90);
+    srcCtx.fillStyle = '#a855f7';
+    srcCtx.beginPath();
+    srcCtx.arc(60, 45, 32, 0, Math.PI * 2, false);
+    srcCtx.fill();
+    createImageBitmap(srcCtx.getImageData(0, 0, 120, 90)).then(function (bitmap) {
+      document.getElementById('ib-dst').getContext('bitmaprenderer').transferFromImageBitmap(bitmap);
+    });
+  })();
+</script>
 
 </body>
 </html>

@@ -1843,13 +1843,16 @@ impl FemtovgBackend {
     /// canvas stack balanced. Pass an empty slice on the direct path (overlays draw
     /// inline).
     ///
-    /// BUG-273 срез 1: in addition to `skip`, every `PushFilter` /
-    /// `PushBackdropFilter` / `PushBlendMode` bracket is checked against the
-    /// viewport ([`Self::group_bounds`] + [`Self::is_command_culled`]) as it is
-    /// reached; one that lands fully outside is skipped whole via
-    /// [`Self::matching_close`], avoiding the offscreen layer acquire, the
-    /// children draws, and the CPU-readback composite for content that would
-    /// not have painted a visible pixel this frame.
+    /// BUG-273 срез 1 (+ BUG-272 срезы 7/8): in addition to `skip`, every
+    /// offscreen-composite / clip bracket (`PushFilter` / `PushBackdropFilter` /
+    /// `PushBlendMode` / `PushOpacity` / `PushClipRoundedRect` / `PushClipPath`)
+    /// is checked against the viewport ([`Self::group_bounds`] +
+    /// [`Self::is_command_culled`]) as it is reached; one that lands fully outside
+    /// is skipped whole via [`Self::matching_close`], avoiding the offscreen layer
+    /// acquire, the children draws, and the CPU-readback composite for content
+    /// that would not have painted a visible pixel this frame. Clip groups are
+    /// the safest case: a clip confines every child to its region, so an
+    /// off-viewport clip rect/shape yields no visible pixel.
     fn run_content_pass(
         &mut self,
         content: &[DisplayCommand],
@@ -2216,10 +2219,10 @@ impl FemtovgBackend {
         if let Some(&id) = self.loaded_fonts.get(path) {
             return Some(id);
         }
-        let bytes = if let Some(mem) = provider.read_face_bytes(path) {
+        let bytes: Arc<[u8]> = if let Some(mem) = provider.read_face_bytes(path) {
             mem
         } else {
-            std::fs::read(path).ok()?
+            Arc::from(std::fs::read(path).ok()?)
         };
         let id = self.canvas.add_font_mem(&bytes).ok()?;
         self.loaded_fonts.insert(path.to_owned(), id);
@@ -2380,7 +2383,7 @@ impl FemtovgBackend {
             };
             let Some(bytes) = provider
                 .read_face_bytes(&rec.path)
-                .or_else(|| std::fs::read(&rec.path).ok())
+                .or_else(|| std::fs::read(&rec.path).ok().map(Arc::from))
             else {
                 continue;
             };
@@ -3109,7 +3112,7 @@ impl FemtovgBackend {
             return;
         }
 
-        let (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y) = bg_tile_geometry(
+        let (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y, step_x, step_y) = bg_tile_geometry(
             size,
             position,
             repeat,
@@ -3159,13 +3162,13 @@ impl FemtovgBackend {
                     if !repeat_x {
                         break;
                     }
-                    tx += tile_w;
+                    tx += step_x;
                 }
             }
             if !repeat_y {
                 break;
             }
-            ty += tile_h;
+            ty += step_y;
         }
         self.canvas.restore();
     }
@@ -3421,14 +3424,42 @@ impl FemtovgBackend {
 
     /// BUG-273 срез 1: document-space CSS px bbox of the offscreen-composite
     /// group a command opens (`PushFilter` / `PushBackdropFilter` /
-    /// `PushBlendMode`), or `None` for anything else / a `PushFilter` with no
-    /// computable bounds. Same coordinate convention as [`DisplayCommand::cull_rect`]
-    /// — a leaf command's own bbox, pre-transform.
+    /// `PushBlendMode` / `PushOpacity`, plus the clip openers from срез 8 and the
+    /// mask openers from срез 9), or `None` for anything else / a
+    /// `PushFilter`/`PushOpacity` with no computable bounds. Same coordinate
+    /// convention as [`DisplayCommand::cull_rect`] — a leaf command's own bbox,
+    /// pre-transform.
     fn group_bounds(cmd: &DisplayCommand) -> Option<Rect> {
         match cmd {
             DisplayCommand::PushFilter { bounds, .. } => *bounds,
             DisplayCommand::PushBackdropFilter { bounds, .. } => Some(*bounds),
             DisplayCommand::PushBlendMode { bounds, .. } => Some(*bounds),
+            // BUG-272 (bbox-layer track): opacity groups carry an element bbox
+            // too (`None` for the full-page view-transition fade — never culled).
+            DisplayCommand::PushOpacity { bounds, .. } => *bounds,
+            // BUG-272 срез 8: pure clip groups are the safest cull class — a clip
+            // restricts every child to its region, so a clip whose rect/shape bbox
+            // lands fully outside the viewport paints no visible pixel. The `rect`
+            // (rounded clip) / `shape.bounding_rect()` (basic-shape clip) is the
+            // exact region the renderer clips to under the current canvas transform,
+            // so it is the correct cull bbox (same coordinate convention as the
+            // groups above). `PushClipRect` is a cheap scissor test (no offscreen
+            // layer) and is not an emitter output today, so it is left out.
+            DisplayCommand::PushClipRoundedRect { rect, .. } => Some(*rect),
+            DisplayCommand::PushClipPath { shape } => Some(shape.bounding_rect()),
+            // BUG-272 срез 9: mask-image / mask-gradient groups confine every
+            // visible pixel to their `rect` (the masked element's border-box),
+            // just like a clip. `PushMaskImage` scissors the masked subtree to
+            // `rect`; the gradient openers composite the offscreen down with
+            // `DestinationIn` painted only over `rect`, zeroing alpha outside it.
+            // So a mask whose `rect` lands fully off-viewport paints nothing —
+            // safe to cull the whole `PushMask*…PopMask` bracket. `PushMaskLayer`
+            // (SVG `<mask>` content, applied to the *parent* layer) has trickier
+            // composite semantics and is left out, like `PushClipRect` above.
+            DisplayCommand::PushMaskImage { rect, .. }
+            | DisplayCommand::PushMaskLinearGradient { rect, .. }
+            | DisplayCommand::PushMaskRadialGradient { rect, .. }
+            | DisplayCommand::PushMaskConicGradient { rect, .. } => Some(*rect),
             _ => None,
         }
     }
@@ -3919,7 +3950,7 @@ impl FemtovgBackend {
             // alpha. Per-draw set_global_alpha double-blends overlaps, lets
             // negative-z children show through siblings, and a nested group
             // replaces (not multiplies) the outer alpha.
-            DisplayCommand::PushOpacity { alpha } => {
+            DisplayCommand::PushOpacity { alpha, .. } => {
                 let prev_rt = self.current_rt();
                 let entry = match self.acquire_layer() {
                     Some(img_id) => {
@@ -4938,11 +4969,11 @@ mod tests {
         assert!(flags.contains(femtovg::ImageFlags::PREMULTIPLIED));
     }
 
-    /// BUG-273 срез 1: `group_bounds` reports the culling bbox only for the three
-    /// offscreen-composite openers, `None` for everything else (including a
-    /// `PushFilter` whose `bounds` is itself `None`).
+    /// BUG-273 срез 1 / BUG-272 срез 8: `group_bounds` reports the culling bbox
+    /// for every offscreen-composite / clip opener, `None` for everything else
+    /// (including a `PushFilter`/`PushOpacity` whose `bounds` is itself `None`).
     #[test]
-    fn group_bounds_covers_the_three_offscreen_openers() {
+    fn group_bounds_covers_the_offscreen_and_clip_openers() {
         use lumen_core::geom::Rect;
         let r = Rect::new(1.0, 2.0, 3.0, 4.0);
         assert_eq!(
@@ -4974,8 +5005,78 @@ mod tests {
             Some(r),
         );
         assert_eq!(
-            FemtovgBackend::group_bounds(&DisplayCommand::PushOpacity { alpha: 0.5 }),
+            FemtovgBackend::group_bounds(&DisplayCommand::PushOpacity {
+                alpha: 0.5,
+                bounds: Some(r),
+            }),
+            Some(r),
+        );
+        // A bounds-less opacity group (full-page view-transition fade) is never culled.
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushOpacity {
+                alpha: 0.5,
+                bounds: None,
+            }),
             None,
+        );
+        // BUG-272 срез 8: pure clip groups cull by their clip region — the rounded
+        // clip reports its rect verbatim, the basic-shape clip its bounding box.
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushClipRoundedRect {
+                rect: r,
+                radii: [2.0; 4],
+            }),
+            Some(r),
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushClipPath {
+                shape: ResolvedClipShape::Circle { cx: 10.0, cy: 20.0, r: 5.0 },
+            }),
+            Some(Rect::new(5.0, 15.0, 10.0, 10.0)),
+        );
+        // BUG-272 срез 9: all four mask openers cull by their `rect` (the masked
+        // element's border-box), like clips — both the scissor (image) and the
+        // DestinationIn-gradient paths confine every visible pixel to `rect`.
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushMaskImage {
+                rect: r,
+                src: "u".to_string(),
+                size: BackgroundSize::default(),
+                position: ObjectPosition::default(),
+                repeat: BackgroundRepeat::default(),
+                image_rendering: lumen_layout::ImageRendering::default(),
+            }),
+            Some(r),
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushMaskLinearGradient {
+                rect: r,
+                angle_deg: 0.0,
+                stops: Vec::new(),
+                repeating: false,
+            }),
+            Some(r),
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushMaskRadialGradient {
+                rect: r,
+                center_x_pct: 50.0,
+                center_y_pct: 50.0,
+                stops: Vec::new(),
+                repeating: false,
+            }),
+            Some(r),
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushMaskConicGradient {
+                rect: r,
+                center_x_pct: 50.0,
+                center_y_pct: 50.0,
+                from_angle_deg: 0.0,
+                stops: Vec::new(),
+                repeating: false,
+            }),
+            Some(r),
         );
         assert_eq!(
             FemtovgBackend::group_bounds(&DisplayCommand::FillRect {
@@ -4997,7 +5098,7 @@ mod tests {
             }, // 0
             DisplayCommand::PushClipRect { rect: lumen_core::geom::Rect::new(0.0, 0.0, 5.0, 5.0) }, // 1
             DisplayCommand::PopClip, // 2
-            DisplayCommand::PushOpacity { alpha: 0.5 }, // 3
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: None }, // 3
             DisplayCommand::PopOpacity, // 4
             DisplayCommand::PopBlendMode, // 5 — matches index 0
             DisplayCommand::PopBlendMode, // 6 — unrelated trailing command
@@ -5118,7 +5219,7 @@ mod tests {
             x: PositionComponent::Percent(0.0),
             y: PositionComponent::Percent(0.0),
         };
-        let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
+        let (tw, th, x0, y0, rx, ry, ..) = bg_tile_geometry(
             BackgroundSize::Length(BgSizeAxis::Px(80.0), BgSizeAxis::Px(60.0)),
             &pos,
             BackgroundRepeat::NoRepeat,
@@ -5224,7 +5325,7 @@ mod tests {
             x: PositionComponent::Percent(0.0),
             y: PositionComponent::Percent(0.0),
         };
-        let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
+        let (tw, th, x0, y0, rx, ry, ..) = bg_tile_geometry(
             BackgroundSize::Length(BgSizeAxis::Px(40.0), BgSizeAxis::Px(40.0)),
             &pos,
             BackgroundRepeat::Repeat,

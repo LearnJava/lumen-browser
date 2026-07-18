@@ -385,6 +385,7 @@ fn main() -> ExitCode {
         }
     };
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
+    let (maximized, rest_args) = extract_maximized(&rest_args);
     let (click_log_flag, rest_args) = extract_click_log(&rest_args);
     click_log::init(click_log_flag);
     let (det_cfg, rest_args) = deterministic::extract_deterministic(&rest_args);
@@ -526,7 +527,7 @@ fn main() -> ExitCode {
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode, viewport_override, automation_handle, automation_cmd_tx, automation_rx),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, maximized, det_mode, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
@@ -633,6 +634,18 @@ fn spawn_engine_thread_if_enabled()
     }
 }
 
+/// Whether `run_window_mode` should restore the last on-disk session for the
+/// initial tab: only for a truly argument-less launch (`source` is
+/// [`PageSource::Empty`]) that isn't driven by an automation front-end.
+///
+/// `automation_mode` is `true` when `--bidi-port`/`--mcp-live-port` was
+/// passed — those launches are documented as opening an empty window and the
+/// driver always issues its own first navigation, so restoring a leftover
+/// session tab would silently race it (BUG-296).
+fn should_restore_session(source: &PageSource, automation_mode: bool) -> bool {
+    matches!(source, PageSource::Empty) && !automation_mode
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_window_mode(
     source: PageSource,
@@ -641,11 +654,13 @@ fn run_window_mode(
     network_log: Arc<std::sync::Mutex<devtools::network_panel::NetworkLog>>,
     initial_scroll: (f32, f32),
     no_scrollbar: bool,
+    maximized: bool,
     deterministic: bool,
     viewport_override: Option<(f32, f32)>,
     automation_handle: AutomationHandle,
     automation_cmd_tx: std::sync::mpsc::Sender<AutomationRequest>,
     automation_rx: std::sync::mpsc::Receiver<AutomationRequest>,
+    automation_mode: bool,
 ) -> ExitCode {
     println!("Lumen v{} — Phase 2 (Interactive) complete", env!("CARGO_PKG_VERSION"));
 
@@ -824,8 +839,8 @@ fn run_window_mode(
         cv_events: Vec::new(),
         dark_mode: false,
         cursor_position: None,
-        hovered_nid: None,
         pending_pointer_moves: Vec::new(),
+        hovered_nid: None,
         hovered_tab_idx: None,
         active_nid: None,
         scroll_drag: None,
@@ -846,6 +861,8 @@ fn run_window_mode(
         stream_images_requested: std::collections::HashSet::new(),
         pending_restore_scroll: None,
         pending_pageshow_persisted: false,
+        pending_post_reload_traversal: None,
+        traversal_crossed_document: false,
         load_generation: 0,
         engine_thread: spawn_engine_thread_if_enabled(),
         engine_job_generation: 0,
@@ -882,6 +899,7 @@ fn run_window_mode(
         raf_task_inflight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         raf_drain_gate: false,
         no_scrollbar,
+        maximized,
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
         nav_start: None,
@@ -950,6 +968,8 @@ fn run_window_mode(
         pip: panels::pip_window::PipWindow::new(),
         pip_controller: panels::pip_os_window::PipController::new(),
         pip_os: None,
+        doc_pip_controller: panels::doc_pip_os_window::DocPipController::new(),
+        doc_pip_os: None,
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
@@ -1039,7 +1059,18 @@ fn run_window_mode(
     // (no file/url argument and no --import-session), so we never clobber an
     // argv-requested page. Sets the active tab's source before `run_app`, so the
     // streaming load in `resumed` picks it up.
-    if matches!(app.source, PageSource::Empty) {
+    //
+    // Also skipped in automation mode (BUG-296): an automation driver's own
+    // `browsingContext.navigate` races a leftover `last_session.db` tab (saved
+    // by a prior interactive run from the same working directory — the session
+    // store's on-disk file is a bare CWD-relative path, see `session_persist.rs`)
+    // restoring into the same top-level context, sometimes landing *after* the
+    // driver's navigate and silently leaving `window`/`document` pointed at the
+    // stale page. `lumen --bidi-port`/`--mcp-live-port` are documented as
+    // opening an empty window (`print_usage`'s "пустое окно") — automation
+    // callers always drive their own first navigation, so restoring a session
+    // here would violate that contract even without the race.
+    if should_restore_session(&app.source, automation_mode) {
         app.restore_session();
     }
     if let Err(err) = event_loop.run_app(&mut app) {
@@ -1612,6 +1643,7 @@ fn print_usage() {
     eprintln!("  [--bidi-port <N>]                               — WebDriver BiDi WS сервер (любой режим)");
     eprintln!("  [--mcp-live-port <N>]                           — MCP-сервер (TCP) на живом окне (любой режим, SDC-2)");
     eprintln!("  [--viewport <W>x<H>]                            — фикс. CSS-размер окна (переопределяет --deterministic 1280×800)");
+    eprintln!("  [--maximized]                                   — развернуть окно на весь экран (живой перф-аудит)");
     eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
     eprintln!("  [--tor [--tor-port <N>]]                        — Tor-режим: TorBrowser fingerprint + SOCKS5 9050 (или N)");
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
@@ -1835,6 +1867,24 @@ fn extract_viewport_override(args: &[String]) -> (Option<(f32, f32)>, Vec<String
         }
     }
     (size, rest)
+}
+
+/// Извлечь `--maximized` из аргументов, вернуть (flag, остальные аргументы).
+///
+/// Разворачивает окно на весь экран при создании (перф-аудит: тестирование
+/// в развёрнутом окне по решению пользователя 2026-07-17). `--viewport` при
+/// этом игнорируется оконным менеджером — размер задаёт максимизация.
+fn extract_maximized(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = false;
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--maximized" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
 }
 
 /// Извлечь `--no-scrollbar` из аргументов, вернуть (flag, остальные аргументы).
@@ -2099,6 +2149,32 @@ impl NavEntry {
             nav_back.push(cur);
             popped
         }
+    }
+
+    /// Shuttle `cur` through `steps - 1` intermediate hops via
+    /// [`Self::shift_history_entry`], additionally tracking whether any hop
+    /// crossed a full-document entry (`same_doc_state_json.is_none()`) along
+    /// the way — i.e. whether the entry one hop short of the final
+    /// destination belongs to a different loaded document than `cur` started
+    /// in. `Lumen::navigate_by` uses the returned flag to decide whether a
+    /// same-document destination needs `Lumen::pending_post_reload_traversal`
+    /// (the loaded document is stale relative to it) instead of firing
+    /// `popstate` directly.
+    fn shift_multi_step(
+        nav_back: &mut Vec<NavEntry>,
+        nav_fwd: &mut Vec<NavEntry>,
+        mut cur: NavEntry,
+        steps: usize,
+        back: bool,
+    ) -> (NavEntry, bool) {
+        let mut crossed_document = false;
+        for _ in 1..steps {
+            cur = Self::shift_history_entry(nav_back, nav_fwd, cur, back);
+            if cur.same_doc_state_json.is_none() {
+                crossed_document = true;
+            }
+        }
+        (cur, crossed_document)
     }
 }
 
@@ -4126,50 +4202,20 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
 
     // Загружаем все таблицы параллельно (сеть — главный тормоз), затем
     // конкатенируем строго в порядке объявления, чтобы каскад не нарушился.
+    // Каждый лист резолвит собственные `@import` относительно СВОЕГО URL
+    // (`sheet_base`), чтобы вложенные импорты (`<link href="/css/a.css">` →
+    // `@import "b.css"` = `/css/b.css`) разрешались корректно.
     let parts = parallel_map(&hrefs, |_, href| {
-        match base.resolve(href) {
-            ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
-                Ok(content) => {
-                    eprintln!("Загружен CSS: {}", path.display());
-                    Some(content)
-                }
-                Err(e) => {
-                    eprintln!("Пропуск CSS {}: {e}", path.display());
-                    None
-                }
-            },
-            ResolvedResource::Url(url) => {
-                use lumen_core::url::Url;
-                use lumen_network::RequestDestination;
-
-                let sub_url = match Url::parse(&url) {
-                    Ok(u) => u,
-                    Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); return None; }
-                };
-
-                // Cross-origin stylesheets are allowed by the web platform:
-                // `<link rel=stylesheet>` is fetched in no-cors mode and the
-                // resulting styles apply normally (Fetch §request, HTML §link).
-                // CORS only gates script-level CSSOM reads (cssRules), not the
-                // visual application — so we fetch cross-origin CSS like any
-                // browser. Real sites host CSS on CDN subdomains (icdn.*,
-                // static.*); blocking them left pages unstyled.
-
-                // BUG-171: read through the prefetch cache — the streaming thread
-                // warms linked stylesheets with this same client, so the cascade
-                // concatenation here reuses identical bytes without a second fetch.
-                let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
-                    let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
-                    client
-                        .fetch_subresource(&sub_url, RequestDestination::Style)
-                        .map_err(|e| e.to_string())
-                });
-                match bytes {
-                    Ok(bytes) => Some(String::from_utf8_lossy(&bytes[..]).into_owned()),
-                    Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); None }
-                }
-            }
-        }
+        let (text, sheet_base) = fetch_stylesheet_text(href, base, sink, cookie_jar.clone())?;
+        Some(inline_css_imports(
+            &text,
+            &sheet_base,
+            sink,
+            cookie_jar.clone(),
+            media_ctx,
+            &mut std::collections::HashSet::new(),
+            0,
+        ))
     });
 
     let mut css = String::new();
@@ -4178,6 +4224,159 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
         css.push('\n');
     }
     css
+}
+
+/// Загружает текст одной таблицы стилей, разрешённой относительно `base`.
+///
+/// Обрабатывает локальные пути (`file://`/относительные — читаются с диска)
+/// и `http(s)` (через prefetch-кэш, как `<link rel=stylesheet>`). Возвращает
+/// текст листа **и** его разрешённый [`ResourceBase`], чтобы вложенные
+/// `@import` резолвились относительно собственного URL листа, а не документа.
+/// При любой ошибке resolve/чтения/сети — `None` (залогировано), поэтому один
+/// битый `@import`/`<link>` не валит весь рендер.
+fn fetch_stylesheet_text(
+    href: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) -> Option<(String, ResourceBase)> {
+    match base.resolve(href) {
+        ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                eprintln!("Загружен CSS: {}", path.display());
+                Some((content, ResourceBase::File(path)))
+            }
+            Err(e) => {
+                eprintln!("Пропуск CSS {}: {e}", path.display());
+                None
+            }
+        },
+        ResolvedResource::Url(url) => {
+            use lumen_core::url::Url;
+            use lumen_network::RequestDestination;
+
+            let sub_url = match Url::parse(&url) {
+                Ok(u) => u,
+                Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); return None; }
+            };
+
+            // Cross-origin stylesheets are allowed by the web platform:
+            // `<link rel=stylesheet>` is fetched in no-cors mode and the
+            // resulting styles apply normally (Fetch §request, HTML §link).
+            // CORS only gates script-level CSSOM reads (cssRules), not the
+            // visual application — so we fetch cross-origin CSS like any
+            // browser. Real sites host CSS on CDN subdomains (icdn.*,
+            // static.*); blocking them left pages unstyled.
+
+            // BUG-171: read through the prefetch cache — the streaming thread
+            // warms linked stylesheets with this same client, so the cascade
+            // concatenation here reuses identical bytes without a second fetch.
+            let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
+                let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
+                client
+                    .fetch_subresource(&sub_url, RequestDestination::Style)
+                    .map_err(|e| e.to_string())
+            });
+            match bytes {
+                Ok(bytes) => Some((
+                    String::from_utf8_lossy(&bytes[..]).into_owned(),
+                    ResourceBase::Url(url),
+                )),
+                Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); None }
+            }
+        }
+    }
+}
+
+/// Максимальная глубина вложенности `@import` (защита от рекурсии/циклов).
+const MAX_CSS_IMPORT_DEPTH: u32 = 16;
+
+/// Рекурсивно резолвит `@import`-правила в `css_text`, возвращая текст с
+/// **предпосланным** содержимым каждой импортированной таблицы.
+///
+/// Per CSS Cascade L4 §6.5: правила импортированного листа предшествуют
+/// собственным правилам импортирующего листа (импорт «раньше» в порядке
+/// каскада). URL резолвятся относительно `base` (расположения самого листа —
+/// см. [`fetch_stylesheet_text`]), поэтому вложенные импорты корректны.
+/// Импорты, чей media-query не матчит `media_ctx` (Media Queries L4), не
+/// загружаются вовсе — их правила всё равно неприменимы. `seen` хранит уже
+/// разрешённые URL и защищает от циклов (`a → b → a`) и повторной загрузки;
+/// `depth` ограничивает глубину вложенности.
+///
+/// Директивы `@import …;` остаются в исходном тексте — парсер каскада
+/// собирает их в `Stylesheet::imports` и игнорирует (повторной загрузки нет),
+/// так что двойного применения не происходит.
+fn inline_css_imports(
+    css_text: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    media_ctx: &lumen_css_parser::MediaContext,
+    seen: &mut std::collections::HashSet<String>,
+    depth: u32,
+) -> String {
+    // Быстрый путь: нет токена `@import` вовсе → лишний парс не нужен
+    // (подавляющее большинство листов). Ложные срабатывания (например
+    // `@import` внутри комментария) безопасны — последующий парс правильно
+    // не найдёт импорта и вернёт текст как есть.
+    if !contains_ignore_ascii_case(css_text.as_bytes(), b"@import") {
+        return css_text.to_owned();
+    }
+    let parsed = lumen_css_parser::parse(css_text);
+    if parsed.imports.is_empty() {
+        return css_text.to_owned();
+    }
+    if depth >= MAX_CSS_IMPORT_DEPTH {
+        eprintln!("Пропуск @import: превышена глубина вложенности ({MAX_CSS_IMPORT_DEPTH})");
+        return css_text.to_owned();
+    }
+
+    let mut prefix = String::new();
+    for imp in &parsed.imports {
+        // Media Queries L4: не матчащий контекст импорт не применяется.
+        if !imp.media.matches(media_ctx) {
+            continue;
+        }
+        // Цикл/дубликат: ключ = абсолютный резолв URL относительно текущего листа.
+        let key = base.resolve_str(&imp.url);
+        if !seen.insert(key) {
+            continue;
+        }
+        let Some((text, imp_base)) =
+            fetch_stylesheet_text(&imp.url, base, sink, cookie_jar.clone())
+        else {
+            continue;
+        };
+        let resolved = inline_css_imports(
+            &text,
+            &imp_base,
+            sink,
+            cookie_jar.clone(),
+            media_ctx,
+            seen,
+            depth + 1,
+        );
+        prefix.push_str(&resolved);
+        if !prefix.ends_with('\n') {
+            prefix.push('\n');
+        }
+    }
+
+    if prefix.is_empty() {
+        return css_text.to_owned();
+    }
+    prefix.push_str(css_text);
+    prefix
+}
+
+/// ASCII-case-insensitive поиск подстроки `needle` в `haystack` без аллокаций.
+fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return needle.is_empty();
+    }
+    haystack
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle))
 }
 
 fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>, media_ctx: &lumen_css_parser::MediaContext) {
@@ -4857,12 +5056,24 @@ fn parse_and_layout(
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let css = {
         let d = doc_arc.lock().unwrap();
-        let mut css = extract_style_blocks(&d);
         let link_media_ctx = if media_print {
             print_media_context(viewport, dark_mode)
         } else {
             screen_media_context(viewport, dark_mode)
         };
+        // Инлайновые <style>: их `@import` резолвятся относительно базы
+        // документа (CSS-SPECS §@import). Внешние <link> резолвят собственные
+        // `@import` относительно своего URL внутри load_linked_stylesheets.
+        let inline = extract_style_blocks(&d);
+        let mut css = inline_css_imports(
+            &inline,
+            base,
+            sink,
+            cookie_jar.clone(),
+            &link_media_ctx,
+            &mut std::collections::HashSet::new(),
+            0,
+        );
         css.push_str(&load_linked_stylesheets(
             &d,
             base,
@@ -6722,17 +6933,19 @@ struct Lumen {
     /// `None` пока курсор не вошёл в окно. Конвертируется в CSS px через
     /// `scale_factor()` непосредственно в hit-test / drag callback-ах.
     cursor_position: Option<winit::dpi::PhysicalPosition<f64>>,
+    /// Ph3 pointer-events-l3: CSS-pixel `(x, y)` samples from `CursorMoved`
+    /// queued since the last flush, in chronological order. Pointer Events
+    /// Level 3 §4.1 "coalesced events" — multiple raw OS samples can arrive
+    /// before the next paint; `flush_pointer_moves` turns the whole batch
+    /// into one `pointermove` dispatch with the rest exposed via
+    /// `getCoalescedEvents()`. Flushed once per `about_to_wait` tick, or
+    /// earlier — right before a hover-boundary crossing or `pointerdown`/
+    /// `pointerup` — so event order stays chronological.
+    pending_pointer_moves: Vec<(f32, f32)>,
     /// DOM node currently under the mouse pointer (CSS `:hover` target).
     /// Updated on every `CursorMoved`; triggers relayout when it changes so
     /// `:hover` rules re-evaluate. `None` when cursor is outside the content area.
     hovered_nid: Option<NodeId>,
-    /// CSS-pixel positions buffered from raw `CursorMoved` samples since the
-    /// last flushed `pointermove`/`mousemove` dispatch (Pointer Events Level 3
-    /// §4.1 coalesced events). Flushed once per `about_to_wait` tick and
-    /// before any press/release/enter/leave dispatch so event ordering is
-    /// preserved; the last buffered sample becomes the "main" dispatched
-    /// event, the rest are exposed via `PointerEvent.getCoalescedEvents()`.
-    pending_pointer_moves: Vec<(f32, f32)>,
     /// Tab bar: index of the hovered tab for displaying tier-tooltip. Updated on
     /// every `CursorMoved` when cursor is over the tab bar (y < TAB_BAR_HEIGHT).
     /// `None` when cursor is outside the tab bar or no tabs exist.
@@ -6817,6 +7030,23 @@ struct Lumen {
     /// consumed (and reset to `false`) in `apply_loaded_page` right after
     /// `notify_window_loaded`. `false` for ordinary fresh loads.
     pending_pageshow_persisted: bool,
+    /// Same-document (`pushState`) state JSON + display URL to apply once an
+    /// in-flight reload completes. Set by `navigate_back`/`navigate_forward`
+    /// when a multi-step `history.go(n)` traversal (`navigate_by`) silently
+    /// shuttled through a full-document entry before landing on a
+    /// same-document entry — the currently loaded document is not the one
+    /// that entry belongs to, so `popstate`/the URL update must wait for the
+    /// correct document to actually finish loading. `None` for the
+    /// overwhelmingly common case (destination belongs to the already-loaded
+    /// document); consumed in `apply_loaded_page`.
+    pending_post_reload_traversal: Option<(String, Option<String>)>,
+    /// Set by `navigate_by` immediately before calling `navigate_back`/
+    /// `navigate_forward` when the multi-step shuffle passed through a
+    /// full-document entry en route to the destination. Consumed (reset to
+    /// `false`) at the top of both functions; direct callers (single-step
+    /// Alt+Left/Right, not routed through `navigate_by`) always see `false`,
+    /// matching their existing single-hop behavior.
+    traversal_crossed_document: bool,
     /// U-1: monotonic navigation generation. Bumped on every async navigation
     /// (`reload` when a window exists) and on the initial streaming load. Each
     /// streaming `LoadEvent` carries the generation it was spawned under;
@@ -6972,6 +7202,9 @@ struct Lumen {
     /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to
     /// avoid scrollbar pixels contaminating the diff against Edge headless.
     no_scrollbar: bool,
+    /// When true the window is created maximized (`--maximized` CLI flag;
+    /// live perf audit runs full-screen so the user can watch rendering).
+    maximized: bool,
     /// Guards for PerformancePaintTiming entries (W3C Paint Timing §2).
     /// `true` once the entry has been delivered to JS so we don't double-fire.
     first_paint_delivered: bool,
@@ -7254,6 +7487,19 @@ struct Lumen {
     /// Falls back to the in-window [`Self::pip`] overlay when a second GPU
     /// surface cannot be created.
     pip_os: Option<PipOsWindow>,
+    /// Document Picture-in-Picture open/closed state machine, driven by the JS
+    /// `_lumen_docpip_request_window` / `_lumen_docpip_close` requests. Pure
+    /// data; the live window + backend it tracks live in [`Self::doc_pip_os`].
+    doc_pip_controller: panels::doc_pip_os_window::DocPipController,
+    /// The live always-on-top OS window backing `documentPictureInPicture`
+    /// (Document PiP slice 1), with its own render backend, or `None` when no
+    /// Document PiP window is open. Created on `_lumen_docpip_request_window`;
+    /// dropped on `.close()` / OS close button. Unlike [`Self::pip_os`] there
+    /// is no in-window overlay fallback — window/backend creation failure just
+    /// leaves the request unfulfilled (the JS `PictureInPictureWindow` promise
+    /// still resolves; `.document` stays a JS-only mock either way, see
+    /// `document_pip.rs`).
+    doc_pip_os: Option<DocPipOsWindow>,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -9243,6 +9489,13 @@ impl Lumen {
         self.sync_engine_js_state();
         // The new runtime starts empty; re-seed it with the current Navigation state.
         self.commit_nav_state();
+        // Cross-document unification (see `pending_post_reload_traversal`): a
+        // multi-step traversal landed on a same-document entry of the document
+        // that just finished loading — apply its popstate/URL update now, on
+        // top of the fresh runtime `commit_nav_state` just seeded.
+        if let Some((state_json, display_url)) = self.pending_post_reload_traversal.take() {
+            self.apply_post_reload_traversal(state_json, display_url);
+        }
         self.content_height = content_height_of(&page.display_list);
         self.content_width = content_width_of(&page.display_list);
         // Full page load: force all tiles dirty.
@@ -9560,6 +9813,26 @@ struct PipOsWindow {
     video_rect: Rect,
 }
 
+/// The live OS-level Document Picture-in-Picture window (slice 2): a separate
+/// always-on-top `winit::Window` with its own [`RenderBackend`] surface,
+/// laying out and painting the moved DOM subtree's serialized markup (see
+/// `doc_pip_os_window.rs` module docs).
+///
+/// Owned by [`Lumen::doc_pip_os`]; created from a
+/// `_lumen_docpip_request_window` request and dropped on close. The drop
+/// closes the OS window (winit destroys the window when the last
+/// `Arc<Window>` is released) and frees the GPU surface.
+struct DocPipOsWindow {
+    /// The floating OS window. Identified against `WindowEvent`s by its id.
+    window: Arc<Window>,
+    /// Dedicated render backend drawing the content.
+    renderer: Box<dyn RenderBackend>,
+    /// Latest serialized markup of `pipWindow.document`'s hidden content
+    /// container (`_lumen_docpip_set_content_html`), re-parsed and laid out
+    /// on every redraw. Empty until the page appends its first node.
+    content_html: String,
+}
+
 impl ApplicationHandler<LoadEvent> for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let (win_w, win_h) = if let Some((w, h)) = self.viewport_override {
@@ -9577,7 +9850,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         let attrs = Window::default_attributes()
             .with_title(window_title(self.title.as_deref()))
             .with_inner_size(LogicalSize::new(win_w, win_h))
-            .with_position(LogicalPosition::new(0, 0));
+            .with_position(LogicalPosition::new(0, 0))
+            .with_maximized(self.maximized);
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
@@ -10396,6 +10670,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.navigate_to(page_source_for_automation_url(&url));
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
+                AutomationCommand::NewTab(url) => {
+                    // Same console semantics as `Navigate`: the fresh tab becomes
+                    // active, so `ConsoleLog` stays scoped to the page being loaded.
+                    self.devtools_console.clear();
+                    self.open_new_tab();
+                    self.navigate_to(page_source_for_automation_url(&url));
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
                 AutomationCommand::Click(target) => {
                     let point = self.resolve_automation_target(&target);
                     if let Some((x, y)) = point {
@@ -10518,6 +10800,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             self.pending_waits = still_pending;
         }
+
+        // Ph3 pointer-events-l3: flush any `CursorMoved` samples queued this
+        // tick as one coalesced `pointermove` — Pointer Events L3 §4.1. Runs
+        // once per `about_to_wait` iteration (roughly once per frame); a fast
+        // mouse can queue several samples between paints, all folded into a
+        // single dispatch with the rest exposed via `getCoalescedEvents()`.
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
+        self.flush_pointer_moves();
 
         // ── Native input injection (ADR-007 §8C) ─────────────────────────────
         // Drain injected commands and route through the same dispatch path as
@@ -10697,6 +10987,31 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 PipRequest::OpenDocument { width, height } => {
                     self.open_pip_os_document(event_loop, width, height);
                 }
+            }
+        }
+
+        // Document Picture-in-Picture (slice 1) — open/close the real OS floating
+        // window. Drained from the process-global queue fed by
+        // `_lumen_docpip_request_window` / `_lumen_docpip_close` (see
+        // `lumen_js::documentpip_bindings`).
+        for req in lumen_js::documentpip_bindings::take_docpip_requests() {
+            use lumen_js::documentpip_bindings::DocPipRequest;
+            use panels::doc_pip_os_window::DocPipAction;
+            let action = match req {
+                DocPipRequest::Open { width, height } => self.doc_pip_controller.on_open(width, height),
+                DocPipRequest::Close => self.doc_pip_controller.on_close(),
+                DocPipRequest::SetContent(html) => {
+                    if let Some(pip) = self.doc_pip_os.as_mut() {
+                        pip.content_html = html;
+                    }
+                    self.render_doc_pip_os();
+                    DocPipAction::None
+                }
+            };
+            match action {
+                DocPipAction::Open { width, height } => self.open_doc_pip_os(event_loop, width, height),
+                DocPipAction::Close => self.close_doc_pip_os(),
+                DocPipAction::None => {}
             }
         }
 
@@ -11009,12 +11324,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     if size.width == 0 || size.height == 0 {
                         return;
                     }
+                    let scale = self
+                        .pip_os
+                        .as_ref()
+                        .map_or(1.0, |p| p.window.scale_factor() as f32);
                     if let Some(p) = self.pip_os.as_mut() {
                         p.renderer.resize(size.width, size.height);
                     }
                     self.render_pip_os();
-                    #[cfg(any(feature = "quickjs", feature = "v8"))]
-                    self.deliver_pip_resize();
+                    let (win_w, win_h) =
+                        panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
+                    self.notify_pip_window_resized(win_w, win_h);
                 }
                 WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                     if let Some(p) = self.pip_os.as_mut() {
@@ -11026,6 +11346,56 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 WindowEvent::RedrawRequested => {
                     self.render_pip_os();
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Document Picture-in-Picture (slice 1): same routing as video PiP
+        // above — events for this second window are fully handled here and
+        // never fall through to the main-window logic.
+        if self.doc_pip_os.as_ref().is_some_and(|p| p.window.id() == window_id) {
+            match event {
+                WindowEvent::CloseRequested => {
+                    self.close_doc_pip_os();
+                    self.doc_pip_controller.on_close();
+                    // Mirror the close into JS so `_closed` / `pictureInPictureElement`
+                    // reflect reality when the user closes via the OS window chrome
+                    // rather than calling `.close()`.
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
+                    route_eval_js(
+                        self.engine_thread.as_ref(),
+                        self.js_ctx.as_ref(),
+                        "if(typeof _lumen_docpip_deliver_close==='function')\
+                         {_lumen_docpip_deliver_close();}"
+                            .to_string(),
+                    );
+                }
+                WindowEvent::Resized(size) => {
+                    if size.width == 0 || size.height == 0 {
+                        return;
+                    }
+                    let scale = self
+                        .doc_pip_os
+                        .as_ref()
+                        .map_or(1.0, |p| p.window.scale_factor() as f32);
+                    if let Some(p) = self.doc_pip_os.as_mut() {
+                        p.renderer.resize(size.width, size.height);
+                    }
+                    self.render_doc_pip_os();
+                    let (win_w, win_h) =
+                        panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
+                    self.notify_docpip_window_resized(win_w, win_h);
+                }
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    if let Some(p) = self.doc_pip_os.as_mut() {
+                        p.renderer.set_scale_factor(scale_factor);
+                    }
+                    self.render_doc_pip_os();
+                }
+                WindowEvent::RedrawRequested => {
+                    self.render_doc_pip_os();
                 }
                 _ => {}
             }
@@ -11327,9 +11697,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // Dispatch hover-change events per W3C UI Events §17.5 / Pointer Events L2 §10.
                         #[cfg(any(feature = "quickjs", feature = "v8"))]
                         {
-                            // Flush buffered pointer moves (including this
-                            // sample) first so `pointermove` precedes the
-                            // enter/leave events, matching real UA ordering.
+                            // Ph3 pointer-events-l3: flush pointermove samples
+                            // queued before this boundary crossing first, so
+                            // they precede pointerout/leave/over/enter in
+                            // dispatch order (spec-observable event order).
                             self.flush_pointer_moves();
                             // Leave events on the element losing hover.
                             if let Some(old) = old_nid {
@@ -11349,6 +11720,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             }
                         }
                     }
+                    // Ph3 pointer-events-l3: queue this raw sample for the next
+                    // coalesced pointermove flush (about_to_wait tick, next
+                    // hover-boundary crossing, or press/release) — Pointer
+                    // Events L3 §4.1.
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
+                    self.pending_pointer_moves.push((x_css, y_css));
                 }
                 // Tab bar: update hovered_tab_idx for tooltip rendering.
                 {
@@ -11446,8 +11823,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Dispatch leave events before clearing hovered state.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let Some(old) = self.hovered_nid {
-                        // Buffered moves from just before the cursor left must
-                        // fire ahead of the leave events.
+                        // Ph3 pointer-events-l3: flush queued pointermove
+                        // samples first so they precede pointerout/leave.
                         self.flush_pointer_moves();
                         let nid = old.index() as u32;
                         self.js_pointer_event(nid, "pointerout",   0.0, 0.0, 0, 0);
@@ -11620,7 +11997,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // any default action (click). Only when cursor is over page content.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let Some(hov) = self.hovered_nid {
-                        // Buffered moves must fire ahead of pointerdown.
+                        // Ph3 pointer-events-l3: flush queued pointermove samples
+                        // first so they precede pointerdown in dispatch order.
                         self.flush_pointer_moves();
                         let nid = hov.index() as u32;
                         self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
@@ -12704,6 +13082,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Per W3C UI Events §17.6 + Pointer Events L2 §10.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     if let (Some(hov), Some(pos)) = (self.hovered_nid, self.cursor_position) {
+                        // Ph3 pointer-events-l3: flush queued pointermove samples
+                        // first so they precede pointerup in dispatch order.
+                        self.flush_pointer_moves();
                         let dpr = self.renderer.as_ref()
                             .map_or(1.0_f32, |r| r.scale_factor() as f32).max(1e-6);
                         let xu = (pos.x as f32) / dpr;
@@ -13472,11 +13853,25 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     (self.select_dropdown_node, &self.layout_box)
                     && let Some(anchor) = forms::find_box_rect(lb, sel_node)
                 {
-                    let doc = self.layout_source.as_ref().map(|s| s.document.lock().unwrap());
-                    if let Some(doc) = doc {
+                    // `appearance: base-select` renders the picker from author CSS
+                    // on the `<option>`s; the native (Auto/Compat) path keeps the
+                    // fixed UA chrome. Row geometry is shared, so `hit_select_option`
+                    // is valid regardless of which builder produced the overlay.
+                    let base_select_style = forms::find_layout_box(lb, sel_node)
+                        .filter(|b| b.style.appearance == lumen_layout::Appearance::BaseSelect)
+                        .map(|b| b.style.clone());
+                    if let Some(src) = self.layout_source.as_ref() {
+                        let doc = src.document.lock().unwrap();
                         let opts = forms::collect_select_options(&doc, sel_node);
                         let vp_h = self.viewport_height_css();
-                        let mut dd = forms::build_select_dropdown(anchor, &opts, self.scroll_y, vp_w, vp_h);
+                        let mut dd = if let Some(sel_style) = &base_select_style {
+                            forms::build_base_select_dropdown(
+                                anchor, &doc, &src.stylesheet, sel_style, &opts,
+                                self.scroll_y, vp_w, vp_h, self.dark_mode,
+                            )
+                        } else {
+                            forms::build_select_dropdown(anchor, &opts, self.scroll_y, vp_w, vp_h)
+                        };
                         dd.append(&mut overlay_buf);
                         overlay_buf = dd;
                     }
@@ -13572,7 +13967,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let alpha = 1.0 - progress;
                     if alpha > 0.0 {
                         let mut vt_cmds = Vec::with_capacity(vt.old_dl.len() + 2);
-                        vt_cmds.push(lumen_paint::DisplayCommand::PushOpacity { alpha });
+                        vt_cmds.push(lumen_paint::DisplayCommand::PushOpacity { alpha, bounds: None });
                         vt_cmds.extend_from_slice(&vt.old_dl);
                         vt_cmds.push(lumen_paint::DisplayCommand::PopOpacity);
                         // Prepend so old content renders before (under) UI panels.
@@ -16027,6 +16422,11 @@ impl Lumen {
             }
         };
 
+        let (win_w, win_h) = panels::pip_os_window::physical_to_logical(
+            window.inner_size().width,
+            window.inner_size().height,
+            window.scale_factor() as f32,
+        );
         self.pip_os = Some(PipOsWindow {
             window,
             renderer,
@@ -16034,6 +16434,7 @@ impl Lumen {
             video_rect,
         });
         self.render_pip_os();
+        self.notify_pip_window_resized(win_w, win_h);
     }
 
     /// P3-pip: open a real OS floating window for Document Picture-in-Picture
@@ -16104,11 +16505,8 @@ impl Lumen {
         };
         let size = pip.window.inner_size();
         let scale = pip.window.scale_factor() as f32;
-        let (win_w, win_h) = if scale > 0.0 {
-            (size.width as f32 / scale, size.height as f32 / scale)
-        } else {
-            (size.width as f32, size.height as f32)
-        };
+        let (win_w, win_h) =
+            panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
         let content = panels::pip_os_window::build_pip_content(
             pip.video_rect,
             &pip.poster_url,
@@ -16121,28 +16519,156 @@ impl Lumen {
     }
 
     /// P3-pip slice 5: notify JS of the OS PiP window's current CSS-pixel size
-    /// via `_lumen_pip_deliver_resize(width, height)` (`video_pip.rs`) — updates
-    /// whichever `PictureInPictureWindow` is active (video or Document PiP) and
-    /// fires its `resize` event. No-op when no OS PiP window is open.
+    /// via [`Self::notify_pip_window_resized`] — updates whichever
+    /// `PictureInPictureWindow` is active (video or legacy Document PiP,
+    /// both backed by [`Self::pip_os`]) and fires its `resize` event. No-op
+    /// when no OS PiP window is open. Reads the window's own current size —
+    /// use this from event handlers (e.g. `ScaleFactorChanged`) that don't
+    /// already have a fresh logical size on hand; when one is already
+    /// computed (e.g. `WindowEvent::Resized`), call
+    /// [`Self::notify_pip_window_resized`] directly instead.
     #[cfg(any(feature = "quickjs", feature = "v8"))]
-    fn deliver_pip_resize(&self) {
+    fn deliver_pip_resize(&mut self) {
         let Some(pip) = self.pip_os.as_ref() else {
             return;
         };
         let size = pip.window.inner_size();
         let scale = pip.window.scale_factor() as f32;
-        let (win_w, win_h) = if scale > 0.0 {
-            (size.width as f32 / scale, size.height as f32 / scale)
-        } else {
-            (size.width as f32, size.height as f32)
-        };
+        let (win_w, win_h) =
+            panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
+        self.notify_pip_window_resized(win_w, win_h);
+    }
+
+    /// Push the OS PiP window's current logical size into JS via
+    /// `_lumen_pip_deliver_resize` (`video_pip.rs`), so the page's
+    /// `PictureInPictureWindow.width`/`.height` reflect the real floating
+    /// window instead of the `(0, 0)` stub set at `requestPictureInPicture()`
+    /// time, and its `resize` event fires when the user drags the window's
+    /// edge. Called once right after the OS window is created and again on
+    /// every `WindowEvent::Resized` — not on `ScaleFactorChanged`/
+    /// `RedrawRequested`, which don't change the logical size delivered here.
+    /// `route_eval_js` no-ops when no JS runtime is installed, so this is
+    /// safe to call unconditionally regardless of the `quickjs`/`v8` features.
+    fn notify_pip_window_resized(&mut self, win_w: f32, win_h: f32) {
         route_eval_js(
             self.engine_thread.as_ref(),
             self.js_ctx.as_ref(),
             format!(
-                "if(typeof _lumen_pip_deliver_resize==='function'){{\
-                 _lumen_pip_deliver_resize({},{});}}",
-                win_w as i32, win_h as i32,
+                "if(typeof _lumen_pip_deliver_resize==='function')\
+                 {{_lumen_pip_deliver_resize({win_w},{win_h});}}"
+            ),
+        );
+    }
+
+    /// Document Picture-in-Picture (slice 1): open the real OS-level floating
+    /// window at the requested logical size. Mirrors [`Self::open_pip_os`]
+    /// minus the `<video>` forwarding and the in-window overlay fallback — on
+    /// window/backend creation failure the request is simply dropped (the JS
+    /// `requestWindow()` promise already resolved with a `PictureInPictureWindow`
+    /// whose `.document` stays a JS-only mock either way, see `document_pip.rs`).
+    fn open_doc_pip_os(&mut self, event_loop: &ActiveEventLoop, width: u32, height: u32) {
+        use panels::doc_pip_os_window::DocPipController;
+        use panels::pip_os_window::{pip_window_attributes, PipOsConfig};
+
+        let cfg = PipOsConfig {
+            width: width as f32,
+            height: height as f32,
+            min_width: PipOsConfig::DEFAULT.min_width,
+            min_height: PipOsConfig::DEFAULT.min_height,
+        };
+        let title = self
+            .title
+            .clone()
+            .unwrap_or_else(|| "Picture-in-Picture".to_owned());
+        let attrs = pip_window_attributes(&title, cfg);
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(err) => {
+                eprintln!("Document PiP: не удалось создать OS-окно ({err})");
+                self.doc_pip_controller = DocPipController::new();
+                return;
+            }
+        };
+        let renderer = match backend_factory::create_backend(
+            window.clone(),
+            INTER_FONT.to_vec(),
+            self.target_color_space(),
+        ) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("Document PiP: не удалось создать рендер OS-окна ({err})");
+                self.doc_pip_controller = DocPipController::new();
+                return;
+            }
+        };
+
+        let (win_w, win_h) = panels::pip_os_window::physical_to_logical(
+            window.inner_size().width,
+            window.inner_size().height,
+            window.scale_factor() as f32,
+        );
+        self.doc_pip_os = Some(DocPipOsWindow { window, renderer, content_html: String::new() });
+        self.render_doc_pip_os();
+        self.notify_docpip_window_resized(win_w, win_h);
+    }
+
+    /// Document Picture-in-Picture (slice 1): tear down the OS floating window.
+    /// Releasing the last `Arc<Window>` makes winit destroy the OS window and
+    /// free its GPU surface.
+    fn close_doc_pip_os(&mut self) {
+        self.doc_pip_os = None;
+    }
+
+    /// Document Picture-in-Picture (slice 3): redraw the OS floating window.
+    /// Background fill (`build_docpip_content`) first, then — if the page has
+    /// appended anything to `pipWindow.document.body` — the moved subtree's
+    /// last-known markup (`pip.content_html`) is re-parsed into a fresh
+    /// detached [`lumen_dom::Document`], laid out at the window's own size
+    /// against the main page's own author stylesheet (`self.layout_source`),
+    /// and painted on top. No-op when no window is open. Known gap: images in
+    /// the moved subtree don't render (this window's renderer has its own
+    /// image cache, separate from the main page's).
+    fn render_doc_pip_os(&mut self) {
+        let Some(pip) = self.doc_pip_os.as_mut() else {
+            return;
+        };
+        let size = pip.window.inner_size();
+        let scale = pip.window.scale_factor() as f32;
+        let (win_w, win_h) =
+            panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
+        let mut content = panels::doc_pip_os_window::build_docpip_content(win_w, win_h);
+        if !pip.content_html.is_empty() {
+            let doc = lumen_html_parser::parse(&pip.content_html);
+            let empty_sheet;
+            let sheet = match self.layout_source.as_ref() {
+                Some(src) => src.stylesheet.as_ref(),
+                None => {
+                    empty_sheet = lumen_css_parser::parse("");
+                    &empty_sheet
+                }
+            };
+            let layout = lumen_layout::layout(&doc, sheet, Size::new(win_w, win_h));
+            content.extend(paint_ordered(&layout));
+        }
+        if let Err(err) = pip.renderer.render(&[], &content, 0.0, 0.0) {
+            eprintln!("Document PiP OS render error: {err:?}");
+        }
+    }
+
+    /// Push the OS Document PiP window's current logical size into JS via
+    /// `_lumen_docpip_deliver_resize` (`document_pip.rs`), so
+    /// `PictureInPictureWindow.width`/`.height` reflect the real floating
+    /// window and its `resize` event fires when the user drags the window's
+    /// edge. Called once right after the OS window is created and again on
+    /// every `WindowEvent::Resized`, mirroring [`Self::notify_pip_window_resized`].
+    fn notify_docpip_window_resized(&mut self, win_w: f32, win_h: f32) {
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!(
+                "if(typeof _lumen_docpip_deliver_resize==='function')\
+                 {{_lumen_docpip_deliver_resize({win_w},{win_h});}}"
             ),
         );
     }
@@ -16222,6 +16748,23 @@ impl Lumen {
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
             j.fire_current_entry_change();
         });
+    }
+
+    /// Apply a same-document `history.go(n)` destination whose containing
+    /// document had to be (re)loaded first (see `pending_post_reload_traversal`):
+    /// fires `popstate` with `state_json`, updates the address bar to
+    /// `display_url`, and fires `currententrychange` — the same tail as the
+    /// ordinary same-document branch in `navigate_back`/`navigate_forward`,
+    /// just run once the correct document's JS runtime actually exists.
+    fn apply_post_reload_traversal(&mut self, state_json: String, display_url: Option<String>) {
+        self.current_history_state_json = state_json.clone();
+        self.display_url = display_url.clone();
+        let url = display_url.unwrap_or_default();
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.fire_popstate(&state_json, &url);
+        });
+        self.fire_current_entry_change();
+        self.request_redraw();
     }
 
     /// Whether the current page may be stored as a full bfcache freeze.
@@ -16580,36 +17123,46 @@ impl Lumen {
             }
         }
         let Some(prev) = self.nav_back.pop() else { return };
+        let crossed_document = std::mem::take(&mut self.traversal_crossed_document);
 
+        let mut post_reload_traversal = None;
         if let Some(state_json) = prev.same_doc_state_json {
-            // Same-document navigation: fire popstate, update address bar, don't reload.
-            // Push current same-doc state to forward stack so Alt+Right restores it.
-            let cur_display = self.display_url.take();
-            let cur_state = std::mem::replace(
-                &mut self.current_history_state_json,
-                state_json.clone(),
-            );
-            self.nav_fwd.push(NavEntry {
-                source: self.source.clone(),
-                scroll_x: self.scroll_x,
-                scroll_y: self.scroll_y,
-                display_url: cur_display,
-                same_doc_state_json: Some(cur_state),
-                nav_key: self.current_nav_key.clone(),
-            });
-            let url = prev.display_url.unwrap_or_default();
-            self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
-            // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
-            // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
-            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                j.fire_popstate(&state_json, &url);
-            });
-            self.fire_current_entry_change();
-            self.request_redraw();
-            self.current_nav_key = prev.nav_key;
-            self.source = prev.source;
-            self.commit_nav_state();
-            return;
+            if !crossed_document {
+                // Same-document navigation: fire popstate, update address bar, don't reload.
+                // Push current same-doc state to forward stack so Alt+Right restores it.
+                let cur_display = self.display_url.take();
+                let cur_state = std::mem::replace(
+                    &mut self.current_history_state_json,
+                    state_json.clone(),
+                );
+                self.nav_fwd.push(NavEntry {
+                    source: self.source.clone(),
+                    scroll_x: self.scroll_x,
+                    scroll_y: self.scroll_y,
+                    display_url: cur_display,
+                    same_doc_state_json: Some(cur_state),
+                    nav_key: self.current_nav_key.clone(),
+                });
+                let url = prev.display_url.unwrap_or_default();
+                self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
+                // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+                // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    j.fire_popstate(&state_json, &url);
+                });
+                self.fire_current_entry_change();
+                self.request_redraw();
+                self.current_nav_key = prev.nav_key;
+                self.source = prev.source;
+                self.commit_nav_state();
+                return;
+            }
+            // Cross-document unification: the multi-step shuffle passed through
+            // a full-document entry before landing here, so the loaded document
+            // is not the one this same-document entry belongs to. Defer the
+            // popstate/URL update until the correct document (reloaded below,
+            // or thawed from bfcache) actually finishes loading.
+            post_reload_traversal = Some((state_json, prev.display_url.clone()));
         }
 
         // Full-document navigation: restore page and reload.
@@ -16643,6 +17196,9 @@ impl Lumen {
                         self.source = prev.source.clone();
                         self.current_nav_key = prev.nav_key.clone();
                         if self.bfcache_thaw(&entry, frozen) {
+                            if let Some((state_json, display_url)) = post_reload_traversal.clone() {
+                                self.apply_post_reload_traversal(state_json, display_url);
+                            }
                             return;
                         }
                         // Thaw failed (stylesheet evicted / DOM decode error):
@@ -16673,6 +17229,9 @@ impl Lumen {
         // it here — a direct assignment would be clobbered when LoadDone arrives.
         let (sx, sy) = restored_scroll.unwrap_or((prev.scroll_x, prev.scroll_y));
         self.pending_restore_scroll = Some((sx, sy));
+        if let Some(traversal) = post_reload_traversal {
+            self.pending_post_reload_traversal = Some(traversal);
+        }
         self.reload();
         if let Some(w) = self.window.as_ref() { w.request_redraw(); }
         self.commit_nav_state();
@@ -16710,35 +17269,41 @@ impl Lumen {
             }
         }
         let Some(next) = self.nav_fwd.pop() else { return };
+        let crossed_document = std::mem::take(&mut self.traversal_crossed_document);
 
+        let mut post_reload_traversal = None;
         if let Some(state_json) = next.same_doc_state_json {
-            // Same-document forward navigation: fire popstate, update address bar.
-            let cur_display = self.display_url.take();
-            let cur_state = std::mem::replace(
-                &mut self.current_history_state_json,
-                state_json.clone(),
-            );
-            self.nav_back.push(NavEntry {
-                source: self.source.clone(),
-                scroll_x: self.scroll_x,
-                scroll_y: self.scroll_y,
-                display_url: cur_display,
-                same_doc_state_json: Some(cur_state),
-                nav_key: self.current_nav_key.clone(),
-            });
-            let url = next.display_url.unwrap_or_default();
-            self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
-            // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
-            // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
-            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                j.fire_popstate(&state_json, &url);
-            });
-            self.fire_current_entry_change();
-            self.request_redraw();
-            self.current_nav_key = next.nav_key;
-            self.source = next.source;
-            self.commit_nav_state();
-            return;
+            if !crossed_document {
+                // Same-document forward navigation: fire popstate, update address bar.
+                let cur_display = self.display_url.take();
+                let cur_state = std::mem::replace(
+                    &mut self.current_history_state_json,
+                    state_json.clone(),
+                );
+                self.nav_back.push(NavEntry {
+                    source: self.source.clone(),
+                    scroll_x: self.scroll_x,
+                    scroll_y: self.scroll_y,
+                    display_url: cur_display,
+                    same_doc_state_json: Some(cur_state),
+                    nav_key: self.current_nav_key.clone(),
+                });
+                let url = next.display_url.unwrap_or_default();
+                self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
+                // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+                // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    j.fire_popstate(&state_json, &url);
+                });
+                self.fire_current_entry_change();
+                self.request_redraw();
+                self.current_nav_key = next.nav_key;
+                self.source = next.source;
+                self.commit_nav_state();
+                return;
+            }
+            // Cross-document unification: see `navigate_back`.
+            post_reload_traversal = Some((state_json, next.display_url.clone()));
         }
 
         // Full-document forward navigation.
@@ -16770,6 +17335,9 @@ impl Lumen {
                         self.source = next.source.clone();
                         self.current_nav_key = next.nav_key.clone();
                         if self.bfcache_thaw(&entry, frozen) {
+                            if let Some((state_json, display_url)) = post_reload_traversal.clone() {
+                                self.apply_post_reload_traversal(state_json, display_url);
+                            }
                             return;
                         }
                         // Thaw failed (stylesheet evicted / DOM decode error):
@@ -16798,6 +17366,9 @@ impl Lumen {
         // navigate_back for rationale).
         let (sx, sy) = restored_scroll.unwrap_or((next.scroll_x, next.scroll_y));
         self.pending_restore_scroll = Some((sx, sy));
+        if let Some(traversal) = post_reload_traversal {
+            self.pending_post_reload_traversal = Some(traversal);
+        }
         self.reload();
         self.commit_nav_state();
         if let Some(w) = self.window.as_ref() { w.request_redraw(); }
@@ -16815,10 +17386,14 @@ impl Lumen {
     /// `back` / `forward` queue a delta that the shell drains into this method, so
     /// the real `nav_back` / `nav_fwd` stacks (not the JS read-cache mirror) decide
     /// what actually happens — eliminating the multi-step `go` drift where the JS
-    /// mirror moved its cursor but the shell stacks did not. Known limitation: a
-    /// multi-step traversal that crosses a full-document boundary yet lands on a
-    /// same-document entry of a different document fires `popstate` without
-    /// re-rendering that document (the remaining cross-document unification).
+    /// mirror moved its cursor but the shell stacks did not.
+    ///
+    /// Cross-document unification: if the shuffle passes through a
+    /// full-document entry en route to a same-document destination, the
+    /// currently loaded document is stale relative to that destination —
+    /// `self.traversal_crossed_document` flags this for `navigate_back`/
+    /// `navigate_forward`, which reload the correct document first and defer
+    /// the `popstate`/URL update via `pending_post_reload_traversal`.
     #[cfg_attr(not(any(feature = "quickjs", feature = "v8")), allow(dead_code))]
     fn navigate_by(&mut self, delta: i32) {
         if delta == 0 {
@@ -16839,8 +17414,9 @@ impl Lumen {
         // entry and each crossed entry onto the opposite stack, leaving `self`
         // positioned at the entry just before the destination. The final
         // navigate_back/forward then performs the one real (popstate/reload) hop.
+        let mut crossed_document = false;
         if steps > 1 {
-            let mut cur = NavEntry {
+            let cur = NavEntry {
                 source: self.source.clone(),
                 scroll_x: self.scroll_x,
                 scroll_y: self.scroll_y,
@@ -16852,14 +17428,14 @@ impl Lumen {
                 },
                 nav_key: self.current_nav_key.clone(),
             };
-            for _ in 1..steps {
-                cur = NavEntry::shift_history_entry(
-                    &mut self.nav_back,
-                    &mut self.nav_fwd,
-                    cur,
-                    back,
-                );
-            }
+            let (cur, crossed) = NavEntry::shift_multi_step(
+                &mut self.nav_back,
+                &mut self.nav_fwd,
+                cur,
+                steps,
+                back,
+            );
+            crossed_document = crossed;
             self.source = cur.source;
             self.scroll_x = cur.scroll_x;
             self.scroll_y = cur.scroll_y;
@@ -16868,6 +17444,7 @@ impl Lumen {
                 cur.same_doc_state_json.unwrap_or_else(|| "null".to_string());
         }
 
+        self.traversal_crossed_document = crossed_document;
         if back {
             self.navigate_back();
         } else {
@@ -20626,8 +21203,17 @@ impl Lumen {
                         // No JS context at all (quickjs disabled, or a
                         // JS-less blank tab) — fall back to the coarser
                         // layout signal so `Wait` doesn't hang forever on a
-                        // readiness signal that will never arrive.
-                        _ => self.layout_box.is_some(),
+                        // readiness signal that will never arrive. Still gated
+                        // on `nav_start.is_none()` (found while diagnosing
+                        // P2-wpt S4): without this gate, a navigation issued
+                        // from a JS-less blank tab (or racing the brief window
+                        // before the new page's JS context is installed) could
+                        // see `js_ctx` as the *old* tab's `None`, and report
+                        // ready from the *previous* page's already-populated
+                        // `layout_box` before the new page had even started
+                        // loading — the same "stale state wins the race"
+                        // pattern BUG-296 fixed for session restore.
+                        _ => self.nav_start.is_none() && self.layout_box.is_some(),
                     }
                 }
                 WaitCondition::Visible(selector) => {
@@ -22002,6 +22588,125 @@ mod tests {
         assert_eq!(hrefs, vec!["style.css"]);
     }
 
+    // ──────────────── @import file loading (CSS Cascade L4 §6.5) ─────────────
+
+    /// Создаёт уникальную временную директорию для CSS-фикстур `@import`-теста,
+    /// очищая прошлый прогон. Возвращает путь директории.
+    fn import_fixture_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lumen_import_test_{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn null_sink() -> Arc<dyn EventSink> {
+        Arc::new(StdoutEventSink)
+    }
+
+    /// `@import` предпосылает содержимое импортированного листа собственным
+    /// правилам импортирующего (импорт «раньше» в каскаде).
+    #[test]
+    fn inline_css_imports_prepends_imported_content() {
+        let dir = import_fixture_dir("prepend");
+        std::fs::write(dir.join("b.css"), "b { color: blue; }").unwrap();
+        let entry = dir.join("a.css");
+        let base = ResourceBase::File(entry.clone());
+        let text = "@import url(\"b.css\");\na { color: red; }";
+        let out = inline_css_imports(
+            text, &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        let b_pos = out.find("color: blue").expect("imported content present");
+        let a_pos = out.find("color: red").expect("own content present");
+        assert!(b_pos < a_pos, "imported rules must precede importing sheet's own rules");
+    }
+
+    /// Вложенные `@import` (a → b → c) разворачиваются в порядке c, b, a.
+    #[test]
+    fn inline_css_imports_nested_order() {
+        let dir = import_fixture_dir("nested");
+        std::fs::write(dir.join("c.css"), ".c{}").unwrap();
+        std::fs::write(dir.join("b.css"), "@import url(c.css);\n.b{}").unwrap();
+        let base = ResourceBase::File(dir.join("a.css"));
+        let out = inline_css_imports(
+            "@import url(b.css);\n.a{}", &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        let c = out.find(".c{}").unwrap();
+        let b = out.find(".b{}").unwrap();
+        let a = out.find(".a{}").unwrap();
+        assert!(c < b && b < a, "expected c < b < a, got c={c} b={b} a={a}");
+    }
+
+    /// Циклический `@import` (a → b → a) завершается без бесконечной рекурсии.
+    #[test]
+    fn inline_css_imports_cycle_guard() {
+        let dir = import_fixture_dir("cycle");
+        std::fs::write(dir.join("a.css"), "@import url(b.css);\n.a{}").unwrap();
+        std::fs::write(dir.join("b.css"), "@import url(a.css);\n.b{}").unwrap();
+        let base = ResourceBase::File(dir.join("a.css"));
+        // Начинаем с содержимого a.css — тот же файл будет импортирован из b.
+        let out = inline_css_imports(
+            "@import url(b.css);\n.a{}", &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        // Каждый лист загружен максимум один раз (guard по `seen`).
+        assert_eq!(out.matches(".b{}").count(), 1);
+    }
+
+    /// `@import url(x) print;` не загружается под экранным контекстом.
+    #[test]
+    fn inline_css_imports_media_gate() {
+        let dir = import_fixture_dir("media");
+        std::fs::write(dir.join("p.css"), ".print-only{}").unwrap();
+        let base = ResourceBase::File(dir.join("a.css"));
+        let out = inline_css_imports(
+            "@import url(p.css) print;\n.a{}", &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        assert!(!out.contains(".print-only{}"), "print-only @import must be skipped for screen");
+        assert!(out.contains(".a{}"));
+    }
+
+    /// Отсутствующий импортируемый файл не валит рендер — текст возвращается,
+    /// собственные правила сохранены.
+    #[test]
+    fn inline_css_imports_missing_file_is_skipped() {
+        let dir = import_fixture_dir("missing");
+        let base = ResourceBase::File(dir.join("a.css"));
+        let out = inline_css_imports(
+            "@import url(nope.css);\n.a{}", &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        assert!(out.contains(".a{}"));
+    }
+
+    /// Текст без `@import` возвращается без изменений (быстрый путь).
+    #[test]
+    fn inline_css_imports_no_import_passthrough() {
+        let base = ResourceBase::File(std::path::PathBuf::from("x/a.css"));
+        let text = ".a { color: red; }";
+        let out = inline_css_imports(
+            text, &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn contains_ignore_ascii_case_matches() {
+        assert!(contains_ignore_ascii_case(b"body { } @IMPORT url(x);", b"@import"));
+        assert!(contains_ignore_ascii_case(b"@import", b"@import"));
+        assert!(!contains_ignore_ascii_case(b"body { color: red }", b"@import"));
+        assert!(!contains_ignore_ascii_case(b"@imp", b"@import"));
+    }
+
     /// BUG-268: `<link rel=stylesheet media=print>` must NOT enter the screen
     /// cascade, while `media=screen`/`all`/matching `@media`-features do.
     #[test]
@@ -22278,6 +22983,22 @@ mod tests {
         assert_eq!(DumpKind::from_flag("--dump-html"), None);
         assert_eq!(DumpKind::from_flag("samples/page.html"), None);
         assert_eq!(DumpKind::from_flag(""), None);
+    }
+
+    #[test]
+    fn should_restore_session_empty_source_no_automation() {
+        assert!(should_restore_session(&PageSource::Empty, false));
+    }
+
+    #[test]
+    fn should_restore_session_skipped_in_automation_mode() {
+        assert!(!should_restore_session(&PageSource::Empty, true));
+    }
+
+    #[test]
+    fn should_restore_session_skipped_for_explicit_source() {
+        assert!(!should_restore_session(&PageSource::AboutBlank, false));
+        assert!(!should_restore_session(&PageSource::AboutBlank, true));
     }
 
     #[test]
@@ -23136,6 +23857,16 @@ mod navigate_by_tests {
         }
     }
 
+    /// Build a full-document `NavEntry` tagged by `tag` (`same_doc_state_json:
+    /// None`) — a genuine page-load boundary, as opposed to [`entry`]'s
+    /// same-document `pushState` entries.
+    fn full_entry(tag: &str) -> NavEntry {
+        NavEntry {
+            same_doc_state_json: None,
+            ..entry(tag)
+        }
+    }
+
     #[test]
     fn shift_back_once() {
         let mut nav_back = vec![entry("e1"), entry("e2")];
@@ -23179,6 +23910,46 @@ mod navigate_by_tests {
         assert_eq!(nav_back.len(), 1);
         assert_eq!(nav_back[0].display_url, Some("c".to_string()));
         assert!(nav_fwd.is_empty());
+    }
+
+    #[test]
+    fn shift_multi_step_all_same_document_does_not_cross() {
+        // steps=2 → 1 hop: pops the top of `nav_back` ("e2") and stops there
+        // without ever reaching a full-document entry.
+        let mut nav_back = vec![entry("e1"), entry("e2")];
+        let mut nav_fwd = vec![];
+        let cur = entry("cur");
+
+        let (result, crossed) =
+            NavEntry::shift_multi_step(&mut nav_back, &mut nav_fwd, cur, 2, true);
+
+        assert_eq!(result.display_url, Some("e2".to_string()));
+        assert!(!crossed);
+    }
+
+    #[test]
+    fn shift_multi_step_through_full_document_crosses() {
+        // dest (same-doc, belongs to `full`) ← full (full-doc) ← mid1 ← mid2
+        // ← cur. steps=4 → 3 hops: pops mid2, mid1 (both same-doc, no cross),
+        // then `full` (full-doc) — the loaded document is now stale for
+        // `dest`, the entry left on top of `nav_back` for the caller's own
+        // (real destination) pop.
+        let mut nav_back = vec![
+            entry("dest"),
+            full_entry("full"),
+            entry("mid1"),
+            entry("mid2"),
+        ];
+        let mut nav_fwd = vec![];
+        let cur = entry("cur");
+
+        let (result, crossed) =
+            NavEntry::shift_multi_step(&mut nav_back, &mut nav_fwd, cur, 4, true);
+
+        assert_eq!(result.display_url, Some("full".to_string()));
+        assert!(crossed);
+        assert_eq!(nav_back.len(), 1);
+        assert_eq!(nav_back[0].display_url, Some("dest".to_string()));
     }
 
     #[test]

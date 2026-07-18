@@ -29,25 +29,11 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   (falling back to its own minimal definition only when evaluated in isolation, e.g. its own
   rquickjs unit tests). Both PiP paths publish the active window as
   `globalThis.__lumen_pip_active_window`, so `_lumen_pip_deliver_resize(w,h)` (shell → JS on
-  OS-window resize) updates whichever session is open and fires its `resize` event. Follow-up:
-  forwarding the page's real DOM content into the document-PiP window (`PictureInPictureWindow
-  .document` is still an in-memory stub; the window shows a plain background). 6 new tests
-  across `pip_bindings.rs` + `document_pip.rs`.
-- **Pointer Events L3 `getCoalescedEvents()`/`getPredictedEvents()` are real ([P1] P3-pointerfull, 2026-07-17).**
-  Previously stubs (`getCoalescedEvents` returned `[ev]` or `[]`, `getPredictedEvents` always `[]`).
-  `_lumen_dispatch_pointer_event` (`dom.rs`, shared shim) now accepts an optional trailing
-  `coalesced` argument — an array of `[x,y]` CSS-pixel samples buffered since the last dispatch —
-  and builds the real `PointerEvent` array (oldest first, main event last per spec §4.1);
-  `getPredictedEvents()` linearly extrapolates 1-2 future points from the last two samples
-  (`_lumen_predict_pointer_events`), `[]` when fewer than 2 are available. The buffering itself
-  lives in `lumen-shell`: `Lumen::pending_pointer_moves` accumulates raw `CursorMoved` positions
-  (and injected automation `MouseMove` samples) instead of dispatching each one individually;
-  `flush_pointer_moves()` drains the buffer as one coalesced `pointermove` + `mousemove` dispatch,
-  called once per `about_to_wait` tick and eagerly before `pointerdown`/`pointerup`/hover-change
-  (`pointerout`+`pointerleave`/`pointerover`+`pointerenter`)/`CursorLeft` so buffered moves stay
-  ordered ahead of those events. Calls without the `coalesced` argument (pointerdown/up/enter/
-  leave/capture events) are unaffected — same single-element/`[]` behavior as before. 2 new
-  `lumen-js` tests; unchanged existing regression test locks in the no-coalesced-arg path.
+  OS-window resize) updates whichever session is open and fires its `resize` event. Follow-up
+  at the time: forwarding the page's real DOM content into the document-PiP window
+  (`PictureInPictureWindow.document` was still an in-memory stub) — done in later slices
+  (`p1-docpip-content`/`p1-docpip-authorcss`, see `ROADMAP.md` P3-pip). 6 new tests across
+  `pip_bindings.rs` + `document_pip.rs`.
 - **`CustomStateSet` reflects into `data-lumen-state-<name>` ([P1] P3-customstate, 2026-07-17).**
   `element_internals.rs`'s `ELEMENT_INTERNALS_SHIM` (shared by both engines — QuickJS
   `install_element_internals_bindings` and V8 `install_element_internals_bindings_v8` eval the
@@ -56,6 +42,37 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   (`PseudoClass::State`, `layout/src/style.rs`) landed earlier (2026-07-15) on the mistaken
   assumption this reflection already existed — it didn't; `CustomStateSet` only held an in-memory
   `Set`. 2 new tests (add/delete/clear round-trip, delete-of-absent-state no-op).
+- **`structuredClone` — spec-conformant cycles/typed-arrays/DataCloneError
+  (`P3-structclone` partial, [P1] 2026-07-18).** The shared `WEB_API_SHIM`
+  implementation (`dom.rs`) now threads a `memory` Map (original → clone) through
+  a nested `clone()` recursion, so self-referential and diamond-shared object
+  graphs round-trip with preserved identity instead of overflowing the stack.
+  Added: BigInt passthrough; `Boolean`/`Number`/`String` wrapper objects;
+  `ArrayBuffer` (deep-copied via `slice(0)`) and every typed-array/`DataView`
+  view (re-viewed over a single cloned backing buffer, so two views of one
+  buffer stay one buffer after cloning); `SharedArrayBuffer` passed by reference.
+  Non-serializable values (functions, symbols) now throw a `DataCloneError`
+  `DOMException` per HTML LS §2.7, instead of the old silent passthrough/drop.
+  Still deferred: the `transfer` option (transferables aren't detached — they're
+  copied). Validated by 9 new `dom::tests::structured_clone_*` (rquickjs) plus a
+  consolidated V8 mirror `v8_runtime::tests::structured_clone_cycles_typed_arrays_and_dataclone_error`
+  (`--features v8-backend`, the default engine per ADR-018).
+- **`_lumen_dispatch_pointer_move_coalesced` — real Pointer Events L3 §4.1
+  `getCoalescedEvents()`/`getPredictedEvents()` (`P3-pointerfull`, 2026-07-17).**
+  New engine-agnostic `WEB_API_SHIM` function (`dom.rs`, registered on
+  `window`): takes a JSON array of `[x, y]` CSS-px samples batched by the
+  shell (`Lumen::flush_pointer_moves`, `crates/shell/src/main.rs`) and builds
+  one `PointerEvent` per point, dispatching the last as the "main" event via
+  `_lumen_dispatch_rich`. `getCoalescedEvents()` returns the full list (main
+  event last, by reference); `getPredictedEvents()` linearly extrapolates 2
+  points from the last two samples' velocity, `[]` below 2 samples. The
+  older `_lumen_dispatch_pointer_event`'s `[ev]`/`[]` stubs were kept
+  unchanged for non-move types (down/up/enter/leave/over/out,
+  `_lumen_dispatch_capture_event`) and one-off synthetic pointermove
+  (pointer-lock, automation) — already spec-correct for a genuinely single,
+  non-coalescing event. 3 new tests (`dom::tests::pointer_move_coalesced_*`),
+  green under both QuickJS (default) and `--features v8-backend`. See
+  `subsystems/shell.md` for the shell-side buffering; `docs/tasks/ph3-pointer-events-l3.md`.
 - **`window` is now the engine's real global object (BUG-280 fix, [P2] P2-wpt S4, 2026-07-16).**
   `WEB_API_SHIM` copies every own property of `window` onto `globalThis` (values via plain
   assignment — required because some quickjs-ng built-ins like `addEventListener` are
@@ -72,7 +89,7 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   Follow-up fix alongside: `File.prototype` now extends `Blob.prototype` (`file_input.rs`, W3C
   File API §4) — this fix made `window.File` reach the real global `File`, surfacing the missing
   prototype link. Fixing BUG-280 got the WPT smoke test far enough to expose a second, unrelated
-  blocker — see [BUG-291](../bugs/BUG-291-OPEN.md) under Deferred.
+  blocker — [BUG-291](../bugs/BUG-291-FIXED.md), now fixed (see below).
 - **`document.getElementsByTagName(tag)` (BUG-279 fix, [P2] P2-wpt S4, 2026-07-13).**
   Was missing entirely from `var document = {...}` in `dom.rs` — broke `testharness.js`'s own
   module-level setup (`test_timeout()`/`get_script_url()` call it unconditionally) with a
@@ -380,17 +397,47 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   - 11 new Rust unit tests; 40/40 total subtle_crypto tests pass.
   - New deps: `rsa = { version = "0.9", features = ["sha2"] }` (permanent, same crate as lumen-network), `rand_core = { version = "0.6", features = ["getrandom"] }` (companion to rsa, OsRng), `p256` updated: +`ecdh` feature.
 
+- **DOM node-wrapper interning fix** (BUG-291, [P2] P2-wpt, 2026-07-17). `_lumen_make_element(nid)`
+  (`crates/js/src/dom.rs`) minted a brand-new JS wrapper object on every call, so repeated access to
+  the same underlying node (`.lastChild`/`.firstChild`/`.parentElement`/`.children`/etc.) returned a
+  *different* object each time — broke `===` node identity (`tbody.lastChild === tr` was `false`) and
+  silently dropped expando properties set between accesses. This is what made `testharness.js`'s
+  built-in results renderer (`Output.show_results`) throw `TypeError: Cannot read properties of null
+  (reading 'appendChild')` on `tbody.lastChild.lastChild.appendChild(...)`, aborting
+  `notify_complete()` before `testharnessreport.js`'s own completion callback ran. Fix: new per-nid
+  cache `_lumen_node_wrappers` (same pattern as the existing `_validity_msg`/`_canvas2d_ctxs` maps) —
+  `_lumen_make_element` now returns the interned wrapper for a previously-wrapped `nid` instead of
+  building a fresh one. Safe for the life of one JS context: the DOM arena
+  (`crates/engine/dom/src/lib.rs`) allocates node ids append-only with no free-list reuse, and the
+  whole shim is re-evaluated fresh on every navigation/bfcache thaw. Shared `WEB_API_SHIM`, fixes both
+  engines. Regression test: `dom::tests::repeated_node_access_returns_identical_wrapper`. `tests/wpt/run_smoke.py`
+  still doesn't reach a real PASS — a separate, unrelated blocker (a `script.evaluate`-install race, not a
+  DOM/JS gap — see [BUG-296](../bugs/BUG-296-FIXED.md)'s "Остаток"; the stale-session mechanism BUG-296
+  itself diagnosed is fixed).
+
+- **Compression Streams — error signalling** (`crates/js/src/dom.rs`, WHATWG Compression Streams). 2026-07-18.
+  - `CompressionStream`/`DecompressionStream` were already functional for the three spec formats
+    (`deflate-raw`/`deflate`/`gzip`, buffer-then-flush over `TransformStream`, native `flate2`
+    bindings `_lumen_compress_bytes`/`_lumen_decompress_bytes`). Gap: `_lumen_decompress_bytes`
+    swallowed decode errors (`.ok()`) and returned an empty `Vec`, so a corrupt/truncated stream
+    closed silently with no output instead of erroring the readable side (spec violation).
+  - Fix: the two per-engine `_lumen_decompress_bytes` natives now both delegate to one shared
+    `crate::dom::_decompress_status_prefixed(data, format)` that returns a **status-prefixed** byte
+    array — `out[0]==1` → success (`out[1..]` are the inflated bytes, possibly empty for a valid
+    stream that decompresses to nothing), `out[0]==0` → decode error (corrupt/truncated/unknown
+    format). The shared `WEB_API_SHIM` `DecompressionStream.flush` calls `controller.error(TypeError)`
+    on status `0`, so `reader.read()` rejects. A status prefix (rather than throwing across the FFI
+    boundary, which the `reg!` macros don't uniformly support) keeps the fix engine-agnostic and lets
+    a genuine empty result stay distinct from an error.
+  - `brotli` is intentionally **not** implemented — it is not part of the WHATWG Compression Streams
+    spec (only `deflate-raw`/`deflate`/`gzip`; `zstd` is a newer, not-yet-universal addition).
+  - Tests (`dom.rs` mod tests): the pre-existing round-trip tests still pass through the stripped
+    prefix; new `decompression_stream_corrupt_input_errors_stream` (bad gzip bytes → `reader.read()`
+    rejects, does not resolve) and `decompression_stream_multi_chunk_matches_single_chunk`
+    (split-write body decodes identically to a single chunk).
+
 ## Deferred
 
-- **`testharness.js`'s built-in results renderer throws, aborting harness completion**
-  ([BUG-291](../bugs/BUG-291-OPEN.md), found by [P2] P2-wpt S4/S5, 2026-07-16, after BUG-280 was
-  fixed). `Output.show_results` throws `TypeError: Cannot read properties of null (reading
-  'appendChild')` while building its results `<table>` (`crates/js` DOM child-node bindings,
-  `createElementNS`-created elements), which aborts `notify_complete()` before
-  `testharnessreport.js`'s own completion callback runs — blocks `tests/wpt/run_smoke.py` from
-  reaching a genuine PASS/FAIL. A related anomaly found while isolating this: DOM node references
-  returned by repeated property access (`parent.lastChild`) are not stable under `===` for the same
-  underlying node — see the bug file for the isolated repro.
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
 - `rusty_v8` backend porting (S12 remains; S0/S1/S2/S3/S4/S5-S7/S8/S9/S10/S11 done
@@ -523,6 +570,22 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   Full `rquickjs` removal from this crate (`QuickJsRuntime`, ~380 dual `install_*`
   bindings, `__lum_args__`) is S12b, not yet started — `rquickjs` is still a real
   dependency and `QuickJsRuntime` still the fallback engine behind `--features quickjs`.
+  P1-imagebitmap (2026-07-17): `offscreen_canvas.rs` V8-ported (`install_offscreen_canvas_bindings_v8`,
+  19 natives, same `into_v8_fnN`/`rt.register_native`/`rt.eval(OFFSCREEN_CANVAS_SHIM)` pattern as
+  `webgl_canvas_v8`) — closes the S8/S10 gap noted above; `OffscreenCanvas`/`createImageBitmap`
+  now exist under the default (V8) engine, not just QuickJS. Same commit implements
+  `createImageBitmap` + `ImageBitmapRenderingContext` (`getContext('bitmaprenderer')`,
+  HTML LS §4.12.5) end-to-end for both engines: bitmap shape unified to
+  `{width, height, __canvas_id__, close()}` across all sources (ImageData, OffscreenCanvas,
+  `<img>` via `img_bitmap_store`, `Blob` via new `lumen-js → lumen-image` dependency +
+  `lumen_image::decode`), `sx/sy/sw/sh` crop as a JS-side post-process over the existing
+  `get_image_data`/`from_image_data` natives, and `transferFromImageBitmap` presenting into a
+  page `<canvas>` via `canvas2d::present_rgba` (the pre-existing WebGPU-present helper) through
+  a new shared native `_lumen_bitmaprenderer_transfer_from_image_bitmap` in `canvas2d.rs`.
+  `createImageBitmap(OffscreenCanvas)` no longer reuses the destructive `transferToImageBitmap`
+  native (that neutered the source canvas as a side effect); it now snapshots via
+  `get_image_data`/`from_image_data` instead, matching spec (only `OffscreenCanvas.transferToImageBitmap()`
+  itself, called directly, still neuters).
 
 ## Invariants
 
