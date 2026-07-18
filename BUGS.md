@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-320)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-321)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -331,6 +331,7 @@
 | [BUG-317](bugs/BUG-317-OPEN.md) | OPEN (renamed from BUG-315 — third-time number collision with `origin/main`'s real BUG-315 above, resolved during the S6/S7 merge-back 2026-07-18) | js (WEB_API_SHIM, dom.rs) | `MutationRecord` не выставлен как глобальный интерфейс — `MutationRecord is not defined` (колбэк MutationObserver срабатывает асинхронно, но записи нельзя проверить через `instanceof`). Семья [BUG-314](bugs/BUG-314-OPEN.md). WPT `dom/nodes/MutationObserver-callback-arguments.html`, `expected: FAIL`. Найдено P2-wpt S6 2026-07-18 |
 | [BUG-318](bugs/BUG-318-OPEN.md) | OPEN (renamed from BUG-316 — collided with `origin/main`'s BUG-316 above, resolved during the S6/S7 merge-back 2026-07-18) | js (WEB_API_SHIM, dom.rs) | MutationObserver: некорректный учёт записей (дубли/лишние, `takeRecords()` не очищает очередь) + subtree-мутации не наблюдаются (async-тест уходит в TIMEOUT). WPT `dom/nodes/MutationObserver-takeRecords.html` (`expected: FAIL`), `MutationObserver-disconnect.html` (`expected: TIMEOUT`). Найдено P2-wpt S6 2026-07-18 |
 | [BUG-319](bugs/BUG-319-OPEN.md) | OPEN (renamed from BUG-317, freed up by the two renumberings above, 2026-07-18) | bidi-server (protocol.rs) | `script.evaluate` игнорирует `awaitPromise`: при `awaitPromise:true` возвращает сам объект промиса (`{}`), а не разрешённое значение. Пайплайн WPT не затронут (executor использует `awaitPromise=false`+polling). Проверено `tests/wpt/verify_s6_await_promise.py`. Найдено P2-wpt S6 2026-07-18 |
+| [BUG-320](bugs/BUG-320-OPEN.md) | OPEN | paint (femtovg, `acquire_layer`/`layer_pool`) | `mix-blend-mode` (все режимы кроме `normal`/`plus-lighter`) не рендерится вовсе на `main`: `acquire_layer()` сайзит offscreen-слой по `self.width`/`self.height` (физический размер окна), а не по размеру АКТИВНОГО render-таргета — во время scroll-blit band-рендера (ADR-016 M3.2.1b) это меньше band-FBO, из-за чего `src_rgba.len() != backdrop_rgba.len()` в `composite_blend_layer` и CPU-блендинг молча пропускается. Воспроизведено на чистом `merge-base` (не регрессия BUG-272 срез 14 — срез 14's bbox-путь для `PushBlendMode` случайно обходит баг, не чинит его намеренно). Найдено визуальной A/B-приёмкой BUG-272 срез 14 2026-07-19 |
 
 ---
 
