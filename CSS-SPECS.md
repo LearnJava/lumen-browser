@@ -578,7 +578,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `scrollbar-width` / `scrollbar-color` / `scrollbar-gutter` | 🟡 | parsed; rendering ⬜ |
+| `scrollbar-width` / `scrollbar-color` / `scrollbar-gutter` | ✅ | width/color rendered; `scrollbar-gutter: stable` reserves the gutter on both inline (`content_width`) and block (`children_available_height`) axes |
 
 ### [T3] UI / Input
 

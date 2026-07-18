@@ -10757,6 +10757,69 @@ mod tests {
         assert!((p.rect.width - 200.0).abs() < 0.01, "p child={}", p.rect.width);
     }
 
+    /// Block-axis gutter: `overflow-x: scroll` + `scrollbar-gutter: stable` reserves
+    /// space for the horizontal scrollbar, so a `%`-height child shrinks by 12 px
+    /// while the container's own border-box height stays put.
+    #[test]
+    fn scrollbar_gutter_block_stable_reduces_child_height() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { height: 200px; overflow-x: scroll; scrollbar-gutter: stable; } p { height: 100%; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // 200 content-box → minus 12 block gutter = 188.
+        assert!((div.rect.height - 200.0).abs() < 0.01, "div={}", div.rect.height);
+        assert!((p.rect.height - 188.0).abs() < 0.01, "p child={}", p.rect.height);
+    }
+
+    /// `both-edges` is undefined for the block axis: only one gutter unit reserved
+    /// (unlike the inline axis, which doubles it). 200 − 12 = 188.
+    #[test]
+    fn scrollbar_gutter_block_both_edges_single_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { height: 200px; overflow-x: scroll; scrollbar-gutter: stable both-edges; } p { height: 100%; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert!((p.rect.height - 188.0).abs() < 0.01, "p child={}", p.rect.height);
+    }
+
+    /// `scrollbar-width: thin` uses a 6 px block-axis gutter. 200 − 6 = 194.
+    #[test]
+    fn scrollbar_gutter_block_thin_reduces_by_6() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { height: 200px; overflow-x: scroll; scrollbar-gutter: stable; scrollbar-width: thin; } p { height: 100%; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert!((p.rect.height - 194.0).abs() < 0.01, "p child={}", p.rect.height);
+    }
+
+    /// Without `overflow-x: scroll/auto`, block-axis `scrollbar-gutter: stable` has
+    /// no effect: the `%`-height child fills the full content height.
+    #[test]
+    fn scrollbar_gutter_block_no_scroll_no_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { height: 200px; scrollbar-gutter: stable; } p { height: 100%; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert!((p.rect.height - 200.0).abs() < 0.01, "p child={}", p.rect.height);
+    }
+
+    /// `scrollbar-width: none` suppresses the block-axis gutter even with
+    /// `overflow-x: scroll` + `scrollbar-gutter: stable`.
+    #[test]
+    fn scrollbar_gutter_block_width_none_no_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { height: 200px; overflow-x: scroll; scrollbar-gutter: stable; scrollbar-width: none; } p { height: 100%; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert!((p.rect.height - 200.0).abs() < 0.01, "p child={}", p.rect.height);
+    }
+
     // ──────── transform-origin / perspective / list-style-* / transition-* ────────
 
     #[test]
