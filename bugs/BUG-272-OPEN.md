@@ -1,6 +1,6 @@
 # BUG-272 — ~1 ГБ RAM на lenta.ru при одной загруженной картинке (Edge целиком ~530 МБ)
 
-**Статус:** OPEN — корень найден, срез 1 (пул offscreen-слоёв femtovg) влит 2026-07-07, срез 2 (blend-mode слой в пул) влит 2026-07-08, срез 3 (blend-result CPU-композит в пул) влит 2026-07-15, срез 4 (colour-matrix filter + backdrop-filter re-upload в общий пул) влит 2026-07-15, срез 5 (backdrop-filter → bbox-сайзинг вместо full-frame) влит 2026-07-16, срез 6 (шрифтовые байты через `Arc<[u8]>` — устранение двойного хранения @font-face-шрифта) влит 2026-07-18; остаточные направления ниже
+**Статус:** OPEN — корень найден, срез 1 (пул offscreen-слоёв femtovg) влит 2026-07-07, срез 2 (blend-mode слой в пул) влит 2026-07-08, срез 3 (blend-result CPU-композит в пул) влит 2026-07-15, срез 4 (colour-matrix filter + backdrop-filter re-upload в общий пул) влит 2026-07-15, срез 5 (backdrop-filter → bbox-сайзинг вместо full-frame) влит 2026-07-16, срез 6 (шрифтовые байты через `Arc<[u8]>` — устранение двойного хранения @font-face-шрифта) влит 2026-07-18, срез 7 (`PushOpacity` несёт `bounds`, off-viewport opacity-группы куллятся) влит 2026-07-18, срез 8 (off-viewport clip-группы `PushClipRoundedRect`/`PushClipPath` куллятся) влит 2026-07-18; остаточные направления ниже
 **Компонент:** paint (femtovg backend, offscreen-слои)
 **Найден:** 2026-07-07, сравнительный замер Lumen vs Edge на lenta.ru
 **Полная запись исследования (методика, опровергнутые гипотезы):** [docs/perf-audit-lenta-2026-07.md](../docs/perf-audit-lenta-2026-07.md)
@@ -130,11 +130,39 @@ lumen-paint --lib` 937/937 (в т.ч. обновлённый `group_bounds`-те
 Some(r) }` → `Some(r)`, `bounds: None` → `None`). Хеш дисплей-листа фолдит `bounds` (hot-вариант
 `hash_command_into` деструктурирует все поля).
 
+## Срез 8 — off-viewport clip-группы куллятся (влит 2026-07-18)
+
+Продолжение пункта «Остаток» 3c: `FemtovgBackend::group_bounds` теперь возвращает
+bbox и для двух чистых clip-опенеров — `PushClipRoundedRect` (его `rect`) и
+`PushClipPath` (`shape.bounding_rect()`) — поэтому `run_content_pass` пропускает
+**весь** bracket `PushClip…PopClip`, когда его область целиком вне вьюпорта (тот же
+механизм viewport-cull, что срезы 7 / BUG-273 срез 1; `overlay_partition::layer_delta`
+уже балансирует clip-скобки, так что `matching_close` находит парный `PopClip`).
+
+Clip — **самый безопасный** класс для этого куллинга: clip по определению ограничивает
+каждого ребёнка своей областью, поэтому clip-rect/shape целиком вне вьюпорта ⇒ ни одного
+видимого пикселя внутри (в отличие от opacity-групп, где нужно доверять тому, что
+element-bbox покрывает детей). `rect` (rounded-clip) и вершины shape (basic-shape clip) —
+ровно та геометрия, по которой рендер строит клип под текущей матрицей канвы, поэтому это
+и есть корректный cull-bbox (та же координатная конвенция, что у групп выше). `PushClipRect`
+(дешёвый scissor, без offscreen-слоя, эмиттером сегодня не выпускается) в срез не входит;
+mask-опенеры (`PushMask*`) — тоже отдельный будущий срез (семантика их композита сложнее
+чистого клипа).
+
+Пассивная оптимизация только для `LUMEN_BACKEND=femtovg`-сессий (femtovg перестал быть
+дефолтным оконным бэкендом после `P1-wgpu-flip`); дисплей-лист уже несёт нужные поля
+(`rect`/`shape`), эмиттер не тронут.
+
+Корректность: `cargo check -p lumen-paint` зелёный; `cargo clippy -p lumen-paint
+--all-targets -- -D warnings` чист; `cargo test -p lumen-paint --lib` 937/937 (обновлённый
+`group_bounds`-тест: `PushClipRoundedRect { rect: r }` → `Some(r)`, `PushClipPath { circle }`
+→ `Some(bounding_rect)`).
+
 ## Остаток (следующие срезы)
 
 1. ~~Blend-слои (PREMULTIPLIED) вне пула~~ — закрыто срезами 2–4 (src-слой, blend-result, colour-matrix filter, backdrop-filter — все теперь в едином `cpu_upload_pool`). Glyph atlas на тексте страницы — GPU на lenta всё ещё ~509 МБ против ~224 МБ baseline (~285 МБ страничных); требует того же счётчика GPU-памяти, срезы 2–4 его не меняли (lenta не использует blend-mode/backdrop-filter/цветовые CSS-фильтры).
 2. Baseline пустого окна 224 МБ GPU — сам по себе жирный (framebuffers/шрифтовой атлас/драйвер).
-3. Слои по bounding box вместо full-frame — **срез 5 (влит) сделал backdrop-filter's `filtered_backdrop_id` bbox-сайзингом**; визуально подтверждён (A/B gdigrab branch-vs-main, TEST-30/103 побайтово идентичны — см. срез 5 выше); **срез 7 (влит) добавил `bounds` в `PushOpacity` и включил viewport-cull off-screen opacity-групп** (см. срез 7 выше); остаётся: (b) `elem_image_id` у backdrop-filter (всё ещё full-framebuffer через `layer_pool`), (c) сам bbox-сайзинг **видимого** слоя `PushOpacity` (сейчас куллинг снимает только off-viewport-случай, on-viewport слой всё ещё full-framebuffer), а также `PushFilter`/`PushClipRoundedRect`/`PushClipPath`/`PushMask*`/`PushBlendMode` — все ещё full-framebuffer (`bounds`/`rect` у них уже есть с BUG-273 среза 1).
+3. Слои по bounding box вместо full-frame — **срез 5 (влит) сделал backdrop-filter's `filtered_backdrop_id` bbox-сайзингом**; визуально подтверждён (A/B gdigrab branch-vs-main, TEST-30/103 побайтово идентичны — см. срез 5 выше); **срез 7 (влит) добавил `bounds` в `PushOpacity` и включил viewport-cull off-screen opacity-групп** (см. срез 7 выше); **срез 8 (влит) включил viewport-cull off-screen clip-групп** (`PushClipRoundedRect`/`PushClipPath`, см. срез 8 ниже); остаётся: (b) `elem_image_id` у backdrop-filter (всё ещё full-framebuffer через `layer_pool`), (c) сам bbox-сайзинг **видимого** слоя (аллокация размером с bbox вместо framebuffer) для `PushOpacity`/`PushClip*` (сейчас куллинг снимает только off-viewport-случай, on-viewport слой всё ещё full-framebuffer), viewport-cull для `PushMask*` (сложнее — семантика композита), а также `PushFilter`/`PushBlendMode` уже куллятся off-viewport (BUG-273 срез 1), но их видимый слой тоже full-framebuffer.
 4. Отложенные многокопийные image-кэши (см. диагностику 2026-07-07 в истории файла): femtovg `raw_images` deep-copy, `@WxH`-варианты, GIF все кадры, ~~font `bytes_store.cloned()`~~ (закрыто срезом 6 — `Arc<[u8]>`), canvas2d thread-local — актуально для image-heavy сайтов.
 
 ## Инструменты (остались в коде)
