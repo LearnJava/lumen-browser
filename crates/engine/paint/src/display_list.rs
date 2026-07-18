@@ -563,7 +563,14 @@ pub enum DisplayCommand {
     /// и накладываются с `alpha`. Используется для `opacity != 1`. Phase 0:
     /// эмиттер не выпускает (нужен compositor с layer-pipeline-ом —
     /// roadmap-задача), renderer игнорирует.
-    PushOpacity { alpha: f32 },
+    ///
+    /// `bounds` — document-space CSS px bbox of the element this group belongs
+    /// to (same convention as [`Self::PushBlendMode`]/[`Self::PushFilter`]).
+    /// BUG-272 (bbox-layer track): backends use it to skip the whole
+    /// offscreen-composite bracket when it lands outside the viewport (same
+    /// mechanism as BUG-273 срез 1 for blend groups). `None` — the group has no
+    /// element bbox (e.g. a full-page view-transition fade) and is never culled.
+    PushOpacity { alpha: f32, bounds: Option<Rect> },
     /// Закрывает opacity-группу.
     PopOpacity,
     /// Открывает blend-группу с указанным режимом смешения
@@ -1584,7 +1591,12 @@ pub(crate) fn hash_command_into(
             h_f32(h, *offset);
         }
         DisplayCommand::PushClipRect { rect } => h_rect(h, rect),
-        DisplayCommand::PushOpacity { alpha } => h_f32(h, *alpha),
+        DisplayCommand::PushOpacity { alpha, bounds } => {
+            h_f32(h, *alpha);
+            if let Some(r) = bounds {
+                h_rect(h, r);
+            }
+        }
         DisplayCommand::PushTransform { matrix } => {
             for v in matrix.0 {
                 h_f32(h, v);
@@ -2694,7 +2706,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::PopClip => {
                 out.push_str("PopClip\n");
             }
-            DisplayCommand::PushOpacity { alpha } => {
+            DisplayCommand::PushOpacity { alpha, .. } => {
                 out.push_str(&format!("PushOpacity {alpha:.3}\n"));
             }
             DisplayCommand::PopOpacity => {
@@ -4071,7 +4083,7 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
         ov.and_then(|o| o.opacity).unwrap_or(s.opacity)
     };
     if effective_opacity < 1.0 {
-        pre.push(DisplayCommand::PushOpacity { alpha: effective_opacity });
+        pre.push(DisplayCommand::PushOpacity { alpha: effective_opacity, bounds: Some(b.rect) });
         post.push(DisplayCommand::PopOpacity);
     } else if s.isolation == Isolation::Isolate
         && box_can_own_stacking_context(b)
@@ -4089,7 +4101,7 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
         // trigger. Reuse the opacity offscreen layer at full alpha: it clears a
         // transparent backdrop, redirects the subtree into it, then composites
         // the result back unchanged — exactly the isolated-group semantics.
-        pre.push(DisplayCommand::PushOpacity { alpha: 1.0 });
+        pre.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) });
         post.push(DisplayCommand::PopOpacity);
     }
     // Transform: animation override wins over style value.
@@ -7319,7 +7331,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             // CSS Color L3 §3: opacity < 1.0 creates compositing layer.
             let has_opacity = b.style.opacity < 1.0; // >0.0 already checked above
             if has_opacity {
-                out.push(DisplayCommand::PushOpacity { alpha: b.style.opacity });
+                out.push(DisplayCommand::PushOpacity { alpha: b.style.opacity, bounds: Some(b.rect) });
             }
             // CSS Transforms L1 §13: forward-матрица применяется до родителя,
             // т.е. PushTransform — ВНУТРИ opacity-layer-а. Применяется ко
@@ -8618,7 +8630,7 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
         BoxKind::Block => {
             let has_opacity = effective_opacity < 1.0;
             if has_opacity {
-                out.push(DisplayCommand::PushOpacity { alpha: effective_opacity });
+                out.push(DisplayCommand::PushOpacity { alpha: effective_opacity, bounds: Some(b.rect) });
             }
 
             // Determine effective transform: animated override wins over style.
@@ -9034,7 +9046,7 @@ mod tests {
             DisplayCommand::PopClip,
             DisplayCommand::PushTransform { matrix: Mat4::translation_2d(0.0, 0.0) },
             DisplayCommand::PopTransform,
-            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: None },
             DisplayCommand::PopOpacity,
             DisplayCommand::PopScrollLayer,
             DisplayCommand::PageBreak,
@@ -11620,7 +11632,7 @@ mod tests {
 
     #[test]
     fn push_opacity_serializes_with_alpha() {
-        let dl = vec![DisplayCommand::PushOpacity { alpha: 0.5 }];
+        let dl = vec![DisplayCommand::PushOpacity { alpha: 0.5, bounds: None }];
         assert_eq!(serialize_display_list(&dl), "PushOpacity 0.500\n");
     }
 
@@ -11716,7 +11728,7 @@ mod tests {
             DisplayCommand::PushClipRect {
                 rect: Rect::new(0.0, 0.0, 100.0, 100.0),
             },
-            DisplayCommand::PushOpacity { alpha: 0.7 },
+            DisplayCommand::PushOpacity { alpha: 0.7, bounds: None },
             DisplayCommand::FillRect {
                 rect: Rect::new(10.0, 10.0, 50.0, 50.0),
                 color: Color::BLACK,
@@ -11888,7 +11900,7 @@ mod tests {
             "",
         );
         let alpha = dl.iter().find_map(|c| match c {
-            DisplayCommand::PushOpacity { alpha } => Some(*alpha),
+            DisplayCommand::PushOpacity { alpha, .. } => Some(*alpha),
             _ => None,
         });
         assert_eq!(alpha, Some(0.0), "backface-hidden rotated box must force PushOpacity 0");
@@ -11902,7 +11914,7 @@ mod tests {
             "",
         );
         assert!(
-            !dl.iter().any(|c| matches!(c, DisplayCommand::PushOpacity { alpha } if *alpha == 0.0)),
+            !dl.iter().any(|c| matches!(c, DisplayCommand::PushOpacity { alpha, .. } if *alpha == 0.0)),
             "front-facing box must not be forced to zero opacity"
         );
     }
@@ -12327,7 +12339,7 @@ mod tests {
             .iter()
             .find(|c| matches!(c, DisplayCommand::PushOpacity { .. }))
             .unwrap();
-        if let DisplayCommand::PushOpacity { alpha } = push {
+        if let DisplayCommand::PushOpacity { alpha, .. } = push {
             assert!((alpha - 0.25).abs() < 1e-6);
         } else {
             panic!("expected PushOpacity");
@@ -13905,7 +13917,7 @@ mod tests {
             "",
         );
         let iso = count_variant(&dl, |c| {
-            matches!(c, DisplayCommand::PushOpacity { alpha } if (*alpha - 1.0).abs() < 1e-6)
+            matches!(c, DisplayCommand::PushOpacity { alpha, .. } if (*alpha - 1.0).abs() < 1e-6)
         });
         let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopOpacity));
         assert_eq!(iso, 1, "isolate must open one full-alpha group layer");
@@ -13935,7 +13947,7 @@ mod tests {
         let pushes: Vec<f32> = dl
             .iter()
             .filter_map(|c| match c {
-                DisplayCommand::PushOpacity { alpha } => Some(*alpha),
+                DisplayCommand::PushOpacity { alpha, .. } => Some(*alpha),
                 _ => None,
             })
             .collect();
@@ -14162,7 +14174,7 @@ mod tests {
         assert_eq!(push_count, 1, "should emit one PushOpacity for the animated node");
         assert_eq!(pop_count, 1, "PushOpacity/PopOpacity must be balanced");
 
-        if let Some(DisplayCommand::PushOpacity { alpha }) = anim_dl.iter().find(|c| matches!(c, DisplayCommand::PushOpacity { .. })) {
+        if let Some(DisplayCommand::PushOpacity { alpha, .. }) = anim_dl.iter().find(|c| matches!(c, DisplayCommand::PushOpacity { .. })) {
             assert!((*alpha - 0.5).abs() < 1e-5, "opacity should be 0.5, got {alpha}");
         }
     }
@@ -14495,7 +14507,7 @@ mod tests {
         // Сегмент внутри opacity-группы: реплей исказил бы групповую
         // композицию — план не строится.
         let content = vec![
-            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: None },
             DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 40.0, 40.0), color: red },
             DisplayCommand::PopOpacity,
         ];
@@ -16374,8 +16386,8 @@ mod tests {
             // Clip / opacity / transform.
             DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0) },
             DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 10.0, 11.0) },
-            DisplayCommand::PushOpacity { alpha: 0.5 },
-            DisplayCommand::PushOpacity { alpha: 0.5001 },
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: None },
+            DisplayCommand::PushOpacity { alpha: 0.5001, bounds: None },
             DisplayCommand::PushTransform { matrix: Mat4::IDENTITY },
             DisplayCommand::PushTransform { matrix: Mat4::translation_2d(1.0, 0.0) },
             DisplayCommand::PushTransform { matrix: Mat4::translation_2d(0.0, 1.0) },

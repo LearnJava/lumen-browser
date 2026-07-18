@@ -473,7 +473,7 @@ pub(crate) fn rasterize_cpu(
             // an off-screen group, then alpha-blends it. Push a transparent
             // full-size layer that becomes the active draw target; draws between
             // here and the matching `PopOpacity` accumulate into it.
-            DisplayCommand::PushOpacity { alpha } => {
+            DisplayCommand::PushOpacity { alpha, .. } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create opacity layer")?;
                 layers.push(CpuLayer::new(layer));
@@ -3630,7 +3630,7 @@ mod tests {
     fn opacity_half_blends_blue_over_white() {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: None },
             DisplayCommand::FillRect { rect: rect(10.0, 10.0, 40.0, 40.0), color: blue },
             DisplayCommand::PopOpacity,
         ];
@@ -3651,7 +3651,7 @@ mod tests {
     fn opacity_zero_keeps_background() {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushOpacity { alpha: 0.0 },
+            DisplayCommand::PushOpacity { alpha: 0.0, bounds: None },
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
             DisplayCommand::PopOpacity,
         ];
@@ -3667,7 +3667,7 @@ mod tests {
         let red = Color { r: 255, g: 0, b: 0, a: 255 };
         let green = Color { r: 0, g: 128, b: 0, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: None },
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 20.0, 20.0), color: red },
             DisplayCommand::FillRect { rect: rect(20.0, 0.0, 20.0, 20.0), color: green },
             DisplayCommand::PopOpacity,
@@ -3969,7 +3969,7 @@ mod tests {
         let fill = rect(50.0, 30.0, 40.0, 25.0);
         let mut cmds = crop_scene_backdrop_cmds(160, 120);
         cmds.extend([
-            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: None },
             DisplayCommand::FillRect { rect: fill, color: green },
             DisplayCommand::PopOpacity,
         ]);

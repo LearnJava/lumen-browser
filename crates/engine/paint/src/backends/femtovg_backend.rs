@@ -3421,14 +3421,18 @@ impl FemtovgBackend {
 
     /// BUG-273 срез 1: document-space CSS px bbox of the offscreen-composite
     /// group a command opens (`PushFilter` / `PushBackdropFilter` /
-    /// `PushBlendMode`), or `None` for anything else / a `PushFilter` with no
-    /// computable bounds. Same coordinate convention as [`DisplayCommand::cull_rect`]
-    /// — a leaf command's own bbox, pre-transform.
+    /// `PushBlendMode` / `PushOpacity`), or `None` for anything else / a
+    /// `PushFilter`/`PushOpacity` with no computable bounds. Same coordinate
+    /// convention as [`DisplayCommand::cull_rect`] — a leaf command's own bbox,
+    /// pre-transform.
     fn group_bounds(cmd: &DisplayCommand) -> Option<Rect> {
         match cmd {
             DisplayCommand::PushFilter { bounds, .. } => *bounds,
             DisplayCommand::PushBackdropFilter { bounds, .. } => Some(*bounds),
             DisplayCommand::PushBlendMode { bounds, .. } => Some(*bounds),
+            // BUG-272 (bbox-layer track): opacity groups carry an element bbox
+            // too (`None` for the full-page view-transition fade — never culled).
+            DisplayCommand::PushOpacity { bounds, .. } => *bounds,
             _ => None,
         }
     }
@@ -3919,7 +3923,7 @@ impl FemtovgBackend {
             // alpha. Per-draw set_global_alpha double-blends overlaps, lets
             // negative-z children show through siblings, and a nested group
             // replaces (not multiplies) the outer alpha.
-            DisplayCommand::PushOpacity { alpha } => {
+            DisplayCommand::PushOpacity { alpha, .. } => {
                 let prev_rt = self.current_rt();
                 let entry = match self.acquire_layer() {
                     Some(img_id) => {
@@ -4974,7 +4978,18 @@ mod tests {
             Some(r),
         );
         assert_eq!(
-            FemtovgBackend::group_bounds(&DisplayCommand::PushOpacity { alpha: 0.5 }),
+            FemtovgBackend::group_bounds(&DisplayCommand::PushOpacity {
+                alpha: 0.5,
+                bounds: Some(r),
+            }),
+            Some(r),
+        );
+        // A bounds-less opacity group (full-page view-transition fade) is never culled.
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushOpacity {
+                alpha: 0.5,
+                bounds: None,
+            }),
             None,
         );
         assert_eq!(
@@ -4997,7 +5012,7 @@ mod tests {
             }, // 0
             DisplayCommand::PushClipRect { rect: lumen_core::geom::Rect::new(0.0, 0.0, 5.0, 5.0) }, // 1
             DisplayCommand::PopClip, // 2
-            DisplayCommand::PushOpacity { alpha: 0.5 }, // 3
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: None }, // 3
             DisplayCommand::PopOpacity, // 4
             DisplayCommand::PopBlendMode, // 5 — matches index 0
             DisplayCommand::PopBlendMode, // 6 — unrelated trailing command
