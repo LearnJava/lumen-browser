@@ -6,6 +6,13 @@
 //! place the element's block-start/center/end at the corresponding position
 //! in the viewport, then return the candidate closest to `current_y`.
 //!
+//! CSS Scroll Snap L1 §5 insets (block axis): the target's snap area is its
+//! border box outset by the target's own `scroll-margin`; the container's
+//! snapport is the viewport inset by the container's `scroll-padding`. Both are
+//! applied here — `scroll-margin-top`/`-bottom` from each snap target and
+//! `scroll-padding-top`/`-bottom` from the root scroll container. The inline
+//! (X) axis has no snap path yet, so the `-left`/`-right` values are inert.
+//!
 //! Wire-up note for P3 (lumen-shell): call `find_scroll_snap_y` after a
 //! scroll gesture ends (WheelEvent phase == Ended, or keyboard scroll settle).
 //! Use `scroll-snap-type.strictness` on the *container* to decide whether to
@@ -31,8 +38,9 @@ use lumen_layout::{BoxKind, Display, LayoutBox, ScrollSnapAlignKeyword};
 /// The returned value is clamped to `[0, +∞)` but NOT to max-scroll; the
 /// caller should clamp to `max_scroll()` after receiving the result.
 pub fn find_scroll_snap_y(root: &LayoutBox, current_y: f32, viewport_h: f32) -> Option<f32> {
+    let (pad_top, pad_bottom) = container_block_padding(root);
     let mut candidates: Vec<f32> = Vec::new();
-    collect_snap_y(root, viewport_h, &mut candidates);
+    collect_snap_y(root, viewport_h, pad_top, pad_bottom, &mut candidates);
     if candidates.is_empty() {
         return None;
     }
@@ -58,8 +66,9 @@ pub fn find_scroll_snap_y_proximity(
     proximity_fraction: f32,
 ) -> Option<f32> {
     let threshold = viewport_h * proximity_fraction;
+    let (pad_top, pad_bottom) = container_block_padding(root);
     let mut candidates: Vec<f32> = Vec::new();
-    collect_snap_y(root, viewport_h, &mut candidates);
+    collect_snap_y(root, viewport_h, pad_top, pad_bottom, &mut candidates);
     candidates
         .into_iter()
         .filter(|&c| (c - current_y).abs() <= threshold)
@@ -71,26 +80,54 @@ pub fn find_scroll_snap_y_proximity(
         })
 }
 
-fn collect_snap_y(b: &LayoutBox, viewport_h: f32, out: &mut Vec<f32>) {
+/// CSS Scroll Snap L1 §5 — the block-axis `scroll-padding` of the document
+/// scroll container, which insets the snapport start/end edges. Returns
+/// `(scroll-padding-top, scroll-padding-bottom)` in CSS px. `auto` resolves to
+/// `0` during parsing, so the stored value is directly usable here.
+///
+/// The `root` box is the anonymous document/viewport box; the viewport's
+/// scroll-padding propagates from the root element (`:root` / `html`), which is
+/// `root`'s first block-level child. Falls back to `root`'s own style when
+/// there is no such child (e.g. a bare box passed directly in tests).
+fn container_block_padding(root: &LayoutBox) -> (f32, f32) {
+    let src = root
+        .children
+        .iter()
+        .find(|c| matches!(c.kind, BoxKind::Block))
+        .unwrap_or(root);
+    (src.style.scroll_padding_top, src.style.scroll_padding_bottom)
+}
+
+fn collect_snap_y(b: &LayoutBox, viewport_h: f32, pad_top: f32, pad_bottom: f32, out: &mut Vec<f32>) {
     if matches!(b.kind, BoxKind::Skip) || b.style.display == Display::None {
         return;
     }
+    // CSS Scroll Snap L1 §5: the snap area is the target's border box outset by
+    // its own `scroll-margin` (block axis: top/bottom); the snapport is the
+    // container viewport inset by `scroll-padding`. The alignment maps the snap
+    // area's start/center/end onto the snapport's start/center/end.
+    let area_start = b.rect.y - b.style.scroll_margin_top;
+    let area_end = b.rect.y + b.rect.height + b.style.scroll_margin_bottom;
     match b.style.scroll_snap_align.block {
         ScrollSnapAlignKeyword::None => {}
         ScrollSnapAlignKeyword::Start => {
-            out.push(b.rect.y.max(0.0));
+            // snapport start = offset + pad_top → offset = area_start - pad_top.
+            out.push((area_start - pad_top).max(0.0));
         }
         ScrollSnapAlignKeyword::Center => {
-            let snap = b.rect.y - (viewport_h - b.rect.height) * 0.5;
-            out.push(snap.max(0.0));
+            // snapport center = offset + (pad_top + viewport_h - pad_bottom)/2.
+            let area_center = (area_start + area_end) * 0.5;
+            let snapport_center = (pad_top + viewport_h - pad_bottom) * 0.5;
+            out.push((area_center - snapport_center).max(0.0));
         }
         ScrollSnapAlignKeyword::End => {
-            let snap = b.rect.y - (viewport_h - b.rect.height);
-            out.push(snap.max(0.0));
+            // snapport end = offset + viewport_h - pad_bottom → offset =
+            // area_end - (viewport_h - pad_bottom).
+            out.push((area_end - (viewport_h - pad_bottom)).max(0.0));
         }
     }
     for child in &b.children {
-        collect_snap_y(child, viewport_h, out);
+        collect_snap_y(child, viewport_h, pad_top, pad_bottom, out);
     }
 }
 
@@ -181,5 +218,84 @@ mod tests {
         // current_y=500, snap at 0, threshold=30%(600)=180. Distance=500 > 180 → None.
         let snap = find_scroll_snap_y_proximity(&root, 500.0, 600.0, 0.3);
         assert!(snap.is_none());
+    }
+
+    // ── scroll-margin / scroll-padding insets (CSS Scroll Snap L1 §5) ──────────
+
+    #[test]
+    fn start_snap_honors_scroll_margin_top() {
+        // Target at y=300 with scroll-margin-top:40 → snap area starts at 260,
+        // so start-alignment snaps to 260 (40px above the plain 300).
+        let root = build(
+            "<div class='sp'>x</div><div class='snap'>y</div>",
+            "
+                .sp { height: 300px; }
+                .snap { height: 200px; scroll-margin-top: 40px; scroll-snap-align: start; }
+            ",
+        );
+        let s = find_scroll_snap_y(&root, 260.0, 600.0).unwrap();
+        assert!((s - 260.0).abs() < 1.0, "expected 260.0, got {s}");
+    }
+
+    #[test]
+    fn end_snap_honors_scroll_margin_bottom() {
+        // Target at y=600 h=200, scroll-margin-bottom:40 → area end = 840.
+        // end-alignment: offset = 840 - (600 - 0) = 240 (40px past the plain 200).
+        let root = build(
+            "<div class='sp'>x</div><div class='snap'>y</div>",
+            "
+                .sp { height: 600px; }
+                .snap { height: 200px; scroll-margin-bottom: 40px; scroll-snap-align: end; }
+            ",
+        );
+        let s = find_scroll_snap_y(&root, 240.0, 600.0).unwrap();
+        assert!((s - 240.0).abs() < 1.0, "expected 240.0, got {s}");
+    }
+
+    #[test]
+    fn center_snap_honors_asymmetric_scroll_margin() {
+        // y=300 h=200, margin-top:20 margin-bottom:60 → area [280, 560], center 420.
+        // snapport center (no padding) = 300 → offset 120 (plain center would be 100).
+        let root = build(
+            "<div class='sp'>x</div><div class='snap'>y</div>",
+            "
+                .sp { height: 300px; }
+                .snap { height: 200px; scroll-margin-top: 20px; scroll-margin-bottom: 60px;
+                        scroll-snap-align: center; }
+            ",
+        );
+        let s = find_scroll_snap_y(&root, 120.0, 600.0).unwrap();
+        assert!((s - 120.0).abs() < 1.0, "expected 120.0, got {s}");
+    }
+
+    #[test]
+    fn start_snap_honors_container_scroll_padding() {
+        // scroll-padding-top:50 on the root element insets the snapport start,
+        // so a start-aligned target at y=300 snaps to 250 (50px earlier).
+        let root = build(
+            "<div class='sp'>x</div><div class='snap'>y</div>",
+            "
+                html { scroll-padding-top: 50px; }
+                .sp { height: 300px; }
+                .snap { height: 200px; scroll-snap-align: start; }
+            ",
+        );
+        let s = find_scroll_snap_y(&root, 250.0, 600.0).unwrap();
+        assert!((s - 250.0).abs() < 1.0, "expected 250.0, got {s}");
+    }
+
+    #[test]
+    fn start_snap_combines_margin_and_padding() {
+        // area_start = 400 - 30 = 370; pad_top = 50 → offset = 320.
+        let root = build(
+            "<div class='sp'>x</div><div class='snap'>y</div>",
+            "
+                html { scroll-padding-top: 50px; }
+                .sp { height: 400px; }
+                .snap { height: 200px; scroll-margin-top: 30px; scroll-snap-align: start; }
+            ",
+        );
+        let s = find_scroll_snap_y(&root, 320.0, 600.0).unwrap();
+        assert!((s - 320.0).abs() < 1.0, "expected 320.0, got {s}");
     }
 }
