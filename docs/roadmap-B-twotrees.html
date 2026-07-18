@@ -1552,9 +1552,9 @@
       {
        "id": "PERF-5",
        "title": "PERF-5: память — постоянная метрика с разбивкой",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Память как временной ряд, а не разовый дамп: LUMEN_MEM_REPORT (временная инструментация из BUG-272) → постоянная метрика: плато после загрузки N вкладок, рост при длинной сессии (leak-детектор), разбивка Rust-heap / GPU / C-heap. Мотивация: неатрибуцированное RAM-плато ~850МБ в ветке exp-wgpu-only — прямое следствие отсутствия такой разбивки; см. также reference_memory_diagnosis_toolkit"
+       "note": "DONE 2026-07-18: `scripts/mem_perf.py` — память как ВРЕМЕННОЙ РЯД в живом окне поверх уже существующих поверхностей (0 кода в движке, как PERF-2/3/4). Плотный ряд RSS процесса (WinAPI `GetProcessMemoryInfo`, как в perf_audit.py) снимается харнессом каждые `--sample-ms`; две фазы — `ramp` (открыть N вкладок MCP `new_tab` -> `per_tab_mb`, `ramp_slope_mb_per_tab`) и `hold` (idle -> `plateau_rss_mb`, `hold_slope_mb_per_min` = leak-детектор + флаг `leak_suspected` по порогу `--leak-mb-per-min`). Разбивка на конец: `rust_known` (сумма Rust-структур из `MEM_REPORT`) / `cheap_js` (js_malloc = C-heap V8) / `unattributed` (RSS - rust - js = GPU-драйвер/фрагментация/прочий C-heap) / `gpu_mb` (best-effort `--gpu`, `Get-Counter`, показан отдельно, не вычтен). Фикстура `scripts/perf-fixtures/mem.html` (офлайн, детерм. DOM+canvas); `--selftest` (median/МНК-наклон/парсинг MEM_REPORT/attribution без браузера — в ворота), `--compare` (>20% по plateau/per_tab/hold_slope/unattributed), `--json`. Журнал `docs/perf/memory.md` + базлайн `docs/perf/memory-runs/2026-07-18.json` (ef5acda9: 6 вкладок 568->687МБ, ~20МБ/вкладка, idle-наклон 0 = утечки нет, GPU 413МБ = 60% RSS -> подтверждение находки reference_memory_diagnosis_toolkit «гигабайт вне Rust-кучи = GPU», ср. ~850МБ-плато exp-wgpu-only). Честные ограничения: точного Rust-heap нет (нужен постоянный counting-allocator в движке, задача P1/P3); `MEM_REPORT` событийный -> на idle редок, разбивка = снимок «на последний отчёт», а плато/утечка на плотном RSS; `js_malloc` часто sentinel (недоступен в flag-off MT) -> доля V8 в unattributed; RSS/GPU — Windows. Порог-гейт откладывается на PERF-7"
       },
       {
        "id": "PERF-6",
