@@ -857,7 +857,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/session.rs:428` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
 `crates/driver/src/session.rs:446` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
 `crates/driver/src/session.rs:460` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
-`crates/driver/src/session.rs:1362` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
+`crates/driver/src/session.rs:1416` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
 `crates/driver/src/types.rs:15` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
 `crates/driver/src/types.rs:30` **enum** `Target` — Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
 `crates/driver/src/types.rs:41` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
@@ -1318,7 +1318,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/download_bindings.rs:25` **struct** `DownloadRequest` — A single pending download asked for by JS, awaiting the shell to start it
 `crates/js/src/download_bindings.rs:44` **fn** `enqueue` — Enqueue a download request. Public so non-JS engine paths (e.g. a future
 `crates/js/src/download_bindings.rs:51` **fn** `take_download_requests` — Drain and return all pending download requests
-`crates/js/src/element_internals.rs:13` **fn** `install_element_internals_bindings` — Install ElementInternals and CustomStateSet bindings into the JS context
+`crates/js/src/element_internals.rs:15` **fn** `install_element_internals_bindings` — Install ElementInternals and CustomStateSet bindings into the JS context
 `crates/js/src/es2026_proposals.rs:24` **fn** `install_es2026_proposals` — Install all ES2026+ proposal shims into the given QuickJS context
 `crates/js/src/esm.rs:27` **type** `SharedPageUrl` — Shared, late-writable page URL used by `LumenResolver` to resolve relative
 `crates/js/src/esm.rs:34` **type** `ModuleRegistry` — Shared module source registry: specifier → source code
@@ -1472,9 +1472,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/payment_request.rs:18` **fn** `init_payment_request` — Install the Payment Request API stub into the JS context
 `crates/js/src/periodic_sync.rs:19` **fn** `init_periodic_sync` — Install the Periodic Background Sync API stub into the JS context
 `crates/js/src/permissions_policy.rs:13` **fn** `install_permissions_policy_bindings` — Install Permissions Policy JS bindings: `document.featurePolicy` and the
-`crates/js/src/pip_bindings.rs:22` **enum** `PipRequest` — A picture-in-picture request emitted by the JS PiP API, awaiting the shell
-`crates/js/src/pip_bindings.rs:47` **fn** `enqueue` — Enqueue a PiP request. Public so non-JS engine paths can reuse the channel
-`crates/js/src/pip_bindings.rs:54` **fn** `take_pip_requests` — Drain and return all pending PiP requests
+`crates/js/src/pip_bindings.rs:29` **enum** `PipRequest` — A picture-in-picture request emitted by the JS PiP API, awaiting the shell
+`crates/js/src/pip_bindings.rs:64` **fn** `enqueue` — Enqueue a PiP request. Public so non-JS engine paths can reuse the channel
+`crates/js/src/pip_bindings.rs:71` **fn** `take_pip_requests` — Drain and return all pending PiP requests
 `crates/js/src/pointer_capture.rs:23` **fn** `install_pointer_capture_bindings` — Install `_lumen_set_capture_state` and `_lumen_release_capture_state` into the
 `crates/js/src/pointer_lock.rs:42` **fn** `request_pointer_lock` — Request pointer lock for element with given node ID
 `crates/js/src/pointer_lock.rs:50` **fn** `exit_pointer_lock` — Exit pointer lock
@@ -1729,7 +1729,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:107` **fn** `unindex_semantic` — Remove a history entry's embedding from the semantic index, if present
 `crates/knowledge/src/store.rs:118` **fn** `search_semantic` — Semantic (embedding-similarity) search over history entries indexed
 
-## lumen-layout  (633 symbols)
+## lumen-layout  (634 symbols)
 
 `crates/engine/layout/src/anchor.rs:47` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:76` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -2045,12 +2045,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/selector_query.rs:294` **fn** `find_all_by_selector` — Returns references to **all** `LayoutBox`es (in document order) whose
 `crates/engine/layout/src/selector_query.rs:335` **fn** `query_all` — Returns all [`NodeId`]s in the document that match `sel`
 `crates/engine/layout/src/selector_query.rs:353` **fn** `query_all_within` — Returns all [`NodeId`]s among `start`'s descendants (excluding `start`
-`crates/engine/layout/src/selector_query.rs:392` **fn** `matches_selector` — Returns `true` if `node` matches **any** selector in `sel`
-`crates/engine/layout/src/selector_query.rs:566` **fn** `computed_style_to_map` — Serialises a [`ComputedStyle`] to a CSS property → resolved-value map
-`crates/engine/layout/src/selector_query.rs:899` **fn** `computed_style_json` — Serialises a [`ComputedStyle`] into a deterministic JSON object string
-`crates/engine/layout/src/selector_query.rs:921` **fn** `computed_style_json_by_selector` — Like [`computed_style_by_selector`] but returns the full computed-style JSON
-`crates/engine/layout/src/selector_query.rs:936` **struct** `MatchedRule` — One CSS rule that matched a specific DOM node
-`crates/engine/layout/src/selector_query.rs:956` **fn** `matched_rules_for_node` — Return all CSS rules from `sheet` whose selectors match `node` in `doc`
+`crates/engine/layout/src/selector_query.rs:392` **fn** `query_all_scoped` — Returns all descendant [`NodeId`]s of `scope` (excluding `scope` itself)
+`crates/engine/layout/src/selector_query.rs:416` **fn** `matches_selector` — Returns `true` if `node` matches **any** selector in `sel`
+`crates/engine/layout/src/selector_query.rs:590` **fn** `computed_style_to_map` — Serialises a [`ComputedStyle`] to a CSS property → resolved-value map
+`crates/engine/layout/src/selector_query.rs:923` **fn** `computed_style_json` — Serialises a [`ComputedStyle`] into a deterministic JSON object string
+`crates/engine/layout/src/selector_query.rs:945` **fn** `computed_style_json_by_selector` — Like [`computed_style_by_selector`] but returns the full computed-style JSON
+`crates/engine/layout/src/selector_query.rs:960` **struct** `MatchedRule` — One CSS rule that matched a specific DOM node
+`crates/engine/layout/src/selector_query.rs:980` **fn** `matched_rules_for_node` — Return all CSS rules from `sheet` whose selectors match `node` in `doc`
 `crates/engine/layout/src/snapshot.rs:65` **fn** `serialize_layout_tree` — Корневой entry-point: рекурсивно сериализует всё дерево
 `crates/engine/layout/src/stacking.rs:29` **struct** `StackingContextId` — Идентификатор stacking context-а. Монотонно растёт от 0; 0 = root
 `crates/engine/layout/src/stacking.rs:35` **fn** `raw`
@@ -3998,7 +3999,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:982` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1037` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (952 symbols)
+## lumen-shell  (953 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -4477,16 +4478,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/permission_panel.rs:218` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
 `crates/shell/src/panels/permission_panel.rs:262` **fn** `build_panel` — Build the display list for the permission floating panel
 `crates/shell/src/panels/pip_os_window.rs:53` **struct** `PipOsConfig` — Geometry for the floating PiP window, in logical (CSS) pixels
-`crates/shell/src/panels/pip_os_window.rs:87` **fn** `pip_window_attributes` — Build the winit attributes for the floating PiP window
-`crates/shell/src/panels/pip_os_window.rs:116` **fn** `build_pip_content` — Build the display list shown in the floating PiP window for a `<video>`
-`crates/shell/src/panels/pip_os_window.rs:149` **fn** `physical_to_logical` — Convert a window's physical inner size to CSS logical pixels using its DPI
-`crates/shell/src/panels/pip_os_window.rs:177` **enum** `PipAction` — What the shell should do after feeding a request into [`PipController`]
-`crates/shell/src/panels/pip_os_window.rs:192` **struct** `PipController` — Tracks which `<video>` (by node id) currently owns the OS PiP window
-`crates/shell/src/panels/pip_os_window.rs:199` **fn** `new` — Create an idle controller with no active PiP window
-`crates/shell/src/panels/pip_os_window.rs:208` **fn** `active` — Node id of the element currently in OS PiP, or `None`
-`crates/shell/src/panels/pip_os_window.rs:214` **fn** `is_active` — `true` while an OS PiP window should be shown
-`crates/shell/src/panels/pip_os_window.rs:219` **fn** `on_enter` — Handle `_lumen_pip_enter(nid)`: open or re-target the floating window
-`crates/shell/src/panels/pip_os_window.rs:228` **fn** `on_exit` — Handle `_lumen_pip_exit(_)` or an OS close button: tear the window down
+`crates/shell/src/panels/pip_os_window.rs:76` **fn** `sized` — A window sized to `width`×`height` (e.g. `documentPictureInPicture
+`crates/shell/src/panels/pip_os_window.rs:98` **fn** `pip_window_attributes` — Build the winit attributes for the floating PiP window
+`crates/shell/src/panels/pip_os_window.rs:127` **fn** `build_pip_content` — Build the display list shown in the floating PiP window for a `<video>`
+`crates/shell/src/panels/pip_os_window.rs:160` **fn** `physical_to_logical` — Convert a window's physical inner size to CSS logical pixels using its DPI
+`crates/shell/src/panels/pip_os_window.rs:188` **enum** `PipAction` — What the shell should do after feeding a request into [`PipController`]
+`crates/shell/src/panels/pip_os_window.rs:203` **struct** `PipController` — Tracks which `<video>` (by node id) currently owns the OS PiP window
+`crates/shell/src/panels/pip_os_window.rs:210` **fn** `new` — Create an idle controller with no active PiP window
+`crates/shell/src/panels/pip_os_window.rs:219` **fn** `active` — Node id of the element currently in OS PiP, or `None`
+`crates/shell/src/panels/pip_os_window.rs:225` **fn** `is_active` — `true` while an OS PiP window should be shown
+`crates/shell/src/panels/pip_os_window.rs:230` **fn** `on_enter` — Handle `_lumen_pip_enter(nid)`: open or re-target the floating window
+`crates/shell/src/panels/pip_os_window.rs:239` **fn** `on_exit` — Handle `_lumen_pip_exit(_)` or an OS close button: tear the window down
 `crates/shell/src/panels/pip_window.rs:65` **struct** `PipWindow` — Picture-in-picture window state
 `crates/shell/src/panels/pip_window.rs:88` **fn** `new` — Create an inactive PiP window positioned at the origin (re-anchored to the
 `crates/shell/src/panels/pip_window.rs:102` **fn** `open` — Open the PiP card for a `<video>` source, anchored to the bottom-right of
@@ -5472,4 +5474,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5398 symbols in 23 crates*
+*Total: 5400 symbols in 23 crates*

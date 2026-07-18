@@ -78,6 +78,16 @@ misbehave if node wrappers aren't stable.
    poll `window.__lumen_wpt_results` — stays `null` indefinitely; `document.readyState` reaches
    `"complete"` immediately.
 
+## Related, separately-tracked issue
+
+A first attempt at reproducing this bug traced the crash to `Element`/`DocumentFragment`/
+`ShadowRoot.querySelector(All)` not being scoped to the calling node (always searching from
+`doc.root()`, so a detached subtree — exactly what `Output.show_results` builds before attaching it —
+silently returned `null`). That is a real, separate spec violation and has been fixed and filed on its
+own as [BUG-298](BUG-298-FIXED.md) (`query_all_within` + `_lumen_query_selector(_all)_scoped`), along
+with the previously-missing `insertAdjacentText`/`insertAdjacentElement`. It is not, however, the root
+cause of *this* bug's crash — see Фикс below.
+
 ## Фикс (2026-07-17)
 
 Node wrappers were never interned: `_lumen_make_element(nid)` (`crates/js/src/dom.rs`) built a brand-new

@@ -332,7 +332,26 @@ fn main() -> ExitCode {
     bench_frames::mark_process_start();
     // Load the fingerprint profile (9F.1) once, before any network or JS setup.
     // Absent config → engine defaults, so behaviour is unchanged out of the box.
-    config::init_global(config::load().unwrap_or_default());
+    let mut startup_profile = config::load().unwrap_or_default();
+    // BUG-295: automation sessions (BiDi / MCP) use an in-memory HTTP cache, never
+    // the persistent on-disk one. The disk cache is keyed by URL and survives across
+    // runs, so on the fixed ports an automation server reuses (e.g. wptserve's
+    // 8000/8001) a resource fetched in one run is replayed stale in the next — even
+    // after the served file changed on disk. That silently broke
+    // `tests/wpt/run_smoke.py`: the first run (before the wptrunner `env_options` fix
+    // served the right file) cached the wrong `testharnessreport.js` with its
+    // `Cache-Control: max-age=3600`, and every later run kept serving that stale copy
+    // from disk, setting the wrong result global forever, so the harness timed out no
+    // matter what else was fixed. In-memory cache = fresh per process, deterministic.
+    // This must be decided BEFORE `init_global` — the profile `OnceLock` is set-once,
+    // so a later `init_global` is a no-op — hence a raw arg scan here rather than
+    // reusing the `extract_*` parsers below.
+    if std::env::args()
+        .any(|a| matches!(a.as_str(), "--bidi-port" | "--mcp-live-port" | "--mcp" | "--mcp-port"))
+    {
+        startup_profile.no_persistent_state = true;
+    }
+    config::init_global(startup_profile);
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (devtools_port, rest_args) = match extract_devtools_port(&args) {
@@ -10949,6 +10968,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // Pointer Events L3 §4.1: flush pointer-move samples buffered this
+        // tick (real `CursorMoved` + injected `MouseMove`) as one coalesced
+        // `pointermove`/`mousemove` dispatch. Safety-net flush point: press/
+        // release/enter/leave dispatch sites flush eagerly for ordering, but a
+        // plain move with no state change only reaches JS here.
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
+        self.flush_pointer_moves();
+
         // Download manager: drain completion events from background threads.
         self.downloads.poll();
 
@@ -11067,20 +11094,27 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
-        // CC-7: Video Picture-in-Picture — open/close the real OS floating window.
-        // Drained from the process-global queue fed by `_lumen_pip_enter` /
-        // `_lumen_pip_exit` (see `lumen_js::pip_bindings`).
+        // CC-7 / P3-pip: Video and Document Picture-in-Picture — open/close the
+        // real OS floating window. Drained from the process-global queue fed
+        // by `_lumen_pip_enter` / `_lumen_pip_exit` / `_lumen_pip_request_window`
+        // (see `lumen_js::pip_bindings`).
         for req in lumen_js::pip_bindings::take_pip_requests() {
             use lumen_js::pip_bindings::PipRequest;
             use panels::pip_os_window::PipAction;
-            let action = match req {
-                PipRequest::Enter { nid } => self.pip_controller.on_enter(nid),
-                PipRequest::Exit { .. } => self.pip_controller.on_exit(),
-            };
-            match action {
-                PipAction::Open(nid) => self.open_pip_os(event_loop, nid),
-                PipAction::Close => self.close_pip_os(),
-                PipAction::None => {}
+            match req {
+                PipRequest::Enter { nid } => match self.pip_controller.on_enter(nid) {
+                    PipAction::Open(nid) => self.open_pip_os(event_loop, nid),
+                    PipAction::Close => self.close_pip_os(),
+                    PipAction::None => {}
+                },
+                PipRequest::Exit { .. } => match self.pip_controller.on_exit() {
+                    PipAction::Open(nid) => self.open_pip_os(event_loop, nid),
+                    PipAction::Close => self.close_pip_os(),
+                    PipAction::None => {}
+                },
+                PipRequest::OpenDocument { width, height } => {
+                    self.open_pip_os_document(event_loop, width, height);
+                }
             }
         }
 
@@ -11394,15 +11428,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.close_pip_os();
                     self.pip_controller.on_exit();
                     // Mirror the close into JS so `leavepictureinpicture` fires
-                    // and `document.pictureInPictureElement` clears. ADR-016
-                    // M2.2c-2d: fire-and-forget void eval через маршрутизатор —
-                    // под флагом off-UI-thread, без флага байт-идентично.
+                    // and `document.pictureInPictureElement` clears (video PiP),
+                    // and so Document PiP's `PictureInPictureWindow.close()`
+                    // runs too (P3-pip) — the same OS window may have been
+                    // opened by either side, and each guards itself so only
+                    // the truly-active one does anything. ADR-016 M2.2c-2d:
+                    // fire-and-forget void eval через маршрутизатор — под
+                    // флагом off-UI-thread, без флага байт-идентично.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     route_eval_js(
                         self.engine_thread.as_ref(),
                         self.js_ctx.as_ref(),
                         "if(typeof document!=='undefined'&&document.pictureInPictureElement)\
-                         {try{document.exitPictureInPicture();}catch(e){}}"
+                         {try{document.exitPictureInPicture();}catch(e){}}\
+                         if(typeof documentPictureInPicture!=='undefined'&&\
+                         documentPictureInPicture._activeWindow&&\
+                         !documentPictureInPicture._activeWindow._closed)\
+                         {try{documentPictureInPicture._activeWindow.close();}catch(e){}}"
                             .to_string(),
                     );
                 }
@@ -11427,6 +11469,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         p.renderer.set_scale_factor(scale_factor);
                     }
                     self.render_pip_os();
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
+                    self.deliver_pip_resize();
                 }
                 WindowEvent::RedrawRequested => {
                     self.render_pip_os();
@@ -11754,6 +11798,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (position.x as f32) / dpr;
                     let y_css = (position.y as f32) / dpr;
+                    // Pointer Events L3 §4.1: buffer this raw sample instead of
+                    // dispatching immediately. Flushed as one coalesced
+                    // `pointermove` on the next `about_to_wait` tick, or sooner
+                    // (below) if hover changes so ordering vs enter/leave holds.
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
+                    self.pending_pointer_moves.push((x_css, y_css));
                     let new_hovered = if y_css < tabs::strip::TAB_BAR_HEIGHT {
                         None
                     } else {
@@ -13179,6 +13229,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         )
                         .flatten()
                         .unwrap_or(hit_nid);
+                        // Buffered moves must fire ahead of pointerup.
+                        self.flush_pointer_moves();
                         self.js_pointer_event(ptr_nid, "pointerup", xu, yu, 0, 0);
                         self.js_mouse_event(hit_nid, "mouseup", xu, yu, 0, 0);
                         // Pointer Events L3 §4.1: implicit release on pointerup.
@@ -14919,6 +14971,33 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
+    /// Dispatch a `pointermove` whose buffered intermediate samples are exposed
+    /// via `PointerEvent.getCoalescedEvents()` (Pointer Events L3 §4.1).
+    /// `coalesced` holds CSS-pixel positions strictly older than
+    /// `(x_css, y_css)`, oldest first; the dispatched event is appended last,
+    /// per spec. Always dispatches with button=0/buttons=0 — the only caller
+    /// is the plain-move flush path, which (like the rest of this file) does
+    /// not track held-button state for hover/move events.
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    fn js_pointer_event_coalesced(&self, nid: u32, x_css: f32, y_css: f32, coalesced: &[(f32, f32)]) {
+        let mut points_json = String::from("[");
+        for (i, (cx, cy)) in coalesced.iter().enumerate() {
+            if i > 0 {
+                points_json.push(',');
+            }
+            points_json.push_str(&format!("[{},{}]", *cx as i32, *cy as i32));
+        }
+        points_json.push(']');
+        let script = format!(
+            "_lumen_dispatch_pointer_event({}, 'pointermove', {}, {}, 0, 0, {}, {})",
+            nid,
+            x_css as i32, y_css as i32,
+            self.mod_flags(),
+            points_json,
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+    }
+
     /// Dispatch a `DragEvent` of the given `event_type` to DOM node `nid`.
     ///
     /// Calls the JS shim `_lumen_dispatch_drag_event` (defined in `lumen-js::dom`)
@@ -14944,74 +15023,46 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
-    /// Flush `pending_pointer_moves` (Pointer Events L3 §4.1 coalescing) as a
-    /// single `pointermove` + `mousemove` dispatch.
-    ///
-    /// Hit-tests the *last* queued point to find the target (mirrors
-    /// [`Lumen::dispatch_mouse_move`]); every queued point becomes an entry
-    /// in `getCoalescedEvents()` on the dispatched (main) `pointermove`, main
-    /// event last per spec. `getPredictedEvents()` is computed JS-side from
-    /// the trailing two points. No-op if the buffer is empty or the last
-    /// point hits no element (e.g. cursor over the tab bar / browser chrome).
+    /// Buffer a synthetic pointer-move sample at CSS-pixel viewport
+    /// coordinates. Used by [`input::humanlike::HumanLikeSender`] to trace
+    /// Bézier-curve paths before a click. Real `CursorMoved` samples are
+    /// buffered the same way (see the `WindowEvent::CursorMoved` handler); both
+    /// sources are flushed together by [`Self::flush_pointer_moves`] as one
+    /// coalesced `pointermove` + `mousemove` dispatch (Pointer Events L3 §4.1).
+    fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
+        self.pending_pointer_moves.push((x_css, y_css));
+        #[cfg(not(any(feature = "quickjs", feature = "v8")))]
+        {
+            let _ = x_css;
+            let _ = y_css;
+        }
+    }
+
+    /// Flush buffered pointer-move samples (`CursorMoved` + injected automation
+    /// moves accumulated since the last flush) as one coalesced `pointermove` +
+    /// `mousemove` dispatch (Pointer Events L3 §4.1). The last buffered sample
+    /// hit-tests the target and becomes the "main" dispatched event; earlier
+    /// samples are exposed via `PointerEvent.getCoalescedEvents()`. Called once
+    /// per `about_to_wait` tick, and before any press/release/enter/leave
+    /// dispatch so buffered moves stay ordered ahead of those events. No-op if
+    /// nothing is buffered or there is no element at the final position.
     #[cfg(any(feature = "quickjs", feature = "v8"))]
     fn flush_pointer_moves(&mut self) {
         if self.pending_pointer_moves.is_empty() {
             return;
         }
-        let points = std::mem::take(&mut self.pending_pointer_moves);
-        let (x_css, y_css) = *points.last().expect("checked non-empty above");
-        let (page_x, page_y) = self.page_point(x_css, y_css);
-        let Some(hit) = self
-            .layout_box
-            .as_ref()
-            .and_then(|lb| hit_test(Point::new(page_x, page_y), lb))
-        else {
+        let samples = std::mem::take(&mut self.pending_pointer_moves);
+        let Some(&(x_css, y_css)) = samples.last() else {
             return;
         };
-        let hit_nid = hit.node.index() as u32;
-        let ptr_nid = route_query_js(
-            self.engine_thread.as_ref(),
-            self.js_ctx.as_ref(),
-            |c| c.pointer_capture_nid(),
-        )
-        .flatten()
-        .unwrap_or(hit_nid);
-        let mut points_json = String::from("[");
-        for (i, (px, py)) in points.iter().enumerate() {
-            if i > 0 {
-                points_json.push(',');
-            }
-            points_json.push_str(&format!("[{},{}]", *px as i32, *py as i32));
-        }
-        points_json.push(']');
-        let script = format!(
-            "_lumen_dispatch_pointer_move_coalesced({}, '{}', {}, {}, {})",
-            ptr_nid,
-            points_json,
-            0u8,
-            0u8,
-            self.mod_flags(),
-        );
-        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
-        self.js_mouse_event(hit_nid, "mousemove", x_css, y_css, 0, 0);
-    }
-
-    /// Dispatch a synthetic `mousemove` event at CSS-pixel viewport coordinates.
-    ///
-    /// Hit-tests the position (accounting for current scroll offset) and fires
-    /// `_lumen_dispatch_mouse_event` with event type `"mousemove"`.  Used by
-    /// [`input::humanlike::HumanLikeSender`] to trace Bézier-curve paths before
-    /// a click.  No-op when there is no JS context or no element at the position.
-    /// Also fires the matching W3C `pointermove` event per Pointer Events L2 §10.
-    fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
         let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
         let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
-        #[cfg(any(feature = "quickjs", feature = "v8"))]
-        if let Some(result) = hit.as_ref() {
+        if let Some(result) = hit {
             // Pointer Events L3 §4.1: if a pointer capture is active, redirect
             // pointermove (and all pointer events) to the captured element.
             let hit_nid = result.node.index() as u32;
@@ -15024,11 +15075,10 @@ impl Lumen {
             )
             .flatten()
             .unwrap_or(hit_nid);
-            self.js_pointer_event(ptr_nid, "pointermove", x_css, y_css, 0, 0);
+            let coalesced = &samples[..samples.len() - 1];
+            self.js_pointer_event_coalesced(ptr_nid, x_css, y_css, coalesced);
             self.js_mouse_event(hit_nid, "mousemove", x_css, y_css, 0, 0);
         }
-        #[cfg(not(any(feature = "quickjs", feature = "v8")))]
-        let _ = hit;
     }
 
     /// Handle a left-button click at CSS-pixel viewport coordinates `(x_css, y_css)`.
@@ -16515,6 +16565,57 @@ impl Lumen {
         self.notify_pip_window_resized(win_w, win_h);
     }
 
+    /// P3-pip: open a real OS floating window for Document Picture-in-Picture
+    /// (`documentPictureInPicture.requestWindow({width, height})`) — no
+    /// `<video>` is involved, so the window shows a plain sized container
+    /// (empty poster → [`panels::pip_os_window::build_pip_content`] draws just
+    /// the background fill). Forwarding the requesting document's actual DOM
+    /// content into the window is a follow-up — see
+    /// `docs/tasks/ph3-picture-in-picture.md`. Unlike [`Self::open_pip_os`]
+    /// there is no video overlay to fall back to on window/backend failure —
+    /// this Phase 0 slice just logs and gives up.
+    fn open_pip_os_document(&mut self, event_loop: &ActiveEventLoop, width: f32, height: f32) {
+        use panels::pip_os_window::{pip_window_attributes, PipOsConfig};
+
+        let cfg = if width > 0.0 && height > 0.0 {
+            PipOsConfig::sized(width, height)
+        } else {
+            PipOsConfig::DEFAULT
+        };
+        let title = self
+            .title
+            .clone()
+            .unwrap_or_else(|| "Picture-in-Picture".to_owned());
+        let attrs = pip_window_attributes(&title, cfg);
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(err) => {
+                eprintln!("Document PiP: не удалось создать OS-окно ({err})");
+                return;
+            }
+        };
+        let renderer = match backend_factory::create_backend(
+            window.clone(),
+            INTER_FONT.to_vec(),
+            self.target_color_space(),
+        ) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("Document PiP: не удалось создать рендер OS-окна ({err})");
+                return;
+            }
+        };
+
+        self.pip_os = Some(PipOsWindow {
+            window,
+            renderer,
+            poster_url: String::new(),
+            video_rect: Rect::new(0.0, 0.0, cfg.width, cfg.height),
+        });
+        self.render_pip_os();
+    }
+
     /// CC-7: tear down the OS PiP window. Releasing the last `Arc<Window>` makes
     /// winit destroy the OS window and free its GPU surface; the overlay fallback
     /// (if it was used instead) is cleared too.
@@ -16543,6 +16644,27 @@ impl Lumen {
         if let Err(err) = pip.renderer.render(&[], &content, 0.0, 0.0) {
             eprintln!("PiP OS render error: {err:?}");
         }
+    }
+
+    /// P3-pip slice 5: notify JS of the OS PiP window's current CSS-pixel size
+    /// via [`Self::notify_pip_window_resized`] — updates whichever
+    /// `PictureInPictureWindow` is active (video or legacy Document PiP,
+    /// both backed by [`Self::pip_os`]) and fires its `resize` event. No-op
+    /// when no OS PiP window is open. Reads the window's own current size —
+    /// use this from event handlers (e.g. `ScaleFactorChanged`) that don't
+    /// already have a fresh logical size on hand; when one is already
+    /// computed (e.g. `WindowEvent::Resized`), call
+    /// [`Self::notify_pip_window_resized`] directly instead.
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    fn deliver_pip_resize(&mut self) {
+        let Some(pip) = self.pip_os.as_ref() else {
+            return;
+        };
+        let size = pip.window.inner_size();
+        let scale = pip.window.scale_factor() as f32;
+        let (win_w, win_h) =
+            panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
+        self.notify_pip_window_resized(win_w, win_h);
     }
 
     /// Push the OS PiP window's current logical size into JS via

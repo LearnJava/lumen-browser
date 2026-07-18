@@ -1,3 +1,15 @@
+# BUG-272 срезы S10-S20: строго по порядку сверху вниз, ни один не пропускать (см. docs/tasks/bug-272-remaining-slices.md:9)
+docs/tasks/bug-272-remaining-slices.md:24
+docs/tasks/bug-272-remaining-slices.md:42
+docs/tasks/bug-272-remaining-slices.md:54
+docs/tasks/bug-272-remaining-slices.md:61
+docs/tasks/bug-272-remaining-slices.md:68
+docs/tasks/bug-272-remaining-slices.md:77
+docs/tasks/bug-272-remaining-slices.md:87
+docs/tasks/bug-272-remaining-slices.md:100
+docs/tasks/bug-272-remaining-slices.md:109
+docs/tasks/bug-272-remaining-slices.md:119
+docs/tasks/bug-272-remaining-slices.md:128
 BUGS.md:288
 BUGS.md:289
 BUGS.md:290

@@ -13,7 +13,7 @@ behavior of `script.evaluate` so a future fix (or regression) is visible.
 Current, verified behavior (2026-07-18): `awaitPromise` is **ignored** — a
 promise-valued expression returns the unsettled promise object (serialized as
 `{"type":"string","value":"{}"}`) regardless of `awaitPromise`. Tracked as
-[BUG-317](../../bugs/BUG-317-OPEN.md). When BUG-317 lands, flip the
+[BUG-319](../../bugs/BUG-319-OPEN.md). When BUG-319 lands, flip the
 `EXPECT_AWAIT_PROMISE_RESOLVES` assertions below to the resolved-value form.
 
 Usage (from repo root, after `pip install -r tests/wpt/requirements.txt` in a
@@ -43,7 +43,7 @@ sys.path[:0] = [
 from webdriver.bidi.client import BidiSession  # noqa: E402
 from webdriver.bidi.modules.script import ContextTarget  # noqa: E402
 
-#: Flip to True once BUG-317 (awaitPromise support) lands — then a
+#: Flip to True once BUG-319 (awaitPromise support) lands — then a
 #: promise-valued expression evaluated with awaitPromise=True must return its
 #: resolved RemoteValue, not the promise object.
 EXPECT_AWAIT_PROMISE_RESOLVES = False
@@ -121,13 +121,13 @@ async def verify(ws_url: str, page_url: str) -> None:
             assert resolved == {"type": "number", "value": 42}, \
                 f"awaitPromise should resolve, got {resolved!r}"
         else:
-            # BUG-317: awaitPromise ignored, promise object returned as-is.
+            # BUG-319: awaitPromise ignored, promise object returned as-is.
             assert resolved == PROMISE_OBJECT_REMOTE_VALUE, \
-                (f"awaitPromise behavior changed (BUG-317 fixed? flip "
+                (f"awaitPromise behavior changed (BUG-319 fixed? flip "
                  f"EXPECT_AWAIT_PROMISE_RESOLVES): got {resolved!r}")
 
         print(f"S6 OK: awaitPromise verified "
-              f"({'resolves' if EXPECT_AWAIT_PROMISE_RESOLVES else 'ignored - BUG-317'})")
+              f"({'resolves' if EXPECT_AWAIT_PROMISE_RESOLVES else 'ignored - BUG-319'})")
     finally:
         await session.end()
 

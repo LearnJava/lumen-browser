@@ -31,7 +31,7 @@ use lumen_dom::{
     DomPosition, Namespace, NodeData, NodeId, QualName, Range as DomRange, Selection,
     ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
-use lumen_layout::{matches_selector, query_all, query_all_within};
+use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
 use std::collections::HashMap;
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -1085,6 +1085,32 @@ impl V8JsRuntime {
             move |sel: String| -> Vec<u32> {
                 let doc = d.lock().unwrap();
                 query_all(&doc, &sel)
+                    .into_iter()
+                    .map(|n| n.index() as u32)
+                    .collect()
+            }
+        );
+        // BUG-291: Element/DocumentFragment/ShadowRoot.querySelector(All) must be
+        // scoped to descendants of the calling node, not the whole document —
+        // the unscoped `_lumen_query_selector(_all)` above silently found nothing
+        // for subtrees not yet attached to the document (`testharness.js` builds
+        // its results table off-document before appending it).
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_scoped",
+            move |node_id: u32, sel: String| -> Option<u32> {
+                let doc = d.lock().unwrap();
+                let scope = NodeId::from_index(node_id as usize);
+                query_all_scoped(&doc, scope, &sel).into_iter().next().map(|n| n.index() as u32)
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_all_scoped",
+            move |node_id: u32, sel: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let scope = NodeId::from_index(node_id as usize);
+                query_all_scoped(&doc, scope, &sel)
                     .into_iter()
                     .map(|n| n.index() as u32)
                     .collect()
@@ -4801,5 +4827,155 @@ mod tests {
             resumed.eval("typeof __anything").unwrap(),
             JsValue::String("undefined".into())
         );
+    }
+
+    // BUG-291 end-to-end: reproduces `testharness.js`'s `Output.show_results`
+    // pattern verbatim — build a `section > table > tbody` tree entirely
+    // detached from the document via a template-driven `render()` (the same
+    // `substitute`/`make_dom` helpers `tests/wpt/resources/testharness.js`
+    // uses), fetch `tbody` via `section.querySelector("tbody")` while still
+    // detached, append several rows, then do the exact crash-site call
+    // (`tbody.lastChild.lastChild.appendChild(...)`) for each row before
+    // finally attaching the whole tree to the document. Before the fix this
+    // threw `Cannot read properties of null (reading 'appendChild')` on the
+    // very first row, because `Element.querySelector` ignored `this` and
+    // searched from `document.root()` — which never reaches a detached tree.
+    #[test]
+    fn bug291_testharness_results_table_pattern_does_not_throw() {
+        let rt = runtime_with_dom(make_doc(), "");
+        let r = rt.eval(r#"
+            function is_single_node(template) { return typeof template[0] === "string"; }
+            function filter(array, callable) {
+                var rv = [];
+                for (var i = 0; i < array.length; i++) { if (callable(array[i])) rv.push(array[i]); }
+                return rv;
+            }
+            function map(array, callable) {
+                var rv = [];
+                for (var i = 0; i < array.length; i++) { rv.push(callable(array[i])); }
+                return rv;
+            }
+            function extend(array, items) { Array.prototype.push.apply(array, items); }
+
+            function substitute(template, substitutions) {
+                if (typeof template === "function") {
+                    var replacement = template(substitutions);
+                    if (!replacement) return null;
+                    return substitute(replacement, substitutions);
+                }
+                if (is_single_node(template)) return substitute_single(template, substitutions);
+                return filter(map(template, function(x) { return substitute(x, substitutions); }),
+                               function(x) { return x !== null; });
+            }
+            function substitute_single(template, substitutions) {
+                var substitution_re = /\$\{([^ }]*)\}/g;
+                function do_substitution(input) {
+                    var components = input.split(substitution_re);
+                    var rv = [];
+                    if (components.length === 1) { rv = components; }
+                    else if (substitutions) {
+                        for (var i = 0; i < components.length; i += 2) {
+                            if (components[i]) rv.push(components[i]);
+                            if (substitutions[components[i + 1]]) rv.push(String(substitutions[components[i + 1]]));
+                        }
+                    }
+                    return rv;
+                }
+                function substitute_attrs(attrs, rv) {
+                    rv[1] = {};
+                    for (var name in template[1]) {
+                        if (attrs.hasOwnProperty(name)) {
+                            rv[1][do_substitution(name).join("")] = do_substitution(attrs[name]).join("");
+                        }
+                    }
+                }
+                function substitute_children(children, rv) {
+                    for (var i = 0; i < children.length; i++) {
+                        if (children[i] instanceof Object) {
+                            var replacement = substitute(children[i], substitutions);
+                            if (replacement !== null) {
+                                if (is_single_node(replacement)) rv.push(replacement);
+                                else extend(rv, replacement);
+                            }
+                        } else {
+                            extend(rv, do_substitution(String(children[i])));
+                        }
+                    }
+                    return rv;
+                }
+                var rv = [];
+                rv.push(do_substitution(String(template[0])).join(""));
+                if (template[0] === "{text}") { substitute_children(template.slice(1), rv); }
+                else { substitute_attrs(template[1], rv); substitute_children(template.slice(2), rv); }
+                return rv;
+            }
+            function make_dom_single(template, doc) {
+                var output_document = doc || document;
+                var element;
+                if (template[0] === "{text}") {
+                    element = output_document.createTextNode("");
+                    for (var i = 1; i < template.length; i++) { element.data += template[i]; }
+                } else {
+                    element = output_document.createElementNS('http://www.w3.org/1999/xhtml', template[0]);
+                    for (var name in template[1]) {
+                        if (template[1].hasOwnProperty(name)) element.setAttribute(name, template[1][name]);
+                    }
+                    for (var i = 2; i < template.length; i++) {
+                        if (template[i] instanceof Object) {
+                            element.appendChild(make_dom(template[i]));
+                        } else {
+                            element.appendChild(output_document.createTextNode(template[i]));
+                        }
+                    }
+                }
+                return element;
+            }
+            function make_dom(template, substitutions, output_document) {
+                if (is_single_node(template)) return make_dom_single(template, output_document);
+                return map(template, function(x) { return make_dom_single(x, output_document); });
+            }
+            function render(template, substitutions, output_document) {
+                return make_dom(substitute(template, substitutions), output_document);
+            }
+
+            var log = document.createElement('div');
+            document.body.appendChild(log);
+
+            // Built entirely detached — not yet reachable from document.root().
+            var section = render(
+                ["section", {},
+                    ["h2", {}, "Details"],
+                    ["table", {"id":"results", "class":""},
+                        ["thead", {},
+                            ["tr", {},
+                                ["th", {}, "Result"],
+                                ["th", {}, "Test Name"],
+                                ["th", {}, "Message" ]]],
+                        ["tbody", {}]]]);
+            var tbody = section.querySelector("tbody");
+            if (tbody === null) throw new Error("querySelector on detached subtree returned null");
+
+            var tests = [
+                { name: 'foo', message: undefined, stack: undefined },
+                { name: 'bar', message: 'assert_equals: expected 1 but got 2', stack: 'at foo (file.js:1:1)' },
+                { name: 'baz', message: undefined, stack: undefined },
+            ];
+            for (var ti = 0; ti < tests.length; ti++) {
+                var test = tests[ti];
+                tbody.appendChild(render(
+                    ["tr", {"class":"overall-pass"},
+                        ["td", {"class":"pass"}, "PASS"],
+                        ["td", {}, test.name],
+                        ["td", {},
+                            test.message ?? "",
+                            ["pre", {}, test.stack ?? ""]]]));
+                // The exact BUG-291 crash site.
+                tbody.lastChild.lastChild.appendChild(
+                    document.createElementNS('http://www.w3.org/1999/xhtml', 'details'));
+            }
+            log.appendChild(section);
+            document.querySelectorAll('tbody tr').length;
+        "#).unwrap();
+        assert_eq!(r, JsValue::Number(3.0));
     }
 }

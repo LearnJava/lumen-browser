@@ -18,6 +18,30 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **Document Picture-in-Picture reaches a real OS window ([P1] P3-pip, 2026-07-17).**
+  `documentPictureInPicture.requestWindow({width,height})` (`document_pip.rs`) called
+  `_lumen_pip_request_window(width,height)` — but that native was never registered, so the
+  call silently no-op'd and no window ever opened. `pip_bindings.rs` now registers it
+  (`into_v8_fn2`), enqueuing a new `PipRequest::OpenDocument { width, height }` the shell drains
+  into `open_pip_os_document` (real sized always-on-top winit window). `PictureInPictureWindow`
+  is unified: `document_pip.rs` defines the class (it installs first, alphabetically) and
+  `video_pip.rs` reuses `globalThis.PictureInPictureWindow` rather than defining a rival one
+  (falling back to its own minimal definition only when evaluated in isolation, e.g. its own
+  rquickjs unit tests). Both PiP paths publish the active window as
+  `globalThis.__lumen_pip_active_window`, so `_lumen_pip_deliver_resize(w,h)` (shell → JS on
+  OS-window resize) updates whichever session is open and fires its `resize` event. Follow-up
+  at the time: forwarding the page's real DOM content into the document-PiP window
+  (`PictureInPictureWindow.document` was still an in-memory stub) — done in later slices
+  (`p1-docpip-content`/`p1-docpip-authorcss`, see `ROADMAP.md` P3-pip). 6 new tests across
+  `pip_bindings.rs` + `document_pip.rs`.
+- **`CustomStateSet` reflects into `data-lumen-state-<name>` ([P1] P3-customstate, 2026-07-17).**
+  `element_internals.rs`'s `ELEMENT_INTERNALS_SHIM` (shared by both engines — QuickJS
+  `install_element_internals_bindings` and V8 `install_element_internals_bindings_v8` eval the
+  same string) — `add`/`delete`/`clear` now call `_lumen_set_attr`/`_lumen_remove_attr` on the
+  host element, same sentinel-attribute bridge as `:fullscreen`/`:modal`. The CSS-side matcher
+  (`PseudoClass::State`, `layout/src/style.rs`) landed earlier (2026-07-15) on the mistaken
+  assumption this reflection already existed — it didn't; `CustomStateSet` only held an in-memory
+  `Set`. 2 new tests (add/delete/clear round-trip, delete-of-absent-state no-op).
 - **`structuredClone` — spec-conformant cycles/typed-arrays/DataCloneError
   (`P3-structclone` partial, [P1] 2026-07-18).** The shared `WEB_API_SHIM`
   implementation (`dom.rs`) now threads a `memory` Map (original → clone) through
@@ -104,6 +128,7 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   - DOM write: `setAttribute`, `removeAttribute`, `textContent =`, `innerHTML =`, `createElement`, `createTextNode`, `appendChild`, `removeChild`.
   - `document.title` get/set.
   - querySelector uses full CSS3 selector engine (lumen_layout::query_all): compound selectors, combinators ( > + ~), pseudo-classes, attribute selectors. element.matches() and element.closest() use per-node matches_selector. (P2 2026-06-03)
+  - **BUG-291 fix (P2-wpt, 2026-07-17).** `Element`/`DocumentFragment`/`ShadowRoot.querySelector(All)` now use `lumen_layout::query_all_scoped(doc, scope, sel)` (new natives `_lumen_query_selector(_all)_scoped`) instead of the document-global `query_all` — scoped to the calling node's descendants (DOM Parentnode §4.2.5), which also makes them work on subtrees not yet attached to the document. `document.querySelector(All)` is unchanged (still whole-document). Also: node-wrapper identity is now stable under `===` — `_lumen_make_element` interns wrappers in `_lumen_element_wrappers[nid]` (purged per-nid by the existing idle `_lumen_gc_collect` tick) instead of minting a fresh object on every call. Added `insertAdjacentText`/`insertAdjacentElement` (were entirely missing).
   - 19 DOM tests + 16 runtime tests = 35 total. All pass.
   - Shell integration: `run_scripts_with_dom` wraps `Document` in `Arc<Mutex<>>`, calls `install_dom`, drops runtime to release Arc clones, recovers `Document`.
 - **Fetch API JS shim** (`install_dom_api`, `crates/js/src/dom.rs`). 2026-05-22.

@@ -46,6 +46,12 @@ Branch names: short kebab-case. **Developer sessions (P1–P5) must prefix the b
 
 Multiple Claude Code sessions may work simultaneously. Full workflow for task lifecycle:
 
+**Step 0: Sync with the remote (BEFORE step 1)**
+1. `git pull origin main` on the `main` worktree, before reading `STATUS-PN.md`/`ROADMAP.md` or creating any branch/worktree. Parallel sessions push to `origin/main` independently, so a session that skips this reads stale task-pointer/roadmap state and, if left long enough, turns what would have been a small conflict into a large multi-file one.
+2. If `pull` fast-forwards or auto-merges cleanly — done, proceed to Step 1.
+3. If `pull` reports real conflicts (diverged history, `<<<<<<<` markers): resolve **file-by-file**, reading enough context on both sides to understand intent — do not run `git checkout --ours/--theirs` blindly across many files, and do not let an agent resolve a whole batch without spot-checking cross-file consistency (shared globals, renamed identifiers, feature-flag names). After resolving, re-verify: `cargo check`/`cargo clippy -- -D warnings` for every touched crate, plus scoped `cargo test` for crates with real logic conflicts (not just doc/config files) — a clean compile does not prove a merge is behaviorally correct. Only then commit the merge.
+4. Push the resolved `main` immediately (`git push origin main`) so other sessions see it before it can drift again.
+
 **Step 1: Task startup (BEFORE coding)**
 1. Read `STATUS-PN.md` + `git branch` — check which tasks already have a `p<N>-…` branch
 2. If a `p<N>-…` branch already exists for the task — it's taken, pick the next pointer line instead
@@ -54,7 +60,7 @@ Multiple Claude Code sessions may work simultaneously. Full workflow for task li
 
 **Step 2: During work** — see "Worktree isolation" section below
 
-**Step 3: Task completion (7 mandatory steps)** — see "Task completion checklist" section below
+**Step 3: Task completion (7 mandatory steps)** — see "Task completion checklist" section below. Step 5 of that checklist (`git push origin main`) is not optional or batchable — push right after the merge commit, in the same sitting, not at some later "wrap-up" point.
 
 **If work is cancelled:**
 - Delete the worktree: `git worktree remove .claude/worktrees/<task-name>`

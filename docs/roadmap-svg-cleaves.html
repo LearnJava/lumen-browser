@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-18",
  "counts": {
-  "open": 48,
-  "fixed": 240,
+  "open": 49,
+  "fixed": 241,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 288,
+ "total_bugs": 290,
  "phases": [
   {
    "id": "P0",
@@ -1091,13 +1091,13 @@
      "id": "P3-customstate",
      "title": "ElementInternals + custom element states (:state())",
      "status": "done",
-     "note": "DONE 2026-07-17 (P1): CSS-селектор :state() в каскаде влит P4 (30af60e0, парсер+матчер); ElementInternals.states теперь реально отражает состояния в data-lumen-state-<name> через _lumen_set_attr/_lumen_remove_attr (element_internals.rs) — цепочка замкнута end-to-end"
+     "note": "DONE 2026-07-17 (P1 + P4): ElementInternals + CustomStateSet (element_internals.rs) с реальным отражением состояния в sentinel-атрибут data-lumen-state-<name> через _lumen_set_attr/_lumen_remove_attr (CustomStateSet.add/delete/clear); CSS-селектор :state() в каскаде замкнут — матчер влит P4 (30af60e0, парсер+матчер) поверх P1-атрибута — цепочка end-to-end"
     },
     {
      "id": "P3-pointerfull",
      "title": "Pointer Events L3 (coalesced / predicted events)",
      "status": "done",
-     "note": "реализовано (2026-07-17): shell копит CursorMoved-сэмплы между кадрами, флашит через _lumen_dispatch_pointer_move_coalesced — реальный getCoalescedEvents() (главное событие последним) + линейная экстраполяция getPredictedEvents(); docs/tasks/ph3-pointer-events-l3.md"
+     "note": "DONE 2026-07-17 (P1): shell буферизует CursorMoved/injected pointer-move сэмплы (`pending_pointer_moves`), флашит покадрово в `about_to_wait` (и eagerly перед pointerdown/up/enter/leave для порядка) как один coalesced `pointermove`; `_lumen_dispatch_pointer_event`/`_lumen_dispatch_pointer_move_coalesced` строит реальный `getCoalescedEvents()` из буфера (главное событие последним), `getPredictedEvents()` — линейная экстраполяция по последним двум сэмплам (`crates/shell/src/main.rs`, `crates/js/src/dom.rs`); см. docs/tasks/ph3-pointer-events-l3.md"
     },
     {
      "id": "P3-cookiestore",
@@ -1180,8 +1180,8 @@
     {
      "id": "P3-pip",
      "title": "Picture-in-Picture API",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-17): Element.requestPictureInPicture — реальное OS-окно (CC-7, panels/pip_os_window.rs) + доставка реального размера через `_lumen_pip_deliver_resize` на открытие и на `WindowEvent::Resized` (было (0,0)-заглушкой, `resize`-событие никогда не летело) — ЗАВЕРШЕНО. Document PiP срез 1 (P1 2026-07-17, ветка p1-docpip-os-window): реальное always-on-top OS-окно (panels/doc_pip_os_window.rs, `_lumen_docpip_request_window`/`_lumen_docpip_close`, зеркалит CC-7) + реальный размер через `_lumen_docpip_deliver_resize`/`_lumen_docpip_deliver_close` — ЗАВЕРШЕНО. Document PiP срез 2 (P1 2026-07-17, ветка p1-docpip-content): `.document` перестал быть JS-only mock-объектом — `pipWindow.document.body.appendChild(el)` перемещает настоящий DOM-узел в скрытый `<div>`-контейнер (реальный DOM move, узел покидает прежнего родителя), каждая мутация сериализует контейнер (`innerHTML`) и шлёт в шелл через `_lumen_docpip_set_content_html`; `Lumen::render_doc_pip_os` парсит разметку `lumen_html_parser::parse`, гоняет `lumen_layout::layout` + `paint_ordered` в размер плавающего окна и красит поверх фона. Document PiP срез 3 (P1 2026-07-17, ветка p1-docpip-authorcss): `Lumen::render_doc_pip_os` кладёт перемещённое поддерево против `self.layout_source.stylesheet` (реальный авторский stylesheet главной страницы) вместо пустого — CSS-каскад перемещённого узла теперь подхватывается. Известные ограничения: один и тот же `Document`, что и у главной страницы (нет независимого per-PiP-window документа), картинки внутри поддерева не рисуются (у окна свой image-кэш) — дошить в следующем срезе"
+     "status": "done",
+     "note": "DONE 2026-07-17 (P1): Element.requestPictureInPicture — реальное OS-окно (CC-7, panels/pip_os_window.rs) + доставка реального размера через `_lumen_pip_deliver_resize` на открытие и на `WindowEvent::Resized` (было (0,0)-заглушкой, `resize`-событие никогда не летело); `PictureInPictureWindow` унифицирован между video/document PiP. Document PiP срез 1 (ветка p1-docpip-os-window): реальное always-on-top OS-окно (panels/doc_pip_os_window.rs, `_lumen_docpip_request_window`/`_lumen_docpip_close`, зеркалит CC-7) + реальный размер через `_lumen_docpip_deliver_resize`/`_lumen_docpip_deliver_close`. Document PiP срез 2 (ветка p1-docpip-content): `.document` перестал быть JS-only mock-объектом — `pipWindow.document.body.appendChild(el)` перемещает настоящий DOM-узел в скрытый `<div>`-контейнер (реальный DOM move, узел покидает прежнего родителя), каждая мутация сериализует контейнер (`innerHTML`) и шлёт в шелл через `_lumen_docpip_set_content_html`; `Lumen::render_doc_pip_os` парсит разметку `lumen_html_parser::parse`, гоняет `lumen_layout::layout` + `paint_ordered` в размер плавающего окна и красит поверх фона. Document PiP срез 3 (ветка p1-docpip-authorcss): `Lumen::render_doc_pip_os` кладёт перемещённое поддерево против `self.layout_source.stylesheet` (реальный авторский stylesheet главной страницы) вместо пустого — CSS-каскад перемещённого узла теперь подхватывается. Известные ограничения: один и тот же `Document`, что и у главной страницы (нет независимого per-PiP-window документа), картинки внутри поддерева не рисуются (у окна свой image-кэш) — дошить в следующем срезе"
     },
     {
      "id": "P3-imagebitmap",
@@ -1483,7 +1483,7 @@
        "title": "DEVX-5: headless MCP/InProcessSession — снять заглушки",
        "status": "done",
        "size": "L",
-       "note": "Срез 1 DONE 2026-07-17: `scroll` подключён к существующему `scroll_page_by` (off-main-thread, без релейаута); `screenshot` теперь по умолчанию рендерит через CPU tiny-skia путь (`cpu-render` стал default-фичей `lumen-driver` вместо opt-in) — работает без GPU-адаптера, детерминированно на всех ОС. Срез 2 DONE 2026-07-17: `SessionState::doc` стал `Arc<Mutex<Document>>`, разделяемым с персистентным V8-рантаймом (feature `v8`, теперь тоже default), переустанавливаемым на каждый `navigate()` (паттерн `V8JsRuntime::new()`+`install_dom()` из `crates/shell/src/main.rs`); `click` — hit-test (`lumen_paint::hit_test`) + `_lumen_dispatch_mouse_event` (mousedown/mouseup/click); `type_text` — посимвольные keydown/input/keyup + нативная мутация `value`; `eval` — JSON значение через `JsValue::to_json_string`. DEVX-5 завершена."
+       "note": "Срез 1 DONE 2026-07-16/17: `InProcessSession` (crates/driver) — `click`/`type_text`/`scroll`/`eval`/`screenshot` сняты с заглушек; `scroll` подключён к существующему `scroll_page_by` (off-main-thread, без релейаута); `screenshot` рендерит через CPU tiny-skia путь (`cpu-render` стал default-фичей `lumen-driver` вместо opt-in) — работает без GPU-адаптера, детерминированно на всех ОС; `click`/`type_text` изначально повторяли DOM-семантику `WinitSession` (переход по `<a href>`, тоггл checkbox/radio, запись `value`). Срез 2 DONE 2026-07-17: `SessionState::doc` стал `Arc<Mutex<Document>>`, разделяемым с персистентным V8-рантаймом (feature `v8`, теперь тоже default), переустанавливаемым на каждый `navigate()` (паттерн `V8JsRuntime::new()`+`install_dom()` из `crates/shell/src/main.rs`); `click` — hit-test (`lumen_paint::hit_test`) + `_lumen_dispatch_mouse_event` (mousedown/mouseup/click); `type_text` — посимвольные keydown/input/keyup + нативная мутация `value`; `eval` — JSON значение через `JsValue::to_json_string`. DEVX-5 завершена."
       },
       {
        "id": "DEVX-6",
@@ -3595,20 +3595,34 @@
    "debtor": false
   },
   "BUG-315": {
+   "status": "fixed",
+   "title": "Две независимые причины на один симптом (`run_smoke.py` TIMEOUT): (1) `TestEnvironment.get_routes` в вендоренном `environment.py` всегда подменяет `/resources/t…",
+   "component": "`tools/wptrunner/wptrunner/browsers/lumen.py` + `crates/shell/src/main.rs`",
+   "date": "2026-07-17",
+   "debtor": false
+  },
+  "BUG-316": {
+   "status": "open",
+   "title": "`cases::snapshot_cpu::cpu_snapshots_match_references` падает (~30 страниц, большие расхождения в байтах) при совместном тестировании `lumen-driver`+`lumen-shell…",
+   "component": "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-317": {
    "status": "open",
    "title": "`MutationRecord` не выставлен как глобальный интерфейс — `MutationRecord is not defined` (колбэк MutationObserver срабатывает асинхронно, но записи нельзя прове…",
    "component": "js (WEB_API_SHIM, dom.rs)",
    "date": null,
    "debtor": false
   },
-  "BUG-316": {
+  "BUG-318": {
    "status": "open",
    "title": "MutationObserver: некорректный учёт записей (дубли/лишние, `takeRecords()` не очищает очередь) + subtree-мутации не наблюдаются (async-тест уходит в TIMEOUT). W…",
    "component": "js (WEB_API_SHIM, dom.rs)",
    "date": null,
    "debtor": false
   },
-  "BUG-317": {
+  "BUG-319": {
    "status": "open",
    "title": "`script.evaluate` игнорирует `awaitPromise`: при `awaitPromise:true` возвращает сам объект промиса (`{}`), а не разрешённое значение. Пайплайн WPT не затронут (…",
    "component": "bidi-server (protocol.rs)",
@@ -3617,8 +3631,11 @@
   }
  },
  "unlinked": {
+  "`tools/wptrunner/wptrunner/browsers/lumen.py` + `crates/shell/src/main.rs`": [
+   "BUG-315"
+  ],
   "bidi-server (protocol.rs)": [
-   "BUG-317"
+   "BUG-319"
   ],
   "css-parser": [
    "BUG-022",
@@ -3642,6 +3659,9 @@
    "BUG-061",
    "BUG-064",
    "BUG-112"
+  ],
+  "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)": [
+   "BUG-316"
   ],
   "encoding": [
    "BUG-162"
@@ -3693,8 +3713,8 @@
    "BUG-312",
    "BUG-313",
    "BUG-314",
-   "BUG-315",
-   "BUG-316"
+   "BUG-317",
+   "BUG-318"
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"

@@ -1,48 +1,39 @@
-# BUG-317: BiDi `script.evaluate` игнорирует `awaitPromise`
+# BUG-317: `MutationRecord` не выставлен как глобальный интерфейс
+
+**Renumbered 2026-07-18** from `BUG-315` — collided with the real `BUG-315`
+(testharnessreport route + persistent-cache fix, already `FIXED` on
+`origin/main`), resolved while merging S6/S7 back into `main`.
 
 **Статус:** OPEN
 **Дата:** 2026-07-18
-**Компонент:** bidi-server (`crates/bidi-server/src/protocol.rs`, `script_evaluate`)
-**Найден:** P2-wpt S6, проверка awaitPromise (`tests/wpt/verify_s6_await_promise.py`)
+**Компонент:** js (WEB_API_SHIM, `crates/js/src/dom.rs`)
+**Найден:** P2-wpt S6, курируемый асинхронный DOM-сабсет через `wptrunner`
 
 ## Симптом
 
-`script.evaluate` не обрабатывает параметр `awaitPromise`: при `awaitPromise:
-true` и выражении, вычисляющемся в `Promise`, сервер возвращает **сам объект
-промиса** (сериализуется как `{"type":"string","value":"{}"}`), а не его
-разрешённое значение.
+Интерфейс `MutationRecord` не выставлен на глобальном объекте — `MutationRecord
+is not defined`. Колбэк MutationObserver вызывается корректно (асинхронно, через
+microtask), но передаваемые записи нельзя проверить через `instanceof
+MutationRecord`.
 
-Проверено живым probe против `lumen --bidi-port` (навигация на страницу со
-скриптом, затем `script.evaluate`):
+Наблюдаемый провал:
 
-| выражение | awaitPromise | получено | ожидание BiDi |
-|---|---|---|---|
-| `1+1` | false | `{type:number, value:2}` | ✅ |
-| `Promise.resolve(42)` | false | `{type:string, value:"{}"}` | RemoteValue `promise` |
-| `Promise.resolve(42)` | **true** | `{type:string, value:"{}"}` | **`{type:number, value:42}`** |
-| `(async () => 42)()` | true | `{type:string, value:"{}"}` | `{type:number, value:42}` |
-| `Promise.reject(new Error(...))` | true | `{type:string, value:"{}"}` | `javascript error` |
+- `dom/nodes/MutationObserver-callback-arguments.html` →
+  `Callback is invoked with |this| value of MutationObserver and two arguments`
+  → `MutationRecord is not defined` (`expected: FAIL`).
 
-## Влияние
-
-Пайплайн WPT **не затронут**: `LumenTestharnessExecutor` намеренно использует
-`awaitPromise=false` и опрашивает глобаль `window.__lumen_wpt_results` (async-тесты
-завершаются через собственный event loop страницы + testharness completion, не
-через awaitPromise). Баг относится только к прямому использованию BiDi
-`awaitPromise` внешними клиентами.
+Та же семья, что [BUG-314](BUG-314-OPEN.md) (DOM-конструкторы не выставлены как
+глобали).
 
 ## Ожидание
 
-BiDi §10.2.4: при `awaitPromise:true`, если результат — промис, ждать его
-разрешения и вернуть разрешённое значение (или `javascript error` при reject).
-Требует прокачки microtask/event loop внутри eval-пути (`AutomationCommand::Eval`
-синхронен и снимает результат до слива microtask-очереди), поэтому корректная
-реализация — отдельный срез (нужна асинхронная команда либо two-round-trip
-extract после слива microtasks).
+DOM Standard §4.3.3: `MutationRecord` доступен как глобальный интерфейс;
+записи, передаваемые в колбэк `MutationObserver`, — его экземпляры. Реализовать
+в engine-agnostic `WEB_API_SHIM`.
 
 ## Воспроизведение
 
 ```bash
 LUMEN_PROFILE=dev-release tests/wpt/.venv/Scripts/python.exe \
-  tests/wpt/verify_s6_await_promise.py
+  tests/wpt/run_smoke.py /dom/nodes/MutationObserver-callback-arguments.html
 ```

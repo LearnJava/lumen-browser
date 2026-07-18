@@ -66,20 +66,28 @@ def env_options():
     # against the default hostname (found while implementing S4).
     #
     # `testharnessreport`: override the report script `wptserve` serves at
-    # `/resources/testharnessreport.js`. wptrunner's default
-    # (`environment.py::get_routes`) is a *static route* that serves its own
-    # bundled `executors/message-queue.js` + `testharnessreport.js` pair —
-    # results are pushed onto `window.__wptrunner_message_queue` and drained by
-    # the stock `WebDriverProtocol`. Our bespoke BiDi-only executor
-    # (`executorlumen.py`) instead polls `window.__lumen_wpt_results`, which
-    # only Lumen's own `tests/wpt/resources/testharnessreport.js` sets. Because
-    # that static route wins over any on-disk file of the same URL, the vendored
-    # report script is *never served* under wptrunner+wptserve — so the poll
-    # times out forever. Pointing the route at our own script restores the
-    # `__lumen_wpt_results` contract the executor expects. This was the sole
-    # root cause of the `run_smoke.py` timeout tracked as BUG-301 (a manual BiDi
-    # driver over a plain HTTP server always served the on-disk file, hence
-    # "works manually, times out under wptrunner").
+    # `/resources/testharnessreport.js`. `TestEnvironment.get_routes`
+    # (`environment.py`) ALWAYS registers a *static route* for that URL,
+    # defaulting to wptrunner's own generic `executors/message-queue.js` +
+    # `testharnessreport.js` pair (results pushed onto
+    # `window.__wptrunner_message_queue`, drained by the stock
+    # `WebDriverProtocol`) unless the product's `env_options()` supplies a
+    # `"testharnessreport"` override. That default unconditionally shadows
+    # whatever is on disk at `tests/wpt/resources/testharnessreport.js`,
+    # including our own Lumen-specific one that stashes results on
+    # `window.__lumen_wpt_results` (`LumenTestharnessExecutor` in
+    # `executorlumen.py` polls exactly that global) — because the static
+    # route wins over any on-disk file at the same URL, the vendored report
+    # script is *never served* under wptrunner+wptserve, so the poll times
+    # out forever with no crash, no error. This was the sole root cause of
+    # the `run_smoke.py` timeout tracked as BUG-301 (found independently
+    # while chasing BUG-291/BUG-295 too — a direct BiDi probe against a
+    # plain `http.server` for the same page always served the on-disk file
+    # and succeeded quickly, isolating the fault to something
+    # wptserve-specific once the engine-side bugs were ruled out; "works
+    # manually, times out under wptrunner"). Pointing the route at our own
+    # script restores the `__lumen_wpt_results` contract the executor
+    # expects.
     return {
         "browser_host": "127.0.0.1",
         "bind_address": True,
