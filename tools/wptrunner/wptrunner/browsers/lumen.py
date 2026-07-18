@@ -11,9 +11,18 @@ session endpoint and `binary` doubles as `webdriver_binary` — there is no
 separate driver process to point `--webdriver-binary` at.
 """
 
+import os
+
 from .base import ExecutorBrowser, WebDriverBrowser, get_timeout_multiplier, require_arg  # noqa: F401
 from ..executors import executor_kwargs as base_executor_kwargs
 from ..executors.executorlumen import LumenTestharnessExecutor  # noqa: F401
+
+#: Absolute path to Lumen's own `testharnessreport.js` (`tests/wpt/resources/`),
+#: four levels up from this plugin file
+#: (`tools/wptrunner/wptrunner/browsers/lumen.py` → repo root).
+_LUMEN_TESTHARNESSREPORT = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "..", "..", "..", "tests", "wpt", "resources", "testharnessreport.js"))
 
 __wptrunner__ = {
     "product": "lumen",
@@ -55,7 +64,27 @@ def env_options():
     # is same-origin `dom/` tests) — a literal IP needs no resolution at all,
     # sidestepping the `[Errno 11001] getaddrinfo failed` this produced
     # against the default hostname (found while implementing S4).
-    return {"browser_host": "127.0.0.1", "bind_address": True}
+    #
+    # `testharnessreport`: override the report script `wptserve` serves at
+    # `/resources/testharnessreport.js`. wptrunner's default
+    # (`environment.py::get_routes`) is a *static route* that serves its own
+    # bundled `executors/message-queue.js` + `testharnessreport.js` pair —
+    # results are pushed onto `window.__wptrunner_message_queue` and drained by
+    # the stock `WebDriverProtocol`. Our bespoke BiDi-only executor
+    # (`executorlumen.py`) instead polls `window.__lumen_wpt_results`, which
+    # only Lumen's own `tests/wpt/resources/testharnessreport.js` sets. Because
+    # that static route wins over any on-disk file of the same URL, the vendored
+    # report script is *never served* under wptrunner+wptserve — so the poll
+    # times out forever. Pointing the route at our own script restores the
+    # `__lumen_wpt_results` contract the executor expects. This was the sole
+    # root cause of the `run_smoke.py` timeout tracked as BUG-301 (a manual BiDi
+    # driver over a plain HTTP server always served the on-disk file, hence
+    # "works manually, times out under wptrunner").
+    return {
+        "browser_host": "127.0.0.1",
+        "bind_address": True,
+        "testharnessreport": [_LUMEN_TESTHARNESSREPORT],
+    }
 
 
 def env_extras(**kwargs):

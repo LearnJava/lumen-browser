@@ -327,30 +327,28 @@ option isn't lost — do not fold it into this task's scope.
       a leftover tab and race the test driver's explicit `browsingContext.navigate`. Fix: `--bidi-port`/
       `--mcp-live-port` launches now skip session restore entirely (`should_restore_session`,
       `crates/shell/src/main.rs`), matching their documented "empty window" behavior.
-- [ ] A deliberately-failing assertion is observed as FAIL (harness genuinely checks assertions) —
-      still blocked, but the "`script.evaluate`-install race" theory (`CLAUDE.md` → "Known gotchas")
-      is now disproven: re-diagnosed 2026-07-17 and found to be three fully deterministic, non-flaky
-      bugs, all now fixed — [BUG-298](../../bugs/BUG-298-FIXED.md) (`Element`/`DocumentFragment`/
-      `ShadowRoot`.querySelector(All) searched the whole document instead of the calling node's
-      subtree, so `testharness.js`'s own results-table renderer — which builds a detached subtree and
-      queries into it — always got nothing), [BUG-299](../../bugs/BUG-299-FIXED.md)
-      (`Element.prototype.insertAdjacentText` was missing entirely, thrown from the same code path
-      whenever a test has no recorded assertions), and [BUG-300](../../bugs/BUG-300-FIXED.md)
-      (`browsingContext.navigate`'s `DocumentReady` wait could ACK using the *previous* page's stale
-      `layout_box` before the new page had even started loading). A manual BiDi driver hitting the
-      fixed binary and the identical vendored test file through a plain HTTP server now completes the
-      harness correctly end to end (`window.__lumen_wpt_results` populated within ~2s). `run_smoke.py`
-      itself (driven through the vendored `wptrunner` + `wptserve`) still times out — a narrower,
-      distinct gap only reproducing under that specific combination, root cause not found — filed as
-      [BUG-301](../../bugs/BUG-301-OPEN.md) for follow-up.
-- [ ] `.ini` expectations committed for a curated ~15–20 synchronous DOM-test subset.
+- [x] A deliberately-failing assertion is observed as FAIL (harness genuinely checks assertions) —
+      **done 2026-07-18.** `run_smoke.py` now drives `/dom/nodes/Element-hasAttribute.html` end to end:
+      `Test OK. Subtests passed 1/2` — subtest 1 genuinely FAILs (`el.setAttributeNS is not a
+      function`, [BUG-309](../../bugs/BUG-309-OPEN.md)), subtest 2 PASSes. The `run_smoke.py`-only
+      timeout was [BUG-301](../../bugs/BUG-301-FIXED.md): `wptrunner` registers a static route for
+      `/resources/testharnessreport.js` that serves its own `__wptrunner_message_queue` report and
+      wins over the on-disk file, so Lumen's vendored report (which sets `window.__lumen_wpt_results`,
+      the global `LumenTestharnessExecutor` polls) was never served under `wptrunner`+`wptserve` —
+      hence "works manually over a plain server, times out under wptrunner". Fixed by
+      `browsers/lumen.py::env_options` setting `testharnessreport` to Lumen's own report file. The
+      earlier BUG-298/299/300 fixes (2026-07-17) were prerequisites, not this blocker.
+- [ ] `.ini` expectations committed for a curated ~15–20 synchronous DOM-test subset — **started
+      2026-07-18** with the first one (`tests/wpt/metadata/dom/nodes/Element-hasAttribute.html.ini`,
+      `expected: FAIL` for the BUG-309 subtest). Curating the full ~15–20-test subset remains.
 - [ ] Async subset (S6) admitted, `awaitPromise` behavior verified against the implementation.
 - [ ] Suite runs fully offline.
 - [ ] `docs/plan/testing.md` updated; `ROADMAP.md:131` flipped to `done` (or split if S8 remains
       open); `tests/wpt/README.md` written.
 - [x] Any engine/BiDi gap found while running the harness filed as `BUG-NNN` (no test weakened to
-      pass) — BUG-278/279/280/291/296/298/299/300 (all fixed); the remaining checkboxes above are
-      blocked by [BUG-301](../../bugs/BUG-301-OPEN.md), a narrower `wptrunner`+`wptserve`-specific gap.
+      pass) — BUG-278/279/280/291/296/298/299/300/301 (all fixed); the first real *test*-surfaced
+      engine gap is [BUG-309](../../bugs/BUG-309-OPEN.md) (`Element.setAttributeNS` missing),
+      recorded as `expected: FAIL` in metadata rather than weakening the test.
 - [x] `cargo clippy -p lumen-bidi-server --all-targets -- -D warnings` clean; existing
       `bidi-server`/`driver` test suites still pass (verified 2026-07-17: bidi-server 96/96,
       driver 125/126 — the one failure, `cases::snapshot_cpu::cpu_snapshots_match_references`,
