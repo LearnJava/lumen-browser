@@ -190,7 +190,7 @@ Implement subprocess launch (`lumen --bidi-port <port>`) + BiDi capability negot
 shutdown. Reuse wptrunner's existing BiDi client machinery; do not hand-roll WebSocket/JSON-RPC
 framing in Python — that duplicates what wptrunner already has.
 
-**S4 — Testharnessreport shim + one smoke test, end to end. IMPLEMENTED, BLOCKED on BUG-291.**
+**S4 — Testharnessreport shim + one smoke test, end to end. DONE 2026-07-17.**
 `tests/wpt/resources/testharnessreport.js` written; `LumenTestharnessExecutor.do_test`
 (`tools/wptrunner/wptrunner/executors/executorlumen.py`) drives `browsingContext.navigate` then polls
 `script.evaluate` for the shim's JSON result — confirmed the objects/arrays-as-JSON-text fallback
@@ -200,19 +200,26 @@ fallback, exactly as predicted). Smoke test is `dom/nodes/Element-hasAttribute.h
 un-vendored `/common/dummy.xml`/`dummy.xhtml` iframe fixtures and is `async_test`-based, not actually
 trivial; picked a genuinely self-contained, fully-synchronous test instead.
 
-Getting a real end-to-end run exposed a chain of four engine gaps, diagnosed live via BiDi
+Getting a real end-to-end run exposed a chain of six engine/tooling gaps, diagnosed live via BiDi
 `script.evaluate` bisection (scratch probe pages + marker-injected copies of `testharness.js`, not
 guessing): **BUG-278** (HTTP client rejected `wptserve`'s close-delimited responses — every fetch to
 the reference test server failed outright; FIXED), **BUG-279** (`document.getElementsByTagName` was
 missing entirely, breaking `testharness.js`'s own module-level setup; FIXED), **BUG-280** (`window`
 was a plain JS object, not the engine's real global object, so anything `testharness.js` exposes via
 `window.x = ...`/`expose()` — `test`, `assert_*`, `add_completion_callback`, ~50 functions — was
-unreachable as a bare identifier; FIXED — `window` now literally is `globalThis`), and **BUG-291**
-(fixing BUG-280 got far enough to expose that `testharness.js`'s built-in results renderer throws
-while building its results `<table>`, aborting harness completion before `testharnessreport.js`'s own
-callback runs; OPEN). The "deliberately-broken assertion surfaces FAIL" proof and a genuine `wpt
-run`-style PASS are both blocked on BUG-291 — tests now run and report individual results, but the
-harness never signals overall completion.
+unreachable as a bare identifier; FIXED — `window` now literally is `globalThis`), **BUG-291**
+(`Element`/`DocumentFragment`/`ShadowRoot.querySelector(All)` weren't scoped to the calling node,
+silently finding nothing on the detached subtree `testharness.js`'s results renderer builds before
+attaching it — the actual crash trigger, not the `appendChild`/`lastChild` line the stack trace
+pointed at; plus missing `insertAdjacentText`/`insertAdjacentElement` and unstable node-wrapper
+identity; FIXED), and **BUG-315** (two independent causes on the same TIMEOUT symptom — wptrunner's
+`environment.py` always shadows `/resources/testharnessreport.js` with its own generic reporter
+unless the product plugin's `env_options()` overrides it, which Lumen's never did; and automation
+sessions shared the persistent on-disk HTTP cache, so `wptserve`'s fixed ports (8000/8001,
+`Cache-Control: max-age=3600`) replayed a stale cached response across every run regardless of code
+fixes; FIXED). `run_smoke.py` now reaches a genuine per-subtest PASS/FAIL result and overall
+completion; the one remaining subtest failure is a real, separate engine gap —
+**BUG-297** (`Element.prototype.setAttributeNS` unimplemented, OPEN) — not an infrastructure fault.
 
 **S5 — Expectations + curated subset.**
 Generate `.ini` expectation metadata (`wpt update-expectations` or manual authoring for the first
@@ -326,7 +333,20 @@ option isn't lost — do not fold it into this task's scope.
       not a "default homepage" feature — CWD-relative store path, see the bug file) could silently reopen
       a leftover tab and race the test driver's explicit `browsingContext.navigate`. Fix: `--bidi-port`/
       `--mcp-live-port` launches now skip session restore entirely (`should_restore_session`,
-      `crates/shell/src/main.rs`), matching their documented "empty window" behavior.
+      `crates/shell/src/main.rs`), matching their documented "empty window" behavior. Separately,
+      [BUG-291](../../bugs/BUG-291-FIXED.md)'s own investigation traced a `TypeError` in
+      `testharness.js`'s built-in results renderer to `Element`/`DocumentFragment`/
+      `ShadowRoot.querySelector(All)` not being scoped to the calling node (always searched from
+      `doc.root()`, silently finding nothing on the detached subtree the renderer builds before
+      attaching it) plus missing `insertAdjacentText`/`insertAdjacentElement` — filed and fixed
+      separately as [BUG-298](../../bugs/BUG-298-FIXED.md). [BUG-315](../../bugs/BUG-315-FIXED.md)
+      (fixed 2026-07-17) found a second, independent `run_smoke.py`-only timeout cause layered on top
+      of the above: automation sessions (BiDi/MCP) were sharing the on-disk HTTP cache, so a
+      `testharnessreport.js` fetched once on `wptserve`'s fixed ports (8000/8001) stayed cached
+      (`Cache-Control: max-age=3600`) across every later run and kept replaying stale content — fixed by
+      forcing `no_persistent_state` for `--bidi-port`/`--mcp*` sessions in `crates/shell/src/main.rs`,
+      alongside the same `testharnessreport` route override later re-found independently as BUG-301
+      below.
 - [x] A deliberately-failing assertion is observed as FAIL (harness genuinely checks assertions) —
       **done 2026-07-18.** `run_smoke.py` now drives `/dom/nodes/Element-hasAttribute.html` end to end:
       `Test OK. Subtests passed 1/2` — subtest 1 genuinely FAILs (`el.setAttributeNS is not a
@@ -365,12 +385,15 @@ option isn't lost — do not fold it into this task's scope.
       `MutationObserver-takeRecords.html` (harness `OK`, 3 `FAIL`); `MutationObserver-disconnect.html`
       (harness `TIMEOUT`, 2 subtests `TIMEOUT`) proves wptrunner's async-timeout driving against
       Lumen is reported correctly. Full subset green under `run_smoke.py` (**0 unexpected**), no test
-      weakened. Three genuine gaps filed: [BUG-315](../../bugs/BUG-315-OPEN.md) (`MutationRecord`
-      global missing), [BUG-316](../../bugs/BUG-316-OPEN.md) (MutationObserver record bookkeeping +
-      subtree delivery), [BUG-317](../../bugs/BUG-317-OPEN.md). `awaitPromise` verified independently
+      weakened. Three genuine gaps filed: [BUG-317](../../bugs/BUG-317-OPEN.md) (`MutationRecord`
+      global missing, renumbered from BUG-315 — collided with the real BUG-315 above), [BUG-318]
+      (../../bugs/BUG-318-OPEN.md) (MutationObserver record bookkeeping + subtree delivery,
+      renumbered from BUG-316 — collided with `origin/main`'s BUG-316),
+      [BUG-319](../../bugs/BUG-319-OPEN.md) (renumbered from BUG-317, freed up by the two
+      renumberings above). `awaitPromise` verified independently
       via `tests/wpt/verify_s6_await_promise.py` (a spawned `lumen --bidi-port` probe, like
       `verify_s3`): `script.evaluate` **ignores** `awaitPromise` — a promise-valued expression returns
-      the unsettled promise object regardless (BUG-317). The WPT pipeline does not depend on it: the
+      the unsettled promise object regardless (BUG-319). The WPT pipeline does not depend on it: the
       executor deliberately uses `awaitPromise=false` + polls `window.__lumen_wpt_results` (async
       tests complete via the page's own event loop + testharness completion callback).
 - [x] Suite runs fully offline — **done 2026-07-18.** `run_suite.py` drives the whole curated
@@ -390,7 +413,7 @@ option isn't lost — do not fold it into this task's scope.
       that S8 reftests remain a separate follow-up. `tests/wpt/README.md` status + "Running the whole
       suite" section updated to S1–S7-complete.
 - [x] Any engine/BiDi gap found while running the harness filed as `BUG-NNN` (no test weakened to
-      pass) — BUG-278/279/280/291/296/298/299/300/301 (all fixed); the first real *test*-surfaced
+      pass) — BUG-278/279/280/291/295/296/298/299/300/301 (all fixed); the first real *test*-surfaced
       engine gap is [BUG-309](../../bugs/BUG-309-OPEN.md) (`Element.setAttributeNS` missing),
       recorded as `expected: FAIL` in metadata rather than weakening the test.
 - [x] `cargo clippy -p lumen-bidi-server --all-targets -- -D warnings` clean; existing

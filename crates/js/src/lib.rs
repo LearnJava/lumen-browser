@@ -1277,7 +1277,7 @@ impl QuickJsRuntime {
                 eprintln!("Form Constraint Validation API init failed: {}", e);
             }
 
-            // Phase 0: element.attachInternals() + CustomStateSet; :state() selector is P4 handoff.
+            // element.attachInternals() + CustomStateSet, incl. :state() sentinel-attribute reflection.
             if let Err(e) = element_internals::install_element_internals_bindings(&ctx) {
                 eprintln!("ElementInternals API init failed: {}", e);
             }

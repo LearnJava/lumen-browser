@@ -43,12 +43,20 @@ pub(crate) fn install_document_pip_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -
 const DOCUMENT_PIP_SHIM: &str = r#"(function() {
   'use strict';
 
-  /// PictureInPictureWindow: DOM window overlay for PiP content.
+  /// PictureInPictureWindow: the one floating-window class shared by both
+  /// Document PiP (`documentPictureInPicture.requestWindow`, this module) and
+  /// video PiP (`video_pip.rs`'s `requestPictureInPicture()`) — P3-pip slice 4.
+  /// `video_pip.rs` installs after this module and reuses this exact class
+  /// (falling back to its own minimal definition only if evaluated in
+  /// isolation, e.g. its own unit tests) so `instanceof PictureInPictureWindow`
+  /// is consistent everywhere and `_lumen_pip_deliver_resize` (`video_pip.rs`)
+  /// can update whichever session is active through one shared reference
+  /// (`globalThis.__lumen_pip_active_window`).
   class PictureInPictureWindow extends EventTarget {
     constructor(width, height) {
       super();
-      this._width = width;
-      this._height = height;
+      this._width = width || 0;
+      this._height = height || 0;
       this._document = null;
       this._closed = false;
     }
@@ -61,6 +69,7 @@ const DOCUMENT_PIP_SHIM: &str = r#"(function() {
       return this._height;
     }
 
+    // Only meaningful for Document PiP — video PiP windows never read this.
     get document() {
       if (this._closed) {
         return null;
@@ -113,11 +122,16 @@ const DOCUMENT_PIP_SHIM: &str = r#"(function() {
         return;
       }
       this._closed = true;
+      if (globalThis.__lumen_pip_active_window === this) {
+        globalThis.__lumen_pip_active_window = null;
+      }
       if (typeof _lumen_docpip_close === 'function') {
         _lumen_docpip_close();
       }
     }
   }
+
+  globalThis.PictureInPictureWindow = PictureInPictureWindow;
 
   /// DocumentPictureInPictureEvent: fired when entering PiP mode.
   class DocumentPictureInPictureEvent extends Event {
@@ -148,6 +162,9 @@ const DOCUMENT_PIP_SHIM: &str = r#"(function() {
 
       const pipWindow = new PictureInPictureWindow(width, height);
       this._activeWindow = pipWindow;
+      // Shared with video_pip.rs: whichever PiP session is open, so
+      // `_lumen_pip_deliver_resize` (video_pip.rs) can update it uniformly.
+      globalThis.__lumen_pip_active_window = pipWindow;
 
       // Fire enter event on document
       const event = new DocumentPictureInPictureEvent(pipWindow);
@@ -229,6 +246,11 @@ mod tests {
 
     #[test]
     fn document_pip_request_window_returns_promise() {
+        // requestWindow() reaches the real `_lumen_docpip_request_window`
+        // native (registered by `documentpip_bindings.rs`) — the queue it
+        // pushes to is process-global and shared with that module's own
+        // tests, so serialize against its lock (also drains leftover state).
+        let _g = crate::documentpip_bindings::test_guard();
         with_document_pip(|rt| {
             let r = rt.eval("documentPictureInPicture.requestWindow() instanceof Promise").unwrap();
             assert_eq!(r, JsValue::Bool(true));
@@ -237,6 +259,7 @@ mod tests {
 
     #[test]
     fn document_pip_request_window_with_options() {
+        let _g = crate::documentpip_bindings::test_guard();
         with_document_pip(|rt| {
             let r = rt
                 .eval(
@@ -249,6 +272,7 @@ mod tests {
 
     #[test]
     fn document_pip_window_access() {
+        let _g = crate::documentpip_bindings::test_guard();
         with_document_pip(|rt| {
             let r = rt
                 .eval(
@@ -282,6 +306,63 @@ mod tests {
         with_document_pip(|rt| {
             let r = rt
                 .eval("typeof Object.getOwnPropertyDescriptor(document, 'pictureInPictureElement') === 'object'")
+                .unwrap();
+            assert_eq!(r, JsValue::Bool(true));
+        });
+    }
+
+    // ── P3-pip slice 4/5: unification with video_pip.rs + resize round-trip ──
+
+    #[test]
+    fn document_pip_window_class_is_unified_with_video_pip() {
+        // `install_dom` installs document_pip before video_pip (alphabetical);
+        // video_pip.rs must reuse this module's class rather than defining a
+        // rival one, so `instanceof PictureInPictureWindow` is consistent.
+        with_document_pip(|rt| {
+            let r = rt
+                .eval("globalThis.PictureInPictureWindow === globalThis.DocumentPictureInPictureWindow")
+                .unwrap();
+            assert_eq!(r, JsValue::Bool(true));
+        });
+    }
+
+    #[test]
+    fn document_pip_native_request_window_enqueues_open_document() {
+        // `_lumen_docpip_request_window` is registered by
+        // `documentpip_bindings.rs` (installed right after this module, see
+        // `v8_runtime.rs::install_dom`); requestWindow() must reach it
+        // instead of silently no-op'ing (the former bug this slice fixes).
+        let _g = crate::documentpip_bindings::test_guard();
+        with_document_pip(|rt| {
+            rt.eval("documentPictureInPicture.requestWindow({width: 800, height: 450});")
+                .unwrap();
+            let reqs = crate::documentpip_bindings::take_docpip_requests();
+            assert_eq!(
+                reqs,
+                vec![crate::documentpip_bindings::DocPipRequest::Open { width: 800, height: 450 }]
+            );
+        });
+    }
+
+    #[test]
+    fn document_pip_resize_round_trip_updates_active_window() {
+        // requestWindow() has no `await` before registering
+        // `__lumen_pip_active_window`, so it is set synchronously by the time
+        // the call returns (still true even though the function is `async`).
+        // Also enqueues an Open request on `documentpip_bindings.rs`'s queue —
+        // serialize against its lock so it doesn't leak into that module's
+        // own tests (or vice versa).
+        let _g = crate::documentpip_bindings::test_guard();
+        with_document_pip(|rt| {
+            let r = rt
+                .eval(
+                    "documentPictureInPicture.requestWindow({width: 640, height: 360}); \
+                     var w = globalThis.__lumen_pip_active_window; \
+                     var fired = false; \
+                     w.addEventListener('resize', function() { fired = true; }); \
+                     _lumen_pip_deliver_resize(800, 600); \
+                     fired && w.width === 800 && w.height === 600",
+                )
                 .unwrap();
             assert_eq!(r, JsValue::Bool(true));
         });

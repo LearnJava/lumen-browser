@@ -95,7 +95,10 @@ lumen-paint = { workspace = true, features = ["cpu-render"] }
 lumen-font.workspace = true
 lumen-encoding.workspace = true
 lumen-image = { workspace = true, features = ["avif"] }
-lumen-driver.workspace = true
+# cpu-render: DEVX-5 headless MCP (`--mcp`/`--mcp-port`) screenshots go through
+# InProcessSession's CPU rasterizer (tiny-skia), not the GPU headless renderer —
+# no GPU adapter required for `--mcp`.
+lumen-driver = { workspace = true, features = ["cpu-render"] }
 lumen-mcp.workspace = true
 
 # Exception #1 из §5: OS event loop + окна.

@@ -20,7 +20,7 @@ use lumen_dom::{
     Selection,
     ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
-use lumen_layout::{matches_selector, query_all, query_all_within};
+use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
 use lumen_core::WebStorage;
@@ -652,6 +652,32 @@ fn install_primitives(
             move |sel: String| -> Vec<u32> {
                 let doc = d.lock().unwrap();
                 query_all(&doc, &sel)
+                    .into_iter()
+                    .map(|n| n.index() as u32)
+                    .collect()
+            }
+        );
+        // BUG-291: Element/DocumentFragment/ShadowRoot.querySelector(All) must be
+        // scoped to descendants of the calling node, not the whole document —
+        // the unscoped `_lumen_query_selector(_all)` above silently found nothing
+        // for subtrees not yet attached to the document (`testharness.js` builds
+        // its results table off-document before appending it).
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_scoped",
+            move |node_id: u32, sel: String| -> Option<u32> {
+                let doc = d.lock().unwrap();
+                let scope = NodeId::from_index(node_id as usize);
+                query_all_scoped(&doc, scope, &sel).into_iter().next().map(|n| n.index() as u32)
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_all_scoped",
+            move |node_id: u32, sel: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let scope = NodeId::from_index(node_id as usize);
+                query_all_scoped(&doc, scope, &sel)
                     .into_iter()
                     .map(|n| n.index() as u32)
                     .collect()
@@ -3828,11 +3854,61 @@ function _lumen_dispatch_locked_mousemove(nid, clientX, clientY, dx, dy, mod) {
     _lumen_dispatch_rich(nid, pev);
 }
 
-// Called from shell for pointer events (W3C Pointer Events Level 2).
+// Build a non-dispatched PointerEvent representing one buffered intermediate
+// sample for _lumen_dispatch_pointer_event's getCoalescedEvents()/
+// getPredictedEvents() arrays (Pointer Events L3 §4.1). Mirrors the main
+// event's fields except position.
+function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod, bubbles) {
+    var cev = new PointerEvent(type, {
+        bubbles: bubbles, cancelable: bubbles, isTrusted: true,
+        clientX: cx, clientY: cy,
+        screenX: cx, screenY: cy,
+        pageX:   cx, pageY:   cy,
+        button: button, buttons: buttons,
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
+        pointerId: 1, pointerType: 'mouse', isPrimary: true,
+        pressure: buttons ? 0.5 : 0.0,
+        altitudeAngle: Math.PI / 2, azimuthAngle: 0,
+        width: 1, height: 1,
+        tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
+    });
+    cev.getCoalescedEvents = function() { return [cev]; };
+    cev.getPredictedEvents = function() { return []; };
+    return cev;
+}
+
+// Pointer Events L3 §4.1: linearly extrapolate up to 2 future positions from
+// the last two entries of `coalesced` (oldest..newest, main event last).
+// Returns [] when fewer than 2 points are available (no velocity to derive).
+// Not a spec-mandated algorithm — linear extrapolation is an accepted default.
+function _lumen_predict_pointer_events(coalesced) {
+    var n = coalesced.length;
+    if (n < 2) return [];
+    var last = coalesced[n - 1];
+    var prev = coalesced[n - 2];
+    var dx = last.clientX - prev.clientX;
+    var dy = last.clientY - prev.clientY;
+    var mod = (last.ctrlKey ? 1 : 0) | (last.shiftKey ? 2 : 0) |
+              (last.altKey  ? 4 : 0) | (last.metaKey  ? 8 : 0);
+    var out = [];
+    for (var i = 1; i <= 2; i++) {
+        out.push(_lumen_make_coalesced_pointer_event(
+            last.type, last.clientX + dx * i, last.clientY + dy * i,
+            last.button, last.buttons, mod, last.bubbles
+        ));
+    }
+    return out;
+}
+
+// Called from shell for pointer events (W3C Pointer Events Level 2/3).
 // Mirrors _lumen_dispatch_mouse_event but creates a PointerEvent (extends MouseEvent).
 // Non-bubbling types (pointerenter / pointerleave) set bubbles:false per spec.
 // mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
-function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod) {
+// coalesced: optional array of [x,y] CSS-pixel positions buffered since the
+// last dispatch (Level 3 §4.1), oldest first, NOT including this event's own
+// (clientX, clientY). Omitted/empty for non-move event types.
+function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod, coalesced) {
     var bubbles = (type !== 'pointerenter' && type !== 'pointerleave');
     var ev = new PointerEvent(type, {
         bubbles: bubbles, cancelable: bubbles, isTrusted: true,
@@ -3849,13 +3925,22 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
         width: 1, height: 1,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
-    // Level 3 §4.1: this dispatcher is for non-move pointer types (down/up/
-    // enter/leave/over/out) plus one-off synthetic pointermove (pointer-lock,
-    // automation single-step) — these never coalesce, so a sequence
-    // containing only this event is the spec-correct answer, not a stub.
-    // Real batched pointermove goes through `_lumen_dispatch_pointer_move_coalesced`.
-    ev.getCoalescedEvents = function() { return [ev]; };
-    ev.getPredictedEvents = function() { return []; };
+    // Level 3 §4.1: intermediate samples buffered since the last dispatch,
+    // then this event appended last (spec order: oldest..newest, main event
+    // last). Without `coalesced` (non-move event types, or callers using the
+    // dedicated `_lumen_dispatch_pointer_move_coalesced` instead) this is
+    // just [ev], with no predicted events — same as the non-coalescing case.
+    var coalescedEvents = [];
+    if (Array.isArray(coalesced)) {
+        for (var i = 0; i < coalesced.length; i++) {
+            coalescedEvents.push(_lumen_make_coalesced_pointer_event(
+                type, coalesced[i][0], coalesced[i][1], button, buttons, mod, bubbles
+            ));
+        }
+    }
+    coalescedEvents.push(ev);
+    ev.getCoalescedEvents = function() { return coalescedEvents; };
+    ev.getPredictedEvents = function() { return _lumen_predict_pointer_events(coalescedEvents); };
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
@@ -4076,6 +4161,7 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
         get textContent() { return _lumen_get_text_content(nid); },
         set textContent(v){ _lumen_set_text_content(nid, String(v)); },
         get style()       { return _style; },
+        // Scoped to this shadow tree's descendants — see BUG-291.
         querySelector:    function(sel) {
             var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
@@ -4131,6 +4217,7 @@ function _lumen_make_document_fragment(nid) {
         set textContent(v)    { _lumen_set_text_content(nid, String(v)); },
         get innerHTML()       { return _lumen_get_inner_html(nid); },
         set innerHTML(v)      { _lumen_set_inner_html(nid, String(v)); },
+        // Scoped to this fragment's descendants — see BUG-291.
         querySelector:        function(sel) {
             var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
@@ -4181,8 +4268,9 @@ function _lumen_fire_slotchange(host_nid) {
 }
 
 // ── Form Constraint Validation API (HTML LS §4.10.21) ────────────────────────
-// Per-nid storage: persists across multiple _lumen_make_element calls for the
-// same node.
+// Per-nid storage, keyed independently of the (now cached, see BUG-291)
+// `_lumen_make_element` wrapper object — kept as separate maps rather than
+// folded onto the wrapper to avoid coupling this state to wrapper lifetime.
 
 // nid → custom validity message set via setCustomValidity() ('' → no custom error)
 var _validity_msg = {};
@@ -4192,16 +4280,6 @@ var _input_values = {};
 var _canvas2d_ctxs = {};
 // nid → cached GPUCanvasContext object (getContext('webgpu'), persists across _lumen_make_element).
 var _canvas_webgpu_ctxs = {};
-// nid → cached element/text-node JS wrapper (BUG-291). The DOM node arena is
-// append-only for the lifetime of a document (crates/engine/dom/src/lib.rs
-// `alloc()`; no free-list reuse until a future Phase-3 compaction), and this
-// whole shim is re-evaluated from scratch on every navigation/bfcache thaw
-// (fresh V8 isolate), so caching by nid for the life of the JS context is
-// safe: it can never alias a stale wrapper onto an unrelated later node.
-// Without this, repeated access (`.firstChild`, `.parentElement`, ...) minted
-// a brand-new object every time, breaking `===` node identity and silently
-// dropping any expando property set on a node between accesses.
-var _lumen_node_wrappers = {};
 // nid → cached ImageBitmapRenderingContext object (getContext('bitmaprenderer')).
 var _canvas_bitmaprenderer_ctxs = {};
 
@@ -4652,15 +4730,40 @@ function _lumen_canvas_dims(nid) {
 
 // ── Element factory ───────────────────────────────────────────────────────────
 
+// BUG-291: node wrappers must be stable under `===` for repeated access to the
+// same node (`tbody.lastChild === tr` etc.) — real-world JS (testharness.js's
+// results renderer among it) relies on reference identity. `_lumen_build_element`
+// used to run fresh on every `_lumen_make_element` call, minting a brand-new JS
+// object each time; this cache interns wrappers by nid so the same node always
+// yields the same object. Purged per-nid by `_lumen_gc_collect` (idle shell tick)
+// so detached, zero-JS-ref nodes don't retain memory here, same lifecycle as
+// `_input_values`/`_canvas2d_ctxs` below. Caching by nid for the life of the JS
+// context is safe even though this covers element *and* text-node wrappers: the
+// DOM node arena is append-only for the lifetime of a document
+// (`crates/engine/dom/src/lib.rs` `alloc()`; no free-list reuse until a future
+// Phase-3 compaction), and this whole shim is re-evaluated from scratch on
+// every navigation/bfcache thaw (fresh V8 isolate), so a cached wrapper can
+// never alias onto an unrelated later node.
+var _lumen_element_wrappers = {};
+
 function _lumen_make_element(nid) {
     if (nid === null || nid === undefined) return null;
     // BUG-291: return the interned wrapper if this nid was already wrapped,
     // so repeated access to the same underlying node (`.firstChild`,
     // `.parentElement`, `getElementById` twice, ...) yields the same JS
     // object — required for `===` node identity and for expando properties
-    // set on a node to survive later re-access.
-    var _existing = _lumen_node_wrappers[nid];
-    if (_existing !== undefined) return _existing;
+    // set on a node to survive later re-access. Split from the actual
+    // builder (`_lumen_build_element`) so the cache write below is the one
+    // and only place a wrapper gets interned, matching what `_lumen_gc_collect`
+    // purges.
+    var cached = _lumen_element_wrappers[nid];
+    if (cached !== undefined) return cached;
+    var built = _lumen_build_element(nid);
+    _lumen_element_wrappers[nid] = built;
+    return built;
+}
+
+function _lumen_build_element(nid) {
     var _classList = _lumen_make_class_list(nid);
     var _style     = _lumen_make_style(nid);
     var _returnValue = '';
@@ -4971,20 +5074,37 @@ function _lumen_make_element(nid) {
                 }
             }
         },
-        // Element.insertAdjacentText (DOM Parsing & Serialization §4): inserts a
-        // Text node at one of the four positions relative to this element. Built
-        // on the ChildNode/ParentNode primitives above rather than a new native
-        // binding — found missing while diagnosing P2-wpt S4 (`testharness.js`'s
-        // `Output.show_results` calls it unconditionally on tests with no
-        // recorded asserts).
-        insertAdjacentText: function(where, text) {
-            var t = String(text);
+        // HTML LS 4.9.2 (old-fashioned but conforming markup) — insertAdjacent{Text,Element}.
+        // Delegates to the before/after/prepend/append methods above (same silent
+        // no-op-if-no-parent behavior as before/after for beforebegin/afterend).
+        // Found missing (BUG-299) while diagnosing testharness.js's results
+        // renderer / P2-wpt S4 (`Output.show_results` -> `get_asserts_output`)
+        // calling insertAdjacentText unconditionally for every test with no
+        // recorded asserts.
+        insertAdjacentText: function(where, data) {
+            var text = String(data);
             switch (String(where).toLowerCase()) {
-                case 'beforebegin': this.before(t); break;
-                case 'afterbegin':  this.prepend(t); break;
-                case 'beforeend':   this.append(t); break;
-                case 'afterend':    this.after(t); break;
-                default: throw new SyntaxError('insertAdjacentText: invalid position ' + where);
+                case 'beforebegin': this.before(text); break;
+                case 'afterbegin':  this.prepend(text); break;
+                case 'beforeend':   this.append(text); break;
+                case 'afterend':    this.after(text); break;
+                default:
+                    throw new DOMException(
+                        'The value provided (' + where + ') is not one of beforebegin, ' +
+                        'afterbegin, beforeend, or afterend.', 'SyntaxError');
+            }
+        },
+        insertAdjacentElement: function(where, element) {
+            if (!element || element.__nid__ === undefined) return null;
+            switch (String(where).toLowerCase()) {
+                case 'beforebegin': this.before(element); return element;
+                case 'afterbegin':  this.prepend(element); return element;
+                case 'beforeend':   this.append(element); return element;
+                case 'afterend':    this.after(element); return element;
+                default:
+                    throw new DOMException(
+                        'The value provided (' + where + ') is not one of beforebegin, ' +
+                        'afterbegin, beforeend, or afterend.', 'SyntaxError');
             }
         },
         // Replaces all children of this element.
@@ -5014,6 +5134,8 @@ function _lumen_make_element(nid) {
             var frag_nid = _lumen_u2n(_lumen_get_template_content(nid));
             return frag_nid !== null ? _lumen_make_document_fragment(frag_nid) : _lumen_make_document_fragment(_lumen_create_fragment());
         },
+        // Scoped to this element's descendants (DOM Parentnode §4.2.5) — works on
+        // detached subtrees too, unlike the document-global `_lumen_query_selector`.
         querySelector:    function(sel) {
             var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
@@ -5588,7 +5710,6 @@ function _lumen_make_element(nid) {
         enumerable: false,
         configurable: true,
     });
-    _lumen_node_wrappers[nid] = _obj;
     return _obj;
 }
 
@@ -12963,8 +13084,9 @@ window.reportError = reportError;
 // Called by the shell's GcTick every 30 s with an array of node IDs that
 // have been detached from the document and have zero live JS references.
 // Purges JS-side per-node caches so dead nodes don't retain memory through maps:
-//   - _lumen_listeners  keyed by 'nid:eventtype'
-//   - _input_values     keyed by nid
+//   - _lumen_listeners        keyed by 'nid:eventtype'
+//   - _input_values           keyed by nid
+//   - _lumen_element_wrappers keyed by nid (BUG-291 identity cache)
 // The arena itself is append-only in Phase 1; physical compaction is Phase 3.
 function _lumen_gc_collect(nids) {
     for (var i = 0; i < nids.length; i++) {
@@ -12978,6 +13100,7 @@ function _lumen_gc_collect(nids) {
         }
         delete _input_values[nid];
         delete _canvas2d_ctxs[nid];
+        delete _lumen_element_wrappers[nid];
     }
 }
 
@@ -13907,6 +14030,80 @@ mod tests {
     fn query_selector_by_tag() {
         let rt = runtime_with_dom(make_doc());
         let result = rt.eval("document.querySelector('span') !== null").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-291: Element.querySelector(All) must be scoped to the calling
+    // element's descendants, and must therefore also work on a subtree that
+    // is not (yet) attached to the document — `document.querySelector` has no
+    // path to reach such nodes at all. Before the fix, `_lumen_query_selector`
+    // ignored `this` and always searched from `document.root()`, so this
+    // returned `null` and crashed `testharness.js`'s results renderer
+    // (`Output.show_results`) with `Cannot read properties of null`.
+    #[test]
+    fn element_query_selector_finds_descendant_in_detached_subtree() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var table = document.createElement('table'); \
+                 var tbody = document.createElement('tbody'); \
+                 table.appendChild(tbody); \
+                 table.querySelector('tbody') === tbody",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_query_selector_all_finds_matches_in_detached_subtree() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var ul = document.createElement('ul'); \
+                 ul.appendChild(document.createElement('li')); \
+                 ul.appendChild(document.createElement('li')); \
+                 ul.querySelectorAll('li').length",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(2.0));
+    }
+
+    // BUG-291: Element.querySelector must be scoped to *descendants* — it
+    // must not match the calling element itself, nor elements outside its
+    // subtree (the pre-fix implementation searched the whole document).
+    #[test]
+    fn element_query_selector_excludes_self_and_siblings() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var a = document.createElement('div'); a.id = 'scope'; \
+                 var b = document.createElement('div'); b.id = 'outside'; \
+                 document.body.appendChild(a); document.body.appendChild(b); \
+                 a.querySelector('#scope') === null && a.querySelector('#outside') === null",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-291: repeated access to the same DOM node must yield the same JS
+    // wrapper object (`===` identity), matching real engines and required by
+    // `testharness.js`'s results renderer (`tbody.lastChild === row`-style
+    // checks). Before the fix, `_lumen_make_element` minted a fresh object on
+    // every call.
+    #[test]
+    fn repeated_node_access_yields_stable_identity() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var parent = document.createElement('div'); \
+                 var child = document.createElement('span'); \
+                 parent.appendChild(child); \
+                 parent.lastChild === child && \
+                 parent.firstChild === parent.lastChild && \
+                 parent.children[0] === child && \
+                 document.getElementById('main') === document.getElementById('main')",
+            )
+            .unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 
@@ -27116,6 +27313,30 @@ mod tests {
              el.addEventListener('pointermove', function(e) { fired = true; }); \
              _lumen_dispatch_pointer_move_coalesced(el.__nid__, '[]', 0, 0, 0); \
              !fired"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pointer_event_coalesced_events_real_batch_and_prediction() {
+        // With buffered intermediate samples, getCoalescedEvents() must return
+        // every one of them (oldest first) plus the main event last, and
+        // getPredictedEvents() must linearly extrapolate from the last two.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var got = null; \
+             el.addEventListener('pointermove', function(e) { got = e; }); \
+             _lumen_dispatch_pointer_event(el.__nid__, 'pointermove', 30, 30, 0, 0, 0, [[10,10],[20,20]]); \
+             var c = got.getCoalescedEvents(); \
+             var p = got.getPredictedEvents(); \
+             Array.isArray(c) && c.length === 3 && \
+             c[0].clientX === 10 && c[0].clientY === 10 && \
+             c[1].clientX === 20 && c[1].clientY === 20 && \
+             c[2] === got && \
+             Array.isArray(p) && p.length === 2 && \
+             p[0].clientX === 40 && p[0].clientY === 40 && \
+             p[1].clientX === 50 && p[1].clientY === 50"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }

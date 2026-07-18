@@ -109,9 +109,12 @@ cargo run -p lumen-shell -- --dump-display-list samples/page.html  # headless pa
 ```
 
 **Session start protocol:**
-1. Read `STATUS-PN.md` — pointer lines to open tasks; `git branch` shows any `p<N>-…` task in progress
-2. Run `git branch` — verify you're on main
-3. Architecture context → `docs/plan/architecture.md` §1, §3; decisions → `docs/decisions/README.md`
+1. **`git pull origin main` first, before reading STATUS files or creating a branch/worktree.** Parallel Claude Code sessions push to `origin/main` independently, so local `main` can lag behind — starting from stale state means stale `STATUS-PN.md`/`ROADMAP.md` reads and, if the lag is large, a big multi-file merge conflict later instead of a small one now. If `pull` reports a diverged history with real conflicts (not just a fast-forward), resolve them file-by-file with full understanding of both sides' intent — do not blindly take one side — and re-verify with `cargo check`/`clippy`/scoped tests for every touched crate before committing the merge.
+2. Read `STATUS-PN.md` — pointer lines to open tasks; `git branch` shows any `p<N>-…` task in progress
+3. Run `git branch` — verify you're on main
+4. Architecture context → `docs/plan/architecture.md` §1, §3; decisions → `docs/decisions/README.md`
+
+**Session end: push what you finished.** A completed task's merge commit (7-step checklist below, step 5) must be pushed to `origin/main` immediately, not left sitting local — other parallel sessions rely on seeing it to avoid duplicate/conflicting work on the same area.
 
 **Cargo output rules:** always `-p <crate>`, never `--workspace` (exception: P5). Success → 1 line. Errors → full `error[...]` block, skip all warnings. Test failure → test name + first 10 lines.
 

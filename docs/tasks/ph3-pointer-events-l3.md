@@ -140,14 +140,22 @@ hover-переходы (`pointerover`/`pointerout`/`pointerenter`/`pointerleave`
   (бриф от 2026-07-05), не Pointer Events.
 
 ## Definition of done
-- [x] Shell копит промежуточные `pointermove` и флашит покадрово.
+- [x] Shell копит промежуточные `pointermove` и флашит покадрово
+      (`pending_pointer_moves` + `flush_pointer_moves`, флаш в `about_to_wait`).
 - [x] `getCoalescedEvents()` возвращает реальные промежуточные события
       (порядок по спеку, главное — последнее).
 - [x] `getPredictedEvents()` возвращает экстраполированные точки (или `[]`).
-- [x] press/release/enter/leave корректно флашат буфер (нет потери порядка).
-- [x] Заглушки `dom.rs` (`_lumen_dispatch_pointer_event`,
-      `_lumen_dispatch_capture_event`) выверены — корректны для
-      некоалесцируемых типов, не требовали замены; комментарии уточнены.
-- [x] Новые тесты на реальную коалесацию/предсказание добавлены и зелёные
-      (default + `--features v8-backend`).
-- [x] `CAPABILITIES.md` — Pointer Events L3 уточнено (coalesced/predicted).
+- [x] press/release/enter/leave корректно флашат буфер (нет потери порядка) —
+      `flush_pointer_moves()` вызывается eagerly перед pointerdown/up/
+      pointerout+leave/CursorLeft, плюс safety-net флаш раз в `about_to_wait`.
+- [x] Заглушки в `dom.rs` (`_lumen_dispatch_pointer_event`,
+      `_lumen_dispatch_locked_mousemove`, `_lumen_dispatch_capture_event`)
+      выверены: главный путь дошит, pointer-lock/capture пути оставлены
+      односэмпловыми/пустыми — корректно по спеку (нет батчинга между кадрами
+      для них); комментарии уточнены — некоалесцируемые типы не требовали
+      замены.
+- [x] Тесты обновлены/добавлены: `pointer_event_get_coalesced_events_returns_array`
+      (регрессия — одиночное событие) + новый
+      `pointer_event_coalesced_events_real_batch_and_prediction` (реальный батч
+      + предсказание). Все зелёные на default (QuickJS) и `--features v8-backend`.
+- [x] `CAPABILITIES.md` — Pointer Events L3 🟡 → ✅ (уточнено: coalesced/predicted).

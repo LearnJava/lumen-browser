@@ -29,17 +29,17 @@ launches now skip session restore), [BUG-298](../../bugs/BUG-298-FIXED.md)
 document instead of the calling node's subtree — `Output.show_results` builds a
 detached results tree and queries into it, always getting nothing),
 [BUG-299](../../bugs/BUG-299-FIXED.md) (`Element.prototype.insertAdjacentText` was
-missing entirely, thrown from the same code path), and [BUG-300](../../bugs/BUG-300-FIXED.md)
+missing entirely, thrown from the same code path), [BUG-300](../../bugs/BUG-300-FIXED.md)
 (`browsingContext.navigate`'s `DocumentReady` wait could ACK using the *previous*
-page's stale `layout_box` before the new page had even started loading). Together
-BUG-298/299/300 fully explain (and disprove as environment-flaky) the
-"`script.evaluate`-install race" theory previously in `CLAUDE.md` → "Known gotchas" —
-a manual BiDi driver hitting the fixed binary through a plain HTTP server now
-completes the harness correctly end to end. The last `run_smoke.py`-only
-timeout ([BUG-301](../../bugs/BUG-301-FIXED.md)) was `wptrunner` serving its own
-`/resources/testharnessreport.js` static route over Lumen's vendored one; fixed
-via `browsers/lumen.py::env_options`. See those bug files and the task doc's S4
-section for the full diagnosis trail (BiDi-eval-based bisection of
+page's stale `layout_box` before the new page had even started loading), and
+[BUG-301](../../bugs/BUG-301-FIXED.md) (`wptrunner`'s vendored harness registers its
+own static route for `/resources/testharnessreport.js`, winning over Lumen's
+vendored file that sets `window.__lumen_wpt_results` — plus a related, independently
+found persistent-on-disk-HTTP-cache angle on the same symptom, see
+[BUG-315](../../bugs/BUG-315-FIXED.md)). Together BUG-298/299/300 fully explain (and
+disprove as environment-flaky) the "`script.evaluate`-install race" theory
+previously in `CLAUDE.md` → "Known gotchas". See those bug files and the task doc's
+S4 section for the full diagnosis trail (BiDi-eval-based bisection of
 `testharness.js`'s execution).
 
 ## What's here
@@ -187,7 +187,7 @@ vendored `dom/` corpus). Every genuine failure is recorded as `expected: FAIL`
 so the whole set runs **green** (0 unexpected) and acts as a regression ratchet
 — same idea as `KNOWN_DEBTORS` in `graphic_tests/`, but tool-native. Each `.ini`
 is header-commented with the engine bug it tracks (BUG-302/309/310/311/312/
-313/314 for S5; BUG-315/316/317 for S6); flip a `FAIL` to `PASS` in the same
+313/314 for S5; BUG-317/318/319 for S6); flip a `FAIL` to `PASS` in the same
 commit that lands the fix.
 
 ## Running the whole suite (S7 gate)

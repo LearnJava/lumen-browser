@@ -70,6 +70,7 @@ mod test_49;
 mod test_a11y_tree;
 mod test_compositor;
 mod test_devx2_golden;
+mod test_devx5_headless_automation;
 mod test_gpu_session;
 mod test_pages_integrity;
 mod test_stacking_order;

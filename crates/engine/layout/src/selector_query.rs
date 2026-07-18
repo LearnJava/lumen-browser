@@ -377,6 +377,30 @@ fn query_all_rec(
     }
 }
 
+// ──────────────── query_all_scoped ────────────────
+
+/// Returns all descendant [`NodeId`]s of `scope` (excluding `scope` itself)
+/// that match `sel`, in document order.
+///
+/// Implements `Element`/`DocumentFragment`/`ShadowRoot.querySelector(All)`
+/// scoping (DOM Parentnode §4.2.5): unlike [`query_all`], which always walks
+/// the whole document tree from `doc.root()`, this only descends from
+/// `scope`'s children — so it also finds matches inside a subtree that is
+/// not (yet) attached to the document (`scope` has no ancestor path to
+/// `doc.root()`). Returns an empty Vec when `sel` is empty/invalid or no
+/// descendant matches.
+pub fn query_all_scoped(doc: &Document, scope: NodeId, sel: &str) -> Vec<NodeId> {
+    let selectors = parse_selector_list(sel);
+    if selectors.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for &child in &doc.get(scope).children.clone() {
+        query_all_rec(doc, child, &selectors, &mut out);
+    }
+    out
+}
+
 // ──────────────── matches_selector ────────────────
 
 /// Returns `true` if `node` matches **any** selector in `sel`.
@@ -1039,6 +1063,39 @@ mod tests {
     fn empty_selector_returns_none() {
         let (doc, tree) = layout_tree("<div>text</div>", "");
         assert!(find_box_by_selector(&tree, &doc, "").is_none());
+    }
+
+    // BUG-291: `query_all_scoped` must find matches inside a subtree that has
+    // no path to `doc.root()` at all — `query_all` (whole-document search)
+    // cannot, which is exactly what broke `Element.querySelector` on
+    // `testharness.js`'s off-document results table.
+    #[test]
+    fn query_all_scoped_finds_matches_in_detached_subtree() {
+        let mut doc = lumen_dom::Document::new();
+        let table = doc.create_element(lumen_dom::QualName::html("table"));
+        let tbody = doc.create_element(lumen_dom::QualName::html("tbody"));
+        doc.append_child(table, tbody);
+        // `table` is intentionally never attached to `doc.root()`.
+
+        assert_eq!(query_all_scoped(&doc, table, "tbody"), vec![tbody]);
+        assert!(query_all(&doc, "tbody").is_empty());
+    }
+
+    // BUG-291: scoped queries match descendants only — never the scope node
+    // itself, and never nodes outside its subtree.
+    #[test]
+    fn query_all_scoped_excludes_self_and_siblings() {
+        let mut doc = lumen_dom::Document::new();
+        let root = doc.root();
+        let a = doc.create_element(lumen_dom::QualName::html("div"));
+        let b = doc.create_element(lumen_dom::QualName::html("div"));
+        let c = doc.create_element(lumen_dom::QualName::html("div"));
+        doc.append_child(root, a);
+        doc.append_child(root, b);
+        doc.append_child(a, c);
+
+        // Only the descendant `c` matches — not `a` itself, not sibling `b`.
+        assert_eq!(query_all_scoped(&doc, a, "div"), vec![c]);
     }
 
     #[test]

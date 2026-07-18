@@ -123,7 +123,7 @@ class LumenTestharnessExecutor(TestharnessExecutor):
                 # the final result on `RESULTS_GLOBAL` — we poll that global
                 # synchronously rather than awaiting a promise here. BiDi
                 # `awaitPromise=True` is a separate, currently-unimplemented
-                # path (BUG-317, pinned by `tests/wpt/verify_s6_await_promise.py`)
+                # path (BUG-319, pinned by `tests/wpt/verify_s6_await_promise.py`)
                 # this executor does not depend on (P2-wpt S6).
                 value = await session.script.evaluate(
                     expression=expression,
