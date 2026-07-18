@@ -21,7 +21,6 @@ ROADMAP.md:230
 CSS-SPECS.md:73
 CSS-SPECS.md:98
 CSS-SPECS.md:271
-CSS-SPECS.md:602
 CSS-SPECS.md:606
 docs/tasks/p2-wpt-integration.md:224
 docs/tasks/p2-wpt-integration.md:229
