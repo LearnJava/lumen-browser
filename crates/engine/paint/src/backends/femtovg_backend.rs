@@ -530,6 +530,21 @@ pub struct FemtovgBackend {
     /// Device-pixel size `backdrop_bbox_pool` images were created for; see
     /// `cpu_upload_pool_size`.
     backdrop_bbox_pool_size: (usize, usize),
+    /// BUG-272 срез 10 (item 3(b), last full-framebuffer piece of the
+    /// backdrop-filter path): pool of reusable render-target FBOs the
+    /// element's own content (background/border etc., captured between
+    /// `PushBackdropFilter`/`PopBackdropFilter`) draws into, sized to the same
+    /// bbox as `backdrop_bbox_pool`'s `filtered_backdrop_id` instead of the
+    /// full framebuffer. Kept separate from `layer_pool` because its size
+    /// varies per element (like `backdrop_bbox_pool` vs `cpu_upload_pool`).
+    /// `offscreen_layer_image_flags()` — `FLIP_Y` needed, a render target
+    /// later `Paint::image`-sampled directly in `composite_backdrop_filter_layer`
+    /// (placed at `BackdropFilterLayerEntry::true_elem_x/y` — see that field's
+    /// doc for why that position, not `filtered_backdrop_x/y`, is correct here).
+    elem_bbox_pool: Vec<femtovg::ImageId>,
+    /// Device-pixel size `elem_bbox_pool` images were created for; see
+    /// `backdrop_bbox_pool_size`.
+    elem_bbox_pool_size: (usize, usize),
     /// Offscreen opacity group layer stack (BUG-133). Each entry holds an
     /// offscreen ImageId that subtree draws render into; PopOpacity composites
     /// it once with the group alpha (CSS Color L3 §3.2: opacity is atomic —
@@ -989,22 +1004,59 @@ struct BlendLayerEntry {
 /// the backdrop snapshot cropped to `bounds` (device px) with the filter chain applied
 /// (blur + colour-matrix) — BUG-272 item 3: sized to the element's bbox instead of the
 /// full framebuffer, since the filtered result is only ever sampled within `bounds`.
+/// BUG-272 срез 10: `elem_image_id` is sized to that same bbox
+/// (`filtered_backdrop_w/h`) instead of full-framebuffer.
+///
+/// Two different position conventions are in play, and they must NOT be
+/// confused: `apply_backdrop_filters`'s crop (hence `filtered_backdrop_x/y`)
+/// indexes the backdrop screenshot using `bounds.x/y` directly, with no
+/// adjustment for ambient scroll/page-offset/nested transforms — a
+/// pre-existing srez-5 limitation, out of scope to fix here, that this
+/// entry's `filtered_backdrop_id` compositing (step 1) inherits unchanged.
+/// `elem_image_id`'s own content, by contrast, is captured with the ambient
+/// transform PRESERVED (ADR-style: same convention every other renderer
+/// command uses) plus an extra translate on top, so it lands at the
+/// element's true on-screen position — matching how the pre-срез-10
+/// full-framebuffer `elem_image_id` behaved (a direct, unshifted copy of the
+/// whole frame already had it there). `true_elem_x/y` is that true position
+/// (device px, captured once at Push time via `canvas.transform()` before any
+/// reset), used by `composite_backdrop_filter_layer` to place it back
+/// correctly — using `filtered_backdrop_x/y` instead here reintroduces the
+/// step 1 mismatch as a second-order bug: the element's own border/background
+/// would land partway through backdrop step 1's (already off) rect, splitting
+/// the card visibly into a correctly-tinted zone and a wrong-tint zone (found
+/// via a single-card A/B gdigrab repro that ruled out FLIP_Y, pooling and a
+/// CPU-roundtrip re-upload as the cause — all three left the diff unchanged
+/// until this position mismatch was identified via `apply_backdrop_filters`'
+/// own CPU crop dumped to PPM: byte-identical between branch and main, so the
+/// bug was never in step 1 or in capturing `elem_image_id`, only in how srez
+/// 10 was placing it back).
 /// On `PopBackdropFilter`, `composite_backdrop_filter_layer` blits the filtered backdrop
 /// at `bounds`, then composites element content on top (CSS Filter Effects L2 §2).
 struct BackdropFilterLayerEntry {
     /// Offscreen image capturing element content (draws between Push and Pop).
+    /// Bbox-sized (BUG-272 срез 10) — see `filtered_backdrop_w/h` for its
+    /// device-pixel size, `true_elem_x/y` for where it belongs on composite.
     elem_image_id: femtovg::ImageId,
+    /// Device-pixel X of the element's true on-screen position (ambient
+    /// transform applied) at Push time — see the struct doc for why this is
+    /// a different coordinate than `filtered_backdrop_x`.
+    true_elem_x: f32,
+    /// Device-pixel Y of the element's true on-screen position; see `true_elem_x`.
+    true_elem_y: f32,
     /// Bbox-cropped filtered backdrop snapshot — blurred and/or colour-filtered.
     filtered_backdrop_id: femtovg::ImageId,
     /// Device-pixel width `filtered_backdrop_id` was uploaded at (BUG-272 срез
-    /// 5) — needed to return it to `backdrop_bbox_pool` on Pop.
+    /// 5) — needed to return it to `backdrop_bbox_pool` on Pop. Also
+    /// `elem_image_id`'s own device-pixel width (both share the same crop size).
     filtered_backdrop_w: usize,
     /// Device-pixel height `filtered_backdrop_id` was uploaded at; see
     /// `filtered_backdrop_w`.
     filtered_backdrop_h: usize,
     /// Device-pixel X origin of `filtered_backdrop_id` within the framebuffer
     /// (BUG-272 срез 5) — the crop's top-left corner, needed to place the
-    /// smaller image back at the right spot on composite.
+    /// smaller image back at the right spot on composite. NOT `elem_image_id`'s
+    /// origin — see `true_elem_x`.
     filtered_backdrop_x: usize,
     /// Device-pixel Y origin of `filtered_backdrop_id`; see `filtered_backdrop_x`.
     filtered_backdrop_y: usize,
@@ -1492,6 +1544,8 @@ impl FemtovgBackend {
             cpu_upload_pool_size: (0, 0),
             backdrop_bbox_pool: Vec::new(),
             backdrop_bbox_pool_size: (0, 0),
+            elem_bbox_pool: Vec::new(),
+            elem_bbox_pool_size: (0, 0),
             backdrop_filter_layer_stack: Vec::new(),
             clip_stack: Vec::new(),
             active_rt_image: None,
@@ -1721,6 +1775,38 @@ impl FemtovgBackend {
             self.backdrop_bbox_pool.push(id);
         } else {
             self.blend_layer_pending_delete.push(id);
+        }
+    }
+
+    /// BUG-272 срез 10: same contract as [`Self::acquire_layer`] (a
+    /// render-target FBO, `offscreen_layer_image_flags()`), but sized `w × h`
+    /// instead of the full framebuffer and backed by `elem_bbox_pool` — a
+    /// dedicated slot for `elem_image_id`, kept separate for the same reason
+    /// [`Self::acquire_backdrop_bbox_image`] is: its per-element varying size
+    /// would thrash the full-framebuffer-sized `layer_pool`.
+    fn acquire_elem_bbox_layer(&mut self, w: usize, h: usize) -> Option<femtovg::ImageId> {
+        if self.elem_bbox_pool_size != (w, h) {
+            self.filter_layer_pending_delete.append(&mut self.elem_bbox_pool);
+            self.elem_bbox_pool_size = (w, h);
+        }
+        if let Some(id) = self.elem_bbox_pool.pop() {
+            return Some(id);
+        }
+        self.canvas
+            .create_image_empty(w, h, femtovg::PixelFormat::Rgba8, offscreen_layer_image_flags())
+            .ok()
+    }
+
+    /// Returns an image acquired via [`Self::acquire_elem_bbox_layer`] to the
+    /// pool for reuse; see [`Self::release_layer`].
+    fn release_elem_bbox_layer(&mut self, id: femtovg::ImageId, w: usize, h: usize) {
+        /// Same cap as `release_backdrop_bbox_image` — the two pools hold
+        /// paired images for the same backdrop-filter group.
+        const MAX_POOLED_ELEM_BBOX: usize = 4;
+        if self.elem_bbox_pool_size == (w, h) && self.elem_bbox_pool.len() < MAX_POOLED_ELEM_BBOX {
+            self.elem_bbox_pool.push(id);
+        } else {
+            self.filter_layer_pending_delete.push(id);
         }
     }
 
@@ -2981,12 +3067,18 @@ impl FemtovgBackend {
     ///
     /// Algorithm:
     /// 1. Flush so `elem_image_id` contains the final element content.
-    /// 2. Switch to `prev_render_target`.
+    /// 2. Undo the Push-time bbox `translate`/`scissor` (BUG-272 срез 10), then
+    ///    switch to `prev_render_target`.
     /// 3. Draw `filtered_backdrop_id` at element `bounds` using Copy (replace-in-place).
-    /// 4. Draw `elem_image_id` (full canvas) with SourceOver to composite element on top.
+    /// 4. Draw `elem_image_id` at its `true_elem_x/y` position with SourceOver to
+    ///    composite element content on top (BUG-272 срез 10: bbox-sized, no
+    ///    longer a full-canvas quad — see `BackdropFilterLayerEntry`'s doc for why
+    ///    this uses a different placement than step 3's `filtered_backdrop_id`).
     fn composite_backdrop_filter_layer(&mut self, entry: BackdropFilterLayerEntry) {
         let BackdropFilterLayerEntry {
             elem_image_id,
+            true_elem_x,
+            true_elem_y,
             filtered_backdrop_id,
             filtered_backdrop_w,
             filtered_backdrop_h,
@@ -2999,11 +3091,15 @@ impl FemtovgBackend {
         // Flush pending draws into elem_image_id.
         self.canvas.flush();
 
+        // Undo the `canvas.save()` + bbox `translate`/`scissor` pushed in
+        // `PushBackdropFilter` (BUG-272 срез 10) before touching the render
+        // target — restoring pops the canvas transform *and* scissor stack
+        // (both are part of femtovg's `State`), independent of which FBO is
+        // active.
+        self.canvas.restore();
+
         // Restore previous render target.
         self.switch_render_target(prev_render_target);
-
-        let css_w = (self.width as f64 / self.scale) as f32;
-        let css_h = (self.height as f64 / self.scale) as f32;
 
         // Step 1: blit filtered backdrop at element bounds (Copy = pixel-replace).
         // BUG-272 item 3: `filtered_backdrop_id` is bbox-sized (cropped to
@@ -3023,12 +3119,19 @@ impl FemtovgBackend {
         self.canvas.fill_path(&bd_path, &bd_paint);
         self.canvas.restore();
 
-        // Step 2: composite element content on top (SourceOver = normal CSS compositing).
+        // Step 2: composite element content on top (SourceOver = normal CSS
+        // compositing). BUG-272 срез 10: placed at `true_elem_x/y` (the
+        // element's true on-screen position captured at Push time), NOT
+        // `bd_x/y` — see `BackdropFilterLayerEntry`'s doc for why those two
+        // differ and why using `bd_x/y` here would misplace the element's own
+        // content relative to step 1's (already off) backdrop rect.
         self.canvas.save();
         self.canvas.reset_transform();
-        let elem_paint = femtovg::Paint::image(elem_image_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+        let true_x = true_elem_x / self.scale as f32;
+        let true_y = true_elem_y / self.scale as f32;
+        let elem_paint = femtovg::Paint::image(elem_image_id, true_x, true_y, bd_w, bd_h, 0.0, 1.0);
         let mut elem_path = femtovg::Path::new();
-        elem_path.rect(0.0, 0.0, css_w, css_h);
+        elem_path.rect(true_x, true_y, bd_w, bd_h);
         self.canvas.fill_path(&elem_path, &elem_paint);
         self.canvas.restore();
 
@@ -3036,7 +3139,10 @@ impl FemtovgBackend {
         // via `backdrop_bbox_pool` (separate from `cpu_upload_pool`'s
         // full-framebuffer consumers — see field doc).
         self.release_backdrop_bbox_image(filtered_backdrop_id, filtered_backdrop_w, filtered_backdrop_h);
-        self.release_layer(elem_image_id);
+        // BUG-272 срез 10: `elem_image_id` is now bbox-sized and pooled via
+        // `elem_bbox_pool` (separate from `layer_pool`'s full-framebuffer
+        // consumers — see field doc).
+        self.release_elem_bbox_layer(elem_image_id, filtered_backdrop_w, filtered_backdrop_h);
     }
 
     /// Рисует изображение из зарегистрированного URL в content box `rect`
@@ -4165,6 +4271,12 @@ impl FemtovgBackend {
             // at element bounds (Copy op) then composites element content on top.
             DisplayCommand::PushBackdropFilter { filters, bounds } => {
                 let prev_rt = self.current_rt();
+                // BUG-272 срез 10: the element's true on-screen device position,
+                // captured from the CURRENT (ambient) transform before anything
+                // below touches it — see `BackdropFilterLayerEntry::true_elem_x`'s
+                // doc for why this must NOT be conflated with `apply_backdrop_
+                // filters`'s own (ambient-blind) `filt_x/y` crop origin.
+                let true_origin = self.canvas.transform().transform_point(bounds.x, bounds.y);
                 // Flush so backdrop has all content rendered.
                 self.canvas.flush();
                 // Apply filters to a screenshot of the current RT.
@@ -4182,15 +4294,46 @@ impl FemtovgBackend {
                     // landed in the wrong row, `viewport_h - bounds.bottom`).
                     // `filtered_backdrop_id` is a CPU pixel upload (top-down) and
                     // correctly stays flag-free per `offscreen_layer_image_flags`.
-                    match self.acquire_layer() {
+                    match self.acquire_elem_bbox_layer(filt_w, filt_h) {
                         Some(elem_id) => {
                             self.switch_render_target(femtovg::RenderTarget::Image(elem_id));
                             self.canvas.clear_rect(
-                                0, 0, self.width, self.height,
+                                0, 0, filt_w as u32, filt_h as u32,
                                 femtovg::Color::rgba(0, 0, 0, 0),
                             );
+                            self.canvas.save();
+                            // BUG-272 срез 10: unlike the (buggy, ambient-blind)
+                            // `filt_x/y` crop, child draws must land at their TRUE
+                            // on-screen position for `composite_backdrop_filter_layer`
+                            // to place `elem_image_id` back correctly (see
+                            // `BackdropFilterLayerEntry`'s doc) — so the ambient
+                            // transform (scroll/page-offset/nested `PushTransform`)
+                            // stays active here; only an extra translate is added on
+                            // top (NOT a reset) to map `true_origin` to this image's
+                            // local `(0, 0)`.
+                            self.canvas.translate(
+                                -(true_origin.0 / self.scale as f32),
+                                -(true_origin.1 / self.scale as f32),
+                            );
+                            // Re-establish (not intersect) the scissor to exactly this
+                            // element's bbox, in the SAME (ambient-preserving)
+                            // coordinate space child draws already use (`bounds`,
+                            // untransformed — femtovg's `scissor()` bakes it against
+                            // the CURRENT transform, same as `intersect_scissor(rect.x,
+                            // rect.y, ...)` calls elsewhere in this file). Needed
+                            // because femtovg's scissor is baked (`Scissor::transform`)
+                            // from whatever CTM was active when an ancestor's overflow
+                            // clip called `intersect_scissor` (e.g. the page's own
+                            // `overflow: hidden` root); left as inherited, it clips
+                            // this small, differently-positioned image against
+                            // coordinates that belong to the full framebuffer, cutting
+                            // content off partway (root-caused via femtovg source
+                            // reading + row-range instrumentation).
+                            self.canvas.scissor(bounds.x, bounds.y, bounds.width, bounds.height);
                             self.backdrop_filter_layer_stack.push(BackdropFilterLayerEntry {
                                 elem_image_id: elem_id,
+                                true_elem_x: true_origin.0,
+                                true_elem_y: true_origin.1,
                                 filtered_backdrop_id: filt_id,
                                 filtered_backdrop_w: filt_w,
                                 filtered_backdrop_h: filt_h,
@@ -4338,14 +4481,15 @@ impl RenderBackend for FemtovgBackend {
     fn debug_mem_report(&self) -> String {
         let raw_bytes: usize = self.raw_images.values().map(|i| i.data.len()).sum();
         format!(
-            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}, cpu_upload_pool={}, backdrop_bbox_pool={}",
+            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}, cpu_upload_pool={}, backdrop_bbox_pool={}, elem_bbox_pool={}",
             self.raw_images.len(),
             raw_bytes as f64 / 1e6,
             self.images.len(),
             self.layer_pool.len(),
             self.content_band_pool.len(),
             self.cpu_upload_pool.len(),
-            self.backdrop_bbox_pool.len()
+            self.backdrop_bbox_pool.len(),
+            self.elem_bbox_pool.len()
         )
     }
 
