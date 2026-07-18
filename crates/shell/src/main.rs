@@ -13915,7 +13915,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let alpha = 1.0 - progress;
                     if alpha > 0.0 {
                         let mut vt_cmds = Vec::with_capacity(vt.old_dl.len() + 2);
-                        vt_cmds.push(lumen_paint::DisplayCommand::PushOpacity { alpha });
+                        vt_cmds.push(lumen_paint::DisplayCommand::PushOpacity { alpha, bounds: None });
                         vt_cmds.extend_from_slice(&vt.old_dl);
                         vt_cmds.push(lumen_paint::DisplayCommand::PopOpacity);
                         // Prepend so old content renders before (under) UI panels.

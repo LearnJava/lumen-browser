@@ -6224,7 +6224,7 @@ impl Renderer {
                 DisplayCommand::PopClip => {
                     clip_stack.pop();
                 }
-                DisplayCommand::PushOpacity { alpha } => {
+                DisplayCommand::PushOpacity { alpha, .. } => {
                     flush_batch!();
                     level_alpha_stack.push((*alpha, render_plan.len()));
                     current_level += 1;
