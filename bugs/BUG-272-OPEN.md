@@ -1,6 +1,6 @@
 # BUG-272 — ~1 ГБ RAM на lenta.ru при одной загруженной картинке (Edge целиком ~530 МБ)
 
-**Статус:** OPEN — корень найден, срез 1 (пул offscreen-слоёв femtovg) влит 2026-07-07, срез 2 (blend-mode слой в пул) влит 2026-07-08, срез 3 (blend-result CPU-композит в пул) влит 2026-07-15, срез 4 (colour-matrix filter + backdrop-filter re-upload в общий пул) влит 2026-07-15, срез 5 (backdrop-filter → bbox-сайзинг вместо full-frame) влит 2026-07-16, срез 6 (шрифтовые байты через `Arc<[u8]>` — устранение двойного хранения @font-face-шрифта) влит 2026-07-18, срез 7 (`PushOpacity` несёт `bounds`, off-viewport opacity-группы куллятся) влит 2026-07-18, срез 8 (off-viewport clip-группы `PushClipRoundedRect`/`PushClipPath` куллятся) влит 2026-07-18; остаточные направления ниже
+**Статус:** OPEN — корень найден, срез 1 (пул offscreen-слоёв femtovg) влит 2026-07-07, срез 2 (blend-mode слой в пул) влит 2026-07-08, срез 3 (blend-result CPU-композит в пул) влит 2026-07-15, срез 4 (colour-matrix filter + backdrop-filter re-upload в общий пул) влит 2026-07-15, срез 5 (backdrop-filter → bbox-сайзинг вместо full-frame) влит 2026-07-16, срез 6 (шрифтовые байты через `Arc<[u8]>` — устранение двойного хранения @font-face-шрифта) влит 2026-07-18, срез 7 (`PushOpacity` несёт `bounds`, off-viewport opacity-группы куллятся) влит 2026-07-18, срез 8 (off-viewport clip-группы `PushClipRoundedRect`/`PushClipPath` куллятся) влит 2026-07-18, срез 9 (off-viewport mask-группы `PushMask{Image,LinearGradient,RadialGradient,ConicGradient}` куллятся) влит 2026-07-18; остаточные направления ниже
 **Компонент:** paint (femtovg backend, offscreen-слои)
 **Найден:** 2026-07-07, сравнительный замер Lumen vs Edge на lenta.ru
 **Полная запись исследования (методика, опровергнутые гипотезы):** [docs/perf-audit-lenta-2026-07.md](../docs/perf-audit-lenta-2026-07.md)
@@ -158,11 +158,41 @@ mask-опенеры (`PushMask*`) — тоже отдельный будущий
 `group_bounds`-тест: `PushClipRoundedRect { rect: r }` → `Some(r)`, `PushClipPath { circle }`
 → `Some(bounding_rect)`).
 
+## Срез 9 — off-viewport mask-группы куллятся (влит 2026-07-18)
+
+Продолжение пункта «Остаток» 3c (последний оставшийся offscreen-опенер-класс):
+`FemtovgBackend::group_bounds` теперь возвращает bbox и для всех четырёх mask-опенеров —
+`PushMaskImage` / `PushMaskLinearGradient` / `PushMaskRadialGradient` /
+`PushMaskConicGradient` — по их `rect` (border-box маскируемого элемента). `run_content_pass`
+пропускает **весь** bracket `PushMask*…PopMask`, когда `rect` целиком вне вьюпорта (тот же
+механизм, что срезы 7/8 / BUG-273 срез 1; `overlay_partition::layer_delta` уже балансирует
+mask-скобки, включая вложенный `mask-clip` `PushClipRect`/`PopClip`, так что `matching_close`
+находит парный `PopMask`).
+
+Безопасность (mask ограничивает видимые пиксели своим `rect`, как clip): `PushMaskImage`
+скиссорит маскируемое поддерево к `rect` (`canvas.scissor(rect…)` в `render_command`), поэтому
+ни один пиксель не рисуется вне `rect`. Градиентные маски рендерят поддерево в offscreen-FBO,
+а `composite_mask_layer` домножает его alpha через `CompositeOperation::DestinationIn`,
+заливая градиент **только по `rect`** — вне `rect` источника нет, DestinationIn обнуляет там
+alpha, так что композит вниз даёт видимые пиксели лишь внутри `rect`. Следовательно `rect`
+целиком вне вьюпорта ⇒ ни одного видимого пикселя ⇒ cull всей группы корректен. `rect` — та же
+координатная конвенция (document-space CSS px), что у clip/opacity/blend-групп выше.
+`PushMaskLayer` (содержимое SVG-`<mask>`, применяется к **родительскому** слою) в срез не
+входит — семантика его композита сложнее чистого клипа (как `PushClipRect` в срезе 8).
+
+Пассивная оптимизация только для `LUMEN_BACKEND=femtovg`-сессий (femtovg перестал быть
+дефолтным оконным бэкендом после `P1-wgpu-flip`); дисплей-лист уже несёт нужное поле
+(`rect`), эмиттер не тронут.
+
+Корректность: `cargo check -p lumen-paint` зелёный; `cargo clippy -p lumen-paint
+--all-targets -- -D warnings` чист; `cargo test -p lumen-paint --lib` (обновлённый
+`group_bounds`-тест: все четыре `PushMask*` с `rect: r` → `Some(r)`).
+
 ## Остаток (следующие срезы)
 
 1. ~~Blend-слои (PREMULTIPLIED) вне пула~~ — закрыто срезами 2–4 (src-слой, blend-result, colour-matrix filter, backdrop-filter — все теперь в едином `cpu_upload_pool`). Glyph atlas на тексте страницы — GPU на lenta всё ещё ~509 МБ против ~224 МБ baseline (~285 МБ страничных); требует того же счётчика GPU-памяти, срезы 2–4 его не меняли (lenta не использует blend-mode/backdrop-filter/цветовые CSS-фильтры).
 2. Baseline пустого окна 224 МБ GPU — сам по себе жирный (framebuffers/шрифтовой атлас/драйвер).
-3. Слои по bounding box вместо full-frame — **срез 5 (влит) сделал backdrop-filter's `filtered_backdrop_id` bbox-сайзингом**; визуально подтверждён (A/B gdigrab branch-vs-main, TEST-30/103 побайтово идентичны — см. срез 5 выше); **срез 7 (влит) добавил `bounds` в `PushOpacity` и включил viewport-cull off-screen opacity-групп** (см. срез 7 выше); **срез 8 (влит) включил viewport-cull off-screen clip-групп** (`PushClipRoundedRect`/`PushClipPath`, см. срез 8 ниже); остаётся: (b) `elem_image_id` у backdrop-filter (всё ещё full-framebuffer через `layer_pool`), (c) сам bbox-сайзинг **видимого** слоя (аллокация размером с bbox вместо framebuffer) для `PushOpacity`/`PushClip*` (сейчас куллинг снимает только off-viewport-случай, on-viewport слой всё ещё full-framebuffer), viewport-cull для `PushMask*` (сложнее — семантика композита), а также `PushFilter`/`PushBlendMode` уже куллятся off-viewport (BUG-273 срез 1), но их видимый слой тоже full-framebuffer.
+3. Слои по bounding box вместо full-frame — **срез 5 (влит) сделал backdrop-filter's `filtered_backdrop_id` bbox-сайзингом**; визуально подтверждён (A/B gdigrab branch-vs-main, TEST-30/103 побайтово идентичны — см. срез 5 выше); **срез 7 (влит) добавил `bounds` в `PushOpacity` и включил viewport-cull off-screen opacity-групп** (см. срез 7 выше); **срез 8 (влит) включил viewport-cull off-screen clip-групп** (`PushClipRoundedRect`/`PushClipPath`, см. срез 8 ниже); **срез 9 (влит) включил viewport-cull off-screen mask-групп** (`PushMask{Image,LinearGradient,RadialGradient,ConicGradient}`, см. срез 9 ниже); остаётся: (b) `elem_image_id` у backdrop-filter (всё ещё full-framebuffer через `layer_pool`), (c) сам bbox-сайзинг **видимого** слоя (аллокация размером с bbox вместо framebuffer) для `PushOpacity`/`PushClip*`/`PushMask*` (сейчас куллинг снимает только off-viewport-случай, on-viewport слой всё ещё full-framebuffer), viewport-cull для `PushMaskLayer` (SVG-`<mask>` content, сложнее — применяется к родительскому слою), а также `PushFilter`/`PushBlendMode` уже куллятся off-viewport (BUG-273 срез 1), но их видимый слой тоже full-framebuffer.
 4. Отложенные многокопийные image-кэши (см. диагностику 2026-07-07 в истории файла): femtovg `raw_images` deep-copy, `@WxH`-варианты, GIF все кадры, ~~font `bytes_store.cloned()`~~ (закрыто срезом 6 — `Arc<[u8]>`), canvas2d thread-local — актуально для image-heavy сайтов.
 
 ## Инструменты (остались в коде)
