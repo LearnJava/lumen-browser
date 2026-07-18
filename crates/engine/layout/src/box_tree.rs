@@ -8499,10 +8499,16 @@ fn lay_out_flex(
                 // cross-axis stretch path below.
                 children[i].style.box_sizing = BoxSizing::BorderBox;
                 children[i].style.height = Some(Length::Px(inner_main));
+                // BUG-294: pass the item's *margin-box* start (no margin pre-added).
+                // `lay_out_inner` unconditionally adds the box's own `margin_left`/
+                // `margin_top` to the `start_x`/`start_y` it receives, so pre-adding
+                // `m_l`/`m_t` here double-counts the margin. Every other call site in
+                // this file passes the bare margin-box origin and lets `lay_out_inner`
+                // apply the margin once.
                 lay_out(
                     &mut children[i],
-                    content_x + m_l,
-                    content_y + main_cursor + m_t,
+                    content_x,
+                    content_y + main_cursor,
                     content_width - m_l - m_r,
                     Some(inner_main),
                     measurer,
@@ -8517,10 +8523,12 @@ fn lay_out_flex(
                 children[i].style.width = Some(Length::Px(inner_main));
                 // CSS Flexbox §9.8: percentage cross sizes (e.g. height:100%) resolve
                 // against the flex container's definite cross size.
+                // BUG-294: margin-box start — `lay_out_inner` adds `m_l`/`m_t` itself
+                // (see the column arm above), so pre-adding them here double-counts.
                 lay_out(
                     &mut children[i],
-                    content_x + main_cursor + m_l,
-                    content_y + cross_cursor + m_t,
+                    content_x + main_cursor,
+                    content_y + cross_cursor,
                     inner_main,
                     explicit_cross,
                     measurer,
@@ -14139,6 +14147,57 @@ mod tests {
         let c = find_by_id_all(&root, &doc, "c").expect("c");
         assert_eq!(a.rect.y, 200.0, "a.y {}", a.rect.y);
         assert_eq!(c.rect.y, 250.0, "c.y {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_row_item_margin_left_applied_once() {
+        // BUG-294: a row flex item's `margin-left` must move it 1× the margin past
+        // the preceding item's border-box edge, not 2×. item-a occupies [0,60);
+        // item-b (margin-left:10) starts at 60+10=70. The main-axis position is not
+        // rewritten by any later cross-alignment pass, so a double-add would surface
+        // directly as rect.x=80.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:300px;height:100px} #a{width:60px;height:40px} #b{width:60px;height:40px;margin-left:10px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.x, 0.0, "a.x {}", a.rect.x);
+        assert_eq!(b.rect.x, 70.0, "b.x {} (expected 70 = 0 + 60 + 10)", b.rect.x);
+    }
+
+    #[test]
+    fn flex_column_item_margin_top_applied_once() {
+        // BUG-294: a column flex item's `margin-top` must offset it 1× along the
+        // main (block) axis. item-a occupies [0,40); item-b (margin-top:10) starts at
+        // 40+10=50. Column containers skip the cross-alignment pass, so the main-axis
+        // rect.y is exactly what the layout call produced — a double-add would show
+        // as rect.y=60.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:100px;height:300px} #a{width:60px;height:40px} #b{width:60px;height:40px;margin-top:10px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.y, 0.0, "a.y {}", a.rect.y);
+        assert_eq!(b.rect.y, 50.0, "b.y {} (expected 50 = 0 + 40 + 10)", b.rect.y);
+    }
+
+    #[test]
+    fn flex_column_item_margin_left_applied_once() {
+        // BUG-294: a column flex item's `margin-left` (a cross-axis margin) must
+        // offset it 1× along the inline axis. The column arm never re-runs cross
+        // alignment, so rect.x is the layout call's output — a double-add would show
+        // as rect.x=30.
+        let html = r#"<div id="flex"><div id="a"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:100px;height:300px} #a{width:60px;height:40px;margin-left:15px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        assert_eq!(a.rect.x, 15.0, "a.x {} (expected 15 = margin-left applied once)", a.rect.x);
     }
 
     #[test]
