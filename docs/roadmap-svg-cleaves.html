@@ -58,11 +58,11 @@
  "generated": "2026-07-18",
  "counts": {
   "open": 40,
-  "fixed": 239,
+  "fixed": 240,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 279,
+ "total_bugs": 280,
  "phases": [
   {
    "id": "P0",
@@ -213,6 +213,12 @@
      "id": "P1-tablife1",
      "title": "Tab lifecycle Phase 1 (TabState T0–T4, memory pressure, image LRU, T1 paused)",
      "status": "done"
+    },
+    {
+     "id": "P3-scope",
+     "title": "CSS @scope (scoped styling + donut scope)",
+     "status": "done",
+     "note": "DONE 2026-07-18 (p1-scope-donut-limit): @scope root-matching + donut `to (<limit>)` — `node_in_scope` резолвит root и limit одним обходом предков (nearest boundary wins); limit внутри поддерева root вырезает дырку, limit выше root не исключает; 3 теста"
     },
     {
      "id": "P3-vertical",
@@ -957,12 +963,6 @@
      "note": "реализовано (сверка с кодом 2026-07-02): полный CSS Nesting L1 — parser.rs expand_nesting (& явный/неявный + вложенные @media/@supports/@layer/@container), 20 тестов"
     },
     {
-     "id": "P3-scope",
-     "title": "CSS @scope (scoped styling + donut scope)",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): @scope root-matching готов (node_is_in_scope); дошить — donut/limit (inner-scope), CSS-SPECS §53 Phase 2"
-    },
-    {
      "id": "P3-stylequery",
      "title": "CSS Container Style Queries (style()/state())",
      "status": "done",
@@ -1062,7 +1062,7 @@
      "id": "P3-structclone",
      "title": "structuredClone + Transferable objects",
      "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): structuredClone (примитивы/Map/Set/массивы/объекты) — dom.rs; дошить — Transferable (ArrayBuffer/ImageBitmap/OffscreenCanvas transfer)"
+     "note": "PARTIAL: structuredClone (примитивы/Map/Set/массивы/объекты) — dom.rs; 2026-07-18 [P1] дошиты циклические+разделяемые ссылки (memory map), BigInt, Boolean/Number/String-обёртки, ArrayBuffer+типизированные массивы/DataView (deep-copy backing buffer, общая идентичность буфера у нескольких вью), DataCloneError DOMException для функций/символов; остаётся только опция `transfer` (Transferable: ArrayBuffer/ImageBitmap/OffscreenCanvas detach)"
     },
     {
      "id": "P3-ricallback",
@@ -1432,7 +1432,7 @@
        "id": "css-specs-t4",
        "title": "CSS модули — Tier 4 (Advanced/future)",
        "status": "active",
-       "note": "7✅ 14🟡 0⬜ 0🚫 из 21 модулей CSS-SPECS.md (Tier 4)"
+       "note": "8✅ 13🟡 0⬜ 0🚫 из 21 модулей CSS-SPECS.md (Tier 4)"
       }
      ]
     },
@@ -3492,10 +3492,10 @@
    "debtor": false
   },
   "BUG-301": {
-   "status": "open",
-   "title": "`tests/wpt/run_smoke.py` всё ещё таймаутится после BUG-298/299/300: все внешние признаки (readyState, наличие тестовых глобалей, DOM) корректны, но `#log` (перв…",
-   "component": "неясно — js (`testharness.js` completion) и/или wptrunner-интеграция (`executorlumen.py`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`run_smoke.py` таймаутился, потому что `wptrunner` статик-роутом перекрывает `/resources/testharnessreport.js` своим отчётом (`__wptrunner_message_queue`), а на…",
+   "component": "wptrunner-интеграция (`browsers/lumen.py` `env_options`)",
+   "date": "2026-07-18",
    "debtor": false
   },
   "BUG-302": {
@@ -3544,6 +3544,13 @@
    "status": "open",
    "title": "Страница с HTTP-ошибкой (403 антибот, w3.org) держит document_ready 129–205 с в живом окне, хотя headless отдаёт тот же 403 за 0.75 с — вкладка «вечно грузится»…",
    "component": "shell (навигация)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-309": {
+   "status": "open",
+   "title": "`Element.prototype.setAttributeNS`/`getAttributeNS`/`removeAttributeNS` и прочие `*NS`-аксессоры атрибутов отсутствуют — `el.setAttributeNS(...)` кидает `TypeEr…",
+   "component": "js (`dom.rs` `WEB_API_SHIM`)",
    "date": null,
    "debtor": false
   }
@@ -3620,6 +3627,9 @@
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"
+  ],
+  "js (`dom.rs` `WEB_API_SHIM`)": [
+   "BUG-309"
   ],
   "js (`dom.rs` shim)": [
    "BUG-299"
@@ -3950,7 +3960,7 @@
   "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)": [
    "BUG-297"
   ],
-  "неясно — js (`testharness.js` completion) и/или wptrunner-интеграция (`executorlumen.py`)": [
+  "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
    "BUG-301"
   ]
  }
