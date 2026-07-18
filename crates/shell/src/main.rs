@@ -4183,50 +4183,20 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
 
     // Загружаем все таблицы параллельно (сеть — главный тормоз), затем
     // конкатенируем строго в порядке объявления, чтобы каскад не нарушился.
+    // Каждый лист резолвит собственные `@import` относительно СВОЕГО URL
+    // (`sheet_base`), чтобы вложенные импорты (`<link href="/css/a.css">` →
+    // `@import "b.css"` = `/css/b.css`) разрешались корректно.
     let parts = parallel_map(&hrefs, |_, href| {
-        match base.resolve(href) {
-            ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
-                Ok(content) => {
-                    eprintln!("Загружен CSS: {}", path.display());
-                    Some(content)
-                }
-                Err(e) => {
-                    eprintln!("Пропуск CSS {}: {e}", path.display());
-                    None
-                }
-            },
-            ResolvedResource::Url(url) => {
-                use lumen_core::url::Url;
-                use lumen_network::RequestDestination;
-
-                let sub_url = match Url::parse(&url) {
-                    Ok(u) => u,
-                    Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); return None; }
-                };
-
-                // Cross-origin stylesheets are allowed by the web platform:
-                // `<link rel=stylesheet>` is fetched in no-cors mode and the
-                // resulting styles apply normally (Fetch §request, HTML §link).
-                // CORS only gates script-level CSSOM reads (cssRules), not the
-                // visual application — so we fetch cross-origin CSS like any
-                // browser. Real sites host CSS on CDN subdomains (icdn.*,
-                // static.*); blocking them left pages unstyled.
-
-                // BUG-171: read through the prefetch cache — the streaming thread
-                // warms linked stylesheets with this same client, so the cascade
-                // concatenation here reuses identical bytes without a second fetch.
-                let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
-                    let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
-                    client
-                        .fetch_subresource(&sub_url, RequestDestination::Style)
-                        .map_err(|e| e.to_string())
-                });
-                match bytes {
-                    Ok(bytes) => Some(String::from_utf8_lossy(&bytes[..]).into_owned()),
-                    Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); None }
-                }
-            }
-        }
+        let (text, sheet_base) = fetch_stylesheet_text(href, base, sink, cookie_jar.clone())?;
+        Some(inline_css_imports(
+            &text,
+            &sheet_base,
+            sink,
+            cookie_jar.clone(),
+            media_ctx,
+            &mut std::collections::HashSet::new(),
+            0,
+        ))
     });
 
     let mut css = String::new();
@@ -4235,6 +4205,159 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
         css.push('\n');
     }
     css
+}
+
+/// Загружает текст одной таблицы стилей, разрешённой относительно `base`.
+///
+/// Обрабатывает локальные пути (`file://`/относительные — читаются с диска)
+/// и `http(s)` (через prefetch-кэш, как `<link rel=stylesheet>`). Возвращает
+/// текст листа **и** его разрешённый [`ResourceBase`], чтобы вложенные
+/// `@import` резолвились относительно собственного URL листа, а не документа.
+/// При любой ошибке resolve/чтения/сети — `None` (залогировано), поэтому один
+/// битый `@import`/`<link>` не валит весь рендер.
+fn fetch_stylesheet_text(
+    href: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) -> Option<(String, ResourceBase)> {
+    match base.resolve(href) {
+        ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                eprintln!("Загружен CSS: {}", path.display());
+                Some((content, ResourceBase::File(path)))
+            }
+            Err(e) => {
+                eprintln!("Пропуск CSS {}: {e}", path.display());
+                None
+            }
+        },
+        ResolvedResource::Url(url) => {
+            use lumen_core::url::Url;
+            use lumen_network::RequestDestination;
+
+            let sub_url = match Url::parse(&url) {
+                Ok(u) => u,
+                Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); return None; }
+            };
+
+            // Cross-origin stylesheets are allowed by the web platform:
+            // `<link rel=stylesheet>` is fetched in no-cors mode and the
+            // resulting styles apply normally (Fetch §request, HTML §link).
+            // CORS only gates script-level CSSOM reads (cssRules), not the
+            // visual application — so we fetch cross-origin CSS like any
+            // browser. Real sites host CSS on CDN subdomains (icdn.*,
+            // static.*); blocking them left pages unstyled.
+
+            // BUG-171: read through the prefetch cache — the streaming thread
+            // warms linked stylesheets with this same client, so the cascade
+            // concatenation here reuses identical bytes without a second fetch.
+            let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
+                let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
+                client
+                    .fetch_subresource(&sub_url, RequestDestination::Style)
+                    .map_err(|e| e.to_string())
+            });
+            match bytes {
+                Ok(bytes) => Some((
+                    String::from_utf8_lossy(&bytes[..]).into_owned(),
+                    ResourceBase::Url(url),
+                )),
+                Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); None }
+            }
+        }
+    }
+}
+
+/// Максимальная глубина вложенности `@import` (защита от рекурсии/циклов).
+const MAX_CSS_IMPORT_DEPTH: u32 = 16;
+
+/// Рекурсивно резолвит `@import`-правила в `css_text`, возвращая текст с
+/// **предпосланным** содержимым каждой импортированной таблицы.
+///
+/// Per CSS Cascade L4 §6.5: правила импортированного листа предшествуют
+/// собственным правилам импортирующего листа (импорт «раньше» в порядке
+/// каскада). URL резолвятся относительно `base` (расположения самого листа —
+/// см. [`fetch_stylesheet_text`]), поэтому вложенные импорты корректны.
+/// Импорты, чей media-query не матчит `media_ctx` (Media Queries L4), не
+/// загружаются вовсе — их правила всё равно неприменимы. `seen` хранит уже
+/// разрешённые URL и защищает от циклов (`a → b → a`) и повторной загрузки;
+/// `depth` ограничивает глубину вложенности.
+///
+/// Директивы `@import …;` остаются в исходном тексте — парсер каскада
+/// собирает их в `Stylesheet::imports` и игнорирует (повторной загрузки нет),
+/// так что двойного применения не происходит.
+fn inline_css_imports(
+    css_text: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    media_ctx: &lumen_css_parser::MediaContext,
+    seen: &mut std::collections::HashSet<String>,
+    depth: u32,
+) -> String {
+    // Быстрый путь: нет токена `@import` вовсе → лишний парс не нужен
+    // (подавляющее большинство листов). Ложные срабатывания (например
+    // `@import` внутри комментария) безопасны — последующий парс правильно
+    // не найдёт импорта и вернёт текст как есть.
+    if !contains_ignore_ascii_case(css_text.as_bytes(), b"@import") {
+        return css_text.to_owned();
+    }
+    let parsed = lumen_css_parser::parse(css_text);
+    if parsed.imports.is_empty() {
+        return css_text.to_owned();
+    }
+    if depth >= MAX_CSS_IMPORT_DEPTH {
+        eprintln!("Пропуск @import: превышена глубина вложенности ({MAX_CSS_IMPORT_DEPTH})");
+        return css_text.to_owned();
+    }
+
+    let mut prefix = String::new();
+    for imp in &parsed.imports {
+        // Media Queries L4: не матчащий контекст импорт не применяется.
+        if !imp.media.matches(media_ctx) {
+            continue;
+        }
+        // Цикл/дубликат: ключ = абсолютный резолв URL относительно текущего листа.
+        let key = base.resolve_str(&imp.url);
+        if !seen.insert(key) {
+            continue;
+        }
+        let Some((text, imp_base)) =
+            fetch_stylesheet_text(&imp.url, base, sink, cookie_jar.clone())
+        else {
+            continue;
+        };
+        let resolved = inline_css_imports(
+            &text,
+            &imp_base,
+            sink,
+            cookie_jar.clone(),
+            media_ctx,
+            seen,
+            depth + 1,
+        );
+        prefix.push_str(&resolved);
+        if !prefix.ends_with('\n') {
+            prefix.push('\n');
+        }
+    }
+
+    if prefix.is_empty() {
+        return css_text.to_owned();
+    }
+    prefix.push_str(css_text);
+    prefix
+}
+
+/// ASCII-case-insensitive поиск подстроки `needle` в `haystack` без аллокаций.
+fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return needle.is_empty();
+    }
+    haystack
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle))
 }
 
 fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>, media_ctx: &lumen_css_parser::MediaContext) {
@@ -4914,12 +5037,24 @@ fn parse_and_layout(
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let css = {
         let d = doc_arc.lock().unwrap();
-        let mut css = extract_style_blocks(&d);
         let link_media_ctx = if media_print {
             print_media_context(viewport, dark_mode)
         } else {
             screen_media_context(viewport, dark_mode)
         };
+        // Инлайновые <style>: их `@import` резолвятся относительно базы
+        // документа (CSS-SPECS §@import). Внешние <link> резолвят собственные
+        // `@import` относительно своего URL внутри load_linked_stylesheets.
+        let inline = extract_style_blocks(&d);
+        let mut css = inline_css_imports(
+            &inline,
+            base,
+            sink,
+            cookie_jar.clone(),
+            &link_media_ctx,
+            &mut std::collections::HashSet::new(),
+            0,
+        );
         css.push_str(&load_linked_stylesheets(
             &d,
             base,
@@ -22329,6 +22464,125 @@ mod tests {
         let mut hrefs = Vec::new();
         collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
         assert_eq!(hrefs, vec!["style.css"]);
+    }
+
+    // ──────────────── @import file loading (CSS Cascade L4 §6.5) ─────────────
+
+    /// Создаёт уникальную временную директорию для CSS-фикстур `@import`-теста,
+    /// очищая прошлый прогон. Возвращает путь директории.
+    fn import_fixture_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lumen_import_test_{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn null_sink() -> Arc<dyn EventSink> {
+        Arc::new(StdoutEventSink)
+    }
+
+    /// `@import` предпосылает содержимое импортированного листа собственным
+    /// правилам импортирующего (импорт «раньше» в каскаде).
+    #[test]
+    fn inline_css_imports_prepends_imported_content() {
+        let dir = import_fixture_dir("prepend");
+        std::fs::write(dir.join("b.css"), "b { color: blue; }").unwrap();
+        let entry = dir.join("a.css");
+        let base = ResourceBase::File(entry.clone());
+        let text = "@import url(\"b.css\");\na { color: red; }";
+        let out = inline_css_imports(
+            text, &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        let b_pos = out.find("color: blue").expect("imported content present");
+        let a_pos = out.find("color: red").expect("own content present");
+        assert!(b_pos < a_pos, "imported rules must precede importing sheet's own rules");
+    }
+
+    /// Вложенные `@import` (a → b → c) разворачиваются в порядке c, b, a.
+    #[test]
+    fn inline_css_imports_nested_order() {
+        let dir = import_fixture_dir("nested");
+        std::fs::write(dir.join("c.css"), ".c{}").unwrap();
+        std::fs::write(dir.join("b.css"), "@import url(c.css);\n.b{}").unwrap();
+        let base = ResourceBase::File(dir.join("a.css"));
+        let out = inline_css_imports(
+            "@import url(b.css);\n.a{}", &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        let c = out.find(".c{}").unwrap();
+        let b = out.find(".b{}").unwrap();
+        let a = out.find(".a{}").unwrap();
+        assert!(c < b && b < a, "expected c < b < a, got c={c} b={b} a={a}");
+    }
+
+    /// Циклический `@import` (a → b → a) завершается без бесконечной рекурсии.
+    #[test]
+    fn inline_css_imports_cycle_guard() {
+        let dir = import_fixture_dir("cycle");
+        std::fs::write(dir.join("a.css"), "@import url(b.css);\n.a{}").unwrap();
+        std::fs::write(dir.join("b.css"), "@import url(a.css);\n.b{}").unwrap();
+        let base = ResourceBase::File(dir.join("a.css"));
+        // Начинаем с содержимого a.css — тот же файл будет импортирован из b.
+        let out = inline_css_imports(
+            "@import url(b.css);\n.a{}", &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        // Каждый лист загружен максимум один раз (guard по `seen`).
+        assert_eq!(out.matches(".b{}").count(), 1);
+    }
+
+    /// `@import url(x) print;` не загружается под экранным контекстом.
+    #[test]
+    fn inline_css_imports_media_gate() {
+        let dir = import_fixture_dir("media");
+        std::fs::write(dir.join("p.css"), ".print-only{}").unwrap();
+        let base = ResourceBase::File(dir.join("a.css"));
+        let out = inline_css_imports(
+            "@import url(p.css) print;\n.a{}", &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        assert!(!out.contains(".print-only{}"), "print-only @import must be skipped for screen");
+        assert!(out.contains(".a{}"));
+    }
+
+    /// Отсутствующий импортируемый файл не валит рендер — текст возвращается,
+    /// собственные правила сохранены.
+    #[test]
+    fn inline_css_imports_missing_file_is_skipped() {
+        let dir = import_fixture_dir("missing");
+        let base = ResourceBase::File(dir.join("a.css"));
+        let out = inline_css_imports(
+            "@import url(nope.css);\n.a{}", &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        assert!(out.contains(".a{}"));
+    }
+
+    /// Текст без `@import` возвращается без изменений (быстрый путь).
+    #[test]
+    fn inline_css_imports_no_import_passthrough() {
+        let base = ResourceBase::File(std::path::PathBuf::from("x/a.css"));
+        let text = ".a { color: red; }";
+        let out = inline_css_imports(
+            text, &base, &null_sink(), None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            &mut std::collections::HashSet::new(), 0,
+        );
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn contains_ignore_ascii_case_matches() {
+        assert!(contains_ignore_ascii_case(b"body { } @IMPORT url(x);", b"@import"));
+        assert!(contains_ignore_ascii_case(b"@import", b"@import"));
+        assert!(!contains_ignore_ascii_case(b"body { color: red }", b"@import"));
+        assert!(!contains_ignore_ascii_case(b"@imp", b"@import"));
     }
 
     /// BUG-268: `<link rel=stylesheet media=print>` must NOT enter the screen
