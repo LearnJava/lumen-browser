@@ -3424,7 +3424,8 @@ impl FemtovgBackend {
 
     /// BUG-273 срез 1: document-space CSS px bbox of the offscreen-composite
     /// group a command opens (`PushFilter` / `PushBackdropFilter` /
-    /// `PushBlendMode` / `PushOpacity`), or `None` for anything else / a
+    /// `PushBlendMode` / `PushOpacity`, plus the clip openers from срез 8 and the
+    /// mask openers from срез 9), or `None` for anything else / a
     /// `PushFilter`/`PushOpacity` with no computable bounds. Same coordinate
     /// convention as [`DisplayCommand::cull_rect`] — a leaf command's own bbox,
     /// pre-transform.
@@ -3446,6 +3447,19 @@ impl FemtovgBackend {
             // layer) and is not an emitter output today, so it is left out.
             DisplayCommand::PushClipRoundedRect { rect, .. } => Some(*rect),
             DisplayCommand::PushClipPath { shape } => Some(shape.bounding_rect()),
+            // BUG-272 срез 9: mask-image / mask-gradient groups confine every
+            // visible pixel to their `rect` (the masked element's border-box),
+            // just like a clip. `PushMaskImage` scissors the masked subtree to
+            // `rect`; the gradient openers composite the offscreen down with
+            // `DestinationIn` painted only over `rect`, zeroing alpha outside it.
+            // So a mask whose `rect` lands fully off-viewport paints nothing —
+            // safe to cull the whole `PushMask*…PopMask` bracket. `PushMaskLayer`
+            // (SVG `<mask>` content, applied to the *parent* layer) has trickier
+            // composite semantics and is left out, like `PushClipRect` above.
+            DisplayCommand::PushMaskImage { rect, .. }
+            | DisplayCommand::PushMaskLinearGradient { rect, .. }
+            | DisplayCommand::PushMaskRadialGradient { rect, .. }
+            | DisplayCommand::PushMaskConicGradient { rect, .. } => Some(*rect),
             _ => None,
         }
     }
@@ -5019,6 +5033,50 @@ mod tests {
                 shape: ResolvedClipShape::Circle { cx: 10.0, cy: 20.0, r: 5.0 },
             }),
             Some(Rect::new(5.0, 15.0, 10.0, 10.0)),
+        );
+        // BUG-272 срез 9: all four mask openers cull by their `rect` (the masked
+        // element's border-box), like clips — both the scissor (image) and the
+        // DestinationIn-gradient paths confine every visible pixel to `rect`.
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushMaskImage {
+                rect: r,
+                src: "u".to_string(),
+                size: BackgroundSize::default(),
+                position: ObjectPosition::default(),
+                repeat: BackgroundRepeat::default(),
+                image_rendering: lumen_layout::ImageRendering::default(),
+            }),
+            Some(r),
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushMaskLinearGradient {
+                rect: r,
+                angle_deg: 0.0,
+                stops: Vec::new(),
+                repeating: false,
+            }),
+            Some(r),
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushMaskRadialGradient {
+                rect: r,
+                center_x_pct: 50.0,
+                center_y_pct: 50.0,
+                stops: Vec::new(),
+                repeating: false,
+            }),
+            Some(r),
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushMaskConicGradient {
+                rect: r,
+                center_x_pct: 50.0,
+                center_y_pct: 50.0,
+                from_angle_deg: 0.0,
+                stops: Vec::new(),
+                repeating: false,
+            }),
+            Some(r),
         );
         assert_eq!(
             FemtovgBackend::group_bounds(&DisplayCommand::FillRect {
