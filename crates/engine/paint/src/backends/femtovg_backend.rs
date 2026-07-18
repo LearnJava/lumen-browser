@@ -822,7 +822,8 @@ enum ClipEntry {
     /// `PopClip` композитит слой на `prev_render_target` одним
     /// `fill_path`-вызовом по форме (антиалиасинг пути — бесплатно).
     PathLayer {
-        /// Offscreen-слой с содержимым клип-группы (full-RT, FLIP_Y FBO).
+        /// Offscreen-слой с содержимым клип-группы. Full-RT FLIP_Y FBO, либо
+        /// (BUG-272 срез 12) bbox-сайзинг слой — см. `bbox`.
         image_id: femtovg::ImageId,
         /// Форма клипа в page-координатах (до transform элемента).
         shape: ResolvedClipShape,
@@ -833,13 +834,20 @@ enum ClipEntry {
         transform: femtovg::Transform2D,
         /// Render target, активный до PushClipPath.
         prev_render_target: femtovg::RenderTarget,
+        /// BUG-272 срез 12: тот же bbox-конвент, что и
+        /// `OpacityLayerEntry::bbox` (срез 11) — device-px `(x0, y0, w, h)`,
+        /// если `image_id` был аллоцирован через
+        /// [`FemtovgBackend::acquire_bbox_layer`], `None` для
+        /// full-framebuffer-пути (`acquire_layer`).
+        bbox: Option<(f32, f32, usize, usize)>,
     },
     /// Скруглённый клип (`PushClipRoundedRect`, BUG-249): как `PathLayer`, но
     /// форма — rounded-rect. Subtree рендерится в offscreen `image_id`, а
     /// `PopClip` композитит его одним `fill_path` по скруглённому контуру —
     /// углы детей обрезаются по border-radius (а не square scissor).
     RoundedRectLayer {
-        /// Offscreen-слой с содержимым клип-группы (full-RT, FLIP_Y FBO).
+        /// Offscreen-слой с содержимым клип-группы. Full-RT FLIP_Y FBO, либо
+        /// (BUG-272 срез 12) bbox-сайзинг слой — см. `bbox`.
         image_id: femtovg::ImageId,
         /// Клип-прямоугольник (padding-box) в page-координатах.
         rect: lumen_core::geom::Rect,
@@ -849,6 +857,8 @@ enum ClipEntry {
         transform: femtovg::Transform2D,
         /// Render target, активный до PushClipRoundedRect.
         prev_render_target: femtovg::RenderTarget,
+        /// BUG-272 срез 12: см. `PathLayer::bbox`.
+        bbox: Option<(f32, f32, usize, usize)>,
     },
 }
 
@@ -2671,13 +2681,15 @@ impl FemtovgBackend {
     /// `fill_path`-вызовом: путь — форма клипа, трансформированная матрицей
     /// `t` (канва на момент Push, включая transform элемента); заливка —
     /// image-paint слоя 1:1 (identity-канва, слой уже в screen-space).
-    /// AA кромки формы — штатный femtovg path-AA.
+    /// AA кромки формы — штатный femtovg path-AA. `bbox` — см.
+    /// [`Self::composite_clip_layer`] (BUG-272 срез 12).
     fn composite_clip_path_layer(
         &mut self,
         src_id: femtovg::ImageId,
         shape: &ResolvedClipShape,
         t: &femtovg::Transform2D,
         prev_render_target: femtovg::RenderTarget,
+        bbox: Option<(f32, f32, usize, usize)>,
     ) {
         // CSS Shapes L1 §3/§4 — even-odd оставляет дырки в самопересекающихся
         // clip-формах (polygon()/path()); по умолчанию nonzero.
@@ -2686,12 +2698,13 @@ impl FemtovgBackend {
             _ => femtovg::FillRule::NonZero,
         };
         let path = clip_shape_path(shape, t);
-        self.composite_clip_layer(src_id, &path, fill_rule, prev_render_target);
+        self.composite_clip_layer(src_id, &path, fill_rule, prev_render_target, bbox);
     }
 
     /// BUG-249: композитит offscreen-слой скруглённого клипа (`RoundedRectLayer`)
     /// на `prev_render_target`, обрезая содержимое по скруглённому контуру
-    /// `rect`/`radii` (углы детей следуют border-radius контейнера).
+    /// `rect`/`radii` (углы детей следуют border-radius контейнера). `bbox` —
+    /// см. [`Self::composite_clip_layer`] (BUG-272 срез 12).
     fn composite_rounded_rect_clip_layer(
         &mut self,
         src_id: femtovg::ImageId,
@@ -2699,22 +2712,55 @@ impl FemtovgBackend {
         radii: &[f32; 4],
         t: &femtovg::Transform2D,
         prev_render_target: femtovg::RenderTarget,
+        bbox: Option<(f32, f32, usize, usize)>,
     ) {
         let path = rounded_rect_clip_path(rect, radii, t);
-        self.composite_clip_layer(src_id, &path, femtovg::FillRule::NonZero, prev_render_target);
+        self.composite_clip_layer(src_id, &path, femtovg::FillRule::NonZero, prev_render_target, bbox);
     }
 
     /// Общий хвост композита клип-слоёв (`composite_clip_path_layer` /
     /// `composite_rounded_rect_clip_layer`): рисует offscreen `src_id` на
     /// `prev_render_target`, маскируя его уже трансформированным `path` под
     /// identity-канвой (антиалиасинг края пути — бесплатно).
+    ///
+    /// `bbox` — тот же конвент, что [`Self::composite_opacity_layer`]'s
+    /// одноимённый параметр (BUG-272 срез 12): `Some((x0, y0, w, h))` —
+    /// device px — когда `src_id` был аллоцирован bbox-сайзинг через
+    /// [`Self::acquire_bbox_layer`] (Push-время сделал `save()` +
+    /// bbox-`translate`/`scissor` — их нужно сначала откатить `restore()`-ом,
+    /// та же причина, что у `composite_opacity_layer`: это состояние живёт в
+    /// стеке канвы, а не в конкретном FBO); `None` для full-framebuffer-слоя
+    /// из `acquire_layer`. `path` уже в screen-space в обоих случаях
+    /// (построен через `t` — канва на момент Push), поэтому не зависит от
+    /// `bbox`: разница только в том, где `Paint::image` берёт исходные
+    /// пиксели слоя (весь framebuffer против `bbox`-прямоугольника) — `path`,
+    /// ограниченный той же bbox-геометрией (`group_bounds`), никогда не
+    /// сэмплирует за пределами этого прямоугольника.
     fn composite_clip_layer(
         &mut self,
         src_id: femtovg::ImageId,
         path: &femtovg::Path,
         fill_rule: femtovg::FillRule,
         prev_render_target: femtovg::RenderTarget,
+        bbox: Option<(f32, f32, usize, usize)>,
     ) {
+        if let Some((x0, y0, w, h)) = bbox {
+            self.canvas.restore();
+            self.switch_render_target(prev_render_target);
+            self.canvas.save();
+            self.canvas.reset_transform();
+            let x = x0 / self.scale as f32;
+            let y = y0 / self.scale as f32;
+            let cw = w as f32 / self.scale as f32;
+            let ch = h as f32 / self.scale as f32;
+            let paint = femtovg::Paint::image(src_id, x, y, cw, ch, 0.0, 1.0)
+                .with_anti_alias(true)
+                .with_fill_rule(fill_rule);
+            self.canvas.fill_path(path, &paint);
+            self.canvas.restore();
+            self.release_bbox_layer(src_id, w, h);
+            return;
+        }
         self.switch_render_target(prev_render_target);
         self.canvas.save();
         self.canvas.reset_transform();
@@ -2729,6 +2775,76 @@ impl FemtovgBackend {
         // submission order, so a later reuse overwrites pixels only after the
         // compositing fill_path above has been recorded.
         self.release_layer(src_id);
+    }
+
+    /// BUG-272 срез 12: `PushClipRoundedRect` fallback when
+    /// `screen_bbox_device_px` returned `None` (degenerate/off-target bbox) or
+    /// `acquire_bbox_layer` failed — the same two-tier fallback the
+    /// pre-срез-12 code always used: a full-framebuffer layer via
+    /// [`Self::acquire_layer`], or (if even that fails) a plain rectangular
+    /// scissor (BUG-132 fallback, square corners instead of rounded).
+    fn push_clip_rounded_rect_fallback(
+        &mut self,
+        rect: &Rect,
+        radii: &[f32; 4],
+        prev_rt: femtovg::RenderTarget,
+    ) -> ClipEntry {
+        match self.acquire_layer() {
+            Some(img_id) => {
+                self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                self.canvas.clear_rect(
+                    0, 0, self.width, self.height,
+                    femtovg::Color::rgba(0, 0, 0, 0),
+                );
+                ClipEntry::RoundedRectLayer {
+                    image_id: img_id,
+                    rect: *rect,
+                    radii: *radii,
+                    transform: self.canvas.transform(),
+                    prev_render_target: prev_rt,
+                    bbox: None,
+                }
+            }
+            None => {
+                self.canvas.save();
+                self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                ClipEntry::Scissor
+            }
+        }
+    }
+
+    /// BUG-272 срез 12: `PushClipPath` fallback — same two-tier fallback as
+    /// [`Self::push_clip_rounded_rect_fallback`], `bbox_rect` is the shape's
+    /// own `bounding_rect()` (used both for the full-framebuffer layer's
+    /// transform-capture point and the plain-scissor fallback, matching the
+    /// pre-срез-12 behaviour).
+    fn push_clip_path_fallback(
+        &mut self,
+        shape: &ResolvedClipShape,
+        bbox_rect: &Rect,
+        prev_rt: femtovg::RenderTarget,
+    ) -> ClipEntry {
+        match self.acquire_layer() {
+            Some(img_id) => {
+                self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                self.canvas.clear_rect(
+                    0, 0, self.width, self.height,
+                    femtovg::Color::rgba(0, 0, 0, 0),
+                );
+                ClipEntry::PathLayer {
+                    image_id: img_id,
+                    shape: shape.clone(),
+                    transform: self.canvas.transform(),
+                    prev_render_target: prev_rt,
+                    bbox: None,
+                }
+            }
+            None => {
+                self.canvas.save();
+                self.canvas.scissor(bbox_rect.x, bbox_rect.y, bbox_rect.width, bbox_rect.height);
+                ClipEntry::Scissor
+            }
+        }
     }
 
     /// Composites an opacity group's offscreen layer onto `prev_render_target`.
@@ -3782,6 +3898,15 @@ impl FemtovgBackend {
                 self.clip_stack.push(ClipEntry::Scissor);
                 self.layer_stack_depth += 1;
             }
+            // BUG-272 срез 12: bbox-сайзинг слоя переиспользует срез 11's
+            // механизм (`screen_bbox_device_px` + `acquire_bbox_layer`) —
+            // тот же `bounds`-прямоугольник (`rect`), что уже используется
+            // для куллинга в срезе 8. `transform` захватывается ДО
+            // bbox-`translate`/`scissor` — путь клипа композитится на
+            // `prev_render_target` под identity-канвой, поэтому должен
+            // остаться в истинном screen-space, а не в bbox-локальном
+            // (см. `PushOpacity`'s doc для той же bbox-translate/scissor
+            // конвенции).
             DisplayCommand::PushClipRoundedRect { rect, radii } => {
                 // BUG-249: скруглённый клип через offscreen-слой + маска (как
                 // PushClipPath/BUG-140). Раньше использовался прямоугольный
@@ -3789,28 +3914,31 @@ impl FemtovgBackend {
                 // расходясь с Edge (TEST-101). Subtree рендерится в FBO, а
                 // PopClip композитит его одним fill_path по скруглённому контуру.
                 let prev_rt = self.current_rt();
-                let entry = match self.acquire_layer() {
-                    Some(img_id) => {
-                        self.switch_render_target(femtovg::RenderTarget::Image(img_id));
-                        self.canvas.clear_rect(
-                            0, 0, self.width, self.height,
-                            femtovg::Color::rgba(0, 0, 0, 0),
-                        );
-                        ClipEntry::RoundedRectLayer {
-                            image_id: img_id,
-                            rect: *rect,
-                            radii: *radii,
-                            transform: self.canvas.transform(),
-                            prev_render_target: prev_rt,
+                let screen_bbox = self.screen_bbox_device_px(*rect);
+                let entry = match screen_bbox {
+                    Some((x0, y0, w, h)) => match self.acquire_bbox_layer(w, h) {
+                        Some(img_id) => {
+                            self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                            self.canvas.clear_rect(
+                                0, 0, w as u32, h as u32,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            let transform = self.canvas.transform();
+                            self.canvas.save();
+                            self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                            self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                            ClipEntry::RoundedRectLayer {
+                                image_id: img_id,
+                                rect: *rect,
+                                radii: *radii,
+                                transform,
+                                prev_render_target: prev_rt,
+                                bbox: Some((x0, y0, w, h)),
+                            }
                         }
-                    }
-                    None => {
-                        // Fallback при сбое аллокации слоя — прямоугольный scissor
-                        // (углы острые, но содержимое всё равно обрезано по боксу).
-                        self.canvas.save();
-                        self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
-                        ClipEntry::Scissor
-                    }
+                        None => self.push_clip_rounded_rect_fallback(rect, radii, prev_rt),
+                    },
+                    None => self.push_clip_rounded_rect_fallback(rect, radii, prev_rt),
                 };
                 self.clip_stack.push(entry);
                 self.layer_stack_depth += 1;
@@ -3819,32 +3947,36 @@ impl FemtovgBackend {
             // рендерится в offscreen-слой; PopClip композитит его одним
             // fill_path по форме, трансформированной матрицей канвы на момент
             // Push — клип переносится transform-ом элемента (команда эмитится
-            // внутри PushTransform).
+            // внутри PushTransform). BUG-272 срез 12: bbox-сайзинг слоя, тот
+            // же приём и та же причина захвата `transform` до translate, что
+            // у `PushClipRoundedRect` выше.
             DisplayCommand::PushClipPath { shape } => {
                 let prev_rt = self.current_rt();
-                let entry = match self.acquire_layer() {
-                    Some(img_id) => {
-                        self.switch_render_target(femtovg::RenderTarget::Image(img_id));
-                        self.canvas.clear_rect(
-                            0, 0, self.width, self.height,
-                            femtovg::Color::rgba(0, 0, 0, 0),
-                        );
-                        ClipEntry::PathLayer {
-                            image_id: img_id,
-                            shape: shape.clone(),
-                            transform: self.canvas.transform(),
-                            prev_render_target: prev_rt,
+                let bbox_rect = shape.bounding_rect();
+                let screen_bbox = self.screen_bbox_device_px(bbox_rect);
+                let entry = match screen_bbox {
+                    Some((x0, y0, w, h)) => match self.acquire_bbox_layer(w, h) {
+                        Some(img_id) => {
+                            self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                            self.canvas.clear_rect(
+                                0, 0, w as u32, h as u32,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            let transform = self.canvas.transform();
+                            self.canvas.save();
+                            self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                            self.canvas.scissor(bbox_rect.x, bbox_rect.y, bbox_rect.width, bbox_rect.height);
+                            ClipEntry::PathLayer {
+                                image_id: img_id,
+                                shape: shape.clone(),
+                                transform,
+                                prev_render_target: prev_rt,
+                                bbox: Some((x0, y0, w, h)),
+                            }
                         }
-                    }
-                    None => {
-                        // Fallback: scissor по bounding box формы (поведение
-                        // до BUG-140). Scissor задан в текущем transform-
-                        // пространстве — переносится transform-ом сам.
-                        let bb = shape.bounding_rect();
-                        self.canvas.save();
-                        self.canvas.scissor(bb.x, bb.y, bb.width, bb.height);
-                        ClipEntry::Scissor
-                    }
+                        None => self.push_clip_path_fallback(shape, &bbox_rect, prev_rt),
+                    },
+                    None => self.push_clip_path_fallback(shape, &bbox_rect, prev_rt),
                 };
                 self.clip_stack.push(entry);
                 self.layer_stack_depth += 1;
@@ -3854,11 +3986,11 @@ impl FemtovgBackend {
                     self.layer_stack_depth -= 1;
                 }
                 match self.clip_stack.pop() {
-                    Some(ClipEntry::PathLayer { image_id, shape, transform, prev_render_target }) => {
-                        self.composite_clip_path_layer(image_id, &shape, &transform, prev_render_target);
+                    Some(ClipEntry::PathLayer { image_id, shape, transform, prev_render_target, bbox }) => {
+                        self.composite_clip_path_layer(image_id, &shape, &transform, prev_render_target, bbox);
                     }
-                    Some(ClipEntry::RoundedRectLayer { image_id, rect, radii, transform, prev_render_target }) => {
-                        self.composite_rounded_rect_clip_layer(image_id, &rect, &radii, &transform, prev_render_target);
+                    Some(ClipEntry::RoundedRectLayer { image_id, rect, radii, transform, prev_render_target, bbox }) => {
+                        self.composite_rounded_rect_clip_layer(image_id, &rect, &radii, &transform, prev_render_target, bbox);
                     }
                     Some(ClipEntry::Scissor) => self.canvas.restore(),
                     // Защита от рассинхрона пар (эмиттер гарантирует парность):
