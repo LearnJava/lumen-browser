@@ -5010,6 +5010,20 @@ impl FemtovgBackend {
             DisplayCommand::PageBreak => {}
         }
     }
+
+    /// BUG-272 срез 16: GPU-byte estimate for a set of femtovg textures — used
+    /// by [`Self::debug_mem_report`] to attribute GPU memory per category
+    /// instead of only reporting pool entry counts. Every texture this backend
+    /// creates is `PixelFormat::Rgba8` (4 bytes/px — `create_image_empty`
+    /// call sites and `ImageSource::Rgba` uploads both fix the format), so a
+    /// flat ×4 multiplier is exact, not an approximation. Missing/stale ids
+    /// (already released) contribute 0 rather than erroring — a best-effort
+    /// diagnostic snapshot, not a correctness-critical path.
+    fn gpu_image_bytes<'a>(&self, ids: impl Iterator<Item = &'a femtovg::ImageId>) -> usize {
+        ids.filter_map(|id| self.canvas.image_size(*id).ok())
+            .map(|(w, h)| w * h * 4)
+            .sum()
+    }
 }
 
 // ─── RenderBackend impl ───────────────────────────────────────────────────────
@@ -5017,17 +5031,51 @@ impl FemtovgBackend {
 impl RenderBackend for FemtovgBackend {
     fn debug_mem_report(&self) -> String {
         let raw_bytes: usize = self.raw_images.values().map(|i| i.data.len()).sum();
+        // BUG-272 срез 16 (остаток item 1): per-category GPU-byte breakdown,
+        // not just a process-wide total — attributes texture memory to glyph
+        // atlas / framebuffer / each layer-FBO pool / decoded-image cache
+        // separately, to test the "glyph atlas ≈ 285 MB on lenta.ru" hypothesis
+        // and any others without guessing. `debug_inspector_get_font_textures`
+        // (femtovg `debug_inspector` feature) is the only way to reach the
+        // glyph atlas's own `ImageId`s — femtovg's `TextContext` is otherwise
+        // fully private.
+        let glyph_atlas_ids = self.canvas.debug_inspector_get_font_textures();
+        let glyph_atlas_bytes = self.gpu_image_bytes(glyph_atlas_ids.iter());
+        // The default render target (window surface) isn't a femtovg `ImageId`
+        // at all — glutin/OpenGL own it — so this is a single-buffer RGBA8
+        // estimate from the known surface size, not a measured value.
+        let framebuffer_bytes = self.width as usize * self.height as usize * 4;
+        let decoded_gpu_bytes = self.gpu_image_bytes(self.images.values());
+        let layer_pool_bytes = self.gpu_image_bytes(self.layer_pool.iter());
+        let content_band_bytes = self.gpu_image_bytes(self.content_band_pool.iter());
+        let cpu_upload_bytes = self.gpu_image_bytes(self.cpu_upload_pool.iter());
+        let backdrop_bbox_bytes = self.gpu_image_bytes(self.backdrop_bbox_pool.iter());
+        let bbox_layer_bytes = self.gpu_image_bytes(self.bbox_layer_pool.iter());
+        let bbox_cpu_upload_bytes = self.gpu_image_bytes(self.bbox_cpu_upload_pool.iter());
         format!(
-            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}, cpu_upload_pool={}, backdrop_bbox_pool={}, bbox_layer_pool={}, bbox_cpu_upload_pool={}",
+            "femtovg: raw_images={} ({:.1} MB), gpu_images={} ({:.1} MB), glyph_atlas={} ({:.1} MB), \
+             framebuffer≈{:.1} MB, layer_pool={} ({:.1} MB), content_band_pool={} ({:.1} MB), \
+             cpu_upload_pool={} ({:.1} MB), backdrop_bbox_pool={} ({:.1} MB), bbox_layer_pool={} ({:.1} MB), \
+             bbox_cpu_upload_pool={} ({:.1} MB)",
             self.raw_images.len(),
             raw_bytes as f64 / 1e6,
             self.images.len(),
+            decoded_gpu_bytes as f64 / 1e6,
+            glyph_atlas_ids.len(),
+            glyph_atlas_bytes as f64 / 1e6,
+            framebuffer_bytes as f64 / 1e6,
             self.layer_pool.len(),
+            layer_pool_bytes as f64 / 1e6,
             self.content_band_pool.len(),
+            content_band_bytes as f64 / 1e6,
             self.cpu_upload_pool.len(),
+            cpu_upload_bytes as f64 / 1e6,
             self.backdrop_bbox_pool.len(),
+            backdrop_bbox_bytes as f64 / 1e6,
             self.bbox_layer_pool.len(),
-            self.bbox_cpu_upload_pool.len()
+            bbox_layer_bytes as f64 / 1e6,
+            self.bbox_cpu_upload_pool.len(),
+            bbox_cpu_upload_bytes as f64 / 1e6,
         )
     }
 
