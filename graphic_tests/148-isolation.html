@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 148 isolation</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
+
+    /* Each cell is an amber backdrop with a blue square placed on top. The
+       square carries mix-blend-mode; whether it blends with the amber depends
+       on isolation. When the square lives inside an `isolation: isolate`
+       wrapper, its group backdrop is transparent, so the blend has nothing to
+       mix with and the square shows its plain colour over the amber. */
+    .cell {
+      position: relative;
+      display: inline-block;
+      width: 200px;
+      height: 150px;
+      margin: 0 18px 18px 0;
+      background: #ffcc00;
+    }
+    .iso { position: absolute; inset: 0; isolation: isolate; }
+    .blend {
+      position: absolute;
+      left: 55px;
+      top: 40px;
+      width: 90px;
+      height: 70px;
+      background: #3399ff;
+    }
+  </style>
+</head>
+<body>
+  <div class="__f">
+    <!-- Row 1: multiply. Left = blended with amber; right = isolated (plain blue). -->
+    <div class="cell"><div class="blend" style="mix-blend-mode: multiply;"></div></div>
+    <div class="cell"><div class="iso"><div class="blend" style="mix-blend-mode: multiply;"></div></div></div>
+
+    <!-- Row 2: difference. Same contrast between blended and isolated. -->
+    <div class="cell"><div class="blend" style="mix-blend-mode: difference;"></div></div>
+    <div class="cell"><div class="iso"><div class="blend" style="mix-blend-mode: difference;"></div></div></div>
+
+    <!-- Row 3: two stacked blend squares inside one isolated group — they blend
+         with each other (and the group's transparent backdrop), never the amber. -->
+    <div class="cell">
+      <div class="blend" style="left: 30px; background: #e53e3e; mix-blend-mode: multiply;"></div>
+      <div class="blend" style="left: 80px; top: 60px; background: #38a169; mix-blend-mode: multiply;"></div>
+    </div>
+    <div class="cell">
+      <div class="iso">
+        <div class="blend" style="left: 30px; background: #e53e3e; mix-blend-mode: multiply;"></div>
+        <div class="blend" style="left: 80px; top: 60px; background: #38a169; mix-blend-mode: multiply;"></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

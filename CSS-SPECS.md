@@ -440,7 +440,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `mix-blend-mode` | ✅ | 17 modes; GPU blend pipeline; stacking context isolation 2026-05-27 |
 | `background-blend-mode` | ✅ | 17 modes; comma-list cycling over bg layers; PushBlendMode/PopBlendMode per layer 2026-05-27 |
-| `isolation` | 🟡 | auto/isolate; stacking context ⬜ |
+| `isolation` | ✅ | auto/isolate; isolate forms an isolated blend group via full-alpha offscreen layer (CSS Compositing L1 §2.1) 2026-07-18 |
 
 ### [T2] Pseudo-Elements
 
