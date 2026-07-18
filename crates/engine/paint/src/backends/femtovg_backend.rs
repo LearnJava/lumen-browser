@@ -1843,13 +1843,16 @@ impl FemtovgBackend {
     /// canvas stack balanced. Pass an empty slice on the direct path (overlays draw
     /// inline).
     ///
-    /// BUG-273 срез 1: in addition to `skip`, every `PushFilter` /
-    /// `PushBackdropFilter` / `PushBlendMode` bracket is checked against the
-    /// viewport ([`Self::group_bounds`] + [`Self::is_command_culled`]) as it is
-    /// reached; one that lands fully outside is skipped whole via
-    /// [`Self::matching_close`], avoiding the offscreen layer acquire, the
-    /// children draws, and the CPU-readback composite for content that would
-    /// not have painted a visible pixel this frame.
+    /// BUG-273 срез 1 (+ BUG-272 срезы 7/8): in addition to `skip`, every
+    /// offscreen-composite / clip bracket (`PushFilter` / `PushBackdropFilter` /
+    /// `PushBlendMode` / `PushOpacity` / `PushClipRoundedRect` / `PushClipPath`)
+    /// is checked against the viewport ([`Self::group_bounds`] +
+    /// [`Self::is_command_culled`]) as it is reached; one that lands fully outside
+    /// is skipped whole via [`Self::matching_close`], avoiding the offscreen layer
+    /// acquire, the children draws, and the CPU-readback composite for content
+    /// that would not have painted a visible pixel this frame. Clip groups are
+    /// the safest case: a clip confines every child to its region, so an
+    /// off-viewport clip rect/shape yields no visible pixel.
     fn run_content_pass(
         &mut self,
         content: &[DisplayCommand],
@@ -3433,6 +3436,16 @@ impl FemtovgBackend {
             // BUG-272 (bbox-layer track): opacity groups carry an element bbox
             // too (`None` for the full-page view-transition fade — never culled).
             DisplayCommand::PushOpacity { bounds, .. } => *bounds,
+            // BUG-272 срез 8: pure clip groups are the safest cull class — a clip
+            // restricts every child to its region, so a clip whose rect/shape bbox
+            // lands fully outside the viewport paints no visible pixel. The `rect`
+            // (rounded clip) / `shape.bounding_rect()` (basic-shape clip) is the
+            // exact region the renderer clips to under the current canvas transform,
+            // so it is the correct cull bbox (same coordinate convention as the
+            // groups above). `PushClipRect` is a cheap scissor test (no offscreen
+            // layer) and is not an emitter output today, so it is left out.
+            DisplayCommand::PushClipRoundedRect { rect, .. } => Some(*rect),
+            DisplayCommand::PushClipPath { shape } => Some(shape.bounding_rect()),
             _ => None,
         }
     }
@@ -4942,11 +4955,11 @@ mod tests {
         assert!(flags.contains(femtovg::ImageFlags::PREMULTIPLIED));
     }
 
-    /// BUG-273 срез 1: `group_bounds` reports the culling bbox only for the three
-    /// offscreen-composite openers, `None` for everything else (including a
-    /// `PushFilter` whose `bounds` is itself `None`).
+    /// BUG-273 срез 1 / BUG-272 срез 8: `group_bounds` reports the culling bbox
+    /// for every offscreen-composite / clip opener, `None` for everything else
+    /// (including a `PushFilter`/`PushOpacity` whose `bounds` is itself `None`).
     #[test]
-    fn group_bounds_covers_the_three_offscreen_openers() {
+    fn group_bounds_covers_the_offscreen_and_clip_openers() {
         use lumen_core::geom::Rect;
         let r = Rect::new(1.0, 2.0, 3.0, 4.0);
         assert_eq!(
@@ -4991,6 +5004,21 @@ mod tests {
                 bounds: None,
             }),
             None,
+        );
+        // BUG-272 срез 8: pure clip groups cull by their clip region — the rounded
+        // clip reports its rect verbatim, the basic-shape clip its bounding box.
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushClipRoundedRect {
+                rect: r,
+                radii: [2.0; 4],
+            }),
+            Some(r),
+        );
+        assert_eq!(
+            FemtovgBackend::group_bounds(&DisplayCommand::PushClipPath {
+                shape: ResolvedClipShape::Circle { cx: 10.0, cy: 20.0, r: 5.0 },
+            }),
+            Some(Rect::new(5.0, 15.0, 10.0, 10.0)),
         );
         assert_eq!(
             FemtovgBackend::group_bounds(&DisplayCommand::FillRect {
