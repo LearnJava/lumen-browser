@@ -1538,9 +1538,9 @@
       {
        "id": "PERF-3",
        "title": "PERF-3: input latency + p95/p99 плавность кадра",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Латентность ввода: клик/клавиша → hit-test → dispatch → видимый repaint, конец-в-конец. Плавность скролла как p95/p99 frame time + счётчик дропнутых кадров — пользователь замечает хвост распределения, не среднее. Базис: scripts/scroll_perf.py + LUMEN_FRAME_LOG=1 покрывают скролл средними; добавить перцентильный отчёт и покрыть typing/click (MCP `click`/`type` уже умеют синтетический ввод)"
+       "note": "DONE 2026-07-18: `scripts/input_perf.py` — латентность ввода и плавность кадра в живом окне поверх `LUMEN_FRAME_LOG=1` + MCP `scroll`/`click`/`type` (0 кода в движке). Три workload; три семейства метрик (мс): `frame_*` (p50/p95/p99/max времени кадра — парсится ЧИСЛО из строки `[frame] total`, а не интервал прибытия) + счётчик дропнутых кадров (длиннее `--budget-ms`, 60 Гц по умолчанию); `ack_*` (round-trip диспатча, плотный сигнал на все workload); `latency_*`+`latency_n` (input→repaint конец-в-конец, плотно для scroll). Fixture `scripts/perf-fixtures/input.html` (scroll/#btn/#inp, офлайн); `--selftest` (чистая статистика percentile/distribution/latency без браузера, в ворота), `--compare` (⚠ >20% по хвостовым), `--json`. Журнал `docs/perf/input.md` + базлайн `docs/perf/input-runs/2026-07-18.json` (851fca6e: scroll frame p95=3.0мс, 0 дропов, lat p95=4.3мс). Находка для P1: дискретный ввод коалесит перерисовки (50 кликов → ~2 кадра), надёжная латентность click/type — `ack_*`; end-to-end их repaint-латентность ждёт repaint-на-событие или спанов `input-dispatch` в движке"
       },
       {
        "id": "PERF-4",
