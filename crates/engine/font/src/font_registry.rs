@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use lumen_core::{FaceRecord, FontProvider, FontStyle};
 
@@ -21,7 +21,11 @@ pub struct FontRegistry {
     /// family_lowercase → Vec<FaceRecord> с виртуальными путями.
     custom: RwLock<HashMap<String, Vec<FaceRecord>>>,
     /// Виртуальный путь → декодированные байты sfnt (TrueType/OTF).
-    bytes_store: RwLock<HashMap<PathBuf, Vec<u8>>>,
+    ///
+    /// Хранятся как `Arc<[u8]>` (BUG-272 срез 6), чтобы `read_face_bytes`
+    /// отдавал буфер через клон Arc (счётчик ссылок), а не копией всего
+    /// файла шрифта — рендер разделяет ту же аллокацию в `LoadedFace`.
+    bytes_store: RwLock<HashMap<PathBuf, Arc<[u8]>>>,
 }
 
 impl FontRegistry {
@@ -81,7 +85,10 @@ impl FontRegistry {
         }
         drop(custom);
 
-        self.bytes_store.write().unwrap().insert(virt_path, bytes);
+        self.bytes_store
+            .write()
+            .unwrap()
+            .insert(virt_path, Arc::from(bytes));
     }
 
     /// Количество зарегистрированных @font-face face-ов. Для тестов.
@@ -111,7 +118,15 @@ impl FontRegistry {
         let face = custom.get(&key)?.first()?;
         let path = face.path.clone();
         drop(custom);
-        self.bytes_store.read().unwrap().get(&path).cloned()
+        // Shell-facing setup path (once per @font-face family) — the owned
+        // `Vec<u8>` API is kept; the persistent double-storage BUG-272 targets
+        // is the render path (`read_face_bytes` → `LoadedFace`), which shares
+        // the `Arc` instead.
+        self.bytes_store
+            .read()
+            .unwrap()
+            .get(&path)
+            .map(|b| b.to_vec())
     }
 }
 
@@ -152,7 +167,8 @@ impl FontProvider for FontRegistry {
 
     /// Возвращает байты для @font-face виртуальных путей; None для системных
     /// шрифтов (рендер тогда читает через `fs::read`).
-    fn read_face_bytes(&self, path: &Path) -> Option<Vec<u8>> {
+    fn read_face_bytes(&self, path: &Path) -> Option<Arc<[u8]>> {
+        // `cloned()` on `Arc<[u8]>` bumps the refcount — no font-buffer copy.
         self.bytes_store.read().unwrap().get(path).cloned()
     }
 }
@@ -190,7 +206,22 @@ mod tests {
 
         let faces = reg.lookup_faces("Foo");
         let face = faces.iter().find(|f| f.weight == 700).unwrap();
-        assert_eq!(reg.read_face_bytes(&face.path).unwrap(), bytes);
+        assert_eq!(&*reg.read_face_bytes(&face.path).unwrap(), &bytes[..]);
+    }
+
+    #[test]
+    fn read_face_bytes_shares_allocation_across_calls() {
+        // BUG-272 срез 6: два вызова read_face_bytes отдают клоны одного Arc —
+        // указывают на одну аллокацию (буфер шрифта не копируется на каждый
+        // вызов, счётчик ссылок разделяется с bytes_store и LoadedFace рендера).
+        let reg = FontRegistry::new();
+        reg.register_from_bytes("Shared", 400, FontStyle::Normal, vec![9, 8, 7, 6]);
+        let faces = reg.lookup_faces("Shared");
+        let path = faces.iter().find(|f| f.weight == 400).unwrap().path.clone();
+
+        let a = reg.read_face_bytes(&path).unwrap();
+        let b = reg.read_face_bytes(&path).unwrap();
+        assert!(Arc::ptr_eq(&a, &b), "оба клона должны указывать на одну аллокацию");
     }
 
     #[test]
@@ -208,7 +239,7 @@ mod tests {
         assert_eq!(reg.custom_face_count(), 1);
         let faces = reg.lookup_faces("Bar");
         let virt = faces.iter().find(|f| f.weight == 400).unwrap().path.clone();
-        assert_eq!(reg.read_face_bytes(&virt).unwrap(), vec![3, 4]);
+        assert_eq!(&*reg.read_face_bytes(&virt).unwrap(), &[3, 4][..]);
     }
 
     #[test]

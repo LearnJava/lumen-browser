@@ -1474,7 +1474,11 @@ struct CachedGlyph {
 /// face_id 0 — default (bundled, передан в `Renderer::new`); остальные
 /// `face_id` назначаются по мере lazy-загрузки из путей `FaceRecord`.
 struct LoadedFace {
-    bytes: Vec<u8>,
+    /// Байты sfnt-шрифта. `Arc<[u8]>` (BUG-272 срез 6): для @font-face-фейсов
+    /// это та же аллокация, что лежит в `FontRegistry::bytes_store` — вместо
+    /// двух копий одного шрифта (в реестре и здесь) обе стороны разделяют один
+    /// буфер через `read_face_bytes` → клон Arc.
+    bytes: Arc<[u8]>,
     /// Метрики для горячего текстового пути (cmap-каскад, advance, baseline).
     /// `None` — face не распарсился при загрузке; такие face пропускаются
     /// в каскаде (эквивалент прежнего `Option<ParsedFace>` = None).
@@ -3589,7 +3593,10 @@ impl Renderer {
              target_color_space,
              canvas_bg: None,
              atlas,
-            faces: vec![LoadedFace { metrics: build_face_metrics(&font_bytes), bytes: font_bytes }],
+            faces: vec![LoadedFace {
+                metrics: build_face_metrics(&font_bytes),
+                bytes: Arc::from(font_bytes),
+            }],
             face_id_by_path: HashMap::new(),
             resolve_cache: HashMap::new(),
             font_provider: Some(Arc::new(SystemFontIndex::new())),
@@ -3753,7 +3760,7 @@ impl Renderer {
         };
         // Кандидаты: путь + байты из провайдера (@font-face virtual path)
         // либо None → fs::read в воркере.
-        let mut jobs: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
+        let mut jobs: Vec<(PathBuf, Option<Arc<[u8]>>)> = Vec::new();
         let mut seen_keys: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut scheduled: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         for cmd in content.iter().chain(overlay.iter()) {
@@ -3797,7 +3804,7 @@ impl Renderer {
             .min(8);
         let cursor = std::sync::atomic::AtomicUsize::new(0);
         // Слот результата job-а: байты шрифта + построенные метрики.
-        type FaceSlot = std::sync::Mutex<Option<(Vec<u8>, FaceMetrics)>>;
+        type FaceSlot = std::sync::Mutex<Option<(Arc<[u8]>, FaceMetrics)>>;
         let results: Vec<FaceSlot> =
             jobs.iter().map(|_| std::sync::Mutex::new(None)).collect();
         std::thread::scope(|s| {
@@ -3808,18 +3815,22 @@ impl Renderer {
                         let Some((path, mem)) = jobs.get(i) else {
                             break;
                         };
-                        let raw = match mem {
-                            Some(bytes) => bytes.clone(),
+                        // `mem` (Arc из @font-face-реестра) клонируется как
+                        // счётчик ссылок; диск читается в новый Arc (BUG-272).
+                        let raw: Arc<[u8]> = match mem {
+                            Some(bytes) => Arc::clone(bytes),
                             None => match std::fs::read(path) {
-                                Ok(b) => b,
+                                Ok(b) => Arc::from(b),
                                 Err(_) => continue,
                             },
                         };
                         // Ошибки декода/парсинга здесь НЕ логируются: face
                         // просто не вставляется, последовательный резолв
                         // повторит попытку и залогирует штатно (без дублей).
-                        let bytes = match maybe_decode_font(&raw) {
-                            Ok(Some(decoded)) => decoded,
+                        // `Ok(None)` (уже sfnt — как все @font-face-байты) отдаёт
+                        // тот же Arc, что и реестр: рендер разделяет буфер.
+                        let bytes: Arc<[u8]> = match maybe_decode_font(&raw) {
+                            Ok(Some(decoded)) => Arc::from(decoded),
                             Ok(None) => raw,
                             Err(_) => continue,
                         };
@@ -3866,17 +3877,19 @@ impl Renderer {
                 return id;
             }
             // @font-face in-memory байты (virtual path) или диск для системных шрифтов.
-            let raw = if let Some(mem_bytes) = provider.read_face_bytes(&rec.path) {
+            // Реестр отдаёт Arc (клон = счётчик ссылок), диск — новый Arc (BUG-272).
+            let raw: Arc<[u8]> = if let Some(mem_bytes) = provider.read_face_bytes(&rec.path) {
                 mem_bytes
             } else {
                 let Ok(disk_bytes) = std::fs::read(&rec.path) else {
                     continue;
                 };
-                disk_bytes
+                Arc::from(disk_bytes)
             };
             // Transparent WOFF/WOFF2 → sfnt conversion before parsing.
-            let bytes = match maybe_decode_font(&raw) {
-                Ok(Some(decoded)) => decoded,
+            // `Ok(None)` (@font-face-байты уже sfnt) переиспользует Arc реестра.
+            let bytes: Arc<[u8]> = match maybe_decode_font(&raw) {
+                Ok(Some(decoded)) => Arc::from(decoded),
                 Ok(None) => raw,
                 Err(e) => {
                     eprintln!("[font] WOFF decode failed {}: {e}", rec.path.display());
