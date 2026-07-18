@@ -5485,6 +5485,29 @@ fn lay_out_inner(
         return;
     }
 
+    // CSS Values L4 §5.1.1 — publish this box's real `ch`/`ex` metrics (advance of
+    // the "0" glyph and the x-height at the used font-size) so `Length::{Ch,Ex}`
+    // resolve against the actual font for this box and its descendants. The guard
+    // restores the parent's value on every return path, keeping the thread-local
+    // balanced across the recursive layout walk. Without a measurer the context is
+    // cleared, so ch/ex fall back to the spec `0.5em` assumption.
+    struct ChExGuard(Option<(f32, f32)>);
+    impl Drop for ChExGuard {
+        fn drop(&mut self) {
+            crate::style::pop_ch_ex_context(self.0);
+        }
+    }
+    let _ch_ex_guard = {
+        let ch_ex = measurer.map(|m| {
+            let fs = b.style.font_size.max(0.0);
+            (
+                m.char_width_with_families('0', fs, &b.style.font_family),
+                m.x_height_px(fs),
+            )
+        });
+        ChExGuard(crate::style::push_ch_ex_context(ch_ex))
+    };
+
     // CSS Containment L3 §4.4 — content-visibility: auto (BB-4). When the box
     // flow position starts below the expanded viewport and the shell hasn't
     // ratcheted the node relevant, drop the children for this pass: the element

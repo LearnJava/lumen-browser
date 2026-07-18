@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-18",
  "counts": {
-  "open": 41,
+  "open": 46,
   "fixed": 241,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 282,
+ "total_bugs": 287,
  "phases": [
   {
    "id": "P0",
@@ -213,6 +213,12 @@
      "id": "P1-tablife1",
      "title": "Tab lifecycle Phase 1 (TabState T0–T4, memory pressure, image LRU, T1 paused)",
      "status": "done"
+    },
+    {
+     "id": "P3-scope",
+     "title": "CSS @scope (scoped styling + donut scope)",
+     "status": "done",
+     "note": "DONE 2026-07-18 (p1-scope-donut-limit): @scope root-matching + donut `to (<limit>)` — `node_in_scope` резолвит root и limit одним обходом предков (nearest boundary wins); limit внутри поддерева root вырезает дырку, limit выше root не исключает; 3 теста"
     },
     {
      "id": "P3-vertical",
@@ -957,12 +963,6 @@
      "note": "реализовано (сверка с кодом 2026-07-02): полный CSS Nesting L1 — parser.rs expand_nesting (& явный/неявный + вложенные @media/@supports/@layer/@container), 20 тестов"
     },
     {
-     "id": "P3-scope",
-     "title": "CSS @scope (scoped styling + donut scope)",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): @scope root-matching готов (node_is_in_scope); дошить — donut/limit (inner-scope), CSS-SPECS §53 Phase 2"
-    },
-    {
      "id": "P3-stylequery",
      "title": "CSS Container Style Queries (style()/state())",
      "status": "done",
@@ -1432,7 +1432,7 @@
        "id": "css-specs-t4",
        "title": "CSS модули — Tier 4 (Advanced/future)",
        "status": "active",
-       "note": "7✅ 14🟡 0⬜ 0🚫 из 21 модулей CSS-SPECS.md (Tier 4)"
+       "note": "8✅ 13🟡 0⬜ 0🚫 из 21 модулей CSS-SPECS.md (Tier 4)"
       }
      ]
     },
@@ -3555,13 +3555,48 @@
    "debtor": false
   },
   "BUG-310": {
+   "status": "open",
+   "title": "ElementTraversal (`childElementCount`/`firstElementChild`/`lastElementChild`/`nextElementSibling`/`previousElementSibling`) и `ParentNode.children` отсутствуют…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-311": {
+   "status": "open",
+   "title": "`Node.prototype.isConnected` отсутствует — возвращает `undefined` вместо булева. WPT `dom/nodes/Node-isConnected.html`, `expected: FAIL`. Найдено P2-wpt S5 2026…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-312": {
+   "status": "open",
+   "title": "`Element.prototype.hasAttributes()` отсутствует — `el.hasAttributes is not a function`. WPT `dom/nodes/Element-hasAttributes.html`, `expected: FAIL`. Найдено P2…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-313": {
+   "status": "open",
+   "title": "`document.createProcessingInstruction` отсутствует + нет валидации Name/`?>` (`InvalidCharacterError`). WPT `dom/nodes/Document-createProcessingInstruction.html…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-314": {
+   "status": "open",
+   "title": "DOM-конструкторы (`Comment`/`Text`/`DocumentFragment`/`DocumentType`/`Document`/`ProcessingInstruction`/`HTML*Element`) не выставлены как глобальные интерфейсы…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-315": {
    "status": "fixed",
    "title": "Две независимые причины на один симптом (`run_smoke.py` TIMEOUT): (1) `TestEnvironment.get_routes` в вендоренном `environment.py` всегда подменяет `/resources/t…",
    "component": "`tools/wptrunner/wptrunner/browsers/lumen.py` + `crates/shell/src/main.rs`",
    "date": "2026-07-17",
    "debtor": false
   },
-  "BUG-311": {
+  "BUG-316": {
    "status": "open",
    "title": "`cases::snapshot_cpu::cpu_snapshots_match_references` падает (~30 страниц, большие расхождения в байтах) при совместном тестировании `lumen-driver`+`lumen-shell…",
    "component": "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)",
@@ -3571,7 +3606,7 @@
  },
  "unlinked": {
   "`tools/wptrunner/wptrunner/browsers/lumen.py` + `crates/shell/src/main.rs`": [
-   "BUG-310"
+   "BUG-315"
   ],
   "css-parser": [
    "BUG-022",
@@ -3597,7 +3632,7 @@
    "BUG-112"
   ],
   "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)": [
-   "BUG-311"
+   "BUG-316"
   ],
   "encoding": [
    "BUG-162"
@@ -3643,7 +3678,12 @@
   ],
   "js (WEB_API_SHIM, dom.rs)": [
    "BUG-302",
-   "BUG-305"
+   "BUG-305",
+   "BUG-310",
+   "BUG-311",
+   "BUG-312",
+   "BUG-313",
+   "BUG-314"
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"

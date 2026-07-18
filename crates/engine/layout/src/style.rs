@@ -6808,14 +6808,12 @@ pub fn compute_style(
     }
     // CSS Cascade L6 §5 — @scope rules: apply only when node is in scope.
     for scope_rule in &sheet.scope_rules {
-        if !node_is_in_scope(doc, node, &scope_rule.root) {
-            next_rule_idx += scope_rule.rules.len();
-            continue;
-        }
-        // Scope limit: if `to (<limit>)` is set, skip nodes that are
-        // descendants of the limit selector *within* this scope.
-        if let Some(ref limit_sel) = scope_rule.limit
-            && node_is_in_scope(doc, node, limit_sel) {
+        // Donut scoping (§3): `node` is in scope when it is an inclusive
+        // descendant of the scope root but *not* of a scope limit that lies
+        // within that same root subtree. `node_in_scope` resolves root and
+        // limit together (nearest boundary wins) so a limit-matching element
+        // *above* the root no longer removes the node from scope.
+        if !node_in_scope(doc, node, &scope_rule.root, scope_rule.limit.as_deref()) {
             next_rule_idx += scope_rule.rules.len();
             continue;
         }
@@ -10845,6 +10843,32 @@ pub fn clear_cq_context() {
 }
 
 thread_local! {
+    /// CSS Values L4 §5.1.1 — absolute px value of one `ch` and one `ex` unit for
+    /// the box currently being laid out: `(char_width('0'), x_height)` measured at
+    /// the box's own used `font-size`. `lay_out_inner` pushes this from the active
+    /// [`crate::TextMeasurer`] before resolving the box's lengths and restores the
+    /// parent's value on exit (RAII, so it is always balanced across recursion).
+    /// `None` outside a layout pass (or when no measurer is available) — then
+    /// `Length::{Ch,Ex}` fall back to the spec default of `0.5em` (§5.1.1: assume
+    /// the "0" glyph is `0.5em` wide and the x-height is `0.5em` when the real
+    /// metric is impractical to obtain).
+    static FONT_CH_EX: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+}
+
+/// Installs the `ch`/`ex` metric context (absolute px per unit) for the box being
+/// laid out and returns the previous value so the caller can restore it (RAII).
+/// `None` clears the context, making `Length::{Ch,Ex}` use the `0.5em` fallback.
+pub fn push_ch_ex_context(ch_ex: Option<(f32, f32)>) -> Option<(f32, f32)> {
+    FONT_CH_EX.with(|c| c.replace(ch_ex))
+}
+
+/// Restores the `ch`/`ex` metric context to a value previously returned by
+/// [`push_ch_ex_context`], undoing the box's contribution once its subtree is done.
+pub fn pop_ch_ex_context(prev: Option<(f32, f32)>) {
+    FONT_CH_EX.with(|c| c.set(prev));
+}
+
+thread_local! {
     /// Raw NodeId.0 of the currently-hovered element, or `u32::MAX` if none.
     /// Set by `set_interactive_state` before layout; cleared with `clear_interactive_state`.
     /// `:hover` matches the hovered element and all its ancestors (CSS Selectors L4 §4.3).
@@ -10983,29 +11007,58 @@ impl StyleEnvSnapshot {
     }
 }
 
-/// CSS Cascade L6 §5.1 — true when `node` is a descendant of (or is) an element
-/// matching any selector in `root_sel_str`. Empty `root_sel_str` → always true
-/// (implicit scope = document root, i.e. the rule applies everywhere).
-fn node_is_in_scope(doc: &Document, node: NodeId, root_sel_str: &str) -> bool {
-    if root_sel_str.trim().is_empty() {
-        return true;
-    }
-    let selectors = lumen_css_parser::parse_selector_list(root_sel_str);
-    if selectors.is_empty() {
+/// CSS Cascade L6 §3 — donut scoping. Returns `true` when `node` is inside the
+/// scope rooted at `root_sel_str` and bounded (below, in the tree) by the
+/// optional `limit_sel_str` (`@scope (<root>) to (<limit>)`).
+///
+/// An element is *in scope* iff it is an inclusive descendant of a scoping-root
+/// element and it is **not** an inclusive descendant of a scoping limit that
+/// lies *within that same root subtree* (the donut hole, §3.2). Root and limit
+/// are resolved in a single ancestor walk so the **nearest** boundary wins: a
+/// limit-matching element *above* the scope root does not remove `node` from
+/// scope (walking up, the root is reached first).
+///
+/// Empty `root_sel_str` (`@scope { … }` without an explicit `(<root>)`) →
+/// implicit scope = document root: every element is in scope unless it sits
+/// under a limit.
+fn node_in_scope(
+    doc: &Document,
+    node: NodeId,
+    root_sel_str: &str,
+    limit_sel_str: Option<&str>,
+) -> bool {
+    let root_empty = root_sel_str.trim().is_empty();
+    let root_selectors = if root_empty {
+        Vec::new()
+    } else {
+        lumen_css_parser::parse_selector_list(root_sel_str)
+    };
+    if !root_empty && root_selectors.is_empty() {
         return false;
     }
-    // Walk node and its ancestors; return true if any matches the scope root.
+    let limit_selectors = limit_sel_str
+        .filter(|s| !s.trim().is_empty())
+        .map(lumen_css_parser::parse_selector_list)
+        .unwrap_or_default();
+    // Walk `node` and its ancestors. The first boundary encountered decides:
+    // a limit (inclusive) → out of scope; a root (inclusive) → in scope.
     let mut cur = Some(node);
     while let Some(n) = cur {
         if n == doc.root() { break; }
-        for complex in &selectors {
+        for complex in &limit_selectors {
+            if matches_complex(complex, doc, n) {
+                return false;
+            }
+        }
+        for complex in &root_selectors {
             if matches_complex(complex, doc, n) {
                 return true;
             }
         }
         cur = doc.get(n).parent;
     }
-    false
+    // No explicit root: implicit document-root scope (only limits cut off).
+    root_empty
 }
 
 /// Returns `true` if `ancestor` is `node` itself, or a proper ancestor of `node` in the tree.
@@ -11075,6 +11128,16 @@ pub enum Length {
     Em(f32),
     /// `rem` — относительно font-size корня документа (ROOT_FONT_SIZE).
     Rem(f32),
+    /// CSS Values L4 §5.1.1 — `ch`: advance measure (width) of the "0" (U+0030)
+    /// glyph in the element's own font. Resolved to px against the font-metric
+    /// thread-local `FONT_CH_EX` (set per box by `lay_out_inner` from the active
+    /// `TextMeasurer`). When that metric is unavailable (outside a layout pass, or
+    /// no measurer), spec §5.1.1 says to assume the "0" glyph is `0.5em` wide.
+    Ch(f32),
+    /// CSS Values L4 §5.1.1 — `ex`: the used x-height of the element's own font.
+    /// Resolved via the same `FONT_CH_EX` thread-local; the spec fallback when the
+    /// metric is unavailable is `0.5em` (the assumed x-height).
+    Ex(f32),
     /// `%` — процент. Базис зависит от свойства: для `font-size` это
     /// `em_basis`, для `line-height` — текущий font-size, для
     /// margin/padding/width — containing block width (Phase 0 пока не считает,
@@ -11418,6 +11481,15 @@ impl Length {
             Length::Px(v) => Some(*v),
             Length::Em(v) => Some(*v * em_basis),
             Length::Rem(v) => Some(*v * ROOT_FONT_SIZE),
+            // CSS Values L4 §5.1.1 — `ch`/`ex` against the box's own font metrics
+            // (thread-local `FONT_CH_EX`, absolute px per unit). Outside a layout
+            // pass the metric is unavailable → spec fallback of `0.5em`.
+            Length::Ch(v) => {
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(ch, _)| *v * ch))
+            }
+            Length::Ex(v) => {
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(_, ex)| *v * ex))
+            }
             Length::Percent(v) => percent_basis.map(|b| *v / 100.0 * b),
             Length::Vh(v) => Some(*v / 100.0 * viewport.height),
             Length::Vw(v) => Some(*v / 100.0 * viewport.width),
@@ -11523,15 +11595,16 @@ fn parse_length_q(s: &str, is_quirks: bool) -> Option<Length> {
         return num.trim().parse::<f32>().ok().map(Length::Rem);
     }
     // ── Font-relative units ──────────────────────────────────────────────────
-    // `ch` = advance width of '0' glyph; Phase 0 approximation: 0.5em.
-    // `ex` = x-height; Phase 0 approximation: 0.5em.
+    // `ch` = advance width of the '0' glyph; `ex` = x-height. Both resolve to px
+    // against the box's real font metrics at layout time (`FONT_CH_EX`), with a
+    // `0.5em` spec fallback (CSS Values L4 §5.1.1).
     // `cap` = cap-height; Phase 0 approximation: 0.7em.
     // `lh` = computed line-height; Phase 0 approximation: 1.2em.
     if let Some(num) = s.strip_suffix("ch") {
-        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.5));
+        return num.trim().parse::<f32>().ok().map(Length::Ch);
     }
     if let Some(num) = s.strip_suffix("ex") {
-        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.5));
+        return num.trim().parse::<f32>().ok().map(Length::Ex);
     }
     if let Some(num) = s.strip_suffix("cap") {
         return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.7));
@@ -12018,18 +12091,14 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
     }
     let length = match unit {
         "px" => Length::Px(value),
-        "em" | "rem" | "ch" | "ex" | "cap" | "lh" => {
-            // Font-relative units: rem uses root size; ch/ex/cap/lh are
-            // approximated as em-fractions (Phase 0, no font metrics API).
-            let factor = match unit {
-                "rem" => { return Some(CalcNode::Length(Length::Rem(value))); }
-                "ch" | "ex" => 0.5,
-                "cap" => 0.7,
-                "lh" => 1.2,
-                _ => 1.0,
-            };
-            Length::Em(value * factor)
-        }
+        "rem" => Length::Rem(value),
+        // `ch`/`ex` carry their own variants (resolved against real font metrics
+        // at layout time); `cap`/`lh` stay em-approximated (Phase 0, no metric).
+        "ch" => Length::Ch(value),
+        "ex" => Length::Ex(value),
+        "em" => Length::Em(value),
+        "cap" => Length::Em(value * 0.7),
+        "lh" => Length::Em(value * 1.2),
         "vh" => Length::Vh(value),
         "vw" => Length::Vw(value),
         "vmin" => Length::Vmin(value),
@@ -19566,6 +19635,10 @@ fn resolve_font_size(
         Length::Px(v) => *v,
         Length::Em(v) => *v * parent_fs,
         Length::Rem(v) => *v * ROOT_FONT_SIZE,
+        // CSS Values L4 §5.1.1 — font-relative units on `font-size` itself refer to
+        // the *parent* font. Real ch/ex metrics for the parent are not available at
+        // computed-value time, so use the spec `0.5em` fallback against `parent_fs`.
+        Length::Ch(v) | Length::Ex(v) => *v * 0.5 * parent_fs,
         Length::Percent(v) => *v / 100.0 * parent_fs,
         Length::Vh(v) => *v / 100.0 * viewport.height,
         Length::Vw(v) => *v / 100.0 * viewport.width,
@@ -19617,7 +19690,9 @@ fn apply_line_height_value(style: &mut ComputedStyle, val: &str, em_basis: f32, 
                 style.line_height = v * ROOT_FONT_SIZE / style.font_size;
             }
             Length::Percent(v) => style.line_height = v / 100.0,
-            Length::Vh(_)
+            Length::Ch(_)
+            | Length::Ex(_)
+            | Length::Vh(_)
             | Length::Vw(_)
             | Length::Vmin(_)
             | Length::Vmax(_)
@@ -19686,6 +19761,7 @@ fn is_font_size_token(tok: &str) -> bool {
         return true;
     }
     matches!(parse_length_q(tok, false), Some(Length::Px(_) | Length::Em(_) | Length::Rem(_)
+        | Length::Ch(_) | Length::Ex(_)
         | Length::Percent(_) | Length::Vh(_) | Length::Vw(_) | Length::Vmin(_) | Length::Vmax(_)))
 }
 
@@ -22590,6 +22666,37 @@ mod tests {
     fn length_resolve_percent_needs_basis() {
         assert_eq!(Length::Percent(50.0).resolve(16.0, Some(200.0), vp()), Some(100.0));
         assert_eq!(Length::Percent(50.0).resolve(16.0, None, vp()), None);
+    }
+
+    // ── CSS Values L4 §5.1.1 — ch / ex font-relative units ────────────────
+    #[test]
+    fn parse_length_recognizes_ch_ex() {
+        assert_eq!(parse_length("60ch"), Some(Length::Ch(60.0)));
+        assert_eq!(parse_length("2.5ex"), Some(Length::Ex(2.5)));
+        // ch/ex are valid <font-size> tokens (font shorthand relies on this).
+        assert!(is_font_size_token("2ch"));
+        assert!(is_font_size_token("2ex"));
+    }
+
+    #[test]
+    fn length_resolve_ch_ex_fallback_is_half_em() {
+        // Outside a layout pass FONT_CH_EX is unset → spec 0.5em fallback:
+        // 10ch at em_basis 20 = 10 * 0.5 * 20 = 100.
+        pop_ch_ex_context(None);
+        assert_eq!(Length::Ch(10.0).resolve(20.0, None, vp()), Some(100.0));
+        assert_eq!(Length::Ex(4.0).resolve(20.0, None, vp()), Some(40.0));
+    }
+
+    #[test]
+    fn length_resolve_ch_ex_uses_font_metric_context() {
+        // With real metrics published (ch = 9px, ex = 7px per unit) the em_basis
+        // is ignored — the absolute per-unit px drives the result.
+        let prev = push_ch_ex_context(Some((9.0, 7.0)));
+        assert_eq!(Length::Ch(3.0).resolve(20.0, None, vp()), Some(27.0));
+        assert_eq!(Length::Ex(2.0).resolve(20.0, None, vp()), Some(14.0));
+        pop_ch_ex_context(prev);
+        // Context restored → fallback again.
+        assert_eq!(Length::Ch(1.0).resolve(20.0, None, vp()), Some(10.0));
     }
 
     // ── viewport units ────────────────────────────────────────────────────
@@ -31420,6 +31527,87 @@ mod tests {
         let span = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, span, &sheet, &root, Size::new(400.0, 400.0), false);
         assert_eq!(style.color.r, 255, "empty-root scope should apply everywhere");
+    }
+
+    #[test]
+    fn scope_limit_excludes_donut_hole() {
+        // CSS Cascade L6 §3.2 — `to (<limit>)` carves a donut hole: elements
+        // that are inclusive descendants of a limit *within* the scope are out.
+        let html = r#"<div class="card"><p class="a">A</p><section class="content"><p class="b">B</p></section></div>"#;
+        let sheet = lumen_css_parser::parse(
+            r#"@scope (.card) to (.content) {
+                .a { color: blue; }
+                .b { color: blue; }
+                .content { color: blue; }
+            }"#,
+        );
+        let doc = lumen_html_parser::parse(html);
+        let root = ComputedStyle::root();
+        let card = doc.get(doc.body().unwrap()).children[0];
+        let a = doc.get(card).children[0];
+        let content = doc.get(card).children[1];
+        let b = doc.get(content).children[0];
+        let vp = Size::new(400.0, 400.0);
+        // .a is above the limit → in scope.
+        assert_eq!(
+            compute_style(&doc, a, &sheet, &root, vp, false).color.b, 255,
+            ".a above the limit should be in scope"
+        );
+        // The limit element itself is inclusive → out of scope.
+        assert_eq!(
+            compute_style(&doc, content, &sheet, &root, vp, false).color.b, 0,
+            "the limit element itself should be out of scope"
+        );
+        // .b is a descendant of the limit → out of scope (the donut hole).
+        assert_eq!(
+            compute_style(&doc, b, &sheet, &root, vp, false).color.b, 0,
+            ".b inside the limit should be out of scope"
+        );
+    }
+
+    #[test]
+    fn scope_limit_above_root_does_not_exclude() {
+        // A limit-matching element that sits *above* the scope root must not
+        // remove a node from scope — walking up, the root is reached first.
+        let html = r#"<section class="content"><div class="card"><p class="a">A</p></div></section>"#;
+        let sheet = lumen_css_parser::parse(
+            r#"@scope (.card) to (.content) { .a { color: blue; } }"#,
+        );
+        let doc = lumen_html_parser::parse(html);
+        let root = ComputedStyle::root();
+        let content = doc.get(doc.body().unwrap()).children[0];
+        let card = doc.get(content).children[0];
+        let a = doc.get(card).children[0];
+        let style = compute_style(&doc, a, &sheet, &root, Size::new(400.0, 400.0), false);
+        assert_eq!(
+            style.color.b, 255,
+            ".a should stay in scope: the .content limit is above the .card root"
+        );
+    }
+
+    #[test]
+    fn scope_empty_root_with_limit_carves_hole() {
+        // `@scope { … } to (<limit>)` — implicit document-root scope still
+        // honours the limit: descendants of the limit are excluded.
+        let html = r#"<div class="wrap"><p class="a">A</p><section class="stop"><p class="b">B</p></section></div>"#;
+        let sheet = lumen_css_parser::parse(
+            r#"@scope to (.stop) { .a { color: red; } .b { color: red; } }"#,
+        );
+        let doc = lumen_html_parser::parse(html);
+        let root = ComputedStyle::root();
+        let wrap = doc.get(doc.body().unwrap()).children[0];
+        let a = doc.get(wrap).children[0];
+        let stop = doc.get(wrap).children[1];
+        let b = doc.get(stop).children[0];
+        let vp = Size::new(400.0, 400.0);
+        assert_eq!(
+            compute_style(&doc, a, &sheet, &root, vp, false).color.r, 255,
+            ".a should be in the implicit document scope"
+        );
+        assert_eq!(
+            compute_style(&doc, b, &sheet, &root, vp, false).color.r, 0,
+            ".b under the limit should be excluded even with an empty root"
+        );
     }
 
     #[test]

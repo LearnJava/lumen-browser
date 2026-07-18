@@ -460,6 +460,8 @@ fn length_to_css(l: &Length) -> String {
         Length::Px(v) => px_str(*v),
         Length::Em(v) => format!("{}em", v),
         Length::Rem(v) => format!("{}rem", v),
+        Length::Ch(v) => format!("{}ch", v),
+        Length::Ex(v) => format!("{}ex", v),
         Length::Percent(v) => format!("{}%", v),
         Length::Vh(v) => format!("{}vh", v),
         Length::Vw(v) => format!("{}vw", v),

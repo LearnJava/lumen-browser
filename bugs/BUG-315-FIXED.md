@@ -1,6 +1,6 @@
-# BUG-310 — `tests/wpt/run_smoke.py` timed out after the BUG-291 fix, despite the same page reaching a genuine result over a direct BiDi probe
+# BUG-315 — `tests/wpt/run_smoke.py` timed out after the BUG-291 fix, despite the same page reaching a genuine result over a direct BiDi probe
 
-**Renumbered 2026-07-18** from `BUG-295` during the merge that reconciled two independent parallel sessions — `BUG-295` was independently assigned by another session to a different bug (six BiDi commands with no live-window effect, see [BUG-295](BUG-295-OPEN.md)); this bug kept its content but moved to the next free number.
+**Renumbered 2026-07-18** from `BUG-295`, then `BUG-310` — assigned twice more by independent parallel sessions to different bugs (six BiDi commands with no live-window effect, see [BUG-295](BUG-295-OPEN.md); ElementTraversal/`ParentNode.children` gap, see [BUG-310](BUG-310-OPEN.md)); this bug kept its content but moved to the next free number each time.
 
 **Статус:** FIXED 2026-07-17
 **Компонент:** `tools/wptrunner/wptrunner/browsers/lumen.py` (product plugin, wrong report.js route) + `crates/shell/src/main.rs` (persistent HTTP cache poisoned automation runs)
