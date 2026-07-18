@@ -10843,6 +10843,32 @@ pub fn clear_cq_context() {
 }
 
 thread_local! {
+    /// CSS Values L4 §5.1.1 — absolute px value of one `ch` and one `ex` unit for
+    /// the box currently being laid out: `(char_width('0'), x_height)` measured at
+    /// the box's own used `font-size`. `lay_out_inner` pushes this from the active
+    /// [`crate::TextMeasurer`] before resolving the box's lengths and restores the
+    /// parent's value on exit (RAII, so it is always balanced across recursion).
+    /// `None` outside a layout pass (or when no measurer is available) — then
+    /// `Length::{Ch,Ex}` fall back to the spec default of `0.5em` (§5.1.1: assume
+    /// the "0" glyph is `0.5em` wide and the x-height is `0.5em` when the real
+    /// metric is impractical to obtain).
+    static FONT_CH_EX: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+}
+
+/// Installs the `ch`/`ex` metric context (absolute px per unit) for the box being
+/// laid out and returns the previous value so the caller can restore it (RAII).
+/// `None` clears the context, making `Length::{Ch,Ex}` use the `0.5em` fallback.
+pub fn push_ch_ex_context(ch_ex: Option<(f32, f32)>) -> Option<(f32, f32)> {
+    FONT_CH_EX.with(|c| c.replace(ch_ex))
+}
+
+/// Restores the `ch`/`ex` metric context to a value previously returned by
+/// [`push_ch_ex_context`], undoing the box's contribution once its subtree is done.
+pub fn pop_ch_ex_context(prev: Option<(f32, f32)>) {
+    FONT_CH_EX.with(|c| c.set(prev));
+}
+
+thread_local! {
     /// Raw NodeId.0 of the currently-hovered element, or `u32::MAX` if none.
     /// Set by `set_interactive_state` before layout; cleared with `clear_interactive_state`.
     /// `:hover` matches the hovered element and all its ancestors (CSS Selectors L4 §4.3).
@@ -11102,6 +11128,16 @@ pub enum Length {
     Em(f32),
     /// `rem` — относительно font-size корня документа (ROOT_FONT_SIZE).
     Rem(f32),
+    /// CSS Values L4 §5.1.1 — `ch`: advance measure (width) of the "0" (U+0030)
+    /// glyph in the element's own font. Resolved to px against the font-metric
+    /// thread-local `FONT_CH_EX` (set per box by `lay_out_inner` from the active
+    /// `TextMeasurer`). When that metric is unavailable (outside a layout pass, or
+    /// no measurer), spec §5.1.1 says to assume the "0" glyph is `0.5em` wide.
+    Ch(f32),
+    /// CSS Values L4 §5.1.1 — `ex`: the used x-height of the element's own font.
+    /// Resolved via the same `FONT_CH_EX` thread-local; the spec fallback when the
+    /// metric is unavailable is `0.5em` (the assumed x-height).
+    Ex(f32),
     /// `%` — процент. Базис зависит от свойства: для `font-size` это
     /// `em_basis`, для `line-height` — текущий font-size, для
     /// margin/padding/width — containing block width (Phase 0 пока не считает,
@@ -11445,6 +11481,15 @@ impl Length {
             Length::Px(v) => Some(*v),
             Length::Em(v) => Some(*v * em_basis),
             Length::Rem(v) => Some(*v * ROOT_FONT_SIZE),
+            // CSS Values L4 §5.1.1 — `ch`/`ex` against the box's own font metrics
+            // (thread-local `FONT_CH_EX`, absolute px per unit). Outside a layout
+            // pass the metric is unavailable → spec fallback of `0.5em`.
+            Length::Ch(v) => {
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(ch, _)| *v * ch))
+            }
+            Length::Ex(v) => {
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(_, ex)| *v * ex))
+            }
             Length::Percent(v) => percent_basis.map(|b| *v / 100.0 * b),
             Length::Vh(v) => Some(*v / 100.0 * viewport.height),
             Length::Vw(v) => Some(*v / 100.0 * viewport.width),
@@ -11550,15 +11595,16 @@ fn parse_length_q(s: &str, is_quirks: bool) -> Option<Length> {
         return num.trim().parse::<f32>().ok().map(Length::Rem);
     }
     // ── Font-relative units ──────────────────────────────────────────────────
-    // `ch` = advance width of '0' glyph; Phase 0 approximation: 0.5em.
-    // `ex` = x-height; Phase 0 approximation: 0.5em.
+    // `ch` = advance width of the '0' glyph; `ex` = x-height. Both resolve to px
+    // against the box's real font metrics at layout time (`FONT_CH_EX`), with a
+    // `0.5em` spec fallback (CSS Values L4 §5.1.1).
     // `cap` = cap-height; Phase 0 approximation: 0.7em.
     // `lh` = computed line-height; Phase 0 approximation: 1.2em.
     if let Some(num) = s.strip_suffix("ch") {
-        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.5));
+        return num.trim().parse::<f32>().ok().map(Length::Ch);
     }
     if let Some(num) = s.strip_suffix("ex") {
-        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.5));
+        return num.trim().parse::<f32>().ok().map(Length::Ex);
     }
     if let Some(num) = s.strip_suffix("cap") {
         return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.7));
@@ -12045,18 +12091,14 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
     }
     let length = match unit {
         "px" => Length::Px(value),
-        "em" | "rem" | "ch" | "ex" | "cap" | "lh" => {
-            // Font-relative units: rem uses root size; ch/ex/cap/lh are
-            // approximated as em-fractions (Phase 0, no font metrics API).
-            let factor = match unit {
-                "rem" => { return Some(CalcNode::Length(Length::Rem(value))); }
-                "ch" | "ex" => 0.5,
-                "cap" => 0.7,
-                "lh" => 1.2,
-                _ => 1.0,
-            };
-            Length::Em(value * factor)
-        }
+        "rem" => Length::Rem(value),
+        // `ch`/`ex` carry their own variants (resolved against real font metrics
+        // at layout time); `cap`/`lh` stay em-approximated (Phase 0, no metric).
+        "ch" => Length::Ch(value),
+        "ex" => Length::Ex(value),
+        "em" => Length::Em(value),
+        "cap" => Length::Em(value * 0.7),
+        "lh" => Length::Em(value * 1.2),
         "vh" => Length::Vh(value),
         "vw" => Length::Vw(value),
         "vmin" => Length::Vmin(value),
@@ -19593,6 +19635,10 @@ fn resolve_font_size(
         Length::Px(v) => *v,
         Length::Em(v) => *v * parent_fs,
         Length::Rem(v) => *v * ROOT_FONT_SIZE,
+        // CSS Values L4 §5.1.1 — font-relative units on `font-size` itself refer to
+        // the *parent* font. Real ch/ex metrics for the parent are not available at
+        // computed-value time, so use the spec `0.5em` fallback against `parent_fs`.
+        Length::Ch(v) | Length::Ex(v) => *v * 0.5 * parent_fs,
         Length::Percent(v) => *v / 100.0 * parent_fs,
         Length::Vh(v) => *v / 100.0 * viewport.height,
         Length::Vw(v) => *v / 100.0 * viewport.width,
@@ -19644,7 +19690,9 @@ fn apply_line_height_value(style: &mut ComputedStyle, val: &str, em_basis: f32, 
                 style.line_height = v * ROOT_FONT_SIZE / style.font_size;
             }
             Length::Percent(v) => style.line_height = v / 100.0,
-            Length::Vh(_)
+            Length::Ch(_)
+            | Length::Ex(_)
+            | Length::Vh(_)
             | Length::Vw(_)
             | Length::Vmin(_)
             | Length::Vmax(_)
@@ -19713,6 +19761,7 @@ fn is_font_size_token(tok: &str) -> bool {
         return true;
     }
     matches!(parse_length_q(tok, false), Some(Length::Px(_) | Length::Em(_) | Length::Rem(_)
+        | Length::Ch(_) | Length::Ex(_)
         | Length::Percent(_) | Length::Vh(_) | Length::Vw(_) | Length::Vmin(_) | Length::Vmax(_)))
 }
 
@@ -22617,6 +22666,37 @@ mod tests {
     fn length_resolve_percent_needs_basis() {
         assert_eq!(Length::Percent(50.0).resolve(16.0, Some(200.0), vp()), Some(100.0));
         assert_eq!(Length::Percent(50.0).resolve(16.0, None, vp()), None);
+    }
+
+    // ── CSS Values L4 §5.1.1 — ch / ex font-relative units ────────────────
+    #[test]
+    fn parse_length_recognizes_ch_ex() {
+        assert_eq!(parse_length("60ch"), Some(Length::Ch(60.0)));
+        assert_eq!(parse_length("2.5ex"), Some(Length::Ex(2.5)));
+        // ch/ex are valid <font-size> tokens (font shorthand relies on this).
+        assert!(is_font_size_token("2ch"));
+        assert!(is_font_size_token("2ex"));
+    }
+
+    #[test]
+    fn length_resolve_ch_ex_fallback_is_half_em() {
+        // Outside a layout pass FONT_CH_EX is unset → spec 0.5em fallback:
+        // 10ch at em_basis 20 = 10 * 0.5 * 20 = 100.
+        pop_ch_ex_context(None);
+        assert_eq!(Length::Ch(10.0).resolve(20.0, None, vp()), Some(100.0));
+        assert_eq!(Length::Ex(4.0).resolve(20.0, None, vp()), Some(40.0));
+    }
+
+    #[test]
+    fn length_resolve_ch_ex_uses_font_metric_context() {
+        // With real metrics published (ch = 9px, ex = 7px per unit) the em_basis
+        // is ignored — the absolute per-unit px drives the result.
+        let prev = push_ch_ex_context(Some((9.0, 7.0)));
+        assert_eq!(Length::Ch(3.0).resolve(20.0, None, vp()), Some(27.0));
+        assert_eq!(Length::Ex(2.0).resolve(20.0, None, vp()), Some(14.0));
+        pop_ch_ex_context(prev);
+        // Context restored → fallback again.
+        assert_eq!(Length::Ch(1.0).resolve(20.0, None, vp()), Some(10.0));
     }
 
     // ── viewport units ────────────────────────────────────────────────────
