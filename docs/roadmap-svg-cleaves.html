@@ -1513,9 +1513,9 @@
       {
        "id": "PERF-2",
        "title": "PERF-2: user-centric метрики на корпусе реальных сайтов",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "User-centric метрики по образцу FCP/LCP/TTI + total blocking time, замеряемые на фиксированном корпусе реальных сайтов (14 сайтов аудита 2026-07 + tier-список) с журналом «метрика ↔ коммит» — по модели docs/build-speed.md (протокол замера + журнал). JS-каркас частично готов (performance.now, long-animation-frames, soft-navigation в crates/js). Внешний ориентир: scripts/bench_chromium.py на том же корпусе — отчёт «где и насколько мы медленнее Chromium»"
+       "note": "DONE 2026-07-18: `scripts/perf_metrics.py` извлекает user-centric метрики «по образцу» FCP/LCP/TTI + Total Blocking Time из таймлайна одной навигации, который уже собирает `lumen --trace-nav` (PERF-1) — БЕЗ нового кода в движке, только раскладка готовых спанов (`fetch-document`/`parse-html`/`run-scripts`/`layout`/`paint`/инстант `first-paint`) в метрики: ttfb/html_parse/script/layout/paint/fcp/lcp/tti/tbt/nav (мс) + детерминированные doc_bytes/total_bytes/resources. Прогон по корпусу (`docs/perf/corpus.txt`), `--repeat N` (медиана против сетевого шума), `--compare <prev.json>` (регрессия по nav_ms, порог >20%), `--selftest` (проверка извлечения на синтетическом трейсе без сети — входит в ворота). Журнал «метрика↔коммит» `docs/perf/metrics.md` (модель docs/build-speed.md) + коммитируемые прогоны `docs/perf/metrics-runs/*.json`. Ограничение честно задокументировано: headless `--trace-nav` красит раз в конце, поэтому fcp/lcp/tti схлопываются к paint-complete (различимы ttfb/script/tbt/layout/paint); живые FCP/LCP/TTI ждут PerformanceObserver paint-timing в движке. Внешний ориентир scripts/bench_chromium.py — на том же корпусе (отложен, не входил в срез)"
       },
       {
        "id": "PERF-3",
