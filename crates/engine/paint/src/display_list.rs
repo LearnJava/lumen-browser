@@ -22,7 +22,7 @@ use lumen_layout::{
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
-    GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
+    GradientStop, ImageRendering, Isolation, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, Resize,
     ScrollbarWidth, SelectionHighlight,
@@ -4072,6 +4072,24 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
     };
     if effective_opacity < 1.0 {
         pre.push(DisplayCommand::PushOpacity { alpha: effective_opacity });
+        post.push(DisplayCommand::PopOpacity);
+    } else if s.isolation == Isolation::Isolate
+        && box_can_own_stacking_context(b)
+        && s.filter.is_empty()
+        && s.backdrop_filter.is_empty()
+        && s.mix_blend_mode == LayoutBlendMode::Normal
+    {
+        // CSS Compositing & Blending L1 §2.1 — `isolation: isolate` turns the
+        // element into an isolated group: descendant `mix-blend-mode`s must
+        // composite against a transparent backdrop that only contains the
+        // group's own content, never the page behind it. When any of
+        // opacity/filter/backdrop-filter/mix-blend-mode is present the element
+        // already renders through an offscreen group layer (which is isolated),
+        // so the dedicated layer is only needed when `isolate` is the sole
+        // trigger. Reuse the opacity offscreen layer at full alpha: it clears a
+        // transparent backdrop, redirects the subtree into it, then composites
+        // the result back unchanged — exactly the isolated-group semantics.
+        pre.push(DisplayCommand::PushOpacity { alpha: 1.0 });
         post.push(DisplayCommand::PopOpacity);
     }
     // Transform: animation override wins over style value.
@@ -13875,6 +13893,54 @@ mod tests {
         let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopTransform));
         assert_eq!(pushes, 1);
         assert_eq!(pops, 1);
+    }
+
+    #[test]
+    fn isolation_isolate_emits_full_alpha_group_layer() {
+        // CSS Compositing L1 §2.1 — `isolation: isolate` must open an isolated
+        // group so descendant blend modes composite against a transparent
+        // backdrop. We reuse the opacity offscreen layer at alpha 1.0.
+        let dl = build_ordered(
+            r#"<div style="background: red; isolation: isolate;">x</div>"#,
+            "",
+        );
+        let iso = count_variant(&dl, |c| {
+            matches!(c, DisplayCommand::PushOpacity { alpha } if (*alpha - 1.0).abs() < 1e-6)
+        });
+        let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopOpacity));
+        assert_eq!(iso, 1, "isolate must open one full-alpha group layer");
+        assert_eq!(pops, 1, "the group layer must be balanced");
+    }
+
+    #[test]
+    fn isolation_auto_emits_no_group_layer() {
+        // The initial value `isolation: auto` never forms a group on its own.
+        let dl = build_ordered(
+            r#"<div style="background: red; isolation: auto;">x</div>"#,
+            "",
+        );
+        let opacity = count_variant(&dl, |c| matches!(c, DisplayCommand::PushOpacity { .. }));
+        assert_eq!(opacity, 0, "isolation:auto must not open an opacity group");
+    }
+
+    #[test]
+    fn isolation_with_opacity_reuses_the_opacity_layer() {
+        // When `opacity < 1` already opens an (isolated) offscreen group, the
+        // dedicated isolation layer is redundant — only the opacity layer at
+        // its real alpha should be emitted, not a second full-alpha one.
+        let dl = build_ordered(
+            r#"<div style="background: red; isolation: isolate; opacity: 0.5;">x</div>"#,
+            "",
+        );
+        let pushes: Vec<f32> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushOpacity { alpha } => Some(*alpha),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pushes.len(), 1, "exactly one opacity group, got {pushes:?}");
+        assert!((pushes[0] - 0.5).abs() < 1e-6, "must keep the real opacity, got {pushes:?}");
     }
 
     #[test]
