@@ -373,9 +373,22 @@ option isn't lost — do not fold it into this task's scope.
       the unsettled promise object regardless (BUG-317). The WPT pipeline does not depend on it: the
       executor deliberately uses `awaitPromise=false` + polls `window.__lumen_wpt_results` (async
       tests complete via the page's own event loop + testharness completion callback).
-- [ ] Suite runs fully offline.
-- [ ] `docs/plan/testing.md` updated; `ROADMAP.md:131` flipped to `done` (or split if S8 remains
-      open); `tests/wpt/README.md` written.
+- [x] Suite runs fully offline — **done 2026-07-18.** `run_suite.py` drives the whole curated
+      subset through the vendored `wptserve` bound to `127.0.0.1:8300/8301` (`tests/wpt/config.json`);
+      the tree under `tools/`/`tests/wpt/` is a committed snapshot (`tests/wpt/VENDOR.md`), not a
+      submodule or a runtime clone, so a full green run makes **zero** network calls to
+      `github.com/web-platform-tests/wpt` or any WPT CDN (verified: 21 tests / 64 checks, 0 unexpected,
+      exit 0, against `target/dev-release/lumen.exe`).
+- [x] `docs/plan/testing.md` updated; `ROADMAP.md` `P2-wpt` row flipped to `done`; `tests/wpt/README.md`
+      written — **done 2026-07-18 (S7).** CI wrapper `tests/wpt/run_suite.py` added (auto-discovers the
+      curated subset from committed `metadata/dom/nodes/*.ini`, reuses `run_smoke.run()`, exit 0 iff
+      0 unexpected — the repeatable local/CI invocation). `ROADMAP.md:131`'s literal line number was
+      stale (line drift); the actual `P2-wpt` row was flipped, its note rewritten to describe the
+      delivered infra + curated ratchet and to state plainly that the phase-level "≥60% pass rate"
+      metric is *not* achieved by this task (it is raised later via engine bug fixes). `docs/plan/testing.md`
+      §Уровень-5 documents the wptrunner+BiDi path, the `run_suite.py` gate, the offline guarantee, and
+      that S8 reftests remain a separate follow-up. `tests/wpt/README.md` status + "Running the whole
+      suite" section updated to S1–S7-complete.
 - [x] Any engine/BiDi gap found while running the harness filed as `BUG-NNN` (no test weakened to
       pass) — BUG-278/279/280/291/296/298/299/300/301 (all fixed); the first real *test*-surfaced
       engine gap is [BUG-309](../../bugs/BUG-309-OPEN.md) (`Element.setAttributeNS` missing),
