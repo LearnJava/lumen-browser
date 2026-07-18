@@ -20466,7 +20466,7 @@ impl Lumen {
                 last_activated_ms: 0.0,
                 pinned: false,
                 group_id: None,
-                adblock: true,
+                adblock: false,
             });
             self.lifecycle_mgr.open_tab(id as u64);
 
