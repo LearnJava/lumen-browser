@@ -397,6 +397,50 @@ fn _camel_to_kebab(prop: &str) -> String {
     result
 }
 
+/// Decompresses `data` with the given Compression Streams `format` and returns a
+/// status-prefixed byte array shared by the `_lumen_decompress_bytes` native in
+/// both JS engines (rquickjs and V8).
+///
+/// A leading status byte lets the `DecompressionStream` JS shim tell a decode
+/// error apart from a valid empty result (a well-formed stream may legitimately
+/// decompress to zero bytes): `out[0] == 1` → success with `out[1..]` the
+/// decompressed bytes; `out[0] == 0` → the input was corrupt/truncated or the
+/// format unknown, and the shim errors the readable side per
+/// <https://compression.spec.whatwg.org/>.
+pub(crate) fn _decompress_status_prefixed(data: &[u8], format: &str) -> Vec<u8> {
+    use std::io::Read as _;
+    let inflated: std::io::Result<Vec<u8>> = match format {
+        "deflate-raw" => {
+            let mut dec = flate2::read::DeflateDecoder::new(data);
+            let mut out = Vec::new();
+            dec.read_to_end(&mut out).map(|_| out)
+        }
+        "deflate" => {
+            let mut dec = flate2::read::ZlibDecoder::new(data);
+            let mut out = Vec::new();
+            dec.read_to_end(&mut out).map(|_| out)
+        }
+        "gzip" => {
+            let mut dec = flate2::read::GzDecoder::new(data);
+            let mut out = Vec::new();
+            dec.read_to_end(&mut out).map(|_| out)
+        }
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "unknown compression format",
+        )),
+    };
+    match inflated {
+        Ok(mut bytes) => {
+            let mut out = Vec::with_capacity(bytes.len() + 1);
+            out.push(1u8);
+            out.append(&mut bytes);
+            out
+        }
+        Err(_) => vec![0u8],
+    }
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn install_primitives(
     ctx: &Ctx<'_>,
@@ -2933,32 +2977,18 @@ fn install_primitives(
         );
 
         // Decompress `data` using the named format.
-        // `format`: "deflate-raw", "deflate", "gzip". Returns empty Vec on error.
+        // `format`: "deflate-raw", "deflate", "gzip".
+        // Returns a status-prefixed byte array so the JS `DecompressionStream` shim
+        // can distinguish a decode error from a valid empty result (a well-formed
+        // stream may legitimately decompress to zero bytes). Layout: `out[0] == 1`
+        // → success and `out[1..]` are the decompressed bytes; `out[0] == 0` → the
+        // input was corrupt/truncated or the format unknown, and the shim errors the
+        // stream (https://compression.spec.whatwg.org/, a decode error errors the
+        // readable side).
         reg!(
             "_lumen_decompress_bytes",
             |data: Vec<u8>, format: String| -> Vec<u8> {
-                use std::io::Read as _;
-                match format.as_str() {
-                    "deflate-raw" => {
-                        let mut dec = flate2::read::DeflateDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    "deflate" => {
-                        let mut dec = flate2::read::ZlibDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    "gzip" => {
-                        let mut dec = flate2::read::GzDecoder::new(data.as_slice());
-                        let mut out = Vec::new();
-                        dec.read_to_end(&mut out).ok();
-                        out
-                    }
-                    _ => Vec::new(),
-                }
+                _decompress_status_prefixed(&data, &format)
             }
         );
     }
@@ -7677,8 +7707,19 @@ function DecompressionStream(format) {
     TransformStream.call(this, {
         transform: function(chunk, _c) { buf.push(_csToU8(chunk)); },
         flush: function(c) {
-            var result = _lumen_decompress_bytes(Array.from(_csConcat(buf)), fmt);
-            if (result && result.length > 0) c.enqueue(new Uint8Array(result));
+            // Native returns a status-prefixed byte array: [1, ...data] on success
+            // (data may be empty for a valid stream that decompresses to nothing),
+            // [0] on a corrupt/truncated input. Per
+            // https://compression.spec.whatwg.org/ a decode error must error the
+            // readable side, so it is distinguished from a valid empty result
+            // instead of silently terminating the stream.
+            var raw = _lumen_decompress_bytes(Array.from(_csConcat(buf)), fmt);
+            var u = (raw instanceof Uint8Array) ? raw : new Uint8Array(raw);
+            if (u.length < 1 || u[0] !== 1) {
+                c.error(new TypeError('DecompressionStream: corrupt or truncated ' + fmt + ' input'));
+                return;
+            }
+            if (u.length > 1) c.enqueue(u.slice(1));
             c.terminate();
         }
     });
@@ -24898,6 +24939,59 @@ mod tests {
                  _lumen_drain_microtasks(); \
                  result instanceof Uint8Array && result.length === 5 && \
                  result[0] === 1 && result[4] === 5",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn decompression_stream_corrupt_input_errors_stream() {
+        let rt = runtime_with_dom(make_doc());
+        // Feeding non-gzip bytes to a gzip DecompressionStream must error the
+        // readable side (https://compression.spec.whatwg.org/), so reader.read()
+        // rejects rather than resolving with an empty/undefined chunk.
+        let r = rt
+            .eval(
+                "var ds = new DecompressionStream('gzip'); \
+                 var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
+                 dw.write(new Uint8Array([1,2,3,4,5,6,7,8])); dw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var errored = false, resolved = false; \
+                 dr.read().then(function() { resolved = true; }, function() { errored = true; }); \
+                 _lumen_drain_microtasks(); \
+                 errored && !resolved",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn decompression_stream_multi_chunk_matches_single_chunk() {
+        let rt = runtime_with_dom(make_doc());
+        // Splitting the compressed body across several writes must decode to the
+        // same bytes as feeding it in one chunk (buffer-then-flush model).
+        let r = rt
+            .eval(
+                "var input = new Uint8Array([9,8,7,6,5,4,3,2,1,0]); \
+                 var cs = new CompressionStream('deflate'); \
+                 var cw = cs.writable.getWriter(); var cr = cs.readable.getReader(); \
+                 cw.write(input); cw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var compressed = null; \
+                 cr.read().then(function(r) { compressed = r.value; }); \
+                 _lumen_drain_microtasks(); \
+                 var ds = new DecompressionStream('deflate'); \
+                 var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
+                 var mid = compressed.length >> 1; \
+                 dw.write(compressed.slice(0, mid)); \
+                 dw.write(compressed.slice(mid)); \
+                 dw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var result = null; \
+                 dr.read().then(function(r) { result = r.value; }); \
+                 _lumen_drain_microtasks(); \
+                 result instanceof Uint8Array && result.length === 10 && \
+                 result[0] === 9 && result[9] === 0",
             )
             .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
