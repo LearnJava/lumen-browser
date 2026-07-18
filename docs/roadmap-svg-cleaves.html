@@ -55,7 +55,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-17",
+ "generated": "2026-07-18",
  "counts": {
   "open": 40,
   "fixed": 239,
@@ -219,6 +219,12 @@
      "title": "CSS writing-mode: вертикальный текст (полный layout)",
      "status": "done",
      "note": "ЗАВЕРШЕНО 2026-07-16 (P1, срезы 1-5): layout (axis-swap + вертикальный inline-поток) был готов; paint — CPU-рендерер (срез 1) и wgpu-рендерер (срез 2, live default, ADR-017) поворачивают глифы, mixed-режим различает CJK-upright/латиница-повёрнута per-glyph (срез 3); BUG-264 layout-реордер закрыт (срез 4); graphic-тест 145-writing-mode.html (срез 5) вскрыл и закрыл BUG-289 (vertical InlineRun текст никогда не рисовался на реальном DOM — emit_inline_run игнорировал writing_mode); остаток — font-parity + upright per-glyph advance, KNOWN_DEBTOR BUG-290. femtovg (fallback-бэкенд) по-прежнему игнорирует text_orientation — вне скоупа. Бриф docs/tasks/ph3-writing-mode-vertical.md"
+    },
+    {
+     "id": "P3-compressionstream",
+     "title": "Compression Streams (deflate-raw/deflate/gzip)",
+     "status": "done",
+     "note": "DONE 2026-07-18 (P1, p1-compression-streams): CompressionStream/DecompressionStream реально жмут/разжимают все три формата спеки — deflate-raw/deflate/gzip (через flate2, buffer-then-flush поверх TransformStream); битый/усечённый вход в DecompressionStream переводит readable-сторону в errored (реджект reader.read()) вместо тихого пустого чанка — статус-префикс в общем нативе `_decompress_status_prefixed` отличает ошибку от валидного пустого результата. brotli в спеку Compression Streams НЕ входит (только deflate-raw/deflate/gzip) — не реализуется."
     },
     {
      "id": "P3-selectmenu",
@@ -758,6 +764,20 @@
          "status": "done",
          "size": "S",
          "note": "Влит в main (branch p1-v8-s12b-13-document-pip, 9fb02a37): rquickjs-путь Document Picture-in-Picture API удалён, 7 тестов (жили в dom.rs::mod tests) портированы в document_pip.rs на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-14",
+         "title": "S12b-14: HTMLElement.inert API",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-14-inert): rquickjs-путь `HTMLElement.inert` (HTML LS §6.7) удалён, INERT_SHIM гейтнут за v8-backend, 8 own-file тестов портированы на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-15",
+         "title": "S12b-15: download bindings",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-15-download): rquickjs-путь `_lumen_network_download`/`_lumen_download` (программный download-триггер) удалён, 6 own-file тестов портированы на V8JsRuntime"
         }
        ]
       }
@@ -1073,12 +1093,6 @@
      "title": "Pointer Events L3 (coalesced / predicted events)",
      "status": "done",
      "note": "реализовано (2026-07-17): shell копит CursorMoved-сэмплы между кадрами, флашит через _lumen_dispatch_pointer_move_coalesced — реальный getCoalescedEvents() (главное событие последним) + линейная экстраполяция getPredictedEvents(); docs/tasks/ph3-pointer-events-l3.md"
-    },
-    {
-     "id": "P3-compressionstream",
-     "title": "Compression Streams (gzip/deflate/brotli)",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): классы CompressionStream/DecompressionStream есть, но throw для всех форматов; дошить — реальный gzip/deflate/brotli (переиспользовать декодеры lumen-network flate/brotli)"
     },
     {
      "id": "P3-cookiestore",
@@ -3291,7 +3305,7 @@
   "BUG-272": {
    "status": "open",
    "title": "lenta.ru держала 1371 МБ WS при одной картинке. **Корень:** каждый Push{ClipRoundedRect,ClipPath,Opacity,Filter,Mask,Backdrop,BlendMode} создавал offscreen-текс…",
-   "component": "paint (femtovg, offscreen-слои)",
+   "component": "paint (femtovg, offscreen-слои) + font (bytes_store)",
    "date": null,
    "debtor": false
   },
@@ -3840,7 +3854,7 @@
   "paint (femtovg, blend/filter-композитинг)": [
    "BUG-273"
   ],
-  "paint (femtovg, offscreen-слои)": [
+  "paint (femtovg, offscreen-слои) + font (bytes_store)": [
    "BUG-272"
   ],
   "paint (font-metrics)": [
