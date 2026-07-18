@@ -545,6 +545,21 @@ pub struct FemtovgBackend {
     /// Device-pixel size `bbox_layer_pool` images were created for; see
     /// `backdrop_bbox_pool_size`.
     bbox_layer_pool_size: (usize, usize),
+    /// BUG-272 срез 14: pool of reusable CPU-upload images for bbox-sized
+    /// results whose group varies per element — `composite_filter_layer`'s
+    /// colour-matrix-only re-upload (PushFilter with no blur in the chain)
+    /// and `composite_blend_layer`'s blend-result re-upload, both only when
+    /// their source layer was itself bbox-sized via `acquire_bbox_layer`.
+    /// Kept separate from `cpu_upload_pool` (still used by these same two
+    /// paths on their full-framebuffer fallback) for the same size-thrash
+    /// reason `backdrop_bbox_pool` is separate from it — see that field's
+    /// doc. Shared by two consumer types under one pool, same precedent as
+    /// `bbox_layer_pool` (one category of varying-size images, several
+    /// Push openers).
+    bbox_cpu_upload_pool: Vec<femtovg::ImageId>,
+    /// Device-pixel size `bbox_cpu_upload_pool` images were created for; see
+    /// `cpu_upload_pool_size`.
+    bbox_cpu_upload_pool_size: (usize, usize),
     /// Offscreen opacity group layer stack (BUG-133). Each entry holds an
     /// offscreen ImageId that subtree draws render into; PopOpacity composites
     /// it once with the group alpha (CSS Color L3 §3.2: opacity is atomic —
@@ -648,6 +663,15 @@ struct FilterLayerEntry {
     filters: Vec<lumen_layout::FilterFn>,
     /// Render target active before PushFilter — restored on PopFilter.
     prev_render_target: femtovg::RenderTarget,
+    /// BUG-272 срез 14: device-pixel `(x0, y0, w, h)` when `image_id` was
+    /// acquired bbox-sized via [`FemtovgBackend::acquire_bbox_layer`] instead
+    /// of full-framebuffer via [`FemtovgBackend::acquire_layer`] — same
+    /// convention as [`OpacityLayerEntry::bbox`]. Always `None` when the
+    /// filter chain contains a blur: `filter_image`'s Gaussian blur samples
+    /// texels beyond the element's own border box, which a tight bbox
+    /// texture has no data for (BUG-145) — Push keeps blur chains
+    /// full-framebuffer unconditionally.
+    bbox: Option<(f32, f32, usize, usize)>,
 }
 
 // ─── Offscreen layer support (BUG-133 opacity, BUG-146 filter) ───────────────
@@ -1017,8 +1041,9 @@ struct BlendLayerEntry {
     mode: BlendMode,
     /// Offscreen image capturing the source layer (draws between Push and Pop).
     src_image_id: femtovg::ImageId,
-    /// Snapshot of the previous render target taken at PushBlendMode time.
-    /// Premultiplied RGBA u8, dimensions `backdrop_w × backdrop_h`.
+    /// Snapshot of the previous render target taken at PushBlendMode time,
+    /// cropped to `bbox` when set (BUG-272 срез 14) or the full framebuffer
+    /// otherwise. Premultiplied RGBA u8, dimensions `backdrop_w × backdrop_h`.
     backdrop_rgba: Vec<u8>,
     /// Width of the backdrop snapshot in pixels.
     backdrop_w: usize,
@@ -1026,6 +1051,13 @@ struct BlendLayerEntry {
     backdrop_h: usize,
     /// Render target active before PushBlendMode — restored on PopBlendMode.
     prev_render_target: femtovg::RenderTarget,
+    /// BUG-272 срез 14: device-pixel `(x0, y0, w, h)` when `src_image_id` was
+    /// acquired bbox-sized via [`FemtovgBackend::acquire_bbox_layer`] instead
+    /// of full-framebuffer via [`FemtovgBackend::acquire_layer`] — same
+    /// convention as [`OpacityLayerEntry::bbox`]. Mix-blend is pure per-pixel
+    /// work (no neighbour sampling), so unlike `PushFilter` this applies
+    /// whenever `bounds` maps to an on-target bbox — no blur-style exception.
+    bbox: Option<(f32, f32, usize, usize)>,
 }
 
 // ─── Backdrop filter layer support (PA-4) ────────────────────────────────────
@@ -1578,6 +1610,8 @@ impl FemtovgBackend {
             backdrop_bbox_pool_size: (0, 0),
             bbox_layer_pool: Vec::new(),
             bbox_layer_pool_size: (0, 0),
+            bbox_cpu_upload_pool: Vec::new(),
+            bbox_cpu_upload_pool_size: (0, 0),
             backdrop_filter_layer_stack: Vec::new(),
             clip_stack: Vec::new(),
             active_rt_image: None,
@@ -1842,6 +1876,59 @@ impl FemtovgBackend {
             self.bbox_layer_pool.push(id);
         } else {
             self.filter_layer_pending_delete.push(id);
+        }
+    }
+
+    /// BUG-272 срез 14: same contract as [`Self::acquire_cpu_upload_image`],
+    /// backed by `bbox_cpu_upload_pool` — see its field doc for why it's kept
+    /// separate.
+    fn acquire_bbox_cpu_upload_image(&mut self, w: usize, h: usize) -> Option<femtovg::ImageId> {
+        if self.bbox_cpu_upload_pool_size != (w, h) {
+            self.blend_layer_pending_delete.append(&mut self.bbox_cpu_upload_pool);
+            self.bbox_cpu_upload_pool_size = (w, h);
+        }
+        self.bbox_cpu_upload_pool.pop()
+    }
+
+    /// Returns an image acquired via [`Self::acquire_bbox_cpu_upload_image`]
+    /// to the pool for reuse; see [`Self::release_cpu_upload_image`].
+    fn release_bbox_cpu_upload_image(&mut self, id: femtovg::ImageId, w: usize, h: usize) {
+        /// Same cap as the other CPU-upload pools.
+        const MAX_POOLED_BBOX_CPU_UPLOADS: usize = 4;
+        if self.bbox_cpu_upload_pool_size == (w, h)
+            && self.bbox_cpu_upload_pool.len() < MAX_POOLED_BBOX_CPU_UPLOADS
+        {
+            self.bbox_cpu_upload_pool.push(id);
+        } else {
+            self.blend_layer_pending_delete.push(id);
+        }
+    }
+
+    /// Uploads `img_src` into `pooled` (a slot from one of the CPU-upload
+    /// pools) via `update_image`, or creates a fresh image if `pooled` is
+    /// `None` or the refresh fails. Shared by the colour-matrix filter and
+    /// blend-result re-upload steps (BUG-272 срез 4, extended to the bbox
+    /// pools in срез 14) — both re-upload a CPU-processed RGBA8 buffer once
+    /// per Pop and want the same reuse-or-fall-back-to-fresh-upload logic.
+    fn upload_to_pool(
+        &mut self,
+        pooled: Option<femtovg::ImageId>,
+        img_src: imgref::ImgRef<'_, rgb::RGBA8>,
+    ) -> Option<femtovg::ImageId> {
+        match pooled {
+            Some(id) => match self.canvas.update_image(id, img_src, 0, 0) {
+                Ok(()) => Some(id),
+                Err(_) => {
+                    self.blend_layer_pending_delete.push(id);
+                    self.canvas
+                        .create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED)
+                        .ok()
+                }
+            },
+            None => self
+                .canvas
+                .create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED)
+                .ok(),
         }
     }
 
@@ -2546,7 +2633,17 @@ impl FemtovgBackend {
     /// Реализует PA-2: GPU Gaussian blur через `filter_image` + CPU colour-matrix
     /// через flush → screenshot → pixel process → re-upload.
     fn composite_filter_layer(&mut self, entry: FilterLayerEntry) {
-        let FilterLayerEntry { image_id: src_id, filters, prev_render_target } = entry;
+        let FilterLayerEntry { image_id: src_id, filters, prev_render_target, bbox } = entry;
+
+        // BUG-272 срез 14: undo the Push-time bbox save()+translate()+scissor(),
+        // if any — mirrors composite_opacity_layer's own restore(). Safe to do
+        // up-front: canvas save/restore state is independent of which GL
+        // render target is bound, and `bbox` is only ever `Some` when Push
+        // determined the chain has no blur (see PushFilter), so Step 1 below
+        // never runs for a bbox-sized layer.
+        if bbox.is_some() {
+            self.canvas.restore();
+        }
 
         let has_blur = filters.iter().any(|f| matches!(f, lumen_layout::FilterFn::Blur(s) if *s > 0.0));
         let has_color_matrix = filters.iter().any(|f| {
@@ -2629,25 +2726,21 @@ impl FemtovgBackend {
                     .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
                     .collect();
                 let img_src = imgref::ImgRef::new(&pixels, iw, ih);
-                let dst = match self.acquire_cpu_upload_image(iw, ih) {
-                    Some(id) => match self.canvas.update_image(id, img_src, 0, 0) {
-                        Ok(()) => Some(id),
-                        Err(_) => {
-                            self.blend_layer_pending_delete.push(id);
-                            self.canvas
-                                .create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED)
-                                .ok()
-                        }
-                    },
-                    None => self
-                        .canvas
-                        .create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED)
-                        .ok(),
+                // BUG-272 срез 14: a bbox-sized Push layer re-uploads into
+                // `bbox_cpu_upload_pool` instead of the full-framebuffer
+                // `cpu_upload_pool` — see that field's doc for why.
+                let acquired = match bbox {
+                    Some(_) => self.acquire_bbox_cpu_upload_image(iw, ih),
+                    None => self.acquire_cpu_upload_image(iw, ih),
                 };
+                let dst = self.upload_to_pool(acquired, img_src);
                 if let Some(dst) = dst {
                     // BUG-272: recycle the pooled source; the re-uploaded image
-                    // belongs to `cpu_upload_pool`, not `layer_pool`.
-                    self.release_layer(current_id);
+                    // belongs to a CPU-upload pool, not a layer pool.
+                    match bbox {
+                        Some((_, _, w, h)) => self.release_bbox_layer(current_id, w, h),
+                        None => self.release_layer(current_id),
+                    }
                     current_id = dst;
                     current_pooled = false;
                     current_cpu_upload_dims = Some((iw, ih));
@@ -2659,25 +2752,47 @@ impl FemtovgBackend {
         self.switch_render_target(prev_render_target);
 
         // ── Step 4: Composite filtered image onto the (now-current) target ───
+        // BUG-272 срез 14: `bbox` covers both the common case (colour-matrix
+        // ran, `current_id` is a bbox-sized cpu-upload image) and the
+        // degenerate `blur(0px)`-only chain (colour-matrix never ran,
+        // `current_id` is still the bbox-sized Push layer, still FLIP_Y'd —
+        // same direct-GPU-composite situation `composite_opacity_layer`'s
+        // bbox path handles).
         self.canvas.save();
         self.canvas.reset_transform();
-        let css_w = (self.width as f64 / self.scale) as f32;
-        let css_h = (self.height as f64 / self.scale) as f32;
-        let paint = femtovg::Paint::image(current_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
-        let mut path = femtovg::Path::new();
-        path.rect(0.0, 0.0, css_w, css_h);
-        self.canvas.fill_path(&path, &paint);
+        match bbox {
+            Some((x0, y0, w, h)) => {
+                let x = x0 / self.scale as f32;
+                let y = y0 / self.scale as f32;
+                let cw = w as f32 / self.scale as f32;
+                let ch = h as f32 / self.scale as f32;
+                let paint = femtovg::Paint::image(current_id, x, y, cw, ch, 0.0, 1.0);
+                let mut path = femtovg::Path::new();
+                path.rect(x, y, cw, ch);
+                self.canvas.fill_path(&path, &paint);
+            }
+            None => {
+                let css_w = (self.width as f64 / self.scale) as f32;
+                let css_h = (self.height as f64 / self.scale) as f32;
+                let paint = femtovg::Paint::image(current_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+                let mut path = femtovg::Path::new();
+                path.rect(0.0, 0.0, css_w, css_h);
+                self.canvas.fill_path(&path, &paint);
+            }
+        }
         self.canvas.restore();
 
-        // BUG-272: `layer_pool` images are recycled via `release_layer`; a
-        // colour-matrix re-upload (срез 4) goes back to `cpu_upload_pool`;
-        // anything else waits on the after-flush delete queue.
-        if current_pooled {
-            self.release_layer(current_id);
-        } else if let Some((w, h)) = current_cpu_upload_dims {
-            self.release_cpu_upload_image(current_id, w, h);
-        } else {
-            self.filter_layer_pending_delete.push(current_id);
+        // BUG-272: layer-pool images (full-frame or bbox) are recycled via
+        // `release_layer`/`release_bbox_layer`; a colour-matrix re-upload
+        // (срез 4, bbox variant срез 14) goes back to the matching
+        // cpu-upload pool; anything else waits on the after-flush delete
+        // queue.
+        match (current_pooled, bbox, current_cpu_upload_dims) {
+            (true, Some((_, _, w, h)), _) => self.release_bbox_layer(current_id, w, h),
+            (true, None, _) => self.release_layer(current_id),
+            (false, Some(_), Some((w, h))) => self.release_bbox_cpu_upload_image(current_id, w, h),
+            (false, None, Some((w, h))) => self.release_cpu_upload_image(current_id, w, h),
+            _ => self.filter_layer_pending_delete.push(current_id),
         }
     }
 
@@ -3083,13 +3198,23 @@ impl FemtovgBackend {
     /// 5. Upload result image and draw with `CompositeOperation::Source` to
     ///    replace the backdrop area with the blended result.
     fn composite_blend_layer(&mut self, entry: BlendLayerEntry) {
-        let BlendLayerEntry { mode, src_image_id, backdrop_rgba, backdrop_w, backdrop_h, prev_render_target } = entry;
+        let BlendLayerEntry { mode, src_image_id, backdrop_rgba, backdrop_w, backdrop_h, prev_render_target, bbox } = entry;
+
+        // BUG-272 срез 14: undo the Push-time bbox save()+translate()+scissor(),
+        // if any — mirrors composite_opacity_layer's own restore() (canvas
+        // save/restore state is independent of which GL render target is
+        // bound, so doing this before the flush/screenshot below is safe).
+        if bbox.is_some() {
+            self.canvas.restore();
+        }
 
         // Step 1: flush pending commands so src_image_id is fully rendered.
         self.canvas.flush();
 
-        // Step 2: screenshot the source offscreen image.
-        // We're currently rendering into src_image_id, so screenshot reads from it.
+        // Step 2: screenshot the source offscreen image. Reads whatever RT is
+        // currently bound (src_image_id) at its own texture size — bbox-sized
+        // when `bbox` is set (matches `backdrop_rgba`'s already-cropped size),
+        // full-framebuffer otherwise (BUG-272 срез 14).
         let src_rgba = self.canvas.screenshot()
             .map(|img| img.buf().iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect::<Vec<u8>>())
             .unwrap_or_default();
@@ -3135,38 +3260,59 @@ impl FemtovgBackend {
                 .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
                 .collect();
             let img_ref = imgref::ImgRef::new(&pixels, backdrop_w, backdrop_h);
-            // BUG-272 (item 5): reuse a pooled image via `update_image` instead
-            // of `create_image`-ing a fresh GPU upload on every Pop (see
-            // `cpu_upload_pool`). Fall back to a fresh upload if the pooled
-            // slot fails to update (e.g. driver-level image loss).
-            let result_id = match self.acquire_cpu_upload_image(backdrop_w, backdrop_h) {
-                Some(id) => match self.canvas.update_image(id, img_ref, 0, 0) {
-                    Ok(()) => Some(id),
-                    Err(_) => {
-                        self.blend_layer_pending_delete.push(id);
-                        self.canvas.create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED).ok()
-                    }
-                },
-                None => self.canvas.create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED).ok(),
+            // BUG-272 (item 5, bbox variant срез 14): reuse a pooled image via
+            // `update_image` instead of `create_image`-ing a fresh GPU upload
+            // on every Pop — `bbox_cpu_upload_pool` when the source layer was
+            // bbox-sized, `cpu_upload_pool` otherwise (see their field docs).
+            // Fall back to a fresh upload if the pooled slot fails to update
+            // (e.g. driver-level image loss).
+            let acquired = match bbox {
+                Some(_) => self.acquire_bbox_cpu_upload_image(backdrop_w, backdrop_h),
+                None => self.acquire_cpu_upload_image(backdrop_w, backdrop_h),
             };
+            let result_id = self.upload_to_pool(acquired, img_ref);
             if let Some(result_id) = result_id {
                 self.canvas.save();
                 self.canvas.reset_transform();
-                // Source operation: replace dest pixels with the blended result image.
+                // Source operation: replace dest pixels with the blended
+                // result image. GL only blends pixels the drawn primitive
+                // rasterizes, so restricting that primitive to `bbox` (BUG-272
+                // срез 14) leaves everything outside it untouched — the same
+                // reasoning `composite_clip_layer`'s bbox path relies on.
                 self.canvas.global_composite_operation(femtovg::CompositeOperation::Copy);
-                let css_w = (self.width as f64 / self.scale) as f32;
-                let css_h = (self.height as f64 / self.scale) as f32;
-                let paint = femtovg::Paint::image(result_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
-                let mut path = femtovg::Path::new();
-                path.rect(0.0, 0.0, css_w, css_h);
-                self.canvas.fill_path(&path, &paint);
+                match bbox {
+                    Some((x0, y0, w, h)) => {
+                        let x = x0 / self.scale as f32;
+                        let y = y0 / self.scale as f32;
+                        let cw = w as f32 / self.scale as f32;
+                        let ch = h as f32 / self.scale as f32;
+                        let paint = femtovg::Paint::image(result_id, x, y, cw, ch, 0.0, 1.0);
+                        let mut path = femtovg::Path::new();
+                        path.rect(x, y, cw, ch);
+                        self.canvas.fill_path(&path, &paint);
+                    }
+                    None => {
+                        let css_w = (self.width as f64 / self.scale) as f32;
+                        let css_h = (self.height as f64 / self.scale) as f32;
+                        let paint = femtovg::Paint::image(result_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+                        let mut path = femtovg::Path::new();
+                        path.rect(0.0, 0.0, css_w, css_h);
+                        self.canvas.fill_path(&path, &paint);
+                    }
+                }
                 self.canvas.restore();
-                self.release_cpu_upload_image(result_id, backdrop_w, backdrop_h);
+                match bbox {
+                    Some(_) => self.release_bbox_cpu_upload_image(result_id, backdrop_w, backdrop_h),
+                    None => self.release_cpu_upload_image(result_id, backdrop_w, backdrop_h),
+                }
             }
         }
-        // BUG-272: src_image_id came from acquire_layer() — recycle it
-        // instead of queuing a delete.
-        self.release_layer(src_image_id);
+        // BUG-272: src_image_id came from acquire_bbox_layer (bbox) or
+        // acquire_layer (full-frame) — recycle to the matching pool.
+        match bbox {
+            Some((_, _, w, h)) => self.release_bbox_layer(src_image_id, w, h),
+            None => self.release_layer(src_image_id),
+        }
     }
 
     /// Applies `filters` to a snapshot of the current render target, cropped to
@@ -4450,7 +4596,7 @@ impl FemtovgBackend {
             // ── Blend mode (PA-3) ─────────────────────────────────────────────
             // Normal → fast path (SourceOver). PlusLighter → fast path (Lighter).
             // All other CSS blend modes → offscreen CPU compositing via mix_blend_rgba.
-            DisplayCommand::PushBlendMode { mode, .. } => {
+            DisplayCommand::PushBlendMode { mode, bounds } => {
                 if *mode == BlendMode::Normal {
                     self.canvas.save();
                     self.layer_stack_depth += 1;
@@ -4464,29 +4610,49 @@ impl FemtovgBackend {
                     // Flush pending commands so backdrop is fully drawn in prev_rt.
                     self.canvas.flush();
                     // Screenshot the current RT to get the backdrop pixels.
-                    let (backdrop_rgba, backdrop_w, backdrop_h) =
-                        if let Ok(img) = self.canvas.screenshot() {
-                            let w = img.width();
-                            let h = img.height();
-                            let rgba = img.buf().iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
-                            (rgba, w, h)
-                        } else {
-                            (vec![], 0, 0)
-                        };
-                    // BUG-272: acquire from the shared layer pool instead of a
-                    // fresh create_image_empty — this src image is only ever
-                    // used as a render target and later read back via
-                    // screenshot() (never GPU-sampled with Paint::image), so
-                    // the pool's FLIP_Y sampler flag is a no-op here, same as
-                    // the acquire_layer() blur destinations in
-                    // composite_filter_layer.
-                    match self.acquire_layer() {
-                        Some(src_id) => {
+                    let (full_rgba, full_w, full_h) = if let Ok(img) = self.canvas.screenshot() {
+                        let w = img.width();
+                        let h = img.height();
+                        let rgba = img.buf().iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
+                        (rgba, w, h)
+                    } else {
+                        (vec![], 0, 0)
+                    };
+                    // BUG-272 срез 14: mix-blend is pure per-pixel work (no
+                    // neighbour sampling) — bbox-size the source layer and
+                    // its backdrop snapshot like PushMask/PushClip*, instead
+                    // of the full framebuffer. `acquire_bbox_layer`, like
+                    // `acquire_layer` below, is a render-target FBO — the src
+                    // image is only ever used as a render target and read
+                    // back via screenshot() (never GPU-sampled with
+                    // `Paint::image`), so the pool's FLIP_Y sampler flag is a
+                    // no-op here, same as the `acquire_layer()` blur
+                    // destinations in `composite_filter_layer`.
+                    let acquired = self
+                        .screen_bbox_device_px(*bounds)
+                        .and_then(|(x0, y0, w, h)| {
+                            self.acquire_bbox_layer(w, h).map(|id| (id, Some((x0, y0, w, h))))
+                        })
+                        .or_else(|| self.acquire_layer().map(|id| (id, None)));
+                    match acquired {
+                        Some((src_id, bbox)) => {
                             self.switch_render_target(femtovg::RenderTarget::Image(src_id));
-                            self.canvas.clear_rect(
-                                0, 0, self.width, self.height,
-                                femtovg::Color::rgba(0, 0, 0, 0),
-                            );
+                            let (backdrop_rgba, backdrop_w, backdrop_h) = match bbox {
+                                Some((x0, y0, w, h)) => crop_region_rgba(
+                                    &full_rgba, full_w, full_h,
+                                    (x0 as usize, y0 as usize, x0 as usize + w, y0 as usize + h),
+                                ),
+                                None => (full_rgba, full_w, full_h),
+                            };
+                            let (cw, ch) = bbox
+                                .map(|(_, _, w, h)| (w as u32, h as u32))
+                                .unwrap_or((self.width, self.height));
+                            self.canvas.clear_rect(0, 0, cw, ch, femtovg::Color::rgba(0, 0, 0, 0));
+                            if let Some((x0, y0, _, _)) = bbox {
+                                self.canvas.save();
+                                self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                                self.canvas.scissor(bounds.x, bounds.y, bounds.width, bounds.height);
+                            }
                             self.blend_layer_stack.push(BlendLayerEntry {
                                 mode: *mode,
                                 src_image_id: src_id,
@@ -4494,6 +4660,7 @@ impl FemtovgBackend {
                                 backdrop_w,
                                 backdrop_h,
                                 prev_render_target: prev_rt,
+                                bbox,
                             });
                         }
                         None => {
@@ -4537,7 +4704,7 @@ impl FemtovgBackend {
             // PA-2: реальный Gaussian blur (GPU via filter_image) и colour-matrix
             // (CPU via flush+screenshot) через offscreen-слой.
             // Только Opacity — легкий путь через set_global_alpha без offscreen.
-            DisplayCommand::PushFilter { filters, bounds: _ } => {
+            DisplayCommand::PushFilter { filters, bounds } => {
                 let needs_offscreen = filters
                     .iter()
                     .any(|f| !matches!(f, lumen_layout::FilterFn::Opacity(_)));
@@ -4548,33 +4715,57 @@ impl FemtovgBackend {
                     // correctly handle nesting with blend layers (PA-3).
                     let prev_rt = self.current_rt();
 
-                    // BUG-145: the layer must stay full-RT-sized. `bounds` is the
-                    // element's untransformed border box, but content is drawn into
-                    // the layer in page coordinates (no translation to layer-local
-                    // space), transformed content extends beyond the border box, and
-                    // blur needs ~3σ of padding around it; `composite_filter_layer`
-                    // also composites the layer as a full-viewport quad. A
-                    // bounds-sized layer (BUG-076 attempt) captured the page's
-                    // top-left corner and stretched it across the viewport
-                    // (TEST-30 30.68%, TEST-103 49.59%).
-                    // BUG-146: FLIP_Y so the rare direct GPU composite of this
-                    // layer (no blur, no colour-matrix — e.g. `blur(0px)`, or
-                    // blur-destination allocation failure) samples it upright.
+                    // BUG-145 / BUG-272 срез 14: a chain containing a blur
+                    // must stay full-RT-sized. `filter_image`'s Gaussian
+                    // blur samples texels beyond the element's own border
+                    // box, and `bounds` carries no padding for that (see
+                    // `group_bounds`'s doc) — a tight bbox texture has no
+                    // data for those samples. A bounds-sized layer for a
+                    // blur chain (BUG-076 attempt, pre-срез-11 translate
+                    // fix) captured the page's top-left corner and
+                    // stretched it across the viewport (TEST-30 30.68%,
+                    // TEST-103 49.59%). A colour-matrix-only chain (no
+                    // blur) is pure per-pixel work — same as
+                    // PushBlendMode/PushMask — so its visible layer can be
+                    // bbox-sized like срезы 11-13.
+                    // BUG-146: FLIP_Y so the rare direct GPU composite of
+                    // this layer (no colour-matrix — e.g. `blur(0px)`, or a
+                    // bbox/layer allocation failure) samples it upright.
                     // The blur pass ignores the flag; the colour-matrix
                     // screenshot round-trip flips rows regardless of it.
-                    match self.acquire_layer() {
-                        Some(img_id) => {
+                    let has_blur = filters
+                        .iter()
+                        .any(|f| matches!(f, lumen_layout::FilterFn::Blur(s) if *s > 0.0));
+                    let acquired = if has_blur {
+                        None
+                    } else {
+                        bounds.and_then(|b| self.screen_bbox_device_px(b))
+                    }
+                    .and_then(|(x0, y0, w, h)| {
+                        self.acquire_bbox_layer(w, h).map(|id| (id, Some((x0, y0, w, h))))
+                    })
+                    .or_else(|| self.acquire_layer().map(|id| (id, None)));
+
+                    match acquired {
+                        Some((img_id, bbox)) => {
                             // Redirect draws into the offscreen image.
                             self.switch_render_target(femtovg::RenderTarget::Image(img_id));
                             // Clear to transparent so content composites correctly.
-                            self.canvas.clear_rect(
-                                0, 0, self.width, self.height,
-                                femtovg::Color::rgba(0, 0, 0, 0),
-                            );
+                            let (cw, ch) = bbox
+                                .map(|(_, _, w, h)| (w as u32, h as u32))
+                                .unwrap_or((self.width, self.height));
+                            self.canvas.clear_rect(0, 0, cw, ch, femtovg::Color::rgba(0, 0, 0, 0));
+                            if let Some((x0, y0, _, _)) = bbox {
+                                self.canvas.save();
+                                self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                                let b = bounds.expect("screen_bbox_device_px came from Some(bounds)");
+                                self.canvas.scissor(b.x, b.y, b.width, b.height);
+                            }
                             self.filter_layer_stack.push(FilterLayerEntry {
                                 image_id: img_id,
                                 filters: filters.clone(),
                                 prev_render_target: prev_rt,
+                                bbox,
                             });
                             self.layer_stack_depth += 1;
                         }
@@ -4827,7 +5018,7 @@ impl RenderBackend for FemtovgBackend {
     fn debug_mem_report(&self) -> String {
         let raw_bytes: usize = self.raw_images.values().map(|i| i.data.len()).sum();
         format!(
-            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}, cpu_upload_pool={}, backdrop_bbox_pool={}, bbox_layer_pool={}",
+            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}, cpu_upload_pool={}, backdrop_bbox_pool={}, bbox_layer_pool={}, bbox_cpu_upload_pool={}",
             self.raw_images.len(),
             raw_bytes as f64 / 1e6,
             self.images.len(),
@@ -4835,7 +5026,8 @@ impl RenderBackend for FemtovgBackend {
             self.content_band_pool.len(),
             self.cpu_upload_pool.len(),
             self.backdrop_bbox_pool.len(),
-            self.bbox_layer_pool.len()
+            self.bbox_layer_pool.len(),
+            self.bbox_cpu_upload_pool.len()
         )
     }
 
