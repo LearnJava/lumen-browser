@@ -3216,6 +3216,18 @@ fn remove_attribute(doc: &mut Document, id: NodeId, name: &str) {
 pub(crate) const WEB_API_SHIM: &str = "
 function _lumen_u2n(v) { return v !== undefined ? v : null; }
 
+// DOM LS §4.5/§4.9: getElementsByClassName(names) matches elements carrying
+// EVERY whitespace-separated class token. Build a compound CSS class selector
+// ('.a.b') and reuse the native query the CSS engine already runs — same
+// static-array simplification `getElementsByTagName` makes (BUG-302). Returns
+// null for an empty token list so callers can short-circuit to an empty array
+// (a '' selector would otherwise throw in the query engine).
+function _lumen_class_selector(names) {
+    var parts = String(names).split(/\\s+/).filter(function (s) { return s.length > 0; });
+    if (parts.length === 0) return null;
+    return parts.map(function (c) { return '.' + c; }).join('');
+}
+
 // ── Event / CustomEvent constructors ─────────────────────────────────────────
 
 function Event(type, init) {
@@ -5143,6 +5155,13 @@ function _lumen_build_element(nid) {
         querySelectorAll: function(sel) {
             return _lumen_query_selector_all_scoped(nid, String(sel)).map(_lumen_make_element);
         },
+        // DOM LS §4.9: getElementsByClassName(names), scoped to this element's
+        // descendants (BUG-302). Static array, not a live HTMLCollection.
+        getElementsByClassName: function(names) {
+            var sel = _lumen_class_selector(names);
+            if (sel === null) return [];
+            return _lumen_query_selector_all_scoped(nid, sel).map(_lumen_make_element);
+        },
         matches: function(sel) {
             return _lumen_node_matches_selector(nid, String(sel));
         },
@@ -6103,6 +6122,13 @@ var document = {
     // it unconditionally) while implementing P2-wpt S4.
     getElementsByTagName: function(tag) {
         return _lumen_query_selector_all(String(tag)).map(_lumen_make_element);
+    },
+    // DOM LS §4.5: getElementsByClassName(names) — document-global variant.
+    // Static array, not a live HTMLCollection (same simplification as above).
+    getElementsByClassName: function(names) {
+        var sel = _lumen_class_selector(names);
+        if (sel === null) return [];
+        return _lumen_query_selector_all(sel).map(_lumen_make_element);
     },
     createElement:     function(tag) {
         var nid = _lumen_create_element(String(tag).toLowerCase());
@@ -14222,6 +14248,44 @@ mod tests {
             .eval("document.querySelectorAll('span').length")
             .unwrap();
         assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn get_elements_by_class_name_document() {
+        // BUG-302: getElementsByClassName was missing from WEB_API_SHIM.
+        let rt = runtime_with_dom(make_doc());
+        let hit = rt
+            .eval("document.getElementsByClassName('highlight').length")
+            .unwrap();
+        assert_eq!(hit, lumen_core::JsValue::Number(1.0));
+        let miss = rt
+            .eval("document.getElementsByClassName('nope').length")
+            .unwrap();
+        assert_eq!(miss, lumen_core::JsValue::Number(0.0));
+        // Empty / whitespace-only token list yields an empty collection.
+        let empty = rt
+            .eval("document.getElementsByClassName('   ').length")
+            .unwrap();
+        assert_eq!(empty, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn get_elements_by_class_name_scoped_element() {
+        // BUG-302: the scoped variant lives on Element too, restricted to the
+        // element's own descendants.
+        let rt = runtime_with_dom(make_doc());
+        let inside = rt
+            .eval("document.body.getElementsByClassName('highlight').length")
+            .unwrap();
+        assert_eq!(inside, lumen_core::JsValue::Number(1.0));
+        // The <span.highlight> has no descendants, so scoping to it finds none.
+        let none = rt
+            .eval(
+                "document.getElementsByClassName('highlight')[0]\
+                 .getElementsByClassName('highlight').length",
+            )
+            .unwrap();
+        assert_eq!(none, lumen_core::JsValue::Number(0.0));
     }
 
     #[test]
