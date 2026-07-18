@@ -1527,9 +1527,9 @@
       {
        "id": "PERF-4",
        "title": "PERF-4: бенч холодного/тёплого старта",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Холодный/тёплый старт: запуск exe → окно на экране → первая страница готова (document_ready). Замер в crates/bench + журнал по коммитам. Дёшево мерить, заметно пользователю при каждом запуске, легко регрессирует незаметно (рост числа инициализаций при старте)"
+       "note": "DONE 2026-07-18: `cargo run -p lumen-bench --release -- --startup` ([`crates/bench/src/startup.rs`](crates/bench/src/startup.rs)) — процессный бенч холодного/тёплого старта: порождает собранный shell-бинарь в headless `--screenshot <tmp> <url>` (полный старт движка: загрузчик ОС для ~70-МБ бинаря + init V8-платформы/изолята + DOM-шим + parse/layout/CPU-paint первой страницы) и меряет настенное время каждого спавна. cold = первый спавн (кэш загрузчика холодный), warm = стационар остальных, `cold − warm_median` = стоимость прогрева. Флаги `--iters/--url/--exe/--json`; бинарь ищется `$LUMEN_EXE`/`target/{dev-release,release,debug}/lumen[.exe]`. Журнал [`docs/perf/startup.md`](docs/perf/startup.md) + базлайн `docs/perf/startup-runs/2026-07-18.json` (cold 136.8мс / warm med 125.3мс / прогрев ~11.5мс на samples/page.html, старт доминируется загрузкой бинаря+init V8). Ограничение: «окно на экране» (GUI) не меряется детерминированно в headless — процессный старт до первого кадра взят прокси; порог-гейт откладывается на PERF-7"
       },
       {
        "id": "PERF-5",
