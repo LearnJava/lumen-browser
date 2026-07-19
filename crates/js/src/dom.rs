@@ -4267,6 +4267,53 @@ function _lumen_make_document_fragment(nid) {
     return frag;
 }
 
+// XML 1.0 Name production (https://www.w3.org/TR/xml/#NT-Name), used by
+// `document.createProcessingInstruction` to validate the `target` (DOM §4.5).
+// BMP-only: the astral NameStartChar range #x10000-#xEFFFF is omitted (no WPT
+// subtest exercises it and surrogate handling would add noise). Combining/
+// punctuation ranges are split so that e.g. U+00D7 (×) and U+00B7 (·, middle
+// dot) are excluded from NameStartChar but the latter is a valid NameChar.
+var _LUMEN_XML_NAME_START =
+    '\\u003A\\u0041-\\u005A\\u005F\\u0061-\\u007A' +
+    '\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D' +
+    '\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF' +
+    '\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD';
+var _LUMEN_XML_NAME_CHAR = _LUMEN_XML_NAME_START +
+    '\\u002D\\u002E\\u0030-\\u0039\\u00B7\\u0300-\\u036F\\u203F-\\u2040';
+var _LUMEN_XML_NAME_RE = new RegExp(
+    '^[' + _LUMEN_XML_NAME_START + '][' + _LUMEN_XML_NAME_CHAR + ']*$');
+
+// True if `s` matches the XML Name production. Empty string is not a Name.
+function _lumen_is_xml_name(s) {
+    return _LUMEN_XML_NAME_RE.test(s);
+}
+
+// DOM §4.5 ProcessingInstruction — a detached, JS-only CharacterData node
+// (no arena backing; PIs are never laid out). Enough surface for scripts to
+// read/write `target`/`data` and inspect `nodeType`/`ownerDocument`. Exposing
+// the `ProcessingInstruction`/`Node` interfaces as globals (for `instanceof`)
+// is tracked separately in BUG-314.
+function _lumen_make_processing_instruction(target, data) {
+    var _data = String(data);
+    var pi = {
+        __isProcessingInstruction__: true,
+        get nodeType()      { return 7; }, // Node.PROCESSING_INSTRUCTION_NODE
+        get nodeName()      { return target; },
+        get target()        { return target; },
+        get data()          { return _data; },
+        set data(v)         { _data = String(v); },
+        get nodeValue()     { return _data; },
+        set nodeValue(v)    { _data = String(v); },
+        get textContent()   { return _data; },
+        set textContent(v)  { _data = String(v); },
+        get length()        { return _data.length; },
+        get ownerDocument() { return document; },
+        get parentNode()    { return null; },
+        get childNodes()    { return []; },
+    };
+    return pi;
+}
+
 // Dispatch slotchange on all <slot> elements inside the shadow root of `host_nid`.
 // Called when host's light DOM changes (appendChild / removeChild).
 function _lumen_fire_slotchange(host_nid) {
@@ -6352,6 +6399,25 @@ var document = {
     createComment:          function()    { return _lumen_make_element(_lumen_create_text_node('')); },
     // DOM LS §4.5: createDocumentFragment() returns an empty DocumentFragment.
     createDocumentFragment: function()    { return _lumen_make_document_fragment(_lumen_create_fragment()); },
+    // DOM LS §4.5: createProcessingInstruction(target, data). Throws
+    // InvalidCharacterError if `target` is not a valid XML Name or `data`
+    // contains the PI-closing sequence ?> . Returns a ProcessingInstruction
+    // node (BUG-313).
+    createProcessingInstruction: function(target, data) {
+        var t = String(target);
+        var d = String(data);
+        if (!_lumen_is_xml_name(t)) {
+            throw new DOMException(
+                'createProcessingInstruction: the target is not a valid XML name: ' + t,
+                'InvalidCharacterError');
+        }
+        if (d.indexOf('?>') !== -1) {
+            throw new DOMException(
+                'createProcessingInstruction: the data must not contain the sequence ?>',
+                'InvalidCharacterError');
+        }
+        return _lumen_make_processing_instruction(t, d);
+    },
     appendChild:       function(c)   {
         if (c && c.__nid__ !== undefined) _lumen_append_child(_lumen_root_nid, c.__nid__);
         return c;
@@ -28014,6 +28080,50 @@ mod tests {
              el.addEventListener('mousemove', function(e) { cx = e.clientX; cy = e.clientY; }); \
              _lumen_dispatch_locked_mousemove(el.__nid__, 42, 99, 5, 5, 0); \
              cx === 42 && cy === 99"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-313: document.createProcessingInstruction returns a PI node with the
+    // given target/data, nodeType 7, and this document as ownerDocument.
+    #[test]
+    fn create_processing_instruction_returns_node() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var pi = document.createProcessingInstruction('xml-stylesheet', 'href=\"a.css\"'); \
+             pi.target === 'xml-stylesheet' && pi.data === 'href=\"a.css\"' && \
+             pi.nodeType === 7 && pi.nodeName === 'xml-stylesheet' && \
+             pi.ownerDocument === document"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-313: valid XML Name targets from the WPT corpus are accepted, including
+    // a colon (`xml:fail`) and the middle-dot NameChar (`A·A`).
+    #[test]
+    fn create_processing_instruction_accepts_valid_names() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "['xml:fail', 'A\\u00B7A', 'a0'].every(function(t) { \
+                try { return document.createProcessingInstruction(t, 'x').target === t; } \
+                catch (e) { return false; } \
+             })"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-313: invalid targets and `?>` in data throw InvalidCharacterError
+    // (DOMException with legacy code 5).
+    #[test]
+    fn create_processing_instruction_rejects_invalid() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var bad = [['A', '?>'], ['\\u00B7A', 'x'], ['\\u00D7A', 'x'], \
+                        ['A\\u00D7', 'x'], ['\\\\A', 'x'], ['\\f', 'x'], ['0', 'x']]; \
+             bad.every(function(pair) { \
+                try { document.createProcessingInstruction(pair[0], pair[1]); return false; } \
+                catch (e) { return e.name === 'InvalidCharacterError' && e.code === 5; } \
+             })"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
