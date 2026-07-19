@@ -24,7 +24,7 @@ winit = { workspace = true, optional = true }
 # hand-written WGSL shaders. Promoted to permanent tier as Phase 2 default (RB-9).
 # glutin provides cross-platform OpenGL context creation; glutin-winit bridges glutin
 # with winit 0.30 windows.
-femtovg = { version = "0.9", optional = true, default-features = false }
+femtovg = { version = "0.9", optional = true, default-features = false, features = ["debug_inspector"] }
 glutin = { version = "0.32", optional = true }
 glutin-winit = { version = "0.5", optional = true }
 # imgref and rgb are direct deps of femtovg 0.9; we use them to pass image data to Canvas.
