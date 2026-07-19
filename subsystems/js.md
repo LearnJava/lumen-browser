@@ -118,6 +118,16 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   reflects the `src` content attribute (`get/set src`, shared by `<img>/<script>/<iframe>/<source>`),
   so `img.src = …` reaches layout; the getter returns the raw attribute string (URL resolution
   deferred), empty string when unset. `onload`/`onerror` on JS-initiated fetch stays deferred.
+- **Namespaced attribute accessors on `Element` (BUG-309 fix, [P3] 2026-07-19).**
+  `setAttributeNS`/`getAttributeNS`/`removeAttributeNS`/`hasAttributeNS` were absent — WPT
+  `dom/nodes/Element-hasAttribute.html` §1 threw `el.setAttributeNS is not a function`. Added the
+  four methods to `Element.prototype` right after `hasAttribute`. Lumen's attribute model is
+  name-only, so the `namespace` argument is accepted but ignored: each method stores/looks up the
+  attribute under its qualified name, matching the name-based `getAttribute`/`hasAttribute` lookup;
+  `setAttributeNS` fires the custom-element `attributeChangedCallback` hook exactly like
+  `setAttribute`. The Attr-node variants (`getAttributeNodeNS`/`setAttributeNodeNS`) are omitted —
+  the base `getAttributeNode`/`setAttributeNode` do not exist in the shim either (no Attr node
+  objects), so adding only the `NS` forms would be inconsistent.
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has
