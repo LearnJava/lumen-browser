@@ -163,9 +163,12 @@ impl RenderBackend for WgpuBackend {
         self.renderer.set_canvas_background(color);
     }
 
-    fn register_image(&mut self, src: String, image: &Image) -> Result<(), String> {
+    fn register_image(&mut self, src: String, image: Arc<Image>) -> Result<(), String> {
+        // BUG-272 срез 17: the wgpu `Renderer` only keeps a CPU copy under the
+        // `LUMEN_NO_IMAGE_MIPS` kill-switch (default mip path reads the GPU
+        // texture directly), so it takes `&Image` — deref the Arc here.
         self.renderer
-            .register_image(src, image)
+            .register_image(src, &image)
             .map_err(|e| e.to_string())
     }
 

@@ -417,7 +417,13 @@ pub struct FemtovgBackend {
     /// Храним рядом с GPU-текстурами, чтобы пересэмплировать на CPU
     /// (`resize_area_avg`) при downscale. Зеркалит `Renderer::raw_images`
     /// (wgpu-бэкенд).
-    raw_images: HashMap<String, Image>,
+    ///
+    /// BUG-272 срез 17: `Arc<Image>`, а не `Image` — `register_image` получает
+    /// `Arc<Image>` от вызывающей стороны и клонирует указатель, разделяя
+    /// аллокацию декодированных пикселей с `IMAGE_CACHE`/CPU image-cache вместо
+    /// второго экземпляра каждой картинки (тот же приём, что срез 6 применил к
+    /// шрифтовым байтам).
+    raw_images: HashMap<String, Arc<Image>>,
     /// Зарегистрированные layer snapshots: id → femtovg ImageId.
     snapshots: HashMap<u64, femtovg::ImageId>,
     /// Провайдер шрифтов для multi-family рендера (опциональный).
@@ -5461,19 +5467,21 @@ impl RenderBackend for FemtovgBackend {
         self.invalidate_scroll_cache();
     }
 
-    fn register_image(&mut self, src: String, image: &Image) -> Result<(), String> {
+    fn register_image(&mut self, src: String, image: Arc<Image>) -> Result<(), String> {
         use femtovg::{ImageFlags, ImageSource};
         use imgref::ImgRef;
         use rgb::RGBA8;
 
-        let rgba: Vec<RGBA8> = image_to_rgba8_vec(image);
+        let rgba: Vec<RGBA8> = image_to_rgba8_vec(&image);
         let img = ImgRef::new(&rgba, image.width as usize, image.height as usize);
         let id = self
             .canvas
             .create_image(ImageSource::Rgba(img), ImageFlags::empty())
             .map_err(|e| format!("femtovg register_image: {e:?}"))?;
         // Keep the decoded pixels for on-demand area-averaged downscale (BUG-077).
-        self.raw_images.insert(src.clone(), image.clone());
+        // BUG-272 срез 17: clone the Arc pointer, not the pixel buffer — this
+        // slot shares the caller's allocation instead of a second full copy.
+        self.raw_images.insert(src.clone(), image);
         self.images.insert(src, id);
         // ADR-016 M3.2.1b-2: a late-arriving image repaints the same display list
         // with new pixels (the content hash — over commands, not pixel data — is
