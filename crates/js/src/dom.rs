@@ -13507,6 +13507,19 @@ mod tests {
         Arc::new(Mutex::new(doc))
     }
 
+    /// Wrap raw RGBA8 test pixels in a shared `Arc<Image>` for `register_img_bitmaps`
+    /// (BUG-272 срез 20: the store shares the decoded `Arc<Image>` rather than an
+    /// eager RGBA8 copy). `data` is a `width × height` RGBA8 buffer.
+    fn test_img_bitmap(width: u32, height: u32, data: Vec<u8>) -> Arc<lumen_image::Image> {
+        Arc::new(lumen_image::Image {
+            width,
+            height,
+            format: lumen_image::PixelFormat::Rgba8,
+            data,
+            icc_profile: None,
+        })
+    }
+
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         // Enable extension API (chrome.runtime) for unit tests that verify its behaviour.
@@ -13920,7 +13933,7 @@ mod tests {
         };
         // Inject decoded bitmap: 2×2 solid red RGBA8.
         let rgba8 = vec![255u8, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
-        rt.register_img_bitmaps(vec![(img_nid, 2, 2, rgba8)]);
+        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 2, rgba8))]);
 
         let dest_nid = match rt
             .eval(
@@ -13962,7 +13975,7 @@ mod tests {
         };
         // 1×1 solid blue.
         let rgba8 = vec![0u8, 0, 255, 255];
-        rt.register_img_bitmaps(vec![(img_nid, 1, 1, rgba8)]);
+        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(1, 1, rgba8))]);
 
         let dest_nid = match rt
             .eval(
@@ -14004,7 +14017,7 @@ mod tests {
         };
         // 2×1 RGBA8: [R, G, B, A] × 2 pixels.
         let rgba8 = vec![255u8, 0, 0, 255, 0, 255, 0, 255]; // red | green
-        rt.register_img_bitmaps(vec![(img_nid, 2, 1, rgba8)]);
+        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 1, rgba8))]);
 
         let dest_nid = match rt
             .eval(

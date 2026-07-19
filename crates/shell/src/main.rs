@@ -2465,12 +2465,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `deliver_lazy_images()` after each relayout.
     #[allow(dead_code)]
     fn register_lazy_images(&self, pairs: &[(u32, &str)]);
-    /// Push decoded `<img>` bitmaps (nid, w, h, rgba8) into the JS canvas drawImage store.
+    /// Push decoded `<img>` bitmaps `(nid, Arc<Image>)` into the JS canvas drawImage store.
     ///
     /// Call after `fetch_and_decode_images` so `drawImage(imgElement, …)` works.
-    /// Default no-op covers non-QuickJS builds and `NullPersistentJs`.
+    /// The `Arc` is shared with the decoded-image cache — no pixel copy (BUG-272
+    /// срез 20). Default no-op covers non-QuickJS builds and `NullPersistentJs`.
     #[allow(dead_code)]
-    fn register_img_bitmaps(&self, _bitmaps: Vec<(u32, u32, u32, Vec<u8>)>) {}
+    fn register_img_bitmaps(&self, _bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {}
     /// Check registered lazy images against the current viewport and enqueue load
     /// requests for those within the lazy-load margin (1 viewport ahead of the fold).
     ///
@@ -2888,7 +2889,7 @@ impl PersistentJs for QuickPersistentJs {
     fn deliver_lazy_images(&self) {
         self.eval_js("_lumen_deliver_lazy_images();");
     }
-    fn register_img_bitmaps(&self, bitmaps: Vec<(u32, u32, u32, Vec<u8>)>) {
+    fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {
         self.rt.register_img_bitmaps(bitmaps);
     }
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
@@ -5235,20 +5236,24 @@ fn parse_and_layout(
     // Register decoded <img> bitmaps with the JS runtime so Canvas 2D
     // drawImage(imgElement, …) can read the pixels. Collect nid→url from DOM
     // (same traversal fetch_and_decode_images used), join with decoded images by
-    // URL, and push RGBA8 buffers into img_bitmap_store on the JS thread.
+    // URL, and share the decoded `Arc<Image>` into img_bitmap_store on the JS thread.
     #[cfg(any(feature = "quickjs", feature = "v8"))]
     if let Some(js) = &js_ctx {
         let img_reqs = {
             let d = doc_arc.lock().unwrap();
             lumen_layout::collect_image_requests(&d, viewport)
         };
-        let url_to_img: std::collections::HashMap<&str, &lumen_image::Image> =
-            images.iter().map(|(url, img)| (url.as_str(), img.as_ref())).collect();
-        let bitmaps: Vec<(u32, u32, u32, Vec<u8>)> = img_reqs
+        // BUG-272 срез 20: share the decoded `Arc<Image>` with the JS canvas
+        // drawImage store instead of eagerly copying an RGBA8 buffer per image.
+        // The store converts to RGBA8 lazily, only for images a canvas actually
+        // draws — images never used as a drawImage source cost zero extra bytes.
+        let url_to_img: std::collections::HashMap<&str, &std::sync::Arc<lumen_image::Image>> =
+            images.iter().map(|(url, img)| (url.as_str(), img)).collect();
+        let bitmaps: Vec<(u32, std::sync::Arc<lumen_image::Image>)> = img_reqs
             .iter()
             .filter_map(|req| {
                 let img = url_to_img.get(req.url.as_str())?;
-                Some((req.node_id.index() as u32, img.width, img.height, img.to_rgba8()))
+                Some((req.node_id.index() as u32, std::sync::Arc::clone(img)))
             })
             .collect();
         if !bitmaps.is_empty() {

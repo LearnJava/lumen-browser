@@ -1922,17 +1922,19 @@ impl QuickJsRuntime {
         });
     }
 
-    /// Register decoded RGBA8 bitmaps for `<img>` elements, keyed by node id.
+    /// Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id.
     ///
     /// Call after `fetch_and_decode_images` so that Canvas 2D `drawImage` with an
     /// `<img>` source can read the decoded pixels from [`img_bitmap_store`].
-    /// Each entry is `(nid, natural_width, natural_height, rgba8_vec)`.
-    /// Clears any previous store contents first (navigation-scoped).
-    pub fn register_img_bitmaps(&self, bitmaps: Vec<(u32, u32, u32, Vec<u8>)>) {
+    /// Each entry is `(nid, Arc<Image>)`; the `Arc` is shared with the shell's
+    /// decoded-image cache (BUG-272 срез 20 — no eager RGBA8 copy, the store
+    /// converts lazily on first canvas read). Clears any previous store contents
+    /// first (navigation-scoped).
+    pub fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {
         self.run(|_inner| {
             img_bitmap_store::clear_img_bitmaps();
-            for (nid, w, h, rgba8) in bitmaps {
-                img_bitmap_store::set_img_bitmap(nid, w, h, rgba8);
+            for (nid, image) in bitmaps {
+                img_bitmap_store::set_img_bitmap(nid, image);
             }
         });
     }
