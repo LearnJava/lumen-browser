@@ -385,6 +385,96 @@ enum GlContextState {
     NotCurrent(NotCurrentContext),
 }
 
+/// Максимальное число одновременно живущих уменьшенных вариантов изображений
+/// (`"src@WxH"`), которое держит femtovg-бэкенд (BUG-272 срез 18).
+///
+/// Взято с большим запасом относительно числа различных placed-размеров
+/// картинок, видимых в одном кадре, поэтому внутрикадровый thrash невозможен;
+/// ограничивает межкадровое накопление, когда одна и та же картинка
+/// переразмещается во множестве размеров за сессию (responsive-relayout, зум,
+/// анимация) — без этой границы `"src@WxH"`-текстуры копились бы до следующей
+/// навигации (`clear_images`).
+const RESIZED_VARIANT_CACHE_CAP: usize = 128;
+
+/// Небольшой LRU-кэш фиксированной ёмкости (BUG-272 срез 18).
+///
+/// Служит хранилищем уменьшенных вариантов изображений [`FemtovgBackend`] — по
+/// одной полноценной GPU-текстуре на каждый различный placed-размер исходной
+/// картинки. Точное совпадение размера — уже *попадание* в кэш (ключ
+/// `"src@WxH"`), но разные размеры — это честно разные пересэмплированные
+/// пиксели: их нельзя дедуплицировать без повторного ресемплинга, а он вернул бы
+/// алиасинг downscale'а, ради устранения которого варианты и существуют
+/// (BUG-077). Поэтому рычаг, ограничивающий накопление, — именно эвикция, а не
+/// дедупликация.
+///
+/// Наименее недавно использованный ключ лежит в начале `order`; попадание в
+/// [`Self::get`] или свежая [`Self::insert`] перемещают ключ в конец. `insert`
+/// сверх `cap` вытесняет начало (LRU) и возвращает вытесненное значение, чтобы
+/// вызывающая сторона освободила связанный ресурс (GPU-текстуру).
+struct LruMap<V> {
+    /// Ключ (`"src@WxH"`) → значение (GPU `ImageId`).
+    map: HashMap<String, V>,
+    /// Порядок обращений, наименее недавно использованный — в начале.
+    order: Vec<String>,
+    /// Максимальное число записей до вытеснения в [`Self::insert`].
+    cap: usize,
+}
+
+impl<V: Copy> LruMap<V> {
+    /// Создаёт пустой кэш, хранящий не более `cap` записей (минимум 1).
+    fn new(cap: usize) -> Self {
+        Self { map: HashMap::new(), order: Vec::new(), cap: cap.max(1) }
+    }
+
+    /// Ищет `key`, помечая его как наиболее недавно использованный при попадании.
+    fn get(&mut self, key: &str) -> Option<V> {
+        let val = *self.map.get(key)?;
+        self.touch(key);
+        Some(val)
+    }
+
+    /// Перемещает `key` в конец порядка обращений (наиболее недавний).
+    fn touch(&mut self, key: &str) {
+        if let Some(pos) = self.order.iter().position(|k| k == key) {
+            let k = self.order.remove(pos);
+            self.order.push(k);
+        }
+    }
+
+    /// Вставляет `key` → `val` как наиболее недавнюю запись. Если кэш заполнен,
+    /// вытесняет наименее недавно использованную запись и возвращает её значение,
+    /// чтобы вызывающая сторона освободила связанный ресурс. `key` не должен уже
+    /// присутствовать (вызывается только на miss-пути).
+    fn insert(&mut self, key: String, val: V) -> Option<V> {
+        let evicted = if self.map.len() >= self.cap && !self.order.is_empty() {
+            let lru = self.order.remove(0);
+            self.map.remove(&lru)
+        } else {
+            None
+        };
+        self.map.insert(key.clone(), val);
+        self.order.push(key);
+        evicted
+    }
+
+    /// Число живых записей.
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Итерирует хранимые значения (для учёта GPU-байт).
+    fn values(&self) -> impl Iterator<Item = &V> {
+        self.map.values()
+    }
+
+    /// Удаляет все записи, возвращая значения, чтобы вызывающая сторона их
+    /// освободила.
+    fn drain(&mut self) -> Vec<V> {
+        self.order.clear();
+        self.map.drain().map(|(_, v)| v).collect()
+    }
+}
+
 /// Реализует [`RenderBackend`] через femtovg 2D Canvas API поверх OpenGL.
 /// Создаётся из winit-окна через [`FemtovgBackend::new`].
 pub struct FemtovgBackend {
@@ -404,13 +494,14 @@ pub struct FemtovgBackend {
     scale: f64,
     /// ID bundled-шрифта (Inter Regular) в femtovg atlas.
     font_id: Option<femtovg::FontId>,
-    /// Зарегистрированные изображения: src URL → femtovg ImageId.
+    /// Зарегистрированные изображения в исходном разрешении: src URL →
+    /// femtovg ImageId. Жизненный цикл — регистрация (`register_image`) →
+    /// очистка (`clear_images`).
     ///
-    /// Помимо ключа `src` (исходное разрешение) здесь же кешируются
-    /// предварительно уменьшенные варианты под ключом `"src@WxH"` (см.
-    /// [`Self::resolve_image_for_rect`]) — нужны для качественного downscale
-    /// (BUG-077): femtovg сэмплит текстуру билинейно, что даёт алиасинг при
-    /// сильном уменьшении; вместо этого рисуем заранее area-averaged картинку.
+    /// BUG-272 срез 18: уменьшенные варианты (`"src@WxH"`) больше здесь **не**
+    /// хранятся — они вынесены в LRU-ограниченный [`Self::resized_variants`],
+    /// чтобы их межкадровое накопление было ограничено, а не жило до следующей
+    /// навигации.
     images: HashMap<String, femtovg::ImageId>,
     /// Декодированные пиксели исходных изображений: src URL → `Image`.
     ///
@@ -424,6 +515,15 @@ pub struct FemtovgBackend {
     /// второго экземпляра каждой картинки (тот же приём, что срез 6 применил к
     /// шрифтовым байтам).
     raw_images: HashMap<String, Arc<Image>>,
+    /// BUG-272 срез 18: LRU-ограниченный кэш area-averaged уменьшенных вариантов
+    /// (`"src@WxH"` → GPU `ImageId`, см. [`Self::resolve_image_for_rect`]).
+    /// Ёмкость — [`RESIZED_VARIANT_CACHE_CAP`]; вытеснение отправляет старую
+    /// текстуру в [`Self::resized_variant_pending_delete`].
+    resized_variants: LruMap<femtovg::ImageId>,
+    /// BUG-272 срез 18: варианты, вытесненные LRU, — удаляются после следующего
+    /// `canvas.flush()`: вытесненный `ImageId` мог быть отрисован ранее в этом же
+    /// кадре, поэтому удаление ждёт flush, как и остальные pending-delete-очереди.
+    resized_variant_pending_delete: Vec<femtovg::ImageId>,
     /// Зарегистрированные layer snapshots: id → femtovg ImageId.
     snapshots: HashMap<u64, femtovg::ImageId>,
     /// Провайдер шрифтов для multi-family рендера (опциональный).
@@ -1587,6 +1687,8 @@ impl FemtovgBackend {
             font_id,
             images: HashMap::new(),
             raw_images: HashMap::new(),
+            resized_variants: LruMap::new(RESIZED_VARIANT_CACHE_CAP),
+            resized_variant_pending_delete: Vec::new(),
             snapshots: HashMap::new(),
             font_provider: None,
             loaded_fonts: HashMap::new(),
@@ -3683,7 +3785,9 @@ impl FemtovgBackend {
         };
 
         let key = format!("{src}@{tw}x{th}");
-        if let Some(&id) = self.images.get(&key) {
+        // BUG-272 срез 18: варианты живут в LRU-ограниченном кэше, а не в
+        // `self.images`; попадание помечает ключ как недавно использованный.
+        if let Some(id) = self.resized_variants.get(&key) {
             return Some(id);
         }
 
@@ -3695,7 +3799,11 @@ impl FemtovgBackend {
             .canvas
             .create_image(femtovg::ImageSource::Rgba(img), femtovg::ImageFlags::empty())
             .ok()?;
-        self.images.insert(key, id);
+        // Вставка сверх ёмкости вытесняет LRU-вариант; его текстуру удаляем после
+        // следующего flush (могла быть отрисована ранее в этом кадре).
+        if let Some(evicted) = self.resized_variants.insert(key, id) {
+            self.resized_variant_pending_delete.push(evicted);
+        }
         Some(id)
     }
 
@@ -5052,6 +5160,9 @@ impl RenderBackend for FemtovgBackend {
         // estimate from the known surface size, not a measured value.
         let framebuffer_bytes = self.width as usize * self.height as usize * 4;
         let decoded_gpu_bytes = self.gpu_image_bytes(self.images.values());
+        // BUG-272 срез 18: уменьшенные варианты (`"src@WxH"`) — отдельная
+        // категория, LRU-ограниченная RESIZED_VARIANT_CACHE_CAP.
+        let resized_variant_bytes = self.gpu_image_bytes(self.resized_variants.values());
         let layer_pool_bytes = self.gpu_image_bytes(self.layer_pool.iter());
         let content_band_bytes = self.gpu_image_bytes(self.content_band_pool.iter());
         let cpu_upload_bytes = self.gpu_image_bytes(self.cpu_upload_pool.iter());
@@ -5059,7 +5170,8 @@ impl RenderBackend for FemtovgBackend {
         let bbox_layer_bytes = self.gpu_image_bytes(self.bbox_layer_pool.iter());
         let bbox_cpu_upload_bytes = self.gpu_image_bytes(self.bbox_cpu_upload_pool.iter());
         format!(
-            "femtovg: raw_images={} ({:.1} MB), gpu_images={} ({:.1} MB), glyph_atlas={} ({:.1} MB), \
+            "femtovg: raw_images={} ({:.1} MB), gpu_images={} ({:.1} MB), \
+             resized_variants={} ({:.1} MB), glyph_atlas={} ({:.1} MB), \
              framebuffer≈{:.1} MB, layer_pool={} ({:.1} MB), content_band_pool={} ({:.1} MB), \
              cpu_upload_pool={} ({:.1} MB), backdrop_bbox_pool={} ({:.1} MB), bbox_layer_pool={} ({:.1} MB), \
              bbox_cpu_upload_pool={} ({:.1} MB)",
@@ -5067,6 +5179,8 @@ impl RenderBackend for FemtovgBackend {
             raw_bytes as f64 / 1e6,
             self.images.len(),
             decoded_gpu_bytes as f64 / 1e6,
+            self.resized_variants.len(),
+            resized_variant_bytes as f64 / 1e6,
             glyph_atlas_ids.len(),
             glyph_atlas_bytes as f64 / 1e6,
             framebuffer_bytes as f64 / 1e6,
@@ -5378,6 +5492,11 @@ impl RenderBackend for FemtovgBackend {
         for id in gradient_del {
             self.canvas.delete_image(id);
         }
+        // BUG-272 срез 18: resized image variants evicted by the LRU this frame.
+        let variant_del: Vec<_> = self.resized_variant_pending_delete.drain(..).collect();
+        for id in variant_del {
+            self.canvas.delete_image(id);
+        }
 
         let swap_result = match self.current_ctx() {
             Ok(ctx) => self
@@ -5492,6 +5611,14 @@ impl RenderBackend for FemtovgBackend {
 
     fn clear_images(&mut self) {
         for (_, id) in self.images.drain() {
+            self.canvas.delete_image(id);
+        }
+        // BUG-272 срез 18: уменьшенные варианты живут отдельно — их тоже удаляем,
+        // вместе с ещё не слитой очередью вытеснений.
+        for id in self.resized_variants.drain() {
+            self.canvas.delete_image(id);
+        }
+        for id in self.resized_variant_pending_delete.drain(..) {
             self.canvas.delete_image(id);
         }
         for (_, id) in self.snapshots.drain() {
@@ -5629,6 +5756,65 @@ mod tests {
     use lumen_layout::BgSizeAxis;
     use lumen_layout::PositionComponent;
     use lumen_layout::Length;
+
+    // ─── BUG-272 срез 18: LruMap (resized-variant cache) ────────────────────
+
+    #[test]
+    fn lru_map_get_hit_and_miss() {
+        let mut c: LruMap<u32> = LruMap::new(4);
+        assert_eq!(c.get("a"), None);
+        assert_eq!(c.insert("a".into(), 10), None);
+        assert_eq!(c.get("a"), Some(10));
+        assert_eq!(c.get("b"), None);
+        assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn lru_map_evicts_least_recently_used() {
+        let mut c: LruMap<u32> = LruMap::new(2);
+        assert_eq!(c.insert("a".into(), 1), None);
+        assert_eq!(c.insert("b".into(), 2), None);
+        // At capacity; inserting "c" evicts the LRU ("a").
+        assert_eq!(c.insert("c".into(), 3), Some(1));
+        assert_eq!(c.get("a"), None);
+        assert_eq!(c.get("b"), Some(2));
+        assert_eq!(c.get("c"), Some(3));
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn lru_map_get_refreshes_recency() {
+        let mut c: LruMap<u32> = LruMap::new(2);
+        c.insert("a".into(), 1);
+        c.insert("b".into(), 2);
+        // Touch "a" so "b" becomes the least-recently-used.
+        assert_eq!(c.get("a"), Some(1));
+        // Inserting "c" now evicts "b", not "a".
+        assert_eq!(c.insert("c".into(), 3), Some(2));
+        assert_eq!(c.get("a"), Some(1));
+        assert_eq!(c.get("b"), None);
+    }
+
+    #[test]
+    fn lru_map_drain_returns_all_and_clears() {
+        let mut c: LruMap<u32> = LruMap::new(4);
+        c.insert("a".into(), 1);
+        c.insert("b".into(), 2);
+        let mut drained = c.drain();
+        drained.sort_unstable();
+        assert_eq!(drained, vec![1, 2]);
+        assert_eq!(c.len(), 0);
+        assert_eq!(c.get("a"), None);
+    }
+
+    #[test]
+    fn lru_map_cap_is_at_least_one() {
+        let mut c: LruMap<u32> = LruMap::new(0);
+        assert_eq!(c.insert("a".into(), 1), None);
+        // Capacity floored to 1: inserting a second entry evicts the first.
+        assert_eq!(c.insert("b".into(), 2), Some(1));
+        assert_eq!(c.len(), 1);
+    }
 
     // ─── ADR-016 M3.2.1b band geometry ──────────────────────────────────────
 
