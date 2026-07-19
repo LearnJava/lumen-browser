@@ -165,9 +165,28 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   5, set by the `v8_runtime.rs` DOMException polyfill) when `target` is not a valid XML Name or `data`
   contains `?>`. Closes 8 of the 11 WPT `Document-createProcessingInstruction.html` sub-fails (the
   `INVALID_CHARACTER_ERR` group). The remaining 3 (`Should get a ProcessingInstruction …`) assert
-  `pi instanceof ProcessingInstruction` / `pi instanceof Node`, which needs the DOM interfaces exposed
-  as globals — that is [BUG-314](../bugs/BUG-314-OPEN.md)'s scope; their `.ini` `expected: FAIL` is
-  kept and re-attributed. 3 unit tests (`dom::tests::create_processing_instruction_*`).
+  `pi instanceof ProcessingInstruction` / `pi instanceof Node` — now satisfied by BUG-314 (the PI
+  object's `[[Prototype]]` is `ProcessingInstruction.prototype`). 3 unit tests
+  (`dom::tests::create_processing_instruction_*`).
+- **DOM node-family interface globals + `Comment`/`Text`/`DocumentFragment` constructors (DOM §4,
+  BUG-314 fix, [P3] 2026-07-20).** Node-family interfaces were entirely absent as globals, so a bare
+  `x instanceof Node` or `window['Comment']` threw `X is not defined` / `is not a constructor`, taking
+  whole scripts (and testharness feature-detection) down. New "DOM interface constructors" block in the
+  shared `WEB_API_SHIM`: (1) bare, non-constructible interface globals for reference/`instanceof`
+  resolution — `Node`/`Element`/`CharacterData`/`Attr`/`Document`/`DocumentType`/`ProcessingInstruction`
+  /`HTMLElement` (hoisted function declarations) plus ~36 `HTML*Element` generated via `globalThis[name]`
+  with an `name in globalThis` guard (so the richer pre-existing `HTMLImageElement`/`Image` pair is not
+  clobbered); prototypes chain `HTML*Element → HTMLElement → Element → Node`. (2) constructible
+  `new Comment(data)`/`new Text(data)` build detached CharacterData objects via
+  `_lumen_make_character_data(nodeType, nodeName, data, proto)` with the full prototype chain
+  (`Comment.prototype → CharacterData.prototype → Node.prototype`) and working `instanceof`; `data` is
+  stringified per DOM §4.5 (undefined → `''`, first argument only). `new DocumentFragment()` returns a
+  native (arena-backed) empty fragment; `_lumen_make_document_fragment` gained `ownerDocument`/
+  `firstChild`. Element wrappers stay plain native-backed objects, so `el instanceof HTMLDivElement` is
+  still false (shared debt with BUG-305). Deferred to [BUG-321](../bugs/BUG-321-OPEN.md): constructible
+  `new Document()`, live `document.doctype`, element-wrapper `instanceof`. 4 unit tests
+  (`dom::tests::{comment_text_constructors_build_nodes, character_data_prototype_chain,
+  document_fragment_constructor, dom_interface_globals_defined}`).
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has

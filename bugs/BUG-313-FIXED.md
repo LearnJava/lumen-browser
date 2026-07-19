@@ -28,7 +28,7 @@ Should throw an INVALID_CHARACTER_ERR for target "A" and data "?>".
   `data` содержит `"?>"`;
 - иначе возвращает узел `ProcessingInstruction` с заданными `target`/`data`.
 Требует также сам интерфейс `ProcessingInstruction` (см.
-[BUG-314](BUG-314-OPEN.md), конструкторы DOM как глобали). Реализовать в
+[BUG-314](BUG-314-FIXED.md), конструкторы DOM как глобали). Реализовать в
 engine-agnostic `WEB_API_SHIM`.
 
 ## Воспроизведение
@@ -58,7 +58,7 @@ LUMEN_PROFILE=dev-release tests/wpt/.venv/Scripts/python.exe \
 (`INVALID_CHARACTER_ERR`-группа). Оставшиеся **3** (`Should get a
 ProcessingInstruction …`) требуют глобальных интерфейсов
 `ProcessingInstruction`/`Node` для `instanceof` — это скоуп
-[BUG-314](BUG-314-OPEN.md); их `expected: FAIL` в
+[BUG-314](BUG-314-FIXED.md); их `expected: FAIL` в
 `metadata/.../Document-createProcessingInstruction.html.ini` оставлен и
 переатрибутирован на BUG-314.
 
