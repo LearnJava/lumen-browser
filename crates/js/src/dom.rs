@@ -4255,8 +4255,9 @@ function _lumen_make_document_fragment(nid) {
             return _lumen_make_document_fragment(clone_nid);
         },
     };
+    // DOM §4.2.6 ParentNode.children — element-only live HTMLCollection (BUG-310).
     Object.defineProperty(frag, 'children', {
-        get: function() { return _lumen_get_children(nid).map(_lumen_make_element); },
+        get: function() { return _lumen_make_html_collection(nid); },
         enumerable: false, configurable: true,
     });
     Object.defineProperty(frag, 'childNodes', {
@@ -4757,6 +4758,89 @@ function _lumen_canvas_dims(nid) {
 // every navigation/bfcache thaw (fresh V8 isolate), so a cached wrapper can
 // never alias onto an unrelated later node.
 var _lumen_element_wrappers = {};
+
+// ── ParentNode / ElementTraversal helpers (DOM Standard §4.2.6/§4.2.7) ────────
+// BUG-310: element-only tree navigation. `_lumen_get_children` returns EVERY
+// child node (text/comment included), so `children`/`childElementCount`/
+// `firstElementChild`/… must filter to element nodes to match the spec.
+
+// True when `id` refers to an element node. Text nodes report via
+// `_lumen_is_text_node`; every other non-element (comment/document/fragment/
+// shadow-root) carries a `#`-prefixed node name, which a real element never does.
+function _lumen_is_element_nid(id) {
+    if (_lumen_is_text_node(id)) return false;
+    var t = _lumen_get_tag_name(id);
+    return typeof t === 'string' && t.length > 0 && t.charAt(0) !== '#';
+}
+
+// Element children of `nid`, in tree order, as raw node ids.
+function _lumen_element_child_nids(nid) {
+    var all = _lumen_get_children(nid);
+    var out = [];
+    for (var i = 0; i < all.length; i++) {
+        if (_lumen_is_element_nid(all[i])) out.push(all[i]);
+    }
+    return out;
+}
+
+// HTMLCollection marker prototype (DOM Standard §4.2.10.2) so `children` can
+// satisfy `x instanceof HTMLCollection`. Not constructible from script.
+function HTMLCollection() { throw new TypeError('Illegal constructor'); }
+
+// `namedItem` semantics (DOM §4.2.10.2): first element in `ids` (tree order)
+// whose `id`, or failing that whose `name`, equals `name`; `null` otherwise.
+function _lumen_html_collection_named(ids, name) {
+    for (var i = 0; i < ids.length; i++) {
+        if (_lumen_u2n(_lumen_get_attr(ids[i], 'id')) === name) return _lumen_make_element(ids[i]);
+    }
+    for (var j = 0; j < ids.length; j++) {
+        if (_lumen_u2n(_lumen_get_attr(ids[j], 'name')) === name) return _lumen_make_element(ids[j]);
+    }
+    return null;
+}
+
+// Live HTMLCollection over `owner_nid`'s element children (DOM §4.2.10.2).
+// Backed by a Proxy so `length`, indices and named lookups all re-query the
+// live tree on every access — the collection stays correct across
+// append/remove without being rebuilt. Consumers may index it (`coll[0]`),
+// call `.item(i)`/`.namedItem(name)` or read `.length`.
+function _lumen_make_html_collection(owner_nid) {
+    var proto = Object.create(HTMLCollection.prototype);
+    function ids() { return _lumen_element_child_nids(owner_nid); }
+    return new Proxy(proto, {
+        get: function(target, prop) {
+            if (prop === 'length') return ids().length;
+            if (prop === 'item') {
+                return function(i) {
+                    var list = ids();
+                    i = i >>> 0;
+                    return i < list.length ? _lumen_make_element(list[i]) : null;
+                };
+            }
+            if (prop === 'namedItem') {
+                return function(name) { return _lumen_html_collection_named(ids(), String(name)); };
+            }
+            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+                var list = ids();
+                var idx = parseInt(prop, 10);
+                return idx < list.length ? _lumen_make_element(list[idx]) : undefined;
+            }
+            if (typeof prop === 'string' && prop !== 'constructor') {
+                var named = _lumen_html_collection_named(ids(), prop);
+                if (named !== null) return named;
+            }
+            return target[prop];
+        },
+        has: function(target, prop) {
+            if (prop === 'length' || prop === 'item' || prop === 'namedItem') return true;
+            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+                return parseInt(prop, 10) < ids().length;
+            }
+            if (typeof prop === 'string' && _lumen_html_collection_named(ids(), prop) !== null) return true;
+            return prop in target;
+        },
+    });
+}
 
 function _lumen_make_element(nid) {
     if (nid === null || nid === undefined) return null;
@@ -5619,8 +5703,19 @@ function _lumen_build_element(nid) {
         },
         enumerable: false, configurable: true,
     });
+    // DOM §4.4 Node.parentNode (BUG-310): the parent node, or null at the tree
+    // root. Mirrors `parentElement` — the shim wraps every parent (element or
+    // container) through `_lumen_make_element`, so `.parentNode.children` works.
+    Object.defineProperty(_obj, 'parentNode', {
+        get: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            return pid !== null ? _lumen_make_element(pid) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    // DOM §4.2.6 ParentNode.children — element-only live HTMLCollection (BUG-310).
     Object.defineProperty(_obj, 'children', {
-        get: function() { return _lumen_get_children(nid).map(_lumen_make_element); },
+        get: function() { return _lumen_make_html_collection(nid); },
         enumerable: false, configurable: true,
     });
     Object.defineProperty(_obj, 'firstChild', {
@@ -5634,6 +5729,45 @@ function _lumen_build_element(nid) {
         get: function() {
             var ch = _lumen_get_children(nid);
             return ch.length > 0 ? _lumen_make_element(ch[ch.length - 1]) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    // DOM §4.2.6/§4.2.7 ParentNode/NonDocumentTypeChildNode element traversal (BUG-310).
+    Object.defineProperty(_obj, 'childElementCount', {
+        get: function() { return _lumen_element_child_nids(nid).length; },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(_obj, 'firstElementChild', {
+        get: function() {
+            var ch = _lumen_element_child_nids(nid);
+            return ch.length > 0 ? _lumen_make_element(ch[0]) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(_obj, 'lastElementChild', {
+        get: function() {
+            var ch = _lumen_element_child_nids(nid);
+            return ch.length > 0 ? _lumen_make_element(ch[ch.length - 1]) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(_obj, 'nextElementSibling', {
+        get: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return null;
+            var sibs = _lumen_element_child_nids(pid);
+            var idx = sibs.indexOf(nid);
+            return (idx >= 0 && idx + 1 < sibs.length) ? _lumen_make_element(sibs[idx + 1]) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(_obj, 'previousElementSibling', {
+        get: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return null;
+            var sibs = _lumen_element_child_nids(pid);
+            var idx = sibs.indexOf(nid);
+            return (idx > 0) ? _lumen_make_element(sibs[idx - 1]) : null;
         },
         enumerable: false, configurable: true,
     });
@@ -10467,6 +10601,7 @@ window.clearInterval         = clearInterval;
 window.MutationObserver      = MutationObserver;
 window.ResizeObserver        = ResizeObserver;
 window.IntersectionObserver  = IntersectionObserver;
+window.HTMLCollection        = HTMLCollection;
 window.NodeFilter            = NodeFilter;
 window.TreeWalker            = _TreeWalker;
 window.NodeIterator          = _NodeIterator;
@@ -18406,6 +18541,141 @@ mod tests {
         "#).unwrap();
         let count = rt.eval("_container.children.length").unwrap();
         assert_eq!(count, lumen_core::JsValue::Number(0.0));
+    }
+
+    // ── ElementTraversal / ParentNode.children (BUG-310) ──────────────────────
+
+    // Appends three element children (`a`,`b`,`c`) interleaved with text nodes
+    // to a fresh `div` bound to the JS global `varname`. innerHTML is NOT parsed
+    // by the bare unit-test runtime, so the subtree is built via DOM APIs.
+    fn build_mixed_children(rt: &QuickJsRuntime, varname: &str) {
+        rt.eval(&format!(r#"
+            var {v} = document.createElement('div');
+            document.body.appendChild({v});
+            {v}.appendChild(document.createTextNode('x'));
+            var _s0 = document.createElement('span'); _s0.id = 'a'; {v}.appendChild(_s0);
+            {v}.appendChild(document.createTextNode(' '));
+            var _s1 = document.createElement('b');    _s1.id = 'b'; {v}.appendChild(_s1);
+            {v}.appendChild(document.createTextNode(' '));
+            var _s2 = document.createElement('span'); _s2.id = 'c'; {v}.appendChild(_s2);
+            {v}.appendChild(document.createTextNode('y'));
+        "#, v = varname)).unwrap();
+    }
+
+    #[test]
+    fn element_traversal_child_element_count_skips_text() {
+        let rt = runtime_with_dom(make_doc());
+        build_mixed_children(&rt, "_t");
+        // Text nodes ('x', whitespace, 'y') must not be counted.
+        let n = rt.eval("_t.childElementCount").unwrap();
+        assert_eq!(n, lumen_core::JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn element_traversal_first_last_element_child() {
+        let rt = runtime_with_dom(make_doc());
+        build_mixed_children(&rt, "_t");
+        let first = rt.eval("_t.firstElementChild.id").unwrap();
+        let last = rt.eval("_t.lastElementChild.id").unwrap();
+        let ntype = rt.eval("_t.firstElementChild.nodeType").unwrap();
+        assert_eq!(first, lumen_core::JsValue::String("a".into()));
+        assert_eq!(last, lumen_core::JsValue::String("c".into()));
+        assert_eq!(ntype, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn element_traversal_sibling_navigation_skips_text() {
+        let rt = runtime_with_dom(make_doc());
+        build_mixed_children(&rt, "_t");
+        // 'a' → next element 'b' and 'c' → prev element 'b' skip whitespace text.
+        let next = rt.eval("document.getElementById('a').nextElementSibling.id").unwrap();
+        let prev = rt.eval("document.getElementById('c').previousElementSibling.id").unwrap();
+        assert_eq!(next, lumen_core::JsValue::String("b".into()));
+        assert_eq!(prev, lumen_core::JsValue::String("b".into()));
+    }
+
+    #[test]
+    fn element_traversal_null_edges() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _empty = document.createElement('div');
+            document.body.appendChild(_empty);
+            _empty.appendChild(document.createTextNode('just text, no elements'));
+            var _solo = document.createElement('div');
+            document.body.appendChild(_solo);
+            var _only = document.createElement('span'); _only.id = 'solo';
+            _solo.appendChild(_only);
+        "#).unwrap();
+        let no_first = rt.eval("_empty.firstElementChild === null").unwrap();
+        let no_last = rt.eval("_empty.lastElementChild === null").unwrap();
+        let count0 = rt.eval("_empty.childElementCount").unwrap();
+        let no_next = rt.eval("document.getElementById('solo').nextElementSibling === null").unwrap();
+        let no_prev = rt.eval("document.getElementById('solo').previousElementSibling === null").unwrap();
+        assert_eq!(no_first, lumen_core::JsValue::Bool(true));
+        assert_eq!(no_last, lumen_core::JsValue::Bool(true));
+        assert_eq!(count0, lumen_core::JsValue::Number(0.0));
+        assert_eq!(no_next, lumen_core::JsValue::Bool(true));
+        assert_eq!(no_prev, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn children_is_live_html_collection() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _p = document.createElement('ul');
+            document.body.appendChild(_p);
+            _p.appendChild(document.createElement('li'));
+            _p.appendChild(document.createElement('li'));
+            _p.appendChild(document.createElement('li'));
+        "#).unwrap();
+        let is_coll = rt.eval("_p.children instanceof HTMLCollection").unwrap();
+        assert_eq!(is_coll, lumen_core::JsValue::Bool(true));
+        // A cached reference must reflect later mutations (live collection).
+        let live = rt.eval(r#"
+            var _c = _p.children;
+            var before = _c.length;
+            _p.appendChild(document.createElement('li'));
+            var after = _c.length;
+            before === 3 && after === 4
+        "#).unwrap();
+        assert_eq!(live, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn parent_node_children_is_reachable() {
+        // Regression for ParentNode-children.html: `node.parentNode.children`
+        // must resolve (parentNode was missing on element wrappers before BUG-310).
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _ul = document.createElement('ul');
+            document.body.appendChild(_ul);
+            var _li = document.createElement('li'); _li.id = 'li0'; _ul.appendChild(_li);
+            _ul.appendChild(document.createElement('li'));
+        "#).unwrap();
+        let via_parent = rt.eval("document.getElementById('li0').parentNode.children.length").unwrap();
+        assert_eq!(via_parent, lumen_core::JsValue::Number(2.0));
+        let parent_tag = rt.eval("document.getElementById('li0').parentNode.tagName.toLowerCase()").unwrap();
+        assert_eq!(parent_tag, lumen_core::JsValue::String("ul".into()));
+    }
+
+    #[test]
+    fn children_collection_item_named_and_index() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _q = document.createElement('div');
+            document.body.appendChild(_q);
+            _q.appendChild(document.createElement('span'));
+            var _mid = document.createElement('span'); _mid.id = 'mid'; _q.appendChild(_mid);
+            _q.appendChild(document.createElement('span'));
+        "#).unwrap();
+        let item = rt.eval("_q.children.item(1).id").unwrap();
+        let named = rt.eval("_q.children.namedItem('mid').id").unwrap();
+        let named_null = rt.eval("_q.children.namedItem('nope') === null").unwrap();
+        let indexed = rt.eval("_q.children[0].tagName.toLowerCase()").unwrap();
+        assert_eq!(item, lumen_core::JsValue::String("mid".into()));
+        assert_eq!(named, lumen_core::JsValue::String("mid".into()));
+        assert_eq!(named_null, lumen_core::JsValue::Bool(true));
+        assert_eq!(indexed, lumen_core::JsValue::String("span".into()));
     }
 
     #[test]
