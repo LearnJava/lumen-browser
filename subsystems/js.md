@@ -145,6 +145,14 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   used on `.children`). Known limitation: `Element-children.html` stays WPT-FAIL — its two subtests
   need the full HTMLCollection named-getter *enumeration* order and a non-HTML-namespace element
   from `createElementNS("", ...)`, which Lumen folds to HTML.
+- **`Node.isConnected` (DOM §4.4, BUG-311 fix, [P3] 2026-07-19).** Was entirely absent (returned
+  `undefined`). Added as a getter on the element wrapper in the shared `WEB_API_SHIM`: a node is
+  connected iff `documentElement` (`<html>`, via `_lumen_get_html_element`) is on its ancestor chain
+  (walked with `_lumen_get_parent`) or is the node itself — a detached subtree's topmost ancestor is
+  an orphan node, so it reports `false`; after `remove()` a node reports `false` again. WPT
+  `Node-isConnected.html` «Test with ordinary child nodes» now PASSes. Known limitation: «Test with
+  iframes» stays WPT-FAIL — it needs separate iframe sub-documents via `contentDocument`, which the
+  shim does not model as distinct connected trees.
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has
