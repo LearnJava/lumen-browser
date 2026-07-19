@@ -9148,6 +9148,8 @@ function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds) {
                 nextSibling: null,
                 previousSibling: null,
             };
+            // BUG-317: records are MutationRecord instances (DOM §4.3.3).
+            Object.setPrototypeOf(rec, MutationRecord.prototype);
             obs._records.push(rec);
             hasObs = true;
         }
@@ -9259,6 +9261,13 @@ MutationObserver.prototype.takeRecords = function() {
     this._records = [];
     return r;
 };
+
+// DOM §4.3.3 MutationRecord — interface global so records delivered to a
+// MutationObserver callback resolve `record instanceof MutationRecord`
+// (BUG-317, same family as BUG-314). Not constructible from script; every
+// record built in `_mo_notify` gets `MutationRecord.prototype` as its
+// [[Prototype]]. The record literal's own data properties take precedence.
+function MutationRecord() { throw new TypeError('Illegal constructor'); }
 
 // ── ResizeObserver (W3C Resize Observer §5) ───────────────────────────────────
 // Delivers size-change entries after layout; the shell calls
@@ -10803,6 +10812,7 @@ window.clearTimeout          = clearTimeout;
 window.setInterval           = setInterval;
 window.clearInterval         = clearInterval;
 window.MutationObserver      = MutationObserver;
+window.MutationRecord        = MutationRecord;
 window.ResizeObserver        = ResizeObserver;
 window.IntersectionObserver  = IntersectionObserver;
 window.HTMLCollection        = HTMLCollection;
@@ -18280,6 +18290,47 @@ mod tests {
         assert_eq!(fired, lumen_core::JsValue::Bool(true));
         let attr = rt.eval("_mo_rec && _mo_rec.type").unwrap();
         assert_eq!(attr, lumen_core::JsValue::String("attributes".into()));
+    }
+
+    #[test]
+    fn mutation_record_is_interface_global() {
+        // BUG-317: MutationRecord resolves as a global interface (bare identifier
+        // and window property) and is not constructible (DOM §4.3.3).
+        let rt = runtime_with_dom(make_doc());
+        assert_eq!(
+            rt.eval("typeof MutationRecord === 'function'").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("typeof window.MutationRecord === 'function'").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("try { new MutationRecord(); false } catch (e) { e instanceof TypeError }")
+                .unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn mutation_observer_records_are_mutation_record_instances() {
+        // BUG-317: records delivered to the callback are `instanceof MutationRecord`
+        // (WPT dom/nodes/MutationObserver-callback-arguments.html).
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _mo_is_rec = false;
+            var obsR = new MutationObserver(function(records) {
+                _mo_is_rec = records[0] instanceof MutationRecord;
+            });
+            var el = document.getElementById('main');
+            obsR.observe(el, { attributes: true });
+            el.setAttribute('data-y', '7');
+        "#).unwrap();
+        rt.eval("_lumen_flush_mutation_observers()").unwrap();
+        assert_eq!(
+            rt.eval("_mo_is_rec").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
     }
 
     #[test]
