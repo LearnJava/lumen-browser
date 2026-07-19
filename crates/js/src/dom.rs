@@ -5713,6 +5713,24 @@ function _lumen_build_element(nid) {
         },
         enumerable: false, configurable: true,
     });
+    // DOM §4.4 Node.isConnected (BUG-311): true when the node's shadow-inclusive
+    // root is the document. In the flat shim tree that means `documentElement`
+    // (<html>) is on the node's ancestor chain (or is the node itself) — a
+    // detached subtree never reaches it, so its topmost ancestor is some
+    // orphan node and `isConnected` is false.
+    Object.defineProperty(_obj, 'isConnected', {
+        get: function() {
+            var htmlId = _lumen_u2n(_lumen_get_html_element());
+            if (htmlId === null) return false;
+            var cur = nid;
+            while (cur !== null) {
+                if (cur === htmlId) return true;
+                cur = _lumen_u2n(_lumen_get_parent(cur));
+            }
+            return false;
+        },
+        enumerable: false, configurable: true,
+    });
     // DOM §4.2.6 ParentNode.children — element-only live HTMLCollection (BUG-310).
     Object.defineProperty(_obj, 'children', {
         get: function() { return _lumen_make_html_collection(nid); },
@@ -18656,6 +18674,32 @@ mod tests {
         assert_eq!(via_parent, lumen_core::JsValue::Number(2.0));
         let parent_tag = rt.eval("document.getElementById('li0').parentNode.tagName.toLowerCase()").unwrap();
         assert_eq!(parent_tag, lumen_core::JsValue::String("ul".into()));
+    }
+
+    #[test]
+    fn node_is_connected_reflects_document_attachment() {
+        // BUG-311: Node.isConnected — true once the node is in the document tree,
+        // false for a freshly-created (detached) node and after removal.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _det = document.createElement('div'); _det.id = 'det';
+            var _child = document.createElement('span'); _det.appendChild(_child);
+            var _att = document.createElement('div'); _att.id = 'att';
+            document.body.appendChild(_att);
+        "#).unwrap();
+        // Detached element and its detached child: false.
+        let det = rt.eval("document.getElementById('det') === null && _det.isConnected").unwrap();
+        assert_eq!(det, lumen_core::JsValue::Bool(false));
+        let det_child = rt.eval("_child.isConnected").unwrap();
+        assert_eq!(det_child, lumen_core::JsValue::Bool(false));
+        // Attached element: true; documentElement itself: true.
+        let att = rt.eval("_att.isConnected").unwrap();
+        assert_eq!(att, lumen_core::JsValue::Bool(true));
+        let html = rt.eval("document.documentElement.isConnected").unwrap();
+        assert_eq!(html, lumen_core::JsValue::Bool(true));
+        // After removal the node reports disconnected again.
+        let removed = rt.eval("_att.remove(); _att.isConnected").unwrap();
+        assert_eq!(removed, lumen_core::JsValue::Bool(false));
     }
 
     #[test]
