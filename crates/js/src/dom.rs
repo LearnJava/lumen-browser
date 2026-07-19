@@ -4900,6 +4900,8 @@ function _lumen_build_element(nid) {
         },
         removeAttribute: function(n)    { _lumen_remove_attr(nid, String(n)); },
         hasAttribute:    function(n)    { return _lumen_get_attr(nid, String(n)) !== undefined; },
+        // DOM §4.9.2: hasAttributes() — true iff the element carries any attribute.
+        hasAttributes:   function()     { return _lumen_get_attr_names(nid).length > 0; },
         // DOM §4.9.2: namespaced attribute accessors. Lumen's attribute model is
         // name-only, so the namespace argument is accepted but ignored — the
         // attribute is stored and looked up under its qualified name, matching the
@@ -18111,6 +18113,28 @@ mod tests {
         assert_eq!(
             rt.eval("_el.getAttributeNS('foo', 'x')").unwrap(),
             lumen_core::JsValue::Null
+        );
+    }
+
+    #[test]
+    fn has_attributes_reflects_attribute_presence() {
+        // BUG-312: Element.hasAttributes() (DOM §4.9.2) — false with no attributes,
+        // true once any attribute is present (WPT dom/nodes/Element-hasAttributes.html).
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _el = document.createElement('p');").unwrap();
+        assert_eq!(
+            rt.eval("_el.hasAttributes()").unwrap(),
+            lumen_core::JsValue::Bool(false)
+        );
+        rt.eval("_el.setAttribute('id', 'x');").unwrap();
+        assert_eq!(
+            rt.eval("_el.hasAttributes()").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        rt.eval("_el.removeAttribute('id');").unwrap();
+        assert_eq!(
+            rt.eval("_el.hasAttributes()").unwrap(),
+            lumen_core::JsValue::Bool(false)
         );
     }
 
