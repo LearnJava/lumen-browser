@@ -3745,8 +3745,9 @@ struct LoadedPage {
     /// Декодированные `<img src="…">` для GPU upload через
     /// `Renderer::register_image`. Ключ — raw src attribute value (тот же,
     /// что попадает в `DisplayCommand::DrawImage.src`), чтобы render-side
-    /// мог сделать lookup без отдельной нормализации URL.
-    images: Vec<(String, lumen_image::Image)>,
+    /// мог сделать lookup без отдельной нормализации URL. `Arc<Image>` (BUG-272
+    /// срез 17): разделяет пиксели с `IMAGE_CACHE`/`register_image`, не копирует.
+    images: Vec<(String, Arc<lumen_image::Image>)>,
     /// Multi-frame GIF animations decoded at load time. Keyed by the same src URL
     /// as `DrawImage.src`. Frame 0 of each entry is already in `images` so the
     /// renderer has a valid texture on first paint; subsequent frames are uploaded
@@ -4623,7 +4624,7 @@ fn fetch_and_decode_images(
     viewport: lumen_core::geom::Size,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
-) -> (Vec<(String, lumen_image::Image)>, Vec<(String, lumen_image::AnimatedGif)>, Vec<(u32, String)>) {
+) -> (Vec<(String, Arc<lumen_image::Image>)>, Vec<(String, lumen_image::AnimatedGif)>, Vec<(u32, String)>) {
     let requests = lumen_layout::collect_image_requests(doc, viewport);
 
     /// Результат параллельной фазы fetch+decode одной картинки. Применение к
@@ -4634,15 +4635,16 @@ fn fetch_and_decode_images(
         Lazy,
         /// Пропуск (ошибка сети/декодирования) — уже залогировано.
         Skip,
-        /// Статическая картинка (включая 1-кадровый GIF).
+        /// Статическая картинка (включая 1-кадровый GIF). `Arc<Image>` (BUG-272
+        /// срез 17): разделяет аллокацию пикселей с `IMAGE_CACHE`, а не копирует.
         Static {
-            image: lumen_image::Image,
+            image: Arc<lumen_image::Image>,
             /// Intrinsic-размеры для HTML-атрибутов, если их не задал автор.
             intrinsic: Option<(u32, u32)>,
         },
         /// Многокадровый GIF: первый кадр + полная анимация.
         Animated {
-            first: lumen_image::Image,
+            first: Arc<lumen_image::Image>,
             gif: lumen_image::AnimatedGif,
             intrinsic: Option<(u32, u32)>,
         },
@@ -4669,12 +4671,11 @@ fn fetch_and_decode_images(
         match decoded {
             None => ImgOutcome::Skip,
             Some(image_cache::DecodedImage::Static(img)) => {
-                let image = (*img).clone();
-                let intrinsic = wants_intrinsic.then_some((image.width, image.height));
-                ImgOutcome::Static { image, intrinsic }
+                // BUG-272 срез 17: share the cache's Arc, not a pixel copy.
+                let intrinsic = wants_intrinsic.then_some((img.width, img.height));
+                ImgOutcome::Static { image: img, intrinsic }
             }
             Some(image_cache::DecodedImage::Animated { first, gif }) => {
-                let first = (*first).clone();
                 let intrinsic = wants_intrinsic.then_some((first.width, first.height));
                 ImgOutcome::Animated { first, gif: (*gif).clone(), intrinsic }
             }
@@ -4682,7 +4683,7 @@ fn fetch_and_decode_images(
     });
 
     // Фаза 2 (последовательно): мутация `doc` + сборка результата в порядке DOM.
-    let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
+    let mut out: Vec<(String, Arc<lumen_image::Image>)> = Vec::new();
     let mut anim_gifs: Vec<(String, lumen_image::AnimatedGif)> = Vec::new();
     let mut lazy_pairs: Vec<(u32, String)> = Vec::new();
     for (req, outcome) in requests.into_iter().zip(outcomes) {
@@ -4921,7 +4922,7 @@ struct ParsedPage {
     title: Option<String>,
     rule_count: usize,
     /// Декодированные изображения, найденные при обходе DOM. См. [`LoadedPage::images`].
-    images: Vec<(String, lumen_image::Image)>,
+    images: Vec<(String, Arc<lumen_image::Image>)>,
     /// Multi-frame GIF animations found in the DOM. See [`LoadedPage::animated_gifs`].
     animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
     /// `(node_id_u32, url)` pairs for `<img loading="lazy">` elements — skipped by
@@ -4982,7 +4983,7 @@ struct LayoutSource {
 struct PageSnapshot {
     display_list: DisplayList,
     title: Option<String>,
-    pending_images: Vec<(String, lumen_image::Image)>,
+    pending_images: Vec<(String, Arc<lumen_image::Image>)>,
     /// PH3-19: saved across tab switch so web-fonts persist in background tabs.
     page_font_registry: Arc<lumen_font::FontRegistry>,
     /// PH3-19: web fonts decoded from @font-face url() sources, needed to
@@ -5235,7 +5236,7 @@ fn parse_and_layout(
             lumen_layout::collect_image_requests(&d, viewport)
         };
         let url_to_img: std::collections::HashMap<&str, &lumen_image::Image> =
-            images.iter().map(|(url, img)| (url.as_str(), img)).collect();
+            images.iter().map(|(url, img)| (url.as_str(), img.as_ref())).collect();
         let bitmaps: Vec<(u32, u32, u32, Vec<u8>)> = img_reqs
             .iter()
             .filter_map(|req| {
@@ -5405,7 +5406,7 @@ fn fetch_and_decode_background_images(
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
-) -> Vec<(String, lumen_image::Image)> {
+) -> Vec<(String, Arc<lumen_image::Image>)> {
     let urls = lumen_layout::collect_background_image_requests(layout);
     // Параллельная загрузка+декодирование, порядок сохраняем (ключи уникальны).
     let decoded = parallel_map(&urls, |_, url| {
@@ -5436,7 +5437,8 @@ fn fetch_and_decode_background_images(
             "Загружена bg-картинка: {url} ({}×{}, {:?})",
             image.width, image.height, image.format
         );
-        Some((url.clone(), image))
+        // BUG-272 срез 17: wrap once in Arc so `register_image` shares the buffer.
+        Some((url.clone(), Arc::new(image)))
     });
     decoded.into_iter().flatten().collect()
 }
@@ -6953,8 +6955,8 @@ struct Lumen {
     /// Декодированные `<img>` ресурсы. До создания Renderer-а — хранятся
     /// в Vec и заливаются в GPU в `resumed`; после — register_image идёт
     /// напрямую в `reload`. На переходах между страницами очищается через
-    /// `Renderer::clear_images` + переустановка.
-    pending_images: Vec<(String, lumen_image::Image)>,
+    /// `Renderer::clear_images` + переустановка. `Arc<Image>` (BUG-272 срез 17).
+    pending_images: Vec<(String, Arc<lumen_image::Image>)>,
     /// PH3-19: реестр шрифтов текущей страницы (local() + web-шрифты, пришедшие
     /// через `FontLoaded`). Хранится отдельно от `Arc<dyn FontProvider>` в renderer-е,
     /// чтобы `user_event(FontLoaded)` мог дорегистрировать шрифт через
@@ -8886,12 +8888,15 @@ impl Lumen {
                             url, gif.width, gif.height, gif.frames.len()
                         );
                         if let Some(r) = self.renderer.as_mut() {
-                            if let Err(e) = r.register_image(url.clone(), &first) {
+                            // BUG-272 срез 17: insert into the CPU cache first, then
+                            // register the returned Arc handle — raw_images shares the
+                            // cache's allocation instead of a second pixel copy.
+                            let handle = self.image_cache.insert(lumen_image::ImageKey::new(&url), first);
+                            if let Err(e) = r.register_image(url.clone(), handle) {
                                 eprintln!("Lazy GIF: не зарегистрирована {url}: {e}");
                             }
-                            self.image_cache.insert(lumen_image::ImageKey::new(&url), first);
                         } else {
-                            self.pending_images.push((url.clone(), first));
+                            self.pending_images.push((url.clone(), Arc::new(first)));
                         }
                         self.gif_last_frame.remove(&url);
                         self.animated_gifs.insert(url, gif);
@@ -8907,12 +8912,12 @@ impl Lumen {
                             }
                             eprintln!("Lazy загружена (GIF, 1 кадр): {url} ({}×{})", img.width, img.height);
                             if let Some(r) = self.renderer.as_mut() {
-                                if let Err(e) = r.register_image(url.clone(), &img) {
+                                let handle = self.image_cache.insert(lumen_image::ImageKey::new(&url), img);
+                                if let Err(e) = r.register_image(url.clone(), handle) {
                                     eprintln!("Lazy: не зарегистрирована {url}: {e}");
                                 }
-                                self.image_cache.insert(lumen_image::ImageKey::new(&url), img);
                             } else {
-                                self.pending_images.push((url, img));
+                                self.pending_images.push((url, Arc::new(img)));
                             }
                         }
                         continue;
@@ -8939,12 +8944,12 @@ impl Lumen {
                 apply_intrinsic_size(&mut doc, node_id, image.width, image.height);
             }
             if let Some(r) = self.renderer.as_mut() {
-                if let Err(e) = r.register_image(url.clone(), &image) {
+                let handle = self.image_cache.insert(lumen_image::ImageKey::new(&url), image);
+                if let Err(e) = r.register_image(url.clone(), handle) {
                     eprintln!("Lazy: не зарегистрирована {url}: {e}");
                 }
-                self.image_cache.insert(lumen_image::ImageKey::new(&url), image);
             } else {
-                self.pending_images.push((url, image));
+                self.pending_images.push((url, Arc::new(image)));
             }
         }
     }
@@ -9020,10 +9025,11 @@ impl Lumen {
 
             match lumen_image::decode_gif_animated(&bytes) {
                 Ok(gif) => {
-                    let first = gif.frames[0].image.clone();
+                    // BUG-272 срез 17: Arc so register/pending share the buffer.
+                    let first = Arc::new(gif.frames[0].image.clone());
                     let key = format!("video:{nid}");
                     if let Some(r) = self.renderer.as_mut() {
-                        if let Err(e) = r.register_image(key.clone(), &first) {
+                        if let Err(e) = r.register_image(key.clone(), Arc::clone(&first)) {
                             eprintln!("video GIF: не зарегистрирован {key}: {e}");
                         }
                     } else {
@@ -9097,7 +9103,7 @@ impl Lumen {
         for (nid, idx, image) in updates {
             let key = format!("video:{nid}");
             if let Some(r) = self.renderer.as_mut()
-                && let Err(e) = r.register_image(key.clone(), &image)
+                && let Err(e) = r.register_image(key.clone(), Arc::new(image))
             {
                 eprintln!("video GIF кадр {key}[{idx}]: {e}");
             }
@@ -9342,10 +9348,12 @@ impl Lumen {
                     // и регистрируем заново.
                     r.clear_images();
                     for (src, image) in &page.images {
-                        if let Err(err) = r.register_image(src.clone(), image) {
+                        // BUG-272 срез 17: `image` — Arc из IMAGE_CACHE; register
+                        // клонирует указатель, raw_images разделяет аллокацию.
+                        if let Err(err) = r.register_image(src.clone(), Arc::clone(image)) {
                             eprintln!("Картинка {src} не зарегистрирована: {err}");
                         }
-                        self.image_cache.insert(lumen_image::ImageKey::new(src), image.clone());
+                        self.image_cache.insert(lumen_image::ImageKey::new(src), (**image).clone());
                     }
                 } else {
                     // Renderer ещё не создан — обычно невозможно (reload идёт
@@ -9446,7 +9454,9 @@ impl Lumen {
         Some(LoadedPage {
             display_list: rendered.display_list,
             title: rendered.title,
-            images: rendered.images,
+            // BUG-272 срез 17: driver's `RenderedPage.images` is still owned
+            // `Image`; wrap at this boundary (driver path unchanged).
+            images: rendered.images.into_iter().map(|(s, i)| (s, Arc::new(i))).collect(),
             animated_gifs: Vec::new(), // lumen-driver path has no animated GIF support yet
             lazy_pairs: Vec::new(), // Phase 4c: TODO integrate lazy loading
             layout_box: rendered.layout_box,
@@ -9910,10 +9920,11 @@ impl Lumen {
             }
             r.clear_images();
             for (src, image) in &page.images {
-                if let Err(err) = r.register_image(src.clone(), image) {
+                // BUG-272 срез 17: share the Arc; raw_images no longer deep-copies.
+                if let Err(err) = r.register_image(src.clone(), Arc::clone(image)) {
                     eprintln!("Картинка {src} не зарегистрирована: {err}");
                 }
-                self.image_cache.insert(lumen_image::ImageKey::new(src), image.clone());
+                self.image_cache.insert(lumen_image::ImageKey::new(src), (**image).clone());
             }
         } else {
             self.pending_images = page.images;
@@ -10113,10 +10124,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Заливаем декодированные ранее картинки в GPU. Take, чтобы освободить
         // память Vec (изображение копируется в wgpu Texture внутри register_image).
         for (src, image) in self.pending_images.drain(..) {
-            if let Err(err) = renderer.register_image(src.clone(), &image) {
+            // BUG-272 срез 17: `image` — Arc; register shares it, raw_images
+            // holds no separate copy.
+            if let Err(err) = renderer.register_image(src.clone(), Arc::clone(&image)) {
                 eprintln!("Картинка {src} не зарегистрирована: {err}");
             }
-            self.image_cache.insert(lumen_image::ImageKey::new(&src), image);
+            self.image_cache.insert(lumen_image::ImageKey::new(&src), (*image).clone());
         }
 
         // CSS Media Queries L5 §5.2 — read the OS `prefers-color-scheme` once the
@@ -10218,14 +10231,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // redraw — следующий кадр заменит placeholder реальной картинкой.
                 let image = *image;
                 if let Some(r) = self.renderer.as_mut() {
-                    if let Err(e) = r.register_image(src.clone(), &image) {
+                    // BUG-272 срез 17: cache-insert returns the Arc handle; register
+                    // with it so raw_images shares the CPU cache's allocation.
+                    let handle = self.image_cache.insert(lumen_image::ImageKey::new(&src), image);
+                    if let Err(e) = r.register_image(src.clone(), handle) {
                         eprintln!("Streaming-картинка: не зарегистрирована {src}: {e}");
                     }
-                    self.image_cache.insert(lumen_image::ImageKey::new(&src), image);
                 } else {
                     // Renderer ещё не создан (окно не открыто) — отложим заливку
                     // в GPU до `resumed`.
-                    self.pending_images.push((src.clone(), image));
+                    self.pending_images.push((src.clone(), Arc::new(image)));
                 }
                 if let Some(gif) = animated {
                     // Многокадровый GIF: тикается в `RedrawRequested`.
@@ -10706,7 +10721,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         data: rgba.clone(),
                         icc_profile: None,
                     };
-                    if let Err(e) = r.register_image(format!("canvas:{nid}"), &image) {
+                    if let Err(e) = r.register_image(format!("canvas:{nid}"), Arc::new(image)) {
                         eprintln!("Canvas: не зарегистрирован canvas:{nid}: {e}");
                     }
                 }
@@ -13909,7 +13924,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                     for (url, idx, image) in updates {
                         if let Some(r) = self.renderer.as_mut()
-                            && let Err(e) = r.register_image(url.clone(), &image)
+                            && let Err(e) = r.register_image(url.clone(), Arc::new(image))
                         {
                             eprintln!("GIF кадр {url}[{idx}]: не зарегистрирован: {e}");
                         }

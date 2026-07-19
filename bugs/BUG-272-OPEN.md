@@ -532,12 +532,53 @@ backend-femtovg --lib` (937 passed) — все зелёные. Живая про
 выше) — числа во всех трёх случаях разумны и внутренне согласованы (glyph atlas не растёт с
 объёмом текста, пока не исчерпана packer-ёмкость страницы).
 
+## Срез 17 — Multi-copy image cache: `raw_images` deep-copy (femtovg) — дедуплицировано через `Arc`
+
+Пункт 4 остатка, часть 1. `FemtovgBackend::register_image` делал `self.raw_images.insert(src,
+image.clone())` — **полную копию декодированных пикселей** каждой картинки помимо той, что уже
+живёт за `Arc<Image>` в глобальном `IMAGE_CACHE` (`DecodedImageCache`) и в CPU
+`ImageDecodeCache` (`self.image_cache`). Дедуплицировано тем же приёмом, что срез 6 применил к
+шрифтовым байтам (`Arc<[u8]>` вместо `Vec<u8>`-клона):
+
+- `RenderBackend::register_image` теперь принимает `Arc<Image>`, а не `&Image` (трейт
+  `crates/engine/paint/src/backend.rs`); `FemtovgBackend::raw_images` — `HashMap<String,
+  Arc<Image>>`, регистрация клонирует **указатель**, разделяя аллокацию пикселей с вызывающей
+  стороной вместо второго экземпляра. Все пять реализаций трейта обновлены (femtovg, wgpu-обёртка,
+  cpu, vello, compare); wgpu `Renderer::register_image` (inherent-метод) оставлен на `&Image` —
+  он держит CPU-копию только под kill-switch'ем `LUMEN_NO_IMAGE_MIPS` (дефолтный mip-путь читает
+  GPU-текстуру напрямую), поэтому `WgpuBackend` разыменовывает `Arc`.
+- Shell протянут end-to-end: `fetch_and_decode_images` возвращает `Arc<Image>` — в горячей точке
+  `DecodedImage::Static(img)` теперь `Arc::clone` хэндла кэша вместо `(*img).clone()`, так что
+  `page.images` разделяет аллокацию с `IMAGE_CACHE`, а `register_image` — с обоими. Поля
+  `ParsedPage`/`LoadedPage`/`PageSnapshot::pending_images` несут `Arc<Image>`. Streaming/lazy-пути
+  используют то, что `ImageDecodeCache::insert` возвращает `ImageHandle` (`Arc<Image>`): вставляют
+  в CPU-кэш, затем регистрируют возвращённый хэндл — `raw_images` разделяет аллокацию **CPU-кэша**
+  (ноль лишних копий). Одноразовые пути (canvas-snapshot, GIF-кадры, bg-картинки) оборачивают
+  свежий декод в `Arc::new` один раз.
+- `render_to_image_cpu`/`rasterize_cpu` (headless CPU-путь) тоже приняли `&[(String, Arc<Image>)]`
+  (`img.as_ref()` при построении `image_map`). Драйверный `RenderedPage.images` оставлен owned
+  `Image` — оборачивается в `Arc::new` на границе shell'а, драйверный путь не тронут.
+
+Экономия: на главном пути загрузки (`page.images`) все три места — `IMAGE_CACHE`, `page.images`,
+`raw_images` — теперь разделяют один буфер вместо трёх копий; femtovg `raw_images` больше **не**
+держит собственный экземпляр. Изменение пиксельно-нейтрально по построению: везде, где рендер
+читает пиксели, `Arc<Image>` разыменовывается в тот же `&Image` (femtovg `register_image` —
+`image_to_rgba8_vec(&image)`, cpu_raster — `img.as_ref()`), — подтверждено попиксельно: headless
+`--screenshot` страницы с шестью `<img>` (`samples/test-04-images.html`, PNG+JPEG) на ветке vs
+main **побайтово идентичен** (`PIL.ImageChops.difference` bbox `None`), картинки рендерятся (не
+grey placeholder).
+
+Проверено: `cargo check`/`clippy -p lumen-paint` (backend-femtovg, backend-vello+compare,
+backend-cpu+cpu-render) и `-p lumen-shell`/`-p lumen-driver` — зелёные; `cargo test -p lumen-paint
+--features backend-femtovg --lib` (937 passed), `--features backend-cpu,cpu-render --lib
+cpu_raster` (62 passed, включая `draw_image_paints_decoded_pixels`/`draw_cross_fade`).
+
 ## Остаток (следующие срезы)
 
 1. ~~Blend-слои (PREMULTIPLIED) вне пула~~ — закрыто срезами 2–4 (src-слой, blend-result, colour-matrix filter, backdrop-filter — все теперь в едином `cpu_upload_pool`). ~~Glyph atlas на тексте страницы~~ — **срез 16 опроверг гипотезу**: новый GPU-байтовый счётчик по категориям (`debug_mem_report`, femtovg `debug_inspector` feature) показал glyph atlas = 1.0 МБ (одна страница 512×512) на реальном lenta.ru, все femtovg-владеемые текстуры вместе ~13.6 МБ — источник ~285 МБ неатрибуцированного GPU лежит вне видимости femtovg-бэкенда (драйвер/swapchain/метод измерения, см. срез 16 выше); не блокирует переход к следующим пунктам.
 2. Baseline пустого окна 224 МБ GPU — сам по себе жирный (framebuffers/шрифтовой атлас/драйвер).
 3. Слои по bounding box вместо full-frame — **срез 5 (влит) сделал backdrop-filter's `filtered_backdrop_id` bbox-сайзингом**; визуально подтверждён (A/B gdigrab branch-vs-main, TEST-30/103 побайтово идентичны — см. срез 5 выше); **срез 7 (влит) добавил `bounds` в `PushOpacity` и включил viewport-cull off-screen opacity-групп** (см. срез 7 выше); **срез 8 (влит) включил viewport-cull off-screen clip-групп** (`PushClipRoundedRect`/`PushClipPath`, см. срез 8 ниже); **срез 9 (влит) включил viewport-cull off-screen mask-групп** (`PushMask{Image,LinearGradient,RadialGradient,ConicGradient}`, см. срез 9 ниже); **срез 10 (влит) сделал backdrop-filter's `elem_image_id` bbox-сайзингом** (пункт (b), см. срез 10 выше); **срез 11 (влит) сделал `PushOpacity`'s видимый слой bbox-сайзингом** через общий `bbox_layer_pool` (пункт (c), см. срез 11 выше); **срез 12 (влит) сделал `PushClipRoundedRect`/`PushClipPath`'s видимый слой bbox-сайзингом** тем же механизмом (пункт (c, продолжение), см. срез 12 выше); **срез 13 (влит) сделал gradient-mask-опенеров (`PushMask{LinearGradient,RadialGradient,ConicGradient}`) видимый слой bbox-сайзингом** тем же механизмом (`PushMaskImage` слой не открывает — тронуть было нечего, см. срез 13 выше); **срез 14 (влит) сделал `PushBlendMode`'s (безусловно) и `PushFilter`'s colour-matrix-only (без blur) видимый слой bbox-сайзингом** через новый общий `bbox_cpu_upload_pool` (пункт (c), последний, см. срез 14 выше); `PushFilter`'s blur-цепочка осознанно оставлена full-framebuffer (нет запаса под GPU-blur-сэмплинг за краем bbox — см. срез 14); **срез 15 (исследовательский, фикса нет)** установил, что `PushMaskLayer` (SVG-`<mask>` content) не эмитируется нигде в продакшене — семантически cull возможен (тот же довод, что срез 9), но писать его сейчас не над чем проверить; пункт остаётся открытым до появления реального эмиттера SVG-`<mask>`-контента (см. срез 15 выше).
-4. Отложенные многокопийные image-кэши (см. диагностику 2026-07-07 в истории файла): femtovg `raw_images` deep-copy, `@WxH`-варианты, GIF все кадры, ~~font `bytes_store.cloned()`~~ (закрыто срезом 6 — `Arc<[u8]>`), canvas2d thread-local — актуально для image-heavy сайтов.
+4. Отложенные многокопийные image-кэши (см. диагностику 2026-07-07 в истории файла): ~~femtovg `raw_images` deep-copy~~ (закрыто срезом 17 — трейт `register_image` принимает `Arc<Image>`, `raw_images` разделяет аллокацию с `IMAGE_CACHE`/CPU-кэшем, см. срез 17 выше), `@WxH`-варианты (срез 18), GIF все кадры (срез 19), ~~font `bytes_store.cloned()`~~ (закрыто срезом 6 — `Arc<[u8]>`), canvas2d thread-local (срез 20) — актуально для image-heavy сайтов.
 
 ## Инструменты (остались в коде)
 

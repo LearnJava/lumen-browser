@@ -176,8 +176,15 @@ pub trait RenderBackend: Send {
     /// После вызова `DrawBackgroundImage` и `DrawImage` с этим `src`
     /// будут использовать переданное изображение.
     ///
+    /// Принимает `Arc<Image>` (не `&Image`): backend'ы, которым нужна CPU-копия
+    /// декодированных пикселей после загрузки в GPU (femtovg's `raw_images` для
+    /// area-averaged downscale, BUG-077), клонируют указатель, а не буфер, и
+    /// разделяют аллокацию с вызывающей стороной (`IMAGE_CACHE` / CPU
+    /// image-cache) вместо второго экземпляра каждой картинки (BUG-272 срез 17,
+    /// тот же приём, что срез 6 применил к шрифтовым байтам).
+    ///
     /// Возвращает `Err(msg)` если изображение не удалось загрузить в GPU.
-    fn register_image(&mut self, src: String, image: &Image) -> Result<(), String>;
+    fn register_image(&mut self, src: String, image: Arc<Image>) -> Result<(), String>;
 
     /// Сбрасывает все зарегистрированные изображения.
     ///
@@ -392,7 +399,7 @@ mod tests {
 
         fn resize(&mut self, _width: u32, _height: u32) {}
         fn set_scale_factor(&mut self, _scale: f64) {}
-        fn register_image(&mut self, _src: String, _image: &Image) -> Result<(), String> {
+        fn register_image(&mut self, _src: String, _image: Arc<Image>) -> Result<(), String> {
             Ok(())
         }
         fn clear_images(&mut self) {}
@@ -417,7 +424,7 @@ mod tests {
         use lumen_image::{Image, PixelFormat};
         let img = Image { width: 1, height: 1, format: PixelFormat::Rgba8, data: vec![255; 4], icc_profile: None };
         let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
-        assert!(b.register_image("test".into(), &img).is_ok());
+        assert!(b.register_image("test".into(), Arc::new(img)).is_ok());
     }
 
     #[test]

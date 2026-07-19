@@ -8814,7 +8814,7 @@ impl Renderer {
         width: u32,
         height: u32,
         commands: &[crate::DisplayCommand],
-        images: &[(String, lumen_image::Image)],
+        images: &[(String, std::sync::Arc<lumen_image::Image>)],
         scroll_x: f32,
         scroll_y: f32,
     ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
