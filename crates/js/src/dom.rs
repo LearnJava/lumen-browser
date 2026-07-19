@@ -4816,6 +4816,19 @@ function _lumen_build_element(nid) {
         },
         removeAttribute: function(n)    { _lumen_remove_attr(nid, String(n)); },
         hasAttribute:    function(n)    { return _lumen_get_attr(nid, String(n)) !== undefined; },
+        // DOM §4.9.2: namespaced attribute accessors. Lumen's attribute model is
+        // name-only, so the namespace argument is accepted but ignored — the
+        // attribute is stored and looked up under its qualified name, matching the
+        // name-based getAttribute/hasAttribute lookup (BUG-309).
+        getAttributeNS:    function(ns, n)    { return _lumen_u2n(_lumen_get_attr(nid, String(n))); },
+        setAttributeNS:    function(ns, n, v) {
+            var attrName = String(n);
+            var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
+            _lumen_set_attr(nid, attrName, String(v));
+            _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, String(v));
+        },
+        removeAttributeNS: function(ns, n)    { _lumen_remove_attr(nid, String(n)); },
+        hasAttributeNS:    function(ns, n)    { return _lumen_get_attr(nid, String(n)) !== undefined; },
         // DOM LS §4.9.3: toggleAttribute(qualifiedName, force?)
         toggleAttribute: function(n, force) {
             var attrName = String(n);
@@ -17915,6 +17928,37 @@ mod tests {
         assert_eq!(fired, lumen_core::JsValue::Bool(true));
         let attr = rt.eval("_mo_rec && _mo_rec.type").unwrap();
         assert_eq!(attr, lumen_core::JsValue::String("attributes".into()));
+    }
+
+    #[test]
+    fn attribute_ns_methods_are_name_based() {
+        // BUG-309: the namespaced attribute accessors mirror the name-only model —
+        // setAttributeNS stores under the qualified name, so hasAttribute finds it
+        // irrespective of namespace (WPT dom/nodes/Element-hasAttribute.html §1).
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _el = document.createElement('p'); _el.setAttributeNS('foo', 'x', 'first');")
+            .unwrap();
+        assert_eq!(
+            rt.eval("_el.hasAttribute('x')").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("_el.getAttributeNS('foo', 'x')").unwrap(),
+            lumen_core::JsValue::String("first".into())
+        );
+        assert_eq!(
+            rt.eval("_el.hasAttributeNS('foo', 'x')").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        rt.eval("_el.removeAttributeNS('foo', 'x')").unwrap();
+        assert_eq!(
+            rt.eval("_el.hasAttribute('x')").unwrap(),
+            lumen_core::JsValue::Bool(false)
+        );
+        assert_eq!(
+            rt.eval("_el.getAttributeNS('foo', 'x')").unwrap(),
+            lumen_core::JsValue::Null
+        );
     }
 
     #[test]
