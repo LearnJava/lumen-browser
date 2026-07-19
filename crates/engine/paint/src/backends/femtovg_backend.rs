@@ -745,7 +745,96 @@ pub struct FemtovgBackend {
     /// via [`Self::invalidate_scroll_cache`]. Invariant:
     /// `scroll_cache.is_populated() == retained_band.is_some()`.
     retained_band: Option<femtovg::ImageId>,
+    /// BUG-273 срез 2: inter-frame cache of composited **bbox-sized filter
+    /// layers** (colour-matrix chains without a blur — the only offscreen
+    /// filter path whose pixels are scroll-invariant, see
+    /// [`FilterLayerEntry::bbox`] and [`Self::filter_is_bbox_cacheable`]).
+    /// Keyed by a content hash of the `PushFilter…PopFilter` subtree (folded
+    /// via [`crate::display_list::hash_command_into`], which excludes the outer
+    /// scroll transform by construction), so a fully-visible filtered element
+    /// scrolled without content change hits and reuses its cached filtered
+    /// texture — skipping the expensive `screenshot()` GPU-readback + CPU
+    /// colour-matrix loop in [`Self::composite_filter_layer`] every frame. The
+    /// texture placement is always recomputed fresh from the current transform
+    /// on a hit, so only the *pixels* are cached, never the position. Held
+    /// outside the scratch pools (like `retained_band`); entries are validated
+    /// on lookup by device dims + sub-pixel phase and dropped wholesale by
+    /// [`Self::invalidate_scroll_cache`] on any resize/DPI/content/image-load
+    /// change (the events that alter on-screen pixels without changing the
+    /// content hash).
+    filter_layer_cache: HashMap<u64, CachedFilterLayer>,
+    /// BUG-273 срез 2: sum of `filter_layer_cache` texture footprints in bytes,
+    /// used to enforce [`FILTER_CACHE_BUDGET_BYTES`] via LRU eviction on store.
+    filter_cache_bytes: usize,
+    /// BUG-273 срез 2: monotonic LRU clock, bumped once per `render()`; each
+    /// cache entry records the clock value at its last hit/store so the
+    /// least-recently-used entry can be evicted when the budget is exceeded.
+    filter_cache_clock: u64,
+    /// BUG-273 срез 2: `false` disables the filter-layer cache entirely
+    /// (`LUMEN_NO_FILTER_CACHE=1`), for paint-bisect diffing a cached frame
+    /// against an always-recomputed one.
+    filter_cache_enabled: bool,
+    /// BUG-273 срез 2: hash + sub-pixel phase computed by
+    /// [`Self::filter_cache_probe`] on a cache **miss**, handed to the very next
+    /// `render_command(PushFilter)` so [`Self::composite_filter_layer`] can
+    /// store the composited result under that key. `take()`-n unconditionally by
+    /// the `PushFilter` arm so it can never leak to an unrelated later push.
+    pending_filter_cache_meta: Option<FilterCacheMeta>,
+    /// BUG-273 срез 2: filter-cache hits this frame (reset in `render()`,
+    /// reported under `LUMEN_FRAME_LOG=2`).
+    filter_cache_hits: u32,
 }
+
+/// BUG-273 срез 2: cache key metadata for a bbox-sized filter layer — the
+/// subtree content hash plus the sub-device-pixel phase of the group's mapped
+/// top-left. The phase gates hits so a reused texture is pixel-identical to a
+/// fresh render: content alignment inside a bbox texture depends on the
+/// fractional device offset, which only stays constant under integer-device
+/// scroll (always the case at scale 1.0). A phase change → a miss → a re-render,
+/// never a sub-pixel-shifted false hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FilterCacheMeta {
+    /// Content hash of the `PushFilter…PopFilter` bracket (inclusive).
+    hash: u64,
+    /// Sub-device-pixel phase of the mapped top-left, quantized to eighths.
+    phase_x: u32,
+    /// Sub-device-pixel phase of the mapped top-left, quantized to eighths.
+    phase_y: u32,
+}
+
+/// BUG-273 срез 2: a retained composited filter-layer texture plus the metadata
+/// needed to validate a reuse. The `image_id` is a CPU-upload image (the
+/// colour-matrix re-upload result) held live across frames; it is queued to
+/// `filter_layer_pending_delete` when evicted or overwritten.
+struct CachedFilterLayer {
+    /// Retained composited (post-filter) texture, sized `(w, h)` device px.
+    image_id: femtovg::ImageId,
+    /// Device-pixel width the texture was composited at; a hit requires the
+    /// current group's clamped device width to match (a partially-scrolled-in
+    /// group's clamped size differs → miss → re-render).
+    w: usize,
+    /// Device-pixel height, same validation role as `w`.
+    h: usize,
+    /// Sub-device-pixel phase the texture was rendered at (see [`FilterCacheMeta`]).
+    phase_x: u32,
+    /// Sub-device-pixel phase, same role as `phase_x`.
+    phase_y: u32,
+    /// GPU footprint (`w * h * 4`) for the budget accounting.
+    bytes: usize,
+    /// LRU clock value at the last hit/store.
+    last_used: u64,
+}
+
+/// BUG-273 срез 2: GPU memory budget for retained filter-layer textures (32 MB).
+/// A realistic page has a handful of filtered elements, each a small bbox
+/// texture (e.g. 300×200×4 ≈ 240 KB), so 32 MB is ample headroom; the LRU
+/// eviction only bites on pathological pages with many large filtered regions.
+const FILTER_CACHE_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+
+/// BUG-273 срез 2: hard cap on retained filter-layer entries, a backstop
+/// against unbounded key growth on pages whose filtered subtrees churn content
+/// hashes every frame (the budget alone already bounds bytes).
+const FILTER_CACHE_MAX_ENTRIES: usize = 128;
 
 // SAFETY: FemtovgBackend используется только из одного потока одновременно
 // (enforce-ится через `&mut self` в методах трейта). OpenGL контекст
@@ -778,6 +867,12 @@ struct FilterLayerEntry {
     /// texture has no data for (BUG-145) — Push keeps blur chains
     /// full-framebuffer unconditionally.
     bbox: Option<(f32, f32, usize, usize)>,
+    /// BUG-273 срез 2: `Some` when this bbox layer is a **cacheable** colour-matrix
+    /// group rendered on a cache miss — the hash + phase
+    /// [`FemtovgBackend::composite_filter_layer`] stores the composited result
+    /// under (instead of recycling it to the scratch pool). `None` for blur
+    /// chains, full-framebuffer fallbacks, and when the cache is disabled.
+    cache_meta: Option<FilterCacheMeta>,
 }
 
 // ─── Offscreen layer support (BUG-133 opacity, BUG-146 filter) ───────────────
@@ -1731,6 +1826,12 @@ impl FemtovgBackend {
             content_band_size: (0, 0),
             scroll_cache: crate::ScrollCache::new(crate::DEFAULT_OVERSCAN),
             retained_band: None,
+            filter_layer_cache: HashMap::new(),
+            filter_cache_bytes: 0,
+            filter_cache_clock: 0,
+            filter_cache_enabled: std::env::var_os("LUMEN_NO_FILTER_CACHE").is_none(),
+            pending_filter_cache_meta: None,
+            filter_cache_hits: 0,
         })
     }
 
@@ -2220,6 +2321,15 @@ impl FemtovgBackend {
                     i = Self::matching_close(content, i) + 1;
                     continue;
                 }
+                // BUG-273 срез 2: a cacheable bbox filter group whose composited
+                // texture is still valid (unchanged content, matching device
+                // size + sub-pixel phase) is blitted from the inter-frame cache;
+                // skip the whole bracket instead of re-running the screenshot +
+                // CPU colour-matrix composite this frame.
+                if let Some(close) = self.filter_cache_probe(content, i) {
+                    i = close + 1;
+                    continue;
+                }
                 let t = std::time::Instant::now();
                 self.render_command(cmd);
                 let e = per_variant.entry(cmd.variant_name()).or_default();
@@ -2235,8 +2345,9 @@ impl FemtovgBackend {
                 .map(|(name, (dur, n))| format!("{name} {:.2}ms/{n}", dur.as_secs_f64() * 1000.0))
                 .collect();
             eprintln!(
-                "[frame] top: {}, offscreen groups culled: {culled_groups}",
+                "[frame] top: {}, offscreen groups culled: {culled_groups}, filter cache hits: {}",
                 top.join(", "),
+                self.filter_cache_hits,
             );
         } else {
             let mut i = 0usize;
@@ -2250,6 +2361,12 @@ impl FemtovgBackend {
                     && self.is_command_culled(bounds)
                 {
                     i = Self::matching_close(content, i) + 1;
+                    continue;
+                }
+                // BUG-273 срез 2: reuse a cached bbox filter-layer texture — see
+                // the instrumented branch above for the rationale.
+                if let Some(close) = self.filter_cache_probe(content, i) {
+                    i = close + 1;
                     continue;
                 }
                 self.render_command(cmd);
@@ -2323,6 +2440,12 @@ impl FemtovgBackend {
             let (dw, dh) = self.content_band_size;
             self.release_content_band(id, dw, dh);
         }
+        // BUG-273 срез 2: the retained filter-layer textures key on a per-subtree
+        // content hash, which cannot see a pixel change that leaves the display
+        // list identical (an image finishing load, a bg/font swap) or a device
+        // geometry change (resize / DPI). This method is called on exactly those
+        // events, so drop the filter cache here in lock-step with the scroll band.
+        self.clear_filter_cache();
     }
 
     // ─── Drawing helpers ──────────────────────────────────────────────────────
@@ -2741,7 +2864,7 @@ impl FemtovgBackend {
     /// Реализует PA-2: GPU Gaussian blur через `filter_image` + CPU colour-matrix
     /// через flush → screenshot → pixel process → re-upload.
     fn composite_filter_layer(&mut self, entry: FilterLayerEntry) {
-        let FilterLayerEntry { image_id: src_id, filters, prev_render_target, bbox } = entry;
+        let FilterLayerEntry { image_id: src_id, filters, prev_render_target, bbox, cache_meta } = entry;
 
         // BUG-272 срез 14: undo the Push-time bbox save()+translate()+scissor(),
         // if any — mirrors composite_opacity_layer's own restore(). Safe to do
@@ -2898,7 +3021,16 @@ impl FemtovgBackend {
         match (current_pooled, bbox, current_cpu_upload_dims) {
             (true, Some((_, _, w, h)), _) => self.release_bbox_layer(current_id, w, h),
             (true, None, _) => self.release_layer(current_id),
-            (false, Some(_), Some((w, h))) => self.release_bbox_cpu_upload_image(current_id, w, h),
+            // BUG-273 срез 2: a cacheable colour-matrix bbox group (the only case
+            // that reaches here with `cache_meta = Some`) retains its composited
+            // texture in the inter-frame cache instead of recycling it to the
+            // bbox cpu-upload pool, so a later frame with the same subtree can
+            // reuse it. The stored image leaves the pool's ownership; it is freed
+            // via `filter_layer_pending_delete` on eviction/overwrite/invalidate.
+            (false, Some(_), Some((w, h))) => match cache_meta {
+                Some(meta) => self.store_filter_cache(meta, current_id, w, h),
+                None => self.release_bbox_cpu_upload_image(current_id, w, h),
+            },
             (false, None, Some((w, h))) => self.release_cpu_upload_image(current_id, w, h),
             _ => self.filter_layer_pending_delete.push(current_id),
         }
@@ -4126,6 +4258,226 @@ impl FemtovgBackend {
         content.len().saturating_sub(1)
     }
 
+    /// BUG-273 срез 2: is a `PushFilter` chain eligible for the inter-frame
+    /// bbox filter-layer cache?
+    ///
+    /// Eligible ⇔ the chain has **no blur** (blur chains render into a
+    /// full-framebuffer, scroll-baked layer — not scroll-invariant, see
+    /// [`FilterLayerEntry::bbox`]) **and** carries at least one colour-matrix
+    /// filter (a non-`Blur`/non-`Opacity` primitive). That is exactly the set of
+    /// chains for which `PushFilter` takes the bbox path and
+    /// [`Self::composite_filter_layer`] runs the expensive `screenshot()` +
+    /// CPU colour-matrix loop whose result is worth retaining. An opacity-only
+    /// or blur(0)-only chain has nothing costly to cache.
+    fn filter_is_bbox_cacheable(filters: &[lumen_layout::FilterFn]) -> bool {
+        let has_blur = filters
+            .iter()
+            .any(|f| matches!(f, lumen_layout::FilterFn::Blur(s) if *s > 0.0));
+        let has_color_matrix = filters.iter().any(|f| {
+            !matches!(
+                f,
+                lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_)
+            )
+        });
+        !has_blur && has_color_matrix
+    }
+
+    /// BUG-273 срез 2: device-pixel placement `(x0, y0, w, h)` plus the
+    /// sub-device-pixel phase `(phase_x, phase_y)` (eighths) of the group's
+    /// mapped top-left under the current transform. `None` when the group has no
+    /// on-screen bbox (fully clamped away / zero-area). The phase captures where
+    /// content lands *within* the bbox texture; two frames with matching dims
+    /// but differing phase would produce sub-pixel-shifted renders, so a hit is
+    /// gated on both matching (integer-device scroll — the scale-1.0 common case
+    /// — keeps the phase constant).
+    fn filter_cache_placement(&self, local: Rect) -> Option<(f32, f32, usize, usize, u32, u32)> {
+        let (x0, y0, w, h) = self.screen_bbox_device_px(local)?;
+        // The bbox origin `screen_bbox_device_px` floors is the AABB min corner.
+        // For the phase we need the sub-pixel remainder of that same min corner,
+        // so re-derive the mapped corners here (cheap: only runs for the handful
+        // of cacheable filter groups per frame).
+        let t = self.canvas.transform();
+        let (bx0, by0) = (local.x, local.y);
+        let (bx1, by1) = (local.x + local.width, local.y + local.height);
+        let corners = [
+            t.transform_point(bx0, by0),
+            t.transform_point(bx1, by0),
+            t.transform_point(bx0, by1),
+            t.transform_point(bx1, by1),
+        ];
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        for (sx, sy) in corners {
+            min_x = min_x.min(sx);
+            min_y = min_y.min(sy);
+        }
+        let scale = self.scale as f32;
+        // `x0`/`y0` are `(min * scale).floor().max(0.0)`; the phase is the
+        // fractional device offset lost to that floor, quantized to eighths.
+        let phase_x = (((min_x * scale) - x0).rem_euclid(1.0) * 8.0).round() as u32 % 8;
+        let phase_y = (((min_y * scale) - y0).rem_euclid(1.0) * 8.0).round() as u32 % 8;
+        Some((x0, y0, w, h, phase_x, phase_y))
+    }
+
+    /// BUG-273 срез 2: content hash of the `PushFilter…PopFilter` bracket
+    /// `content[open..=close]` (inclusive). Folded via
+    /// [`crate::display_list::hash_command_into`], which hashes document-space
+    /// command fields only — the outer scroll transform is never part of a
+    /// command, so the hash is stable across pure scrolling by construction.
+    fn hash_filter_bracket(content: &[DisplayCommand], open: usize, close: usize) -> u64 {
+        use std::hash::Hasher as _;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for cmd in &content[open..=close] {
+            crate::display_list::hash_command_into(cmd, &mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// BUG-273 срез 2: decide, at a `PushFilter` index in `run_content_pass`,
+    /// whether the bbox filter-layer cache handles this bracket.
+    ///
+    /// Returns `Some(close)` on a **hit** — the caller must blit-then-skip to
+    /// `close + 1` (the composited texture has already been drawn at the current
+    /// on-screen position). Returns `None` when the bracket must render normally;
+    /// on a genuine miss for a cacheable group it records
+    /// [`Self::pending_filter_cache_meta`] so the store fires at `PopFilter`.
+    fn filter_cache_probe(&mut self, content: &[DisplayCommand], i: usize) -> Option<usize> {
+        if !self.filter_cache_enabled {
+            return None;
+        }
+        let DisplayCommand::PushFilter {
+            filters,
+            bounds: Some(b),
+        } = &content[i]
+        else {
+            return None;
+        };
+        if !Self::filter_is_bbox_cacheable(filters) {
+            return None;
+        }
+        let (x0, y0, w, h, phase_x, phase_y) = self.filter_cache_placement(*b)?;
+        let close = Self::matching_close(content, i);
+        let hash = Self::hash_filter_bracket(content, i, close);
+        // Hit: dims + phase must match so the reuse is pixel-identical. Copy the
+        // texture id out here so the immutable lookup borrow ends before the
+        // `get_mut`/counter mutations below.
+        let hit = self
+            .filter_layer_cache
+            .get(&hash)
+            .filter(|e| e.w == w && e.h == h && e.phase_x == phase_x && e.phase_y == phase_y)
+            .map(|e| e.image_id);
+        if let Some(image_id) = hit {
+            self.filter_cache_clock += 1;
+            let clock = self.filter_cache_clock;
+            if let Some(e) = self.filter_layer_cache.get_mut(&hash) {
+                e.last_used = clock;
+            }
+            self.filter_cache_hits += 1;
+            self.blit_cached_filter_layer(image_id, x0, y0, w, h);
+            return Some(close);
+        }
+        // Miss: hand the key to the upcoming PushFilter → composite → store.
+        self.pending_filter_cache_meta = Some(FilterCacheMeta {
+            hash,
+            phase_x,
+            phase_y,
+        });
+        None
+    }
+
+    /// BUG-273 срез 2: draw a cached filter-layer texture at its current
+    /// on-screen device rect. Mirrors the `bbox = Some(..)` branch of
+    /// [`Self::composite_filter_layer`]'s Step 4 exactly, so a cache hit is
+    /// byte-identical to the composite it replaces — `reset_transform` + an
+    /// absolute-device-space image fill, independent of the ambient transform.
+    fn blit_cached_filter_layer(
+        &mut self,
+        image_id: femtovg::ImageId,
+        x0: f32,
+        y0: f32,
+        w: usize,
+        h: usize,
+    ) {
+        let x = x0 / self.scale as f32;
+        let y = y0 / self.scale as f32;
+        let cw = w as f32 / self.scale as f32;
+        let ch = h as f32 / self.scale as f32;
+        self.canvas.save();
+        self.canvas.reset_transform();
+        let paint = femtovg::Paint::image(image_id, x, y, cw, ch, 0.0, 1.0);
+        let mut path = femtovg::Path::new();
+        path.rect(x, y, cw, ch);
+        self.canvas.fill_path(&path, &paint);
+        self.canvas.restore();
+    }
+
+    /// BUG-273 срез 2: retain a freshly composited bbox filter-layer texture
+    /// under `meta`, so future frames with the same subtree hit. Enforces
+    /// [`FILTER_CACHE_BUDGET_BYTES`] / [`FILTER_CACHE_MAX_ENTRIES`] by evicting
+    /// the least-recently-used entries first; every image removed (evicted or
+    /// overwritten) is queued to `filter_layer_pending_delete` so it is deleted
+    /// only after the frame's flush.
+    fn store_filter_cache(&mut self, meta: FilterCacheMeta, image_id: femtovg::ImageId, w: usize, h: usize) {
+        let bytes = w.saturating_mul(h).saturating_mul(4);
+        self.filter_cache_clock += 1;
+        let clock = self.filter_cache_clock;
+        // Overwrite any stale entry under this key (content hash collision within
+        // the same key is impossible; a repeat store means a re-render of the
+        // same group whose previous texture is now superseded).
+        if let Some(old) = self.filter_layer_cache.remove(&meta.hash) {
+            self.filter_cache_bytes = self.filter_cache_bytes.saturating_sub(old.bytes);
+            self.filter_layer_pending_delete.push(old.image_id);
+        }
+        self.filter_layer_cache.insert(
+            meta.hash,
+            CachedFilterLayer {
+                image_id,
+                w,
+                h,
+                phase_x: meta.phase_x,
+                phase_y: meta.phase_y,
+                bytes,
+                last_used: clock,
+            },
+        );
+        self.filter_cache_bytes = self.filter_cache_bytes.saturating_add(bytes);
+        self.evict_filter_cache();
+    }
+
+    /// BUG-273 срез 2: LRU-evict retained filter textures until both the byte
+    /// budget and the entry cap are satisfied. Evicted images go to the
+    /// after-flush delete queue.
+    fn evict_filter_cache(&mut self) {
+        while self.filter_cache_bytes > FILTER_CACHE_BUDGET_BYTES
+            || self.filter_layer_cache.len() > FILTER_CACHE_MAX_ENTRIES
+        {
+            let Some((&victim, _)) = self
+                .filter_layer_cache
+                .iter()
+                .min_by_key(|(_, e)| e.last_used)
+            else {
+                break;
+            };
+            if let Some(e) = self.filter_layer_cache.remove(&victim) {
+                self.filter_cache_bytes = self.filter_cache_bytes.saturating_sub(e.bytes);
+                self.filter_layer_pending_delete.push(e.image_id);
+            }
+        }
+    }
+
+    /// BUG-273 срез 2: drop every retained filter-layer texture (queued for
+    /// after-flush deletion) and empty the cache. Called from
+    /// [`Self::invalidate_scroll_cache`] on the same resize/DPI/content/
+    /// image-load events that invalidate the scroll-blit band — the events that
+    /// change on-screen pixels without changing a subtree's content hash, which
+    /// the per-subtree hash alone could not detect.
+    fn clear_filter_cache(&mut self) {
+        for (_, e) in self.filter_layer_cache.drain() {
+            self.filter_layer_pending_delete.push(e.image_id);
+        }
+        self.filter_cache_bytes = 0;
+    }
+
     fn render_command(&mut self, cmd: &DisplayCommand) {
         // ADR-016 M0.2: skip self-contained leaf draws whose box is fully
         // off-screen under the current transform. Structural commands return
@@ -4828,6 +5180,12 @@ impl FemtovgBackend {
                     // Uses active_rt_image (maintained by switch_render_target) to
                     // correctly handle nesting with blend layers (PA-3).
                     let prev_rt = self.current_rt();
+                    // BUG-273 срез 2: the cache key `filter_cache_probe` staged
+                    // on a miss (if any). Taken unconditionally so it can never
+                    // leak to a later, unrelated PushFilter; only attached to the
+                    // entry on the bbox path below (a full-framebuffer fallback is
+                    // not cacheable).
+                    let cache_meta = self.pending_filter_cache_meta.take();
 
                     // BUG-145 / BUG-272 срез 14: a chain containing a blur
                     // must stay full-RT-sized. `filter_image`'s Gaussian
@@ -4880,6 +5238,10 @@ impl FemtovgBackend {
                                 filters: filters.clone(),
                                 prev_render_target: prev_rt,
                                 bbox,
+                                // Only a bbox-sized layer is cacheable; a
+                                // full-framebuffer fallback (`bbox == None`) is
+                                // scroll-baked, so drop the staged key there.
+                                cache_meta: bbox.and(cache_meta),
                             });
                             self.layer_stack_depth += 1;
                         }
@@ -5215,6 +5577,10 @@ impl RenderBackend for FemtovgBackend {
         self.scroll_x = scroll_x;
         // ADR-016 M0.2: reset per-frame culling counters.
         self.cull_stats = (0, 0);
+        // BUG-273 срез 2: advance the filter-cache LRU clock and reset the
+        // per-frame hit counter (reported under LUMEN_FRAME_LOG=2).
+        self.filter_cache_clock = self.filter_cache_clock.wrapping_add(1);
+        self.filter_cache_hits = 0;
         self.viewport_css_w = (self.width as f64 / self.scale) as f32;
         self.viewport_css_h = (self.height as f64 / self.scale) as f32;
         // ADR-016 M3.2.1b: culling defaults to the viewport; the band content
@@ -6030,6 +6396,78 @@ mod tests {
         assert_eq!(FemtovgBackend::matching_close(&cmds, 0), 5);
         // A bracket with no nesting closes at the very next index.
         assert_eq!(FemtovgBackend::matching_close(&cmds, 1), 2);
+    }
+
+    /// BUG-273 срез 2: only a blur-free chain carrying a colour-matrix primitive
+    /// is cache-eligible — that is the exact set of filter chains that take the
+    /// bbox (scroll-invariant, screenshot-round-trip) path in `composite_filter_layer`.
+    #[test]
+    fn filter_is_bbox_cacheable_matches_the_bbox_colour_matrix_path() {
+        use lumen_layout::FilterFn;
+        // Colour-matrix only → cacheable.
+        assert!(FemtovgBackend::filter_is_bbox_cacheable(&[FilterFn::Grayscale(1.0)]));
+        assert!(FemtovgBackend::filter_is_bbox_cacheable(&[
+            FilterFn::Brightness(0.5),
+            FilterFn::Contrast(2.0),
+        ]));
+        // Opacity is folded in with a colour-matrix filter → still cacheable
+        // (opacity alone is handled without an offscreen layer, see below).
+        assert!(FemtovgBackend::filter_is_bbox_cacheable(&[
+            FilterFn::Opacity(0.5),
+            FilterFn::Sepia(1.0),
+        ]));
+        // Any real blur forces the full-framebuffer (scroll-baked) path → NOT cacheable.
+        assert!(!FemtovgBackend::filter_is_bbox_cacheable(&[FilterFn::Blur(4.0)]));
+        assert!(!FemtovgBackend::filter_is_bbox_cacheable(&[
+            FilterFn::Blur(4.0),
+            FilterFn::Grayscale(1.0),
+        ]));
+        // Opacity-only / blur(0)-only → nothing costly to cache.
+        assert!(!FemtovgBackend::filter_is_bbox_cacheable(&[FilterFn::Opacity(0.3)]));
+        assert!(!FemtovgBackend::filter_is_bbox_cacheable(&[FilterFn::Blur(0.0)]));
+        assert!(!FemtovgBackend::filter_is_bbox_cacheable(&[]));
+    }
+
+    /// BUG-273 срез 2: the subtree hash folds every command in the bracket
+    /// (inclusive of the `PushFilter` opener and its filter chain), is stable for
+    /// identical content, and changes when any interior command changes. Scroll
+    /// is never part of a command, so a pure-scroll frame reuses the same hash.
+    #[test]
+    fn hash_filter_bracket_is_content_addressed() {
+        use lumen_core::geom::Rect;
+        use lumen_layout::{Color, FilterFn};
+        let bracket = |gray: f32, fill_x: f32| {
+            vec![
+                DisplayCommand::PushFilter {
+                    filters: vec![FilterFn::Grayscale(gray)],
+                    bounds: Some(Rect::new(10.0, 20.0, 30.0, 40.0)),
+                },
+                DisplayCommand::FillRect {
+                    rect: Rect::new(fill_x, 0.0, 5.0, 5.0),
+                    color: Color { r: 1, g: 2, b: 3, a: 255 },
+                },
+                DisplayCommand::PopFilter,
+            ]
+        };
+        let a = bracket(1.0, 0.0);
+        let b = bracket(1.0, 0.0);
+        // Identical content → identical hash (the pure-scroll reuse case).
+        assert_eq!(
+            FemtovgBackend::hash_filter_bracket(&a, 0, 2),
+            FemtovgBackend::hash_filter_bracket(&b, 0, 2),
+        );
+        // A changed interior draw → different hash (invalidates the cache).
+        let c = bracket(1.0, 7.0);
+        assert_ne!(
+            FemtovgBackend::hash_filter_bracket(&a, 0, 2),
+            FemtovgBackend::hash_filter_bracket(&c, 0, 2),
+        );
+        // A changed filter parameter → different hash.
+        let d = bracket(0.5, 0.0);
+        assert_ne!(
+            FemtovgBackend::hash_filter_bracket(&a, 0, 2),
+            FemtovgBackend::hash_filter_bracket(&d, 0, 2),
+        );
     }
 
     /// BUG-249: скруглённый клип (`overflow:hidden` + `border-radius`) теперь
