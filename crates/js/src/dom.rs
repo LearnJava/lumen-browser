@@ -5318,6 +5318,13 @@ function _lumen_build_element(nid) {
                 var d = _lumen_canvas_dims(nid); _lumen_canvas2d_resize(nid, d[0], d[1]);
             }
         },
+        // Reflected `src` URL attribute — shared by <img>/<script>/<iframe>/<source>/…
+        // (HTML LS: each element's `src` IDL attribute reflects the content attribute).
+        // Returns the raw attribute string (same simplification as `getAttribute`; full
+        // URL resolution to an absolute URL is deferred). Empty string when unset, per
+        // the reflect-a-URL steps. Enables `new Image().src = …` to reach layout (BUG-305).
+        get src()  { var v = _lumen_u2n(_lumen_get_attr(nid, 'src')); return v !== null ? v : ''; },
+        set src(v) { _lumen_set_attr(nid, 'src', String(v)); },
         get offsetWidth()  { var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
         get offsetHeight() { var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
         get offsetLeft()   { var r = _lumen_get_bounding_rect(nid); return r ? r[0] : 0; },
@@ -6080,6 +6087,25 @@ var _doc_hidden = false;
 var _doc_visibility_state = 'visible';
 var _doc_ready_state = 'loading';
 var __dom_node_warned = false;
+
+// HTML LS §4.8.3: the `HTMLImageElement` interface and its legacy factory
+// function `Image(width?, height?)`. BUG-305: both were entirely absent, so
+// `new Image()` — one of the most common legacy patterns (image preloading,
+// tracking pixels, canvas sources) — threw `Image is not defined` and took the
+// whole script down. `Image(w, h)` is defined to be equivalent to
+// `document.createElement('img')` with the width/height content attributes set
+// from the constructor arguments. Returning the element from the constructor
+// makes `new Image()` yield the native `<img>` wrapper (a returned object wins
+// over `this`), so it participates in layout/paint like any parsed `<img>`.
+// `HTMLImageElement` is exposed as a bare interface global; `instanceof` is not
+// wired (element wrappers are plain objects), matching every other DOM element.
+function HTMLImageElement() {}
+function Image(width, height) {
+    var img = document.createElement('img');
+    if (width !== undefined && width !== null)  { img.width  = width; }
+    if (height !== undefined && height !== null) { img.height = height; }
+    return img;
+}
 
 var document = {
     // DOM LS §4.5: `Document.nodeType` is always `Node.DOCUMENT_NODE` (9). react-dom's
@@ -14286,6 +14312,53 @@ mod tests {
             )
             .unwrap();
         assert_eq!(none, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn image_constructor_creates_img_element() {
+        // BUG-305: `new Image()` must produce a native <img> wrapper.
+        let rt = runtime_with_dom(make_doc());
+        let tag = rt.eval("new Image().tagName").unwrap();
+        assert_eq!(tag, lumen_core::JsValue::String("IMG".into()));
+    }
+
+    #[test]
+    fn image_constructor_applies_width_height_args() {
+        // BUG-305: Image(width, height) sets the width/height content attributes.
+        let rt = runtime_with_dom(make_doc());
+        let dims = rt
+            .eval(
+                "var i = new Image(4, 6);\
+                 i.getAttribute('width') + 'x' + i.getAttribute('height')",
+            )
+            .unwrap();
+        assert_eq!(dims, lumen_core::JsValue::String("4x6".into()));
+    }
+
+    #[test]
+    fn image_src_reflects_content_attribute() {
+        // BUG-305: `img.src = …` reaches the underlying `src` attribute so layout
+        // can see the dynamically-assigned image, and reads back the same value.
+        let rt = runtime_with_dom(make_doc());
+        let via_attr = rt
+            .eval("var i = new Image(); i.src = 'test.png'; i.getAttribute('src')")
+            .unwrap();
+        assert_eq!(via_attr, lumen_core::JsValue::String("test.png".into()));
+        let via_prop = rt
+            .eval("var i = new Image(); i.src = 'blue.png'; i.src")
+            .unwrap();
+        assert_eq!(via_prop, lumen_core::JsValue::String("blue.png".into()));
+        // Unset `src` reflects as the empty string, per the reflect-a-URL steps.
+        let unset = rt.eval("new Image().src").unwrap();
+        assert_eq!(unset, lumen_core::JsValue::String("".into()));
+    }
+
+    #[test]
+    fn html_image_element_is_a_global() {
+        // BUG-305: `HTMLImageElement` is exposed as a bare interface global.
+        let rt = runtime_with_dom(make_doc());
+        let ty = rt.eval("typeof HTMLImageElement").unwrap();
+        assert_eq!(ty, lumen_core::JsValue::String("function".into()));
     }
 
     #[test]

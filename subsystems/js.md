@@ -107,6 +107,17 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   (descendants only). Static array, not a live `HTMLCollection`, same as `getElementsByTagName`.
   Known limitation (as with `getElementsByTagName`): class tokens are spliced into the selector
   without CSS escaping — exotic class names with special chars are unsupported.
+- **`Image` / `HTMLImageElement` constructors (BUG-305 fix, [P3] 2026-07-19).**
+  Both were absent from `WEB_API_SHIM`, so `new Image()` (image preloading, tracking pixels, canvas
+  sources) threw `Image is not defined` and took the whole script down (ria.ru). Added two global
+  declarations before the `document` literal: `function HTMLImageElement() {}` (bare interface global,
+  `instanceof` not wired — element wrappers are plain objects) and `function Image(width?, height?)`
+  which does `document.createElement('img')`, sets the width/height content attributes from its args,
+  and **returns** the element (a returned object wins over `this`), so `new Image()` yields a native
+  `<img>` wrapper that participates in layout/paint. Companion change: `_lumen_build_element` now
+  reflects the `src` content attribute (`get/set src`, shared by `<img>/<script>/<iframe>/<source>`),
+  so `img.src = …` reaches layout; the getter returns the raw attribute string (URL resolution
+  deferred), empty string when unset. `onload`/`onerror` on JS-initiated fetch stays deferred.
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has
