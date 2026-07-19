@@ -4780,24 +4780,31 @@ fn decode_image(
         }
     };
 
-    // Animated GIF detection: decode all frames; keep the animation if >1 frame.
+    // Animated GIF detection: decode metadata lazily; keep the animation if >1 frame.
     if lumen_image::is_gif(&bytes) {
         return match lumen_image::decode_gif_animated(&bytes) {
-            Ok(gif) if gif.frames.len() > 1 => {
-                let first = gif.frames[0].image.clone();
-                eprintln!(
-                    "Загружена GIF-анимация: {} ({}×{}, {} кадров)",
-                    raw_src, gif.width, gif.height, gif.frames.len()
-                );
-                Some(DecodedImage::Animated {
-                    first: Arc::new(first),
-                    gif: Arc::new(gif),
-                })
+            Ok(gif) if gif.frame_count() > 1 => {
+                // BUG-272 срез 19: only the first frame is materialised eagerly.
+                match gif.frame_image(0) {
+                    Ok(first) => {
+                        eprintln!(
+                            "Загружена GIF-анимация: {} ({}×{}, {} кадров)",
+                            raw_src, gif.width, gif.height, gif.frame_count()
+                        );
+                        Some(DecodedImage::Animated {
+                            first: Arc::new(first),
+                            gif: Arc::new(gif),
+                        })
+                    }
+                    Err(e) => {
+                        eprintln!("Не декодируется GIF {raw_src}: {e}");
+                        None
+                    }
+                }
             }
             Ok(gif) => {
                 // Single-frame GIF: treat as static image.
-                gif.frames.into_iter().next().map(|frame| {
-                    let image = frame.image;
+                gif.frame_image(0).ok().map(|image| {
                     eprintln!(
                         "Загружена картинка (GIF, 1 кадр): {} ({}×{})",
                         raw_src, image.width, image.height
@@ -8876,8 +8883,15 @@ impl Lumen {
             // Animated GIF detection for lazy-loaded images.
             if lumen_image::is_gif(&bytes) {
                 match lumen_image::decode_gif_animated(&bytes) {
-                    Ok(gif) if gif.frames.len() > 1 => {
-                        let first = gif.frames[0].image.clone();
+                    Ok(gif) if gif.frame_count() > 1 => {
+                        // BUG-272 срез 19: only the first frame is decoded eagerly here.
+                        let first = match gif.frame_image(0) {
+                            Ok(img) => img,
+                            Err(e) => {
+                                eprintln!("Lazy: не декодируется GIF {url}: {e}");
+                                continue;
+                            }
+                        };
                         if let Some(src) = self.layout_source.as_ref() {
                             let mut doc = src.document.lock().unwrap();
                             let node_id = NodeId::from_index(nid as usize);
@@ -8885,7 +8899,7 @@ impl Lumen {
                         }
                         eprintln!(
                             "Lazy GIF-анимация: {} ({}×{}, {} кадров)",
-                            url, gif.width, gif.height, gif.frames.len()
+                            url, gif.width, gif.height, gif.frame_count()
                         );
                         if let Some(r) = self.renderer.as_mut() {
                             // BUG-272 срез 17: insert into the CPU cache first, then
@@ -8903,8 +8917,7 @@ impl Lumen {
                         continue;
                     }
                     Ok(gif) => {
-                        if let Some(frame) = gif.frames.into_iter().next() {
-                            let img = frame.image;
+                        if let Ok(img) = gif.frame_image(0) {
                             if let Some(src) = self.layout_source.as_ref() {
                                 let mut doc = src.document.lock().unwrap();
                                 let node_id = NodeId::from_index(nid as usize);
@@ -9025,8 +9038,15 @@ impl Lumen {
 
             match lumen_image::decode_gif_animated(&bytes) {
                 Ok(gif) => {
-                    // BUG-272 срез 17: Arc so register/pending share the buffer.
-                    let first = Arc::new(gif.frames[0].image.clone());
+                    // BUG-272 срез 17/19: Arc so register/pending share the buffer;
+                    // only the first frame is materialised eagerly.
+                    let first = match gif.frame_image(0) {
+                        Ok(img) => Arc::new(img),
+                        Err(e) => {
+                            eprintln!("video GIF: ошибка декодирования {src}: {e}");
+                            continue;
+                        }
+                    };
                     let key = format!("video:{nid}");
                     if let Some(r) = self.renderer.as_mut() {
                         if let Err(e) = r.register_image(key.clone(), Arc::clone(&first)) {
@@ -9043,10 +9063,10 @@ impl Lumen {
                     }
                     eprintln!(
                         "video GIF: загружен nid={nid} ({}×{}, {} кадров)",
-                        gif.width, gif.height, gif.frames.len()
+                        gif.width, gif.height, gif.frame_count()
                     );
                     // Store frames in shell-side map (lumen_image dep stays in shell).
-                    let cycle_ms: u64 = gif.frames.iter().map(|f| f.delay_ms()).sum();
+                    let cycle_ms: u64 = gif.total_cycle_ms();
                     let loop_count = match gif.loop_count {
                         lumen_image::GifLoopCount::Infinite | lumen_image::GifLoopCount::Finite(0) => 0u32,
                         lumen_image::GifLoopCount::Finite(n) => u32::from(n),
@@ -9095,7 +9115,7 @@ impl Lumen {
                 if last == idx {
                     return None;
                 }
-                Some((*nid, idx, gif.frames[idx].image.clone()))
+                Some((*nid, idx, gif.frame_image(idx).ok()?))
             })
             .collect();
         drop(playback);
@@ -10447,10 +10467,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             if now_s - self.last_mem_report_s >= 10.0 {
                 self.last_mem_report_s = now_s;
                 let wf_bytes: usize = self.web_fonts.iter().map(|f| f.bytes.len()).sum();
+                // BUG-272 срез 19: lazy GIFs hold encoded bytes + ~one decoded frame,
+                // not all N frames — `resident_bytes` reflects the real footprint.
                 let gif_bytes: usize = self
                     .animated_gifs
                     .values()
-                    .map(|g| g.frames.iter().map(|f| f.image.data.len()).sum::<usize>())
+                    .map(lumen_image::AnimatedGif::resident_bytes)
                     .sum();
                 let (img_n, img_b) = image_cache::IMAGE_CACHE.debug_stats();
                 let (pf_n, pf_b) = prefetch::PREFETCH_CACHE.debug_stats();
@@ -13914,7 +13936,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             .filter_map(|(url, gif)| {
                                 let idx = gif.frame_index_at(elapsed_ms);
                                 if last.get(url).copied().unwrap_or(usize::MAX) != idx {
-                                    Some((url.clone(), idx, gif.frames[idx].image.clone()))
+                                    gif.frame_image(idx).ok().map(|img| (url.clone(), idx, img))
                                 } else {
                                     None
                                 }
@@ -13935,10 +13957,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let gif_animating = {
                         let gifs = &self.animated_gifs;
                         gifs.values().any(|gif| match gif.loop_count {
-                            lumen_image::GifLoopCount::Infinite => gif.frames.len() > 1,
+                            lumen_image::GifLoopCount::Infinite => gif.frame_count() > 1,
                             lumen_image::GifLoopCount::Finite(n) => {
-                                let total_ms: u64 =
-                                    gif.frames.iter().map(lumen_image::AnimatedFrame::delay_ms).sum();
+                                let total_ms: u64 = gif.total_cycle_ms();
                                 elapsed_ms < total_ms.saturating_mul(u64::from(n))
                             }
                         })
@@ -21068,7 +21089,7 @@ impl Lumen {
             let mut pb = self.video_gif_store.playback.lock().unwrap();
             pb.clear();
             for (nid, gif) in &self.video_gif_frames {
-                let cycle_ms: u64 = gif.frames.iter().map(|f| f.delay_ms()).sum();
+                let cycle_ms: u64 = gif.total_cycle_ms();
                 let loop_count = match gif.loop_count {
                     lumen_image::GifLoopCount::Infinite | lumen_image::GifLoopCount::Finite(0) => 0u32,
                     lumen_image::GifLoopCount::Finite(n) => u32::from(n),

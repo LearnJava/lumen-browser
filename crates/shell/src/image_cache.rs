@@ -100,9 +100,9 @@ impl DecodedImageCache {
             if let Some(Some(img)) = slot.state.lock().unwrap().as_ref() {
                 bytes += match img {
                     DecodedImage::Static(i) => i.data.len(),
+                    // BUG-272 срез 19: lazy GIF holds encoded bytes + ~one decoded frame.
                     DecodedImage::Animated { first, gif } => {
-                        first.data.len()
-                            + gif.frames.iter().map(|f| f.image.data.len()).sum::<usize>()
+                        first.data.len() + gif.resident_bytes()
                     }
                 };
             }
