@@ -128,6 +128,23 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   `setAttribute`. The Attr-node variants (`getAttributeNodeNS`/`setAttributeNodeNS`) are omitted —
   the base `getAttributeNode`/`setAttributeNode` do not exist in the shim either (no Attr node
   objects), so adding only the `NS` forms would be inconsistent.
+- **ElementTraversal + `ParentNode.children` + `Node.parentNode` (BUG-310 fix, [P3] 2026-07-19).**
+  `childElementCount`/`firstElementChild`/`lastElementChild`/`nextElementSibling`/
+  `previousElementSibling` were entirely absent, `.children` was a bare array (no `.item()`), and —
+  surprisingly — element wrappers had only `parentElement`, never `parentNode` (so
+  `node.parentNode.children` threw `Cannot read properties of undefined`). Fix, all in the shared
+  `WEB_API_SHIM`: element-only helpers `_lumen_is_element_nid` (element = not a text node and
+  tag-name not `#`-prefixed — `_lumen_get_children` returns text/comment children too) and
+  `_lumen_element_child_nids` (element children in tree order); the five traversal accessors on the
+  element wrapper (siblings locate the node among the parent's element children and step past text);
+  a `parentNode` getter mirroring `parentElement`. `children` (element + `DocumentFragment`) is now
+  a live `HTMLCollection` built by `_lumen_make_html_collection` over a `Proxy` — `length`, numeric
+  indices, `item(i)` and `namedItem(name)` re-query the live tree on every access; the prototype is
+  the marker `HTMLCollection` (exposed as `window.HTMLCollection`) so `x instanceof HTMLCollection`
+  holds. Consumers that index `el.children[i]`/read `.length` are unaffected (no array methods were
+  used on `.children`). Known limitation: `Element-children.html` stays WPT-FAIL — its two subtests
+  need the full HTMLCollection named-getter *enumeration* order and a non-HTML-namespace element
+  from `createElementNS("", ...)`, which Lumen folds to HTML.
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has
