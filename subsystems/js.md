@@ -153,6 +153,21 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   `Node-isConnected.html` «Test with ordinary child nodes» now PASSes. Known limitation: «Test with
   iframes» stays WPT-FAIL — it needs separate iframe sub-documents via `contentDocument`, which the
   shim does not model as distinct connected trees.
+- **`document.createProcessingInstruction(target, data)` (DOM §4.5, BUG-313 fix, [P3] 2026-07-19).**
+  Was entirely absent. Added to the `document` literal in the shared `WEB_API_SHIM`, plus two
+  top-level helpers before it: `_lumen_is_xml_name(s)` (an `^[NameStartChar][NameChar]*$` regexp built
+  from the XML 1.0 Name production ranges — BMP only; the astral `#x10000-#xEFFFF` range is omitted
+  since no subtest exercises it; the split ranges are what correctly exclude `U+00D7` (×) and `U+00B7`
+  (·) from NameStartChar while still admitting `·` as a NameChar, e.g. `A·A`), and
+  `_lumen_make_processing_instruction(target, data)` (a detached JS-only CharacterData node — PIs never
+  participate in layout — exposing `target`/`data` (mutable)/`nodeValue`/`nodeType 7`/`nodeName`/
+  `length`/`ownerDocument`). The method throws `DOMException(…, 'InvalidCharacterError')` (legacy code
+  5, set by the `v8_runtime.rs` DOMException polyfill) when `target` is not a valid XML Name or `data`
+  contains `?>`. Closes 8 of the 11 WPT `Document-createProcessingInstruction.html` sub-fails (the
+  `INVALID_CHARACTER_ERR` group). The remaining 3 (`Should get a ProcessingInstruction …`) assert
+  `pi instanceof ProcessingInstruction` / `pi instanceof Node`, which needs the DOM interfaces exposed
+  as globals — that is [BUG-314](../bugs/BUG-314-OPEN.md)'s scope; their `.ini` `expected: FAIL` is
+  kept and re-attributed. 3 unit tests (`dom::tests::create_processing_instruction_*`).
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has
