@@ -22,7 +22,7 @@ MutationRecord`.
   `Callback is invoked with |this| value of MutationObserver and two arguments`
   → `MutationRecord is not defined` (`expected: FAIL`).
 
-Та же семья, что [BUG-314](BUG-314-OPEN.md) (DOM-конструкторы не выставлены как
+Та же семья, что [BUG-314](BUG-314-FIXED.md) (DOM-конструкторы не выставлены как
 глобали).
 
 ## Ожидание

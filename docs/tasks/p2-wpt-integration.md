@@ -367,7 +367,7 @@ option isn't lost — do not fold it into this task's scope.
       `ParentNode.children` — 10 tests), [BUG-311](../../bugs/BUG-311-OPEN.md) (`Node.isConnected`),
       [BUG-312](../../bugs/BUG-312-OPEN.md) (`Element.hasAttributes()`),
       [BUG-313](../../bugs/BUG-313-OPEN.md) (`document.createProcessingInstruction`),
-      [BUG-314](../../bugs/BUG-314-OPEN.md) (DOM interface constructors not exposed as globals),
+      [BUG-314](../../bugs/BUG-314-FIXED.md) (DOM interface constructors not exposed as globals),
       plus the pre-existing [BUG-302](../../bugs/BUG-302-OPEN.md) (`getElementsByClassName`) and
       [BUG-309](../../bugs/BUG-309-OPEN.md) (`setAttributeNS`). Excluded from the curated subset
       (not weakened — filed/noted separately): `Element-classlist.html` (1420 subtests, DOMTokenList

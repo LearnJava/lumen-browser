@@ -4225,6 +4225,14 @@ function _lumen_make_document_fragment(nid) {
         __isDocumentFragment__: true,
         get nodeType()        { return 11; }, // Node.DOCUMENT_FRAGMENT_NODE
         get nodeName()        { return '#document-fragment'; },
+        // BUG-314: `new DocumentFragment()` is owned by the current document;
+        // `firstChild` returns the first inserted child (cached wrapper, so it
+        // compares === with the node handed to appendChild).
+        get ownerDocument()   { return document; },
+        get firstChild()      {
+            var ch = _lumen_get_children(nid);
+            return ch.length ? _lumen_make_element(ch[0]) : null;
+        },
         get textContent()     { return _lumen_get_text_content(nid); },
         set textContent(v)    { _lumen_set_text_content(nid, String(v)); },
         get innerHTML()       { return _lumen_get_inner_html(nid); },
@@ -4290,9 +4298,10 @@ function _lumen_is_xml_name(s) {
 
 // DOM §4.5 ProcessingInstruction — a detached, JS-only CharacterData node
 // (no arena backing; PIs are never laid out). Enough surface for scripts to
-// read/write `target`/`data` and inspect `nodeType`/`ownerDocument`. Exposing
-// the `ProcessingInstruction`/`Node` interfaces as globals (for `instanceof`)
-// is tracked separately in BUG-314.
+// read/write `target`/`data` and inspect `nodeType`/`ownerDocument`. The
+// `ProcessingInstruction`/`CharacterData`/`Node` interface globals (for
+// `instanceof`) are defined below (BUG-314) and this object's prototype is set
+// to `ProcessingInstruction.prototype` before it is returned.
 function _lumen_make_processing_instruction(target, data) {
     var _data = String(data);
     var pi = {
@@ -4311,8 +4320,117 @@ function _lumen_make_processing_instruction(target, data) {
         get parentNode()    { return null; },
         get childNodes()    { return []; },
     };
+    // BUG-314: give the PI object the ProcessingInstruction → CharacterData →
+    // Node prototype chain so `pi instanceof ProcessingInstruction` holds. The
+    // literal's own accessors above take precedence over anything on the chain.
+    Object.setPrototypeOf(pi, ProcessingInstruction.prototype);
     return pi;
 }
+
+// ── DOM interface constructors (DOM Standard §4, HTML §4) ────────────────────
+// BUG-314: node-family interfaces exposed as global constructors. Two roles:
+//   1. Reference / `instanceof` resolution — before this a bare
+//      `x instanceof Node` or `window['Comment']` threw `... is not defined`,
+//      taking whole scripts (and testharness feature-detection) down. Every
+//      interface below at least resolves now.
+//   2. Real construction — `new Comment(data)`, `new Text(data)` and
+//      `new DocumentFragment()` build actual nodes.
+// The CharacterData family (Comment/Text/ProcessingInstruction) are detached
+// JS-only objects (no arena backing — same design as the pre-existing PI node),
+// so they get a REAL prototype chain and working `instanceof`. Element wrappers
+// stay plain native-backed objects and are NOT instances of Element/HTML*Element
+// (documented simplification, see HTMLImageElement); those globals exist for
+// reference resolution only. A constructible `new Document()` and a live
+// `document.doctype` node are deferred (BUG-321).
+
+// Abstract bases — not constructible from script (DOM §4.4/§4.9, HTML §3.2.2).
+function Node() { throw new TypeError('Illegal constructor'); }
+function Element() { throw new TypeError('Illegal constructor'); }
+Element.prototype = Object.create(Node.prototype);
+Element.prototype.constructor = Element;
+function CharacterData() { throw new TypeError('Illegal constructor'); }
+CharacterData.prototype = Object.create(Node.prototype);
+CharacterData.prototype.constructor = CharacterData;
+function Attr() { throw new TypeError('Illegal constructor'); }
+Attr.prototype = Object.create(Node.prototype);
+Attr.prototype.constructor = Attr;
+function Document() { throw new TypeError('Illegal constructor'); }
+Document.prototype = Object.create(Node.prototype);
+Document.prototype.constructor = Document;
+function DocumentType() { throw new TypeError('Illegal constructor'); }
+DocumentType.prototype = Object.create(Node.prototype);
+DocumentType.prototype.constructor = DocumentType;
+function ProcessingInstruction() { throw new TypeError('Illegal constructor'); }
+ProcessingInstruction.prototype = Object.create(CharacterData.prototype);
+ProcessingInstruction.prototype.constructor = ProcessingInstruction;
+function HTMLElement() { throw new TypeError('Illegal constructor'); }
+HTMLElement.prototype = Object.create(Element.prototype);
+HTMLElement.prototype.constructor = HTMLElement;
+
+// Common concrete HTML element interfaces, generated so `instanceof
+// HTMLDivElement` (and feature-detection like `'HTMLDialogElement' in window`)
+// resolves. Each is a bare, non-constructible interface whose prototype chains
+// through HTMLElement; the `in globalThis` guard preserves already-defined
+// interfaces (e.g. the richer `HTMLImageElement`/`Image` pair below).
+['HTMLDivElement','HTMLSpanElement','HTMLParagraphElement','HTMLHeadingElement',
+ 'HTMLAnchorElement','HTMLInputElement','HTMLButtonElement','HTMLSelectElement',
+ 'HTMLOptionElement','HTMLTextAreaElement','HTMLLabelElement','HTMLFormElement',
+ 'HTMLUListElement','HTMLOListElement','HTMLLIElement','HTMLTableElement',
+ 'HTMLTableRowElement','HTMLTableCellElement','HTMLTableSectionElement',
+ 'HTMLScriptElement','HTMLStyleElement','HTMLLinkElement','HTMLMetaElement',
+ 'HTMLHtmlElement','HTMLHeadElement','HTMLBodyElement','HTMLTitleElement',
+ 'HTMLCanvasElement','HTMLVideoElement','HTMLAudioElement','HTMLIFrameElement',
+ 'HTMLTemplateElement','HTMLPreElement','HTMLBRElement','HTMLHRElement',
+ 'HTMLDialogElement','HTMLUnknownElement'
+].forEach(function(_name) {
+    if (_name in globalThis) return;
+    var _ctor = function() { throw new TypeError('Illegal constructor'); };
+    Object.defineProperty(_ctor, 'name', { value: _name, configurable: true });
+    _ctor.prototype = Object.create(HTMLElement.prototype);
+    _ctor.prototype.constructor = _ctor;
+    globalThis[_name] = _ctor;
+});
+
+// Builds a detached CharacterData node (Comment/Text) with `proto` as its
+// [[Prototype]] so both the DOM prototype chain (proto → CharacterData.prototype
+// → Node.prototype) and `instanceof` resolve. `data` is stringified per DOM §4.5
+// (undefined → '', null → 'null'); only the first constructor argument is read.
+function _lumen_make_character_data(nodeType, nodeName, data, proto) {
+    var _data = (data === undefined) ? '' : String(data);
+    var obj = Object.create(proto);
+    // data / nodeValue / textContent are the same mutable CharacterData string.
+    ['data', 'nodeValue', 'textContent'].forEach(function(_prop) {
+        Object.defineProperty(obj, _prop, {
+            get: function() { return _data; },
+            set: function(v) { _data = String(v); },
+            enumerable: true, configurable: true,
+        });
+    });
+    Object.defineProperty(obj, 'length',        { get: function() { return _data.length; }, enumerable: true, configurable: true });
+    Object.defineProperty(obj, 'nodeType',      { get: function() { return nodeType; },     enumerable: true, configurable: true });
+    Object.defineProperty(obj, 'nodeName',      { get: function() { return nodeName; },     enumerable: true, configurable: true });
+    Object.defineProperty(obj, 'ownerDocument', { get: function() { return document; },     enumerable: true, configurable: true });
+    Object.defineProperty(obj, 'parentNode',    { get: function() { return null; },         enumerable: true, configurable: true });
+    Object.defineProperty(obj, 'childNodes',    { get: function() { return []; },           enumerable: true, configurable: true });
+    return obj;
+}
+
+// DOM §4.5 Comment(data) / Text(data) — a returned object wins over `this`, so
+// `new Comment()`/`new Text()` yield the detached CharacterData node above.
+function Comment(data) { return _lumen_make_character_data(8, '#comment', data, Comment.prototype); }
+Comment.prototype = Object.create(CharacterData.prototype);
+Comment.prototype.constructor = Comment;
+function Text(data) { return _lumen_make_character_data(3, '#text', data, Text.prototype); }
+Text.prototype = Object.create(CharacterData.prototype);
+Text.prototype.constructor = Text;
+
+// DOM §4.7 DocumentFragment() — a native (arena-backed) empty fragment, so it
+// can hold real inserted children. The wrapper is a plain native-backed object,
+// so it is NOT a `DocumentFragment` instanceof; the interface global still
+// resolves for reference checks.
+function DocumentFragment() { return _lumen_make_document_fragment(_lumen_create_fragment()); }
+DocumentFragment.prototype = Object.create(Node.prototype);
+DocumentFragment.prototype.constructor = DocumentFragment;
 
 // Dispatch slotchange on all <slot> elements inside the shadow root of `host_nid`.
 // Called when host's light DOM changes (appendChild / removeChild).
@@ -28137,6 +28255,70 @@ mod tests {
                 try { document.createProcessingInstruction(pair[0], pair[1]); return false; } \
                 catch (e) { return e.name === 'InvalidCharacterError' && e.code === 5; } \
              })"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-314: `new Comment(data)` / `new Text(data)` build detached CharacterData
+    // nodes with the correct nodeType/nodeName, stringified data, and the current
+    // document as ownerDocument.
+    #[test]
+    fn comment_text_constructors_build_nodes() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var c = new Comment('hi'), t = new Text('yo'); \
+             c.nodeType === 8 && c.nodeName === '#comment' && c.data === 'hi' && \
+             c.nodeValue === 'hi' && c.ownerDocument === document && \
+             t.nodeType === 3 && t.nodeName === '#text' && t.data === 'yo' && \
+             new Comment().data === '' && new Comment(null).data === 'null' && \
+             new Text(42).data === '42'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-314: the CharacterData prototype chain and `instanceof` resolve for
+    // `new Comment()`/`new Text()` and the detached ProcessingInstruction node.
+    #[test]
+    fn character_data_prototype_chain() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var c = new Comment(); \
+             Object.getPrototypeOf(c) === Comment.prototype && \
+             Object.getPrototypeOf(Comment.prototype) === CharacterData.prototype && \
+             Object.getPrototypeOf(CharacterData.prototype) === Node.prototype && \
+             c instanceof Comment && c instanceof CharacterData && c instanceof Node && \
+             (new Text()) instanceof Text && \
+             document.createProcessingInstruction('a', 'b') instanceof ProcessingInstruction"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-314: `new DocumentFragment()` is owned by the document and holds
+    // inserted children (`firstChild` compares === with the appended node).
+    #[test]
+    fn document_fragment_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var f = new DocumentFragment(); \
+             var t = document.createTextNode(''); \
+             f.appendChild(t); \
+             f.ownerDocument === document && f.firstChild === t"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-314: node/element interface globals resolve so `instanceof` no longer
+    // throws `X is not defined`.
+    #[test]
+    fn dom_interface_globals_defined() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "['Node','Element','CharacterData','Attr','Document','DocumentType', \
+              'ProcessingInstruction','HTMLElement','HTMLDivElement','HTMLInputElement'] \
+             .every(function(n) { return typeof globalThis[n] === 'function'; }) && \
+             (HTMLDivElement.prototype instanceof HTMLElement) && \
+             (HTMLElement.prototype instanceof Element) && \
+             (Element.prototype instanceof Node)"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
