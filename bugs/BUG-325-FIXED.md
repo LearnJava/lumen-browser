@@ -1,6 +1,6 @@
 # BUG-325: `CharacterData.appendChild()` не бросает `HierarchyRequestError`; `ProcessingInstruction` вообще не имеет `appendChild`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-20
 **Дата:** 2026-07-20
 **Компонент:** js (WEB_API_SHIM, `crates/js/src/dom.rs`)
 **Найден:** `docs/wpt-status.md` / `.tmp/wpt-report-all.html`, WPT `dom/nodes/CharacterData-appendChild.html` (0/9 сабтестов).
@@ -50,3 +50,27 @@
 "parent must be Document/DocumentFragment/Element" для семейства `Node`-insertion методов —
 `appendChild` у Element-обёрток и у detached-PI реализованы независимо друг от друга и оба её не
 делают. Чинить, вероятно, стоит вместе (общий helper), а не по одному сабтесту.
+
+## Фикс
+
+Общий хелпер `_lumen_character_data_insertion_error()` (`crates/js/src/dom.rs`, рядом с
+`_lumen_make_processing_instruction`) строит `DOMException(..., 'HierarchyRequestError')`.
+Используется в двух точках:
+
+- Общий `appendChild` (`_lumen_build_element`, `crates/js/src/dom.rs:5360`) — в начале метода
+  добавлена проверка `if (_lumen_is_text_node(nid)) throw ...`, бросающая до попытки что-либо
+  вставить. Покрывает `Text`/`Comment` (оба сейчас реализованы через один и тот же native-текстовый
+  узел под капотом — `document.createComment` строит текстовый узел, отдельного представления
+  `NodeData::Comment` в JS-обёртке пока нет; это отдельный, более широкий гэп, не в скоупе этого бага).
+- `ProcessingInstruction`-объект (`_lumen_make_processing_instruction`) получил свои
+  `appendChild`/`insertBefore`/`replaceChild`/`removeChild` — все четыре бросают ту же ошибку вместо
+  прежнего `TypeError: ... is not a function` (у PI не было вообще ни одного insertion-метода).
+
+Регрессионный юнит-тест `character_data_append_child_throws_hierarchy_request_error`
+(`crates/js/src/dom.rs`, рядом с `character_data_prototype_chain`) зеркалит все 9 комбинаций
+Text/Comment/ProcessingInstruction из самого WPT-теста, проверяя `e.name === 'HierarchyRequestError'
+&& e.code === 3`. Прогнан против V8 (`--features v8-backend`, дефолтный движок по ADR-018) — зелёный.
+
+`insertBefore`/`replaceChild`/`insertAdjacentElement` для Element-обёрток (не CharacterData) —
+осознанно не тронуты, как и было указано в разделе «Ожидание»: WPT-тест их не проверяет, и это
+отдельный необследованный периметр.
