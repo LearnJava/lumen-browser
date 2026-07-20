@@ -1920,17 +1920,20 @@ impl FemtovgBackend {
     /// The caller MUST clear the texture (`clear_rect` to transparent) before
     /// drawing: a reused texture holds the previous layer's pixels.
     fn acquire_layer(&mut self) -> Option<femtovg::ImageId> {
-        if self.layer_pool_size != (self.width, self.height) {
+        // BUG-320: size to the ACTIVE render target (band FBO during a
+        // scroll-blit pass, else the framebuffer), not the window.
+        let (w, h) = self.current_rt_size();
+        if self.layer_pool_size != (w, h) {
             self.filter_layer_pending_delete.append(&mut self.layer_pool);
-            self.layer_pool_size = (self.width, self.height);
+            self.layer_pool_size = (w, h);
         }
         if let Some(id) = self.layer_pool.pop() {
             return Some(id);
         }
         self.canvas
             .create_image_empty(
-                self.width as usize,
-                self.height as usize,
+                w as usize,
+                h as usize,
                 femtovg::PixelFormat::Rgba8,
                 offscreen_layer_image_flags(),
             )
@@ -1943,7 +1946,10 @@ impl FemtovgBackend {
     fn release_layer(&mut self, id: femtovg::ImageId) {
         /// Deeper simultaneous layer nesting than this is not worth pooling.
         const MAX_POOLED_LAYERS: usize = 8;
-        if self.layer_pool_size == (self.width, self.height)
+        // BUG-320: match the pool against the active-target size the layer was
+        // sized for; a band-sized layer released while the framebuffer is bound
+        // (or vice versa) is retired rather than reused at the wrong dimensions.
+        if self.layer_pool_size == self.current_rt_size()
             && self.layer_pool.len() < MAX_POOLED_LAYERS
         {
             self.layer_pool.push(id);
@@ -2146,6 +2152,42 @@ impl FemtovgBackend {
             Some(id) => femtovg::RenderTarget::Image(id),
             None => femtovg::RenderTarget::Screen,
         }
+    }
+
+    /// BUG-320: device-pixel size of the currently active render target — the
+    /// bound offscreen image's own dimensions when an `Image` target is set,
+    /// else the framebuffer (`self.width × self.height`).
+    ///
+    /// `acquire_layer`/`release_layer` must key off this, NOT `self.width`/
+    /// `self.height`: during a scroll-blit band content pass (ADR-016 M3.2.1b)
+    /// the active target is the band FBO, which is larger than the window
+    /// (viewport + 2·overscan). A window-sized full-frame layer acquired against
+    /// that band target makes `composite_blend_layer`'s `src_rgba` (read back
+    /// from the layer via `screenshot()`) and `backdrop_rgba` (read from the
+    /// band) disagree in length, so the CPU blend is silently skipped and
+    /// `mix-blend-mode` (and the other full-frame fallback openers) never
+    /// renders. Falls back to the framebuffer size if the image lookup fails.
+    fn current_rt_size(&self) -> (u32, u32) {
+        match self.active_rt_image {
+            Some(id) => self
+                .canvas
+                .image_size(id)
+                .map(|(w, h)| (w as u32, h as u32))
+                .unwrap_or((self.width, self.height)),
+            None => (self.width, self.height),
+        }
+    }
+
+    /// BUG-320: CSS-px size of the active render target — [`Self::current_rt_size`]
+    /// divided by the device scale. The full-frame composite paths (`bbox ==
+    /// None`) fill the whole active target 1:1 with their (now active-target-
+    /// sized) layer; a window-sized rect would squash a larger band-sized layer
+    /// into the top-left corner during a scroll-blit content pass. On the direct
+    /// path the active target is the framebuffer, so this equals the window CSS
+    /// size — behaviour there is unchanged.
+    fn current_rt_css_size(&self) -> (f32, f32) {
+        let (w, h) = self.current_rt_size();
+        (w as f32 / self.scale as f32, h as f32 / self.scale as f32)
     }
 
     /// Sets the femtovg render target and updates `active_rt_image` accordingly.
@@ -3003,8 +3045,9 @@ impl FemtovgBackend {
                 self.canvas.fill_path(&path, &paint);
             }
             None => {
-                let css_w = (self.width as f64 / self.scale) as f32;
-                let css_h = (self.height as f64 / self.scale) as f32;
+                // BUG-320: fill the whole active target (band FBO during a
+                // scroll-blit pass) so the band-sized layer composites 1:1.
+                let (css_w, css_h) = self.current_rt_css_size();
                 let paint = femtovg::Paint::image(current_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
                 let mut path = femtovg::Path::new();
                 path.rect(0.0, 0.0, css_w, css_h);
@@ -3130,8 +3173,9 @@ impl FemtovgBackend {
         self.switch_render_target(prev_render_target);
         self.canvas.save();
         self.canvas.reset_transform();
-        let css_w = (self.width as f64 / self.scale) as f32;
-        let css_h = (self.height as f64 / self.scale) as f32;
+        // BUG-320: fill the whole active target (band FBO during a scroll-blit
+        // pass) so the band-sized layer composites 1:1.
+        let (css_w, css_h) = self.current_rt_css_size();
         let paint = femtovg::Paint::image(src_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0)
             .with_anti_alias(true)
             .with_fill_rule(fill_rule);
@@ -3158,8 +3202,12 @@ impl FemtovgBackend {
         match self.acquire_layer() {
             Some(img_id) => {
                 self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                // BUG-320: full-frame fallback layer is sized to the active
+                // render target (band FBO during a scroll-blit pass), not the
+                // window — clear its full extent.
+                let (cw, ch) = self.current_rt_size();
                 self.canvas.clear_rect(
-                    0, 0, self.width, self.height,
+                    0, 0, cw, ch,
                     femtovg::Color::rgba(0, 0, 0, 0),
                 );
                 ClipEntry::RoundedRectLayer {
@@ -3193,8 +3241,12 @@ impl FemtovgBackend {
         match self.acquire_layer() {
             Some(img_id) => {
                 self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                // BUG-320: full-frame fallback layer is sized to the active
+                // render target (band FBO during a scroll-blit pass), not the
+                // window — clear its full extent.
+                let (cw, ch) = self.current_rt_size();
                 self.canvas.clear_rect(
-                    0, 0, self.width, self.height,
+                    0, 0, cw, ch,
                     femtovg::Color::rgba(0, 0, 0, 0),
                 );
                 ClipEntry::PathLayer {
@@ -3253,8 +3305,9 @@ impl FemtovgBackend {
                 self.switch_render_target(prev_render_target);
                 self.canvas.save();
                 self.canvas.reset_transform();
-                let css_w = (self.width as f64 / self.scale) as f32;
-                let css_h = (self.height as f64 / self.scale) as f32;
+                // BUG-320: fill the whole active target (band FBO during a
+                // scroll-blit pass) so the band-sized layer composites 1:1.
+                let (css_w, css_h) = self.current_rt_css_size();
                 let paint = femtovg::Paint::image(src_id, 0.0, 0.0, css_w, css_h, 0.0, alpha);
                 let mut path = femtovg::Path::new();
                 path.rect(0.0, 0.0, css_w, css_h);
@@ -3323,8 +3376,12 @@ impl FemtovgBackend {
         match self.acquire_layer() {
             Some(img_id) => {
                 self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                // BUG-320: full-frame fallback layer is sized to the active
+                // render target (band FBO during a scroll-blit pass), not the
+                // window — clear its full extent.
+                let (cw, ch) = self.current_rt_size();
                 self.canvas.clear_rect(
-                    0, 0, self.width, self.height,
+                    0, 0, cw, ch,
                     femtovg::Color::rgba(0, 0, 0, 0),
                 );
                 MaskLayerEntry {
@@ -3532,8 +3589,10 @@ impl FemtovgBackend {
                         self.canvas.fill_path(&path, &paint);
                     }
                     None => {
-                        let css_w = (self.width as f64 / self.scale) as f32;
-                        let css_h = (self.height as f64 / self.scale) as f32;
+                        // BUG-320: fill the whole active target (band FBO
+                        // during a scroll-blit pass) so the band-sized layer
+                        // composites 1:1.
+                        let (css_w, css_h) = self.current_rt_css_size();
                         let paint = femtovg::Paint::image(result_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
                         let mut path = femtovg::Path::new();
                         path.rect(0.0, 0.0, css_w, css_h);
@@ -5015,8 +5074,12 @@ impl FemtovgBackend {
                         Some(img_id) => {
                             // Redirect subtree draws into the transparent offscreen layer.
                             self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                            // BUG-320: full-frame fallback layer is sized to the
+                            // active render target (band FBO during a scroll-blit
+                            // pass), not the window — clear its full extent.
+                            let (cw, ch) = self.current_rt_size();
                             self.canvas.clear_rect(
-                                0, 0, self.width, self.height,
+                                0, 0, cw, ch,
                                 femtovg::Color::rgba(0, 0, 0, 0),
                             );
                             OpacityLayerEntry {
@@ -5110,9 +5173,15 @@ impl FemtovgBackend {
                                 ),
                                 None => (full_rgba, full_w, full_h),
                             };
+                            // BUG-320: the full-frame fallback layer (`bbox ==
+                            // None`) is sized to the ACTIVE render target (the
+                            // src layer just bound, band-sized during a
+                            // scroll-blit pass) — clear the whole layer, not just
+                            // the window-sized sub-rect, so no band-overscan
+                            // stale pixels leak into the blend.
                             let (cw, ch) = bbox
                                 .map(|(_, _, w, h)| (w as u32, h as u32))
-                                .unwrap_or((self.width, self.height));
+                                .unwrap_or_else(|| self.current_rt_size());
                             self.canvas.clear_rect(0, 0, cw, ch, femtovg::Color::rgba(0, 0, 0, 0));
                             if let Some((x0, y0, _, _)) = bbox {
                                 self.canvas.save();
@@ -5223,9 +5292,13 @@ impl FemtovgBackend {
                             // Redirect draws into the offscreen image.
                             self.switch_render_target(femtovg::RenderTarget::Image(img_id));
                             // Clear to transparent so content composites correctly.
+                            // BUG-320: the full-frame fallback layer (`bbox ==
+                            // None`) is sized to the ACTIVE render target (the
+                            // band FBO during a scroll-blit pass, just bound
+                            // above), not the window — clear the whole layer.
                             let (cw, ch) = bbox
                                 .map(|(_, _, w, h)| (w as u32, h as u32))
-                                .unwrap_or((self.width, self.height));
+                                .unwrap_or_else(|| self.current_rt_size());
                             self.canvas.clear_rect(0, 0, cw, ch, femtovg::Color::rgba(0, 0, 0, 0));
                             if let Some((x0, y0, _, _)) = bbox {
                                 self.canvas.save();
