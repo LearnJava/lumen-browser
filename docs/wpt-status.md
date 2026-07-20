@@ -371,7 +371,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 
 | Тест | Статус | Сабтесты | Владелец | Баг | Заметка |
 |---|---|---|---|---|---|
-| `/dom/nodes/CharacterData-appendChild.html` | OK | 0/9 |  |  |  |
+| `/dom/nodes/CharacterData-appendChild.html` | OK | 0/9 |  | [BUG-325](../bugs/BUG-325-OPEN.md) |  |
 | `/dom/nodes/CharacterData-appendData.html` | OK | 1/14 |  |  |  |
 | `/dom/nodes/CharacterData-data.html` | OK | 0/16 |  |  |  |
 | `/dom/nodes/CharacterData-deleteData.html` | OK | 0/18 |  |  |  |
