@@ -1,6 +1,6 @@
 # BUG-321: остаток DOM-конструкторов — Document/doctype/element-instanceof
 
-**Статус:** FIXED 2026-07-20 (пункты 1–2; пункт 3 остаётся за [BUG-305](BUG-305-OPEN.md))
+**Статус:** FIXED 2026-07-20 (пункты 1–2; пункт 3 остаётся за [BUG-322](BUG-322-OPEN.md))
 **Дата:** 2026-07-20
 **Компонент:** js (WEB_API_SHIM, `crates/js/src/dom.rs`)
 **Родитель:** [BUG-314](BUG-314-FIXED.md) (интерфейс-глобалы + Comment/Text/DocumentFragment)
@@ -26,7 +26,7 @@
 3. **`instanceof HTML*Element` для нативных элемент-обёрток** — обёртки
    (`_lumen_make_element`) остаются plain-объектами, поэтому
    `div instanceof HTMLDivElement`/`HTMLElement`/`Element`/`Node` = false.
-   Общий долг с [BUG-305](BUG-305-OPEN.md): чтобы `instanceof` заработал, надо
+   Общий долг, трекается как [BUG-322](BUG-322-OPEN.md): чтобы `instanceof` заработал, надо
    выставлять `[[Prototype]]` обёрток по тегу (`HTMLDivElement.prototype` и т.д.)
    — затрагивает всю систему элемент-обёрток, риск и объём вне P3-багфикса.
 
@@ -74,5 +74,5 @@ LUMEN_PROFILE=dev-release tests/wpt/.venv/Scripts/python.exe \
 
 **Пункт 3** (`el instanceof HTMLXElement` для нативных элемент-обёрток) намеренно
 не входит в этот фикс — это долг всей системы элемент-обёрток (обёртки остаются
-plain-объектами), трекается как [BUG-305](BUG-305-OPEN.md). WPT
+plain-объектами), трекается как [BUG-322](BUG-322-OPEN.md). WPT
 `Document-doctype.html` его не проверяет, оба его подтеста зелены только на 1–2.
