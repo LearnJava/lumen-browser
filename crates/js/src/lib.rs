@@ -882,13 +882,6 @@ impl QuickJsRuntime {
                 eprintln!("WebSerial bindings init failed: {}", e);
             }
 
-            // Install Permissions Policy bindings (W3C Permissions Policy §8) — after DOM/document.
-            // Phase 0: document.featurePolicy + _lumen_set_permissions_policy(headerValue) hook.
-            // Phase 1: shell calls _lumen_set_permissions_policy after HTTP response headers.
-            if let Err(e) = permissions_policy::install_permissions_policy_bindings(&ctx) {
-                eprintln!("Permissions Policy bindings init failed: {}", e);
-            }
-
             // Install W3C WebCodecs API (https://www.w3.org/TR/webcodecs/) — after DOM.
             // Phase 0: VideoEncoder/Decoder + AudioEncoder/Decoder + EncodedVideoChunk/AudioChunk stubs.
             // configure() rejects with NotSupportedError; no codec support in Phase 0.

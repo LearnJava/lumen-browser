@@ -75,8 +75,8 @@
 {
  "generated": "2026-07-20",
  "counts": {
-  "open": 36,
-  "fixed": 256,
+  "open": 35,
+  "fixed": 257,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -821,6 +821,13 @@
          "status": "done",
          "size": "S",
          "note": "Влит в main (branch p1-v8-s12b-17-csp): rquickjs-путь CSP violation-events (`csp.rs`, `install_csp_bindings`) удалён, 6 own-file тестов портированы на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-18",
+         "title": "S12b-18: Permissions Policy API",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-18-permissions-policy): rquickjs-путь Permissions Policy (`permissions_policy.rs`, `install_permissions_policy_bindings`) удалён, 6 own-file тестов портированы на V8JsRuntime. `webxr.rs` дисквалифицирован (ловушка `event_target_dependent_apis_installed`, как serial.rs)"
         }
        ]
       }
@@ -3669,10 +3676,10 @@
    "debtor": false
   },
   "BUG-320": {
-   "status": "open",
-   "title": "`mix-blend-mode` (все режимы кроме `normal`/`plus-lighter`) не рендерится вовсе на `main`: `acquire_layer()` сайзит offscreen-слой по `self.width`/`self.height`…",
+   "status": "fixed",
+   "title": "`mix-blend-mode` (все режимы кроме `normal`/`plus-lighter`) не рендерился вовсе во время scroll-blit band-рендера: `acquire_layer()` сайзил offscreen-слой по `s…",
    "component": "paint (femtovg, `acquire_layer`/`layer_pool`)",
-   "date": null,
+   "date": "2026-07-20",
    "debtor": false
   }
  },
