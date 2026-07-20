@@ -139,6 +139,7 @@ python graphic_tests/run.py --bisect 100         # diagnose interaction test
 2. Add demo to `graphic_tests/1000000-final.html`
 3. Update `graphic_tests/COVERAGE.md`
 4. Add entry to `TESTS` in `graphic_tests/run.py`
+5. **If the property affects paint/rasterization**, regenerate the deterministic CPU snapshot references in the **same commit**: `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render cases::snapshot_cpu` (then review the changed PNGs are correct, not garbage). Skipping this drifts `graphic_tests/snapshots/cpu/` on unrelated pages and later red-lights the `scoped-test.sh` gate for someone else — the recurring BUG-118 / BUG-149 / BUG-297 / BUG-316 staleness.
 
 **Hard rules:** never edit test pages to work around engine limits; never change thresholds (0.5% for all); no screenshots committed.
 

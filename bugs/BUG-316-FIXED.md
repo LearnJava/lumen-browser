@@ -2,7 +2,7 @@
 
 **Renumbered 2026-07-18** from `BUG-296`, then `BUG-311` — assigned twice more by independent parallel sessions to different bugs (session-restore race, see [BUG-296](BUG-296-FIXED.md); `Node.isConnected` gap, see [BUG-311](BUG-311-OPEN.md)); this bug kept its content but moved to the next free number each time. Likely the same underlying reference-staleness as [BUG-297](BUG-297-OPEN.md) (found independently around the same time) — worth checking for a duplicate before investigating both.
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-20 (P3) — duplicate of [BUG-297](BUG-297-FIXED.md), closed by the same reference regeneration
 **Компонент:** driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`) — CPU-rasterizer snapshot references, or `scripts/scoped-test.sh` gate coverage
 **Найден:** P2-bug291, 2026-07-17, running `scripts/scoped-test.sh` as the pre-merge gate
 
@@ -47,3 +47,13 @@ first, not blind regeneration), or the CPU rasterizer itself has a real bug.
 Also worth checking whether `scripts/scoped-test.sh`/CI should run this feature
 combination routinely so gaps like this don't go undetected between full
 workspace-test runs.
+
+## Разрешение (2026-07-20, P3)
+
+Confirmed the same reference-staleness as [BUG-297](BUG-297-FIXED.md) — the identical 32-page
+mismatch set with identical byte counts. The two bugs are the same root cause reported twice
+(BUG-297 surfaced it via `cargo test -p lumen-driver --features cpu-render` directly; this one via
+the combined `lumen-driver`+`lumen-shell` scoped-test that transitively enables `cpu-render`).
+Fixed by regenerating `graphic_tests/snapshots/cpu/` after verifying the drift is feature-driven,
+not a rasterizer regression (largest-diff pages spot-checked visually — see BUG-297-FIXED.md
+«Разрешение»). No engine change; references only.
