@@ -1109,12 +1109,6 @@ impl QuickJsRuntime {
                 eprintln!("Soft Navigation API init failed: {}", e);
             }
 
-            // Install Content Index API Phase 0 — ContentIndex class,
-            // ServiceWorkerRegistration.prototype.index getter.
-            if let Err(e) = content_index::install_content_index_api(&ctx) {
-                eprintln!("Content Index API init failed: {}", e);
-            }
-
             // Install URL Pattern API (WHATWG URLPattern §3) — pure JS implementation.
             // Provides new URLPattern({pathname, search, hash, hostname}) with .test() and .exec().
             if let Err(e) = url_pattern::install_url_pattern_api(&ctx) {
