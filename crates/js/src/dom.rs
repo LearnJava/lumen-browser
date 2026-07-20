@@ -743,6 +743,51 @@ fn install_primitives(
                 matches!(doc.get(nid).data, NodeData::Text(_))
             }
         );
+        // BUG-321: DocumentType support. `_lumen_is_doctype` classifies a node so
+        // `document.childNodes` can wrap the doctype child as a DocumentType;
+        // `_lumen_get_document_doctype` returns the document's doctype child (the
+        // `document.doctype` property); `_lumen_get_doctype_field` reads the
+        // `name`/`publicId`/`systemId` of a DocumentType node.
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_is_doctype",
+            move |node_id: u32| -> bool {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                matches!(doc.get(nid).data, NodeData::Doctype { .. })
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_document_doctype", move || -> Option<u32> {
+            let doc = d.lock().unwrap();
+            let root = doc.root();
+            doc.get(root)
+                .children
+                .iter()
+                .copied()
+                .find(|&c| matches!(doc.get(c).data, NodeData::Doctype { .. }))
+                .map(|n| n.index() as u32)
+        });
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_get_doctype_field",
+            move |node_id: u32, which: String| -> Option<String> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                match &doc.get(nid).data {
+                    NodeData::Doctype {
+                        name,
+                        public_id,
+                        system_id,
+                    } => Some(match which.as_str() {
+                        "public" => public_id.clone(),
+                        "system" => system_id.clone(),
+                        _ => name.clone(),
+                    }),
+                    _ => None,
+                }
+            }
+        );
         let d = Arc::clone(&doc);
         reg!(
             "_lumen_get_namespace_uri",
@@ -4354,7 +4399,47 @@ CharacterData.prototype.constructor = CharacterData;
 function Attr() { throw new TypeError('Illegal constructor'); }
 Attr.prototype = Object.create(Node.prototype);
 Attr.prototype.constructor = Attr;
-function Document() { throw new TypeError('Illegal constructor'); }
+// DOM §4.5 Document() — a detached document with no browsing context (BUG-321).
+// The live page is backed by the single arena `document` object literal below;
+// a script-created `new Document()` cannot own arena nodes, so it tracks its
+// children in a JS array. `createElement` builds a parentless arena node (never
+// rendered, since it is never inserted into the live tree); `appendChild`
+// records the child; `doctype` scans the children for a DocumentType (a fresh
+// document has none → null). Enough for reference resolution and WPT
+// `dom/nodes/Document-doctype.html`'s `new Document()` subtest.
+function Document() {
+    if (!(this instanceof Document)) { throw new TypeError('Illegal constructor'); }
+    var _children = [];
+    Object.defineProperty(this, 'nodeType',      { get: function() { return 9; },           enumerable: true });
+    Object.defineProperty(this, 'nodeName',      { get: function() { return '#document'; }, enumerable: true });
+    Object.defineProperty(this, 'ownerDocument', { get: function() { return null; },        enumerable: true });
+    Object.defineProperty(this, 'childNodes',    { get: function() { return _children.slice(); }, enumerable: true });
+    Object.defineProperty(this, 'doctype', {
+        get: function() {
+            for (var i = 0; i < _children.length; i++) {
+                if (_children[i] && _children[i].nodeType === 10) { return _children[i]; }
+            }
+            return null;
+        },
+        enumerable: true,
+    });
+    Object.defineProperty(this, 'documentElement', {
+        get: function() {
+            for (var i = 0; i < _children.length; i++) {
+                if (_children[i] && _children[i].nodeType === 1) { return _children[i]; }
+            }
+            return null;
+        },
+        enumerable: true,
+    });
+    this.createElement = function(tag) {
+        var nid = _lumen_create_element(String(tag).toLowerCase());
+        if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        return _lumen_make_element(nid);
+    };
+    this.createTextNode = function(t) { return _lumen_make_element(_lumen_create_text_node(String(t))); };
+    this.appendChild = function(node) { if (node) { _children.push(node); } return node; };
+}
 Document.prototype = Object.create(Node.prototype);
 Document.prototype.constructor = Document;
 function DocumentType() { throw new TypeError('Illegal constructor'); }
@@ -4431,6 +4516,43 @@ Text.prototype.constructor = Text;
 function DocumentFragment() { return _lumen_make_document_fragment(_lumen_create_fragment()); }
 DocumentFragment.prototype = Object.create(Node.prototype);
 DocumentFragment.prototype.constructor = DocumentFragment;
+
+// BUG-321: a DocumentType wrapper (`nodeType` 10) whose [[Prototype]] is
+// DocumentType.prototype, so `document.doctype instanceof DocumentType` holds.
+// Interned in the shared `_lumen_element_wrappers` cache (keyed by nid) so that
+// `document.doctype` and `document.childNodes[1]` yield the SAME object
+// (`===` node identity) and `_lumen_gc_collect` purges it like any other
+// node wrapper. `name`/`publicId`/`systemId` read the native fields on demand.
+function _lumen_make_doctype(nid) {
+    if (nid === null || nid === undefined) return null;
+    var cached = _lumen_element_wrappers[nid];
+    if (cached !== undefined) return cached;
+    var _field = function(which) {
+        var v = _lumen_u2n(_lumen_get_doctype_field(nid, which));
+        return v !== null ? v : '';
+    };
+    var obj = Object.create(DocumentType.prototype);
+    Object.defineProperty(obj, '__nid__',       { value: nid, enumerable: false });
+    Object.defineProperty(obj, 'nodeType',      { get: function() { return 10; },            enumerable: true });
+    Object.defineProperty(obj, 'name',          { get: function() { return _field('name'); },   enumerable: true });
+    Object.defineProperty(obj, 'nodeName',      { get: function() { return _field('name'); },   enumerable: true });
+    Object.defineProperty(obj, 'publicId',      { get: function() { return _field('public'); }, enumerable: true });
+    Object.defineProperty(obj, 'systemId',      { get: function() { return _field('system'); }, enumerable: true });
+    Object.defineProperty(obj, 'ownerDocument', { get: function() { return document; },       enumerable: true });
+    Object.defineProperty(obj, 'parentNode',    { get: function() { return document; },       enumerable: true });
+    _lumen_element_wrappers[nid] = obj;
+    return obj;
+}
+
+// BUG-321: wrap a child nid by node kind so `document.childNodes` returns a
+// DocumentType for the doctype child rather than a bogus element wrapper.
+// Text / element / comment nodes fall through to `_lumen_make_element` (whose
+// `nodeType` getter already distinguishes text via `_lumen_is_text_node`).
+function _lumen_make_node(nid) {
+    if (nid === null || nid === undefined) return null;
+    if (_lumen_is_doctype(nid)) { return _lumen_make_doctype(nid); }
+    return _lumen_make_element(nid);
+}
 
 // Dispatch slotchange on all <slot> elements inside the shadow root of `host_nid`.
 // Called when host's light DOM changes (appendChild / removeChild).
@@ -6462,6 +6584,18 @@ var document = {
     get nodeType()   { return 9; },
     get nodeName()   { return '#document'; },
     get ownerDocument() { return null; },
+    // DOM §4.9: the document's child nodes (top-level comments, the doctype and
+    // the root element) in tree order, wrapped kind-aware so the doctype child
+    // is a DocumentType node (BUG-321). Static array (same simplification as
+    // querySelectorAll). For a standard page `childNodes[1]` is the doctype.
+    get childNodes() {
+        return _lumen_get_children(_lumen_root_nid).map(_lumen_make_node);
+    },
+    // DOM §4.5: the document's DocumentType child (`<!doctype …>`), or null.
+    get doctype() {
+        var dnid = _lumen_u2n(_lumen_get_document_doctype());
+        return dnid !== null ? _lumen_make_doctype(dnid) : null;
+    },
     get title()  { return _lumen_get_document_title(); },
     set title(v) { _lumen_set_document_title(String(v)); },
     get cookie()  { return _lumen_cookie_get(); },
@@ -28525,6 +28659,51 @@ mod tests {
              (HTMLElement.prototype instanceof Element) && \
              (Element.prototype instanceof Node)"
         ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-321: `document.doctype` is a DocumentType node reflecting `<!doctype …>`,
+    // referentially identical to the doctype child in `document.childNodes`.
+    #[test]
+    fn document_doctype_is_document_type() {
+        let mut doc = Document::new();
+        let dt = doc.create_doctype("html", "", "");
+        let html = doc.create_element(QualName::html("html"));
+        doc.append_child(doc.root(), dt);
+        doc.append_child(doc.root(), html);
+        let rt = runtime_with_dom(Arc::new(Mutex::new(doc)));
+        let r = rt
+            .eval(
+                "document.doctype instanceof DocumentType && \
+                 document.doctype.name === 'html' && \
+                 document.doctype.nodeType === 10 && \
+                 document.doctype === document.childNodes[0]",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-321: a page without a doctype reports `document.doctype === null`.
+    #[test]
+    fn document_doctype_null_when_absent() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("document.doctype === null").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-321: `new Document()` is constructible and detached — createElement /
+    // appendChild work and a fresh document has a null doctype.
+    #[test]
+    fn new_document_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var nd = new Document(); \
+                 nd.appendChild(nd.createElement('html')); \
+                 (nd instanceof Document) && nd.nodeType === 9 && \
+                 nd.doctype === null && nd.documentElement !== null",
+            )
+            .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }

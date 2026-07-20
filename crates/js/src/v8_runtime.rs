@@ -1179,6 +1179,48 @@ impl V8JsRuntime {
                 matches!(doc.get(nid).data, NodeData::Text(_))
             }
         );
+        // BUG-321: DocumentType support (mirrors the rquickjs registration in
+        // dom.rs). See there for the rationale.
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_is_doctype",
+            move |node_id: u32| -> bool {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                matches!(doc.get(nid).data, NodeData::Doctype { .. })
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_document_doctype", move || -> Option<u32> {
+            let doc = d.lock().unwrap();
+            let root = doc.root();
+            doc.get(root)
+                .children
+                .iter()
+                .copied()
+                .find(|&c| matches!(doc.get(c).data, NodeData::Doctype { .. }))
+                .map(|n| n.index() as u32)
+        });
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_get_doctype_field",
+            move |node_id: u32, which: String| -> Option<String> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                match &doc.get(nid).data {
+                    NodeData::Doctype {
+                        name,
+                        public_id,
+                        system_id,
+                    } => Some(match which.as_str() {
+                        "public" => public_id.clone(),
+                        "system" => system_id.clone(),
+                        _ => name.clone(),
+                    }),
+                    _ => None,
+                }
+            }
+        );
         let d = Arc::clone(&doc);
         reg!(
             "_lumen_get_namespace_uri",
