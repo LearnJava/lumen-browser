@@ -998,6 +998,28 @@ call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-js -
 v8-backend download` — 6/6 green; `cargo check -p lumen-js` on default + `v8-backend` — green;
 `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both.
 
+### S12b-16 — `content_index.rs` (2026-07-20, branch p1-v8-s12b-16-content-index)
+
+Sixteenth slice, same systematic selection (`comm -12` on still-present rquickjs
+`fn install_*(…Ctx…)` sites vs `fn install_*_v8(` sites, sorted by file size): after the known
+traps `typed_om_api.rs` (148, S12b-9), `serial.rs` (151, S12b-10) and `scroll_snap_events.rs`
+(179, S12b-10), the smallest non-trap candidate is `content_index.rs` (203 lines). Clean by the
+file-stem method (**zero `dom.rs` hits** for `content_index`/`ContentIndex`) with its own-file
+`mod tests`; call site in `lib.rs`'s `QuickJsRuntime::install_dom` is a plain one-liner (no
+`QuickJsRuntime` `fire_*`/`take_*` method). Exactly the S12b-1..8 shape: pure JS-shim `eval` (no
+native bindings), the Content Index API Level 1 Phase-0 stub (`ContentIndex` class with
+`add`/`getAll`/`delete`, wired onto `ServiceWorkerRegistration.prototype.index`; in-memory, no
+persistence). Deleted the rquickjs `install_content_index_api` fn + its `use rquickjs::Ctx`; gated
+`CONTENT_INDEX_SHIM` behind `#[cfg(feature = "v8-backend")]` (only referenced from the v8 path now,
+same as S12b-12/13/14's SHIM consts); no `empty_line_after_doc_comments` fix needed — the module
+doc was already `//!`. Ported all 5 tests 1:1 to `V8JsRuntime` (bare `V8JsRuntime::new()` + the
+same `ServiceWorkerRegistration`-stub eval + `install_content_index_api_v8`, `with_content_index`
+single-helper pattern — no `install_dom` needed since the shim only touches `globalThis` and
+`ServiceWorkerRegistration.prototype`), gated `#[cfg(all(test, feature = "v8-backend"))]`; dropped
+the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-js --features
+v8-backend content_index` — 5/5 green; `cargo check -p lumen-js` (default) — green; `cargo clippy
+-p lumen-js --all-targets -- -D warnings` clean on both default and `v8-backend` features.
+
 ---
 
 ## Risks (Rev 2)
