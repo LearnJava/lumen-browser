@@ -114,6 +114,17 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   single pass/fail gate — exit 0 iff 0 unexpected results. This is the
   repeatable local/CI invocation (see "Running the whole suite" below). Adding
   an `.ini` grows the gate; there is no separate list to maintain.
+- `tests/wpt/run_report.py` — **ours** — HTML report, not a gate: always runs
+  and always exits 0 (unless the run itself couldn't start), writing a
+  self-contained `.tmp/wpt-report.html` (test/subtest counts, pass/fail per
+  test, expandable per-subtest detail with the failure message, and whether
+  each result matched its `.ini` expectation). Defaults to the same curated
+  subset as `run_suite.py`; `--all` instead runs every vendored `.html` under
+  `dom/nodes/` (168 files, not just the 20 curated ones) — most of those were
+  never vetted for this minimal BiDi-only executor (no `test_driver.*`,
+  multi-window, iframes), so expect ERROR/TIMEOUT/FAIL noise there, not bugs
+  worth filing without individually checking first; use it to survey, not to
+  gate. See "HTML report" below.
 - `tests/wpt/config.json` — **ours** (S4) — `wptserve` config override: pins
   `browser_host` to `127.0.0.1` (the default, `web-platform.test`, needs
   `/etc/hosts` entries this task's "no live network" rule can't rely on) and
@@ -202,9 +213,44 @@ aren't mangled into Windows paths:
 export LUMEN_PROFILE=dev-release MSYS2_ARG_CONV_EXCL='/dom'
 BIN=$(cygpath -w "$PWD/target/dev-release/lumen.exe")
 tests/wpt/.venv/Scripts/python.exe tests/wpt/run_suite.py --binary "$BIN"
-# → "running 21 curated WPT tests" then
-#   "Ran 64 checks (43 subtests, 21 tests) ... Unexpected results: 0", exit 0
+# → "running 20 curated WPT tests" then
+#   "Ran 61 checks (41 subtests, 20 tests) ... Unexpected results: 0", exit 0
 ```
+
+The curated-subset size drifts as tests are added/excluded (see "Adding a test"
+below) — don't hardcode it elsewhere; `run_suite.py --binary "$BIN"` always
+prints the current count.
+
+## HTML report
+
+`tests/wpt/run_report.py` runs the same curated subset (or, with `--all`,
+every vendored `dom/nodes/*.html` test) and writes a self-contained HTML file
+— open it in any browser, no server needed. Unlike `run_suite.py` it's not a
+gate: it always writes the report and exits 0 regardless of how many tests
+failed, so use it to *look at* results rather than to fail a build.
+
+```bash
+export LUMEN_PROFILE=dev-release MSYS2_ARG_CONV_EXCL='/dom'
+BIN=$(cygpath -w "$PWD/target/dev-release/lumen.exe")
+tests/wpt/.venv/Scripts/python.exe tests/wpt/run_report.py --binary "$BIN" --out .tmp/wpt-report.html
+# → "tests: 20/20 harness OK; subtests: 35/41 passed"
+#   "report written to .tmp/wpt-report.html"
+```
+
+The report shows, per test: harness status (`OK`/`ERROR`/`TIMEOUT`/`CRASH`),
+subtests passed/total, and duration; expand a row for the per-subtest
+breakdown with failure messages. Summary cards at the top separate "raw"
+pass/fail counts from "unexpected (vs `.ini`)" — a subtest can legitimately
+`FAIL` while still being 0 unexpected, if that failure is pinned as
+`expected: FAIL` (a tracked, known gap) rather than a surprise regression.
+
+`--all` runs every vendored `.html` under `dom/nodes/` (168 files) instead of
+just the 20 curated ones — most were never vetted for this project's
+minimal BiDi-only executor (no `test_driver.*`, multi-window, iframes), so
+expect a lot of ERROR/TIMEOUT/FAIL noise there. Useful to survey what else
+might be worth curating next; don't file bugs off it without checking each
+failure individually first (same discipline as "Adding a test" below) — and
+budget more time for it (~168 tests vs. 20, no per-test parallelism).
 
 (Omit `--binary` and it defaults to `target/$LUMEN_PROFILE/lumen.exe`; pass it
 explicitly when running the script from a `git worktree`, whose own `target/`
