@@ -4,10 +4,45 @@
 `BUG-317` (the next-free slot per another parallel session's BUGS.md), resolved
 while merging S6/S7 back into `main`.
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-20 (P3)
 **Дата:** 2026-07-18
 **Компонент:** bidi-server (`crates/bidi-server/src/protocol.rs`, `script_evaluate`)
 **Найден:** P2-wpt S6, проверка awaitPromise (`tests/wpt/verify_s6_await_promise.py`)
+
+## Исправление (2026-07-20)
+
+`script_evaluate` при `awaitPromise:true` теперь идёт через новый
+`eval_await_promise`, реализующий two-round-trip eval поверх синхронного
+`AutomationCommand::Eval`:
+
+1. **Раунд 1** — выражение оборачивается в
+   `Promise.resolve((EXPR)).then(onFulfilled, onRejected)`, где хендлеры
+   записывают `{state:"fulfilled",value}` / `{state:"rejected",error}` в
+   глобаль `globalThis.__lumen_bidi_await` (синхронный throw в `EXPR` ловится
+   `try/catch` → `rejected`). V8 авто-гоняет microtask-checkpoint в конце
+   каждого eval (`v8_runtime.rs`: «V8 auto-runs microtasks after each
+   script/task by default»), поэтому settle-хендлер срабатывает ещё до
+   возврата раунда 1.
+2. **Раунд 2** — читает `globalThis.__lumen_bidi_await` (и удаляет его),
+   транслирует: `fulfilled` → `RemoteValue` через `remote_value_from_json`
+   (`Promise.resolve(42)` → `{type:number,value:42}`; отсутствующий `value` =
+   `undefined`-fulfillment → `{type:undefined}`); `rejected` → `javascript
+   error` с сообщением; `pending` → объект промиса (`{type:string,value:"{}"}`,
+   тот же fallback, что и non-await путь).
+
+**Ограничение:** резолвятся только microtask-разрешимые промисы
+(`Promise.resolve`, синхронные `async`-функции). Промис, ждущий макротаска/IO
+(`setTimeout`, сеть), остаётся `pending` и возвращает объект промиса —
+корректная поддержка потребовала бы прокачки полного event loop между
+раундами.
+
+Побочно: `eval_result_to_remote_value` разложен на `remote_value_from_json`
+(маппинг уже-распарсенного JSON) + строковый фолбэк; добавлен
+`undefined_remote_value()`.
+
+4 юнит-теста (`script_evaluate_await_promise_*`) + `fake_live_session_await`
+эмулирует two-round-trip в bidi-server-only фейке. `verify_s6_await_promise.py`
+флипнут на `EXPECT_AWAIT_PROMISE_RESOLVES=True`.
 
 ## Симптом
 
