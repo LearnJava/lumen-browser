@@ -55,13 +55,14 @@ def default_binary() -> str:
     return os.path.join(REPO_ROOT, "target", profile, "lumen.exe")
 
 
-def run(binary: str, test_ids: list) -> int:
+def run(binary: str, test_ids: list, extra_args: list = None) -> int:
     """Run the vendored `wptrunner` against `test_ids` using `binary`.
 
-    Shared by this script's `--binary`/`test_ids` CLI and S7's `run_suite.py`
-    (the whole-curated-subset gate). Returns wptrunner's exit code: 0 iff every
-    included test matched its committed expectation (0 unexpected results),
-    non-zero otherwise.
+    Shared by this script's `--binary`/`test_ids` CLI, S7's `run_suite.py`
+    (the whole-curated-subset gate) and `run_report.py` (HTML report, adds
+    `--log-wptreport`/`--log-html` via `extra_args`). Returns wptrunner's exit
+    code: 0 iff every included test matched its committed expectation (0
+    unexpected results), non-zero otherwise.
     """
     if not os.path.isfile(binary):
         print(f"lumen binary not found: {binary}", file=sys.stderr)
@@ -81,7 +82,7 @@ def run(binary: str, test_ids: list) -> int:
         # (`LumenBidiProtocol` has no ProtocolParts, see executorlumen.py),
         # crashing the runner. Not needed for an automated smoke run.
         "--no-pause-after-test",
-    ] + list(test_ids)
+    ] + list(extra_args or []) + list(test_ids)
 
     cmd_parser = wptcommandline.create_parser()
     kwargs = vars(cmd_parser.parse_args(argv))
