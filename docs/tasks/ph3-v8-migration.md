@@ -1041,6 +1041,38 @@ lumen-js --features v8-backend csp` — 6/6 green; `cargo check -p lumen-js --fe
 green; `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` clean. Next
 candidate S12b-18 = `webxr.rs` (210), then `permissions_policy.rs` (214), `highlight_api.rs` (215).
 
+### S12b-18 — `permissions_policy.rs` (2026-07-20, branch p1-v8-s12b-18-permissions-policy)
+
+Eighteenth slice. **`webxr.rs` (210), listed as the next candidate at the end of S12b-17, is
+disqualified — same trap as `serial.rs` (S12b-10):** the naive file-stem grep (`webxr`/`WebXR`)
+only matches comments in `dom.rs`, but `dom.rs`'s `event_target_dependent_apis_installed` test
+asserts `typeof navigator.xr === 'object'`, so deleting the rquickjs `install_webxr_bindings` call
+site would break that test on the default (quickjs) build. That shared test pins six modules to the
+rquickjs path (`navigator.hid`/`usb`/`bluetooth`/`serial`/`xr` + `window.navigation`); each must be
+handled as a coordinated cluster (or the shared test refactored) rather than as an independent
+single-file slice — deferred. The next non-trap candidate by size is therefore `permissions_policy.rs`
+(214 lines).
+
+Clean by the file-stem method (**zero `dom.rs` hits** for `permissions_policy`/`permissionsPolicy`/
+`featurePolicy`/`FeaturePolicy` — the `FeaturePolicy` shim does not `extends EventTarget`, so it is
+not in the `event_target_dependent_apis_installed` test) with its own-file `mod tests`; call site in
+`lib.rs`'s `QuickJsRuntime::install_dom` is a plain block (no `QuickJsRuntime` `fire_*`/`take_*`
+method — `_lumen_set_permissions_policy` is a plain global assigned inside the shim, not a native
+binding). Same S12b-1..8/16/17 shape: pure JS-shim `eval`, the W3C Permissions Policy §8 Phase-0
+stub (`document.featurePolicy` + `document.permissionsPolicy` alias, `allowsFeature`/`features`/
+`allowedFeatures`/`getAllowlistForFeature`, and the `_lumen_set_permissions_policy(headerValue)`
+header-parse hook). Deleted the rquickjs `install_permissions_policy_bindings` fn + its
+`use rquickjs::Ctx`; gated `PERMISSIONS_POLICY_SHIM` behind `#[cfg(feature = "v8-backend")]` (only
+referenced from the v8 path now, as S12b-12/13/14/16/17). Ported all 6 tests 1:1 to `V8JsRuntime`;
+like S12b-17 the shim needs `window`/`document`, so `with_pp_api` evals a minimal `window = globalThis`
++ `document = {}` stub on a bare `V8JsRuntime::new()` before `install_permissions_policy_bindings_v8`
+— evals on one runtime share global state so the internal `_ppStore` persists across the assertion
+`eval`. Gated `#[cfg(all(test, feature = "v8-backend"))]`; dropped the call site (comment + block) in
+`lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-js --features v8-backend
+permissions_policy` — 6/6 green; `cargo check -p lumen-js` (default) + `--features v8-backend` —
+green; `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both default and `v8-backend`
+features. Next candidate S12b-19 = `highlight_api.rs` (215).
+
 ---
 
 ## Risks (Rev 2)

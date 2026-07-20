@@ -6,17 +6,13 @@
 //! Phase 0: `featurePolicy.allowsFeature(name)` returns `true` by default
 //! (policy data is recorded but enforcement is a Phase 1 task).
 
-use rquickjs::Ctx;
-
-/// Install Permissions Policy JS bindings: `document.featurePolicy` and the
+/// Install Permissions Policy JS bindings: `document.featurePolicy` (plus the
+/// `document.permissionsPolicy` alias) and the
 /// `_lumen_set_permissions_policy(headerValue)` native dispatch helper.
-pub fn install_permissions_policy_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(PERMISSIONS_POLICY_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_permissions_policy_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+///
+/// Must run after the DOM shim so that `document` and `window` are already
+/// defined. Evaluates the JS shim via [`lumen_core::ext::JsRuntime::eval`] on
+/// the default (V8) engine.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_permissions_policy_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -25,6 +21,7 @@ pub(crate) fn install_permissions_policy_bindings_v8(rt: &crate::v8_runtime::V8J
 }
 
 /// JavaScript shim: FeaturePolicy interface + document.featurePolicy accessor.
+#[cfg(feature = "v8-backend")]
 const PERMISSIONS_POLICY_SHIM: &str = r#"
 (function() {
   // ── Internal policy store ────────────────────────────────────────────────
@@ -120,95 +117,98 @@ const PERMISSIONS_POLICY_SHIM: &str = r#"
 
 // ── tests ────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn with_pp_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var document = {};
-                "#,
-            )
-            .unwrap();
-            install_permissions_policy_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    /// Set up a minimal `window`/`document` stub plus the Permissions Policy shim
+    /// on a bare V8 runtime — the shim only touches `document` and `window`, so no
+    /// full `install_dom` is required. Evals on one runtime share global state, so
+    /// the internal `_ppStore` persists across `eval` calls.
+    fn with_pp_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            globalThis.window = globalThis;
+            globalThis.document = {};
+            "#,
+        )
+        .unwrap();
+        install_permissions_policy_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn feature_policy_object_exists() {
-        with_pp_api(|ctx| {
-            let ok: bool = ctx
+        with_pp_api(|rt| {
+            let ok = rt
                 .eval("typeof document.featurePolicy === 'object'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn allows_feature_returns_true_by_default() {
-        with_pp_api(|ctx| {
-            let ok: bool = ctx
+        with_pp_api(|rt| {
+            let ok = rt
                 .eval("document.featurePolicy.allowsFeature('camera')")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn set_policy_disables_feature() {
-        with_pp_api(|ctx| {
-            let ok: bool = ctx
+        with_pp_api(|rt| {
+            let ok = rt
                 .eval(
                     "_lumen_set_permissions_policy('camera=(), microphone=*'); \
                      document.featurePolicy.allowsFeature('camera') === false && \
                      document.featurePolicy.allowsFeature('microphone') === true",
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn features_returns_policy_names() {
-        with_pp_api(|ctx| {
-            let ok: bool = ctx
+        with_pp_api(|rt| {
+            let ok = rt
                 .eval(
                     "_lumen_set_permissions_policy('geolocation=(), usb=(self)'); \
                      var f = document.featurePolicy.features(); \
                      f.indexOf('geolocation') !== -1 && f.indexOf('usb') !== -1",
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn permissions_policy_alias_exists() {
-        with_pp_api(|ctx| {
-            let ok: bool = ctx
+        with_pp_api(|rt| {
+            let ok = rt
                 .eval("typeof document.permissionsPolicy === 'object'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn get_allowlist_for_disabled_feature() {
-        with_pp_api(|ctx| {
-            let ok: bool = ctx
+        with_pp_api(|rt| {
+            let ok = rt
                 .eval(
                     "_lumen_set_permissions_policy('camera=()'); \
                      document.featurePolicy.getAllowlistForFeature('camera').length === 0",
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }
