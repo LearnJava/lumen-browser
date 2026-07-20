@@ -82,6 +82,21 @@ def run(binary: str, test_ids: list, extra_args: list = None) -> int:
         # (`LumenBidiProtocol` has no ProtocolParts, see executorlumen.py),
         # crashing the runner. Not needed for an automated smoke run.
         "--no-pause-after-test",
+        # wptrunner's default (`restart_on_unexpected=True`) respawns the
+        # browser process after every test whose result doesn't match its
+        # (often absent, under `--all`) expectation — with no committed
+        # `.ini` most tests count as "unexpected", so this silently turned
+        # into "one lumen.exe process per test". `LumenTestharnessExecutor`
+        # already relies on one browser process + one reused browsing
+        # context per run (`context_id` fetched once in `after_connect`,
+        # navigated fresh per test — see executorlumen.py docstring), so
+        # restarting on unexpected is neither needed for isolation (a fresh
+        # `browsingContext.navigate` already gives every test a fresh
+        # `window`) nor desired here — it only slows the run down. The
+        # browser is still restarted on an actual crash/hang
+        # (`restart_required` in testrunner.py), just not on a plain
+        # FAIL/ERROR/TIMEOUT.
+        "--no-restart-on-unexpected",
     ] + list(extra_args or []) + list(test_ids)
 
     cmd_parser = wptcommandline.create_parser()

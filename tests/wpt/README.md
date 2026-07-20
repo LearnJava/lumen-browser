@@ -100,7 +100,15 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
 
 - `tests/wpt/run_smoke.py` — **ours** (S4) — minimal driver that calls
   `wptcommandline`/`wptrunner.run_tests` directly against the smoke test (see
-  its own docstring for why this isn't `tools/wpt/wpt`). Run with:
+  its own docstring for why this isn't `tools/wpt/wpt`). Passes
+  `--no-restart-on-unexpected`: wptrunner's own default respawns the browser
+  process after every test whose result doesn't match its expectation, which
+  under `--all` (no committed `.ini` for most tests) meant a fresh `lumen.exe`
+  per failing test. One `lumen.exe` process now runs the whole selected test
+  set, reusing a single browsing context (`LumenBidiProtocol.context_id`,
+  `executorlumen.py`) that gets a fresh `browsingContext.navigate` per test —
+  still test-isolated, just not process-isolated. The browser still restarts
+  on an actual crash/hang. Run with:
 
   ```bash
   LUMEN_PROFILE=dev-release <venv>/python tests/wpt/run_smoke.py
