@@ -1,9 +1,46 @@
 # BUG-320: `layer_pool` full-frame layers mis-sized against the active scroll-blit band target
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-20
 **Дата:** 2026-07-19
 **Компонент:** paint (`crates/engine/paint/src/backends/femtovg_backend.rs`, `acquire_layer`/`layer_pool`)
 **Найден:** BUG-272 срез 14 (PushFilter/PushBlendMode bbox-сайзинг) — визуальная A/B-приёмка TEST-56
+
+## Фикс (2026-07-20, P3)
+
+Все offscreen-слои теперь сайзятся по **активному render-таргету**, а не по окну. Два новых
+хелпера в `FemtovgBackend`:
+
+- `current_rt_size() -> (u32, u32)` — device-размер текущего таргета: `canvas.image_size(id)` для
+  привязанного offscreen-`Image` (band-FBO во время scroll-blit прохода), иначе framebuffer
+  (`self.width × self.height`). Fallback на framebuffer при промахе image-lookup.
+- `current_rt_css_size() -> (f32, f32)` — то же в CSS-px (÷ scale), для full-frame композит-заливок.
+
+Правки:
+1. `acquire_layer`/`release_layer` — пул ключуется на `current_rt_size()` вместо `self.width/height`.
+   Слой, выделенный во время band-прохода, получает band-размер → в `composite_blend_layer`
+   `src_rgba.len() == backdrop_rgba.len()` (оба band-размера) и CPU-бленд больше не пропускается.
+2. Все full-frame fallback-`clear_rect` (bbox=None пути `PushBlendMode`/`PushFilter`/`PushOpacity`,
+   `push_clip_rounded_rect_fallback`/`push_clip_path_fallback`/`push_mask_gradient_fallback`) чистят
+   весь слой (`current_rt_size()`), а не window-подпрямоугольник — иначе band-overscan-пиксели
+   остались бы протухшими.
+3. Все full-frame композит-заливки (`composite_opacity_layer`, `composite_clip_layer`,
+   `composite_filter_layer`, `composite_blend_layer`, None-ветки) заливают активный таргет 1:1
+   через `current_rt_css_size()` вместо window-css — иначе band-размерный слой сжимался бы в
+   верхний-левый window-угол.
+
+Приём: вся цепочка ключуется на реальный `image_size` привязанного таргета, поэтому вложенные
+offscreen-слои корректны на любой глубине в обоих путях (direct и band). На direct-пути активный
+таргет — framebuffer, поэтому `current_rt_size() == (self.width, self.height)` и поведение
+побайтово прежнее (нулевой риск регрессии вне band-прохода). `screen_bbox_device_px`'s clamp к
+`self.width/height` намеренно не тронут — относится к bbox-пути (срезы 11–14), клампит
+консервативно (к окну) и вне скоупа этого бага. `cargo test -p lumen-paint` 944+29 зелёных;
+clippy `-D warnings` чист.
+
+Валидация: band/scroll-blit путь активируется только при интерактивной прокрутке высокой страницы
+— графические тесты (одиночный скриншот без скролла) его не задевают, поэтому автоматического
+детерминированного репро в наборе нет (как и у всех GL-срезов BUG-272, валидировавшихся визуальной
+gdigrab A/B-приёмкой, а не юнит-тестами). Фикс — ровно тот, что рекомендован в разделе «Влияние на
+BUG-272 срез 14» ниже, и не меняет direct-путь.
 
 ## Симптом
 
