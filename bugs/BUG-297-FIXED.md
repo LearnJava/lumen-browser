@@ -1,6 +1,6 @@
 # BUG-297 — snapshot_cpu reference PNGs stale again (30+ pages, third occurrence)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-20 (P3)
 **Компонент:** test/snapshot (`crates/driver/tests/cases/snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)
 **Найден:** P1-imagebitmap (2026-07-17), `scripts/scoped-test.sh` gate before merge
 
@@ -41,3 +41,34 @@ is an *intentional* consequence of the feature that introduced it (not a real re
 Consider wiring this into the relevant doc-sync step (CLAUDE.md's "Adding a new CSS property"
 checklist) so future paint-affecting merges regenerate the reference alongside the property, instead
 of drifting until someone notices.
+
+## Разрешение (2026-07-20, P3)
+
+Regenerated the whole reference set — `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver
+--features cpu-render cases::snapshot_cpu` — exactly 32 PNGs changed on disk (the 31 listed
+pages + `1000000-final`), matching the mismatch list byte-for-byte; the other 46 pages
+re-rendered identical to their committed references (no unintended drift). Before regenerating,
+the drift was **verified feature-driven, not a rasterizer regression**, by diffing the old
+committed reference against the fresh render on the three largest-diff pages:
+
+- `119-paint-order` (1 141 200 differing bytes, 39%): the old reference showed a single
+  incomplete yellow rect — SVG `paint-order` / stroke tessellation wasn't rendering at all at
+  `801d7640`. The new render correctly shows all four stroked squares (`normal` vs
+  `paint-order: stroke`). The huge diff is the page going from near-blank to fully rendered.
+- `34-forms` (311 406 bytes): the old reference rendered form controls with no text content
+  (no placeholders, input values, or button labels) and a wrong vertical stack. The new render
+  correctly shows input text, checkmarks, button labels, the range slider and the color swatch —
+  accumulated form-rendering feature work.
+- `39-gradients` (287 942 bytes): a radial-gradient sizing/interpolation refinement — the
+  hotspot is now correctly concentric; both renders are valid gradients, no corruption.
+
+All spot-checks show the new output equal-or-more-correct, never broken. Since tiny-skia is a
+deterministic pure-Rust rasterizer (cross-OS stable per the test's own header), the regenerated
+references reproduce exactly — `cpu_snapshots_match_references` passes.
+
+Duplicate [BUG-316](BUG-316-FIXED.md) (same reference-staleness, surfaced via the combined
+`lumen-driver`+`lumen-shell` scoped-test) is closed by the same regeneration.
+
+Prevention: added a note to CLAUDE.md's "Adding a new CSS property" graphic-tests checklist —
+paint-affecting merges must regenerate the CPU snapshot references in the same commit (see also
+`crates/driver/tests/cases/snapshot_cpu.rs` header). Fourth recurrence should be caught there.
