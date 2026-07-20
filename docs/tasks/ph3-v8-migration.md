@@ -1020,6 +1020,27 @@ the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-
 v8-backend content_index` — 5/5 green; `cargo check -p lumen-js` (default) — green; `cargo clippy
 -p lumen-js --all-targets -- -D warnings` clean on both default and `v8-backend` features.
 
+### S12b-17 — `csp.rs` (2026-07-20, branch p1-v8-s12b-17-csp)
+
+Seventeenth slice, same systematic selection. After `content_index.rs` (S12b-16) the next smallest
+non-trap `install_*(…Ctx…)` candidate is `csp.rs` (206 lines). Clean by the file-stem method
+(**zero `dom.rs` hits** for `csp`/`SecurityPolicyViolationEvent`/`_lumen_dispatch_csp_violation`)
+with its own-file `mod tests`; call site in `lib.rs`'s `QuickJsRuntime::install_dom` is a plain
+one-liner (no `QuickJsRuntime` `fire_*`/`take_*` method — the Phase-1 `_lumen_fire_csp_violation`
+native does not exist yet). Same S12b-1..8/16 shape: pure JS-shim `eval` (no native bindings), the
+CSP3 §7.8 Phase-0 stub (`SecurityPolicyViolationEvent extends Event` + the
+`window._lumen_dispatch_csp_violation` dispatch helper). Deleted the rquickjs `install_csp_bindings`
+fn + its `use rquickjs::Ctx`; gated `CSP_SHIM` behind `#[cfg(feature = "v8-backend")]` (only
+referenced from the v8 path now, as S12b-12/13/14/16). Ported all 6 tests 1:1 to `V8JsRuntime`;
+unlike S12b-16 the CSP shim needs `Event`/`window`/`document`/`location`, so `with_csp_api` evals a
+minimal DOM stub (matching the old rquickjs test's stub, but assigning on `globalThis`) on a bare
+`V8JsRuntime::new()` before `install_csp_bindings_v8` — evals on one runtime share global state so
+`_dispatched` persists across the assertion `eval`. Gated `#[cfg(all(test, feature =
+"v8-backend"))]`; dropped the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p
+lumen-js --features v8-backend csp` — 6/6 green; `cargo check -p lumen-js --features v8-backend` —
+green; `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` clean. Next
+candidate S12b-18 = `webxr.rs` (210), then `permissions_policy.rs` (214), `highlight_api.rs` (215).
+
 ---
 
 ## Risks (Rev 2)

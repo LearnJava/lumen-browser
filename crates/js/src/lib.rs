@@ -882,13 +882,6 @@ impl QuickJsRuntime {
                 eprintln!("WebSerial bindings init failed: {}", e);
             }
 
-            // Install CSP violation event class (W3C CSP Level 3 §7.8) — after DOM/document.
-            // Phase 0: SecurityPolicyViolationEvent class + _lumen_dispatch_csp_violation helper.
-            // Phase 1: shell calls _lumen_fire_csp_violation for actual enforcement.
-            if let Err(e) = csp::install_csp_bindings(&ctx) {
-                eprintln!("CSP bindings init failed: {}", e);
-            }
-
             // Install Permissions Policy bindings (W3C Permissions Policy §8) — after DOM/document.
             // Phase 0: document.featurePolicy + _lumen_set_permissions_policy(headerValue) hook.
             // Phase 1: shell calls _lumen_set_permissions_policy after HTTP response headers.
