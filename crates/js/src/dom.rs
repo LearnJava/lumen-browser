@@ -6068,6 +6068,23 @@ function _lumen_build_element(nid) {
         enumerable: false,
         configurable: true,
     });
+    // DOM §4.5 CharacterData.data / Node.nodeValue for live text nodes. Only
+    // exposed on text nodes (element wrappers keep `data` free for expandos and
+    // `nodeValue` absent, matching the pre-existing shape). Writing routes through
+    // `_lumen_set_text_content`, whose MutationObserver wrap emits a `characterData`
+    // record for text nodes (BUG-318, WPT MutationObserver-takeRecords.html).
+    if (_lumen_is_text_node(nid)) {
+        Object.defineProperty(_obj, 'data', {
+            get: function() { return _lumen_get_text_content(nid); },
+            set: function(v) { _lumen_set_text_content(nid, String(v)); },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(_obj, 'nodeValue', {
+            get: function() { return _lumen_get_text_content(nid); },
+            set: function(v) { _lumen_set_text_content(nid, String(v)); },
+            enumerable: true, configurable: true,
+        });
+    }
     return _obj;
 }
 
@@ -9121,6 +9138,19 @@ var sessionStorage = _lumen_make_storage(
 var _mo_observers = [];
 var _mo_delivery_queued = false;
 
+// True if `nid` is `ancestorNid` or a descendant of it (walks the parent chain
+// via `_lumen_get_parent`). Scopes `subtree:true` observers to their own subtree
+// (DOM §4.3.1) so a mutation elsewhere in the document — e.g. testharness.js's own
+// results-table writes — is not misattributed to them (BUG-318).
+function _lumen_mo_in_subtree(ancestorNid, nid) {
+    var cur = nid;
+    while (cur !== undefined && cur !== null) {
+        if (cur === ancestorNid) return true;
+        cur = _lumen_get_parent(cur);
+    }
+    return false;
+}
+
 function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds) {
     var hasObs = false;
     for (var oi = 0; oi < _mo_observers.length; oi++) {
@@ -9130,8 +9160,14 @@ function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds) {
             var tnid = entry.target && entry.target.__nid__;
             if (tnid === undefined) continue;
             var opts = entry.opts;
-            // Check if this mutation applies to this observation
-            if (tnid !== nid && !opts.subtree) continue;
+            // DOM §4.3.1: queue a record only if the mutated node is the observed
+            // target, or — with subtree:true — a descendant of it. Without the
+            // ancestry test, subtree observers captured every document mutation.
+            if (opts.subtree) {
+                if (!_lumen_mo_in_subtree(tnid, nid)) continue;
+            } else if (tnid !== nid) {
+                continue;
+            }
             if (type === 'attributes' && !opts.attributes) continue;
             if (type === 'childList' && !opts.childList) continue;
             if (type === 'characterData' && !opts.characterData) continue;
@@ -9139,12 +9175,18 @@ function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds) {
                     opts.attributeFilter.indexOf(attrName) < 0) continue;
             var rec = {
                 type: type,
-                target: entry.target,
+                // DOM §4.3.3: target is the mutated node itself — for a subtree
+                // observer this is the descendant, not the observation root.
+                target: _lumen_make_element(nid),
                 attributeName: attrName || null,
+                attributeNamespace: null,
                 oldValue: (type === 'attributes' && opts.attributeOldValue) ? oldVal :
                           (type === 'characterData' && opts.characterDataOldValue) ? oldVal : null,
-                addedNodes: addedNodeIds || [],
-                removedNodes: removedNodeIds || [],
+                // addedNodes/removedNodes are node ids from the mutation primitives;
+                // deliver them as (interned) node wrappers so `record.addedNodes[i]`
+                // is `===` the same object scripts see via `firstChild` etc.
+                addedNodes: (addedNodeIds || []).map(_lumen_make_element),
+                removedNodes: (removedNodeIds || []).map(_lumen_make_element),
                 nextSibling: null,
                 previousSibling: null,
             };
@@ -9212,12 +9254,23 @@ _lumen_remove_child = function(parent, child) {
     }
 };
 
-// Wrap _lumen_set_text_content to intercept characterData/childList mutations
+// Wrap _lumen_set_text_content to intercept mutations. DOM §4.9.1: setting
+// textContent on an ELEMENT replaces all its children with (at most) one text
+// node — a childList mutation (removedNodes = old children, addedNodes = new
+// text node). On a text/CharacterData node it replaces the node's data — a
+// characterData mutation (BUG-318).
 var _orig_set_text_content = _lumen_set_text_content;
 _lumen_set_text_content = function(nid, text) {
-    _orig_set_text_content(nid, text);
-    if (_mo_observers.length > 0) {
-        _mo_notify(nid, 'characterData', null, null, null, null);
+    if (_mo_observers.length === 0) { _orig_set_text_content(nid, text); return; }
+    if (_lumen_is_text_node(nid)) {
+        var old = _lumen_get_text_content(nid);
+        _orig_set_text_content(nid, text);
+        _mo_notify(nid, 'characterData', null, old, null, null);
+    } else {
+        var before = _lumen_get_children(nid);
+        _orig_set_text_content(nid, text);
+        var after = _lumen_get_children(nid);
+        _mo_notify(nid, 'childList', null, null, after, before);
     }
 };
 
@@ -9229,6 +9282,10 @@ function MutationObserver(callback) {
 }
 MutationObserver.prototype.observe = function(target, options) {
     if (!target || target.__nid__ === undefined) return;
+    // DOM §4.3.1: observe() re-activates the observer. `disconnect()` removes it
+    // from `_mo_observers`, so re-observing after a disconnect must re-register it
+    // (only the constructor pushed before — BUG-318, WPT MutationObserver-disconnect).
+    if (_mo_observers.indexOf(this) < 0) _mo_observers.push(this);
     var opts = options || {};
     var config = {
         target: target,
@@ -18435,6 +18492,103 @@ mod tests {
         // Internal queue must be cleared
         let inner_len = rt.eval("obs4.takeRecords().length").unwrap();
         assert_eq!(inner_len, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn mutation_observer_take_records_full_sequence() {
+        // BUG-318: mirrors WPT dom/nodes/MutationObserver-takeRecords.html — the
+        // full record shape must match. In particular: element.textContent yields a
+        // childList record (not characterData), a live text node's `.data` write
+        // yields a characterData record with the correct target/oldValue, and
+        // addedNodes carries the actual (interned) node wrapper.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var p = document.createElement('p');
+            p.setAttribute('id', 'n00');
+            document.body.appendChild(p);
+            var obs = new MutationObserver(function(){});
+            obs.observe(p, {subtree:true, childList:true, attributes:true,
+                            characterData:true, attributeOldValue:true,
+                            characterDataOldValue:true});
+            p.id = "foo";
+            p.id = "bar";
+            p.className = "bar";
+            p.textContent = "old data";
+            p.firstChild.data = "new data";
+            var recs = obs.takeRecords();
+            globalThis._summary = [
+                recs.length,
+                recs[0].type, recs[0].attributeName, recs[0].oldValue,
+                recs[1].type, recs[1].oldValue,
+                recs[2].type, recs[2].attributeName, recs[2].oldValue,
+                recs[3].type, recs[3].addedNodes.length, (recs[3].addedNodes[0] === p.firstChild),
+                recs[4].type, recs[4].oldValue, (recs[4].target === p.firstChild),
+                obs.takeRecords().length
+            ].join('|');
+        "#).unwrap();
+        assert_eq!(
+            rt.eval("_summary").unwrap(),
+            lumen_core::JsValue::String(
+                "5|attributes|id|n00|attributes|foo|attributes|class||childList|1|true|characterData|old data|true|0".into()
+            )
+        );
+    }
+
+    #[test]
+    fn mutation_observer_reobserve_after_disconnect_delivers() {
+        // BUG-318: mirrors WPT dom/nodes/MutationObserver-disconnect.html — a fresh
+        // observe() after disconnect() must re-activate delivery (the observer was
+        // spliced out of the active list by disconnect and only re-added by observe).
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            globalThis._cnt = 0;
+            globalThis._info = '';
+            var el = document.getElementById('main');
+            var observer = new MutationObserver(function(seq){
+                _cnt++;
+                _info = seq.length + '/' + seq[0].type + '/' + seq[0].attributeName + '/' + seq[0].oldValue;
+            });
+            observer.observe(el, {attributes:true});
+            el.id = "foo";
+            el.id = "bar";
+            observer.disconnect();
+            observer.observe(el, {attributes:true, attributeOldValue:true});
+            el.id = "latest";
+            observer.disconnect();
+            observer.observe(el, {attributes:true, attributeOldValue:true});
+            el.id = "n0000";
+        "#).unwrap();
+        rt.eval("_lumen_flush_mutation_observers()").unwrap();
+        assert_eq!(rt.eval("_cnt").unwrap(), lumen_core::JsValue::Number(1.0));
+        assert_eq!(
+            rt.eval("_info").unwrap(),
+            lumen_core::JsValue::String("1/attributes/id/latest".into())
+        );
+    }
+
+    #[test]
+    fn mutation_observer_subtree_scoped_to_target() {
+        // BUG-318: a subtree observer records mutations inside its own subtree only,
+        // not everywhere in the document. The record's target is the mutated node.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var a = document.createElement('div');
+            var b = document.createElement('div');
+            document.body.appendChild(a);
+            document.body.appendChild(b);
+            var child = document.createElement('span');
+            a.appendChild(child);
+            var obs = new MutationObserver(function(){});
+            obs.observe(a, {subtree:true, attributes:true});
+            child.setAttribute('x', '1');
+            b.setAttribute('y', '2');
+            var recs = obs.takeRecords();
+            globalThis._sub = recs.length + '|' + (recs.length === 1 && recs[0].target === child);
+        "#).unwrap();
+        assert_eq!(
+            rt.eval("_sub").unwrap(),
+            lumen_core::JsValue::String("1|true".into())
+        );
     }
 
     // ── ResizeObserver tests ──────────────────────────────────────────────────
