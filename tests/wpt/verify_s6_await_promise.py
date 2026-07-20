@@ -10,11 +10,14 @@ complete via the page's own event loop + testharness completion callback, not
 via BiDi `awaitPromise`. This script pins the *independent* `awaitPromise`
 behavior of `script.evaluate` so a future fix (or regression) is visible.
 
-Current, verified behavior (2026-07-18): `awaitPromise` is **ignored** — a
-promise-valued expression returns the unsettled promise object (serialized as
-`{"type":"string","value":"{}"}`) regardless of `awaitPromise`. Tracked as
-[BUG-319](../../bugs/BUG-319-OPEN.md). When BUG-319 lands, flip the
-`EXPECT_AWAIT_PROMISE_RESOLVES` assertions below to the resolved-value form.
+Current, verified behavior (2026-07-20, [BUG-319](../../bugs/BUG-319-FIXED.md)
+fixed): `awaitPromise:true` on a promise-valued expression returns the promise's
+**resolved** RemoteValue (`Promise.resolve(42)` -> `{"type":"number","value":42}`).
+Implemented as a two-round-trip eval in `bidi-server`'s `script_evaluate`
+(`eval_await_promise`): round 1 records the settled outcome on a global, V8's
+microtask checkpoint runs the settle handler, round 2 reads it back. Only
+microtask-settleable promises resolve this way; a promise still pending on a
+macrotask/IO falls back to the promise object.
 
 Usage (from repo root, after `pip install -r tests/wpt/requirements.txt` in a
 venv — see tests/wpt/README.md):
@@ -43,10 +46,9 @@ sys.path[:0] = [
 from webdriver.bidi.client import BidiSession  # noqa: E402
 from webdriver.bidi.modules.script import ContextTarget  # noqa: E402
 
-#: Flip to True once BUG-319 (awaitPromise support) lands — then a
-#: promise-valued expression evaluated with awaitPromise=True must return its
-#: resolved RemoteValue, not the promise object.
-EXPECT_AWAIT_PROMISE_RESOLVES = False
+#: BUG-319 landed (2026-07-20): a promise-valued expression evaluated with
+#: awaitPromise=True returns its resolved RemoteValue, not the promise object.
+EXPECT_AWAIT_PROMISE_RESOLVES = True
 
 #: A promise object currently serializes to this best-effort RemoteValue (full
 #: RemoteValue serialization is future work; see `eval_result_to_remote_value`).
