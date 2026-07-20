@@ -4341,6 +4341,17 @@ function _lumen_is_xml_name(s) {
     return _LUMEN_XML_NAME_RE.test(s);
 }
 
+// DOM §4.2.3 (pre-insert validity): Node-insertion methods must throw
+// HierarchyRequestError when called on a CharacterData receiver — Text,
+// Comment and ProcessingInstruction can never have children. Shared by the
+// generic `appendChild` (Text/Comment, wrapped via `_lumen_make_element`) and
+// the ProcessingInstruction object below (BUG-325).
+function _lumen_character_data_insertion_error() {
+    return new DOMException(
+        'Node insertion methods are not supported on CharacterData nodes',
+        'HierarchyRequestError');
+}
+
 // DOM §4.5 ProcessingInstruction — a detached, JS-only CharacterData node
 // (no arena backing; PIs are never laid out). Enough surface for scripts to
 // read/write `target`/`data` and inspect `nodeType`/`ownerDocument`. The
@@ -4364,6 +4375,12 @@ function _lumen_make_processing_instruction(target, data) {
         get ownerDocument() { return document; },
         get parentNode()    { return null; },
         get childNodes()    { return []; },
+        // BUG-325: CharacterData never has children — throw, not `TypeError:
+        // ... is not a function`, for the whole Node-insertion surface.
+        appendChild:  function()  { throw _lumen_character_data_insertion_error(); },
+        insertBefore: function()  { throw _lumen_character_data_insertion_error(); },
+        replaceChild: function()  { throw _lumen_character_data_insertion_error(); },
+        removeChild:  function()  { throw _lumen_character_data_insertion_error(); },
     };
     // BUG-314: give the PI object the ProcessingInstruction → CharacterData →
     // Node prototype chain so `pi instanceof ProcessingInstruction` holds. The
@@ -5358,6 +5375,12 @@ function _lumen_build_element(nid) {
             return false;
         },
         appendChild:     function(c) {
+            // BUG-325: DOM §4.2.3 pre-insert validity — Text/Comment (both
+            // wrapped here via `_lumen_make_element`, sharing this literal)
+            // are CharacterData and can never have children.
+            if (_lumen_is_text_node(nid)) {
+                throw _lumen_character_data_insertion_error();
+            }
             if (!c || c.__nid__ === undefined) return c;
             if (c.__isDocumentFragment__) {
                 // DOM LS §4.2.4: fragment append moves all children, not the fragment itself.
@@ -28628,6 +28651,31 @@ mod tests {
              c instanceof Comment && c instanceof CharacterData && c instanceof Node && \
              (new Text()) instanceof Text && \
              document.createProcessingInstruction('a', 'b') instanceof ProcessingInstruction"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-325: `Node.appendChild()` on any CharacterData receiver (Text/
+    // Comment/ProcessingInstruction) throws HierarchyRequestError — DOM
+    // §4.2.3 pre-insert validity forbids CharacterData from having children.
+    // Mirrors WPT `dom/nodes/CharacterData-appendChild.html`.
+    #[test]
+    fn character_data_append_child_throws_hierarchy_request_error() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "function create(type) { \
+                 if (type === 'Text') return document.createTextNode('test'); \
+                 if (type === 'Comment') return document.createComment('test'); \
+                 return document.createProcessingInstruction('target', 'test'); \
+             } \
+             var types = ['Text', 'Comment', 'ProcessingInstruction']; \
+             types.every(function(t1) { \
+                 return types.every(function(t2) { \
+                     var n1 = create(t1), n2 = create(t2); \
+                     try { n1.appendChild(n2); return false; } \
+                     catch (e) { return e.name === 'HierarchyRequestError' && e.code === 3; } \
+                 }); \
+             })"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
