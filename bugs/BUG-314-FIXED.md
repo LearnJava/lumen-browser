@@ -68,7 +68,7 @@ LUMEN_PROFILE=dev-release tests/wpt/.venv/Scripts/python.exe \
 `character_data_prototype_chain`, `document_fragment_constructor`,
 `dom_interface_globals_defined`.
 
-**Отложено в [BUG-321](BUG-321-OPEN.md):** конструируемый `new Document()`
+**Отложено в [BUG-321](BUG-321-FIXED.md):** конструируемый `new Document()`
 (с `createElement`/`appendChild`/`doctype`), живой `document.doctype` как
 `DocumentType`-узел и `instanceof HTML*Element` для нативных элемент-обёрток
 (общий долг с BUG-305 — обёртки остаются plain-объектами). Из-за этого

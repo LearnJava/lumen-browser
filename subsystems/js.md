@@ -183,10 +183,24 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   stringified per DOM §4.5 (undefined → `''`, first argument only). `new DocumentFragment()` returns a
   native (arena-backed) empty fragment; `_lumen_make_document_fragment` gained `ownerDocument`/
   `firstChild`. Element wrappers stay plain native-backed objects, so `el instanceof HTMLDivElement` is
-  still false (shared debt with BUG-305). Deferred to [BUG-321](../bugs/BUG-321-OPEN.md): constructible
-  `new Document()`, live `document.doctype`, element-wrapper `instanceof`. 4 unit tests
+  still false (shared debt with BUG-305). 4 unit tests
   (`dom::tests::{comment_text_constructors_build_nodes, character_data_prototype_chain,
   document_fragment_constructor, dom_interface_globals_defined}`).
+- **`document.doctype` + constructible `new Document()` (DOM §4.5/§4.9, [BUG-321](../bugs/BUG-321-FIXED.md)
+  fix, [P3] 2026-07-20).** Follows up BUG-314's node-family work. New natives in **both** engines
+  (`dom.rs` + `v8_runtime.rs`): `_lumen_is_doctype(nid)`, `_lumen_get_document_doctype()` (the document's
+  doctype child), `_lumen_get_doctype_field(nid, 'name'|'public'|'system')`. Shim: `_lumen_make_doctype(nid)`
+  builds a DocumentType wrapper (`nodeType 10`, prototype `DocumentType.prototype` → `instanceof` works),
+  interned in the shared `_lumen_element_wrappers` cache so `document.doctype === document.childNodes[1]`
+  (same object) and `_lumen_gc_collect` purges it. `document` gained kind-aware `childNodes` (maps children
+  through `_lumen_make_node`, which routes doctype→`_lumen_make_doctype`, else `_lumen_make_element`) and a
+  `doctype` getter. `Document` is now constructible — a detached document tracking its children in a JS
+  array with `createElement`/`createTextNode`/`appendChild`, a `doctype` getter (scans for `nodeType 10`,
+  `null` on a fresh document) and `documentElement`. Passes both WPT `dom/nodes/Document-doctype.html`
+  subtests. Element-wrapper `instanceof HTMLXElement` (BUG-321 item 3) is NOT part of this — still the
+  plain-object element-wrapper debt tracked by BUG-305. 3 unit tests
+  (`dom::tests::{document_doctype_is_document_type, document_doctype_null_when_absent,
+  new_document_constructor}`).
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has
