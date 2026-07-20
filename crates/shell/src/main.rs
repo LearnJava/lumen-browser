@@ -943,6 +943,7 @@ fn run_window_mode(
         maximized,
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
+        load_failed: false,
         nav_start: None,
         history_fts: HistoryFts::open_in_memory().expect("history_fts init"),
         notes_store: lumen_knowledge::Notes::open_in_memory().expect("notes_store init"),
@@ -5051,6 +5052,8 @@ struct PageSnapshot {
     js_ctx: Option<Arc<dyn PersistentJs>>,
     first_paint_delivered: bool,
     first_contentful_paint_delivered: bool,
+    /// Per-tab settled-navigation-error flag (BUG-308); see the `Lumen` field.
+    load_failed: bool,
     /// Instant at which the current navigation began (set in `reload()`).
     /// Used to compute `duration` for the W3C Navigation Timing entry.
     nav_start: Option<std::time::Instant>,
@@ -7430,6 +7433,14 @@ struct Lumen {
     first_paint_delivered: bool,
     /// `true` once `first-contentful-paint` has been delivered to JS.
     first_contentful_paint_delivered: bool,
+    /// `true` when the current navigation finished in a network/HTTP error
+    /// (`LoadError` / final-render `Err`) rather than a loaded document. A
+    /// settled error IS "done loading": `check_wait_condition` treats it as
+    /// `DocumentReady` so a `wait{document_ready}` (MCP/BiDi) resolves at once
+    /// instead of hanging until its deadline when there is no JS context and no
+    /// prior `layout_box` to fall back on (BUG-308). Reset to `false` at the
+    /// start of every navigation; per-tab (saved/restored via `PageSnapshot`).
+    load_failed: bool,
     /// Instant at which the current navigation began (set in `reload()`).
     /// Used to compute `duration` for the W3C Navigation Timing entry.
     nav_start: Option<std::time::Instant>,
@@ -9230,6 +9241,8 @@ impl Lumen {
         }
         // Record navigation start for PerformanceNavigationTiming (Navigation Timing L2 §4.2).
         self.nav_start = Some(std::time::Instant::now());
+        // A fresh navigation supersedes any prior settled error (BUG-308).
+        self.load_failed = false;
         click_log::log_load_start(&self.source.describe());
         println!("Reload: {}", self.source.describe());
 
@@ -9815,6 +9828,9 @@ impl Lumen {
         // Reset paint timing guards so new page fires fresh PerformancePaintTiming entries.
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
+        // A page was applied successfully — clear any prior settled-error flag
+        // (BUG-308) so `document_ready` reflects this real load, not a stale one.
+        self.load_failed = false;
 
         // Индексировать страницу в history_fts для omnibox (@history) и записать
         // в history_store для панели истории (Ctrl+H).
@@ -10198,6 +10214,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         self.stream_layout_seeded = false;
         // Record navigation start for the initial streaming load.
         self.nav_start = Some(std::time::Instant::now());
+        // A fresh navigation supersedes any prior settled error (BUG-308).
+        self.load_failed = false;
         self.load_generation = self.load_generation.wrapping_add(1);
         self.start_streaming_load(self.load_generation);
     }
@@ -10409,6 +10427,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                     Err(e) => {
                         self.nav_start = None;
+                        // Settled navigation error — mark done so a
+                        // `wait{document_ready}` resolves at once (BUG-308).
+                        self.load_failed = true;
                         click_log::log_load_err(&self.source.describe(), &e);
                         health_log::log_load_error(&self.source.describe(), &e);
                         eprintln!("Ошибка финального render {}: {e}", self.source.describe());
@@ -10418,6 +10439,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             LoadEvent::LoadError(msg, generation) => {
                 if generation != self.load_generation { return; }
                 self.nav_start = None;
+                // Settled navigation error — mark done so a
+                // `wait{document_ready}` resolves at once (BUG-308).
+                self.load_failed = true;
                 click_log::log_load_err(&self.source.describe(), &msg);
                 health_log::log_load_error(&self.source.describe(), &msg);
                 eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
@@ -21008,6 +21032,7 @@ impl Lumen {
             js_ctx: self.take_js_ctx(),
             first_paint_delivered: self.first_paint_delivered,
             first_contentful_paint_delivered: self.first_contentful_paint_delivered,
+            load_failed: self.load_failed,
             nav_start: self.nav_start.take(),
             animated_gifs: std::mem::take(&mut self.animated_gifs),
             gif_last_frame: std::mem::take(&mut self.gif_last_frame),
@@ -21083,6 +21108,7 @@ impl Lumen {
         self.set_js_ctx(snap.js_ctx);
         self.first_paint_delivered = snap.first_paint_delivered;
         self.first_contentful_paint_delivered = snap.first_contentful_paint_delivered;
+        self.load_failed = snap.load_failed;
         self.nav_start = snap.nav_start;
         self.animated_gifs = snap.animated_gifs;
         self.gif_last_frame = snap.gif_last_frame;
@@ -21177,6 +21203,7 @@ impl Lumen {
         self.set_js_ctx(None);
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
+        self.load_failed = false;
         self.nav_start = None;
         self.animated_gifs = HashMap::new();
         self.gif_last_frame = HashMap::new();
@@ -21508,6 +21535,17 @@ impl Lumen {
         fn check_wait_condition(&self, cond: &WaitCondition) -> bool {
             match cond {
                 WaitCondition::DocumentReady | WaitCondition::NetworkIdle => {
+                    // A settled navigation error (network/HTTP failure) is "done
+                    // loading" — resolve immediately instead of hanging until the
+                    // wait's deadline (BUG-308). Without this, a nav that ends in
+                    // `LoadError` with no JS context and no prior `layout_box`
+                    // (e.g. `about:blank` → an anti-bot 403) never satisfies
+                    // either readiness branch below, so `wait{document_ready}`
+                    // blocks for minutes. Still gated on `nav_start.is_none()` so
+                    // a stale flag from a superseded nav can't win a race.
+                    if self.nav_start.is_none() && self.load_failed {
+                        return true;
+                    }
                     // ADR-016: eval через `route_query_js`, тот же паттерн, что
                     // `WaitCondition::JsIdle` ниже.
                     match route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
