@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-18",
+ "generated": "2026-07-20",
  "counts": {
-  "open": 48,
-  "fixed": 242,
+  "open": 36,
+  "fixed": 256,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 290,
+ "total_bugs": 292,
  "phases": [
   {
    "id": "P0",
@@ -789,6 +789,20 @@
          "status": "done",
          "size": "S",
          "note": "Влит в main (branch p1-v8-s12b-15-download): rquickjs-путь `_lumen_network_download`/`_lumen_download` (программный download-триггер) удалён, 6 own-file тестов портированы на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-16",
+         "title": "S12b-16: Content Index API",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-16-content-index): rquickjs-путь Content Index API (`content_index.rs`) удалён, 5 own-file тестов портированы на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-17",
+         "title": "S12b-17: CSP violation events",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-17-csp): rquickjs-путь CSP violation-events (`csp.rs`, `install_csp_bindings`) удалён, 6 own-file тестов портированы на V8JsRuntime"
         }
        ]
       }
@@ -3323,8 +3337,8 @@
   },
   "BUG-274": {
    "status": "open",
-   "title": "Сравнение `LUMEN_BACKEND=femtovg` vs `=wgpu` на 1000000-final.html: в простое (10с, без ввода) wgpu жжёт ~1422 мс CPU против 375 мс у femtovg (~4×) — похоже на…",
-   "component": "paint (WgpuBackend) / shell (event loop, wgpu-путь)",
+   "title": "**Пере-скоуплен 2026-07-20 (P1):** заявка «idle CPU ~4× + скачок памяти в простое» ОПРОВЕРГНУТА замером — в истинном простое (t16→t26 после оседания страницы) о…",
+   "component": "paint (WgpuBackend/Renderer) / shell (streaming первого кадра)",
    "date": null,
    "debtor": false
   },
@@ -3448,17 +3462,17 @@
    "debtor": false
   },
   "BUG-293": {
-   "status": "open",
-   "title": "Вкладка, открытая `window.open('file:///…')`, не загружается: дренаж popup-запросов заворачивает URL как есть в `PageSource::Url` → сетевой путь → `unsupported…",
-   "component": "shell (`main.rs` — дренаж `window.open()` popup-запросов)",
-   "date": null,
+   "status": "fixed",
+   "title": "Вкладка, открытая `window.open('file:///…')`, не загружалась: дренаж popup-запросов заворачивал URL как есть в `PageSource::Url` → сетевой путь → `unsupported s…",
+   "component": "shell (`main.rs` — дренаж `window.open()` popup-запросов + `location.href`)",
+   "date": "2026-07-19",
    "debtor": false
   },
   "BUG-294": {
-   "status": "open",
-   "title": "Flex-item с `margin-left` в row-контейнере позиционируется со сдвигом в 2× margin вместо 1×: `lay_out_flex`'s row-ветка передаёт `content_x + main_cursor + m_l`…",
+   "status": "fixed",
+   "title": "Flex-item с `margin-left` в row-контейнере позиционировался со сдвигом в 2× margin вместо 1×: `lay_out_flex`'s row/column-ветки передавали `content_x + main_cur…",
    "component": "layout (`box_tree.rs`, `lay_out_flex`)",
-   "date": null,
+   "date": "2026-07-19",
    "debtor": false
   },
   "BUG-295": {
@@ -3504,10 +3518,10 @@
    "debtor": false
   },
   "BUG-302": {
-   "status": "open",
-   "title": "`Element.getElementsByClassName` отсутствует в основном DOM-шиме (есть только в dom_parser.rs) — скрипты news.ycombinator.com падают целиком (`el.getElementsByC…",
+   "status": "fixed",
+   "title": "`Element.getElementsByClassName` отсутствовал в основном DOM-шиме (был только в dom_parser.rs) — скрипты news.ycombinator.com падали целиком (`el.getElementsByC…",
    "component": "js (WEB_API_SHIM, dom.rs)",
-   "date": null,
+   "date": "2026-07-19",
    "debtor": false
   },
   "BUG-303": {
@@ -3525,10 +3539,10 @@
    "debtor": false
   },
   "BUG-305": {
-   "status": "open",
-   "title": "Конструктор `Image`/`HTMLImageElement` отсутствует в шиме — `new Image()` (предзагрузка, трекинг-пиксели, canvas) валит скрипты ria.ru целиком (`Image is not de…",
+   "status": "fixed",
+   "title": "Конструктор `Image`/`HTMLImageElement` отсутствовал в шиме — `new Image()` (предзагрузка, трекинг-пиксели, canvas) валил скрипты ria.ru целиком (`Image is not d…",
    "component": "js (WEB_API_SHIM, dom.rs)",
-   "date": null,
+   "date": "2026-07-19",
    "debtor": false
   },
   "BUG-306": {
@@ -3553,45 +3567,52 @@
    "debtor": false
   },
   "BUG-309": {
-   "status": "open",
-   "title": "`Element.prototype.setAttributeNS`/`getAttributeNS`/`removeAttributeNS` и прочие `*NS`-аксессоры атрибутов отсутствуют — `el.setAttributeNS(...)` кидает `TypeEr…",
+   "status": "fixed",
+   "title": "`Element.prototype.setAttributeNS`/`getAttributeNS`/`removeAttributeNS`/`hasAttributeNS` отсутствовали — `el.setAttributeNS(...)` кидал `TypeError`. Первый реал…",
    "component": "js (`dom.rs` `WEB_API_SHIM`)",
-   "date": null,
+   "date": "2026-07-19",
    "debtor": false
   },
   "BUG-310": {
-   "status": "open",
-   "title": "ElementTraversal (`childElementCount`/`firstElementChild`/`lastElementChild`/`nextElementSibling`/`previousElementSibling`) и `ParentNode.children` отсутствуют…",
+   "status": "fixed",
+   "title": "ElementTraversal (`childElementCount`/`firstElementChild`/`lastElementChild`/`nextElementSibling`/`previousElementSibling`) и `ParentNode.children` отсутствовал…",
    "component": "js (WEB_API_SHIM, dom.rs)",
-   "date": null,
+   "date": "2026-07-19",
    "debtor": false
   },
   "BUG-311": {
-   "status": "open",
-   "title": "`Node.prototype.isConnected` отсутствует — возвращает `undefined` вместо булева. WPT `dom/nodes/Node-isConnected.html`, `expected: FAIL`. Найдено P2-wpt S5 2026…",
+   "status": "fixed",
+   "title": "`Node.prototype.isConnected` отсутствовал — возвращал `undefined`. **Фикс:** геттер в `WEB_API_SHIM` (`_lumen_make_element`) — `true`, когда `documentElement` (…",
    "component": "js (WEB_API_SHIM, dom.rs)",
-   "date": null,
+   "date": "2026-07-19",
    "debtor": false
   },
   "BUG-312": {
-   "status": "open",
-   "title": "`Element.prototype.hasAttributes()` отсутствует — `el.hasAttributes is not a function`. WPT `dom/nodes/Element-hasAttributes.html`, `expected: FAIL`. Найдено P2…",
+   "status": "fixed",
+   "title": "`Element.prototype.hasAttributes()` отсутствовал — `el.hasAttributes is not a function`. Фикс: `hasAttributes()` в `WEB_API_SHIM` поверх существующего натива `_…",
    "component": "js (WEB_API_SHIM, dom.rs)",
-   "date": null,
+   "date": "2026-07-19",
    "debtor": false
   },
   "BUG-313": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.createProcessingInstruction` отсутствует + нет валидации Name/`?>` (`InvalidCharacterError`). WPT `dom/nodes/Document-createProcessingInstruction.html…",
    "component": "js (WEB_API_SHIM, dom.rs)",
-   "date": null,
+   "date": "2026-07-19",
    "debtor": false
   },
   "BUG-314": {
-   "status": "open",
+   "status": "fixed",
    "title": "DOM-конструкторы (`Comment`/`Text`/`DocumentFragment`/`DocumentType`/`Document`/`ProcessingInstruction`/`HTML*Element`) не выставлены как глобальные интерфейсы…",
    "component": "js (WEB_API_SHIM, dom.rs)",
-   "date": null,
+   "date": "2026-07-20",
+   "debtor": false
+  },
+  "BUG-321": {
+   "status": "fixed",
+   "title": "Остаток [BUG-314](bugs/BUG-314-FIXED.md): (1) конструируемый `new Document()` с `createElement`/`appendChild`/`doctype`; (2) живой `document.doctype` как `Docum…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": "2026-07-20",
    "debtor": false
   },
   "BUG-315": {
@@ -3609,23 +3630,30 @@
    "debtor": false
   },
   "BUG-317": {
-   "status": "open",
+   "status": "fixed",
    "title": "`MutationRecord` не выставлен как глобальный интерфейс — `MutationRecord is not defined` (колбэк MutationObserver срабатывает асинхронно, но записи нельзя прове…",
    "component": "js (WEB_API_SHIM, dom.rs)",
-   "date": null,
+   "date": "2026-07-20",
    "debtor": false
   },
   "BUG-318": {
-   "status": "open",
-   "title": "MutationObserver: некорректный учёт записей (дубли/лишние, `takeRecords()` не очищает очередь) + subtree-мутации не наблюдаются (async-тест уходит в TIMEOUT). W…",
+   "status": "fixed",
+   "title": "MutationObserver: некорректный учёт записей (дубли/лишние, `takeRecords()` не очищает очередь) + subtree-мутации не наблюдаются (async-тест уходит в TIMEOUT). *…",
    "component": "js (WEB_API_SHIM, dom.rs)",
-   "date": null,
+   "date": "2026-07-20",
    "debtor": false
   },
   "BUG-319": {
-   "status": "open",
-   "title": "`script.evaluate` игнорирует `awaitPromise`: при `awaitPromise:true` возвращает сам объект промиса (`{}`), а не разрешённое значение. Пайплайн WPT не затронут (…",
+   "status": "fixed",
+   "title": "`script.evaluate` игнорировал `awaitPromise`: при `awaitPromise:true` возвращал сам объект промиса (`{}`), а не разрешённое значение. **Фикс:** `script_evaluate…",
    "component": "bidi-server (protocol.rs)",
+   "date": "2026-07-20",
+   "debtor": false
+  },
+  "BUG-320": {
+   "status": "open",
+   "title": "`mix-blend-mode` (все режимы кроме `normal`/`plus-lighter`) не рендерится вовсе на `main`: `acquire_layer()` сайзит offscreen-слой по `self.width`/`self.height`…",
+   "component": "paint (femtovg, `acquire_layer`/`layer_pool`)",
    "date": null,
    "debtor": false
   }
@@ -3714,7 +3742,8 @@
    "BUG-313",
    "BUG-314",
    "BUG-317",
-   "BUG-318"
+   "BUG-318",
+   "BUG-321"
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"
@@ -3934,7 +3963,7 @@
    "BUG-226",
    "BUG-227"
   ],
-  "paint (WgpuBackend) / shell (event loop, wgpu-путь)": [
+  "paint (WgpuBackend/Renderer) / shell (streaming первого кадра)": [
    "BUG-274"
   ],
   "paint (`Renderer::new_async`, выбор wgpu-бэкенда)": [
@@ -3951,6 +3980,9 @@
   ],
   "paint (build)": [
    "BUG-235"
+  ],
+  "paint (femtovg, `acquire_layer`/`layer_pool`)": [
+   "BUG-320"
   ],
   "paint (femtovg, blend/filter-композитинг)": [
    "BUG-273"
@@ -3999,7 +4031,7 @@
    "BUG-147",
    "BUG-148"
   ],
-  "shell (`main.rs` — дренаж `window.open()` popup-запросов)": [
+  "shell (`main.rs` — дренаж `window.open()` popup-запросов + `location.href`)": [
    "BUG-293"
   ],
   "shell (`main.rs`, `check_wait_condition`)": [
