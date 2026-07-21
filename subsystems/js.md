@@ -110,8 +110,9 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 - **`Image` / `HTMLImageElement` constructors (BUG-305 fix, [P3] 2026-07-19).**
   Both were absent from `WEB_API_SHIM`, so `new Image()` (image preloading, tracking pixels, canvas
   sources) threw `Image is not defined` and took the whole script down (ria.ru). Added two global
-  declarations before the `document` literal: `function HTMLImageElement() {}` (bare interface global,
-  `instanceof` not wired — element wrappers are plain objects) and `function Image(width?, height?)`
+  declarations before the `document` literal: `function HTMLImageElement() {}` (bare interface global;
+  `instanceof` was not wired at the time — element wrappers were plain objects, since fixed by BUG-322)
+  and `function Image(width?, height?)`
   which does `document.createElement('img')`, sets the width/height content attributes from its args,
   and **returns** the element (a returned object wins over `this`), so `new Image()` yields a native
   `<img>` wrapper that participates in layout/paint. Companion change: `_lumen_build_element` now
@@ -142,9 +143,9 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   indices, `item(i)` and `namedItem(name)` re-query the live tree on every access; the prototype is
   the marker `HTMLCollection` (exposed as `window.HTMLCollection`) so `x instanceof HTMLCollection`
   holds. Consumers that index `el.children[i]`/read `.length` are unaffected (no array methods were
-  used on `.children`). Known limitation: `Element-children.html` stays WPT-FAIL — its two subtests
-  need the full HTMLCollection named-getter *enumeration* order and a non-HTML-namespace element
-  from `createElementNS("", ...)`, which Lumen folds to HTML.
+  used on `.children`). `Element-children.html`'s two subtests were WPT-FAIL at the time (needed
+  `ownKeys`/`getOwnPropertyDescriptor` traps for enumeration, and a `[[Prototype]]` on element
+  wrappers for `instanceof`) — both closed since, see BUG-323 and BUG-322 below.
 - **`Node.isConnected` (DOM §4.4, BUG-311 fix, [P3] 2026-07-19).** Was entirely absent (returned
   `undefined`). Added as a getter on the element wrapper in the shared `WEB_API_SHIM`: a node is
   connected iff `documentElement` (`<html>`, via `_lumen_get_html_element`) is on its ancestor chain
@@ -182,8 +183,8 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   (`Comment.prototype → CharacterData.prototype → Node.prototype`) and working `instanceof`; `data` is
   stringified per DOM §4.5 (undefined → `''`, first argument only). `new DocumentFragment()` returns a
   native (arena-backed) empty fragment; `_lumen_make_document_fragment` gained `ownerDocument`/
-  `firstChild`. Element wrappers stay plain native-backed objects, so `el instanceof HTMLDivElement` is
-  still false (shared debt with BUG-305). 4 unit tests
+  `firstChild`. Element wrappers stayed plain native-backed objects at the time, so
+  `el instanceof HTMLDivElement` was still false — closed by BUG-322 below. 4 unit tests
   (`dom::tests::{comment_text_constructors_build_nodes, character_data_prototype_chain,
   document_fragment_constructor, dom_interface_globals_defined}`).
 - **`document.doctype` + constructible `new Document()` (DOM §4.5/§4.9, [BUG-321](../bugs/BUG-321-FIXED.md)
@@ -197,10 +198,40 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   `doctype` getter. `Document` is now constructible — a detached document tracking its children in a JS
   array with `createElement`/`createTextNode`/`appendChild`, a `doctype` getter (scans for `nodeType 10`,
   `null` on a fresh document) and `documentElement`. Passes both WPT `dom/nodes/Document-doctype.html`
-  subtests. Element-wrapper `instanceof HTMLXElement` (BUG-321 item 3) is NOT part of this — still the
-  plain-object element-wrapper debt tracked by BUG-305. 3 unit tests
+  subtests. Element-wrapper `instanceof HTMLXElement` (BUG-321 item 3) is NOT part of this — spun off
+  as BUG-322 (fixed below). 3 unit tests
   (`dom::tests::{document_doctype_is_document_type, document_doctype_null_when_absent,
   new_document_constructor}`).
+- **HTMLCollection `for-in`/`Object.getOwnPropertyNames` enumeration (DOM §4.2.6.2, BUG-323 fix,
+  [P3] 2026-07-21).** The live `HTMLCollection` `Proxy` (`_lumen_make_html_collection`) had no
+  `ownKeys`/`getOwnPropertyDescriptor` traps, so enumerating one (`for...in`, `Object.keys`,
+  `Object.getOwnPropertyNames`) silently yielded nothing despite `length`/`item()`/`namedItem()`
+  all working. Fix: both traps added, backed by a new `_lumen_html_collection_own_names` helper
+  (same id-then-name pass as the existing `_lumen_html_collection_named`) — numeric indices
+  `enumerable: true`, `id`/`name`-derived keys `enumerable: false` (visible via
+  `getOwnPropertyNames`/`hasOwnProperty`, not `for-in`), matching real engines. Unit test
+  `html_collection_supports_enumeration`.
+- **Native element/text wrapper `[[Prototype]]` chain — `instanceof Element`/`Node`/`HTML*Element`/
+  `Text`/`CharacterData` (DOM §4.9/§4.4, HTML §3.1.3, [BUG-322](../bugs/BUG-322-FIXED.md) fix,
+  [P1] 2026-07-21).** `_lumen_build_element` (the single builder behind `_lumen_make_element`, used
+  for both element and text nodes) always returned a plain object with no `[[Prototype]]`, so
+  `document.body instanceof Element`/`Node`/`HTMLElement`, `document.createElement('div') instanceof
+  HTMLDivElement`, etc. were always `false` — the gap BUG-314/BUG-321 explicitly deferred. Fix: a
+  `_lumen_html_tag_prototypes` table (`TAGNAME → HTML*Element` constructor, ~40 common tags; tags
+  without an entry fall back to plain `HTMLElement` per HTML §3.1.3, not `HTMLUnknownElement`) plus
+  `_lumen_element_prototype_for(nid)` (non-HTML-namespace nodes — SVG/MathML — get the generic
+  `Element.prototype`; the SVG shim's `createElementNS` decorator, which re-points results at typed
+  `SVG*Element.prototype` afterward, chains through `Element.prototype` too via `class SVGElement
+  extends Element`, so the two don't conflict). One `Object.setPrototypeOf` call at the end of
+  `_lumen_build_element` — `Text.prototype` for text nodes (`_lumen_is_text_node`), else the
+  tag-resolved prototype. Every accessor/method on the wrapper is still an own property, so it
+  shadows the inherited chain. Fixed a latent hole found along the way: `HTMLImageElement` (BUG-305)
+  had no `.prototype` chain at all (bare `Object.prototype`) — would have broken `instanceof
+  Element`/`Node` specifically for `<img>` once tag-mapped; now matches the other `HTML*Element`
+  interfaces (`Object.create(HTMLElement.prototype)`). Custom elements and parsed (non-
+  `createElementNS`) SVG/MathML markup are untouched — separate, non-overlapping perimeters. Unit
+  test `element_prototype_chain_instanceof`; full `lumen-js` suite green (2506+68, `--features
+  v8-backend`).
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has

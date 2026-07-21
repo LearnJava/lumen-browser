@@ -423,7 +423,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/Element-childElementCount-dynamic-remove.html` | OK | 1/1 |  |  |  |
 | `/dom/nodes/Element-childElementCount-nochild.html` | OK | 1/1 |  |  |  |
 | `/dom/nodes/Element-childElementCount.html` | OK | 1/1 |  |  |  |
-| `/dom/nodes/Element-children.html` | OK | 0/2 |  | [BUG-322](../bugs/BUG-322-OPEN.md), [BUG-323](../bugs/BUG-323-FIXED.md) |  |
+| `/dom/nodes/Element-children.html` | OK | 0/2 |  | [BUG-322](../bugs/BUG-322-FIXED.md), [BUG-323](../bugs/BUG-323-FIXED.md) | Оба фикса влиты 2026-07-21; сабтесты/статус обновит следующий `run_report.py --all` |
 | `/dom/nodes/Element-classlist.html` | OK | 765/1420 |  |  | XML-namespace validation gap, см. BUG-324 заметку |
 | `/dom/nodes/Element-closest.html` | OK | 25/29 |  |  |  |
 | `/dom/nodes/Element-firstElementChild-namespace.html` | OK | 0/1 |  |  |  |

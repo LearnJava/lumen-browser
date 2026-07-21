@@ -1,6 +1,6 @@
 # BUG-322: `instanceof Element`/`Node`/`HTML*Element` всегда `false` для нативных элемент-обёрток
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-21
 **Дата:** 2026-07-20
 **Компонент:** js (WEB_API_SHIM, `crates/js/src/dom.rs`)
 **Найден:** WPT `dom/nodes/Element-children.html` (P2-wpt curated subset), при разборе двух
@@ -70,4 +70,51 @@ EventTarget.prototype` (DOM Standard §4.9 / HTML Standard §3.1.3), так чт
 
 `tests/wpt/metadata/dom/nodes/Element-children.html.ini` — сабтест «HTMLCollection edge cases»
 (было ошибочно закреплено под именем `Element-children`, см. BUG-323) закреплён `expected: FAIL`
-с ссылкой на этот баг.
+с ссылкой на этот баг. **Обновлено фиксом** — оба сабтеста теперь `expected: PASS`.
+
+## Фикс
+
+Реализовано ровно то, что описано в «Ожидании» — таблица тег → интерфейс плюс единая точка
+простановки `[[Prototype]]` в `_lumen_build_element` (`crates/js/src/dom.rs`):
+
+- `_lumen_html_tag_prototypes` — объект `TAGNAME → HTML*Element`-конструктор для ~40 общеупотребимых
+  HTML-тегов (div/span/p/h1-h6/a/input/button/select/option/textarea/label/form/ul/ol/li/table и
+  ячейки/секции/script/style/link/meta/html/head/body/title/canvas/video/audio/iframe/template/pre/
+  br/hr/dialog/img). Тегов вне таблицы (в т.ч. кастомных элементов, `<footer>`/`<nav>`/`<section>` и
+  т.п.) — намеренное упрощение: HTML LS §3.1.3 отдаёт им сам `HTMLElement`, а не
+  `HTMLUnknownElement` (последний зарезервирован под по-настоящему нераспознанные имена тегов;
+  различать это не пытаемся).
+- `_lumen_element_prototype_for(nid)` — резолвит итоговый прототип: не-HTML-namespace узлы (SVG/
+  MathML) получают общий `Element.prototype` (SVG-шим, `svg.rs`, донастраивает конкретные
+  `SVG*Element.prototype` уже ПОСЛЕ этого через собственный `Object.setPrototypeOf` на результате
+  `createElementNS` — цепочка не конфликтует, потому что `class SVGElement extends Element`);
+  HTML-namespace узлы смотрят в таблицу выше, фолбэк — `HTMLElement.prototype`.
+- В хвосте `_lumen_build_element`, перед `return _obj`, один вызов:
+  `Object.setPrototypeOf(_obj, _lumen_is_text_node(nid) ? Text.prototype : _lumen_element_prototype_for(nid))`.
+  Текстовые узлы (включая `document.createComment`, которое под капотом строит текстовый узел —
+  см. BUG-325, отдельный, не тронутый здесь гэп) получают `Text.prototype`.
+- Побочная находка по дороге: `function HTMLImageElement() {}` (BUG-305) не имел вообще никакой
+  `.prototype`-цепочки (голый `Object.prototype`) — если бы `<img>`-тег молча смотрел на него из
+  новой таблицы, `instanceof Element`/`Node`/`HTMLElement` ломались бы именно для `<img>`, единственного
+  тега с отдельной, более богатой обёрткой. Поправлено на тот же паттерн, что и остальные
+  `HTML*Element`-интерфейсы: `throw` в конструкторе + `Object.create(HTMLElement.prototype)`.
+
+Регрессионный юнит-тест `element_prototype_chain_instanceof` (`crates/js/src/dom.rs`, рядом с
+`character_data_prototype_chain`) проверяет цепочку прототипов и `instanceof` для div/span/body
+(теговая таблица), незарегистрированного тега (фолбэк на `HTMLElement`, не на конкретный
+подкласс) и текстового узла (`instanceof Text`/`CharacterData`/`Node`, не `Text` для элемента).
+Прогнан против V8 (`--features v8-backend`) — весь пакет `lumen-js` зелёный (2506 + 68 тестов).
+
+Риск для `Object.keys`/`JSON.stringify`/`for...in`, о котором предупреждало «Замечание по объёму»,
+не материализовался: `Object.keys`/`getOwnPropertyNames`/`JSON.stringify` читают только
+СОБСТВЕННЫЕ свойства (не задеты добавлением `[[Prototype]]`), а единственное найденное в
+вендоренном корпусе использование `for...in` над самим элементом
+(`dom/nodes/attributes.html:719`, `getEnumerableOwnProps1`) явно фильтрует через
+`obj.hasOwnProperty(prop)`, так что унаследованное перечисляемое `constructor` с прототипов
+(существующий, не новый для этого фикса паттерн — `X.prototype.constructor = X` без
+`enumerable: false`, использован по всему `WEB_API_SHIM` для Event-подклассов и раньше) туда не
+просачивается. Не переделывал этот паттерн на non-enumerable по всему файлу — предсуществующий,
+не завязанный на этот баг, риск не подтверждён тестами.
+
+Кастомные элементы (`_lumen_ce_upgrade_element`) и распарсенные (не через `createElementNS`)
+SVG/MathML-узлы намеренно не тронуты — отдельные, не пересекающиеся периметры.

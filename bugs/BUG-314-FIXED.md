@@ -71,6 +71,6 @@ LUMEN_PROFILE=dev-release tests/wpt/.venv/Scripts/python.exe \
 **Отложено в [BUG-321](BUG-321-FIXED.md):** конструируемый `new Document()`
 (с `createElement`/`appendChild`/`doctype`), живой `document.doctype` как
 `DocumentType`-узел и `instanceof HTML*Element` для нативных элемент-обёрток
-(общий долг, трекается как [BUG-322](BUG-322-OPEN.md) — обёртки остаются
+(общий долг, трекается как [BUG-322](BUG-322-FIXED.md) — обёртки остаются
 plain-объектами). Из-за этого
 `Document-doctype.html` проходит частично.
