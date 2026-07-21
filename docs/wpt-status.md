@@ -372,14 +372,14 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | Тест | Статус | Сабтесты | Владелец | Баг | Заметка |
 |---|---|---|---|---|---|
 | `/dom/nodes/CharacterData-appendChild.html` | OK | 9/9 |  | [BUG-325](../bugs/BUG-325-FIXED.md) | Фикс влит 2026-07-20; сабтесты/статус обновит следующий `run_report.py --all` |
-| `/dom/nodes/CharacterData-appendData.html` | OK | 1/14 |  |  |  |
-| `/dom/nodes/CharacterData-data.html` | OK | 0/16 |  |  |  |
-| `/dom/nodes/CharacterData-deleteData.html` | OK | 0/18 |  |  |  |
-| `/dom/nodes/CharacterData-insertData.html` | OK | 0/18 |  |  |  |
+| `/dom/nodes/CharacterData-appendData.html` | OK | 12/14 |  |  |  |
+| `/dom/nodes/CharacterData-data.html` | OK | 14/16 |  |  |  |
+| `/dom/nodes/CharacterData-deleteData.html` | OK | 18/18 |  |  |  |
+| `/dom/nodes/CharacterData-insertData.html` | OK | 18/18 |  |  |  |
 | `/dom/nodes/CharacterData-remove.html` | OK | 4/12 |  |  |  |
-| `/dom/nodes/CharacterData-replaceData.html` | OK | 0/34 |  |  |  |
-| `/dom/nodes/CharacterData-substringData.html` | OK | 1/28 |  |  |  |
-| `/dom/nodes/CharacterData-surrogates.html` | OK | 0/8 |  |  |  |
+| `/dom/nodes/CharacterData-replaceData.html` | OK | 34/34 |  |  |  |
+| `/dom/nodes/CharacterData-substringData.html` | OK | 26/28 |  |  |  |
+| `/dom/nodes/CharacterData-surrogates.html` | OK | 2/8 |  |  |  |
 | `/dom/nodes/ChildNode-after.html` | OK | 6/45 |  |  |  |
 | `/dom/nodes/ChildNode-before.html` | OK | 5/45 |  |  |  |
 | `/dom/nodes/ChildNode-replaceWith.html` | OK | 9/33 |  |  |  |
@@ -407,7 +407,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/Document-createTextNode.html` | OK | 0/6 |  |  |  |
 | `/dom/nodes/Document-createTreeWalker.html` | OK | 4/5 |  |  |  |
 | `/dom/nodes/Document-doctype.html` | OK | 2/2 |  |  |  |
-| `/dom/nodes/Document-getElementById.html` | OK | 11/18 |  |  |  |
+| `/dom/nodes/Document-getElementById.html` | OK | 13/18 |  |  |  |
 | `/dom/nodes/Document-getElementsByClassName.html` | OK | 0/1 |  |  |  |
 | `/dom/nodes/Document-getElementsByTagName.html` | OK | 6/18 |  |  |  |
 | `/dom/nodes/Document-getElementsByTagNameNS.html` | OK | 0/14 |  |  |  |
@@ -451,7 +451,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/Element-webkitMatchesSelector.html` | TIMEOUT | 0/1 |  |  |  |
 | `/dom/nodes/MutationObserver-attributes.html` | TIMEOUT | 32/42 |  |  |  |
 | `/dom/nodes/MutationObserver-callback-arguments.html` | OK | 1/1 |  |  |  |
-| `/dom/nodes/MutationObserver-characterData.html` | TIMEOUT | 6/23 |  |  |  |
+| `/dom/nodes/MutationObserver-characterData.html` | TIMEOUT | 17/23 |  |  |  |
 | `/dom/nodes/MutationObserver-childList.html` | TIMEOUT | 13/38 |  |  |  |
 | `/dom/nodes/MutationObserver-cross-realm-callback-report-exception.html` | TIMEOUT | 0/0 |  |  |  |
 | `/dom/nodes/MutationObserver-disconnect.html` | OK | 2/2 |  |  |  |
@@ -471,7 +471,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/Node-cloneNode-external-stylesheet-no-bc.sub.html` | TIMEOUT | 0/1 |  |  |  |
 | `/dom/nodes/Node-cloneNode-on-inactive-document-crash.html` | NOT RUN | 0/0 |  |  |  |
 | `/dom/nodes/Node-cloneNode-svg.html` | OK | 0/4 |  |  |  |
-| `/dom/nodes/Node-cloneNode.html` | OK | 0/135 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
+| `/dom/nodes/Node-cloneNode.html` | OK | 97/135 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
 | `/dom/nodes/Node-compareDocumentPosition.html` | TIMEOUT | 0/0 |  |  |  |
 | `/dom/nodes/Node-constants.html` | TIMEOUT | 0/0 |  |  |  |
 | `/dom/nodes/Node-contains.html` | TIMEOUT | 0/0 |  |  |  |
@@ -482,7 +482,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/Node-isSameNode.html` | OK | 0/9 |  |  |  |
 | `/dom/nodes/Node-lookupNamespaceURI.html` | OK | 0/70 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
 | `/dom/nodes/Node-mutation-adoptNode.html` | OK | 0/2 |  |  |  |
-| `/dom/nodes/Node-nodeName.html` | OK | 4/6 |  |  |  |
+| `/dom/nodes/Node-nodeName.html` | OK | 5/6 |  |  |  |
 | `/dom/nodes/Node-nodeValue.html` | OK | 0/7 |  |  |  |
 | `/dom/nodes/Node-normalize.html` | OK | 0/4 |  |  |  |
 | `/dom/nodes/Node-parentElement.html` | OK | 6/12 |  |  |  |
@@ -491,7 +491,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/Node-properties.html` | TIMEOUT | 0/0 |  |  |  |
 | `/dom/nodes/Node-removeChild.html` | OK | 0/28 |  |  |  |
 | `/dom/nodes/Node-replaceChild.html` | OK | 1/29 |  |  |  |
-| `/dom/nodes/Node-textContent.html` | OK | 19/81 |  |  |  |
+| `/dom/nodes/Node-textContent.html` | OK | 33/81 |  |  |  |
 | `/dom/nodes/NodeList-Iterable.html` | OK | 7/8 |  |  |  |
 | `/dom/nodes/NodeList-static-length-getter-tampered-1.html` | OK | 0/1 |  |  |  |
 | `/dom/nodes/NodeList-static-length-getter-tampered-2.html` | OK | 0/1 |  |  |  |
