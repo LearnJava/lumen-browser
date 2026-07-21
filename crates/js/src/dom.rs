@@ -4399,11 +4399,13 @@ function _lumen_make_processing_instruction(target, data) {
 //      `new DocumentFragment()` build actual nodes.
 // The CharacterData family (Comment/Text/ProcessingInstruction) are detached
 // JS-only objects (no arena backing — same design as the pre-existing PI node),
-// so they get a REAL prototype chain and working `instanceof`. Element wrappers
-// stay plain native-backed objects and are NOT instances of Element/HTML*Element
-// (documented simplification, see HTMLImageElement); those globals exist for
-// reference resolution only. A constructible `new Document()` and a live
-// `document.doctype` node are deferred (BUG-321).
+// so they get a REAL prototype chain and working `instanceof`. Native-backed
+// element/text wrappers built by `_lumen_build_element` get their [[Prototype]]
+// wired up too (BUG-322, see `_lumen_element_prototype_for` below), so ordinary
+// `document.createElement('div') instanceof HTMLDivElement/HTMLElement/Element/Node`
+// hold for live nodes as well — not just the detached constructor forms above. A
+// constructible `new Document()` and a live `document.doctype` node are deferred
+// (BUG-321, since fixed).
 
 // Abstract bases — not constructible from script (DOM §4.4/§4.9, HTML §3.2.2).
 function Node() { throw new TypeError('Illegal constructor'); }
@@ -4472,6 +4474,46 @@ DOMImplementation.prototype.constructor = DOMImplementation;
     _ctor.prototype.constructor = _ctor;
     globalThis[_name] = _ctor;
 });
+
+// BUG-322: tag name (as returned by `_lumen_get_tag_name`, always upper-cased) →
+// concrete HTML*Element interface global. Tags without a dedicated entry fall back
+// to `HTMLElement.prototype` in `_lumen_element_prototype_for` below, matching HTML
+// LS §3.1.3 (most elements use the plain `HTMLElement` interface; `HTMLUnknownElement`
+// is reserved for genuinely unrecognized tag names, which this simplification does
+// not attempt to distinguish). `HTMLImageElement` (defined further down as the richer
+// `Image`/`HTMLImageElement` pair) is referenced here as a hoisted function
+// declaration — safe regardless of textual order, since this table itself is only
+// read lazily from `_lumen_build_element`, long after the whole shim has loaded.
+var _lumen_html_tag_prototypes = {
+    'DIV': HTMLDivElement, 'SPAN': HTMLSpanElement, 'P': HTMLParagraphElement,
+    'H1': HTMLHeadingElement, 'H2': HTMLHeadingElement, 'H3': HTMLHeadingElement,
+    'H4': HTMLHeadingElement, 'H5': HTMLHeadingElement, 'H6': HTMLHeadingElement,
+    'A': HTMLAnchorElement, 'INPUT': HTMLInputElement, 'BUTTON': HTMLButtonElement,
+    'SELECT': HTMLSelectElement, 'OPTION': HTMLOptionElement, 'TEXTAREA': HTMLTextAreaElement,
+    'LABEL': HTMLLabelElement, 'FORM': HTMLFormElement, 'UL': HTMLUListElement,
+    'OL': HTMLOListElement, 'LI': HTMLLIElement, 'TABLE': HTMLTableElement,
+    'TR': HTMLTableRowElement, 'TD': HTMLTableCellElement, 'TH': HTMLTableCellElement,
+    'THEAD': HTMLTableSectionElement, 'TBODY': HTMLTableSectionElement, 'TFOOT': HTMLTableSectionElement,
+    'SCRIPT': HTMLScriptElement, 'STYLE': HTMLStyleElement, 'LINK': HTMLLinkElement,
+    'META': HTMLMetaElement, 'HTML': HTMLHtmlElement, 'HEAD': HTMLHeadElement,
+    'BODY': HTMLBodyElement, 'TITLE': HTMLTitleElement, 'CANVAS': HTMLCanvasElement,
+    'VIDEO': HTMLVideoElement, 'AUDIO': HTMLAudioElement, 'IFRAME': HTMLIFrameElement,
+    'TEMPLATE': HTMLTemplateElement, 'PRE': HTMLPreElement, 'BR': HTMLBRElement,
+    'HR': HTMLHRElement, 'DIALOG': HTMLDialogElement, 'IMG': HTMLImageElement,
+};
+// BUG-322: resolves the [[Prototype]] a native element wrapper (`_lumen_build_element`)
+// should get. Non-HTML-namespace elements (SVG/MathML/unknown) get the generic
+// `Element.prototype` here — the SVG shim (`svg.rs`) re-points `createElementNS`
+// results at typed `SVG*Element` prototypes afterward, and those already chain
+// through `Element.prototype` (`class SVGElement extends Element`), so this is a
+// safe, non-conflicting default for anything the SVG shim doesn't touch (e.g. SVG
+// markup parsed via `innerHTML` rather than `createElementNS`).
+function _lumen_element_prototype_for(nid) {
+    var ns = _lumen_u2n(_lumen_get_namespace_uri(nid));
+    if (ns !== 'http://www.w3.org/1999/xhtml') return Element.prototype;
+    var ctor = _lumen_html_tag_prototypes[_lumen_get_tag_name(nid)];
+    return ctor ? ctor.prototype : HTMLElement.prototype;
+}
 
 // Builds a detached CharacterData node (Comment/Text) with `proto` as its
 // [[Prototype]] so both the DOM prototype chain (proto → CharacterData.prototype
@@ -6440,6 +6482,14 @@ function _lumen_build_element(nid) {
             enumerable: true, configurable: true,
         });
     }
+    // BUG-322: give the wrapper a real [[Prototype]] chain — Text.prototype for
+    // text nodes, the tag-appropriate HTML*Element/Element.prototype chain for
+    // elements — so `instanceof Element`/`Node`/`HTMLDivElement`/`Text`/
+    // `CharacterData` resolve for ordinary, native-backed nodes (previously always
+    // `false`: every wrapper was a plain object with no [[Prototype]] set). Every
+    // accessor/method defined on `_obj` above is an OWN property, so it still
+    // shadows anything of the same name on the inherited chain.
+    Object.setPrototypeOf(_obj, _lumen_is_text_node(nid) ? Text.prototype : _lumen_element_prototype_for(nid));
     return _obj;
 }
 
@@ -6804,9 +6854,15 @@ var _lumen_document_implementation = null;
 // from the constructor arguments. Returning the element from the constructor
 // makes `new Image()` yield the native `<img>` wrapper (a returned object wins
 // over `this`), so it participates in layout/paint like any parsed `<img>`.
-// `HTMLImageElement` is exposed as a bare interface global; `instanceof` is not
-// wired (element wrappers are plain objects), matching every other DOM element.
-function HTMLImageElement() {}
+// `HTMLImageElement` is exposed as an interface global with a real
+// HTMLElement/Element/Node prototype chain (BUG-322), same as the other
+// concrete HTML*Element interfaces generated further up — `_lumen_html_tag_prototypes`
+// points the `<img>` tag at this constructor's `.prototype`, so every `<img>`
+// wrapper (including ones built by `Image()` below) resolves `instanceof
+// HTMLImageElement/HTMLElement/Element/Node`.
+function HTMLImageElement() { throw new TypeError('Illegal constructor'); }
+HTMLImageElement.prototype = Object.create(HTMLElement.prototype);
+HTMLImageElement.prototype.constructor = HTMLImageElement;
 function Image(width, height) {
     var img = document.createElement('img');
     if (width !== undefined && width !== null)  { img.width  = width; }
@@ -28905,6 +28961,34 @@ mod tests {
              c instanceof Comment && c instanceof CharacterData && c instanceof Node && \
              (new Text()) instanceof Text && \
              document.createProcessingInstruction('a', 'b') instanceof ProcessingInstruction"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-322: native-backed element/text wrappers get a real [[Prototype]]
+    // chain too — tag-appropriate HTML*Element for elements (falling back to
+    // plain HTMLElement for tags without a dedicated interface, e.g. a custom
+    // element name), Text for text nodes — so `instanceof` resolves the same
+    // way it does for the detached constructor forms covered by
+    // `character_data_prototype_chain` above.
+    #[test]
+    fn element_prototype_chain_instanceof() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var div = document.createElement('div'); \
+             var span = document.getElementsByClassName('highlight')[0]; \
+             var textNode = document.createTextNode('x'); \
+             var unknown = document.createElement('foo-bar'); \
+             div instanceof HTMLDivElement && div instanceof HTMLElement && \
+             div instanceof Element && div instanceof Node && \
+             Object.getPrototypeOf(HTMLDivElement.prototype) === HTMLElement.prototype && \
+             Object.getPrototypeOf(HTMLElement.prototype) === Element.prototype && \
+             Object.getPrototypeOf(Element.prototype) === Node.prototype && \
+             span instanceof HTMLSpanElement && \
+             document.body instanceof HTMLBodyElement && document.body instanceof HTMLElement && \
+             unknown instanceof HTMLElement && !(unknown instanceof HTMLDivElement) && \
+             textNode instanceof Text && textNode instanceof CharacterData && textNode instanceof Node && \
+             !(div instanceof Text)"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
