@@ -6497,8 +6497,8 @@ impl Renderer {
                         continue;
                     }
                     let scrolled = translate_rect(*rect, dx, dy);
-                    let (p0, p1) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
-                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    let (p0, p1, line_len) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
+                    let resolved = resolve_gradient_stops(stops, line_len);
                     let params = build_grad_params(&resolved, p0, p1, 0, *repeating, 0.0);
                     let v_start = grad_vertices.len() as u32;
                     push_grad_quad(&mut grad_vertices, scrolled);
@@ -6511,7 +6511,7 @@ impl Renderer {
                     draw_ops.push(DrawOp::Gradient { v_start, v_count, grad_batch_idx });
                 }
                 // CSS Images L3 §3.5 — GPU radial gradient pipeline.
-                DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating, .. } => {
+                DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, radius_x, radius_y, stops, repeating } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
@@ -6520,7 +6520,10 @@ impl Renderer {
                     }
                     let scrolled = translate_rect(*rect, dx, dy);
                     let (p0, p1) = radial_gradient_uv_params(*center_x_pct, *center_y_pct);
-                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    // Px/Calc stops resolve against the larger ending-shape radius,
+                    // matching `cpu_raster::rasterize_radial_gradient` (BUG-277).
+                    let line_len = radius_x.max(*radius_y).max(1.0);
+                    let resolved = resolve_gradient_stops(stops, line_len);
                     let params = build_grad_params(&resolved, p0, p1, 1, *repeating, 0.0);
                     let v_start = grad_vertices.len() as u32;
                     push_grad_quad(&mut grad_vertices, scrolled);
@@ -6648,8 +6651,8 @@ impl Renderer {
                 DisplayCommand::PushMaskLinearGradient { rect, angle_deg, stops, repeating } => {
                     flush_batch!();
                     let scrolled = translate_rect(*rect, dx, dy);
-                    let (p0, p1) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
-                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    let (p0, p1, line_len) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
+                    let resolved = resolve_gradient_stops(stops, line_len);
                     let params = build_grad_params(&resolved, p0, p1, 0, *repeating, 0.0);
                     mask_params_stack.push(MaskPushInfo {
                         src: None,
@@ -6673,7 +6676,12 @@ impl Renderer {
                     flush_batch!();
                     let scrolled = translate_rect(*rect, dx, dy);
                     let (p0, p1) = radial_gradient_uv_params(*center_x_pct, *center_y_pct);
-                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    // Mask radial gradients stay circular (farthest-corner) — the mask
+                    // command carries no ending-shape, matching `cpu_raster::render_mask`.
+                    let mask_dx = center_x_pct.max(1.0 - center_x_pct) * scrolled.width;
+                    let mask_dy = center_y_pct.max(1.0 - center_y_pct) * scrolled.height;
+                    let line_len = mask_dx.hypot(mask_dy).max(1.0);
+                    let resolved = resolve_gradient_stops(stops, line_len);
                     let params = build_grad_params(&resolved, p0, p1, 1, *repeating, 0.0);
                     mask_params_stack.push(MaskPushInfo {
                         src: None,
@@ -9395,21 +9403,25 @@ fn resolve_gradient_stops(stops: &[GradientStop], line_len: f32) -> Vec<(f32, [f
 
 /// CSS Images L3 §3.4 — compute linear gradient line endpoints in UV [0,1] space.
 ///
-/// Returns (start_uv, end_uv) such that `t = dot(uv-start, end-start)/|end-start|²`
-/// gives t=0 at the start-color edge and t=1 at the end-color edge.
+/// Returns `(start_uv, end_uv, line_len)` such that
+/// `t = dot(uv-start, end-start)/|end-start|²` gives t=0 at the start-color
+/// edge and t=1 at the end-color edge. `line_len` is the gradient line length
+/// in CSS px (mirrors `cpu_raster::linear_uv_endpoints`) — callers must feed
+/// it to [`resolve_gradient_stops`] so `Px`/`Calc` stop positions resolve
+/// against the same length as the CPU/femtovg backends (BUG-277).
 ///
 /// CSS angle convention: 0° = "to top", 90° = "to right", 180° = "to bottom".
 /// Box dimensions `w`×`h` in CSS pixels.
-fn linear_gradient_uv_endpoints(w: f32, h: f32, angle_deg: f32) -> ([f32; 2], [f32; 2]) {
+fn linear_gradient_uv_endpoints(w: f32, h: f32, angle_deg: f32) -> ([f32; 2], [f32; 2], f32) {
     if w <= 0.0 || h <= 0.0 {
-        return ([0.0, 0.5], [1.0, 0.5]);
+        return ([0.0, 0.5], [1.0, 0.5], w.max(h).max(1.0));
     }
     let theta = angle_deg.to_radians();
     let dx = theta.sin();
     let dy = -theta.cos(); // negative because CSS y grows down
     let half_len = (w * dx.abs() + h * dy.abs()) / 2.0;
     if half_len < 1e-6 {
-        return ([0.5, 0.5], [0.5, 0.5]);
+        return ([0.5, 0.5], [0.5, 0.5], 1.0);
     }
     let cx = w / 2.0;
     let cy = h / 2.0;
@@ -9417,7 +9429,7 @@ fn linear_gradient_uv_endpoints(w: f32, h: f32, angle_deg: f32) -> ([f32; 2], [f
     let sy = (cy - dy * half_len) / h;
     let ex = (cx + dx * half_len) / w;
     let ey = (cy + dy * half_len) / h;
-    ([sx, sy], [ex, ey])
+    ([sx, sy], [ex, ey], 2.0 * half_len)
 }
 
 /// CSS Images L3 §3.5 — compute radial gradient center + semi-axes in UV [0,1] space.
