@@ -232,6 +232,24 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   `createElementNS`) SVG/MathML markup are untouched — separate, non-overlapping perimeters. Unit
   test `element_prototype_chain_instanceof`; full `lumen-js` suite green (2506+68, `--features
   v8-backend`).
+- **DOM §4.10 `CharacterData` interface methods + real `Comment` node identity ([P1] 2026-07-21).**
+  `CharacterData.prototype` gained `length`/`substringData`/`appendData`/`insertData`/`deleteData`/
+  `replaceData` (all defined once on the shared prototype, so `Text`, `Comment` and
+  `ProcessingInstruction` all inherit them; offset/count follow WebIDL `unsigned long` coercion —
+  `>>> 0` — and out-of-range offsets throw `IndexSizeError`). Along the way, two pre-existing bugs
+  surfaced: (1) `document.createComment(data)` ignored `data` and always built an empty *Text* node
+  (`nodeType` 3, not 8, wrong `[[Prototype]]`) — new native `_lumen_create_comment` (mirrored in
+  `dom.rs` + `v8_runtime.rs`) plus a `_lumen_is_comment_node` classifier fix `nodeType`/`nodeName`/
+  `data`/`[[Prototype]]` (`Comment.prototype`) for both native (arena-backed) and `_nf_accepts`
+  (`NodeIterator`/`TreeWalker` `SHOW_COMMENT`) paths; (2) `set_text_content`/`collect_text_content`
+  in both engines applied Element/Document "replace all children" semantics even to a leaf
+  Text/Comment receiver — detached its (empty) children and appended a *new child* text node instead
+  of mutating the node's own string in place, so a second `.data` write read back a stale/duplicated
+  value. Fixed by special-casing `NodeData::Text`/`NodeData::Comment` first in both setters/getters.
+  3 unit tests (`dom::tests::{create_comment_is_a_real_comment_node,
+  live_text_and_comment_data_mutates_in_place, character_data_methods_spec_examples}`); closes most
+  of WPT `dom/nodes/CharacterData-{data,appendData,insertData,deleteData,replaceData,
+  substringData,surrogates}.html`.
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has
