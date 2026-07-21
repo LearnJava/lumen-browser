@@ -3100,11 +3100,11 @@ impl PersistentJs for QuickPersistentJs {
 ///
 /// Mirrors [`QuickPersistentJs`] method-for-method. Methods backed by state
 /// wired in `install_dom` (S3 core DOM) delegate to `V8JsRuntime` accessors;
-/// methods for subsystems not yet ported to V8 (view transitions, pointer
-/// capture, bfcache heap suspend — see `docs/tasks/ph3-v8-migration.md`
-/// slices S11) use the trait's own default no-op/empty implementation or a
-/// local stub, and start returning real data once their slice lands. Workers
-/// (dedicated + shared + service) were wired in S10.
+/// methods for subsystems not yet ported to V8 (view transitions, bfcache
+/// heap suspend — see `docs/tasks/ph3-v8-migration.md` slices S11) use the
+/// trait's own default no-op/empty implementation or a local stub, and start
+/// returning real data once their slice lands. Workers (dedicated + shared +
+/// service) were wired in S10; pointer capture in S12b-20.
 #[cfg(feature = "v8")]
 struct V8PersistentJs {
     rt: lumen_js::v8_runtime::V8JsRuntime,
@@ -3383,8 +3383,14 @@ impl PersistentJs for V8PersistentJs {
             "if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
         ));
     }
+    fn pointer_capture_nid(&self) -> Option<u32> {
+        self.rt.pointer_capture_nid()
+    }
     fn has_bfcache_freeze_blocker(&self) -> bool {
         matches!(self.eval_js_value("_lumen_bfcache_blocked()"), Ok(ref v) if v == "true")
+    }
+    fn take_pointer_capture(&self) -> Option<u32> {
+        self.rt.take_pointer_capture()
     }
 }
 

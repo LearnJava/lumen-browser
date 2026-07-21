@@ -287,6 +287,10 @@ pub struct V8JsRuntime {
     print_requests: Arc<Mutex<Vec<crate::dom::PrintRequest>>>,
     /// Focus requests queued by JS via `_lumen_request_focus` / `_lumen_request_blur`.
     pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
+    /// Node ID of the current pointer capture target (W3C Pointer Events L3 §4.1),
+    /// set via `_lumen_set_capture_state`/`_lumen_release_capture_state`.
+    /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
+    pointer_capture_nid: Arc<Mutex<Option<u32>>>,
     /// Deterministic render mode (8F): when `true`, `Date.now()`/`Math.random` are frozen/seeded.
     deterministic: AtomicBool,
     /// Live SW execution threads keyed by `(origin, scope)`.
@@ -355,6 +359,7 @@ impl V8JsRuntime {
             fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
             print_requests: Arc::new(Mutex::new(Vec::new())),
             pending_focus_requests: Arc::new(Mutex::new(Vec::new())),
+            pointer_capture_nid: Arc::new(Mutex::new(None)),
             deterministic: AtomicBool::new(false),
             sw_worker_store: None,
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
@@ -602,6 +607,23 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::take_focus_requests`].
     pub fn take_focus_requests(&self) -> Vec<Option<u32>> {
         std::mem::take(&mut *self.pending_focus_requests.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Returns the DOM node nid that currently holds pointer capture (pointer_id=1).
+    ///
+    /// Shell calls this before dispatching pointer events to redirect them to the
+    /// capture target instead of the hit-tested element (W3C Pointer Events L3 §4.1).
+    /// Returns `None` when no capture is active. Mirrors [`crate::QuickJsRuntime::pointer_capture_nid`].
+    pub fn pointer_capture_nid(&self) -> Option<u32> {
+        *self.pointer_capture_nid.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Release the active pointer capture, returning the former capture target nid.
+    ///
+    /// Called by the shell implicitly on `pointerup`/`pointercancel` per spec §4.1.
+    /// Returns `None` if no capture was active. Mirrors [`crate::QuickJsRuntime::take_pointer_capture`].
+    pub fn take_pointer_capture(&self) -> Option<u32> {
+        self.pointer_capture_nid.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 
     /// Drain dirty `<canvas>` 2D buffers for GPU re-upload. Mirrors
@@ -3782,6 +3804,15 @@ impl V8JsRuntime {
         install_v8!(paint_worklet::install_paint_worklet_api_v8);
         install_v8!(permissions_policy::install_permissions_policy_bindings_v8);
         install_v8!(pip_bindings::install_pip_bindings_v8);
+        // W3C Pointer Events Level 3 §4.1 — takes `pointer_capture_nid` by ref since the
+        // native closures need the runtime-instance Arc, not just `&self` (mirrors the
+        // `geolocation`/`shared_worker` extra-arg calls above, not the plain `install_v8!` macro).
+        if let Err(e) = crate::pointer_capture::install_pointer_capture_bindings_v8(
+            self,
+            Arc::clone(&self.pointer_capture_nid),
+        ) {
+            eprintln!("v8: pointer_capture::install_pointer_capture_bindings_v8 failed: {e}");
+        }
         install_v8!(presentation_api::install_presentation_api_v8);
         install_v8!(reporting_api::install_reporting_api_bindings_v8);
         install_v8!(sanitizer::install_sanitizer_bindings_v8);

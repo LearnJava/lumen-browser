@@ -1362,16 +1362,6 @@ impl QuickJsRuntime {
                 eprintln!("Idle Detection API init failed: {}", e);
             }
 
-            // W3C Pointer Events Level 3 §4.1 — pointer capture native bindings.
-            // _lumen_set_capture_state(nid) / _lumen_release_capture_state()
-            // Called by JS setPointerCapture/releasePointerCapture on Element.
-            if let Err(e) = pointer_capture::install_pointer_capture_bindings(
-                &ctx,
-                Arc::clone(&self.pointer_capture_nid),
-            ) {
-                eprintln!("Pointer capture bindings init failed: {}", e);
-            }
-
             Ok(())
         }))
     }
