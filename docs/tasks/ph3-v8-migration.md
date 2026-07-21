@@ -1118,6 +1118,33 @@ across `lumen-ai`/`lumen-bench`/`lumen-bidi-server`/`lumen-driver`/`lumen-js`/`l
 `battery_bindings.rs` (95) — clean by the file-stem method (zero `battery`/`Battery` hits in
 `dom.rs`), or re-audit the still-deferred `webxr.rs` cluster.
 
+### S12b-21 — `webtransport.rs` (2026-07-21, branch p1-v8-s12b-21-webtransport)
+
+Twenty-first slice. The listed `battery_bindings.rs` (95) candidate turned out to be a false
+positive of the `grep -rl rquickjs` selection method: its only `rquickjs` hit is a doc comment
+saying "rquickjs side removed in S12b-4" — the file is already 100% V8-only. Same false positive
+for `badging.rs` (S12b-1's doc comment) and `pointer_capture.rs` (S12b-20's, just completed).
+Re-ran the selection grep filtering for files that still have a live `use rquickjs::Ctx` import;
+smallest was `webtransport.rs` (108 lines, WebTransport Phase-0 stub, all operations reject — no
+QUIC). Tracing its call site turned up something the prior 20 slices didn't hit:
+`install_webtransport_bindings` has **zero callers anywhere in the repo** — not from
+`QuickJsRuntime::install_dom` (verified by grepping the full ~700-line function body), not from
+`V8JsRuntime::install_dom`, not from shell. `window.WebTransport` is already `undefined` on both
+engines today; this was dead code since it was added (`8ed672dc`), never wired in. Per CLAUDE.md
+("never target new functionality at the rquickjs path" + don't add features beyond what the task
+requires), the correct action for dead code is deletion, not porting — inventing a newly-wired V8
+stub for a capability that was never live anywhere would be new functionality disguised as a
+migration slice. Deleted `crates/js/src/webtransport.rs` whole (incl. its trivial
+`webtransport_stub_exists` test, which only asserted the shim constant was non-empty) and the
+`pub mod webtransport;` line in `lib.rs`. Updated `CAPABILITIES.md`/`ROADMAP.md`
+(`P3-webtransport`) to stop describing a "stub" that no longer exists. `cargo check -p lumen-js`
+(default) + `--features v8-backend` — green; `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` clean. **Selection method update:** grep for a live `use rquickjs::Ctx`
+import, not just any `rquickjs` substring, before ranking candidates by size — and always confirm
+an actual `install_dom` call site exists before committing to a candidate (`contacts.rs`, 110
+lines, confirmed live via `lib.rs:926`'s `contacts::init_contacts_manager` call — good next
+candidate).
+
 ---
 
 ## Risks (Rev 2)
