@@ -798,12 +798,6 @@ impl QuickJsRuntime {
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
-            // Install CSS Custom Highlight API (CSS Highlight API L1) — after DOM.
-            // Phase 0: CSS.highlights registry + Highlight class; visual rendering in Phase 1.
-            if let Err(e) = highlight_api::install_highlight_api_bindings(&ctx) {
-                eprintln!("Highlight API bindings init failed: {}", e);
-            }
-
             // Install navigator/screen/timezone normalization (ADR-007 Layer 4, 9D.6) — after DOM.
             if let Err(e) = navigator_bindings::install_navigator_bindings(&ctx) {
                 eprintln!("Navigator bindings init failed: {}", e);
