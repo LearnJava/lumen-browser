@@ -286,3 +286,280 @@ FIXED/DEBTOR → `done`, IN PROGRESS → `active`), CSS-тиров (см. выш
 | PERF-6 | P2 | PERF | done | M | | DONE 2026-07-18: локальный privacy-first «журнал здоровья сессии» — расширение поверхности `--activity-log` новым модулем [`crates/shell/src/health_log.rs`](crates/shell/src/health_log.rs), пишет `health.log` (JSON Lines, только проблемы) под `--health-log`/`--activity-log`/`LUMEN_HEALTH_LOG=1`. Четыре сигнала: `panic` (panic-hook, цепляется к прежнему — message+location+backtrace+открытая страница, ловится в ЛЮБОМ режиме), `console_error` (дренаж консоли живого окна, level==2), `load_error` (три пути ошибки навигации), `broken_render` (эвристика белого экрана: `dom_nodes≥20` И `rendered_units==0` — ни печатаемого inline-текста, ни replaced-элемента; `count_rendered_units`/`count_layout_boxes` в шелле, `Document::node_count`). Агрегатор [`scripts/health_report.py`](scripts/health_report.py) (0 кода в движке) группирует записи в сигнатуры (kind+хост+нормализ. текст: числа→`#`, URL→`<url>`) и ранжирует по `повторы×вес` (panic=10/broken=5/load=3/console=1) → очередь P3-багфиксов по частоте; `--selftest` (в воротах), `--json`, `--kind`, `--top`. Журнал [`docs/perf/health.md`](docs/perf/health.md) + фикстура `scripts/perf-fixtures/health.html`. Ограничения честно: console/render-сигналы — только живое окно (headless `--screenshot` не проходит); белый экран через CSS-фон не ловится | PERF-6: локальный журнал здоровья сессии |
 | PERF-7 | P3 | PERF | planned | S | | Регрессионный перф-гейт поверх PERF-2/3/4/5: ночной (или пред-мержевый для тяжёлых веток) прогон корпуса, запись метрик в журнал, пороги в crates/bench/src/ci_gate.rs (механизм гейта уже существует — расширить новыми метриками). Аналог храповика KNOWN_DEBTORS, но для миллисекунд и мегабайт | PERF-7: ночной перф-гейт на новых метриках |
 | PERF-8 | P3 | PERF | done | S | | DONE 2026-07-17: scripts/perf_audit.py — 3 headless-замера на сайт (--dump-source / --dump-layout+LUMEN_PROFILE_TREE / --screenshot) → фазы сеть+парсинг / стиль+layout / paint, таймауты, error_lines, results.json+summary.md в .tmp/perf-audit/, --compare с дельтами (⚠ >20%); корпус docs/perf/corpus.txt (14 сайтов аудита 2026-07-02, вкл. антибот-403 намеренно); журнал docs/perf/journal.md + коммитируемые сырые прогоны docs/perf/runs/*.json; skill /lumen-perf-audit — полный автономный протокол прогон→анализ→журнал→BUG-NNN. ОБНОВЛЕНО 2026-07-17 (вторая итерация): дефолт — ЖИВОЙ режим (одно GUI-окно, каждый сайт в новой вкладке через новый MCP-инструмент new_tab = AutomationCommand::NewTab + open_new_tab; пользователь видит рендер, dwell+скролл на сайт; кумулятивная RAM тек/пик через WinAPI; per-site stderr-дельта + console-ошибки; TIMEOUT/DEAD с авторестартом окна как находкой); старое пофазное headless-разложение — флаг --phases. Ручной предшественник PERF-2/PERF-7 (тот же корпус и журнал) | PERF-8: skill /lumen-perf-audit — аудит корпуса реальных сайтов |
+| WPT-VENDOR | P3 | | planned | | | Дорожка вендоринга/прогона остальных категорий верхнеуровневого корпуса WPT (dom/nodes уже вендорена и прогнана, см. P2-wpt). Каждая дочерняя задача — одна категория из категорийного индекса docs/wpt-status.md: вендорить тестовое поддерево запиненного коммита (tests/wpt/VENDOR.md), прогнать через tests/wpt/run_report.py, синхронизировать docs/wpt-status.md. Провалы тестов не заводятся по одному — группируются в BUG-NNN по первопричине (методология в docs/wpt-status.md). Категории со скоупом 🚫 (вне архитектуры Lumen-читалки: медиа-конвейер, аппаратные API, ad-tech и т.п.) включены по прямому запросу пользователя 2026-07-21, несмотря на то что docs/wpt-status.md их помечает как вероятно вне скоупа — объём можно пересмотреть после первого прохода. | WPT-VENDOR: вендорить и прогнать остальные 276 категорий WPT |
+| WPT-VENDOR-FileAPI | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `FileAPI` |
+| WPT-VENDOR-IndexedDB | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `IndexedDB` |
+| WPT-VENDOR-WebCryptoAPI | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `WebCryptoAPI` |
+| WPT-VENDOR-accelerometer | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства | WPT: вендорить + прогнать категорию `accelerometer` |
+| WPT-VENDOR-accessibility | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `accessibility` |
+| WPT-VENDOR-accname | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `accname` |
+| WPT-VENDOR-acid | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). исторические Acid1/2/3, не актуальный спек | WPT: вендорить + прогнать категорию `acid` |
+| WPT-VENDOR-ai | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). AI/Writer API — нет LLM-интеграции | WPT: вендорить + прогнать категорию `ai` |
+| WPT-VENDOR-ambient-light | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства | WPT: вендорить + прогнать категорию `ambient-light` |
+| WPT-VENDOR-animation-worklet | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `animation-worklet` |
+| WPT-VENDOR-annotation-model | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `annotation-model` |
+| WPT-VENDOR-annotation-protocol | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `annotation-protocol` |
+| WPT-VENDOR-annotation-vocab | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `annotation-vocab` |
+| WPT-VENDOR-apng | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `apng` |
+| WPT-VENDOR-appmanifest | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). PWA-инсталляция | WPT: вендорить + прогнать категорию `appmanifest` |
+| WPT-VENDOR-attribution-reporting | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox) | WPT: вендорить + прогнать категорию `attribution-reporting` |
+| WPT-VENDOR-audio-output | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа-конвейер | WPT: вендорить + прогнать категорию `audio-output` |
+| WPT-VENDOR-audio-session | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа-конвейер | WPT: вендорить + прогнать категорию `audio-session` |
+| WPT-VENDOR-autoplay-policy-detection | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа-конвейер | WPT: вендорить + прогнать категорию `autoplay-policy-detection` |
+| WPT-VENDOR-avif | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `avif` |
+| WPT-VENDOR-background-fetch | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Service Worker расширение — фоновая ОС-интеграция | WPT: вендорить + прогнать категорию `background-fetch` |
+| WPT-VENDOR-background-sync | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Service Worker расширение — фоновая ОС-интеграция | WPT: вендорить + прогнать категорию `background-sync` |
+| WPT-VENDOR-badging | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). PWA/ОС-интеграция | WPT: вендорить + прогнать категорию `badging` |
+| WPT-VENDOR-battery-status | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства | WPT: вендорить + прогнать категорию `battery-status` |
+| WPT-VENDOR-beacon | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `beacon` |
+| WPT-VENDOR-bluetooth | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). аппаратный API (Bluetooth) — нет слоя интеграции с устройствами | WPT: вендорить + прогнать категорию `bluetooth` |
+| WPT-VENDOR-browsing-topics | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox) | WPT: вендорить + прогнать категорию `browsing-topics` |
+| WPT-VENDOR-captured-mouse-events | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `captured-mouse-events` |
+| WPT-VENDOR-clear-site-data | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `clear-site-data` |
+| WPT-VENDOR-client-hints | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `client-hints` |
+| WPT-VENDOR-clipboard-apis | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `clipboard-apis` |
+| WPT-VENDOR-close-watcher | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `close-watcher` |
+| WPT-VENDOR-compat | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `compat` |
+| WPT-VENDOR-compression | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `compression` |
+| WPT-VENDOR-compute-pressure | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства (нагрузка CPU/GPU) | WPT: вендорить + прогнать категорию `compute-pressure` |
+| WPT-VENDOR-connection-allowlist | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). нишевый корпоративный API | WPT: вендорить + прогнать категорию `connection-allowlist` |
+| WPT-VENDOR-console | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `console` |
+| WPT-VENDOR-contacts | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Contact Picker API | WPT: вендорить + прогнать категорию `contacts` |
+| WPT-VENDOR-container-timing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `container-timing` |
+| WPT-VENDOR-content-dpr | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `content-dpr` |
+| WPT-VENDOR-content-index | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `content-index` |
+| WPT-VENDOR-content-security-policy | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `content-security-policy` |
+| WPT-VENDOR-contenteditable | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `contenteditable` |
+| WPT-VENDOR-cookies | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `cookies` |
+| WPT-VENDOR-cookiestore | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `cookiestore` |
+| WPT-VENDOR-core-aam | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `core-aam` |
+| WPT-VENDOR-cors | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `cors` |
+| WPT-VENDOR-cpu-performance | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `cpu-performance` |
+| WPT-VENDOR-credential-management | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Credential Management API | WPT: вендорить + прогнать категорию `credential-management` |
+| WPT-VENDOR-css | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `css` |
+| WPT-VENDOR-cssom | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `cssom` |
+| WPT-VENDOR-custom-elements | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `custom-elements` |
+| WPT-VENDOR-delegated-ink | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). нишевый Ink API (стилус) | WPT: вендорить + прогнать категорию `delegated-ink` |
+| WPT-VENDOR-density-size-correction | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `density-size-correction` |
+| WPT-VENDOR-deprecation-reporting | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `deprecation-reporting` |
+| WPT-VENDOR-device-bound-session-credentials | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). нишевый auth API | WPT: вендорить + прогнать категорию `device-bound-session-credentials` |
+| WPT-VENDOR-device-memory | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства | WPT: вендорить + прогнать категорию `device-memory` |
+| WPT-VENDOR-device-posture | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства (форм-фактор) | WPT: вендорить + прогнать категорию `device-posture` |
+| WPT-VENDOR-digital-credentials | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Digital Credentials API | WPT: вендорить + прогнать категорию `digital-credentials` |
+| WPT-VENDOR-direct-sockets | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). аппаратный/сетевой низкоуровневый API | WPT: вендорить + прогнать категорию `direct-sockets` |
+| WPT-VENDOR-document-picture-in-picture | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). PiP — нет медиа-конвейера видео | WPT: вендорить + прогнать категорию `document-picture-in-picture` |
+| WPT-VENDOR-document-policy | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `document-policy` |
+| WPT-VENDOR-domparsing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `domparsing` |
+| WPT-VENDOR-domxpath | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `domxpath` |
+| WPT-VENDOR-dpub-aam | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `dpub-aam` |
+| WPT-VENDOR-dpub-aria | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `dpub-aria` |
+| WPT-VENDOR-ecmascript | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `ecmascript` |
+| WPT-VENDOR-editing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `editing` |
+| WPT-VENDOR-element-timing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `element-timing` |
+| WPT-VENDOR-encoding | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `encoding` |
+| WPT-VENDOR-encoding-detection | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `encoding-detection` |
+| WPT-VENDOR-encrypted-media | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `encrypted-media` |
+| WPT-VENDOR-entries-api | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `entries-api` |
+| WPT-VENDOR-event-timing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `event-timing` |
+| WPT-VENDOR-eventsource | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `eventsource` |
+| WPT-VENDOR-eyedropper | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). нишевый EyeDropper API | WPT: вендорить + прогнать категорию `eyedropper` |
+| WPT-VENDOR-fedcm | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Federated Credential Management | WPT: вендорить + прогнать категорию `fedcm` |
+| WPT-VENDOR-fenced-frame | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox) | WPT: вендорить + прогнать категорию `fenced-frame` |
+| WPT-VENDOR-fetch | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `fetch` |
+| WPT-VENDOR-file-system-access | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `file-system-access` |
+| WPT-VENDOR-fledge | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox) | WPT: вендорить + прогнать категорию `fledge` |
+| WPT-VENDOR-focus | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `focus` |
+| WPT-VENDOR-font-access | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `font-access` |
+| WPT-VENDOR-fonts | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `fonts` |
+| WPT-VENDOR-forced-colors-mode | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `forced-colors-mode` |
+| WPT-VENDOR-fs | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `fs` |
+| WPT-VENDOR-fullscreen | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `fullscreen` |
+| WPT-VENDOR-gamepad | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). аппаратный API (геймпады) | WPT: вендорить + прогнать категорию `gamepad` |
+| WPT-VENDOR-generic-sensor | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства (базовый API) | WPT: вендорить + прогнать категорию `generic-sensor` |
+| WPT-VENDOR-geolocation | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `geolocation` |
+| WPT-VENDOR-geolocation-sensor | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства | WPT: вендорить + прогнать категорию `geolocation-sensor` |
+| WPT-VENDOR-gif | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `gif` |
+| WPT-VENDOR-gpc | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `gpc` |
+| WPT-VENDOR-graphics-aam | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `graphics-aam` |
+| WPT-VENDOR-graphics-aria | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `graphics-aria` |
+| WPT-VENDOR-gyroscope | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства | WPT: вендорить + прогнать категорию `gyroscope` |
+| WPT-VENDOR-hr-time | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `hr-time` |
+| WPT-VENDOR-hsts | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `hsts` |
+| WPT-VENDOR-html | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `html` |
+| WPT-VENDOR-html-aam | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `html-aam` |
+| WPT-VENDOR-html-longdesc | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `html-longdesc` |
+| WPT-VENDOR-html-media-capture | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа-конвейер | WPT: вендорить + прогнать категорию `html-media-capture` |
+| WPT-VENDOR-html-ruby-extensions | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `html-ruby-extensions` |
+| WPT-VENDOR-https-upgrades | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `https-upgrades` |
+| WPT-VENDOR-idle-detection | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `idle-detection` |
+| WPT-VENDOR-imagebitmap-renderingcontext | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `imagebitmap-renderingcontext` |
+| WPT-VENDOR-images | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `images` |
+| WPT-VENDOR-import-maps | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `import-maps` |
+| WPT-VENDOR-inert | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `inert` |
+| WPT-VENDOR-input-device-capabilities | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `input-device-capabilities` |
+| WPT-VENDOR-input-events | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `input-events` |
+| WPT-VENDOR-installedapp | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). ОС-интеграция | WPT: вендорить + прогнать категорию `installedapp` |
+| WPT-VENDOR-intersection-observer | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `intersection-observer` |
+| WPT-VENDOR-intervention-reporting | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `intervention-reporting` |
+| WPT-VENDOR-is-input-pending | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `is-input-pending` |
+| WPT-VENDOR-jpegxl | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `jpegxl` |
+| WPT-VENDOR-js | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `js` |
+| WPT-VENDOR-js-self-profiling | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `js-self-profiling` |
+| WPT-VENDOR-keyboard-lock | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `keyboard-lock` |
+| WPT-VENDOR-keyboard-map | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `keyboard-map` |
+| WPT-VENDOR-largest-contentful-paint | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `largest-contentful-paint` |
+| WPT-VENDOR-layout-instability | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `layout-instability` |
+| WPT-VENDOR-loading | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `loading` |
+| WPT-VENDOR-long-animation-frame | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `long-animation-frame` |
+| WPT-VENDOR-longtask-timing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `longtask-timing` |
+| WPT-VENDOR-magnetometer | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства | WPT: вендорить + прогнать категорию `magnetometer` |
+| WPT-VENDOR-managed | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). корпоративное управление устройством | WPT: вендорить + прогнать категорию `managed` |
+| WPT-VENDOR-mathml | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `mathml` |
+| WPT-VENDOR-measure-memory | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `measure-memory` |
+| WPT-VENDOR-media | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `media` |
+| WPT-VENDOR-media-capabilities | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа-конвейер | WPT: вендорить + прогнать категорию `media-capabilities` |
+| WPT-VENDOR-media-playback-quality | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа-конвейер | WPT: вендорить + прогнать категорию `media-playback-quality` |
+| WPT-VENDOR-media-source | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа-конвейер (MSE) | WPT: вендорить + прогнать категорию `media-source` |
+| WPT-VENDOR-mediacapture-extensions | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера | WPT: вендорить + прогнать категорию `mediacapture-extensions` |
+| WPT-VENDOR-mediacapture-fromelement | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера | WPT: вендорить + прогнать категорию `mediacapture-fromelement` |
+| WPT-VENDOR-mediacapture-handle | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера | WPT: вендорить + прогнать категорию `mediacapture-handle` |
+| WPT-VENDOR-mediacapture-image | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера | WPT: вендорить + прогнать категорию `mediacapture-image` |
+| WPT-VENDOR-mediacapture-insertable-streams | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера | WPT: вендорить + прогнать категорию `mediacapture-insertable-streams` |
+| WPT-VENDOR-mediacapture-record | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера | WPT: вендорить + прогнать категорию `mediacapture-record` |
+| WPT-VENDOR-mediacapture-region | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера | WPT: вендорить + прогнать категорию `mediacapture-region` |
+| WPT-VENDOR-mediacapture-streams | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера | WPT: вендорить + прогнать категорию `mediacapture-streams` |
+| WPT-VENDOR-mediasession | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа-конвейер | WPT: вендорить + прогнать категорию `mediasession` |
+| WPT-VENDOR-merchant-validation | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Payment Request API | WPT: вендорить + прогнать категорию `merchant-validation` |
+| WPT-VENDOR-mimesniff | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `mimesniff` |
+| WPT-VENDOR-mixed-content | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `mixed-content` |
+| WPT-VENDOR-mst-content-hint | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера | WPT: вендорить + прогнать категорию `mst-content-hint` |
+| WPT-VENDOR-nav-tracking-mitigations | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `nav-tracking-mitigations` |
+| WPT-VENDOR-navigation-api | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `navigation-api` |
+| WPT-VENDOR-navigation-timing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `navigation-timing` |
+| WPT-VENDOR-netinfo | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `netinfo` |
+| WPT-VENDOR-network-error-logging | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `network-error-logging` |
+| WPT-VENDOR-notifications | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `notifications` |
+| WPT-VENDOR-orientation-event | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства (legacy DeviceOrientation) | WPT: вендорить + прогнать категорию `orientation-event` |
+| WPT-VENDOR-orientation-sensor | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства | WPT: вендорить + прогнать категорию `orientation-sensor` |
+| WPT-VENDOR-page-lifecycle | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `page-lifecycle` |
+| WPT-VENDOR-page-visibility | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `page-visibility` |
+| WPT-VENDOR-paint-timing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `paint-timing` |
+| WPT-VENDOR-parakeet | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox) | WPT: вендорить + прогнать категорию `parakeet` |
+| WPT-VENDOR-payment-method-basic-card | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Payment Request API | WPT: вендорить + прогнать категорию `payment-method-basic-card` |
+| WPT-VENDOR-payment-method-id | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Payment Request API | WPT: вендорить + прогнать категорию `payment-method-id` |
+| WPT-VENDOR-payment-request | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Payment Request API | WPT: вендорить + прогнать категорию `payment-request` |
+| WPT-VENDOR-performance-timeline | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `performance-timeline` |
+| WPT-VENDOR-periodic-background-sync | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Service Worker расширение — фоновая ОС-интеграция | WPT: вендорить + прогнать категорию `periodic-background-sync` |
+| WPT-VENDOR-permissions | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `permissions` |
+| WPT-VENDOR-permissions-policy | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `permissions-policy` |
+| WPT-VENDOR-permissions-request | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `permissions-request` |
+| WPT-VENDOR-permissions-revoke | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `permissions-revoke` |
+| WPT-VENDOR-picture-in-picture | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). PiP — нет медиа-конвейера видео | WPT: вендорить + прогнать категорию `picture-in-picture` |
+| WPT-VENDOR-png | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `png` |
+| WPT-VENDOR-pointerevents | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `pointerevents` |
+| WPT-VENDOR-pointerlock | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `pointerlock` |
+| WPT-VENDOR-preload | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `preload` |
+| WPT-VENDOR-presentation-api | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа/casting API | WPT: вендорить + прогнать категорию `presentation-api` |
+| WPT-VENDOR-print | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `print` |
+| WPT-VENDOR-private-aggregation | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox) | WPT: вендорить + прогнать категорию `private-aggregation` |
+| WPT-VENDOR-private-click-measurement | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox) | WPT: вендорить + прогнать категорию `private-click-measurement` |
+| WPT-VENDOR-proximity | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). датчик устройства | WPT: вендорить + прогнать категорию `proximity` |
+| WPT-VENDOR-push-api | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Push-уведомления — нужен пуш-сервис | WPT: вендорить + прогнать категорию `push-api` |
+| WPT-VENDOR-quirks | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `quirks` |
+| WPT-VENDOR-referrer-policy | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `referrer-policy` |
+| WPT-VENDOR-remote-playback | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа-конвейер | WPT: вендорить + прогнать категорию `remote-playback` |
+| WPT-VENDOR-reporting | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `reporting` |
+| WPT-VENDOR-requestidlecallback | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `requestidlecallback` |
+| WPT-VENDOR-resize-observer | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `resize-observer` |
+| WPT-VENDOR-resource-timing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `resource-timing` |
+| WPT-VENDOR-sanitizer-api | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `sanitizer-api` |
+| WPT-VENDOR-savedata | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `savedata` |
+| WPT-VENDOR-scheduler | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `scheduler` |
+| WPT-VENDOR-screen-capture | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа-конвейер (getDisplayMedia) | WPT: вендорить + прогнать категорию `screen-capture` |
+| WPT-VENDOR-screen-details | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). мульти-монитор ОС-интеграция | WPT: вендорить + прогнать категорию `screen-details` |
+| WPT-VENDOR-screen-orientation | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `screen-orientation` |
+| WPT-VENDOR-screen-wake-lock | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `screen-wake-lock` |
+| WPT-VENDOR-scroll-animations | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `scroll-animations` |
+| WPT-VENDOR-scroll-performance-timing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `scroll-performance-timing` |
+| WPT-VENDOR-scroll-to-text-fragment | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `scroll-to-text-fragment` |
+| WPT-VENDOR-secure-contexts | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `secure-contexts` |
+| WPT-VENDOR-secure-payment-confirmation | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Payment Request API | WPT: вендорить + прогнать категорию `secure-payment-confirmation` |
+| WPT-VENDOR-selection | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `selection` |
+| WPT-VENDOR-serial | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). аппаратный API (Serial) | WPT: вендорить + прогнать категорию `serial` |
+| WPT-VENDOR-server-timing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `server-timing` |
+| WPT-VENDOR-service-workers | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `service-workers` |
+| WPT-VENDOR-shadow-dom | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `shadow-dom` |
+| WPT-VENDOR-shape-detection | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `shape-detection` |
+| WPT-VENDOR-shared-storage | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox) | WPT: вендорить + прогнать категорию `shared-storage` |
+| WPT-VENDOR-shared-storage-selecturl-limit | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox) | WPT: вендорить + прогнать категорию `shared-storage-selecturl-limit` |
+| WPT-VENDOR-signed-exchange | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). нишевый формат доставки (SXG) | WPT: вендорить + прогнать категорию `signed-exchange` |
+| WPT-VENDOR-soft-navigation-heuristics | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `soft-navigation-heuristics` |
+| WPT-VENDOR-speculation-rules | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `speculation-rules` |
+| WPT-VENDOR-speech-api | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). нет речевого движка | WPT: вендорить + прогнать категорию `speech-api` |
+| WPT-VENDOR-storage | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `storage` |
+| WPT-VENDOR-storage-access-api | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `storage-access-api` |
+| WPT-VENDOR-streams | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `streams` |
+| WPT-VENDOR-subapps | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). PWA-инсталляция | WPT: вендорить + прогнать категорию `subapps` |
+| WPT-VENDOR-subresource-integrity | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `subresource-integrity` |
+| WPT-VENDOR-svg | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `svg` |
+| WPT-VENDOR-svg-aam | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `svg-aam` |
+| WPT-VENDOR-timing-entrytypes-registry | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `timing-entrytypes-registry` |
+| WPT-VENDOR-top-level-storage-access-api | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `top-level-storage-access-api` |
+| WPT-VENDOR-touch-events | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `touch-events` |
+| WPT-VENDOR-trust-tokens | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox) | WPT: вендорить + прогнать категорию `trust-tokens` |
+| WPT-VENDOR-trusted-types | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `trusted-types` |
+| WPT-VENDOR-ua-client-hints | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `ua-client-hints` |
+| WPT-VENDOR-uievents | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `uievents` |
+| WPT-VENDOR-upgrade-insecure-requests | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `upgrade-insecure-requests` |
+| WPT-VENDOR-url | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `url` |
+| WPT-VENDOR-urlpattern | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `urlpattern` |
+| WPT-VENDOR-user-timing | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `user-timing` |
+| WPT-VENDOR-vibration | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). аппаратный API (вибро) | WPT: вендорить + прогнать категорию `vibration` |
+| WPT-VENDOR-video-rvfc | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). медиа-конвейер | WPT: вендорить + прогнать категорию `video-rvfc` |
+| WPT-VENDOR-viewport | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `viewport` |
+| WPT-VENDOR-viewport-segments | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). складные устройства | WPT: вендорить + прогнать категорию `viewport-segments` |
+| WPT-VENDOR-virtual-keyboard | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). мобильная ОС-интеграция | WPT: вендорить + прогнать категорию `virtual-keyboard` |
+| WPT-VENDOR-visual-viewport | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `visual-viewport` |
+| WPT-VENDOR-wai-aria | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `wai-aria` |
+| WPT-VENDOR-wasm | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `wasm` |
+| WPT-VENDOR-web-animations | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `web-animations` |
+| WPT-VENDOR-web-based-payment-handler | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). Payment Request API | WPT: вендорить + прогнать категорию `web-based-payment-handler` |
+| WPT-VENDOR-web-bundle | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `web-bundle` |
+| WPT-VENDOR-web-extensions | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). модель расширений — отдельная архитектура | WPT: вендорить + прогнать категорию `web-extensions` |
+| WPT-VENDOR-web-install | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). PWA-инсталляция | WPT: вендорить + прогнать категорию `web-install` |
+| WPT-VENDOR-web-locks | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `web-locks` |
+| WPT-VENDOR-web-nfc | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). аппаратный API (NFC) | WPT: вендорить + прогнать категорию `web-nfc` |
+| WPT-VENDOR-web-otp | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). WebOTP (SMS) | WPT: вендорить + прогнать категорию `web-otp` |
+| WPT-VENDOR-web-share | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `web-share` |
+| WPT-VENDOR-webaudio | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `webaudio` |
+| WPT-VENDOR-webauthn | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). WebAuthn — отдельная крипто/платформенная интеграция | WPT: вендорить + прогнать категорию `webauthn` |
+| WPT-VENDOR-webcodecs | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). нет аппаратного/софт кодек-конвейера | WPT: вендорить + прогнать категорию `webcodecs` |
+| WPT-VENDOR-webdriver | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). тестовая инфраструктура самого WPT/WebDriver, не веб-фича сайта | WPT: вендорить + прогнать категорию `webdriver` |
+| WPT-VENDOR-webgl | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `webgl` |
+| WPT-VENDOR-webgpu | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). нет compute-конвейера GPU (растеризация — своя) | WPT: вендорить + прогнать категорию `webgpu` |
+| WPT-VENDOR-webhid | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). аппаратный API (HID) | WPT: вендорить + прогнать категорию `webhid` |
+| WPT-VENDOR-webidl | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `webidl` |
+| WPT-VENDOR-webmcp | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). экспериментальный, вне текущего скоупа | WPT: вендорить + прогнать категорию `webmcp` |
+| WPT-VENDOR-webmessaging | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `webmessaging` |
+| WPT-VENDOR-webmidi | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). аппаратный API (MIDI) | WPT: вендорить + прогнать категорию `webmidi` |
+| WPT-VENDOR-webnn | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). нет ML-инференс рантайма | WPT: вендорить + прогнать категорию `webnn` |
+| WPT-VENDOR-webrtc | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера | WPT: вендорить + прогнать категорию `webrtc` |
+| WPT-VENDOR-webrtc-encoded-transform | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера | WPT: вендорить + прогнать категорию `webrtc-encoded-transform` |
+| WPT-VENDOR-webrtc-extensions | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера | WPT: вендорить + прогнать категорию `webrtc-extensions` |
+| WPT-VENDOR-webrtc-ice | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера | WPT: вендорить + прогнать категорию `webrtc-ice` |
+| WPT-VENDOR-webrtc-identity | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера | WPT: вендорить + прогнать категорию `webrtc-identity` |
+| WPT-VENDOR-webrtc-priority | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера | WPT: вендорить + прогнать категорию `webrtc-priority` |
+| WPT-VENDOR-webrtc-stats | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера | WPT: вендорить + прогнать категорию `webrtc-stats` |
+| WPT-VENDOR-webrtc-svc | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера | WPT: вендорить + прогнать категорию `webrtc-svc` |
+| WPT-VENDOR-websockets | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `websockets` |
+| WPT-VENDOR-webstorage | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `webstorage` |
+| WPT-VENDOR-webtransport | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). нет транспортного стека | WPT: вендорить + прогнать категорию `webtransport` |
+| WPT-VENDOR-webusb | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). аппаратный API (USB) | WPT: вендорить + прогнать категорию `webusb` |
+| WPT-VENDOR-webvtt | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `webvtt` |
+| WPT-VENDOR-webxr | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). XR — нет рантайма | WPT: вендорить + прогнать категорию `webxr` |
+| WPT-VENDOR-window-management | P3 | WPT-VENDOR | planned | S | | Скоуп: 🚫 (вне скоупа). мульти-монитор ОС-интеграция | WPT: вендорить + прогнать категорию `window-management` |
+| WPT-VENDOR-workers | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `workers` |
+| WPT-VENDOR-worklets | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `worklets` |
+| WPT-VENDOR-x-frame-options | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `x-frame-options` |
+| WPT-VENDOR-xhr | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `xhr` |
+| WPT-VENDOR-xml | P3 | WPT-VENDOR | planned | S | | Скоуп: ⬜ (кандидат). | WPT: вендорить + прогнать категорию `xml` |

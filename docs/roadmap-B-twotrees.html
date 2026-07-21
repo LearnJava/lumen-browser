@@ -76,11 +76,11 @@
  "generated": "2026-07-21",
  "counts": {
   "open": 32,
-  "fixed": 265,
+  "fixed": 266,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 297,
+ "total_bugs": 298,
  "phases": [
   {
    "id": "P0",
@@ -1618,6 +1618,1946 @@
        "status": "done",
        "size": "S",
        "note": "DONE 2026-07-17: scripts/perf_audit.py — 3 headless-замера на сайт (--dump-source / --dump-layout+LUMEN_PROFILE_TREE / --screenshot) → фазы сеть+парсинг / стиль+layout / paint, таймауты, error_lines, results.json+summary.md в .tmp/perf-audit/, --compare с дельтами (⚠ >20%); корпус docs/perf/corpus.txt (14 сайтов аудита 2026-07-02, вкл. антибот-403 намеренно); журнал docs/perf/journal.md + коммитируемые сырые прогоны docs/perf/runs/*.json; skill /lumen-perf-audit — полный автономный протокол прогон→анализ→журнал→BUG-NNN. ОБНОВЛЕНО 2026-07-17 (вторая итерация): дефолт — ЖИВОЙ режим (одно GUI-окно, каждый сайт в новой вкладке через новый MCP-инструмент new_tab = AutomationCommand::NewTab + open_new_tab; пользователь видит рендер, dwell+скролл на сайт; кумулятивная RAM тек/пик через WinAPI; per-site stderr-дельта + console-ошибки; TIMEOUT/DEAD с авторестартом окна как находкой); старое пофазное headless-разложение — флаг --phases. Ручной предшественник PERF-2/PERF-7 (тот же корпус и журнал)"
+      }
+     ]
+    },
+    {
+     "id": "WPT-VENDOR",
+     "title": "WPT-VENDOR: вендорить и прогнать остальные 276 категорий WPT",
+     "status": "planned",
+     "note": "Дорожка вендоринга/прогона остальных категорий верхнеуровневого корпуса WPT (dom/nodes уже вендорена и прогнана, см. P2-wpt). Каждая дочерняя задача — одна категория из категорийного индекса docs/wpt-status.md: вендорить тестовое поддерево запиненного коммита (tests/wpt/VENDOR.md), прогнать через tests/wpt/run_report.py, синхронизировать docs/wpt-status.md. Провалы тестов не заводятся по одному — группируются в BUG-NNN по первопричине (методология в docs/wpt-status.md). Категории со скоупом 🚫 (вне архитектуры Lumen-читалки: медиа-конвейер, аппаратные API, ad-tech и т.п.) включены по прямому запросу пользователя 2026-07-21, несмотря на то что docs/wpt-status.md их помечает как вероятно вне скоупа — объём можно пересмотреть после первого прохода.",
+     "tasks": [
+      {
+       "id": "WPT-VENDOR-FileAPI",
+       "title": "WPT: вендорить + прогнать категорию `FileAPI`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-IndexedDB",
+       "title": "WPT: вендорить + прогнать категорию `IndexedDB`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-WebCryptoAPI",
+       "title": "WPT: вендорить + прогнать категорию `WebCryptoAPI`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-accelerometer",
+       "title": "WPT: вендорить + прогнать категорию `accelerometer`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+      },
+      {
+       "id": "WPT-VENDOR-accessibility",
+       "title": "WPT: вендорить + прогнать категорию `accessibility`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-accname",
+       "title": "WPT: вендорить + прогнать категорию `accname`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-acid",
+       "title": "WPT: вендорить + прогнать категорию `acid`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). исторические Acid1/2/3, не актуальный спек"
+      },
+      {
+       "id": "WPT-VENDOR-ai",
+       "title": "WPT: вендорить + прогнать категорию `ai`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). AI/Writer API — нет LLM-интеграции"
+      },
+      {
+       "id": "WPT-VENDOR-ambient-light",
+       "title": "WPT: вендорить + прогнать категорию `ambient-light`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+      },
+      {
+       "id": "WPT-VENDOR-animation-worklet",
+       "title": "WPT: вендорить + прогнать категорию `animation-worklet`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-annotation-model",
+       "title": "WPT: вендорить + прогнать категорию `annotation-model`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-annotation-protocol",
+       "title": "WPT: вендорить + прогнать категорию `annotation-protocol`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-annotation-vocab",
+       "title": "WPT: вендорить + прогнать категорию `annotation-vocab`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-apng",
+       "title": "WPT: вендорить + прогнать категорию `apng`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-appmanifest",
+       "title": "WPT: вендорить + прогнать категорию `appmanifest`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). PWA-инсталляция"
+      },
+      {
+       "id": "WPT-VENDOR-attribution-reporting",
+       "title": "WPT: вендорить + прогнать категорию `attribution-reporting`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+      },
+      {
+       "id": "WPT-VENDOR-audio-output",
+       "title": "WPT: вендорить + прогнать категорию `audio-output`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+      },
+      {
+       "id": "WPT-VENDOR-audio-session",
+       "title": "WPT: вендорить + прогнать категорию `audio-session`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+      },
+      {
+       "id": "WPT-VENDOR-autoplay-policy-detection",
+       "title": "WPT: вендорить + прогнать категорию `autoplay-policy-detection`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+      },
+      {
+       "id": "WPT-VENDOR-avif",
+       "title": "WPT: вендорить + прогнать категорию `avif`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-background-fetch",
+       "title": "WPT: вендорить + прогнать категорию `background-fetch`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Service Worker расширение — фоновая ОС-интеграция"
+      },
+      {
+       "id": "WPT-VENDOR-background-sync",
+       "title": "WPT: вендорить + прогнать категорию `background-sync`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Service Worker расширение — фоновая ОС-интеграция"
+      },
+      {
+       "id": "WPT-VENDOR-badging",
+       "title": "WPT: вендорить + прогнать категорию `badging`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). PWA/ОС-интеграция"
+      },
+      {
+       "id": "WPT-VENDOR-battery-status",
+       "title": "WPT: вендорить + прогнать категорию `battery-status`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+      },
+      {
+       "id": "WPT-VENDOR-beacon",
+       "title": "WPT: вендорить + прогнать категорию `beacon`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-bluetooth",
+       "title": "WPT: вендорить + прогнать категорию `bluetooth`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (Bluetooth) — нет слоя интеграции с устройствами"
+      },
+      {
+       "id": "WPT-VENDOR-browsing-topics",
+       "title": "WPT: вендорить + прогнать категорию `browsing-topics`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+      },
+      {
+       "id": "WPT-VENDOR-captured-mouse-events",
+       "title": "WPT: вендорить + прогнать категорию `captured-mouse-events`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-clear-site-data",
+       "title": "WPT: вендорить + прогнать категорию `clear-site-data`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-client-hints",
+       "title": "WPT: вендорить + прогнать категорию `client-hints`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-clipboard-apis",
+       "title": "WPT: вендорить + прогнать категорию `clipboard-apis`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-close-watcher",
+       "title": "WPT: вендорить + прогнать категорию `close-watcher`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-compat",
+       "title": "WPT: вендорить + прогнать категорию `compat`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-compression",
+       "title": "WPT: вендорить + прогнать категорию `compression`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-compute-pressure",
+       "title": "WPT: вендорить + прогнать категорию `compute-pressure`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (нагрузка CPU/GPU)"
+      },
+      {
+       "id": "WPT-VENDOR-connection-allowlist",
+       "title": "WPT: вендорить + прогнать категорию `connection-allowlist`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). нишевый корпоративный API"
+      },
+      {
+       "id": "WPT-VENDOR-console",
+       "title": "WPT: вендорить + прогнать категорию `console`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-contacts",
+       "title": "WPT: вендорить + прогнать категорию `contacts`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Contact Picker API"
+      },
+      {
+       "id": "WPT-VENDOR-container-timing",
+       "title": "WPT: вендорить + прогнать категорию `container-timing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-content-dpr",
+       "title": "WPT: вендорить + прогнать категорию `content-dpr`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-content-index",
+       "title": "WPT: вендорить + прогнать категорию `content-index`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-content-security-policy",
+       "title": "WPT: вендорить + прогнать категорию `content-security-policy`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-contenteditable",
+       "title": "WPT: вендорить + прогнать категорию `contenteditable`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-cookies",
+       "title": "WPT: вендорить + прогнать категорию `cookies`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-cookiestore",
+       "title": "WPT: вендорить + прогнать категорию `cookiestore`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-core-aam",
+       "title": "WPT: вендорить + прогнать категорию `core-aam`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-cors",
+       "title": "WPT: вендорить + прогнать категорию `cors`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-cpu-performance",
+       "title": "WPT: вендорить + прогнать категорию `cpu-performance`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-credential-management",
+       "title": "WPT: вендорить + прогнать категорию `credential-management`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Credential Management API"
+      },
+      {
+       "id": "WPT-VENDOR-css",
+       "title": "WPT: вендорить + прогнать категорию `css`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-cssom",
+       "title": "WPT: вендорить + прогнать категорию `cssom`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-custom-elements",
+       "title": "WPT: вендорить + прогнать категорию `custom-elements`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-delegated-ink",
+       "title": "WPT: вендорить + прогнать категорию `delegated-ink`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). нишевый Ink API (стилус)"
+      },
+      {
+       "id": "WPT-VENDOR-density-size-correction",
+       "title": "WPT: вендорить + прогнать категорию `density-size-correction`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-deprecation-reporting",
+       "title": "WPT: вендорить + прогнать категорию `deprecation-reporting`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-device-bound-session-credentials",
+       "title": "WPT: вендорить + прогнать категорию `device-bound-session-credentials`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). нишевый auth API"
+      },
+      {
+       "id": "WPT-VENDOR-device-memory",
+       "title": "WPT: вендорить + прогнать категорию `device-memory`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+      },
+      {
+       "id": "WPT-VENDOR-device-posture",
+       "title": "WPT: вендорить + прогнать категорию `device-posture`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (форм-фактор)"
+      },
+      {
+       "id": "WPT-VENDOR-digital-credentials",
+       "title": "WPT: вендорить + прогнать категорию `digital-credentials`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Digital Credentials API"
+      },
+      {
+       "id": "WPT-VENDOR-direct-sockets",
+       "title": "WPT: вендорить + прогнать категорию `direct-sockets`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный/сетевой низкоуровневый API"
+      },
+      {
+       "id": "WPT-VENDOR-document-picture-in-picture",
+       "title": "WPT: вендорить + прогнать категорию `document-picture-in-picture`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). PiP — нет медиа-конвейера видео"
+      },
+      {
+       "id": "WPT-VENDOR-document-policy",
+       "title": "WPT: вендорить + прогнать категорию `document-policy`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-domparsing",
+       "title": "WPT: вендорить + прогнать категорию `domparsing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-domxpath",
+       "title": "WPT: вендорить + прогнать категорию `domxpath`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-dpub-aam",
+       "title": "WPT: вендорить + прогнать категорию `dpub-aam`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-dpub-aria",
+       "title": "WPT: вендорить + прогнать категорию `dpub-aria`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-ecmascript",
+       "title": "WPT: вендорить + прогнать категорию `ecmascript`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-editing",
+       "title": "WPT: вендорить + прогнать категорию `editing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-element-timing",
+       "title": "WPT: вендорить + прогнать категорию `element-timing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-encoding",
+       "title": "WPT: вендорить + прогнать категорию `encoding`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-encoding-detection",
+       "title": "WPT: вендорить + прогнать категорию `encoding-detection`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-encrypted-media",
+       "title": "WPT: вендорить + прогнать категорию `encrypted-media`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-entries-api",
+       "title": "WPT: вендорить + прогнать категорию `entries-api`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-event-timing",
+       "title": "WPT: вендорить + прогнать категорию `event-timing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-eventsource",
+       "title": "WPT: вендорить + прогнать категорию `eventsource`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-eyedropper",
+       "title": "WPT: вендорить + прогнать категорию `eyedropper`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). нишевый EyeDropper API"
+      },
+      {
+       "id": "WPT-VENDOR-fedcm",
+       "title": "WPT: вендорить + прогнать категорию `fedcm`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Federated Credential Management"
+      },
+      {
+       "id": "WPT-VENDOR-fenced-frame",
+       "title": "WPT: вендорить + прогнать категорию `fenced-frame`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+      },
+      {
+       "id": "WPT-VENDOR-fetch",
+       "title": "WPT: вендорить + прогнать категорию `fetch`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-file-system-access",
+       "title": "WPT: вендорить + прогнать категорию `file-system-access`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-fledge",
+       "title": "WPT: вендорить + прогнать категорию `fledge`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+      },
+      {
+       "id": "WPT-VENDOR-focus",
+       "title": "WPT: вендорить + прогнать категорию `focus`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-font-access",
+       "title": "WPT: вендорить + прогнать категорию `font-access`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-fonts",
+       "title": "WPT: вендорить + прогнать категорию `fonts`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-forced-colors-mode",
+       "title": "WPT: вендорить + прогнать категорию `forced-colors-mode`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-fs",
+       "title": "WPT: вендорить + прогнать категорию `fs`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-fullscreen",
+       "title": "WPT: вендорить + прогнать категорию `fullscreen`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-gamepad",
+       "title": "WPT: вендорить + прогнать категорию `gamepad`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (геймпады)"
+      },
+      {
+       "id": "WPT-VENDOR-generic-sensor",
+       "title": "WPT: вендорить + прогнать категорию `generic-sensor`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (базовый API)"
+      },
+      {
+       "id": "WPT-VENDOR-geolocation",
+       "title": "WPT: вендорить + прогнать категорию `geolocation`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-geolocation-sensor",
+       "title": "WPT: вендорить + прогнать категорию `geolocation-sensor`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+      },
+      {
+       "id": "WPT-VENDOR-gif",
+       "title": "WPT: вендорить + прогнать категорию `gif`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-gpc",
+       "title": "WPT: вендорить + прогнать категорию `gpc`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-graphics-aam",
+       "title": "WPT: вендорить + прогнать категорию `graphics-aam`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-graphics-aria",
+       "title": "WPT: вендорить + прогнать категорию `graphics-aria`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-gyroscope",
+       "title": "WPT: вендорить + прогнать категорию `gyroscope`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+      },
+      {
+       "id": "WPT-VENDOR-hr-time",
+       "title": "WPT: вендорить + прогнать категорию `hr-time`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-hsts",
+       "title": "WPT: вендорить + прогнать категорию `hsts`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-html",
+       "title": "WPT: вендорить + прогнать категорию `html`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-html-aam",
+       "title": "WPT: вендорить + прогнать категорию `html-aam`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-html-longdesc",
+       "title": "WPT: вендорить + прогнать категорию `html-longdesc`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-html-media-capture",
+       "title": "WPT: вендорить + прогнать категорию `html-media-capture`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+      },
+      {
+       "id": "WPT-VENDOR-html-ruby-extensions",
+       "title": "WPT: вендорить + прогнать категорию `html-ruby-extensions`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-https-upgrades",
+       "title": "WPT: вендорить + прогнать категорию `https-upgrades`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-idle-detection",
+       "title": "WPT: вендорить + прогнать категорию `idle-detection`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-imagebitmap-renderingcontext",
+       "title": "WPT: вендорить + прогнать категорию `imagebitmap-renderingcontext`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-images",
+       "title": "WPT: вендорить + прогнать категорию `images`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-import-maps",
+       "title": "WPT: вендорить + прогнать категорию `import-maps`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-inert",
+       "title": "WPT: вендорить + прогнать категорию `inert`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-input-device-capabilities",
+       "title": "WPT: вендорить + прогнать категорию `input-device-capabilities`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-input-events",
+       "title": "WPT: вендорить + прогнать категорию `input-events`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-installedapp",
+       "title": "WPT: вендорить + прогнать категорию `installedapp`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). ОС-интеграция"
+      },
+      {
+       "id": "WPT-VENDOR-intersection-observer",
+       "title": "WPT: вендорить + прогнать категорию `intersection-observer`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-intervention-reporting",
+       "title": "WPT: вендорить + прогнать категорию `intervention-reporting`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-is-input-pending",
+       "title": "WPT: вендорить + прогнать категорию `is-input-pending`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-jpegxl",
+       "title": "WPT: вендорить + прогнать категорию `jpegxl`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-js",
+       "title": "WPT: вендорить + прогнать категорию `js`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-js-self-profiling",
+       "title": "WPT: вендорить + прогнать категорию `js-self-profiling`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-keyboard-lock",
+       "title": "WPT: вендорить + прогнать категорию `keyboard-lock`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-keyboard-map",
+       "title": "WPT: вендорить + прогнать категорию `keyboard-map`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-largest-contentful-paint",
+       "title": "WPT: вендорить + прогнать категорию `largest-contentful-paint`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-layout-instability",
+       "title": "WPT: вендорить + прогнать категорию `layout-instability`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-loading",
+       "title": "WPT: вендорить + прогнать категорию `loading`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-long-animation-frame",
+       "title": "WPT: вендорить + прогнать категорию `long-animation-frame`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-longtask-timing",
+       "title": "WPT: вендорить + прогнать категорию `longtask-timing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-magnetometer",
+       "title": "WPT: вендорить + прогнать категорию `magnetometer`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+      },
+      {
+       "id": "WPT-VENDOR-managed",
+       "title": "WPT: вендорить + прогнать категорию `managed`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). корпоративное управление устройством"
+      },
+      {
+       "id": "WPT-VENDOR-mathml",
+       "title": "WPT: вендорить + прогнать категорию `mathml`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-measure-memory",
+       "title": "WPT: вендорить + прогнать категорию `measure-memory`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-media",
+       "title": "WPT: вендорить + прогнать категорию `media`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-media-capabilities",
+       "title": "WPT: вендорить + прогнать категорию `media-capabilities`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+      },
+      {
+       "id": "WPT-VENDOR-media-playback-quality",
+       "title": "WPT: вендорить + прогнать категорию `media-playback-quality`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+      },
+      {
+       "id": "WPT-VENDOR-media-source",
+       "title": "WPT: вендорить + прогнать категорию `media-source`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер (MSE)"
+      },
+      {
+       "id": "WPT-VENDOR-mediacapture-extensions",
+       "title": "WPT: вендорить + прогнать категорию `mediacapture-extensions`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-mediacapture-fromelement",
+       "title": "WPT: вендорить + прогнать категорию `mediacapture-fromelement`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-mediacapture-handle",
+       "title": "WPT: вендорить + прогнать категорию `mediacapture-handle`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-mediacapture-image",
+       "title": "WPT: вендорить + прогнать категорию `mediacapture-image`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-mediacapture-insertable-streams",
+       "title": "WPT: вендорить + прогнать категорию `mediacapture-insertable-streams`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-mediacapture-record",
+       "title": "WPT: вендорить + прогнать категорию `mediacapture-record`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-mediacapture-region",
+       "title": "WPT: вендорить + прогнать категорию `mediacapture-region`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-mediacapture-streams",
+       "title": "WPT: вендорить + прогнать категорию `mediacapture-streams`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-mediasession",
+       "title": "WPT: вендорить + прогнать категорию `mediasession`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+      },
+      {
+       "id": "WPT-VENDOR-merchant-validation",
+       "title": "WPT: вендорить + прогнать категорию `merchant-validation`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API"
+      },
+      {
+       "id": "WPT-VENDOR-mimesniff",
+       "title": "WPT: вендорить + прогнать категорию `mimesniff`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-mixed-content",
+       "title": "WPT: вендорить + прогнать категорию `mixed-content`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-mst-content-hint",
+       "title": "WPT: вендорить + прогнать категорию `mst-content-hint`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-nav-tracking-mitigations",
+       "title": "WPT: вендорить + прогнать категорию `nav-tracking-mitigations`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-navigation-api",
+       "title": "WPT: вендорить + прогнать категорию `navigation-api`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-navigation-timing",
+       "title": "WPT: вендорить + прогнать категорию `navigation-timing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-netinfo",
+       "title": "WPT: вендорить + прогнать категорию `netinfo`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-network-error-logging",
+       "title": "WPT: вендорить + прогнать категорию `network-error-logging`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-notifications",
+       "title": "WPT: вендорить + прогнать категорию `notifications`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-orientation-event",
+       "title": "WPT: вендорить + прогнать категорию `orientation-event`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (legacy DeviceOrientation)"
+      },
+      {
+       "id": "WPT-VENDOR-orientation-sensor",
+       "title": "WPT: вендорить + прогнать категорию `orientation-sensor`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+      },
+      {
+       "id": "WPT-VENDOR-page-lifecycle",
+       "title": "WPT: вендорить + прогнать категорию `page-lifecycle`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-page-visibility",
+       "title": "WPT: вендорить + прогнать категорию `page-visibility`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-paint-timing",
+       "title": "WPT: вендорить + прогнать категорию `paint-timing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-parakeet",
+       "title": "WPT: вендорить + прогнать категорию `parakeet`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+      },
+      {
+       "id": "WPT-VENDOR-payment-method-basic-card",
+       "title": "WPT: вендорить + прогнать категорию `payment-method-basic-card`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API"
+      },
+      {
+       "id": "WPT-VENDOR-payment-method-id",
+       "title": "WPT: вендорить + прогнать категорию `payment-method-id`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API"
+      },
+      {
+       "id": "WPT-VENDOR-payment-request",
+       "title": "WPT: вендорить + прогнать категорию `payment-request`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API"
+      },
+      {
+       "id": "WPT-VENDOR-performance-timeline",
+       "title": "WPT: вендорить + прогнать категорию `performance-timeline`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-periodic-background-sync",
+       "title": "WPT: вендорить + прогнать категорию `periodic-background-sync`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Service Worker расширение — фоновая ОС-интеграция"
+      },
+      {
+       "id": "WPT-VENDOR-permissions",
+       "title": "WPT: вендорить + прогнать категорию `permissions`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-permissions-policy",
+       "title": "WPT: вендорить + прогнать категорию `permissions-policy`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-permissions-request",
+       "title": "WPT: вендорить + прогнать категорию `permissions-request`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-permissions-revoke",
+       "title": "WPT: вендорить + прогнать категорию `permissions-revoke`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-picture-in-picture",
+       "title": "WPT: вендорить + прогнать категорию `picture-in-picture`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). PiP — нет медиа-конвейера видео"
+      },
+      {
+       "id": "WPT-VENDOR-png",
+       "title": "WPT: вендорить + прогнать категорию `png`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-pointerevents",
+       "title": "WPT: вендорить + прогнать категорию `pointerevents`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-pointerlock",
+       "title": "WPT: вендорить + прогнать категорию `pointerlock`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-preload",
+       "title": "WPT: вендорить + прогнать категорию `preload`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-presentation-api",
+       "title": "WPT: вендорить + прогнать категорию `presentation-api`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа/casting API"
+      },
+      {
+       "id": "WPT-VENDOR-print",
+       "title": "WPT: вендорить + прогнать категорию `print`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-private-aggregation",
+       "title": "WPT: вендорить + прогнать категорию `private-aggregation`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+      },
+      {
+       "id": "WPT-VENDOR-private-click-measurement",
+       "title": "WPT: вендорить + прогнать категорию `private-click-measurement`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+      },
+      {
+       "id": "WPT-VENDOR-proximity",
+       "title": "WPT: вендорить + прогнать категорию `proximity`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+      },
+      {
+       "id": "WPT-VENDOR-push-api",
+       "title": "WPT: вендорить + прогнать категорию `push-api`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Push-уведомления — нужен пуш-сервис"
+      },
+      {
+       "id": "WPT-VENDOR-quirks",
+       "title": "WPT: вендорить + прогнать категорию `quirks`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-referrer-policy",
+       "title": "WPT: вендорить + прогнать категорию `referrer-policy`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-remote-playback",
+       "title": "WPT: вендорить + прогнать категорию `remote-playback`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+      },
+      {
+       "id": "WPT-VENDOR-reporting",
+       "title": "WPT: вендорить + прогнать категорию `reporting`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-requestidlecallback",
+       "title": "WPT: вендорить + прогнать категорию `requestidlecallback`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-resize-observer",
+       "title": "WPT: вендорить + прогнать категорию `resize-observer`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-resource-timing",
+       "title": "WPT: вендорить + прогнать категорию `resource-timing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-sanitizer-api",
+       "title": "WPT: вендорить + прогнать категорию `sanitizer-api`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-savedata",
+       "title": "WPT: вендорить + прогнать категорию `savedata`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-scheduler",
+       "title": "WPT: вендорить + прогнать категорию `scheduler`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-screen-capture",
+       "title": "WPT: вендорить + прогнать категорию `screen-capture`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер (getDisplayMedia)"
+      },
+      {
+       "id": "WPT-VENDOR-screen-details",
+       "title": "WPT: вендорить + прогнать категорию `screen-details`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). мульти-монитор ОС-интеграция"
+      },
+      {
+       "id": "WPT-VENDOR-screen-orientation",
+       "title": "WPT: вендорить + прогнать категорию `screen-orientation`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-screen-wake-lock",
+       "title": "WPT: вендорить + прогнать категорию `screen-wake-lock`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-scroll-animations",
+       "title": "WPT: вендорить + прогнать категорию `scroll-animations`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-scroll-performance-timing",
+       "title": "WPT: вендорить + прогнать категорию `scroll-performance-timing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-scroll-to-text-fragment",
+       "title": "WPT: вендорить + прогнать категорию `scroll-to-text-fragment`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-secure-contexts",
+       "title": "WPT: вендорить + прогнать категорию `secure-contexts`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-secure-payment-confirmation",
+       "title": "WPT: вендорить + прогнать категорию `secure-payment-confirmation`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API"
+      },
+      {
+       "id": "WPT-VENDOR-selection",
+       "title": "WPT: вендорить + прогнать категорию `selection`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-serial",
+       "title": "WPT: вендорить + прогнать категорию `serial`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (Serial)"
+      },
+      {
+       "id": "WPT-VENDOR-server-timing",
+       "title": "WPT: вендорить + прогнать категорию `server-timing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-service-workers",
+       "title": "WPT: вендорить + прогнать категорию `service-workers`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-shadow-dom",
+       "title": "WPT: вендорить + прогнать категорию `shadow-dom`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-shape-detection",
+       "title": "WPT: вендорить + прогнать категорию `shape-detection`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-shared-storage",
+       "title": "WPT: вендорить + прогнать категорию `shared-storage`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+      },
+      {
+       "id": "WPT-VENDOR-shared-storage-selecturl-limit",
+       "title": "WPT: вендорить + прогнать категорию `shared-storage-selecturl-limit`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+      },
+      {
+       "id": "WPT-VENDOR-signed-exchange",
+       "title": "WPT: вендорить + прогнать категорию `signed-exchange`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). нишевый формат доставки (SXG)"
+      },
+      {
+       "id": "WPT-VENDOR-soft-navigation-heuristics",
+       "title": "WPT: вендорить + прогнать категорию `soft-navigation-heuristics`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-speculation-rules",
+       "title": "WPT: вендорить + прогнать категорию `speculation-rules`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-speech-api",
+       "title": "WPT: вендорить + прогнать категорию `speech-api`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). нет речевого движка"
+      },
+      {
+       "id": "WPT-VENDOR-storage",
+       "title": "WPT: вендорить + прогнать категорию `storage`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-storage-access-api",
+       "title": "WPT: вендорить + прогнать категорию `storage-access-api`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-streams",
+       "title": "WPT: вендорить + прогнать категорию `streams`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-subapps",
+       "title": "WPT: вендорить + прогнать категорию `subapps`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). PWA-инсталляция"
+      },
+      {
+       "id": "WPT-VENDOR-subresource-integrity",
+       "title": "WPT: вендорить + прогнать категорию `subresource-integrity`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-svg",
+       "title": "WPT: вендорить + прогнать категорию `svg`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-svg-aam",
+       "title": "WPT: вендорить + прогнать категорию `svg-aam`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-timing-entrytypes-registry",
+       "title": "WPT: вендорить + прогнать категорию `timing-entrytypes-registry`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-top-level-storage-access-api",
+       "title": "WPT: вендорить + прогнать категорию `top-level-storage-access-api`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-touch-events",
+       "title": "WPT: вендорить + прогнать категорию `touch-events`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-trust-tokens",
+       "title": "WPT: вендорить + прогнать категорию `trust-tokens`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+      },
+      {
+       "id": "WPT-VENDOR-trusted-types",
+       "title": "WPT: вендорить + прогнать категорию `trusted-types`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-ua-client-hints",
+       "title": "WPT: вендорить + прогнать категорию `ua-client-hints`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-uievents",
+       "title": "WPT: вендорить + прогнать категорию `uievents`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-upgrade-insecure-requests",
+       "title": "WPT: вендорить + прогнать категорию `upgrade-insecure-requests`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-url",
+       "title": "WPT: вендорить + прогнать категорию `url`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-urlpattern",
+       "title": "WPT: вендорить + прогнать категорию `urlpattern`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-user-timing",
+       "title": "WPT: вендорить + прогнать категорию `user-timing`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-vibration",
+       "title": "WPT: вендорить + прогнать категорию `vibration`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (вибро)"
+      },
+      {
+       "id": "WPT-VENDOR-video-rvfc",
+       "title": "WPT: вендорить + прогнать категорию `video-rvfc`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+      },
+      {
+       "id": "WPT-VENDOR-viewport",
+       "title": "WPT: вендорить + прогнать категорию `viewport`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-viewport-segments",
+       "title": "WPT: вендорить + прогнать категорию `viewport-segments`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). складные устройства"
+      },
+      {
+       "id": "WPT-VENDOR-virtual-keyboard",
+       "title": "WPT: вендорить + прогнать категорию `virtual-keyboard`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). мобильная ОС-интеграция"
+      },
+      {
+       "id": "WPT-VENDOR-visual-viewport",
+       "title": "WPT: вендорить + прогнать категорию `visual-viewport`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-wai-aria",
+       "title": "WPT: вендорить + прогнать категорию `wai-aria`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-wasm",
+       "title": "WPT: вендорить + прогнать категорию `wasm`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-web-animations",
+       "title": "WPT: вендорить + прогнать категорию `web-animations`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-web-based-payment-handler",
+       "title": "WPT: вендорить + прогнать категорию `web-based-payment-handler`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API"
+      },
+      {
+       "id": "WPT-VENDOR-web-bundle",
+       "title": "WPT: вендорить + прогнать категорию `web-bundle`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-web-extensions",
+       "title": "WPT: вендорить + прогнать категорию `web-extensions`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). модель расширений — отдельная архитектура"
+      },
+      {
+       "id": "WPT-VENDOR-web-install",
+       "title": "WPT: вендорить + прогнать категорию `web-install`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). PWA-инсталляция"
+      },
+      {
+       "id": "WPT-VENDOR-web-locks",
+       "title": "WPT: вендорить + прогнать категорию `web-locks`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-web-nfc",
+       "title": "WPT: вендорить + прогнать категорию `web-nfc`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (NFC)"
+      },
+      {
+       "id": "WPT-VENDOR-web-otp",
+       "title": "WPT: вендорить + прогнать категорию `web-otp`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). WebOTP (SMS)"
+      },
+      {
+       "id": "WPT-VENDOR-web-share",
+       "title": "WPT: вендорить + прогнать категорию `web-share`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-webaudio",
+       "title": "WPT: вендорить + прогнать категорию `webaudio`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-webauthn",
+       "title": "WPT: вендорить + прогнать категорию `webauthn`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). WebAuthn — отдельная крипто/платформенная интеграция"
+      },
+      {
+       "id": "WPT-VENDOR-webcodecs",
+       "title": "WPT: вендорить + прогнать категорию `webcodecs`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). нет аппаратного/софт кодек-конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-webdriver",
+       "title": "WPT: вендорить + прогнать категорию `webdriver`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). тестовая инфраструктура самого WPT/WebDriver, не веб-фича сайта"
+      },
+      {
+       "id": "WPT-VENDOR-webgl",
+       "title": "WPT: вендорить + прогнать категорию `webgl`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-webgpu",
+       "title": "WPT: вендорить + прогнать категорию `webgpu`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). нет compute-конвейера GPU (растеризация — своя)"
+      },
+      {
+       "id": "WPT-VENDOR-webhid",
+       "title": "WPT: вендорить + прогнать категорию `webhid`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (HID)"
+      },
+      {
+       "id": "WPT-VENDOR-webidl",
+       "title": "WPT: вендорить + прогнать категорию `webidl`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-webmcp",
+       "title": "WPT: вендорить + прогнать категорию `webmcp`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). экспериментальный, вне текущего скоупа"
+      },
+      {
+       "id": "WPT-VENDOR-webmessaging",
+       "title": "WPT: вендорить + прогнать категорию `webmessaging`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-webmidi",
+       "title": "WPT: вендорить + прогнать категорию `webmidi`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (MIDI)"
+      },
+      {
+       "id": "WPT-VENDOR-webnn",
+       "title": "WPT: вендорить + прогнать категорию `webnn`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). нет ML-инференс рантайма"
+      },
+      {
+       "id": "WPT-VENDOR-webrtc",
+       "title": "WPT: вендорить + прогнать категорию `webrtc`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-webrtc-encoded-transform",
+       "title": "WPT: вендорить + прогнать категорию `webrtc-encoded-transform`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-webrtc-extensions",
+       "title": "WPT: вендорить + прогнать категорию `webrtc-extensions`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-webrtc-ice",
+       "title": "WPT: вендорить + прогнать категорию `webrtc-ice`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-webrtc-identity",
+       "title": "WPT: вендорить + прогнать категорию `webrtc-identity`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-webrtc-priority",
+       "title": "WPT: вендорить + прогнать категорию `webrtc-priority`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-webrtc-stats",
+       "title": "WPT: вендорить + прогнать категорию `webrtc-stats`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-webrtc-svc",
+       "title": "WPT: вендорить + прогнать категорию `webrtc-svc`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+      },
+      {
+       "id": "WPT-VENDOR-websockets",
+       "title": "WPT: вендорить + прогнать категорию `websockets`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-webstorage",
+       "title": "WPT: вендорить + прогнать категорию `webstorage`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-webtransport",
+       "title": "WPT: вендорить + прогнать категорию `webtransport`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). нет транспортного стека"
+      },
+      {
+       "id": "WPT-VENDOR-webusb",
+       "title": "WPT: вендорить + прогнать категорию `webusb`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (USB)"
+      },
+      {
+       "id": "WPT-VENDOR-webvtt",
+       "title": "WPT: вендорить + прогнать категорию `webvtt`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-webxr",
+       "title": "WPT: вендорить + прогнать категорию `webxr`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). XR — нет рантайма"
+      },
+      {
+       "id": "WPT-VENDOR-window-management",
+       "title": "WPT: вендорить + прогнать категорию `window-management`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: 🚫 (вне скоупа). мульти-монитор ОС-интеграция"
+      },
+      {
+       "id": "WPT-VENDOR-workers",
+       "title": "WPT: вендорить + прогнать категорию `workers`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-worklets",
+       "title": "WPT: вендорить + прогнать категорию `worklets`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-x-frame-options",
+       "title": "WPT: вендорить + прогнать категорию `x-frame-options`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-xhr",
+       "title": "WPT: вендорить + прогнать категорию `xhr`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
+      },
+      {
+       "id": "WPT-VENDOR-xml",
+       "title": "WPT: вендорить + прогнать категорию `xml`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат)."
       }
      ]
     }
@@ -3375,10 +5315,10 @@
    "debtor": false
   },
   "BUG-273": {
-   "status": "open",
-   "title": "Прокрутка страниц с mix-blend-mode/filter/backdrop-filter — слайдшоу: 1000000-final.html ~660 мс/кадр (1.5 FPS), baseline без них 4.6 мс. **Корень (профиль LUME…",
-   "component": "paint (femtovg, blend/filter-композитинг)",
-   "date": null,
+   "status": "fixed",
+   "title": "Прокрутка страниц с mix-blend-mode/filter/backdrop-filter — слайдшоу: 1000000-final.html ~660 мс/кадр (1.5 FPS), baseline без них 4.6 мс, под `LUMEN_BACKEND=fem…",
+   "component": "paint (femtovg fallback, blend/filter-композитинг)",
+   "date": "2026-07-21",
    "debtor": false
   },
   "BUG-274": {
@@ -3694,6 +5634,13 @@
    "title": "Три независимых дефекта на одну WPT-таблицу: (1) `CharacterData.prototype` не имел ни одного из шести спек-методов (DOM §4.10) — `length`/`substringData`/`appen…",
    "component": "js (WEB_API_SHIM, dom.rs) + native `v8_runtime.rs`/`dom.rs` (оба движка)",
    "date": "2026-07-21",
+   "debtor": false
+  },
+  "BUG-327": {
+   "status": "open",
+   "title": "`PAINT_RE` требует, чтобы `[frame] paint …` заканчивалась сразу на `swap X.XXms)`, но текущий формат лога несёт ещё поле `culled N/M leaf)` перед закрывающей ск…",
+   "component": "tooling (`scripts/scroll_perf.py`)",
+   "date": null,
    "debtor": false
   },
   "BUG-315": {
@@ -4069,11 +6016,11 @@
   "paint (build)": [
    "BUG-235"
   ],
+  "paint (femtovg fallback, blend/filter-композитинг)": [
+   "BUG-273"
+  ],
   "paint (femtovg, `acquire_layer`/`layer_pool`)": [
    "BUG-320"
-  ],
-  "paint (femtovg, blend/filter-композитинг)": [
-   "BUG-273"
   ],
   "paint (femtovg, offscreen-слои) + font (bytes_store)": [
    "BUG-272"
@@ -4170,6 +6117,9 @@
   ],
   "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)": [
    "BUG-297"
+  ],
+  "tooling (`scripts/scroll_perf.py`)": [
+   "BUG-327"
   ],
   "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
    "BUG-301"
