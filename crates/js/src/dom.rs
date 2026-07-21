@@ -5260,6 +5260,26 @@ function _lumen_html_collection_named(ids, name) {
     return null;
 }
 
+// BUG-323: supported property names for `for-in`/`Object.getOwnPropertyNames`/
+// `hasOwnProperty` enumeration (DOM §4.2.10.2) — the `id`, then (failing that)
+// the `name` attribute of every element in the collection, in tree order,
+// ignoring later duplicates. Mirrors the id-pass-then-name-pass structure of
+// `_lumen_html_collection_named` above so the `ownKeys`/`getOwnPropertyDescriptor`
+// traps stay consistent with what `get`/`has`/`namedItem` already expose.
+function _lumen_html_collection_own_names(ids) {
+    var names = [];
+    var seen = {};
+    function add(v) {
+        if (v !== null && v !== '' && !Object.prototype.hasOwnProperty.call(seen, v)) {
+            seen[v] = true;
+            names.push(v);
+        }
+    }
+    for (var i = 0; i < ids.length; i++) add(_lumen_u2n(_lumen_get_attr(ids[i], 'id')));
+    for (var j = 0; j < ids.length; j++) add(_lumen_u2n(_lumen_get_attr(ids[j], 'name')));
+    return names;
+}
+
 // Live HTMLCollection over `owner_nid`'s element children (DOM §4.2.10.2).
 // Backed by a Proxy so `length`, indices and named lookups all re-query the
 // live tree on every access — the collection stays correct across
@@ -5299,6 +5319,39 @@ function _lumen_make_html_collection(owner_nid) {
             }
             if (typeof prop === 'string' && _lumen_html_collection_named(ids(), prop) !== null) return true;
             return prop in target;
+        },
+        // BUG-323: `ownKeys` + `getOwnPropertyDescriptor` so `for-in`,
+        // `Object.getOwnPropertyNames`/`keys` and `hasOwnProperty` see the
+        // collection's indices and named keys instead of the empty plain
+        // `proto` target. Indexed keys are enumerable (WebIDL legacy platform
+        // object indexed-property semantics); named keys are own but
+        // non-enumerable, matching real HTMLCollection behaviour where
+        // `for (var p in list)` yields only indices while
+        // `Object.getOwnPropertyNames`/`hasOwnProperty` also see named keys.
+        ownKeys: function(target) {
+            var list = ids();
+            var keys = [];
+            for (var i = 0; i < list.length; i++) keys.push(String(i));
+            var names = _lumen_html_collection_own_names(list);
+            for (var k = 0; k < names.length; k++) keys.push(names[k]);
+            return keys;
+        },
+        getOwnPropertyDescriptor: function(target, prop) {
+            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+                var list = ids();
+                var idx = parseInt(prop, 10);
+                if (idx < list.length) {
+                    return { value: _lumen_make_element(list[idx]), writable: false, enumerable: true, configurable: true };
+                }
+                return undefined;
+            }
+            if (typeof prop === 'string') {
+                var named = _lumen_html_collection_named(ids(), prop);
+                if (named !== null) {
+                    return { value: named, writable: false, enumerable: false, configurable: true };
+                }
+            }
+            return undefined;
         },
     });
 }
@@ -19409,6 +19462,38 @@ mod tests {
             before === 3 && after === 4
         "#).unwrap();
         assert_eq!(live, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn html_collection_supports_enumeration() {
+        // BUG-323: HTMLCollection's Proxy had no `ownKeys`/`getOwnPropertyDescriptor`
+        // traps, so `for-in`, `Object.getOwnPropertyNames` and `hasOwnProperty` all
+        // saw an empty plain object instead of the live indices/named keys.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _p = document.createElement('ul');
+            document.body.appendChild(_p);
+            var _a = document.createElement('li'); _a.id = 'alpha'; _p.appendChild(_a);
+            var _b = document.createElement('li'); _b.name = 'beta'; _p.appendChild(_b);
+            _p.appendChild(document.createElement('li'));
+        "#).unwrap();
+        // for-in yields only the enumerable indexed keys.
+        let for_in = rt.eval(r#"
+            var keys = [];
+            for (var p in _p.children) keys.push(p);
+            keys.join(',')
+        "#).unwrap();
+        assert_eq!(for_in, lumen_core::JsValue::String("0,1,2".into()));
+        // Object.getOwnPropertyNames sees indices AND named keys (non-enumerable).
+        let own_names = rt.eval("Object.getOwnPropertyNames(_p.children).join(',')").unwrap();
+        assert_eq!(own_names, lumen_core::JsValue::String("0,1,2,alpha,beta".into()));
+        // hasOwnProperty is true for both indices and named keys.
+        let has_own = rt.eval(r#"
+            var c = _p.children;
+            c.hasOwnProperty('0') && c.hasOwnProperty('alpha') && c.hasOwnProperty('beta')
+                && !c.hasOwnProperty('missing')
+        "#).unwrap();
+        assert_eq!(has_own, lumen_core::JsValue::Bool(true));
     }
 
     #[test]

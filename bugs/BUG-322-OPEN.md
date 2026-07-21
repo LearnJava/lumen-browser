@@ -61,7 +61,8 @@ EventTarget.prototype` (DOM Standard §4.9 / HTML Standard §3.1.3), так чт
 из BUG-314), где кэшировать прототип на nid, и не сломать ли `Object.keys`/`JSON.stringify`
 поведение объекта при переходе с plain-object на объект с non-null `[[Prototype]]` (текущий код
 местами полагается на `for...in`/`Object.getOwnPropertyNames` над самим враппером — см. также
-[BUG-323](BUG-323-OPEN.md), где та же плоская модель мешает `HTMLCollection`-enumeration).
+[BUG-323](BUG-323-FIXED.md), где та же плоская модель мешала `HTMLCollection`-enumeration (fixed
+2026-07-21 — `ownKeys`/`getOwnPropertyDescriptor` traps на `Proxy`, независимо от `[[Prototype]]`).
 Риск и объём — за пределами точечного P3-багфикса; годится под отдельную задачу P1/P4-масштаба
 (вся система элемент-обёрток), не под "один баг за раз".
 
