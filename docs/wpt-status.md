@@ -43,7 +43,7 @@
 
 4802 сабтеста в одной только `dom/nodes` — заводить BUG на каждый упавший бессмысленно
 (не масштабируется, и почти всегда 10-100 упавших тестов — симптом одной первопричины в движке;
-пример: [BUG-324](../bugs/BUG-324-OPEN.md) — отсутствие `document.implementation` закрывает ~75%
+пример: [BUG-324](../bugs/BUG-324-FIXED.md) — отсутствие `document.implementation` закрывает ~75%
 провалов в `dom/nodes`). Рабочий цикл:
 
 1. Прогнать `tests/wpt/run_report.py --all` (см. `tests/wpt/README.md`), найти кластеры провалов.
@@ -144,7 +144,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `direct-sockets` | 🚫 | — |  |  | аппаратный/сетевой низкоуровневый API |
 | `document-picture-in-picture` | 🚫 | — |  |  | PiP — нет медиа-конвейера видео |
 | `document-policy` | ⬜ | — |  |  |  |
-| `dom` | ⬜ | 🟡 (`dom/nodes/` только) |  | [BUG-324](../bugs/BUG-324-OPEN.md) | таблица ниже |
+| `dom` | ⬜ | 🟡 (`dom/nodes/` только) |  | [BUG-324](../bugs/BUG-324-FIXED.md) | таблица ниже |
 | `domparsing` | ⬜ | — |  |  |  |
 | `domxpath` | ⬜ | — |  |  |  |
 | `dpub-aam` | ⬜ | — |  |  |  |
@@ -371,7 +371,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 
 | Тест | Статус | Сабтесты | Владелец | Баг | Заметка |
 |---|---|---|---|---|---|
-| `/dom/nodes/CharacterData-appendChild.html` | OK | 0/9 |  | [BUG-325](../bugs/BUG-325-FIXED.md) | Фикс влит 2026-07-20; сабтесты/статус обновит следующий `run_report.py --all` |
+| `/dom/nodes/CharacterData-appendChild.html` | OK | 9/9 |  | [BUG-325](../bugs/BUG-325-FIXED.md) | Фикс влит 2026-07-20; сабтесты/статус обновит следующий `run_report.py --all` |
 | `/dom/nodes/CharacterData-appendData.html` | OK | 1/14 |  |  |  |
 | `/dom/nodes/CharacterData-data.html` | OK | 0/16 |  |  |  |
 | `/dom/nodes/CharacterData-deleteData.html` | OK | 0/18 |  |  |  |
@@ -385,24 +385,24 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/ChildNode-replaceWith.html` | OK | 9/33 |  |  |  |
 | `/dom/nodes/Comment-constructor.html` | TIMEOUT | 15/16 |  |  |  |
 | `/dom/nodes/DOMImplementation-createDocument-with-null-browsing-context-crash.html` | NOT RUN | 0/0 |  |  |  |
-| `/dom/nodes/DOMImplementation-createDocument.html` | OK | 1/2 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
-| `/dom/nodes/DOMImplementation-createDocumentType.html` | OK | 0/1 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
+| `/dom/nodes/DOMImplementation-createDocument.html` | OK | 111/434 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
+| `/dom/nodes/DOMImplementation-createDocumentType.html` | OK | 82/82 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
 | `/dom/nodes/DOMImplementation-createHTMLDocument-with-null-browsing-context-crash.html` | NOT RUN | 0/0 |  |  |  |
-| `/dom/nodes/DOMImplementation-createHTMLDocument-with-saved-implementation.html` | OK | 0/1 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
-| `/dom/nodes/DOMImplementation-createHTMLDocument.html` | OK | 0/13 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
-| `/dom/nodes/DOMImplementation-hasFeature.html` | OK | 1/137 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
+| `/dom/nodes/DOMImplementation-createHTMLDocument-with-saved-implementation.html` | OK | 0/1 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
+| `/dom/nodes/DOMImplementation-createHTMLDocument.html` | OK | 2/13 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
+| `/dom/nodes/DOMImplementation-hasFeature.html` | OK | 137/137 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
 | `/dom/nodes/Document-URL.html` | TIMEOUT | 0/1 |  |  |  |
 | `/dom/nodes/Document-adoptNode.html` | OK | 0/4 |  |  |  |
-| `/dom/nodes/Document-characterSet-normalization-1.html` | TIMEOUT | 0/315 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
-| `/dom/nodes/Document-characterSet-normalization-2.html` | TIMEOUT | 0/339 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
-| `/dom/nodes/Document-constructor.html` | OK | 0/5 |  |  |  |
-| `/dom/nodes/Document-createAttribute.html` | ERROR | 0/0 |  |  |  |
+| `/dom/nodes/Document-characterSet-normalization-1.html` | TIMEOUT | 0/315 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
+| `/dom/nodes/Document-characterSet-normalization-2.html` | TIMEOUT | 0/339 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
+| `/dom/nodes/Document-constructor.html` | OK | 2/5 |  |  |  |
+| `/dom/nodes/Document-createAttribute.html` | OK | 0/36 |  |  |  |
 | `/dom/nodes/Document-createCDATASection.html` | TIMEOUT | 0/1 |  |  |  |
 | `/dom/nodes/Document-createComment.html` | OK | 0/6 |  |  |  |
-| `/dom/nodes/Document-createElement-namespace.html` | TIMEOUT | 1/51 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
-| `/dom/nodes/Document-createElement.html` | OK | 0/147 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
-| `/dom/nodes/Document-createElementNS.html` | OK | 0/596 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
-| `/dom/nodes/Document-createEvent.https.html` | SKIP | 0/0 |  |  |  |
+| `/dom/nodes/Document-createElement-namespace.html` | TIMEOUT | 3/51 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
+| `/dom/nodes/Document-createElement.html` | OK | 0/147 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
+| `/dom/nodes/Document-createElementNS.html` | OK | 0/596 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
+| `/dom/nodes/Document-createEvent.https.html` | ERROR | 0/0 |  |  |  |
 | `/dom/nodes/Document-createProcessingInstruction.html` | OK | 12/12 |  |  |  |
 | `/dom/nodes/Document-createTextNode.html` | OK | 0/6 |  |  |  |
 | `/dom/nodes/Document-createTreeWalker.html` | OK | 4/5 |  |  |  |
@@ -411,13 +411,13 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/Document-getElementsByClassName.html` | OK | 0/1 |  |  |  |
 | `/dom/nodes/Document-getElementsByTagName.html` | OK | 6/18 |  |  |  |
 | `/dom/nodes/Document-getElementsByTagNameNS.html` | OK | 0/14 |  |  |  |
-| `/dom/nodes/Document-implementation.html` | OK | 0/2 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
+| `/dom/nodes/Document-implementation.html` | OK | 2/2 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
 | `/dom/nodes/Document-importNode.html` | OK | 0/5 |  |  |  |
 | `/dom/nodes/DocumentFragment-constructor.html` | OK | 2/2 |  |  |  |
 | `/dom/nodes/DocumentFragment-getElementById.html` | OK | 0/5 |  |  |  |
 | `/dom/nodes/DocumentFragment-querySelectorAll-after-modification.html` | OK | 1/1 |  |  |  |
 | `/dom/nodes/DocumentType-literal.html` | OK | 0/1 |  |  |  |
-| `/dom/nodes/DocumentType-remove.html` | ERROR | 0/0 |  |  |  |
+| `/dom/nodes/DocumentType-remove.html` | OK | 0/4 |  |  |  |
 | `/dom/nodes/Element-childElement-null.html` | OK | 1/1 |  |  |  |
 | `/dom/nodes/Element-childElementCount-dynamic-add.html` | OK | 1/1 |  |  |  |
 | `/dom/nodes/Element-childElementCount-dynamic-remove.html` | OK | 1/1 |  |  |  |
@@ -461,17 +461,17 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/MutationObserver-sanity.html` | TIMEOUT | 11/16 |  |  |  |
 | `/dom/nodes/MutationObserver-takeRecords.html` | OK | 3/3 |  |  |  |
 | `/dom/nodes/MutationObserver-textContent.html` | TIMEOUT | 0/4 |  |  |  |
-| `/dom/nodes/Node-appendChild.html` | OK | 2/11 |  |  |  |
+| `/dom/nodes/Node-appendChild.html` | OK | 4/11 |  |  |  |
 | `/dom/nodes/Node-baseURI.html` | OK | 4/9 |  |  |  |
 | `/dom/nodes/Node-childNodes-cache-2.html` | OK | 0/1 |  |  |  |
 | `/dom/nodes/Node-childNodes-cache.html` | OK | 0/1 |  |  |  |
 | `/dom/nodes/Node-childNodes.html` | OK | 1/6 |  |  |  |
-| `/dom/nodes/Node-cloneNode-XMLDocument.html` | OK | 0/1 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
+| `/dom/nodes/Node-cloneNode-XMLDocument.html` | OK | 0/1 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
 | `/dom/nodes/Node-cloneNode-document-with-doctype.html` | OK | 0/3 |  |  |  |
 | `/dom/nodes/Node-cloneNode-external-stylesheet-no-bc.sub.html` | TIMEOUT | 0/1 |  |  |  |
 | `/dom/nodes/Node-cloneNode-on-inactive-document-crash.html` | NOT RUN | 0/0 |  |  |  |
 | `/dom/nodes/Node-cloneNode-svg.html` | OK | 0/4 |  |  |  |
-| `/dom/nodes/Node-cloneNode.html` | OK | 0/135 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
+| `/dom/nodes/Node-cloneNode.html` | OK | 0/135 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
 | `/dom/nodes/Node-compareDocumentPosition.html` | TIMEOUT | 0/0 |  |  |  |
 | `/dom/nodes/Node-constants.html` | TIMEOUT | 0/0 |  |  |  |
 | `/dom/nodes/Node-contains.html` | TIMEOUT | 0/0 |  |  |  |
@@ -480,7 +480,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/Node-isConnected.html` | OK | 1/2 |  |  |  |
 | `/dom/nodes/Node-isEqualNode.html` | OK | 0/9 |  |  |  |
 | `/dom/nodes/Node-isSameNode.html` | OK | 0/9 |  |  |  |
-| `/dom/nodes/Node-lookupNamespaceURI.html` | OK | 0/70 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
+| `/dom/nodes/Node-lookupNamespaceURI.html` | OK | 0/70 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
 | `/dom/nodes/Node-mutation-adoptNode.html` | OK | 0/2 |  |  |  |
 | `/dom/nodes/Node-nodeName.html` | OK | 4/6 |  |  |  |
 | `/dom/nodes/Node-nodeValue.html` | OK | 0/7 |  |  |  |
@@ -491,7 +491,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/Node-properties.html` | TIMEOUT | 0/0 |  |  |  |
 | `/dom/nodes/Node-removeChild.html` | OK | 0/28 |  |  |  |
 | `/dom/nodes/Node-replaceChild.html` | OK | 1/29 |  |  |  |
-| `/dom/nodes/Node-textContent.html` | ERROR | 0/0 |  |  |  |
+| `/dom/nodes/Node-textContent.html` | OK | 19/81 |  |  |  |
 | `/dom/nodes/NodeList-Iterable.html` | OK | 7/8 |  |  |  |
 | `/dom/nodes/NodeList-static-length-getter-tampered-1.html` | OK | 0/1 |  |  |  |
 | `/dom/nodes/NodeList-static-length-getter-tampered-2.html` | OK | 0/1 |  |  |  |
@@ -515,19 +515,19 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/Text-constructor.html` | TIMEOUT | 15/16 |  |  |  |
 | `/dom/nodes/Text-splitText.html` | OK | 0/6 |  |  |  |
 | `/dom/nodes/Text-wholeText.html` | OK | 0/1 |  |  |  |
-| `/dom/nodes/append-on-Document.html` | TIMEOUT | 0/0 |  |  |  |
+| `/dom/nodes/append-on-Document.html` | OK | 0/5 |  |  |  |
 | `/dom/nodes/attributes-namednodemap.html` | OK | 0/8 |  |  |  |
 | `/dom/nodes/attributes.html` | OK | 6/67 |  |  |  |
-| `/dom/nodes/case.html` | OK | 8/285 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
+| `/dom/nodes/case.html` | OK | 8/285 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
 | `/dom/nodes/getElementsByClassName-32.html` | OK | 4/4 |  |  |  |
 | `/dom/nodes/getElementsByClassName-empty-set.html` | OK | 3/3 |  |  |  |
 | `/dom/nodes/getElementsByClassName-whitespace-class-names.html` | OK | 5/26 |  |  |  |
-| `/dom/nodes/insert-adjacent.html` | OK | 7/14 |  |  |  |
+| `/dom/nodes/insert-adjacent.html` | OK | 6/14 |  |  |  |
 | `/dom/nodes/insertBefore-iframe-crash.html` | NOT RUN | 0/0 |  |  |  |
 | `/dom/nodes/name-validation.html` | ERROR | 0/0 |  |  |  |
 | `/dom/nodes/node-appendchild-crash.html` | NOT RUN | 0/0 |  |  |  |
-| `/dom/nodes/prepend-on-Document.html` | TIMEOUT | 0/0 |  |  |  |
-| `/dom/nodes/processing-instruction-attributes.html` | OK | 6/140 |  | [BUG-324](../bugs/BUG-324-OPEN.md) |  |
+| `/dom/nodes/prepend-on-Document.html` | OK | 0/5 |  |  |  |
+| `/dom/nodes/processing-instruction-attributes.html` | OK | 6/140 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
 | `/dom/nodes/query-target-in-load-event.html` | TIMEOUT | 0/1 |  |  |  |
 | `/dom/nodes/query-target-in-load-event.part.html` | NOT RUN | 0/0 |  |  |  |
 | `/dom/nodes/querySelector-mixed-case.html` | OK | 0/1 |  |  |  |

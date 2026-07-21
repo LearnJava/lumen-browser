@@ -4418,47 +4418,23 @@ Attr.prototype = Object.create(Node.prototype);
 Attr.prototype.constructor = Attr;
 // DOM §4.5 Document() — a detached document with no browsing context (BUG-321).
 // The live page is backed by the single arena `document` object literal below;
-// a script-created `new Document()` cannot own arena nodes, so it tracks its
-// children in a JS array. `createElement` builds a parentless arena node (never
-// rendered, since it is never inserted into the live tree); `appendChild`
-// records the child; `doctype` scans the children for a DocumentType (a fresh
-// document has none → null). Enough for reference resolution and WPT
-// `dom/nodes/Document-doctype.html`'s `new Document()` subtest.
+// a script-created document cannot own arena nodes, so it tracks its children
+// in a JS array (`_lumen_build_detached_document`, defined below once
+// `DocumentType`/`DOMImplementation` exist). `new Document()` is the
+// `application/xml`-typed constructor form; `DOMImplementation.createDocument`/
+// `createHTMLDocument` (BUG-324) build the same shape with a different
+// prototype/contentType.
 function Document() {
     if (!(this instanceof Document)) { throw new TypeError('Illegal constructor'); }
-    var _children = [];
-    Object.defineProperty(this, 'nodeType',      { get: function() { return 9; },           enumerable: true });
-    Object.defineProperty(this, 'nodeName',      { get: function() { return '#document'; }, enumerable: true });
-    Object.defineProperty(this, 'ownerDocument', { get: function() { return null; },        enumerable: true });
-    Object.defineProperty(this, 'childNodes',    { get: function() { return _children.slice(); }, enumerable: true });
-    Object.defineProperty(this, 'doctype', {
-        get: function() {
-            for (var i = 0; i < _children.length; i++) {
-                if (_children[i] && _children[i].nodeType === 10) { return _children[i]; }
-            }
-            return null;
-        },
-        enumerable: true,
-    });
-    Object.defineProperty(this, 'documentElement', {
-        get: function() {
-            for (var i = 0; i < _children.length; i++) {
-                if (_children[i] && _children[i].nodeType === 1) { return _children[i]; }
-            }
-            return null;
-        },
-        enumerable: true,
-    });
-    this.createElement = function(tag) {
-        var nid = _lumen_create_element(String(tag).toLowerCase());
-        if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
-        return _lumen_make_element(nid);
-    };
-    this.createTextNode = function(t) { return _lumen_make_element(_lumen_create_text_node(String(t))); };
-    this.appendChild = function(node) { if (node) { _children.push(node); } return node; };
+    return _lumen_build_detached_document(Document.prototype, 'application/xml');
 }
 Document.prototype = Object.create(Node.prototype);
 Document.prototype.constructor = Document;
+// DOM §4.5 XMLDocument — the interface `DOMImplementation.createDocument`
+// returns (not constructible from script directly).
+function XMLDocument() { throw new TypeError('Illegal constructor'); }
+XMLDocument.prototype = Object.create(Document.prototype);
+XMLDocument.prototype.constructor = XMLDocument;
 function DocumentType() { throw new TypeError('Illegal constructor'); }
 DocumentType.prototype = Object.create(Node.prototype);
 DocumentType.prototype.constructor = DocumentType;
@@ -4468,6 +4444,10 @@ ProcessingInstruction.prototype.constructor = ProcessingInstruction;
 function HTMLElement() { throw new TypeError('Illegal constructor'); }
 HTMLElement.prototype = Object.create(Element.prototype);
 HTMLElement.prototype.constructor = HTMLElement;
+// DOM §4.5 DOMImplementation — not constructible from script; instances are
+// only minted by `_lumen_make_dom_implementation` (BUG-324).
+function DOMImplementation() { throw new TypeError('Illegal constructor'); }
+DOMImplementation.prototype.constructor = DOMImplementation;
 
 // Common concrete HTML element interfaces, generated so `instanceof
 // HTMLDivElement` (and feature-detection like `'HTMLDialogElement' in window`)
@@ -4569,6 +4549,183 @@ function _lumen_make_node(nid) {
     if (nid === null || nid === undefined) return null;
     if (_lumen_is_doctype(nid)) { return _lumen_make_doctype(nid); }
     return _lumen_make_element(nid);
+}
+
+// BUG-324: a DocumentType minted by `DOMImplementation.createDocumentType` —
+// detached (no arena backing, unlike the page's own `<!doctype>` wrapped by
+// `_lumen_make_doctype` above). DOM §4.5 sets its node document to the
+// document whose implementation created it, even before any `appendChild`;
+// `__lumen_setOwner` lets `createDocument`/`appendChild` re-home it on
+// adoption into a (possibly different) document.
+function _lumen_make_detached_doctype(name, publicId, systemId, ownerDoc) {
+    var _owner = ownerDoc;
+    var obj = Object.create(DocumentType.prototype);
+    Object.defineProperty(obj, 'nodeType',      { get: function() { return 10; },   enumerable: true });
+    Object.defineProperty(obj, 'nodeName',      { get: function() { return name; }, enumerable: true });
+    Object.defineProperty(obj, 'name',          { get: function() { return name; }, enumerable: true });
+    Object.defineProperty(obj, 'publicId',      { get: function() { return publicId; }, enumerable: true });
+    Object.defineProperty(obj, 'systemId',      { get: function() { return systemId; }, enumerable: true });
+    Object.defineProperty(obj, 'nodeValue',     { get: function() { return null; }, enumerable: true });
+    Object.defineProperty(obj, 'parentNode',    { get: function() { return null; }, enumerable: true });
+    Object.defineProperty(obj, 'childNodes',    { get: function() { return []; },   enumerable: true });
+    Object.defineProperty(obj, 'ownerDocument', { get: function() { return _owner; }, enumerable: true });
+    Object.defineProperty(obj, '__lumen_setOwner', { value: function(doc) { _owner = doc; }, enumerable: false });
+    return obj;
+}
+
+// BUG-324: shared builder for a detached document (no browsing context) — used
+// by `new Document()` and by `DOMImplementation.createDocument`/
+// `createHTMLDocument`. `proto` fixes which interface's prototype chain the
+// result exposes (`Document.prototype` vs `XMLDocument.prototype`);
+// `contentType` is fixed at construction (DOM §4.5 / §7 — a document with no
+// browsing context always resolves to UTF-8 / about:blank / CSS1Compat).
+// `createElement`/`createElementNS`/`createTextNode` build real arena nodes
+// (never inserted into the live tree's root, so never rendered) so the
+// resulting subtree behaves like any other detached DOM subtree; their
+// `ownerDocument` still reads back as the single live `document` (the arena
+// has no per-node document tag) — a known simplification, not spec-accurate
+// for these detached documents.
+function _lumen_build_detached_document(proto, contentType) {
+    var doc = Object.create(proto);
+    var _children = [];
+    var _impl = null;
+    Object.defineProperty(doc, 'nodeType',      { get: function() { return 9; },            enumerable: true });
+    Object.defineProperty(doc, 'nodeName',      { get: function() { return '#document'; },  enumerable: true });
+    Object.defineProperty(doc, 'nodeValue',     { get: function() { return null; },         enumerable: true });
+    Object.defineProperty(doc, 'DOCUMENT_NODE', { get: function() { return 9; },            enumerable: true });
+    Object.defineProperty(doc, 'ownerDocument', { get: function() { return null; },         enumerable: true });
+    Object.defineProperty(doc, 'childNodes',    { get: function() { return _children.slice(); }, enumerable: true });
+    Object.defineProperty(doc, 'doctype', {
+        get: function() {
+            for (var i = 0; i < _children.length; i++) {
+                if (_children[i] && _children[i].nodeType === 10) { return _children[i]; }
+            }
+            return null;
+        },
+        enumerable: true,
+    });
+    Object.defineProperty(doc, 'documentElement', {
+        get: function() {
+            for (var i = 0; i < _children.length; i++) {
+                if (_children[i] && _children[i].nodeType === 1) { return _children[i]; }
+            }
+            return null;
+        },
+        enumerable: true,
+    });
+    Object.defineProperty(doc, 'implementation', {
+        get: function() {
+            if (_impl === null) { _impl = _lumen_make_dom_implementation(doc); }
+            return _impl;
+        },
+        enumerable: true,
+    });
+    Object.defineProperty(doc, 'URL',           { get: function() { return 'about:blank'; }, enumerable: true });
+    Object.defineProperty(doc, 'documentURI',   { get: function() { return 'about:blank'; }, enumerable: true });
+    Object.defineProperty(doc, 'compatMode',    { get: function() { return 'CSS1Compat'; },  enumerable: true });
+    Object.defineProperty(doc, 'characterSet',  { get: function() { return 'UTF-8'; },       enumerable: true });
+    Object.defineProperty(doc, 'charset',       { get: function() { return 'UTF-8'; },       enumerable: true });
+    Object.defineProperty(doc, 'inputEncoding', { get: function() { return 'UTF-8'; },       enumerable: true });
+    Object.defineProperty(doc, 'contentType',   { get: function() { return contentType; },   enumerable: true });
+    Object.defineProperty(doc, 'location',      { get: function() { return null; },          enumerable: true });
+    doc.createElement = function(tag) {
+        var nid = _lumen_create_element(String(tag).toLowerCase());
+        if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        return _lumen_make_element(nid);
+    };
+    doc.createElementNS = function(ns, qualifiedName) {
+        var local = String(qualifiedName || '').replace(/^[^:]+:/, '');
+        var nid = _lumen_create_element_ns(ns === null || ns === undefined ? '' : String(ns), local);
+        if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        return _lumen_make_element(nid);
+    };
+    doc.createTextNode = function(t) { return _lumen_make_element(_lumen_create_text_node(String(t))); };
+    doc.createComment = function(t) { return _lumen_make_element(_lumen_create_text_node(t === undefined ? '' : String(t))); };
+    doc.createDocumentFragment = function() { return _lumen_make_document_fragment(_lumen_create_fragment()); };
+    doc.appendChild = function(node) {
+        if (node) {
+            if (typeof node.__lumen_setOwner === 'function') { node.__lumen_setOwner(doc); }
+            _children.push(node);
+        }
+        return node;
+    };
+    return doc;
+}
+
+// BUG-324: `document.implementation` (DOM §4.5 DOMImplementation) — one
+// instance per document, cached by the caller (`document`'s own getter below,
+// or `_lumen_build_detached_document`'s `_impl` closure) so repeated access
+// yields the SAME object (`document.implementation === document.implementation`,
+// WPT `Document-implementation.html`).
+function _lumen_make_dom_implementation(ownerDoc) {
+    var impl = {
+        // DOM §4.5 'validate': observed browser behavior (WPT
+        // `DOMImplementation-createDocumentType.html`) is far looser than the
+        // XML Name production `_lumen_is_xml_name` enforces elsewhere
+        // (`createProcessingInstruction`) — leading digits, symbols, empty
+        // strings, and stray/duplicate/leading/trailing colons are all
+        // accepted; only whitespace and '>' (which would corrupt a
+        // `<!DOCTYPE name>` serialization) throw.
+        createDocumentType: function(qualifiedName, publicId, systemId) {
+            var qn = String(qualifiedName);
+            if (/[\\s>]/.test(qn)) {
+                throw new DOMException(
+                    'createDocumentType: qualifiedName contains whitespace or the character >: ' + qn,
+                    'InvalidCharacterError');
+            }
+            return _lumen_make_detached_doctype(qn, String(publicId), String(systemId), ownerDoc);
+        },
+        // DOM §4.5: namespace/qualifiedName are both required (missing either
+        // throws TypeError, per WebIDL argument-count checking); qualifiedName
+        // '' or null/undefined omits the document element.
+        createDocument: function(namespace, qualifiedName, doctype) {
+            if (arguments.length < 2) {
+                throw new TypeError('createDocument requires at least 2 arguments');
+            }
+            var ns = (namespace === undefined || namespace === null) ? null : String(namespace);
+            var qn = (qualifiedName === undefined || qualifiedName === null) ? '' : String(qualifiedName);
+            var contentType = ns === 'http://www.w3.org/1999/xhtml' ? 'application/xhtml+xml'
+                : ns === 'http://www.w3.org/2000/svg' ? 'image/svg+xml'
+                : 'application/xml';
+            var doc = _lumen_build_detached_document(XMLDocument.prototype, contentType);
+            if (doctype !== null && doctype !== undefined) {
+                doc.appendChild(doctype);
+            }
+            if (qn !== '') {
+                var local = qn.replace(/^[^:]+:/, '');
+                var nid = _lumen_create_element_ns(ns === null ? '' : ns, local);
+                if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+                doc.appendChild(_lumen_make_element(nid));
+            }
+            return doc;
+        },
+        // DOM §4.5: builds the standard html>head,body skeleton as a REAL
+        // (arena-backed, but unattached to the live tree's root) subtree, so
+        // `documentElement.firstChild`/`lastChild` etc. traverse it normally.
+        // `title` is a WebIDL trailing optional argument with no default — an
+        // explicit `undefined` is treated the same as omitted (no <title>
+        // element at all), only other values (including `null`) create one.
+        createHTMLDocument: function(title) {
+            var doc = _lumen_build_detached_document(Document.prototype, 'text/html');
+            doc.appendChild(_lumen_make_detached_doctype('html', '', '', doc));
+            var htmlNid = _lumen_create_element('html');
+            var headNid = _lumen_create_element('head');
+            _lumen_append_child(htmlNid, headNid);
+            if (arguments.length > 0 && title !== undefined) {
+                var titleNid = _lumen_create_element('title');
+                _lumen_append_child(headNid, titleNid);
+                _lumen_append_child(titleNid, _lumen_create_text_node(String(title)));
+            }
+            var bodyNid = _lumen_create_element('body');
+            _lumen_append_child(htmlNid, bodyNid);
+            doc.appendChild(_lumen_make_element(htmlNid));
+            return doc;
+        },
+        // DOM §4.5: legacy no-op, always true.
+        hasFeature: function() { return true; },
+    };
+    Object.setPrototypeOf(impl, DOMImplementation.prototype);
+    return impl;
 }
 
 // Dispatch slotchange on all <slot> elements inside the shadow root of `host_nid`.
@@ -6581,6 +6738,9 @@ var _doc_hidden = false;
 var _doc_visibility_state = 'visible';
 var _doc_ready_state = 'loading';
 var __dom_node_warned = false;
+// BUG-324: cache for the live page's `document.implementation`, so repeated
+// access returns the same object (`document.implementation === document.implementation`).
+var _lumen_document_implementation = null;
 
 // HTML LS §4.8.3: the `HTMLImageElement` interface and its legacy factory
 // function `Image(width?, height?)`. BUG-305: both were entirely absent, so
@@ -6618,6 +6778,15 @@ var document = {
     get doctype() {
         var dnid = _lumen_u2n(_lumen_get_document_doctype());
         return dnid !== null ? _lumen_make_doctype(dnid) : null;
+    },
+    // DOM §4.5: DOMImplementation, cached (BUG-324 — was absent entirely,
+    // cascading `Cannot read properties of undefined (reading '...')` into
+    // every WPT fixture that builds an XML/HTML document through it).
+    get implementation() {
+        if (_lumen_document_implementation === null) {
+            _lumen_document_implementation = _lumen_make_dom_implementation(document);
+        }
+        return _lumen_document_implementation;
     },
     get title()  { return _lumen_get_document_title(); },
     set title(v) { _lumen_set_document_title(String(v)); },
@@ -28750,6 +28919,136 @@ mod tests {
                  nd.appendChild(nd.createElement('html')); \
                  (nd instanceof Document) && nd.nodeType === 9 && \
                  nd.doctype === null && nd.documentElement !== null",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `document.implementation` is a cached DOMImplementation — same
+    // object on repeated access, distinct per document (WPT
+    // `Document-implementation.html`).
+    #[test]
+    fn document_implementation_is_cached_dom_implementation() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var impl = document.implementation; \
+                 (impl instanceof DOMImplementation) && \
+                 (document.implementation === impl) && \
+                 (document.implementation.createHTMLDocument().implementation !== impl)",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `createDocumentType` builds a detached DocumentType whose
+    // ownerDocument is the document owning the implementation, immediately
+    // (not just after insertion) — WPT `DOMImplementation-createDocumentType.html`.
+    #[test]
+    fn create_document_type_reflects_fields() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var dt = document.implementation.createDocumentType('test:root', '1234', 'sys'); \
+                 dt.name === 'test:root' && dt.nodeName === 'test:root' && \
+                 dt.publicId === '1234' && dt.systemId === 'sys' && \
+                 dt.nodeValue === null && dt.ownerDocument === document && \
+                 dt instanceof DocumentType && dt.nodeType === 10",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: an invalid XML Name (e.g. containing a space) throws
+    // InvalidCharacterError, matching `document.createProcessingInstruction`'s
+    // validation (same `_lumen_is_xml_name` helper).
+    #[test]
+    fn create_document_type_rejects_invalid_name() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "try { document.implementation.createDocumentType('a b', '', ''); false; } \
+                 catch (e) { e.name === 'InvalidCharacterError'; }",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `createHTMLDocument(title)` builds the standard html>head,body
+    // skeleton with a `<!doctype html>` and, when a title is given, a <title>
+    // text child — WPT `DOMImplementation-createHTMLDocument.html`. An explicit
+    // `undefined` title argument is treated as omitted (no <title> element).
+    #[test]
+    fn create_html_document_builds_skeleton() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var doc = document.implementation.createHTMLDocument('hi'); \
+                 var noTitle = document.implementation.createHTMLDocument(undefined); \
+                 (doc instanceof Document) && doc.childNodes.length === 2 && \
+                 doc.doctype.name === 'html' && doc.doctype.publicId === '' && \
+                 doc.documentElement.tagName === 'HTML' && \
+                 doc.documentElement.firstChild.tagName === 'HEAD' && \
+                 doc.documentElement.firstChild.firstChild.tagName === 'TITLE' && \
+                 doc.documentElement.firstChild.firstChild.firstChild.data === 'hi' && \
+                 doc.documentElement.lastChild.tagName === 'BODY' && \
+                 noTitle.documentElement.firstChild.firstChild === null",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `createDocument(namespace, qualifiedName, doctype)` returns an
+    // XMLDocument with the given doctype and a namespaced document element
+    // (or no document element when qualifiedName is empty) — WPT
+    // `DOMImplementation-createDocument.html`.
+    #[test]
+    fn create_document_builds_xml_document() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var dt = document.implementation.createDocumentType('svg', '', ''); \
+                 var doc = document.implementation.createDocument('http://www.w3.org/2000/svg', 'svg', dt); \
+                 var empty = document.implementation.createDocument(null, '', null); \
+                 (Object.getPrototypeOf(doc) === XMLDocument.prototype) && \
+                 doc.nodeType === 9 && doc.contentType === 'image/svg+xml' && \
+                 doc.doctype === dt && doc.documentElement.tagName === 'SVG' && \
+                 doc.childNodes.length === 2 && \
+                 empty.documentElement === null && empty.contentType === 'application/xml'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `createDocument` requires at least 2 arguments (namespace,
+    // qualifiedName) — a WebIDL required-argument TypeError, not a
+    // DOMException.
+    #[test]
+    fn create_document_requires_two_arguments() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "['', undefined].every(function(v) { \
+                    try { \
+                        if (v === undefined) { document.implementation.createDocument(); } \
+                        else { document.implementation.createDocument(v); } \
+                        return false; \
+                    } catch (e) { return e instanceof TypeError; } \
+                 })",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `hasFeature` is a legacy no-op — always true regardless of
+    // arguments (WPT `DOMImplementation-hasFeature.html`).
+    #[test]
+    fn has_feature_always_true() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "document.implementation.hasFeature() === true && \
+                 document.implementation.hasFeature('bogus', '99.0') === true",
             )
             .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
