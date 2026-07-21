@@ -743,6 +743,19 @@ fn install_primitives(
                 matches!(doc.get(nid).data, NodeData::Text(_))
             }
         );
+        // Mirrors the V8 registration in `v8_runtime.rs` — needed so
+        // `document.createComment`/`CharacterData.prototype` (shared
+        // WEB_API_SHIM) don't crash with `is not a function` under the
+        // rquickjs rollback build (`--features quickjs`).
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_is_comment_node",
+            move |node_id: u32| -> bool {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                matches!(doc.get(nid).data, NodeData::Comment(_))
+            }
+        );
         // BUG-321: DocumentType support. `_lumen_is_doctype` classifies a node so
         // `document.childNodes` can wrap the doctype child as a DocumentType;
         // `_lumen_get_document_doctype` returns the document's doctype child (the
@@ -962,6 +975,15 @@ fn install_primitives(
             move |text: String| -> u32 {
                 let mut doc = d.lock().unwrap();
                 let nid = doc.create_text(text);
+                nid.index() as u32
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_create_comment",
+            move |text: String| -> u32 {
+                let mut doc = d.lock().unwrap();
+                let nid = doc.create_comment(text);
                 nid.index() as u32
             }
         );
@@ -3192,7 +3214,14 @@ fn find_first_matching(
     None
 }
 
+// Mirrors `v8_runtime::collect_text_content` — see there for the CharacterData
+// rationale (a Comment's own data isn't recursed into via `collect_text_inner`,
+// which intentionally only concatenates Text descendants for element
+// `.textContent`).
 fn collect_text_content(doc: &Document, id: NodeId) -> String {
+    if let NodeData::Comment(s) = &doc.get(id).data {
+        return s.clone();
+    }
     let mut out = String::new();
     collect_text_inner(doc, id, &mut out);
     out
@@ -3208,7 +3237,17 @@ fn collect_text_inner(doc: &Document, id: NodeId, out: &mut String) {
     }
 }
 
+// Mirrors `v8_runtime::set_text_content` — see there for why a leaf Text/Comment
+// receiver must be mutated in place instead of getting Element/Document
+// "replace all children" semantics.
 fn set_text_content(doc: &mut Document, id: NodeId, text: &str) {
+    match &mut doc.get_mut(id).data {
+        NodeData::Text(s) | NodeData::Comment(s) => {
+            *s = text.to_string();
+            return;
+        }
+        _ => {}
+    }
     let children: Vec<NodeId> = doc.get(id).children.clone();
     for child in children {
         doc.detach(child);
@@ -4415,6 +4454,54 @@ Element.prototype.constructor = Element;
 function CharacterData() { throw new TypeError('Illegal constructor'); }
 CharacterData.prototype = Object.create(Node.prototype);
 CharacterData.prototype.constructor = CharacterData;
+// DOM §4.10 CharacterData — length/substringData/appendData/insertData/
+// deleteData/replaceData. Defined once on the shared prototype so Text,
+// Comment and ProcessingInstruction all get them: every concrete `data`
+// accessor (native live-tree nodes in `_lumen_build_element`, the detached
+// `_lumen_make_character_data` nodes behind `new Comment()`/`new Text()`, and
+// the `_lumen_make_processing_instruction` object) is an instance-own
+// accessor, so `this.data`/`this.data = ...` below resolve to the right
+// backing store regardless of which of the three shapes `this` is — no
+// separate native offset/count plumbing needed, since JS strings are already
+// UTF-16-code-unit indexed like the DOM spec expects.
+function _lumen_character_data_check_offset(offset, length) {
+    // WebIDL `unsigned long` (no [EnforceRange]) coerces via ToUint32 — matches
+    // `>>> 0` (negative/NaN/out-of-range values wrap, then get range-checked below).
+    offset = offset >>> 0;
+    if (offset > length) {
+        throw new DOMException(
+            'Index or size is negative or greater than the allowed amount',
+            'IndexSizeError');
+    }
+    return offset;
+}
+Object.defineProperty(CharacterData.prototype, 'length', {
+    get: function() { return this.data.length; },
+    enumerable: true, configurable: true,
+});
+CharacterData.prototype.substringData = function(offset, count) {
+    var data = this.data;
+    offset = _lumen_character_data_check_offset(offset, data.length);
+    count = count >>> 0;
+    if (offset + count > data.length) count = data.length - offset;
+    return data.substring(offset, offset + count);
+};
+CharacterData.prototype.appendData = function(data) {
+    this.data = this.data + String(data);
+};
+CharacterData.prototype.insertData = function(offset, data) {
+    this.replaceData(offset, 0, data);
+};
+CharacterData.prototype.deleteData = function(offset, count) {
+    this.replaceData(offset, count, '');
+};
+CharacterData.prototype.replaceData = function(offset, count, data) {
+    var oldData = this.data;
+    offset = _lumen_character_data_check_offset(offset, oldData.length);
+    count = count >>> 0;
+    if (offset + count > oldData.length) count = oldData.length - offset;
+    this.data = oldData.substring(0, offset) + String(data) + oldData.substring(offset + count);
+};
 function Attr() { throw new TypeError('Illegal constructor'); }
 Attr.prototype = Object.create(Node.prototype);
 Attr.prototype.constructor = Attr;
@@ -4682,7 +4769,7 @@ function _lumen_build_detached_document(proto, contentType) {
         return _lumen_make_element(nid);
     };
     doc.createTextNode = function(t) { return _lumen_make_element(_lumen_create_text_node(String(t))); };
-    doc.createComment = function(t) { return _lumen_make_element(_lumen_create_text_node(t === undefined ? '' : String(t))); };
+    doc.createComment = function(t) { return _lumen_make_element(_lumen_create_comment(t === undefined ? '' : String(t))); };
     doc.createDocumentFragment = function() { return _lumen_make_document_fragment(_lumen_create_fragment()); };
     doc.appendChild = function(node) {
         if (node) {
@@ -5423,7 +5510,7 @@ function _lumen_build_element(nid) {
         __nid__: nid,
         get tagName()        { return _lumen_get_tag_name(nid); },
         get nodeName()       { return _lumen_get_tag_name(nid); },
-        get nodeType()       { return _lumen_is_text_node(nid) ? 3 : 1; },
+        get nodeType()       { return _lumen_is_text_node(nid) ? 3 : (_lumen_is_comment_node(nid) ? 8 : 1); },
         // DOM LS §4.9.1: XHTML namespace for HTML elements, `null` for non-element nodes
         // (text/comment). react-dom's root-listening bootstrap (BUG-281) reads this.
         get namespaceURI()   { return _lumen_u2n(_lumen_get_namespace_uri(nid)); },
@@ -5630,7 +5717,7 @@ function _lumen_build_element(nid) {
             // BUG-325: DOM §4.2.3 pre-insert validity — Text/Comment (both
             // wrapped here via `_lumen_make_element`, sharing this literal)
             // are CharacterData and can never have children.
-            if (_lumen_is_text_node(nid)) {
+            if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid)) {
                 throw _lumen_character_data_insertion_error();
             }
             if (!c || c.__nid__ === undefined) return c;
@@ -6465,12 +6552,17 @@ function _lumen_build_element(nid) {
         enumerable: false,
         configurable: true,
     });
-    // DOM §4.5 CharacterData.data / Node.nodeValue for live text nodes. Only
-    // exposed on text nodes (element wrappers keep `data` free for expandos and
-    // `nodeValue` absent, matching the pre-existing shape). Writing routes through
-    // `_lumen_set_text_content`, whose MutationObserver wrap emits a `characterData`
-    // record for text nodes (BUG-318, WPT MutationObserver-takeRecords.html).
-    if (_lumen_is_text_node(nid)) {
+    // DOM §4.10 CharacterData.data / Node.nodeValue for live text AND comment
+    // nodes. Only exposed on CharacterData nodes (element wrappers keep `data`
+    // free for expandos and `nodeValue` absent, matching the pre-existing
+    // shape). Writing routes through `_lumen_set_text_content`, whose
+    // MutationObserver wrap emits a `characterData` record (BUG-318, WPT
+    // MutationObserver-takeRecords.html). `CharacterData.prototype.length`/
+    // `substringData`/`appendData`/`insertData`/`deleteData`/`replaceData` are
+    // all built on top of this `data` accessor (see `CharacterData.prototype`
+    // definition above), so both Text and Comment get the full interface here.
+    var _is_character_data_nid = _lumen_is_text_node(nid) || _lumen_is_comment_node(nid);
+    if (_is_character_data_nid) {
         Object.defineProperty(_obj, 'data', {
             get: function() { return _lumen_get_text_content(nid); },
             set: function(v) { _lumen_set_text_content(nid, String(v)); },
@@ -6483,13 +6575,17 @@ function _lumen_build_element(nid) {
         });
     }
     // BUG-322: give the wrapper a real [[Prototype]] chain — Text.prototype for
-    // text nodes, the tag-appropriate HTML*Element/Element.prototype chain for
-    // elements — so `instanceof Element`/`Node`/`HTMLDivElement`/`Text`/
-    // `CharacterData` resolve for ordinary, native-backed nodes (previously always
-    // `false`: every wrapper was a plain object with no [[Prototype]] set). Every
-    // accessor/method defined on `_obj` above is an OWN property, so it still
-    // shadows anything of the same name on the inherited chain.
-    Object.setPrototypeOf(_obj, _lumen_is_text_node(nid) ? Text.prototype : _lumen_element_prototype_for(nid));
+    // text nodes, Comment.prototype for comment nodes, the tag-appropriate
+    // HTML*Element/Element.prototype chain for elements — so `instanceof
+    // Element`/`Node`/`HTMLDivElement`/`Text`/`Comment`/`CharacterData` resolve
+    // for ordinary, native-backed nodes (previously always `false`: every
+    // wrapper was a plain object with no [[Prototype]] set, and native Comment
+    // nodes were additionally mistaken for Text nodes — see `nodeType`/
+    // `createComment` fixes above). Every accessor/method defined on `_obj`
+    // above is an OWN property, so it still shadows anything of the same name
+    // on the inherited chain.
+    Object.setPrototypeOf(_obj, _lumen_is_text_node(nid) ? Text.prototype :
+        (_lumen_is_comment_node(nid) ? Comment.prototype : _lumen_element_prototype_for(nid)));
     return _obj;
 }
 
@@ -6966,7 +7062,12 @@ var document = {
         return _lumen_make_element(nid);
     },
     createTextNode:         function(t)   { return _lumen_make_element(_lumen_create_text_node(String(t))); },
-    createComment:          function()    { return _lumen_make_element(_lumen_create_text_node('')); },
+    // DOM LS §4.5: createComment(data) — previously ignored `data` entirely and
+    // always built an empty *Text* node (both the missing argument and the
+    // wrong node kind are fixed here; see `_lumen_create_comment`/BUG-322-family
+    // nodeType/nodeName/prototype fixes below for why a real Comment node now
+    // reports nodeType 8, nodeName '#comment' and `Comment.prototype`).
+    createComment:          function(t)   { return _lumen_make_element(_lumen_create_comment(t === undefined ? '' : String(t))); },
     // DOM LS §4.5: createDocumentFragment() returns an empty DocumentFragment.
     createDocumentFragment: function()    { return _lumen_make_document_fragment(_lumen_create_fragment()); },
     // DOM LS §4.5: createProcessingInstruction(target, data). Throws
@@ -9697,7 +9798,7 @@ _lumen_remove_child = function(parent, child) {
 var _orig_set_text_content = _lumen_set_text_content;
 _lumen_set_text_content = function(nid, text) {
     if (_mo_observers.length === 0) { _orig_set_text_content(nid, text); return; }
-    if (_lumen_is_text_node(nid)) {
+    if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid)) {
         var old = _lumen_get_text_content(nid);
         _orig_set_text_content(nid, text);
         _mo_notify(nid, 'characterData', null, old, null, null);
@@ -9974,8 +10075,8 @@ var NodeFilter = {
 // whatToShow bitmask and an optional filter callback or NodeFilter object.
 function _nf_accepts(nid, whatToShow, filter) {
     // whatToShow bitmask check
-    var nt = _lumen_is_text_node(nid) ? 3 : 1; // 1=element, 3=text
-    var bit = (nt === 3) ? NodeFilter.SHOW_TEXT : NodeFilter.SHOW_ELEMENT;
+    var nt = _lumen_is_text_node(nid) ? 3 : (_lumen_is_comment_node(nid) ? 8 : 1); // 1=element, 3=text, 8=comment
+    var bit = (nt === 3) ? NodeFilter.SHOW_TEXT : (nt === 8 ? NodeFilter.SHOW_COMMENT : NodeFilter.SHOW_ELEMENT);
     if (!(whatToShow & bit)) return NodeFilter.FILTER_SKIP;
     if (!filter) return NodeFilter.FILTER_ACCEPT;
     var el = _lumen_make_element(nid);
@@ -29014,6 +29115,72 @@ mod tests {
                      catch (e) { return e.name === 'HierarchyRequestError' && e.code === 3; } \
                  }); \
              })"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // `document.createComment(data)` previously ignored `data` and built an
+    // empty *Text* node (not Comment) — nodeType 3, nodeName '#text', wrong
+    // [[Prototype]]. A live/arena-backed Comment must now report its real
+    // identity, matching WPT `dom/nodes/CharacterData-data.html` /
+    // `-surrogates.html`, which both operate on `document.createComment(...)`.
+    #[test]
+    fn create_comment_is_a_real_comment_node() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var c = document.createComment('hello'); \
+             c.nodeType === 8 && c.nodeName === '#comment' && c.data === 'hello' && \
+             c instanceof Comment && c instanceof CharacterData && c instanceof Node && \
+             !(c instanceof Text)"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // Regression test: `set_text_content` used to apply Element/Document
+    // "replace all children" semantics even to a leaf Text/Comment receiver —
+    // detaching its (empty) children and appending a brand-new CHILD text
+    // node under it, never touching the node's own string. A second write
+    // then read back a stale/concatenated value instead of the last-written
+    // one. `CharacterData.prototype.appendData`/`insertData`/`deleteData`/
+    // `replaceData` all route through the same `.data` setter, so this also
+    // covers WPT `dom/nodes/CharacterData-{data,appendData,insertData,
+    // deleteData,replaceData,substringData}.html`.
+    #[test]
+    fn live_text_and_comment_data_mutates_in_place() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var t = document.createTextNode('abc'); \
+             t.data = 'x'; t.data = 'y'; \
+             var c = document.createComment('abc'); \
+             c.data = 'x'; c.data = 'y'; \
+             t.data === 'y' && t.length === 1 && c.data === 'y' && c.length === 1"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // DOM §4.10 CharacterData interface methods, exercised on a live text
+    // node (arena-backed, not the detached `new Text()` form) — mirrors the
+    // worked examples in WPT `CharacterData-substringData.html` /
+    // `-insertData.html` / `-deleteData.html` / `-replaceData.html` /
+    // `-appendData.html`.
+    #[test]
+    fn character_data_methods_spec_examples() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var t = document.createTextNode('abcdef'); \
+             var results = []; \
+             results.push(t.substringData(2, 3) === 'cde'); \
+             results.push(t.substringData(2, 100) === 'cdef'); \
+             t.appendData('gh'); results.push(t.data === 'abcdefgh'); \
+             t.data = 'abcdef'; \
+             t.insertData(3, 'XYZ'); results.push(t.data === 'abcXYZdef'); \
+             t.data = 'abcdef'; \
+             t.deleteData(1, 2); results.push(t.data === 'adef'); \
+             t.data = 'abcdef'; \
+             t.replaceData(1, 2, 'XYZ'); results.push(t.data === 'aXYZdef'); \
+             try { t.substringData(1000, 1); results.push(false); } \
+             catch (e) { results.push(e.name === 'IndexSizeError'); } \
+             results.every(function(v) { return v === true; })"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }

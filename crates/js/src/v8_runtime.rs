@@ -1179,6 +1179,15 @@ impl V8JsRuntime {
                 matches!(doc.get(nid).data, NodeData::Text(_))
             }
         );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_is_comment_node",
+            move |node_id: u32| -> bool {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                matches!(doc.get(nid).data, NodeData::Comment(_))
+            }
+        );
         // BUG-321: DocumentType support (mirrors the rquickjs registration in
         // dom.rs). See there for the rationale.
         let d = Arc::clone(&doc);
@@ -1395,6 +1404,15 @@ impl V8JsRuntime {
             move |text: String| -> u32 {
                 let mut doc = d.lock().unwrap();
                 let nid = doc.create_text(text);
+                nid.index() as u32
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_create_comment",
+            move |text: String| -> u32 {
+                let mut doc = d.lock().unwrap();
+                let nid = doc.create_comment(text);
                 nid.index() as u32
             }
         );
@@ -3988,7 +4006,18 @@ fn find_first_matching(
 }
 
 /// Mirrors `dom::collect_text_content`.
+///
+/// DOM §4.10 `CharacterData.data`/`Node.textContent` on a Comment node return
+/// that node's own string verbatim, not a recursive descendant-Text
+/// concatenation (a leaf Comment has no children anyway, but its own text
+/// lives in `NodeData::Comment`, which `collect_text_inner` deliberately does
+/// not match — `Node.textContent` on an *ancestor* element must skip comment
+/// descendants entirely per spec, so that exclusion has to stay narrow to the
+/// recursive case only).
 fn collect_text_content(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> String {
+    if let lumen_dom::NodeData::Comment(s) = &doc.get(id).data {
+        return s.clone();
+    }
     let mut out = String::new();
     collect_text_inner(doc, id, &mut out);
     out
@@ -4006,7 +4035,26 @@ fn collect_text_inner(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mu
 }
 
 /// Mirrors `dom::set_text_content`.
+///
+/// DOM §4.10 CharacterData nodes (Text/Comment) have no children, so setting
+/// `.data`/`.textContent` must overwrite their own string in place. The
+/// previous implementation always applied Element/Document "replace all
+/// children with one Text node" semantics even when `id` itself was a leaf
+/// Text/Comment node: it detached the (empty) children, then appended a
+/// *new child* text node under `id` — leaving `id`'s own string untouched and
+/// corrupting subsequent reads (`get_text_content` would return the stale
+/// original string concatenated with the new child's). CharacterData.appendData
+/// et al (WEB_API_SHIM `CharacterData.prototype`) all bottom out in this
+/// setter via the `data` accessor, so this bug silently broke every write to
+/// a native Text/Comment node's data.
 fn set_text_content(doc: &mut lumen_dom::Document, id: lumen_dom::NodeId, text: &str) {
+    match &mut doc.get_mut(id).data {
+        lumen_dom::NodeData::Text(s) | lumen_dom::NodeData::Comment(s) => {
+            *s = text.to_string();
+            return;
+        }
+        _ => {}
+    }
     let children: Vec<lumen_dom::NodeId> = doc.get(id).children.clone();
     for child in children {
         doc.detach(child);
