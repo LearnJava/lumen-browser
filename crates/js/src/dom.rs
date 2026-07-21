@@ -4448,6 +4448,14 @@ function _lumen_make_processing_instruction(target, data) {
 
 // Abstract bases — not constructible from script (DOM §4.4/§4.9, HTML §3.2.2).
 function Node() { throw new TypeError('Illegal constructor'); }
+// DOM §4.4 Node.hasChildNodes() — shared by every node kind (element, live
+// text/comment, Document, DocumentFragment, DocumentType) via the Node.prototype
+// chain wired below and by BUG-322, so it only needs `this.childNodes` to exist
+// on the receiver. BUG-327: was missing entirely (`c.hasChildNodes is not a
+// function`), alongside `.childNodes` itself being absent on the ordinary live
+// element/text/comment wrapper — see the `childNodes` getter added to `_obj` in
+// `_lumen_build_element` below.
+Node.prototype.hasChildNodes = function() { return this.childNodes.length > 0; };
 function Element() { throw new TypeError('Illegal constructor'); }
 Element.prototype = Object.create(Node.prototype);
 Element.prototype.constructor = Element;
@@ -4666,6 +4674,9 @@ function _lumen_make_doctype(nid) {
     Object.defineProperty(obj, 'systemId',      { get: function() { return _field('system'); }, enumerable: true });
     Object.defineProperty(obj, 'ownerDocument', { get: function() { return document; },       enumerable: true });
     Object.defineProperty(obj, 'parentNode',    { get: function() { return document; },       enumerable: true });
+    // DOM §4.4: DocumentType never has children — BUG-327's Node.prototype.hasChildNodes()
+    // needs `.childNodes` to exist on every node kind, not just element/text/comment.
+    Object.defineProperty(obj, 'childNodes',    { get: function() { return []; },             enumerable: true });
     _lumen_element_wrappers[nid] = obj;
     return obj;
 }
@@ -6387,6 +6398,15 @@ function _lumen_build_element(nid) {
         get: function() { return _lumen_make_html_collection(nid); },
         enumerable: false, configurable: true,
     });
+    // BUG-327: `.childNodes` was entirely absent on the ordinary live
+    // element/text/comment wrapper (only `document`/`DocumentFragment`/detached
+    // `CharacterData` had it) — `Node-childNodes.html`, `Node.hasChildNodes()`
+    // (added above) and everything that walks a live subtree via `.childNodes`
+    // threw or silently reported an empty tree.
+    Object.defineProperty(_obj, 'childNodes', {
+        get: function() { return _lumen_get_children(nid).map(_lumen_make_element); },
+        enumerable: false, configurable: true,
+    });
     Object.defineProperty(_obj, 'firstChild', {
         get: function() {
             var ch = _lumen_get_children(nid);
@@ -6979,6 +6999,10 @@ var document = {
     get childNodes() {
         return _lumen_get_children(_lumen_root_nid).map(_lumen_make_node);
     },
+    // BUG-327: DOM §4.4 Node.hasChildNodes() — the `document` singleton isn't
+    // wired to `Document.prototype` (so it doesn't inherit the one just added
+    // there), hence an own copy here.
+    hasChildNodes: function() { return this.childNodes.length > 0; },
     // DOM §4.5: the document's DocumentType child (`<!doctype …>`), or null.
     get doctype() {
         var dnid = _lumen_u2n(_lumen_get_document_doctype());

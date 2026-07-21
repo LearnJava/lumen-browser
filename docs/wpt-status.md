@@ -404,7 +404,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `/dom/nodes/Document-createElementNS.html` | OK | 0/596 |  | [BUG-324](../bugs/BUG-324-FIXED.md) |  |
 | `/dom/nodes/Document-createEvent.https.html` | ERROR | 0/0 |  |  |  |
 | `/dom/nodes/Document-createProcessingInstruction.html` | OK | 12/12 |  |  |  |
-| `/dom/nodes/Document-createTextNode.html` | OK | 0/6 |  |  |  |
+| `/dom/nodes/Document-createTextNode.html` | OK | 0/6 |  | [BUG-327](../bugs/BUG-327-FIXED.md) | Фикс влит 2026-07-21 (реально 6/6), сабтесты/статус обновит следующий `run_report.py --all` |
 | `/dom/nodes/Document-createTreeWalker.html` | OK | 4/5 |  |  |  |
 | `/dom/nodes/Document-doctype.html` | OK | 2/2 |  |  |  |
 | `/dom/nodes/Document-getElementById.html` | OK | 13/18 |  |  |  |
