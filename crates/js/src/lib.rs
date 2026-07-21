@@ -61,7 +61,6 @@ pub mod webgl_canvas;
 pub mod webrtc_stub;
 pub mod webhid;
 pub mod webusb;
-pub mod webtransport;
 pub mod worker;
 pub mod url_pattern;
 pub mod navigation_api;
