@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-20",
+ "generated": "2026-07-21",
  "counts": {
   "open": 32,
-  "fixed": 260,
+  "fixed": 265,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 292,
+ "total_bugs": 297,
  "phases": [
   {
    "id": "P0",
@@ -828,6 +828,13 @@
          "status": "done",
          "size": "S",
          "note": "Влит в main (branch p1-v8-s12b-18-permissions-policy): rquickjs-путь Permissions Policy (`permissions_policy.rs`, `install_permissions_policy_bindings`) удалён, 6 own-file тестов портированы на V8JsRuntime. `webxr.rs` дисквалифицирован (ловушка `event_target_dependent_apis_installed`, как serial.rs)"
+        },
+        {
+         "id": "P3-v8-s12b-19",
+         "title": "S12b-19: CSS Highlight API",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-19-highlight-api): rquickjs-путь CSS Highlight API (`highlight_api.rs`, `install_highlight_api_bindings`) удалён; 9 own-file тестов — чистый Rust на HighlightRegistry/Highlight без rquickjs::Ctx — портировать было нечего"
         }
        ]
       }
@@ -3640,6 +3647,41 @@
    "date": "2026-07-20",
    "debtor": false
   },
+  "BUG-322": {
+   "status": "fixed",
+   "title": "`instanceof Element`/`Node`/`HTML*Element` — `false` для ЛЮБОЙ нативной элемент-обёртки (`document.body instanceof Element` и т.п.), не только через `HTMLCollec…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": "2026-07-21",
+   "debtor": false
+  },
+  "BUG-323": {
+   "status": "fixed",
+   "title": "Живой `HTMLCollection` (`_lumen_make_html_collection`) не поддерживал `for-in`/`Object.getOwnPropertyNames`/`hasOwnProperty` enumeration — `Proxy` без `ownKeys`…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": "2026-07-21",
+   "debtor": false
+  },
+  "BUG-324": {
+   "status": "fixed",
+   "title": "`document.implementation` (DOMImplementation) отсутствовал в шиме — `createDocument`/`createDocumentType`/`createHTMLDocument`/`hasFeature` бросались `Cannot re…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": "2026-07-21",
+   "debtor": false
+  },
+  "BUG-325": {
+   "status": "fixed",
+   "title": "`CharacterData.appendChild()` не бросала `HierarchyRequestError` для Text/Comment (общий `appendChild` в `_lumen_make_element` не проверял тип получателя); `Pro…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": "2026-07-20",
+   "debtor": false
+  },
+  "BUG-326": {
+   "status": "fixed",
+   "title": "Три независимых дефекта на одну WPT-таблицу: (1) `CharacterData.prototype` не имел ни одного из шести спек-методов (DOM §4.10) — `length`/`substringData`/`appen…",
+   "component": "js (WEB_API_SHIM, dom.rs) + native `v8_runtime.rs`/`dom.rs` (оба движка)",
+   "date": "2026-07-21",
+   "debtor": false
+  },
   "BUG-315": {
    "status": "fixed",
    "title": "Две независимые причины на один симптом (`run_smoke.py` TIMEOUT): (1) `TestEnvironment.get_routes` в вендоренном `environment.py` всегда подменяет `/resources/t…",
@@ -3768,7 +3810,14 @@
    "BUG-314",
    "BUG-317",
    "BUG-318",
-   "BUG-321"
+   "BUG-321",
+   "BUG-322",
+   "BUG-323",
+   "BUG-324",
+   "BUG-325"
+  ],
+  "js (WEB_API_SHIM, dom.rs) + native `v8_runtime.rs`/`dom.rs` (оба движка)": [
+   "BUG-326"
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"

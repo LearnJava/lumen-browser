@@ -1073,6 +1073,23 @@ permissions_policy` — 6/6 green; `cargo check -p lumen-js` (default) + `--feat
 green; `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both default and `v8-backend`
 features. Next candidate S12b-19 = `highlight_api.rs` (215).
 
+### S12b-19 — `highlight_api.rs` (2026-07-21, branch p1-v8-s12b-19-highlight-api)
+
+Nineteenth slice, next by size after `permissions_policy.rs`. Clean by the file-stem method
+(all `highlight`/`Highlight` hits in `dom.rs` are the unrelated `.highlight` CSS class used by
+selector tests, not the CSS Highlight API — no cluster trap). The file's `#[cfg(test)]` block
+tests `HighlightRegistry`/`Highlight` (plain Rust structs backing the JS shim) directly, with no
+`rquickjs::Ctx` dependency at all, so — unlike every prior slice — there was nothing to port.
+Deleted the rquickjs `install_highlight_api_bindings` fn (no `use rquickjs::Ctx` to remove, it
+took `&rquickjs::Ctx` inline); gated `HIGHLIGHT_API_SHIM` behind `#[cfg(feature = "v8-backend")]`
+(only referenced from `install_highlight_api_bindings_v8` now); dropped the call site (comment +
+block) in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-js --features v8-backend
+highlight_api` — 9/9 green; `cargo check -p lumen-js` (default) + `--features v8-backend` — green;
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` clean. Next
+candidate by size: re-audit the `webxr.rs`-cluster deferral from S12b-18 (`navigator.hid`/`usb`/
+`bluetooth`/`serial`/`xr` + `window.navigation`, pinned together by `dom.rs`'s
+`event_target_dependent_apis_installed`) or pick the next non-trap single file.
+
 ---
 
 ## Risks (Rev 2)
