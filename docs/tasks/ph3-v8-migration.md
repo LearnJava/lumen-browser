@@ -1090,6 +1090,34 @@ candidate by size: re-audit the `webxr.rs`-cluster deferral from S12b-18 (`navig
 `bluetooth`/`serial`/`xr` + `window.navigation`, pinned together by `dom.rs`'s
 `event_target_dependent_apis_installed`) or pick the next non-trap single file.
 
+### S12b-20 — `pointer_capture.rs` (2026-07-21, branch p1-v8-s12b-20-pointer-capture)
+
+Twentieth slice. Deferred the `webxr.rs` cluster re-audit again; `pointer_capture.rs` (102 lines)
+is the next non-trap single file — clean by the file-stem method (zero `pointer`/`Pointer` hits
+in `dom.rs`'s `event_target_dependent_apis_installed`; `setPointerCapture`/`releasePointerCapture`/
+`hasPointerCapture` are plain `Element.prototype` methods in the shim, not `EventTarget`-derived
+globals, so no cluster trap). Ported `install_pointer_capture_bindings` (three natives —
+`_lumen_set_capture_state`/`_lumen_release_capture_state`/`_lumen_get_capture_nid`) to
+`install_pointer_capture_bindings_v8`, registered via `V8JsRuntime::register_native` instead of
+`rquickjs::Function::new`. Unlike the plain `install_v8!` macro slices, this one needs an
+extra-arg call site (mirrors `geolocation`/`shared_worker`): `V8JsRuntime` gained its own
+`pointer_capture_nid: Arc<Mutex<Option<u32>>>` field plus `pointer_capture_nid()`/
+`take_pointer_capture()` accessors, mirroring `QuickJsRuntime`'s fields of the same name so the
+shell's `PersistentJs` trait (`V8PersistentJs` in `crates/shell/src/main.rs`) observes the same
+state the natives mutate — the pointer-event dispatch routing in `main.rs` was already
+engine-agnostic via the trait, so only the V8-side wiring was missing. Deleted the rquickjs
+`install_pointer_capture_bindings` fn + its call site in `lib.rs`'s `QuickJsRuntime::install_dom`
+(the `QuickJsRuntime::pointer_capture_nid` field/accessors stay — still the live rquickjs-path
+state). 4/4 own-file tests ported 1:1 to `V8JsRuntime`. `cargo test -p lumen-js --features
+v8-backend pointer_capture` — 7/7 green (4 own-file + 3 pre-existing `dom::tests` pointer-capture
+cases); `cargo check -p lumen-js` (default) + `--features v8-backend` — green; `cargo check -p
+lumen-shell --no-default-features --features backend-femtovg,v8` — green; `cargo clippy
+--workspace --all-targets -- -D warnings` clean; `scripts/scoped-test.sh` — all green (0 failed
+across `lumen-ai`/`lumen-bench`/`lumen-bidi-server`/`lumen-driver`/`lumen-js`/`lumen-knowledge`/
+`lumen-mcp`/`lumen-network`/`lumen-paint`/`lumen-shell`/`lumen-storage`). Next candidate by size:
+`battery_bindings.rs` (95) — clean by the file-stem method (zero `battery`/`Battery` hits in
+`dom.rs`), or re-audit the still-deferred `webxr.rs` cluster.
+
 ---
 
 ## Risks (Rev 2)
