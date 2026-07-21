@@ -824,6 +824,13 @@
          "status": "done",
          "size": "S",
          "note": "Влит в main (branch p1-v8-s12b-20-pointer-capture): rquickjs-путь Pointer Capture API (`pointer_capture.rs`, `install_pointer_capture_bindings`) удалён; V8JsRuntime получил pointer_capture_nid + accessors, зеркалящие QuickJsRuntime; 4 own-file теста портированы на V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-21",
+         "title": "S12b-21: WebTransport (dead code removal)",
+         "status": "done",
+         "size": "S",
+         "note": "Влит в main (branch p1-v8-s12b-21-webtransport): rquickjs-путь WebTransport (`webtransport.rs`, `install_webtransport_bindings`) удалён целиком — файл оказался мёртвым кодом (0 вызовов ни в `QuickJsRuntime::install_dom`, ни где-либо ещё), не портирован в V8 (нечего портировать — функциональности не было ни на одном движке); `pub mod webtransport;` убран из lib.rs, `webtransport_stub_exists`-тест удалён вместе с файлом; см. P3-webtransport"
         }
        ]
       }
@@ -1144,7 +1151,7 @@
      "id": "P3-webtransport",
      "title": "WebTransport (поверх HTTP/3)",
      "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): стаб webtransport.rs всегда reject (нет QUIC); дошить — зависит от QUIC/H3 (P3-h3)"
+     "note": "Не реализовано: прежний стаб webtransport.rs (2026-05, всегда reject) удалён 2026-07-21 (S12b-21) — он был полностью недостижим, не вызывался ни из QuickJsRuntime::install_dom, ни из V8JsRuntime::install_dom, ни откуда-либо ещё (мёртвый rquickjs-only код). Реализация зависит от QUIC/H3 (P3-h3)"
     },
     {
      "id": "P3-reporting",
