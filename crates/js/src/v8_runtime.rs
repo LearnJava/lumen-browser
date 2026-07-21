@@ -4749,6 +4749,35 @@ mod tests {
         assert_eq!(ok, JsValue::Bool(true));
     }
 
+    // BUG-327: `Node.prototype.hasChildNodes()` was missing entirely, and the
+    // ordinary live element/text/comment wrapper (`_lumen_build_element`) had no
+    // `.childNodes` at all (only `document`/`DocumentFragment`/detached
+    // `CharacterData` did) — any WPT test walking a live subtree via
+    // `.childNodes` or calling `.hasChildNodes()` threw or saw an empty tree.
+    // Mirrors WPT `dom/nodes/Document-createTextNode.html` /
+    // `Document-createComment-createTextNode.js` (`c.hasChildNodes is not a
+    // function`) and `dom/nodes/Node-childNodes.html`.
+    #[test]
+    fn node_child_nodes_and_has_child_nodes() {
+        let rt = runtime_with_dom(make_doc(), "");
+        let r = rt
+            .eval(
+                "var div = document.createElement('div'); \
+                 var a = document.createElement('span'), b = document.createElement('span'); \
+                 div.appendChild(a); div.appendChild(b); \
+                 var t = document.createTextNode('x'); \
+                 var c = document.createComment('y'); \
+                 div.hasChildNodes() === true && div.childNodes.length === 2 && \
+                 div.childNodes[0] === a && div.childNodes[1] === b && \
+                 a.hasChildNodes() === false && a.childNodes.length === 0 && \
+                 t.hasChildNodes() === false && t.childNodes.length === 0 && \
+                 c.hasChildNodes() === false && c.childNodes.length === 0 && \
+                 document.hasChildNodes() === true",
+            )
+            .unwrap();
+        assert_eq!(r, JsValue::Bool(true));
+    }
+
     #[test]
     fn query_selector_by_class_reads_text_content() {
         let rt = runtime_with_dom(make_doc(), "");
