@@ -484,7 +484,10 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
         text: display_text.to_string(),
         font_size: FONT,
         color: text_color,
-        font_family: Vec::new(),
+        // DS-4: omnibox URL text is monospace (bundled JetBrains Mono); the
+        // rest of the address bar (dropdown labels/tags below) stays the
+        // default chrome UI font (Golos Text, resolved from empty font_family).
+        font_family: vec!["JetBrains Mono".to_string()],
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
