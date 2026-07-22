@@ -610,7 +610,7 @@ fn tt_language(ly: f32) -> Option<&'static str> {
 /// Greedily wrap `text` into lines of at most `max_chars` characters, breaking
 /// only at word boundaries (a single word longer than `max_chars` still gets
 /// its own, overflowing line rather than being split mid-word).
-fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
+pub(crate) fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
     for word in text.split_whitespace() {
