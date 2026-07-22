@@ -1,11 +1,13 @@
 # BUG-329: `system_fonts::tests::finds_bundled_inter` красный — DS-4 добавила 2 семейства шрифтов, тест ожидает ровно 1
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-22
 **Дата:** 2026-07-22
 **Компонент:** font (`crates/engine/font/src/system_fonts.rs:308`)
 **Найден:** `scoped-test.sh` на ветке `p1-ds-5-idn-homoglyph` (P1, гейт перед мержем DS-5). Подтверждено:
 красный уже на `main` (0000b645) — регрессия не от DS-5, а от предыдущего мержа DS-4 (26fdb0c8, шрифты
 Golos Text + JetBrains Mono в `assets/fonts/`).
+**Исправлен:** `aad9f0e5` — assertion в `finds_bundled_inter` обновлена на `family_count() == 3`
+(Inter/Golos Text/JetBrains Mono), остальные Inter-специфичные проверки не тронуты.
 
 ## Симптом
 
