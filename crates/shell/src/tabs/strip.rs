@@ -950,7 +950,7 @@ pub fn build_tab_tooltip(
     const TT_W: f32 = 240.0;
     const TT_H: f32 = 28.0;
     const PAD: f32 = 8.0;
-    const RADIUS: f32 = 4.0;
+    const RADIUS: f32 = crate::theme_tokens::radius::MD;
     const FONT_SZ: f32 = 11.0;
 
     let x = (tab_center_x - TT_W / 2.0).max(4.0);

@@ -36,6 +36,35 @@
   `HistoryFts` result-tag colour, which used to reuse the same constant by
   coincidence, is now its own `HISTORY_TAG` constant so the tag legend's
   fixed colour-per-category scheme (unrelated to theming) is unaffected.
+- **Done (DS-3 chrome corner radii on `radius::{SM,MD,LG}` tokens, 2026-07-22):**
+  every literal chrome corner radius across ~20 panel/tab-strip modules
+  (`FillRoundedRect`/`DrawBorder` `radii` fields, `uniform_radii(r)`/`radii(r)`/
+  `corners(r)` call sites, and local `RADIUS`/`PANEL_RADIUS`/`BTN_RADIUS`/
+  `CARD_RADIUS`/`CHIP_RADIUS` constants) now reads `theme_tokens::radius::{SM,MD,LG}`
+  (2/4/6 px) instead of ad-hoc literals. Values outside the three-step scale
+  were re-quantised: `>6` (pill-shaped controls) clamp down to `LG` per the
+  design-system rule (no pills in chrome — cheaper fillrate, denser UI), and
+  in-between literals (3, 5, 7…) round to the nearest token. Nested "border +
+  1px-inset content" pairs (nine panels: `cert_panel`, `history_panel`,
+  `permission_panel`, `print_panel`(tooltip), `read_later_panel`,
+  `settings_panel`(panel + tooltip), `shields_panel`, `shortcuts_panel`) keep
+  their concentric-radius relationship via `radius::LG - 1.0` / `radius::MD -
+  1.0` rather than being flattened to a single token, since that inset is a
+  border-width derivation, not an independent design choice. Left untouched,
+  deliberately: true circles/dots (`radius = size / 2.0` — status dots, avatar
+  swatches, spinner/badge circles) since they are not a corner-radius-scale
+  choice; `surface/theme.rs`'s `Theme::radius_{sm,md,lg}` (ADR-009
+  `SurfaceManager` token set — ADR-009 migration is out of DS-track scope per
+  `docs/tasks/p1-design-v3.md`); and `newtab.rs`/`reader_view.rs`'s embedded
+  page-content CSS strings (New Tab tile grid, reader-mode article body — not
+  yet on the design-token system at all, deferred to DS-11/content-styling
+  work, not chrome paint radii). Verified: `cargo test -p lumen-shell` (1620
+  tests, unaffected `theme_tokens_radius_lg_matches_prototype` still pins
+  `radius::LG == 6.0`); `cargo clippy -p lumen-shell --all-targets -- -D
+  warnings` clean; headless `--screenshot` smoke-tested (no crash). Live
+  per-panel before/after screenshots were not captured for every one of the
+  ~20 touched overlays — the change is a value substitution onto an already
+  spec'd 2/4/6 scale, not new geometry.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*

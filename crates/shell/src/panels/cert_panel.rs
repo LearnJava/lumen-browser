@@ -13,6 +13,7 @@ use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand};
 
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 
 type DisplayList = Vec<DisplayCommand>;
 
@@ -244,19 +245,22 @@ pub fn build_panel(panel: &CertPanel, buf: &mut DisplayList, px: f32, py: f32, p
     // Panel background + border.
     buf.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
-        radii: CornerRadii { tl: 6.0, tl_y: 6.0, tr: 6.0, tr_y: 6.0, bl: 6.0, bl_y: 6.0, br: 6.0, br_y: 6.0 },
+        radii: CornerRadii { tl: radius::LG, tl_y: radius::LG, tr: radius::LG, tr_y: radius::LG, bl: radius::LG, bl_y: radius::LG, br: radius::LG, br_y: radius::LG },
         color: pal.overlay_border,
     });
+    // Inner content is inset 1px from the border, so its radius is the panel
+    // radius minus that inset to stay visually concentric with the outer edge.
+    let inner_radius = radius::LG - 1.0;
     buf.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
-        radii: CornerRadii { tl: 5.0, tl_y: 5.0, tr: 5.0, tr_y: 5.0, bl: 5.0, bl_y: 5.0, br: 5.0, br_y: 5.0 },
+        radii: CornerRadii { tl: inner_radius, tl_y: inner_radius, tr: inner_radius, tr_y: inner_radius, bl: inner_radius, bl_y: inner_radius, br: inner_radius, br_y: inner_radius },
         color: pal.overlay_bg,
     });
 
     // ── Header ────────────────────────────────────────────────────────────────
     buf.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, HEADER_H),
-        radii: CornerRadii { tl: 5.0, tl_y: 5.0, tr: 5.0, tr_y: 5.0, bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
+        radii: CornerRadii { tl: inner_radius, tl_y: inner_radius, tr: inner_radius, tr_y: inner_radius, bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
         color: pal.header_bg,
     });
     // Lock icon (unicode padlock) + title.

@@ -38,6 +38,7 @@
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
+use crate::theme_tokens::radius;
 
 use crate::panels::themes::Palette;
 
@@ -77,7 +78,7 @@ const DELETE_FG: Color = Color { r: 190, g: 90, b: 90, a: 255 };
 
 const FONT_SZ: f32 = 12.0;
 const FONT_SZ_SM: f32 = 10.5;
-const RADIUS: f32 = 6.0;
+const RADIUS: f32 = crate::theme_tokens::radius::LG;
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -343,7 +344,7 @@ pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32, pal: &Palette) -> Di
     let search_top = ay + HEADER_H + PAD;
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(ax + PAD, search_top, PANEL_WIDTH - 2.0 * PAD, SEARCH_H),
-        radii: uniform_radii(4.0),
+        radii: uniform_radii(radius::MD),
         color: pal.input_bg,
     });
     let (search_text, search_col) = if panel.search.is_empty() {

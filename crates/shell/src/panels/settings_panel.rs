@@ -31,6 +31,7 @@ use lumen_storage::adblock::Subscription;
 use lumen_storage::BrowserSettingsSnapshot;
 
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
@@ -656,12 +657,12 @@ pub fn build_tooltip(text: &str, mx: f32, my: f32, win_w: f32, win_h: f32, pal: 
     let mut list = vec![
         DisplayCommand::FillRoundedRect {
             rect: Rect::new(x, y, w, h),
-            radii: radii(4.0),
+            radii: radii(radius::MD),
             color: pal.overlay_border,
         },
         DisplayCommand::FillRoundedRect {
             rect: Rect::new(x + 1.0, y + 1.0, w - 2.0, h - 2.0),
-            radii: radii(3.0),
+            radii: radii(radius::MD - 1.0),
             color: Color { r: 30, g: 30, b: 34, a: 245 },
         },
     ];
@@ -684,20 +685,22 @@ pub fn build_panel(panel: &SettingsPanel, list: &mut DisplayList, px: f32, py: f
     // Outer border ring.
     list.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
-        radii: radii(7.0),
+        radii: radii(radius::LG),
         color: pal.overlay_border,
     });
-    // Inner background.
+    // Inner content is inset 1px from the border, so its radius is the panel
+    // radius minus that inset to stay visually concentric with the outer edge.
+    let inner_radius = radius::LG - 1.0;
     list.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
-        radii: radii(6.0),
+        radii: radii(inner_radius),
         color: pal.overlay_bg,
     });
 
     // ── Header ───────────────────────────────────────────────────────────────
     list.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, HEADER_H),
-        radii: CornerRadii { tl: 6.0, tl_y: 6.0, tr: 6.0, tr_y: 6.0,
+        radii: CornerRadii { tl: inner_radius, tl_y: inner_radius, tr: inner_radius, tr_y: inner_radius,
                              bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
         color: pal.header_bg,
     });
@@ -797,7 +800,7 @@ fn push_input(list: &mut DisplayList, x: f32, y: f32, value: &str, focused: bool
     let ih = ROW_H - PAD_V * 2.0;
     list.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(ix, iy, iw, ih),
-        radii: radii(3.0),
+        radii: radii(radius::MD),
         color: if focused { pal.item_selected_bg } else { pal.input_bg },
     });
     let display = if value.len() > 72 {
@@ -816,7 +819,7 @@ fn push_toggle(list: &mut DisplayList, x: f32, y: f32, on: bool, pal: &Palette) 
     let ty = y + PAD_V;
     list.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(tx, ty, tw, th),
-        radii: radii(3.0),
+        radii: radii(radius::MD),
         // ON stays semantic green; OFF uses item_bg surface token.
         color: if on { TOGGLE_ON } else { pal.item_bg },
     });
@@ -834,7 +837,7 @@ fn push_button(list: &mut DisplayList, x: f32, y: f32, w: f32, label: &str, pal:
     let bh = ROW_H - PAD_V * 2.0;
     list.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(bx, by, w, bh),
-        radii: radii(3.0),
+        radii: radii(radius::MD),
         color: pal.item_selected_bg,
     });
     list.push(txt(label.to_owned(), bx + 8.0, by + 4.0, w - 16.0, 12.0,
@@ -858,7 +861,7 @@ fn push_options(
         let is_on = val == current;
         list.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(ox + 2.0, oy, opt_w - 4.0, oh),
-            radii: radii(3.0),
+            radii: radii(radius::MD),
             color: if is_on { pal.item_selected_bg } else { pal.item_bg },
         });
         list.push(txt(lbl.to_owned(), ox + 4.0, oy + 3.0, opt_w - 8.0, 11.0,
@@ -943,7 +946,7 @@ fn render_appearance(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f
         // + button.
         list.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(right - btn_w, by2, btn_w, bh),
-            radii: radii(3.0), color: pal.item_bg,
+            radii: radii(radius::MD), color: pal.item_bg,
         });
         list.push(txt("+".to_owned(), right - btn_w + 8.0, by2 + 3.0, btn_w - 8.0, 13.0,
             FontWeight::BOLD, pal.text));
@@ -954,7 +957,7 @@ fn render_appearance(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f
         // − button.
         list.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(right - btn_w - val_w - btn_w, by2, btn_w, bh),
-            radii: radii(3.0), color: pal.item_bg,
+            radii: radii(radius::MD), color: pal.item_bg,
         });
         list.push(txt("−".to_owned(), right - btn_w - val_w - btn_w + 8.0, by2 + 3.0,
             btn_w - 8.0, 13.0, FontWeight::BOLD, pal.text));

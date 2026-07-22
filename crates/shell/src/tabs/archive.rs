@@ -16,6 +16,7 @@ use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::tabs::containers::ContainerKind;
+use crate::theme_tokens::radius;
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -338,7 +339,7 @@ pub fn build_panel(archive: &TabArchive, window_w: f32, tab_bar_h: f32) -> Displ
         widths: [1.0, 1.0, 1.0, 1.0],
         colors: [PANEL_BORDER; 4],
         styles: [BorderStyle::Solid; 4],
-        radii: CornerRadii { tl: 0.0, tl_y: 0.0, tr: 0.0, tr_y: 0.0, br: 3.0, br_y: 3.0, bl: 3.0, bl_y: 3.0 },
+        radii: CornerRadii { tl: 0.0, tl_y: 0.0, tr: 0.0, tr_y: 0.0, br: radius::MD, br_y: radius::MD, bl: radius::MD, bl_y: radius::MD },
     });
 
     // Header.

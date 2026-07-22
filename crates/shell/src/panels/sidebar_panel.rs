@@ -31,6 +31,7 @@ use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 
 // ── Visual constants ──────────────────────────────────────────────────────────
 
@@ -281,7 +282,7 @@ pub fn build_panel(
     let close_y = tab_bar_h + (HEADER_H - CLOSE_SIZE) / 2.0;
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(close_x, close_y, CLOSE_SIZE, CLOSE_SIZE),
-        radii: CornerRadii { tl: 3.0, tl_y: 3.0, tr: 3.0, tr_y: 3.0, br: 3.0, br_y: 3.0, bl: 3.0, bl_y: 3.0 },
+        radii: CornerRadii { tl: radius::MD, tl_y: radius::MD, tr: radius::MD, tr_y: radius::MD, br: radius::MD, br_y: radius::MD, bl: radius::MD, bl_y: radius::MD },
         color: pal.item_bg,
     });
     // Close button "×" glyph.
