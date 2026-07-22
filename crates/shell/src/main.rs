@@ -14694,13 +14694,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let tab_layout = tabs::strip::TabLayout::from_str(
                         &self.settings_store.tab_layout(),
                     );
-                    let mut layout_btn = tabs::strip::build_layout_toggle_btn(tab_layout, layout_btn_x);
+                    let mut layout_btn = tabs::strip::build_layout_toggle_btn(tab_layout, layout_btn_x, &pal);
                     overlay_buf.append(&mut layout_btn);
                     // Settings gear button: between tabs and layout toggle.
                     let settings_btn_x = layout_btn_x - tabs::strip::SETTINGS_BTN_W;
                     let mut settings_btn = tabs::strip::build_settings_btn(
                         settings_btn_x,
                         self.settings_panel.visible,
+                        &pal,
                     );
                     overlay_buf.append(&mut settings_btn);
                     // Archive toolbar button (rightmost 36 px of tab bar).

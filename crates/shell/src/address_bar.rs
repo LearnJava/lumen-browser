@@ -28,14 +28,18 @@ use crate::panels::themes::Palette;
 // ── Визуальные константы ──────────────────────────────────────────────────────
 //
 // Surface/text colours are theme-driven via [`Palette`] (passed into
-// `build_bar_overlay`). The constants below are theme-invariant: the focus
-// ring, caret, and result-tag accents read correctly on both light and dark.
+// `build_bar_overlay`). The focus ring and caret now follow `pal.accent`
+// (design-system prototype: `.omnibox:focus-within{ border-color:var(--accent) }`)
+// instead of a fixed blue, so both track the active profile's accent colour.
+// The result-tag legend below stays theme-invariant by design: it is a fixed
+// per-category colour code (history/notes/tabs/…), same rationale as the
+// lifecycle/container colours excluded from `Palette` in `tabs/strip.rs`.
 
-/// Accent focus ring drawn 1px around the bar.
-const BAR_BORDER: Color = Color { r: 60, g: 120, b: 220, a: 255 };
-/// Text caret colour.
-const CURSOR: Color = Color { r: 100, g: 160, b: 255, a: 220 };
-/// Green tag accent for omnibox result categories.
+/// Tag accent for FTS-history omnibox results — historically shared the same
+/// blue as the focus ring; kept as its own constant now that the ring reads
+/// `pal.accent` instead.
+const HISTORY_TAG: Color = Color { r: 60, g: 120, b: 220, a: 255 };
+/// Green tag accent for search-query omnibox results.
 const ITEM_TAG: Color = Color { r: 72, g: 150, b: 90, a: 255 };
 
 const BAR_W: f32 = 560.0;
@@ -274,7 +278,7 @@ impl OmniboxSuggestion {
 
     fn tag_color(&self) -> Color {
         match self {
-            OmniboxSuggestion::HistoryFts { .. } => BAR_BORDER,
+            OmniboxSuggestion::HistoryFts { .. } => HISTORY_TAG,
             OmniboxSuggestion::Note { .. } => Color { r: 180, g: 120, b: 60, a: 255 },
             OmniboxSuggestion::SearchQuery { .. } => ITEM_TAG,
             OmniboxSuggestion::ReadLater { .. } => Color { r: 120, g: 90, b: 180, a: 255 },
@@ -436,10 +440,11 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
 
     // ─ Основной бар ──────────────────────────────────────────────────────────
 
-    // Рамка (на 1px шире с каждой стороны) — синий accent.
+    // Рамка (на 1px шире с каждой стороны) — accent профиля/темы (design-system:
+    // `.omnibox:focus-within{ border-color:var(--accent) }`).
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(x - 1.0, y - 1.0, BAR_W + 2.0, BAR_H + 2.0),
-        color: BAR_BORDER,
+        color: pal.accent,
     });
     // Фон бара.
     out.push(DisplayCommand::FillRect {
@@ -499,7 +504,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
                 2.0,
                 FONT * 1.2,
             ),
-            color: CURSOR,
+            color: Color { a: 220, ..pal.accent },
         });
     }
 
@@ -757,7 +762,7 @@ mod tests {
             x
         };
         let dl = build_bar_overlay(&s, BarOverlay { window_size: (1024, 720) }, &Palette::DARK);
-        assert!(matches!(dl[0], DisplayCommand::FillRect { color, .. } if color.b == BAR_BORDER.b));
+        assert!(matches!(dl[0], DisplayCommand::FillRect { color, .. } if color == Palette::DARK.accent));
     }
 
     // ── Omnibox prefix ────────────────────────────────────────────────────────
