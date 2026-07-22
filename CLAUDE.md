@@ -65,7 +65,7 @@ Full role definitions, workflows, collaboration rules, task tracking schema — 
 
 | Developer | Domain | Crates |
 |---|---|---|
-| **P1** | Feature development: any subsystem from roadmap (source → layout → paint → shell) | All crates (coordinated with P2/P4) |
+| **P1** | **Since 2026-07-22**: leads the DS track — implementing design system v3.3 in the browser chrome (`docs/tasks/p1-design-v3.md`, ROADMAP.md DS-1…DS-19; visual reference `docs/design/lumen-v3_3.html`). General feature development otherwise (source → layout → paint → shell) | All crates (coordinated with P2/P4) |
 | **P2** | **Reactivated 2026-07-13**: leads P2-wpt (WPT via `wptrunner` + WebDriver BiDi, `docs/tasks/p2-wpt-integration.md`) and the DEVX track (dev-tooling on existing automation surfaces, `docs/automation.md`, ROADMAP.md DEVX-1…6, assigned 2026-07-16). Was reserve (since 2026-06-18). | `lumen-bidi-server`, `lumen-driver`/`lumen-mcp` (DEVX-5), Python tooling `tests/wpt/` + `graphic_tests/run.py` (DEVX-1/4) |
 | **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
