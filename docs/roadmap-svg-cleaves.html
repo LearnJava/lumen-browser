@@ -1633,9 +1633,9 @@
       {
        "id": "WPT-VENDOR-accelerometer",
        "title": "WPT: вендорить + прогнать категорию `accelerometer`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+       "note": "DONE 2026-07-22: вендорена (коммит 0f7f0157, tests/wpt/accelerometer/, 19 файлов), включена несмотря на скоуп 🚫 по прямому запросу пользователя. Внекатегорийные хелперы (/generic-sensor/, /page-visibility/, /permissions-policy/) намеренно не довендорены (та же методология, что FileAPI/IndexedDB). Прогон run_report.py --all --root accelerometer --recursive: 12 отобранных id (4 SKIP — testdriver.js не поддержан), 1/12 harness OK, 0/1 сабтестов passed (см. заметку в docs/wpt-status.md). Не заводился отдельный BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-accessibility",
