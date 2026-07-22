@@ -1644,9 +1644,9 @@
       {
        "id": "WPT-VENDOR-WebCryptoAPI",
        "title": "WPT: вендорить + прогнать категорию `WebCryptoAPI`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-22: вендорена (коммит 629dbeb5, tests/wpt/WebCryptoAPI/, 185 файлов) и прогнана через tests/wpt/run_report.py --all --root WebCryptoAPI --recursive. Категория на 122/125 файлов `.https.`-only — минимальный исполнитель не поднимает HTTPS-порт (тот же класс ограничения, что FileAPI/BlobURL), поэтому все `.https.` id падают одинаково; полный прогон дважды завис, не дойдя до конца (не сбой браузера). 2 не-`.https.` файла прогнаны изолированно: 2/2 harness OK, 28/42 сабтестов passed (см. заметку в docs/wpt-status.md). Не заводились отдельные BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет, root-cause-группировка в BUG-NNN и назначение Владельца остаются будущим шагом"
       },
       {
        "id": "WPT-VENDOR-accelerometer",
