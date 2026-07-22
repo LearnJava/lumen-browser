@@ -27,6 +27,7 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
@@ -297,12 +298,15 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32, pal: &Palet
     // ── Outer border + background ────────────────────────────────────────────
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
-        radii: uniform_radii(7.0),
+        radii: uniform_radii(radius::LG),
         color: pal.overlay_border,
     });
+    // Inner content is inset 1px from the border, so its radius is the panel
+    // radius minus that inset to stay visually concentric with the outer edge.
+    let inner_radius = radius::LG - 1.0;
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
-        radii: uniform_radii(6.0),
+        radii: uniform_radii(inner_radius),
         color: pal.overlay_bg,
     });
 
@@ -310,10 +314,10 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32, pal: &Palet
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, HEADER_H),
         radii: CornerRadii {
-            tl: 6.0,
-            tl_y: 6.0,
-            tr: 6.0,
-            tr_y: 6.0,
+            tl: inner_radius,
+            tl_y: inner_radius,
+            tr: inner_radius,
+            tr_y: inner_radius,
             bl: 0.0,
             bl_y: 0.0,
             br: 0.0,
@@ -358,7 +362,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32, pal: &Palet
     let stxt = if panel.search_active { pal.text } else { pal.text_dim };
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(sx, sy, sw, sh),
-        radii: uniform_radii(4.0),
+        radii: uniform_radii(radius::MD),
         color: pal.input_bg,
     });
     let search_display = if panel.query.is_empty() {
@@ -505,7 +509,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32, pal: &Palet
     let btn_y = fy + 7.0;
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(btn_x, btn_y, 88.0, 22.0),
-        radii: uniform_radii(4.0),
+        radii: uniform_radii(radius::MD),
         color: CLEAR_BTN_BG,
     });
     dl.push(make_text(
