@@ -252,13 +252,23 @@ pass/fail counts from "unexpected (vs `.ini`)" — a subtest can legitimately
 `FAIL` while still being 0 unexpected, if that failure is pinned as
 `expected: FAIL` (a tracked, known gap) rather than a surprise regression.
 
-`--all` runs every vendored `.html` under `dom/nodes/` (168 files) instead of
-just the 20 curated ones — most were never vetted for this project's
-minimal BiDi-only executor (no `test_driver.*`, multi-window, iframes), so
-expect a lot of ERROR/TIMEOUT/FAIL noise there. Useful to survey what else
-might be worth curating next; don't file bugs off it without checking each
-failure individually first (same discipline as "Adding a test" below) — and
-budget more time for it (~168 tests vs. 20, no per-test parallelism).
+`--all` runs every vendored/generatable test under `--root` (default
+`dom/nodes`, 168 files) instead of just the 20 curated ones — most were never
+vetted for this project's minimal BiDi-only executor (no `test_driver.*`,
+multi-window, iframes), so expect a lot of ERROR/TIMEOUT/FAIL noise there.
+Useful to survey what else might be worth curating next; don't file bugs off
+it without checking each failure individually first (same discipline as
+"Adding a test" below) — and budget more time for it (no per-test
+parallelism). Pass `--root FileAPI` (or any other vendored category under
+`tests/wpt/`) plus `--recursive` to survey a category organized into
+subdirectories — `--recursive` walks the directory tree and expands
+`.any.js`/`.window.js` templates into their `.any.html`/`.window.html` ids
+the way `wptserve`'s `AnyHtmlHandler`/`WindowHandler` do at request time,
+skipping `support`/`resources` fixture dirs and `-manual.html` tests.
+Without `--recursive`, `--root` still just globs `*.html` at that
+directory's top level (the `dom/nodes` default's original, deliberately
+non-recursive behavior — its own subdirectories are crashtests/other
+never-vetted sub-suites, not part of the 168-file count).
 
 (Omit `--binary` and it defaults to `target/$LUMEN_PROFILE/lumen.exe`; pass it
 explicitly when running the script from a `git worktree`, whose own `target/`

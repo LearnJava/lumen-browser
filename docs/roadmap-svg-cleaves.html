@@ -55,7 +55,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-21",
+ "generated": "2026-07-22",
  "counts": {
   "open": 32,
   "fixed": 266,
@@ -1606,15 +1606,15 @@
     {
      "id": "WPT-VENDOR",
      "title": "WPT-VENDOR: вендорить и прогнать остальные 276 категорий WPT",
-     "status": "planned",
+     "status": "active",
      "note": "Дорожка вендоринга/прогона остальных категорий верхнеуровневого корпуса WPT (dom/nodes уже вендорена и прогнана, см. P2-wpt). Каждая дочерняя задача — одна категория из категорийного индекса docs/wpt-status.md: вендорить тестовое поддерево запиненного коммита (tests/wpt/VENDOR.md), прогнать через tests/wpt/run_report.py, синхронизировать docs/wpt-status.md. Провалы тестов не заводятся по одному — группируются в BUG-NNN по первопричине (методология в docs/wpt-status.md). Категории со скоупом 🚫 (вне архитектуры Lumen-читалки: медиа-конвейер, аппаратные API, ad-tech и т.п.) включены по прямому запросу пользователя 2026-07-21, несмотря на то что docs/wpt-status.md их помечает как вероятно вне скоупа — объём можно пересмотреть после первого прохода.",
      "tasks": [
       {
        "id": "WPT-VENDOR-FileAPI",
        "title": "WPT: вендорить + прогнать категорию `FileAPI`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-21: вендорена (коммит 35be3b44, tests/wpt/FileAPI/, 115 файлов) и прогнана через обобщённый tests/wpt/run_report.py --root FileAPI --recursive (генерализация с dom/nodes на произвольную категорию, .any.js/.window.js расширяются в .any.html/.window.html как это делает wptserve). 66/70 отобранных id получили результат (35 harness OK, 305 сабтестов, 115 passed); 4 не добежали (см. заметку в docs/wpt-status.md). Не заводились отдельные BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет, root-cause-группировка в BUG-NNN и назначение Владельца остаются будущим шагом"
       },
       {
        "id": "WPT-VENDOR-IndexedDB",
