@@ -15,6 +15,7 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::settings_panel::wrap_text;
 use crate::panels::themes::Palette;
 
 // ── Visual constants ─────────────────────────────────────────────────────────
@@ -22,7 +23,10 @@ use crate::panels::themes::Palette;
 /// Width of the floating permission panel in CSS px.
 pub const PANEL_W: f32 = 240.0;
 /// Height of the floating permission panel in CSS px.
-pub const PANEL_H: f32 = 164.0;
+///
+/// Includes the header, the four permission rows, and the reserved
+/// [`FINE_PRINT_H`] block at the bottom for the session-only disclaimer.
+pub const PANEL_H: f32 = HEADER_H + 4.0 * ROW_H + FINE_PRINT_H;
 /// Top offset from the tab-bar bottom edge (CSS px).
 const PANEL_TOP_OFFSET: f32 = 4.0;
 /// Left margin from the window edge (CSS px).
@@ -33,6 +37,16 @@ const HEADER_H: f32 = 28.0;
 const ROW_H: f32 = 30.0;
 /// Horizontal padding inside the panel.
 const PAD_X: f32 = 10.0;
+/// Reserved height at the bottom of the panel for the session-only fine
+/// print (divider + up to three wrapped text lines + padding). Sized for
+/// the current disclaimer wording; grows automatically if the string is
+/// ever edited, since [`wrap_text`] output is capped at 3 lines here.
+const FINE_PRINT_H: f32 = 56.0;
+/// Disclaimer shown at the bottom of the panel: grants made here never
+/// persist across sessions (design-system rule — no "remember" checkbox
+/// in the popover; permanent grants live in about:settings/privacy).
+const FINE_PRINT_TEXT: &str =
+    "Разрешение действует только для этого сеанса. Навсегда — about:settings/privacy.";
 
 // Semantic action-state colors — carry meaning (Allow=green / Deny=red / Ask=amber).
 const ALLOW_FG: Color = Color { r: 60, g: 200, b: 120, a: 255 };
@@ -392,6 +406,39 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32, pal: &Palette) -> Di
             color: btn_fg,
             font_family: Vec::new(),
             font_weight: FontWeight::BOLD,
+            font_style: FontStyle::Normal,
+            font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            highlight_name: None,
+            text_orientation: None,
+        });
+    }
+
+    // Divider + session-only fine print, anchored to the bottom of the rows.
+    let rows_bottom = py + HEADER_H + PermissionKind::ALL.len() as f32 * ROW_H;
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(px + 1.0, rows_bottom, PANEL_W - 2.0, 1.0),
+        color: pal.divider,
+    });
+
+    const CHAR_W: f32 = FONT_SZ_SM * 0.62;
+    let max_chars = (((PANEL_W - PAD_X * 2.0) / CHAR_W).floor() as usize).max(12);
+    let line_h = FONT_SZ_SM * 1.3;
+    for (i, line) in wrap_text(FINE_PRINT_TEXT, max_chars).into_iter().enumerate() {
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(
+                px + PAD_X,
+                rows_bottom + 8.0 + i as f32 * line_h,
+                PANEL_W - PAD_X * 2.0,
+                line_h,
+            ),
+            text: line,
+            font_size: FONT_SZ_SM,
+            color: pal.text_dim,
+            font_family: Vec::new(),
+            font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             font_features: Vec::new(),

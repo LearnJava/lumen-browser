@@ -135,6 +135,19 @@
   asserts the label flips with the underlying `bool`). `cargo test -p
   lumen-shell` and `cargo clippy -p lumen-shell --all-targets -- -D warnings`
   both clean.
+- **Done (DS-8 permission popover session-only disclaimer, 2026-07-23):**
+  [`crates/shell/src/panels/permission_panel.rs`](../crates/shell/src/panels/permission_panel.rs)
+  gained a fine-print line below the four permission rows ("Разрешение
+  действует только для этого сеанса. Навсегда — about:settings/privacy."),
+  wrapped via the shared `settings_panel::wrap_text` helper (promoted from
+  private to `pub(crate)` for reuse) and rendered under a new divider; `PANEL_H`
+  now derives from `HEADER_H + 4×ROW_H + FINE_PRINT_H` instead of a bare
+  literal. The panel was already in-memory/session-only — no persistence was
+  added, matching the design-system rule against a "remember" checkbox in
+  popovers. `about:settings` has no permissions table yet, so the DoD's
+  "don't render an empty table" clause needed no code. `cargo test -p
+  lumen-shell` and `cargo clippy -p lumen-shell --all-targets -- -D warnings`
+  both clean.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*
