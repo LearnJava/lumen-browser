@@ -12,15 +12,16 @@ invocation — no protocol/runner code duplicated here, only report rendering.
 By default it runs the curated subset (`run_suite.curated_test_ids()` — the
 same ~20 `dom/nodes/` tests the S7 gate covers, the only ones vetted to run
 cleanly against this BiDi-only executor). `--all` instead discovers every
-vendored `.html` test under `tests/wpt/dom/nodes/` (168 files) — most of
-those were never vetted for this project's minimal executor (no
-`test_driver.*`, no multi-window, no iframes), so expect ERROR/TIMEOUT noise,
-not failures worth filing bugs over; use it to survey, not to gate.
+vendored/generatable test under `tests/wpt/<root>/` (`--root`, default
+`dom/nodes`, 168 files) — most of those were never vetted for this project's
+minimal executor (no `test_driver.*`, no multi-window, no iframes), so expect
+ERROR/TIMEOUT noise, not failures worth filing bugs over; use it to survey,
+not to gate.
 
 Usage (from repo root, after `pip install -r tests/wpt/requirements.txt` in a
 venv — see tests/wpt/README.md):
 
-    <venv>/python tests/wpt/run_report.py [--binary PATH] [--out PATH] [--all]
+    <venv>/python tests/wpt/run_report.py [--binary PATH] [--out PATH] [--all] [--root DIR] [--recursive]
 
 On Windows Git Bash also set `MSYS2_ARG_CONV_EXCL='/dom'` (see README) so the
 leading-slash test ids aren't mangled into Windows paths.
@@ -49,12 +50,45 @@ HARNESS_OK_STATUSES = {"OK", "PASS"}
 SUBTEST_PASS_STATUSES = {"PASS"}
 
 
-def all_vendored_test_ids() -> list:
-    """Every vendored `.html` file under `tests/wpt/dom/nodes/`, curated or not."""
-    subdir = os.path.join(run_smoke.TESTS_ROOT, "dom", "nodes")
+def all_vendored_test_ids(root: str = "dom/nodes", recursive: bool = False) -> list:
+    """Every runnable test id under `tests/wpt/<root>/`, curated or not.
+
+    Flat by default (`glob` at the top level only) — this is the original
+    `dom/nodes` behavior (168 files) and must stay exact: that category's
+    subdirectories (`crashtests/` — non-testharness crash-only pages;
+    `moveBefore/`, `insertion-removing-steps/`, … — separate, never-vetted
+    sub-suites) were never part of its documented scope, so silently pulling
+    them in would inflate a number several docs (README.md, VENDOR.md,
+    wpt-status.md) cite verbatim.
+
+    `recursive=True` (opt in for categories that are organized into
+    subdirectories, e.g. `FileAPI`) walks the whole tree instead. `.any.js`/
+    `.window.js` files are testharness "multi-global" templates that
+    wptserve's `AnyHtmlHandler`/`WindowHandler` (`tools/serve/serve.py`) wrap
+    into a `.any.html`/`.window.html` response on request, so those are
+    runnable ids too even though only the `.js` source is vendored — plain
+    `.worker.js`/`.sub.js` helper scripts are not (nothing serves them as a
+    standalone top-level test). `support/`/`resources/` hold fixtures, not
+    tests, and `-manual.html` tests need human interaction this automated
+    executor can't drive — both are skipped.
+    """
+    subdir = os.path.join(run_smoke.TESTS_ROOT, *root.split("/"))
+    if not recursive:
+        return sorted(
+            f"/{root}/" + os.path.basename(p) for p in glob.glob(os.path.join(subdir, "*.html"))
+        )
     ids = []
-    for path in sorted(glob.glob(os.path.join(subdir, "*.html"))):
-        ids.append("/dom/nodes/" + os.path.basename(path))
+    for dirpath, dirnames, filenames in os.walk(subdir):
+        dirnames[:] = sorted(d for d in dirnames if d not in ("support", "resources"))
+        rel_dir = os.path.relpath(dirpath, run_smoke.TESTS_ROOT).replace(os.sep, "/")
+        for fn in sorted(filenames):
+            if fn.endswith((".any.js", ".window.js")):
+                out = fn[: -len(".js")] + ".html"
+            elif fn.endswith(".html") and "-manual" not in fn:
+                out = fn
+            else:
+                continue
+            ids.append(f"/{rel_dir}/{out}")
     return ids
 
 
@@ -230,16 +264,30 @@ def main() -> int:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="run every vendored dom/nodes/*.html test, not just the curated/vetted subset",
+        help="run every vendored test under --root, not just the curated/vetted subset",
+    )
+    parser.add_argument(
+        "--root",
+        default="dom/nodes",
+        help="category subdir under tests/wpt/ to scan with --all (default: dom/nodes)",
+    )
+    parser.add_argument(
+        "--recursive",
+        action="store_true",
+        help="with --all, walk --root recursively and expand .any.js/.window.js "
+        "(needed for categories organized into subdirectories, e.g. FileAPI; "
+        "dom/nodes stays flat/168 either way unless this is passed)",
     )
     args = parser.parse_args()
 
-    test_ids = all_vendored_test_ids() if args.all else run_suite.curated_test_ids()
+    test_ids = (
+        all_vendored_test_ids(args.root, args.recursive) if args.all else run_suite.curated_test_ids()
+    )
     if not test_ids:
         print("no tests selected", file=sys.stderr)
         return 1
 
-    kind = "all vendored" if args.all else "curated"
+    kind = f"all vendored ({args.root})" if args.all else "curated"
     print(f"running {len(test_ids)} {kind} WPT tests against {args.binary}", file=sys.stderr)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
