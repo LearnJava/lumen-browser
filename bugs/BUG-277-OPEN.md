@@ -102,10 +102,54 @@ TEST-101/104/59/etc remain at their prior numbers — unrelated causes (border-r
 image-set blend, non-gradient tests). Next candidates for a further slice: TEST-49 (28.15%,
 background-blend-mode), TEST-62/56 (scroll-snap/border-radius, ≥14%).
 
+## Срез 2 (2026-07-22, P1) — TEST-49 background-blend-mode root-cause найден и исправлен
+
+`background-blend-mode` на top-level боксе (без родительского stacking-context) не
+композитился вовсе в wgpu-окне: фоновые blend-слои сидели на `from_level == 1`, чей
+«родитель» — реальная swapchain-поверхность, у которой нет `TEXTURE_BINDING` usage и её
+нельзя сэмплировать. `renderer.rs`'s `Composite` требует `from_level > 1`, чтобы прочитать
+родительский слой, поэтому blend молча падал в plain alpha-over — эффект пропадал целиком
+(отсюда 28.15% на TEST-49).
+
+Три части фикса:
+1. **Изоляция (`display_list.rs::emit_background_image`).** Когда не-нижний фоновый слой
+   реально блендит (`blend_mode != Normal`; `i == 0` всегда подавляется), стек слоёв
+   оборачивается в собственную `PushOpacity{alpha:1.0}`/`PopOpacity`-группу. Это даёт
+   blend-паре свой двухуровневый offscreen-стек независимо от вложенности предков (нижний
+   слой на уровне изоляции, верхний — на уровень выше), так что `Composite` идёт на
+   `from_level == 2` (родитель = сэмплируемая offscreen-текстура). Совпадает с семантикой
+   CSS Compositing L1 §8.3 «background forms an isolated group» и с cpu_raster/femtovg
+   (их immediate-mode canvas на этот момент уже содержит только контент самого бокса —
+   CPU-снимки не изменились, `cpu_snapshots_match_references` зелёный).
+2. **Un-premultiply в `BLEND_SHADER`.** Offscreen-слои копят ПРЕМУЛЬТИПЛИРОВАННЫЙ контент
+   (каждый draw композитится straight-alpha `ALPHA_BLENDING` от прозрачно-чёрного clear →
+   rgb остаётся домноженным на alpha). Формулы CSS Compositing L1 §8 ждут straight Cs/Cd —
+   теперь делим обратно на alpha (`select(rgb/a, 0, a<=0)`). Прежний код трактовал
+   премультиплированный rgb как straight → неверно при alpha<1; заодно чинит «изолирующий
+   offscreen-слой чернел при multiply-против-прозрачного».
+3. **Per-composite uniform-буфер blend-режима.** `self.blend_mode_uniform` писался через
+   `queue.write_buffer` один раз на `PushBlendMode`/`PopBlendMode`; при 2+ таких парах в
+   кадре все blend-проходы читали ПОСЛЕДНЕ записанный режим (все write_buffer лендятся до
+   сабмита единого энкодера) — тот же класс hazard'а, что уже решён для `filter_param_bufs`.
+   Теперь — свежий буфер на каждый composite (`make_blend_mode_param_buf`).
+
+Результат: **TEST-49 28.15% → 2.74%** (10×; остаток — AA-кромка/font-parity, rule 2/3),
+KNOWN_DEBTOR ратчет. TEST-148 (isolation) 6.30% → 5.44% — un-premultiply убрал чернение
+изолирующего слоя. Полный wgpu-прогон 1–71 без регрессий (дрейф в пределах gdigrab-допуска);
+пути не-blend страниц не задеты (display-list байт-в-байт), подтверждено
+`cpu_snapshots_match_references`.
+
+Does **not** close BUG-277: mix-blend-mode на top-level боксах (TEST-56 14.12%, и остаток
+TEST-148) — отдельный путь, не покрытый background-only изоляцией этого среза; требует
+изоляции для самих mix-blend-элементов. Не-blend долги (border-radius AA, filter, image-set,
+SVG-AA) не тронуты.
+
 ## Новые долги, добавленные после базлайна
 
-- **TEST-148 (isolation, 6.30%)** — добавлен 2026-07-18 (`p4-isolation`). `mix-blend-mode`-зависимый
+- **TEST-148 (isolation, 5.44%)** — добавлен 2026-07-18 (`p4-isolation`). `mix-blend-mode`-зависимый
   тест `isolation: isolate`: в wgpu-окне неизолированный `mix-blend` не композитится (source-over
   вместо `multiply`), а изолирующий offscreen-слой делает `multiply`-против-прозрачного-фона
   чёрным. Фича сама корректна — CPU-снимок (`lumen --screenshot`, `cpu_raster`) пиксельно совпадает
-  с Edge, unit-тесты зелёные. Тот же класс, что TEST-56. Уйдёт в PASS вместе с фиксом BUG-277.
+  с Edge, unit-тесты зелёные. Тот же класс, что TEST-56. Срез 2 (2026-07-22) убрал чернение
+  изолирующего слоя (un-premultiply) — 6.30% → 5.44%; остаток = неизолированный top-level
+  mix-blend, уйдёт в PASS с mix-blend-срезом BUG-277.

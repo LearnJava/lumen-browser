@@ -674,11 +674,16 @@ fn blend_channel(mode: u32, cs: f32, cd: f32) -> f32 {
     let dst = textureSample(t_dst, s_layer, in.uv);
     let mode = u.mode;
 
-    // Un-premultiply for blending (wgpu stores straight alpha in offscreen layers).
-    var cs = src.rgb;
-    var cd = dst.rgb;
+    // Un-premultiply for blending: offscreen layers accumulate PREMULTIPLIED content
+    // (each draw is composited onto them with straight-alpha ALPHA_BLENDING, which —
+    // starting from a transparent-black clear — leaves rgb scaled by alpha). The CSS
+    // Compositing L1 §8 formulas below (and blend_channel) expect straight Cs/Cd, so
+    // divide it back out; a fully-transparent source/dest has no meaningful straight
+    // color and `as_`/`ad` zero it out later in the compositing formula regardless.
     let as_ = src.a;
     let ad = dst.a;
+    var cs = select(src.rgb / as_, vec3<f32>(0.0), as_ <= 0.0);
+    var cd = select(dst.rgb / ad, vec3<f32>(0.0), ad <= 0.0);
 
     var blended: vec3<f32>;
 
@@ -1635,7 +1640,6 @@ pub struct Renderer {
     composite_bgl: wgpu::BindGroupLayout,
     blend_pipeline: wgpu::RenderPipeline,
     blend_bgl: wgpu::BindGroupLayout,
-    blend_mode_uniform: wgpu::Buffer,
     /// CSS Masking L1 §4 — mask composite pipeline + bind group layout.
     /// Used by PopMask to composite the offscreen layer using a mask image.
     mask_composite_bgl: wgpu::BindGroupLayout,
@@ -2987,12 +2991,6 @@ impl Renderer {
                 },
             ],
         });
-        let blend_mode_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("blend-mode-uniform"),
-            size: 16, // u32 mode + 3 × u32 padding = 16 bytes
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let blend_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("blend-shader"),
             source: wgpu::ShaderSource::Wgsl(BLEND_SHADER_SRC.into()),
@@ -3569,7 +3567,6 @@ impl Renderer {
             composite_bgl,
             blend_pipeline,
             blend_bgl,
-            blend_mode_uniform,
             mask_composite_bgl,
             mask_composite_pipeline,
             mask_layer_alpha_pipeline,
@@ -7711,6 +7708,13 @@ impl Renderer {
         // Using a single shared buffer caused all passes to see the last write_buffer
         // value (wgpu batches all write_buffer calls before any encoder commands run).
         let mut filter_param_bufs: Vec<wgpu::Buffer> = Vec::new();
+        // BUG-277 slice 2: same hazard as `filter_param_bufs` above, for blend-mode
+        // composites. `self.blend_mode_uniform` used to be written via `queue.write_buffer`
+        // once per `PushBlendMode`/`PopBlendMode` pair; with 2+ such pairs in one frame
+        // (e.g. several `background-blend-mode` boxes, or one box with 2+ blended
+        // background layers) every blend render pass ended up reading whichever mode was
+        // written LAST, since all writes land before the single shared encoder submits.
+        let mut blend_mode_param_bufs: Vec<wgpu::Buffer> = Vec::new();
 
         // BUG-274: поэлементный CPU-учёт encode-фазы (LUMEN_FRAME_LOG=2) —
         // суммарное время и число элементов по каждому типу RenderPlanItem.
@@ -7823,14 +7827,13 @@ impl Renderer {
                                 scratch_copy,
                                 wgpu::Extent3d { width: dst_w, height: dst_h, depth_or_array_layers: 1 },
                             );
-                            // Write blend mode uniform (u32 mode + 3× u32 padding = 16 bytes).
+                            // Per-composite blend mode uniform (u32 mode + 3× u32 padding =
+                            // 16 bytes) — a fresh buffer per composite, not a `write_buffer`
+                            // into the shared `self.blend_mode_uniform` (see
+                            // `blend_mode_param_bufs` above for why).
                             let mode_u32 = blend_mode_to_u32(comp.mode);
                             let uniform_data: [u32; 4] = [mode_u32, 0, 0, 0];
-                            self.queue.write_buffer(
-                                &self.blend_mode_uniform,
-                                0,
-                                as_bytes(uniform_data.as_slice()),
-                            );
+                            let mode_buf = make_blend_mode_param_buf(&self.device, &uniform_data);
                             // Create per-frame blend bind group (src + scratch + sampler + uniform).
                             let src_view = &self.layer_textures[comp.from_level - 1].view;
                             let scratch_view = &self.scratch_layer.as_ref().unwrap().view;
@@ -7853,10 +7856,11 @@ impl Renderer {
                                     },
                                     wgpu::BindGroupEntry {
                                         binding: 3,
-                                        resource: self.blend_mode_uniform.as_entire_binding(),
+                                        resource: mode_buf.as_entire_binding(),
                                     },
                                 ],
                             });
+                            blend_mode_param_bufs.push(mode_buf);
                             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                 label: Some("blend-pass"),
                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -10221,6 +10225,20 @@ fn make_filter_param_buf(device: &wgpu::Device, params: &FilterParamsCpu) -> wgp
         mapped_at_creation: true,
     });
     buf.slice(..).get_mapped_range_mut().copy_from_slice(as_bytes(std::slice::from_ref(params)));
+    buf.unmap();
+    buf
+}
+
+/// Создаёт отдельный UNIFORM-буфер с режимом blend одного composite pass —
+/// тот же приём и по той же причине, что [`make_filter_param_buf`] (BUG-277 срез 2).
+fn make_blend_mode_param_buf(device: &wgpu::Device, mode_padded: &[u32; 4]) -> wgpu::Buffer {
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("blend-mode-param"),
+        size: std::mem::size_of::<[u32; 4]>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: true,
+    });
+    buf.slice(..).get_mapped_range_mut().copy_from_slice(as_bytes(mode_padded.as_slice()));
     buf.unmap();
     buf
 }
