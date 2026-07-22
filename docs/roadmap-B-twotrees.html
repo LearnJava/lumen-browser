@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-22",
+ "generated": "2026-07-23",
  "counts": {
   "open": 32,
-  "fixed": 266,
+  "fixed": 267,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 298,
+ "total_bugs": 299,
  "phases": [
   {
    "id": "P0",
@@ -3605,14 +3605,14 @@
       {
        "id": "DS-6",
        "title": "DS-6: Омнибокс — punycode-показ + предупреждение",
-       "status": "planned",
+       "status": "done",
        "size": "S",
        "note": "address_bar: URL/саджесты через display_host (spoof → punycode-рендер), красная строка-предупреждение под полем, Enter навигирует на punycode. После DS-5"
       },
       {
        "id": "DS-7",
        "title": "DS-7: Честность тумблеров в about:settings",
-       "status": "planned",
+       "status": "done",
        "size": "XS",
        "note": "settings_panel: у каждого тумблера текст текущего состояния «: Вкл/Выкл», обновляется при переключении (правило честности тумблеров)"
       },
@@ -5825,6 +5825,13 @@
    "component": "paint (femtovg, `acquire_layer`/`layer_pool`)",
    "date": "2026-07-20",
    "debtor": false
+  },
+  "BUG-329": {
+   "status": "fixed",
+   "title": "`finds_bundled_inter` жёстко ожидал `family_count() == 1` в `assets/fonts/` — DS-4 добавила туда Golos Text + JetBrains Mono, стало 3 семейства, assertion устар…",
+   "component": "font (`system_fonts.rs`)",
+   "date": "2026-07-22",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -5871,6 +5878,9 @@
   ],
   "font (`Rasterizer::rasterize`)": [
    "BUG-283"
+  ],
+  "font (`system_fonts.rs`)": [
+   "BUG-329"
   ],
   "html-parser": [
    "BUG-021"

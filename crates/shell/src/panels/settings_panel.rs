@@ -812,6 +812,13 @@ fn push_input(list: &mut DisplayList, x: f32, y: f32, value: &str, focused: bool
         FontWeight::NORMAL, pal.text));
 }
 
+/// Toggle-state suffix appended to a row's label per the "toggle honesty"
+/// rule (DS-7, design ref `.st-desc`): every toggle row must spell out its
+/// current state in text, not rely on the toggle's own colour/label alone.
+fn toggle_state_suffix(on: bool) -> &'static str {
+    if on { ": Вкл" } else { ": Выкл" }
+}
+
 fn push_toggle(list: &mut DisplayList, x: f32, y: f32, on: bool, pal: &Palette) {
     let tw = 60.0;
     let th = ROW_H - PAD_V * 2.0;
@@ -902,7 +909,7 @@ fn render_privacy(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32,
 
     // Row 0: shields toggle.
     push_row(list, x, by, 0, pal);
-    push_label(list, x, by, "Блокировка трекеров", pal);
+    push_label(list, x, by, &format!("Блокировка трекеров{}", toggle_state_suffix(panel.draft.shields_enabled)), pal);
     push_toggle(list, x, by, panel.draft.shields_enabled, pal);
 
     // Row 1: fingerprint mode options.
@@ -917,7 +924,7 @@ fn render_privacy(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32,
 
     // Row 2: DoH toggle.
     push_row(list, x, by + ROW_H * 2.0, 2, pal);
-    push_label(list, x, by + ROW_H * 2.0, "DNS-over-HTTPS", pal);
+    push_label(list, x, by + ROW_H * 2.0, &format!("DNS-over-HTTPS{}", toggle_state_suffix(panel.draft.doh_enabled)), pal);
     push_toggle(list, x, by + ROW_H * 2.0, panel.draft.doh_enabled, pal);
 
     // Row 3: Tor status (read-only — set only via --tor at startup).
@@ -1051,7 +1058,7 @@ fn render_network(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32,
 
     // Row 0: HTTP/3 toggle.
     push_row(list, x, by, 0, pal);
-    push_label(list, x, by, "HTTP/3 (QUIC)", pal);
+    push_label(list, x, by, &format!("HTTP/3 (QUIC){}", toggle_state_suffix(panel.http3_draft)), pal);
     push_toggle(list, x, by, panel.http3_draft, pal);
 
     // Row 1: active HTTP fingerprint profile (read-only).
@@ -1074,7 +1081,7 @@ fn render_adblock(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32,
     for (i, sub) in panel.adblock_subs.iter().enumerate() {
         let ry = by + ROW_H * i as f32;
         push_row(list, x, ry, i, pal);
-        push_label(list, x, ry, &sub.title, pal);
+        push_label(list, x, ry, &format!("{}{}", sub.title, toggle_state_suffix(sub.enabled)), pal);
         push_toggle(list, x, ry, sub.enabled, pal);
     }
 
@@ -1384,6 +1391,44 @@ mod tests {
         assert!(p.tor_active);
         assert_eq!(p.spell_locale.as_deref(), Some("en_US+ru_RU"));
         assert_eq!(p.adblock_subs.len(), 1);
+    }
+
+    /// DS-7 "toggle honesty" rule: every toggle row's label must spell out
+    /// its current state and flip when the underlying value flips.
+    #[test]
+    fn toggle_labels_report_current_state() {
+        fn label_texts(p: &SettingsPanel) -> Vec<String> {
+            let mut dl: DisplayList = Vec::new();
+            build_panel(p, &mut dl, 0.0, 0.0, &Palette::DARK);
+            dl.into_iter()
+                .filter_map(|cmd| match cmd {
+                    DisplayCommand::DrawText { text, .. } => Some(text),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        let mut p = panel_at_origin();
+        p.section = SettingsSection::Privacy;
+        p.draft.shields_enabled = true;
+        p.draft.doh_enabled = false;
+        let texts = label_texts(&p);
+        assert!(texts.iter().any(|t| t == "Блокировка трекеров: Вкл"));
+        assert!(texts.iter().any(|t| t == "DNS-over-HTTPS: Выкл"));
+
+        p.draft.shields_enabled = false;
+        let texts = label_texts(&p);
+        assert!(texts.iter().any(|t| t == "Блокировка трекеров: Выкл"));
+
+        p.section = SettingsSection::Network;
+        p.set_http3(true);
+        let texts = label_texts(&p);
+        assert!(texts.iter().any(|t| t == "HTTP/3 (QUIC): Вкл"));
+
+        p.section = SettingsSection::Adblock;
+        p.set_adblock_subs(vec![Subscription { url: "u".into(), title: "T".into(), enabled: true }]);
+        let texts = label_texts(&p);
+        assert!(texts.iter().any(|t| t == "T: Вкл"));
     }
 
     #[test]
