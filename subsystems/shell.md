@@ -104,6 +104,25 @@
   `--screenshot` smoke run does not panic. `cargo clippy -p lumen-paint
   --all-features --all-targets` and `cargo clippy -p lumen-shell --all-targets`
   both clean.
+- **Done (DS-6 omnibox punycode-guard, 2026-07-23):**
+  [`crates/shell/src/address_bar.rs`](../crates/shell/src/address_bar.rs) wires
+  `lumen_core::idn::display_host()` (DS-5) into the omnibox. New
+  `guard_display_text(text)` helper: parses `text` as a `Url`, and if its host
+  is a spoof risk (`HostDisplay::Punycode`), replaces the host substring with
+  its Punycode ASCII form and returns the `SpoofReason`; text without a
+  parseable URL or with an empty host (search query, `@`-prefix commands,
+  internal sentinels like `switch-tab:<id>`) passes through unchanged. Applied
+  at three sites: the input-field/selected-suggestion display text in
+  `build_bar_overlay`, dropdown suggestion `label()`/`sub_label()` (history/
+  tabs/bookmarks rows can carry a spoofed URL), and `AddressBarState::commit()`
+  (`pending_commit` is guarded so Enter navigates to the Punycode form, not the
+  visually-spoofed Unicode one). A fixed-red warning strip (`SPOOF_WARNING_BG`,
+  `WARN_H` = 22px, theme-invariant per the DS-6 brief — a security signal must
+  read the same in both palettes) renders under the input field when the
+  current display text is a spoof risk, pushing the dropdown down by `warn_h`.
+  9 new tests (`guard_*`, `commit_normalizes_*`, `overlay_*`,
+  `dropdown_suggestion_url_is_punycode_guarded`). `cargo test -p lumen-shell`
+  and `cargo clippy -p lumen-shell --all-targets -- -D warnings` both clean.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*

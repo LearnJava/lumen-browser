@@ -18,10 +18,18 @@
 //! через `lumen-ai` `RagEngine` (§12.5), либо hint-строка если модуль не
 //! собран (`--features ai`); без префикса — prefix-match по search_history +
 //! FTS по умолчанию.
+//!
+//! DS-6 — IDN homograph-spoof guard: любой URL-текст, попадающий на экран
+//! (поле ввода, label/sub_label подсказок) или в `commit()`, проходит через
+//! `guard_display_text()` → `lumen_core::idn::display_host` (DS-5). Если
+//! хост признан спуф-риском, отображается/коммитится его Punycode-форма,
+//! а под полем ввода рисуется красная строка-предупреждение.
 
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{DisplayCommand, DisplayList};
 use lumen_core::geom::Rect;
+use lumen_core::idn::{HostDisplay, SpoofReason, display_host};
+use lumen_core::url::Url;
 
 use crate::panels::themes::Palette;
 
@@ -55,6 +63,53 @@ const ITEM_PAD: f32 = 8.0;
 const MAX_VISIBLE: usize = 7;
 /// Максимальная длина строки ввода. Защита от случайной paste-атаки.
 const MAX_INPUT_LEN: usize = 2048;
+/// Высота красной строки-предупреждения о спуфинге (DS-6), рисуется под
+/// полем ввода перед dropdown, если он есть.
+const WARN_H: f32 = 22.0;
+
+/// Фон строки-предупреждения о спуфинге — фиксированный красный вне
+/// зависимости от темы (сигнал безопасности должен быть читаем в обеих
+/// палитрах, та же логика что у `HISTORY_TAG`/`ITEM_TAG` выше).
+const SPOOF_WARNING_BG: Color = Color { r: 130, g: 24, b: 24, a: 235 };
+/// Цвет текста поверх `SPOOF_WARNING_BG`.
+const SPOOF_WARNING_TEXT: Color = Color { r: 255, g: 220, b: 220, a: 255 };
+
+// ── IDN spoof guard (DS-6) ──────────────────────────────────────────────────
+
+/// Прогоняет `text` (полный URL) через детектор омоглифов/mixed-script
+/// (`lumen_core::idn::display_host`, DS-5). Если хост признан спуф-риском,
+/// возвращает `text` с хостом, замененным на его Punycode ASCII-форму, и
+/// причину. Иначе возвращает `text` без изменений и `None`.
+///
+/// Вход без схемы (поисковый запрос, `@`-команда, внутренние sentinel-ы
+/// вроде `switch-tab:<id>`) не парсится `Url::parse` или даёт пустой host —
+/// в обоих случаях возвращается как есть: детектор действует только на
+/// реальный URL-хост.
+fn guard_display_text(text: &str) -> (String, Option<SpoofReason>) {
+    let Ok(url) = Url::parse(text) else {
+        return (text.to_owned(), None);
+    };
+    let host = url.host();
+    if host.is_empty() {
+        return (text.to_owned(), None);
+    }
+    match display_host(host) {
+        HostDisplay::Punycode { ascii, reason } => (text.replacen(host, &ascii, 1), Some(reason)),
+        HostDisplay::Unicode(_) => (text.to_owned(), None),
+    }
+}
+
+/// Текст красной строки-предупреждения под полем ввода для причины спуфинга.
+fn spoof_warning_message(reason: SpoofReason) -> &'static str {
+    match reason {
+        SpoofReason::MixedScript => {
+            "Домен смешивает алфавиты — возможна подмена, показан Punycode"
+        }
+        SpoofReason::ConfusableLabel => {
+            "Буквы домена похожи на латиницу — возможна подмена, показан Punycode"
+        }
+    }
+}
 
 // ── Omnibox prefix ────────────────────────────────────────────────────────────
 
@@ -404,6 +459,9 @@ impl AddressBarState {
         } else {
             None
         };
+        // DS-6: если хост коммитимого значения — спуф-риск, навигируем на
+        // его Punycode-форму, а не на визуально подделываемый Unicode.
+        let value = value.map(|v| guard_display_text(&v).0);
         self.close(); // сбрасывает input, open, suggestions, selected_idx, pending_commit
         self.pending_commit = value; // восстанавливаем после close
     }
@@ -435,7 +493,22 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
     let n_visible = sugg.len().min(MAX_VISIBLE);
     let drop_h = n_visible as f32 * ITEM_H;
 
-    let cap = 6 + n_visible * 4;
+    // Отображаем строку выделенной подсказки в input field если она выбрана.
+    let display_input = if let Some(idx) = state.selected_idx() {
+        sugg.get(idx).map(|s| s.commit_value()).unwrap_or(state.input())
+    } else {
+        state.input()
+    };
+    let is_empty = display_input.is_empty();
+    let (display_text, text_color, spoof_reason) = if is_empty {
+        ("Введите URL или поисковый запрос…".to_string(), pal.text_dim, None)
+    } else {
+        let (guarded, reason) = guard_display_text(display_input);
+        (guarded, pal.text, reason)
+    };
+    let warn_h = if spoof_reason.is_some() { WARN_H } else { 0.0 };
+
+    let cap = 6 + n_visible * 4 + if spoof_reason.is_some() { 2 } else { 0 };
     let mut out = DisplayList::with_capacity(cap);
 
     // ─ Основной бар ──────────────────────────────────────────────────────────
@@ -462,17 +535,6 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
         color: pal.input_bg,
     });
 
-    // Отображаем строку выделенной подсказки в input field если она выбрана.
-    let display_input = if let Some(idx) = state.selected_idx() {
-        sugg.get(idx).map(|s| s.commit_value()).unwrap_or(state.input())
-    } else {
-        state.input()
-    };
-    let (display_text, text_color) = if display_input.is_empty() {
-        ("Введите URL или поисковый запрос…", pal.text_dim)
-    } else {
-        (display_input, pal.text)
-    };
     let text_margin = 6.0;
     out.push(DisplayCommand::DrawText {
         rect: Rect::new(
@@ -481,7 +543,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
             input_w - text_margin * 2.0 - 10.0,
             FONT * 1.2,
         ),
-        text: display_text.to_string(),
+        text: display_text,
         font_size: FONT,
         color: text_color,
         // DS-4: omnibox URL text is monospace (bundled JetBrains Mono); the
@@ -499,7 +561,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
     });
 
     // Курсор — вертикальная линия. Не рисуется если выбрана подсказка.
-    if !display_input.is_empty() && state.selected_idx().is_none() {
+    if !is_empty && state.selected_idx().is_none() {
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(
                 input_x + input_w - text_margin - 2.0,
@@ -511,13 +573,42 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
         });
     }
 
+    // ─ Спуфинг-предупреждение (DS-6) ────────────────────────────────────────
+
+    if let Some(reason) = spoof_reason {
+        out.push(DisplayCommand::FillRect {
+            rect: Rect::new(x, y + BAR_H, BAR_W, WARN_H),
+            color: SPOOF_WARNING_BG,
+        });
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(
+                x + PAD,
+                y + BAR_H + (WARN_H - ITEM_SUB_SZ * 1.3) * 0.5,
+                BAR_W - PAD * 2.0,
+                ITEM_SUB_SZ * 1.3,
+            ),
+            text: spoof_warning_message(reason).to_string(),
+            font_size: ITEM_SUB_SZ,
+            color: SPOOF_WARNING_TEXT,
+            font_family: Vec::new(),
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            highlight_name: None,
+            text_orientation: None,
+        });
+    }
+
     // ─ Dropdown ───────────────────────────────────────────────────────────────
 
     if n_visible == 0 {
         return out;
     }
 
-    let drop_y = y + BAR_H;
+    let drop_y = y + BAR_H + warn_h;
     let drop_x = x;
 
     // Граница dropdown.
@@ -542,8 +633,11 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
             });
         }
 
-        let label = s.label();
-        let sub = s.sub_label();
+        // DS-6: подсказки часто несут URL в label/sub_label (история,
+        // вкладки, закладки) — прогоняем их через тот же спуф-guard, что и
+        // основное поле ввода, чтобы дропдаун не подсвечивал спуф-домен.
+        let label = guard_display_text(s.label()).0;
+        let sub = guard_display_text(s.sub_label()).0;
         let tag = s.tag(); // String
 
         let has_sub = !sub.is_empty();
@@ -556,7 +650,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
                     BAR_W - ITEM_PAD * 3.0 - 60.0,
                     ITEM_LABEL_SZ * 1.3,
                 ),
-                text: label.to_string(),
+                text: label,
                 font_size: ITEM_LABEL_SZ,
                 color: pal.text,
                 font_family: Vec::new(),
@@ -576,7 +670,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
                     BAR_W - ITEM_PAD * 3.0 - 60.0,
                     ITEM_SUB_SZ * 1.3,
                 ),
-                text: sub.to_string(),
+                text: sub,
                 font_size: ITEM_SUB_SZ,
                 color: pal.text_dim,
                 font_family: Vec::new(),
@@ -598,7 +692,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
                     BAR_W - ITEM_PAD * 3.0 - 60.0,
                     ITEM_LABEL_SZ * 1.3,
                 ),
-                text: label.to_string(),
+                text: label,
                 font_size: ITEM_LABEL_SZ,
                 color: pal.text,
                 font_family: Vec::new(),
@@ -1076,5 +1170,102 @@ mod tests {
             viewer_url: "note-viewer:3".into(),
         };
         assert_eq!(s.sub_label(), "https://example.com/");
+    }
+
+    // ── DS-6: IDN spoof guard ──────────────────────────────────────────────────
+
+    #[test]
+    fn guard_swaps_spoofed_host_to_punycode() {
+        let (text, reason) = guard_display_text("https://аpple.com/login");
+        assert_eq!(text, "https://xn--pple-43d.com/login");
+        assert_eq!(reason, Some(SpoofReason::MixedScript));
+    }
+
+    #[test]
+    fn guard_leaves_safe_host_unchanged() {
+        let (text, reason) = guard_display_text("https://google.com/search");
+        assert_eq!(text, "https://google.com/search");
+        assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn guard_leaves_pure_cyrillic_rf_domain_unchanged() {
+        let (text, reason) = guard_display_text("https://яндекс.рф/news");
+        assert_eq!(text, "https://яндекс.рф/news");
+        assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn guard_ignores_schemeless_and_sentinel_text() {
+        assert_eq!(guard_display_text("rust async").0, "rust async");
+        assert_eq!(guard_display_text("switch-tab:42").0, "switch-tab:42");
+        assert_eq!(guard_display_text("").0, "");
+    }
+
+    #[test]
+    fn commit_normalizes_spoofed_raw_input_to_punycode() {
+        let mut s = AddressBarState::default();
+        s.open("https://аpple.com/login");
+        s.commit();
+        assert_eq!(
+            s.take_commit(),
+            Some("https://xn--pple-43d.com/login".to_owned())
+        );
+    }
+
+    #[test]
+    fn commit_normalizes_spoofed_selected_suggestion_to_punycode() {
+        let mut s = AddressBarState::default();
+        s.open("a");
+        s.set_suggestions(vec![OmniboxSuggestion::HistoryFts {
+            url: "https://аpple.com/".into(),
+            title: "Apple".into(),
+            snippet: String::new(),
+        }]);
+        s.select_next();
+        s.commit();
+        assert_eq!(s.take_commit(), Some("https://xn--pple-43d.com/".to_owned()));
+    }
+
+    #[test]
+    fn overlay_shows_warning_strip_for_spoofed_input() {
+        let mut s = AddressBarState::default();
+        s.open("https://аpple.com/login");
+        let dl = build_bar_overlay(&s, BarOverlay { window_size: (1024, 720) }, &Palette::DARK);
+        let has_warning = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Punycode"))
+        });
+        assert!(has_warning);
+        let has_punycode_url = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("xn--pple-43d.com"))
+        });
+        assert!(has_punycode_url);
+    }
+
+    #[test]
+    fn overlay_has_no_warning_strip_for_safe_input() {
+        let mut s = AddressBarState::default();
+        s.open("https://google.com");
+        let dl = build_bar_overlay(&s, BarOverlay { window_size: (1024, 720) }, &Palette::DARK);
+        let has_warning = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Punycode"))
+        });
+        assert!(!has_warning);
+    }
+
+    #[test]
+    fn dropdown_suggestion_url_is_punycode_guarded() {
+        let mut s = AddressBarState::default();
+        s.open("a");
+        s.set_suggestions(vec![OmniboxSuggestion::HistoryFts {
+            url: "https://аpple.com/".into(),
+            title: String::new(),
+            snippet: String::new(),
+        }]);
+        let dl = build_bar_overlay(&s, BarOverlay { window_size: (1024, 720) }, &Palette::DARK);
+        let has_punycode_label = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("xn--pple-43d.com"))
+        });
+        assert!(has_punycode_label);
     }
 }
