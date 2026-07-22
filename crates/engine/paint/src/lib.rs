@@ -21,6 +21,8 @@ pub mod matrix_util;
     feature = "compare"
 ))]
 pub mod backends;
+#[cfg(any(feature = "backend-wgpu", feature = "backend-femtovg"))]
+pub mod chrome_fonts;
 pub mod backdrop_cache;
 pub mod display_list_cache;
 pub mod glsl;

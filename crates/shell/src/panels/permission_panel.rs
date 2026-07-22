@@ -44,8 +44,8 @@ const ASK_BG: Color = Color { r: 65, g: 58, b: 22, a: 255 };
 
 const FONT_SZ: f32 = 11.0;
 const FONT_SZ_SM: f32 = 10.0;
-const PANEL_RADIUS: f32 = 6.0;
-const BTN_RADIUS: f32 = 4.0;
+const PANEL_RADIUS: f32 = crate::theme_tokens::radius::LG;
+const BTN_RADIUS: f32 = crate::theme_tokens::radius::MD;
 const BTN_W: f32 = 54.0;
 const BTN_H: f32 = 18.0;
 

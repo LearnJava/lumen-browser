@@ -5075,11 +5075,40 @@ fn emit_background_layer(
 /// The bottom-most layer blends against transparent background-color; for common
 /// blend modes (multiply, screen etc.) this is identity for premultiplied alpha,
 /// so we suppress PushBlendMode for that layer.
+///
+/// BUG-277 slice 2: when a non-bottom layer actually blends, the layer stack is
+/// wrapped in its own `PushOpacity{alpha:1.0}`/`PopOpacity` isolation group. Without
+/// it, the wgpu renderer's level-based compositor has no readable "parent" texture
+/// for a top-level (non-nested) box — `PopBlendMode`'s composite silently falls back
+/// to plain alpha-over, dropping the blend effect entirely (renderer.rs `Composite`
+/// requires `from_level > 1` to read a parent layer; a box with no ancestor
+/// stacking context sits at `from_level == 1`, whose "parent" is the real
+/// swapchain surface, which has no `TEXTURE_BINDING` usage and can't be sampled).
+/// Forcing an isolate group gives the blend pair its own two-level offscreen stack
+/// (bottom layer at the isolate's level, top layer nested one level above it)
+/// regardless of ancestor nesting, matching cpu_raster/femtovg (whose immediate-mode
+/// canvas already contains only this box's own painted content at this point) and
+/// the CSS spec's "background forms an isolated group" semantics.
 fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox, dpr: f32) {
+    // Isolation is needed only if some non-bottom layer actually blends (i == 0 is
+    // always suppressed, see `emit_background_layer`'s `suppress_blend`).
+    let needs_isolation = b
+        .style
+        .background_layers
+        .iter()
+        .rev()
+        .enumerate()
+        .any(|(i, layer)| i > 0 && layer.blend_mode != LayoutBlendMode::Normal);
+    if needs_isolation {
+        out.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) });
+    }
     // Рисуем в обратном порядке: последний слой = нижний (рисуется первым).
     for (i, layer) in b.style.background_layers.iter().rev().enumerate() {
         // i == 0 is the bottom-most layer; suppress its blend mode (identity effect).
         emit_background_layer(out, b, layer, dpr, i == 0);
+    }
+    if needs_isolation {
+        out.push(DisplayCommand::PopOpacity);
     }
 }
 

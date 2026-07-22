@@ -48,7 +48,7 @@ const CLOSE_FG: Color = Color { r: 140, g: 80, b: 80, a: 255 };
 
 const FONT_SZ: f32 = 11.0;
 const FONT_SZ_SM: f32 = 10.0;
-const PANEL_RADIUS: f32 = 6.0;
+const PANEL_RADIUS: f32 = crate::theme_tokens::radius::LG;
 
 // ── Blocked log ───────────────────────────────────────────────────────────────
 

@@ -494,6 +494,14 @@ pub struct FemtovgBackend {
     scale: f64,
     /// ID bundled-шрифта (Inter Regular) в femtovg atlas.
     font_id: Option<femtovg::FontId>,
+    /// ID bundled Golos Text Regular (DS-4) — default chrome UI font, resolved
+    /// for reserved family `"Golos Text"` and for empty-`font_family` chrome text.
+    chrome_font_id: Option<femtovg::FontId>,
+    /// ID bundled Golos Text Medium (DS-4) — reserved family `"Golos Text Medium"`.
+    chrome_font_medium_id: Option<femtovg::FontId>,
+    /// ID bundled JetBrains Mono Regular (DS-4) — reserved family `"JetBrains Mono"`,
+    /// used for the omnibox URL field and DevTools panels.
+    mono_font_id: Option<femtovg::FontId>,
     /// Зарегистрированные изображения в исходном разрешении: src URL →
     /// femtovg ImageId. Жизненный цикл — регистрация (`register_image`) →
     /// очистка (`clear_images`).
@@ -1769,6 +1777,13 @@ impl FemtovgBackend {
         // Загружаем bundled Inter как fallback-шрифт.
         let font_id = canvas.add_font_mem(&font_bytes).ok();
 
+        // Bundled chrome UI faces (DS-4): Golos Text (default UI) + JetBrains
+        // Mono (omnibox URL / DevTools). Loaded eagerly, like Inter above —
+        // chrome never falls back to the system FontProvider for these.
+        let chrome_font_id = canvas.add_font_mem(crate::chrome_fonts::GOLOS_TEXT_REGULAR).ok();
+        let chrome_font_medium_id = canvas.add_font_mem(crate::chrome_fonts::GOLOS_TEXT_MEDIUM).ok();
+        let mono_font_id = canvas.add_font_mem(crate::chrome_fonts::JETBRAINS_MONO_REGULAR).ok();
+
         let size = window.inner_size();
         let scale = window.scale_factor();
 
@@ -1780,6 +1795,9 @@ impl FemtovgBackend {
             height: size.height,
             scale,
             font_id,
+            chrome_font_id,
+            chrome_font_medium_id,
+            mono_font_id,
             images: HashMap::new(),
             raw_images: HashMap::new(),
             resized_variants: LruMap::new(RESIZED_VARIANT_CACHE_CAP),
@@ -2712,10 +2730,14 @@ impl FemtovgBackend {
 
     /// Resolves CSS `font-family` list + weight/style to a femtovg font chain.
     ///
-    /// Order: CSS-declared families (first match wins per CSS Fonts L4 §3.1) →
+    /// Order: CSS-declared families (first match wins per CSS Fonts L4 §3.1;
+    /// reserved bundled names "Golos Text"/"Golos Text Medium"/"JetBrains Mono"
+    /// resolve to the DS-4 chrome faces without touching the provider) →
     /// bundled Inter → curated system fallbacks (emoji/CJK/RTL/Indic/Thai).
     /// Generic keywords (serif/sans-serif/monospace/cursive/fantasy/system-ui)
     /// are skipped — they fall through to Inter which covers Latin well enough.
+    /// An empty `families` list — every chrome `DrawText` call site, since
+    /// chrome never resolves CSS font-family — defaults to bundled Golos Text.
     /// Returns at least `[inter_id]` when no provider is set.
     ///
     /// The two booleans report whether the FIRST provider-resolved face is a
@@ -2732,13 +2754,53 @@ impl FemtovgBackend {
         let mut true_bold = false;
         let mut true_italic = false;
 
-        if let Some(provider) = self.font_provider.clone() {
+        // DS-4: chrome never queries the CSS FontProvider — every chrome
+        // `DrawText` passes an empty `font_family` (page content always has a
+        // non-empty one, from the UA/author stylesheet's font-family cascade),
+        // so an empty list defaults to the bundled chrome UI face. Reserved
+        // bundled family names ("Golos Text"/"Golos Text Medium"/"JetBrains
+        // Mono") resolve directly and skip the provider lookup below —
+        // independent of whether a `FontProvider` is installed at all.
+        if families.is_empty() {
+            if let Some(chrome) = self.chrome_font_id {
+                ids.push(chrome);
+            }
+        } else {
+            let provider = self.font_provider.clone();
             let core_style = match style {
                 FontStyle::Normal => lumen_core::ext::FontStyle::Normal,
                 FontStyle::Italic => lumen_core::ext::FontStyle::Italic,
                 FontStyle::Oblique => lumen_core::ext::FontStyle::Oblique,
             };
             for fam in families {
+                match fam.as_str() {
+                    "Golos Text" => {
+                        if let Some(id) = self.chrome_font_id
+                            && !ids.contains(&id)
+                        {
+                            ids.push(id);
+                        }
+                        continue;
+                    }
+                    "Golos Text Medium" => {
+                        if let Some(id) = self.chrome_font_medium_id
+                            && !ids.contains(&id)
+                        {
+                            ids.push(id);
+                        }
+                        continue;
+                    }
+                    "JetBrains Mono" => {
+                        if let Some(id) = self.mono_font_id
+                            && !ids.contains(&id)
+                        {
+                            ids.push(id);
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                let Some(provider) = provider.as_ref() else { continue };
                 let lc = fam.to_ascii_lowercase();
                 if matches!(
                     lc.as_str(),
@@ -2747,7 +2809,7 @@ impl FemtovgBackend {
                     continue;
                 }
                 if let Some(rec) = provider.pick_face(fam, weight, core_style)
-                    && let Some(id) = self.load_font_by_path(&rec.path.clone(), &provider)
+                    && let Some(id) = self.load_font_by_path(&rec.path.clone(), provider)
                     && !ids.contains(&id)
                 {
                     if ids.is_empty() {
@@ -2759,7 +2821,9 @@ impl FemtovgBackend {
             }
         }
 
-        // Bundled Inter as the primary Latin fallback.
+        // Bundled Inter as the primary Latin fallback (DS-4: stays in the chain
+        // even for chrome text, per the design brief — Golos/mono are primary,
+        // Inter still backstops any glyph missing from those bundled faces).
         if let Some(inter) = self.font_id
             && !ids.contains(&inter)
         {

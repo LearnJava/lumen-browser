@@ -69,6 +69,7 @@ mod scrollbar;
 mod session_persist;
 mod tab_lifecycle;
 mod tabs;
+mod theme_tokens;
 mod tracks;
 mod zoom;
 mod network_service;
@@ -14693,13 +14694,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let tab_layout = tabs::strip::TabLayout::from_str(
                         &self.settings_store.tab_layout(),
                     );
-                    let mut layout_btn = tabs::strip::build_layout_toggle_btn(tab_layout, layout_btn_x);
+                    let mut layout_btn = tabs::strip::build_layout_toggle_btn(tab_layout, layout_btn_x, &pal);
                     overlay_buf.append(&mut layout_btn);
                     // Settings gear button: between tabs and layout toggle.
                     let settings_btn_x = layout_btn_x - tabs::strip::SETTINGS_BTN_W;
                     let mut settings_btn = tabs::strip::build_settings_btn(
                         settings_btn_x,
                         self.settings_panel.visible,
+                        &pal,
                     );
                     overlay_buf.append(&mut settings_btn);
                     // Archive toolbar button (rightmost 36 px of tab bar).
@@ -22111,6 +22113,26 @@ fn escape_js_string_char(ch: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── DS-1: design-token generator output sanity ───────────────────────────
+
+    #[test]
+    fn theme_tokens_radius_lg_matches_prototype() {
+        assert_eq!(crate::theme_tokens::radius::LG, 6.0);
+    }
+
+    #[test]
+    fn theme_tokens_profile_anonymous_matches_prototype() {
+        assert_eq!(
+            crate::theme_tokens::profile::ANONYMOUS,
+            lumen_layout::Color {
+                r: 255,
+                g: 59,
+                b: 48,
+                a: 255,
+            }
+        );
+    }
 
     // ── Ph3 P3-bfcache: Cache-Control: no-store eligibility filter ──────────
 

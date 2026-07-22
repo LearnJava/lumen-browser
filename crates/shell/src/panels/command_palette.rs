@@ -68,7 +68,7 @@ const ICON_HISTORY: Color = Color { r: 140, g: 200, b: 150, a: 255 };
 
 const FONT_SZ: f32 = 13.0;
 const FONT_SZ_SM: f32 = 11.0;
-const RADIUS: f32 = 8.0;
+const RADIUS: f32 = crate::theme_tokens::radius::LG;
 
 // ── Command actions ─────────────────────────────────────────────────────────
 

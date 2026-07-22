@@ -1,5 +1,109 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Done (DS-1 design-token generator, 2026-07-22):**
+  [`scripts/gen_tokens.py`](../scripts/gen_tokens.py) parses the four CSS
+  custom-property blocks of the design-system prototype
+  (`docs/design/lumen-v3_3.html`: `:root`, `body[data-theme="light"]`,
+  `body[data-theme="dark"]`, `body[data-profile=*]`) and generates
+  [`crates/shell/src/theme_tokens.rs`](../crates/shell/src/theme_tokens.rs) —
+  typed `radius`/`space`/`size`/`badge`/`light`/`dark`/`profile` modules of
+  `f32`/`lumen_layout::Color` constants, replacing scattered magic literals.
+  `--check` mode diffs against the committed file (exit 1 on drift, no write).
+  DS-1 only wires the module (`mod theme_tokens;` in `main.rs`, currently
+  unconsumed — `#![allow(dead_code)]` on the generated file) — consumers land
+  slice by slice per `docs/tasks/p1-design-v3.md` (DS-2 onward).
+- **Done (DS-2 `Palette`/tab-strip/address-bar on tokens, 2026-07-22):**
+  `panels::themes::Palette::DARK`/`LIGHT` are now built field-by-field from
+  `theme_tokens::{dark,light}` instead of bespoke hex literals — the 7
+  design-system-named roles map 1:1 (`tab_bar_bg`←`SURFACE_1`,
+  `tab_active_bg`←`SURFACE_2`, `input_bg`←`SURFACE_1`, `text`←`TEXT_PRIMARY`,
+  `text_dim`←`TEXT_SECONDARY`, `divider`←`STROKE`,
+  `accent`←`theme_tokens::profile::PERSONAL`); the remaining Lumen-only roles
+  (`header_bg`, `row_alt_bg`, `item_bg`, `item_selected_bg`, `overlay_border`,
+  `tab_inactive_bg`, `tab_sleep_bg`, `tab_hibernate_bg`) are pinned to the
+  nearest surface tier with the mapping decision documented per field in
+  `themes.rs`. One deliberate deviation from the DS-2 brief's literal
+  `overlay_bg←OVERLAY_BG` instruction: `Palette::overlay_bg` is the *opaque*
+  floating-panel/dropdown surface used by ~20 panels (the prototype's
+  `.dropdown`/`.popover`/`.modal` all use `--surface-0`), not the translucent
+  full-screen modal scrim the prototype's `--overlay-bg` custom property
+  actually names — mapping it to the scrim token would have made every panel
+  in the chrome render half-transparent over page content. `tabs/strip.rs`'s
+  layout-toggle and settings-gear buttons now take `&Palette` and are
+  theme-aware (`BAR_BG` constant removed); `address_bar.rs`'s omnibox focus
+  ring and caret now read `pal.accent` instead of a fixed blue (matches the
+  prototype's `.omnibox:focus-within{ border-color:var(--accent) }`) — the
+  `HistoryFts` result-tag colour, which used to reuse the same constant by
+  coincidence, is now its own `HISTORY_TAG` constant so the tag legend's
+  fixed colour-per-category scheme (unrelated to theming) is unaffected.
+- **Done (DS-3 chrome corner radii on `radius::{SM,MD,LG}` tokens, 2026-07-22):**
+  every literal chrome corner radius across ~20 panel/tab-strip modules
+  (`FillRoundedRect`/`DrawBorder` `radii` fields, `uniform_radii(r)`/`radii(r)`/
+  `corners(r)` call sites, and local `RADIUS`/`PANEL_RADIUS`/`BTN_RADIUS`/
+  `CARD_RADIUS`/`CHIP_RADIUS` constants) now reads `theme_tokens::radius::{SM,MD,LG}`
+  (2/4/6 px) instead of ad-hoc literals. Values outside the three-step scale
+  were re-quantised: `>6` (pill-shaped controls) clamp down to `LG` per the
+  design-system rule (no pills in chrome — cheaper fillrate, denser UI), and
+  in-between literals (3, 5, 7…) round to the nearest token. Nested "border +
+  1px-inset content" pairs (nine panels: `cert_panel`, `history_panel`,
+  `permission_panel`, `print_panel`(tooltip), `read_later_panel`,
+  `settings_panel`(panel + tooltip), `shields_panel`, `shortcuts_panel`) keep
+  their concentric-radius relationship via `radius::LG - 1.0` / `radius::MD -
+  1.0` rather than being flattened to a single token, since that inset is a
+  border-width derivation, not an independent design choice. Left untouched,
+  deliberately: true circles/dots (`radius = size / 2.0` — status dots, avatar
+  swatches, spinner/badge circles) since they are not a corner-radius-scale
+  choice; `surface/theme.rs`'s `Theme::radius_{sm,md,lg}` (ADR-009
+  `SurfaceManager` token set — ADR-009 migration is out of DS-track scope per
+  `docs/tasks/p1-design-v3.md`); and `newtab.rs`/`reader_view.rs`'s embedded
+  page-content CSS strings (New Tab tile grid, reader-mode article body — not
+  yet on the design-token system at all, deferred to DS-11/content-styling
+  work, not chrome paint radii). Verified: `cargo test -p lumen-shell` (1620
+  tests, unaffected `theme_tokens_radius_lg_matches_prototype` still pins
+  `radius::LG == 6.0`); `cargo clippy -p lumen-shell --all-targets -- -D
+  warnings` clean; headless `--screenshot` smoke-tested (no crash). Live
+  per-panel before/after screenshots were not captured for every one of the
+  ~20 touched overlays — the change is a value substitution onto an already
+  spec'd 2/4/6 scale, not new geometry.
+- **Done (DS-4 bundled Golos Text + JetBrains Mono chrome fonts, 2026-07-22):**
+  [`crates/engine/paint/src/chrome_fonts.rs`](../crates/engine/paint/src/chrome_fonts.rs)
+  bundles `GolosText-Regular.ttf`/`GolosText-Medium.ttf` (default chrome UI
+  font) and `JetBrainsMono-Regular.ttf` (omnibox URL field + DevTools
+  console/inspector/network panels), all SIL OFL 1.1 (`assets/fonts/OFL-*.txt`).
+  Fonts arrive as static instances (Golos Text upstream ships only a variable
+  `[wght]` font; `fonttools varLib.instancer` pinned `wght=400`/`500` — no
+  variable-font runtime support needed in either render path). Wired as
+  reserved `DrawText.font_family` names — `"Golos Text"`/`"Golos Text
+  Medium"`/`"JetBrains Mono"` — in **both** live-window backends: femtovg
+  (`FemtovgBackend::resolve_font_chain`, new `chrome_font_id`/
+  `chrome_font_medium_id`/`mono_font_id` fields loaded via `add_font_mem`
+  alongside bundled Inter) and the wgpu default (`Renderer::resolve_face_id`,
+  mirrored `chrome_face_id`/`chrome_face_medium_id`/`mono_face_id` `usize`
+  indices into `self.faces`, pushed right after the default Inter face at
+  construction) — ADR-017 can probe either backend as the live default, so
+  both must agree. An **empty** `font_family` — every chrome `DrawText` call
+  site in `crates/shell/src` passes one, confirmed by grep audit, since
+  content DrawText commands always carry a non-empty family from the CSS
+  cascade — now defaults to bundled Golos instead of falling straight to
+  Inter; Inter still backstops the chain for any glyph missing from Golos/
+  Mono. Explicit opt-in to `"JetBrains Mono"` at 4 call sites: the omnibox URL
+  input (`address_bar.rs`, dropdown suggestion labels/tags stay Golos-default)
+  and the DevTools console/inspector/network panel `make_text` helpers.
+  **Known caveat:** the reserved-name match is a plain string equality on
+  `font_family`, not a chrome/content flag — page content that explicitly sets
+  `font-family: "JetBrains Mono"` (a real, commonly-installed developer font,
+  e.g. a syntax-highlighted code block on a blog) will render with the
+  bundled copy rather than consulting the system `FontProvider`. Accepted:
+  same glyphs, same family, just always our bundled build instead of
+  deferring to the OS — no rendering break, only a minor loss of "use
+  whatever the OS has" purity that would require a non-string signal
+  (e.g. a dedicated `DisplayCommand::DrawText` field) to fully close, out of
+  scope for this slice. Headless/CPU rendering (`--screenshot`, WPT, graphic
+  tests) never draws chrome — only page content — so this default cannot
+  affect it; verified `cargo test -p lumen-shell` green and a headless
+  `--screenshot` smoke run does not panic. `cargo clippy -p lumen-paint
+  --all-features --all-targets` and `cargo clippy -p lumen-shell --all-targets`
+  both clean.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*
@@ -209,7 +313,7 @@
 - **Done (`@import` file loading — CSS Cascade L4 §6.5, 2026-07-18):** `inline_css_imports(css_text, base, sink, cookie_jar, media_ctx, seen, depth)` recursively resolves `@import` rules. Applied per-sheet in `parse_and_layout`: inline `<style>` imports resolve against the document `base`; each external `<link>` sheet resolves its own imports against its own URL (`fetch_stylesheet_text` returns the fetched text **and** its resolved `ResourceBase`, so nested `@import`s in `/css/a.css` point at `/css/`, not `/`). Imported content is **prepended** to the importing sheet's text (imported rules precede in the cascade). A `MediaQuery` gate (`imp.media.matches(media_ctx)`) skips imports whose media doesn't match the render context (same `screen`/`print` contexts as `<link media>` from BUG-268). `seen: HashSet<resolved-url>` guards cycles + duplicate loads; `MAX_CSS_IMPORT_DEPTH = 16` caps nesting. Fetch is shared with `<link>` via `fetch_stylesheet_text` (local file or http through `PREFETCH_CACHE`, extracted from `load_linked_stylesheets`). A fast `contains_ignore_ascii_case(b"@import")` gate skips the extra parse for import-free sheets (the common case). The `@import …;` directive lines stay in the text — the cascade parser collects them into `Stylesheet::imports` and ignores them, so no double-application. Deferred: streaming progressive frames don't inline imports (they apply on the final `parse_and_layout` pass). 7 unit tests (`inline_css_imports_*`, `contains_ignore_ascii_case_matches`).
 - **Done (off-UI-thread final pipeline — BUG-171 этап 2, 2026-06-19):** the heavy final render no longer runs synchronously on the winit event-loop thread. The `LoadEvent::LoadDone` handler now reads UI-only inputs (viewport, storage handles via `&mut self.ls_storage`), clones the `Send` rest (`event_sink`, `cookie_jar`, `sw_worker_store`, `cache_store`, `hyp_provider`, `load_proxy`), `std::mem::take`s `preload_dispatched`, and spawns a `std::thread` that calls `render_bytes` (fetch scripts → QuickJS → fetch+decode images/CSS/fonts → layout). The worker posts the result back as a new `LoadEvent::RenderDone(Box<RenderOutcome>, generation)`; the UI thread applies it via `apply_loaded_page` (+ Navigation Timing delivery) exactly as `LoadDone` used to. While the worker runs, the event loop keeps spinning — the window repaints the last streaming frame and stays responsive instead of freezing for the ~1.9 s JS + layout CPU phase. Unblocked by **B-1/ADR-014**: `QuickJsRuntime` is now a `Send` handle (the runtime lives on its own thread), so the JS context is created on the worker and shipped to the UI thread inside `RenderDone`. Supporting changes: `PersistentJs: Send` supertrait (so `Box<dyn PersistentJs>` crosses the thread boundary); `hyp_provider: Arc<KnuthLiangHyphenation>` (shared with the worker without losing the warmed dictionary cache); type alias `RenderedPage = (LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>)`. The U-1 **generation guard** drops a `RenderDone` from a superseded navigation (its page + JS handle drop, joining the JS thread); a current-generation `RenderDone` restores the taken `preload_dispatched`. `render_bytes`/`parse_and_layout` were already pure free fns taking only `Send`/`Arc` inputs, so no behavioural change to the pipeline itself — only *where* it runs. Compile-time regression guard: `render_pipeline_payload_is_send` asserts `RenderOutcome`/`LoadEvent`/`Box<dyn PersistentJs>`/`RawPage` are `Send`.
 - **Done (decoded-image cache — BUG-172, 2026-06-19):** module `lumen-shell::image_cache`. Process-global `IMAGE_CACHE: LazyLock<DecodedImageCache>` makes the two `<img>` loaders share one fetch+decode per image per navigation. Before this, `spawn_stream_image_loads` (PH1-2c progressive streaming) and the final `fetch_and_decode_images` (in `parse_and_layout`) independently took `collect_image_requests` and re-downloaded+re-decoded the same `src`s. The cache mirrors `prefetch::PrefetchCache`: generation-scoped, in-flight dedup via `Condvar` (first caller decodes, concurrent callers block and share the result), caches success *and* failure (`Option<DecodedImage>`), stale generation bypasses. Value is `DecodedImage::{Static, Animated}` behind `Arc`, so a hit clones a pointer not the pixels (the consumer makes the owned copy). The shared fetch+decode logic of both paths was extracted into the free fn `decode_image()` (single source of truth, original logging preserved). Streaming threads call `get_or_decode(self.load_generation, …)` then emit `LoadEvent::ImageDecoded`; the final pass calls `get_or_decode_current(…)` in `parallel_map`, skipping network+decode on a hit and only computing `wants_intrinsic`/`is_lazy` + cloning pixels. Reset: `IMAGE_CACHE.reset(generation)` at navigation start (next to `PREFETCH_CACHE.reset` in `start_streaming_load`) and `reset_new()` per render in headless `render_source_to_png` (`--screenshot` / `--ipc-server` Screenshot) — bounds memory in the long-lived IPC server and prevents stale cross-page reuse. Lazy `<img>` (on-scroll) and `background-image` are separate paths, never part of the double-load, and untouched. 6 unit tests in `image_cache`.
-- **Done (chrome theme palette — F2-6 stage 1, 2026-06-22):** `panels::themes::Palette` is a flat struct of role-named chrome colour tokens (tab-strip backgrounds, overlay/input/item surfaces, text/dim/divider, accent) with two const variants `Palette::DARK` / `Palette::LIGHT`; `ShellTheme::palette(os_dark) -> Palette` resolves the variant (honouring `ThemeBase::System` vs explicit Light/Dark) and overrides `accent` with the selected preset. `Palette::DARK` reproduces the previous hard-coded dark constants of `tabs/strip.rs` + `address_bar.rs` exactly, so the dark theme is pixel-identical; `LIGHT` is a soft neutral-grey set with dark text. `build_tab_bar(strip, w, pal, drag)` and `build_bar_overlay(state, bar, pal)` now take `&Palette` instead of a bare accent `Color`; the two call sites in `main.rs` pass `&self.shell_theme.palette(self.dark_mode)` so picking Light in the Appearance settings actually recolours the tab strip and the Ctrl+L omnibox. Theme-invariant indicator colours (ad-block checkbox, lifecycle Z-badges, container strips, group bars, focus ring, caret, result-tag) intentionally stay constant. 5 palette tests in `themes`.
+- **Done (chrome theme palette — F2-6 stage 1, 2026-06-22):** `panels::themes::Palette` is a flat struct of role-named chrome colour tokens (tab-strip backgrounds, overlay/input/item surfaces, text/dim/divider, accent) with two const variants `Palette::DARK` / `Palette::LIGHT`; `ShellTheme::palette(os_dark) -> Palette` resolves the variant (honouring `ThemeBase::System` vs explicit Light/Dark) and overrides `accent` with the selected preset. `Palette::DARK` reproduces the previous hard-coded dark constants of `tabs/strip.rs` + `address_bar.rs` exactly, so the dark theme is pixel-identical; `LIGHT` is a soft neutral-grey set with dark text. `build_tab_bar(strip, w, pal, drag)` and `build_bar_overlay(state, bar, pal)` now take `&Palette` instead of a bare accent `Color`; the two call sites in `main.rs` pass `&self.shell_theme.palette(self.dark_mode)` so picking Light in the Appearance settings actually recolours the tab strip and the Ctrl+L omnibox. Theme-invariant indicator colours (ad-block checkbox, lifecycle Z-badges, container strips, group bars, result-tag) intentionally stay constant. 5 palette tests in `themes`. **Superseded by DS-2 (2026-07-22, see above):** `Palette::DARK`/`LIGHT` are no longer a literal reproduction of the old hard-coded constants — they are generated-token-derived and visually match `docs/design/lumen-v3_3.html` instead; the omnibox focus ring and caret are no longer theme-invariant either (`pal.accent`).
 - **Done (per-panel theming — F2-6 stage 2 part 1, 2026-06-22):** all ~22 secondary panels now follow the active theme. `Palette` gained two role tokens — `header_bg` (panel title/toolbar bar) and `row_alt_bg` (zebra rows) — with DARK/LIGHT values. Every panel render fn (`privacy_panel`, `settings_panel`, `history_panel`, `workspace_panel`, `print_panel`, `a11y_panel`, `read_later_panel`, `note_viewer`, `bookmark_panel`, `shortcuts_panel`, `command_palette`, `tree_tabs`, `cert_panel`, `vertical_tabs`, `permission_panel`, `ai_panel`, `shields_panel`, `focus_panel`, `sidebar_panel`, `pip_window`, `split_view`) takes a trailing `pal: &Palette` and maps its former hard-coded surface constants to palette tokens (bg→`overlay_bg`, header→`header_bg`, zebra→`row_alt_bg`, item→`item_bg`, selection→`item_selected_bg`, input→`input_bg`, outer border→`overlay_border`, separators→`divider`, text→`text`/`text_dim`, accent→`accent`). **Semantic colours stay constant** (status red/green/amber, container/group/category identity colours, the PiP video letterbox, modal scrims). The redraw path computes `let pal = self.shell_theme.palette(self.dark_mode)` once and passes `&pal` to every panel call site. Dark theme is close to before (per-panel bespoke shades are now unified onto the shared palette tokens — a small intentional change, not pixel-identity). **Pending (F2-6 stage 2 part 2):** user-rearrangeable panel drag&drop / docking (ADR-009 `Surface`/`SurfaceManager` + layout persistence).
 - **Done (OS PiP window real size delivery, 2026-07-17):** `PipController`/`PipOsWindow` (CC-7) previously never told JS the floating window's real dimensions — `HTMLVideoElement.requestPictureInPicture()` always resolved a `PictureInPictureWindow` stuck at `(0, 0)`, and the `resize` event never fired even though the OS window is fully resizable. `panels::pip_os_window::physical_to_logical(width, height, scale_factor)` (pure, unit-tested) converts the winit physical size to CSS logical px; `Lumen::notify_pip_window_resized` pushes it into JS via `_lumen_pip_deliver_resize` (the native binding `video_pip.rs` already exposed but nothing called) — once right after `open_pip_os` creates the window, and again on every `WindowEvent::Resized` for the PiP window id. `render_pip_os` now shares the same helper instead of duplicating the physical→logical math.
 - **Done (Document PiP real OS window, slice 1, 2026-07-17):** `documentPictureInPicture.requestWindow()`/`PictureInPictureWindow.close()` (`crates/js/src/document_pip.rs`) previously called an unbound native (`_lumen_pip_request_window`) — the JS API never touched a real window. Now `_lumen_docpip_request_window(width, height)` / `_lumen_docpip_close()` (`crates/js/src/documentpip_bindings.rs`, a process-global queue mirroring `pip_bindings.rs`) reach `Lumen::doc_pip_controller: panels::doc_pip_os_window::DocPipController` (pure open/closed state, no re-target case since JS already rejects a second `requestWindow()` while active) and `Lumen::doc_pip_os: Option<DocPipOsWindow>` (a second always-on-top borderless `winit::Window` + its own `RenderBackend`, reusing `pip_os_window::{PipOsConfig, pip_window_attributes, physical_to_logical}` verbatim — they carry no video-specific state). Real size round-trips back via `_lumen_docpip_deliver_resize` (mirrors `_lumen_pip_deliver_resize`), and closing via the OS window's own close button calls `_lumen_docpip_deliver_close()` so `.pictureInPictureElement`/`_closed` stay truthful.

@@ -3560,6 +3560,147 @@
        "note": "Скоуп: ⬜ (кандидат)."
       }
      ]
+    },
+    {
+     "id": "DS",
+     "title": "DS: Дизайн-система v3.3 в хроме",
+     "status": "active",
+     "note": "Дорожка «Дизайн-система v3.3» (владелец — P1, назначено 2026-07-22): внедрение визуального эталона docs/design/lumen-v3_3.html в хром браузера. Полный бриф с пошаговыми срезами, файлами и DoD — docs/tasks/p1-design-v3.md. Аудит разрыва 2026-07-22: рендер-инфраструктура (display-list→wgpu), вкладки, ~30 панелей и хранилища уже есть; отстают токены, шрифты, омоглиф-защита, тулбар, профили, a11y хрома",
+     "tasks": [
+      {
+       "id": "DS-1",
+       "title": "DS-1: Генератор дизайн-токенов CSS→Rust",
+       "status": "done",
+       "size": "S",
+       "note": "scripts/gen_tokens.py парсит блоки :root/data-theme/data-profile эталона → crates/shell/src/theme_tokens.rs (radius 2/4/6, space 4px-сетка, size, light/dark-поверхности, акценты профилей, badge-цвета); режим --check против дрейфа"
+      },
+      {
+       "id": "DS-2",
+       "title": "DS-2: Palette и таб-бар/адресная строка на токенах",
+       "status": "done",
+       "size": "M",
+       "note": "Palette::DARK/LIGHT из theme_tokens; зачистка локальных hex в tabs/strip.rs (:35-73) и address_bar.rs (:35-39); theme-aware кнопки настроек/layout. После DS-1"
+      },
+      {
+       "id": "DS-3",
+       "title": "DS-3: Радиусы 2/4/6 + сетка 4px как инвариант",
+       "status": "done",
+       "size": "S",
+       "note": "Все радиусы хрома из radius::{SM,MD,LG} (2/4/6), пилюли >6px запрещены; сверка отступов с 4px-сеткой в затронутых местах. После DS-2"
+      },
+      {
+       "id": "DS-4",
+       "title": "DS-4: Шрифты Golos Text + JetBrains Mono",
+       "status": "done",
+       "size": "M",
+       "note": "Golos Text (UI) + JetBrains Mono (омнибокс-URL, DevTools) в assets/fonts/ c OFL-лицензиями; зарегистрированы как reserved font_family в ОБОИХ live-window бэкендах (femtovg + wgpu Renderer) — headless/CPU-путь chrome не рисует, доп. регистрация там не нужна"
+      },
+      {
+       "id": "DS-5",
+       "title": "DS-5: Детектор омоглифов/mixed-script (idn)",
+       "status": "planned",
+       "size": "S",
+       "note": "lumen-core::idn: display_host() → Unicode либо Punycode{reason} — mixed-script (лат+кир/греч) и кириллические омоглиф-метки с латинским TLD; чистая логика + тесты (аpple.com → xn--pple-43d.com; яндекс.рф — ок)"
+      },
+      {
+       "id": "DS-6",
+       "title": "DS-6: Омнибокс — punycode-показ + предупреждение",
+       "status": "planned",
+       "size": "S",
+       "note": "address_bar: URL/саджесты через display_host (spoof → punycode-рендер), красная строка-предупреждение под полем, Enter навигирует на punycode. После DS-5"
+      },
+      {
+       "id": "DS-7",
+       "title": "DS-7: Честность тумблеров в about:settings",
+       "status": "planned",
+       "size": "XS",
+       "note": "settings_panel: у каждого тумблера текст текущего состояния «: Вкл/Выкл», обновляется при переключении (правило честности тумблеров)"
+      },
+      {
+       "id": "DS-8",
+       "title": "DS-8: Поповер разрешений — session-only явно",
+       "status": "planned",
+       "size": "XS",
+       "note": "permission_panel УЖЕ session-only (in-memory) — добавить fine-print «действует только на сеанс, навсегда — about:settings/privacy»; persist из поповера не добавлять (правило: без чекбокса «запомнить»)"
+      },
+      {
+       "id": "DS-9",
+       "title": "DS-9: Постоянный тулбар 36px",
+       "status": "planned",
+       "size": "M",
+       "note": "Новый crates/shell/src/toolbar.rs (36px, по образцу strip.rs): назад/вперёд/reload + правый кластер (find/web/AI/загрузки/DevTools/настройки — зовут существующие панели); сдвиг content_layout_viewport и автоматика-офсетов Target::Point (+TOOLBAR_H); гейт: MCP live-клик + graphic_tests --only 00/03"
+      },
+      {
+       "id": "DS-10",
+       "title": "DS-10: Омнибокс инлайн в тулбаре",
+       "status": "planned",
+       "size": "M",
+       "note": "Омнибокс инлайн в центре тулбара (max 680px) вместо Ctrl+L-оверлея (build_bar_overlay:425 упраздняется); дропдаун под полем; замок→cert_panel, звезда→закладка, щит→shields_panel. После DS-9 (и DS-6 для punycode-рендера)"
+      },
+      {
+       "id": "DS-11",
+       "title": "DS-11: Newtab — 8 настраиваемых плиток + восстановление",
+       "status": "planned",
+       "size": "M",
+       "note": "newtab.rs: MAX_TILES 5→8, закрепляемые плитки (новый store newtab_tiles по образцу omnibox_aliases.rs, portable data/), плитка «+», кнопка «Восстановить закрытые» из session-persist; лент новостей нет — осознанное ограничение"
+      },
+      {
+       "id": "DS-12",
+       "title": "DS-12: Цвет пространства → сайдбар и активная вкладка",
+       "status": "planned",
+       "size": "S",
+       "note": "Уровень 1 иерархии: цвет workspace (storage/workspaces.rs:22 color уже есть) красит маркер активной вкладки (низ 2px гориз. / лево 2px верт.) и активный элемент workspace-панели; hex→Color хелпер + тест"
+      },
+      {
+       "id": "DS-13",
+       "title": "DS-13: Вертикальная контейнер-полоса на вкладке",
+       "status": "planned",
+       "size": "XS",
+       "note": "Контейнер-полоса: верхняя (strip.rs:808-814) → вертикальная слева 3px (радиус SM), также в vertical_tabs; цвета ContainerKind не меняются"
+      },
+      {
+       "id": "DS-14",
+       "title": "DS-14: UI переключателя профилей",
+       "status": "planned",
+       "size": "M",
+       "note": "Аватар-кнопка в тулбаре + panels/profile_menu.rs поверх готового ProfileRegistry (list_all/set_active/active); первый запуск создаёт 4 профиля (Личный/Рабочий/Анонимный/Гость); скоуп = переключение+accent, изоляция данных — DS-16. После DS-9"
+      },
+      {
+       "id": "DS-15",
+       "title": "DS-15: Сигнатуры профилей — обводка/монохром",
+       "status": "planned",
+       "size": "S",
+       "note": "Anonymous → красная inset-обводка окна 2px (4 FillRect поверх кадра, profile::ANONYMOUS); Guest → desaturate() всей Palette (монохром). После DS-14"
+      },
+      {
+       "id": "DS-16",
+       "title": "DS-16: ADR профилей + эфемерный Anonymous",
+       "status": "planned",
+       "size": "M",
+       "note": "ADR «Профили как контексты безопасности» (уровни изоляции, связь с ADR-012) + эфемерный срез: при Anonymous история/downloads не пишутся, cookie jar in-memory, баннер в history_panel. После DS-14"
+      },
+      {
+       "id": "DS-17",
+       "title": "DS-17: AX-узлы собственного хрома",
+       "status": "planned",
+       "size": "M",
+       "note": "lumen-a11y: синтетические chrome-узлы (TabList/Tab, ToolBar/Button, ComboBox-омнибокс) братьями к web-дереву в build_ax_tree (main.rs:10085); видно в MCP resource://a11y_tree; заодно поправить устаревший CAPABILITIES-пункт про «stubs» (Windows MSAA-мост уже реальный). После DS-9"
+      },
+      {
+       "id": "DS-18",
+       "title": "DS-18: Статистика блокировок в shields-поповере",
+       "status": "planned",
+       "size": "S",
+       "note": "Пер-вкладочный счётчик заблокированных запросов в точке блокировки adblock.rs (сброс на навигации) + цифры в shields_panel; разбивку трекеры/реклама показывать только если списки её реально дают"
+      },
+      {
+       "id": "DS-19",
+       "title": "DS-19: Загрузки — поповер по эталону",
+       "status": "planned",
+       "size": "S",
+       "note": "download.rs: нижний бар → поповер правый-низ 320px (карточки: имя+мета+прогресс 2px+«Открыть»/«В папке»), тумблер — кнопка тулбара с точкой-индикатором. После DS-9"
+      }
+     ]
     }
    ],
    "date": "36–48 мес"

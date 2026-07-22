@@ -12,6 +12,7 @@ use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 use crate::tab_lifecycle::state::TabState;
 use crate::tabs::strip::TabStrip;
 
@@ -199,7 +200,7 @@ pub fn build_tab_bar_vertical(
 
         // Favicon placeholder square.
         let icon_top = row_top + (ROW_H - ICON_SZ) * 0.5;
-        let icon_r = 2.0_f32;
+        let icon_r = radius::SM;
         out.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(ICON_LEFT, icon_top, ICON_SZ, ICON_SZ),
             radii: CornerRadii {

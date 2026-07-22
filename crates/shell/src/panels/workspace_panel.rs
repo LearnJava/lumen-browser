@@ -20,6 +20,7 @@ use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 
 // ── Visual constants ─────────────────────────────────────────────────────────
 
@@ -54,7 +55,7 @@ const ADD_BTN_RIGHT: f32 = 8.0;
 const DELETE_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
 /// Semantic: create/add action indicator — green, carries constructive-action meaning.
 const ADD_FG: Color = Color { r: 120, g: 180, b: 120, a: 255 };
-const CHIP_RADIUS: f32 = 5.0;
+const CHIP_RADIUS: f32 = radius::LG;
 const FONT_SZ: f32 = 11.0;
 
 // ── Data types ────────────────────────────────────────────────────────────────

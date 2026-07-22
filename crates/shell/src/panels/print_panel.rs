@@ -18,6 +18,7 @@ use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
@@ -412,14 +413,14 @@ pub fn build_panel(panel: &PrintPanel, px: f32, py: f32, pal: &Palette) -> Displ
     let mut out: DisplayList = vec![DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         color: pal.overlay_bg,
-        radii: uniform_radii(6.0),
+        radii: uniform_radii(radius::LG),
     }];
     out.push(DisplayCommand::DrawBorder {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         widths: [1.0; 4],
         colors: [pal.overlay_border; 4],
         styles: [BorderStyle::Solid; 4],
-        radii: uniform_radii(6.0),
+        radii: uniform_radii(radius::LG),
     });
 
     // Header.
@@ -427,7 +428,7 @@ pub fn build_panel(panel: &PrintPanel, px: f32, py: f32, pal: &Palette) -> Displ
         rect: Rect::new(px, py, PANEL_W, HEADER_H),
         color: pal.header_bg,
         radii: CornerRadii {
-            tl: 6.0, tl_y: 6.0, tr: 6.0, tr_y: 6.0,
+            tl: radius::LG, tl_y: radius::LG, tr: radius::LG, tr_y: radius::LG,
             br: 0.0, br_y: 0.0, bl: 0.0, bl_y: 0.0,
         },
     });
@@ -523,7 +524,7 @@ fn emit_scale_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32, p
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(field_x, field_y, btn_w, FIELD_H),
         color: pal.input_bg,
-        radii: uniform_radii(3.0),
+        radii: uniform_radii(radius::MD),
     });
     out.push(make_text(
         "−".to_owned(),
@@ -540,7 +541,7 @@ fn emit_scale_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32, p
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(plus_x, field_y, btn_w, FIELD_H),
         color: pal.input_bg,
-        radii: uniform_radii(3.0),
+        radii: uniform_radii(radius::MD),
     });
     out.push(make_text(
         "+".to_owned(),
@@ -616,7 +617,7 @@ fn emit_buttons(out: &mut DisplayList, px: f32, py: f32, pal: &Palette) {
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(cancel_x, btn_y, BTN_W, BTN_H),
         color: pal.item_bg,
-        radii: uniform_radii(4.0),
+        radii: uniform_radii(radius::MD),
     });
     out.push(make_text(
         "Отмена".to_owned(),
@@ -632,7 +633,7 @@ fn emit_buttons(out: &mut DisplayList, px: f32, py: f32, pal: &Palette) {
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(print_x, btn_y, BTN_W, BTN_H),
         color: pal.accent,
-        radii: uniform_radii(4.0),
+        radii: uniform_radii(radius::MD),
     });
     out.push(make_text(
         "Печать".to_owned(),
@@ -692,7 +693,7 @@ fn emit_pill(out: &mut DisplayList, x: f32, y: f32, w: f32, label: &str, active:
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(x, y, w, PILL_H),
         color: bg,
-        radii: uniform_radii(4.0),
+        radii: uniform_radii(radius::MD),
     });
     out.push(make_text(
         label.to_owned(),
@@ -710,14 +711,14 @@ fn emit_text_field(out: &mut DisplayList, value: &str, x: f32, y: f32, w: f32, f
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(x, y, w, FIELD_H),
         color: pal.input_bg,
-        radii: uniform_radii(3.0),
+        radii: uniform_radii(radius::MD),
     });
     out.push(DisplayCommand::DrawBorder {
         rect: Rect::new(x, y, w, FIELD_H),
         widths: [1.0; 4],
         colors: [border_col; 4],
         styles: [BorderStyle::Solid; 4],
-        radii: uniform_radii(3.0),
+        radii: uniform_radii(radius::MD),
     });
     out.push(make_text(
         value.to_owned(),
