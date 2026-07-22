@@ -3546,13 +3546,13 @@
     {
      "id": "DS",
      "title": "DS: Дизайн-система v3.3 в хроме",
-     "status": "planned",
+     "status": "active",
      "note": "Дорожка «Дизайн-система v3.3» (владелец — P1, назначено 2026-07-22): внедрение визуального эталона docs/design/lumen-v3_3.html в хром браузера. Полный бриф с пошаговыми срезами, файлами и DoD — docs/tasks/p1-design-v3.md. Аудит разрыва 2026-07-22: рендер-инфраструктура (display-list→wgpu), вкладки, ~30 панелей и хранилища уже есть; отстают токены, шрифты, омоглиф-защита, тулбар, профили, a11y хрома",
      "tasks": [
       {
        "id": "DS-1",
        "title": "DS-1: Генератор дизайн-токенов CSS→Rust",
-       "status": "ready",
+       "status": "done",
        "size": "S",
        "note": "scripts/gen_tokens.py парсит блоки :root/data-theme/data-profile эталона → crates/shell/src/theme_tokens.rs (radius 2/4/6, space 4px-сетка, size, light/dark-поверхности, акценты профилей, badge-цвета); режим --check против дрейфа"
       },
