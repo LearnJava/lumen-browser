@@ -69,6 +69,7 @@ mod scrollbar;
 mod session_persist;
 mod tab_lifecycle;
 mod tabs;
+mod theme_tokens;
 mod tracks;
 mod zoom;
 mod network_service;
@@ -22111,6 +22112,26 @@ fn escape_js_string_char(ch: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── DS-1: design-token generator output sanity ───────────────────────────
+
+    #[test]
+    fn theme_tokens_radius_lg_matches_prototype() {
+        assert_eq!(crate::theme_tokens::radius::LG, 6.0);
+    }
+
+    #[test]
+    fn theme_tokens_profile_anonymous_matches_prototype() {
+        assert_eq!(
+            crate::theme_tokens::profile::ANONYMOUS,
+            lumen_layout::Color {
+                r: 255,
+                g: 59,
+                b: 48,
+                a: 255,
+            }
+        );
+    }
 
     // ── Ph3 P3-bfcache: Cache-Control: no-store eligibility filter ──────────
 

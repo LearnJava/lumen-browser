@@ -1,5 +1,17 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Done (DS-1 design-token generator, 2026-07-22):**
+  [`scripts/gen_tokens.py`](../scripts/gen_tokens.py) parses the four CSS
+  custom-property blocks of the design-system prototype
+  (`docs/design/lumen-v3_3.html`: `:root`, `body[data-theme="light"]`,
+  `body[data-theme="dark"]`, `body[data-profile=*]`) and generates
+  [`crates/shell/src/theme_tokens.rs`](../crates/shell/src/theme_tokens.rs) —
+  typed `radius`/`space`/`size`/`badge`/`light`/`dark`/`profile` modules of
+  `f32`/`lumen_layout::Color` constants, replacing scattered magic literals.
+  `--check` mode diffs against the committed file (exit 1 on drift, no write).
+  DS-1 only wires the module (`mod theme_tokens;` in `main.rs`, currently
+  unconsumed — `#![allow(dead_code)]` on the generated file) — consumers land
+  slice by slice per `docs/tasks/p1-design-v3.md` (DS-2 onward).
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*
