@@ -65,6 +65,45 @@
   per-panel before/after screenshots were not captured for every one of the
   ~20 touched overlays — the change is a value substitution onto an already
   spec'd 2/4/6 scale, not new geometry.
+- **Done (DS-4 bundled Golos Text + JetBrains Mono chrome fonts, 2026-07-22):**
+  [`crates/engine/paint/src/chrome_fonts.rs`](../crates/engine/paint/src/chrome_fonts.rs)
+  bundles `GolosText-Regular.ttf`/`GolosText-Medium.ttf` (default chrome UI
+  font) and `JetBrainsMono-Regular.ttf` (omnibox URL field + DevTools
+  console/inspector/network panels), all SIL OFL 1.1 (`assets/fonts/OFL-*.txt`).
+  Fonts arrive as static instances (Golos Text upstream ships only a variable
+  `[wght]` font; `fonttools varLib.instancer` pinned `wght=400`/`500` — no
+  variable-font runtime support needed in either render path). Wired as
+  reserved `DrawText.font_family` names — `"Golos Text"`/`"Golos Text
+  Medium"`/`"JetBrains Mono"` — in **both** live-window backends: femtovg
+  (`FemtovgBackend::resolve_font_chain`, new `chrome_font_id`/
+  `chrome_font_medium_id`/`mono_font_id` fields loaded via `add_font_mem`
+  alongside bundled Inter) and the wgpu default (`Renderer::resolve_face_id`,
+  mirrored `chrome_face_id`/`chrome_face_medium_id`/`mono_face_id` `usize`
+  indices into `self.faces`, pushed right after the default Inter face at
+  construction) — ADR-017 can probe either backend as the live default, so
+  both must agree. An **empty** `font_family` — every chrome `DrawText` call
+  site in `crates/shell/src` passes one, confirmed by grep audit, since
+  content DrawText commands always carry a non-empty family from the CSS
+  cascade — now defaults to bundled Golos instead of falling straight to
+  Inter; Inter still backstops the chain for any glyph missing from Golos/
+  Mono. Explicit opt-in to `"JetBrains Mono"` at 4 call sites: the omnibox URL
+  input (`address_bar.rs`, dropdown suggestion labels/tags stay Golos-default)
+  and the DevTools console/inspector/network panel `make_text` helpers.
+  **Known caveat:** the reserved-name match is a plain string equality on
+  `font_family`, not a chrome/content flag — page content that explicitly sets
+  `font-family: "JetBrains Mono"` (a real, commonly-installed developer font,
+  e.g. a syntax-highlighted code block on a blog) will render with the
+  bundled copy rather than consulting the system `FontProvider`. Accepted:
+  same glyphs, same family, just always our bundled build instead of
+  deferring to the OS — no rendering break, only a minor loss of "use
+  whatever the OS has" purity that would require a non-string signal
+  (e.g. a dedicated `DisplayCommand::DrawText` field) to fully close, out of
+  scope for this slice. Headless/CPU rendering (`--screenshot`, WPT, graphic
+  tests) never draws chrome — only page content — so this default cannot
+  affect it; verified `cargo test -p lumen-shell` green and a headless
+  `--screenshot` smoke run does not panic. `cargo clippy -p lumen-paint
+  --all-features --all-targets` and `cargo clippy -p lumen-shell --all-targets`
+  both clean.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*

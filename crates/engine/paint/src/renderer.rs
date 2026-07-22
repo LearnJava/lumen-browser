@@ -1738,6 +1738,15 @@ pub struct Renderer {
     /// `font-family` пуст или ни одно имя не нашлось через `FontProvider`.
     /// Остальные добавляются лениво при первом `DrawText` с известной family.
     faces: Vec<LoadedFace>,
+    /// `face_id` bundled Golos Text Regular (DS-4) — default chrome UI font,
+    /// used by [`Self::resolve_face_id`] when `font_family` is empty (every
+    /// chrome `DrawText` call site) or requests reserved family `"Golos Text"`.
+    chrome_face_id: Option<usize>,
+    /// `face_id` bundled Golos Text Medium (DS-4) — reserved family `"Golos Text Medium"`.
+    chrome_face_medium_id: Option<usize>,
+    /// `face_id` bundled JetBrains Mono Regular (DS-4) — reserved family
+    /// `"JetBrains Mono"`, used for the omnibox URL field and DevTools panels.
+    mono_face_id: Option<usize>,
     /// `face_id` по абсолютному пути TTF — чтобы не грузить файл повторно.
     face_id_by_path: HashMap<PathBuf, usize>,
     /// Мемоизация `resolve_face_id`: хэш `(families, weight, style)` →
@@ -3524,6 +3533,30 @@ impl Renderer {
 
         let atlas = GlyphAtlas::new(ATLAS_DIM);
 
+        // DS-4: bundled chrome UI faces (Golos Text + JetBrains Mono), loaded
+        // eagerly right after the default (Inter) face at index 0 — mirrors
+        // `FemtovgBackend::new`'s eager `add_font_mem` for the same fonts.
+        // A `None` id (metrics failed to parse — shouldn't happen for a
+        // bundled, CI-validated asset) just leaves `resolve_face_id` falling
+        // back to the default face 0.
+        let mut faces = vec![LoadedFace {
+            metrics: build_face_metrics(&font_bytes),
+            bytes: Arc::from(font_bytes),
+        }];
+        let push_chrome_face = |faces: &mut Vec<LoadedFace>, bytes: &'static [u8]| {
+            build_face_metrics(bytes).map(|metrics| {
+                let id = faces.len();
+                faces.push(LoadedFace { metrics: Some(metrics), bytes: Arc::from(bytes) });
+                id
+            })
+        };
+        let chrome_face_id =
+            push_chrome_face(&mut faces, crate::chrome_fonts::GOLOS_TEXT_REGULAR);
+        let chrome_face_medium_id =
+            push_chrome_face(&mut faces, crate::chrome_fonts::GOLOS_TEXT_MEDIUM);
+        let mono_face_id =
+            push_chrome_face(&mut faces, crate::chrome_fonts::JETBRAINS_MONO_REGULAR);
+
         let (depth_texture, depth_view) = {
             let (t, v) = create_depth_texture(&device, headless_w, headless_h);
             (Some(t), Some(v))
@@ -3590,10 +3623,10 @@ impl Renderer {
              target_color_space,
              canvas_bg: None,
              atlas,
-            faces: vec![LoadedFace {
-                metrics: build_face_metrics(&font_bytes),
-                bytes: Arc::from(font_bytes),
-            }],
+            faces,
+            chrome_face_id,
+            chrome_face_medium_id,
+            mono_face_id,
             face_id_by_path: HashMap::new(),
             resolve_cache: HashMap::new(),
             font_provider: Some(Arc::new(SystemFontIndex::new())),
@@ -3679,6 +3712,25 @@ impl Renderer {
         weight: FontWeight,
         style: FontStyle,
     ) -> usize {
+        // DS-4: chrome never queries the CSS FontProvider — every chrome
+        // `DrawText` passes an empty `font_family` (page content always has a
+        // non-empty one, from the UA/author stylesheet's font-family cascade),
+        // so an empty list defaults to the bundled chrome UI face (Golos
+        // Text). Reserved bundled family names resolve directly here,
+        // independent of whether a `FontProvider` is installed at all.
+        if families.is_empty() {
+            return self.chrome_face_id.unwrap_or(0);
+        }
+        for fam in families {
+            match fam.as_str() {
+                "Golos Text" => return self.chrome_face_id.unwrap_or(0),
+                "Golos Text Medium" => {
+                    return self.chrome_face_medium_id.or(self.chrome_face_id).unwrap_or(0);
+                }
+                "JetBrains Mono" => return self.mono_face_id.unwrap_or(0),
+                _ => {}
+            }
+        }
         let Some(provider) = self.font_provider.clone() else {
             return 0;
         };
@@ -3770,6 +3822,14 @@ impl Renderer {
                 continue;
             }
             for fam in font_family {
+                // DS-4: reserved bundled chrome names resolve without the
+                // provider in `resolve_face_id` — skip them here too, else
+                // every frame re-attempts a `pick_face` lookup for hot chrome
+                // text (omnibox, DevTools) that never gets cached (the actual
+                // resolve short-circuits before reaching `resolve_cache`).
+                if matches!(fam.as_str(), "Golos Text" | "Golos Text Medium" | "JetBrains Mono") {
+                    continue;
+                }
                 let lc = fam.to_lowercase();
                 if Self::is_generic_family(&lc) {
                     continue;
