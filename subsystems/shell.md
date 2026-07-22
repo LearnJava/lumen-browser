@@ -123,6 +123,18 @@
   9 new tests (`guard_*`, `commit_normalizes_*`, `overlay_*`,
   `dropdown_suggestion_url_is_punycode_guarded`). `cargo test -p lumen-shell`
   and `cargo clippy -p lumen-shell --all-targets -- -D warnings` both clean.
+- **Done (DS-7 settings toggle honesty, 2026-07-23):**
+  [`crates/shell/src/panels/settings_panel.rs`](../crates/shell/src/panels/settings_panel.rs)
+  gained `toggle_state_suffix(on)` (`": Вкл"`/`": Выкл"`), appended to the row
+  label wherever `push_toggle` is used — shields, DoH (Privacy), HTTP/3
+  (Network), and each Adblock subscription row — so every binary toggle's
+  state is legible from the label text alone, not just the toggle's colour.
+  Fingerprint-mode (3-way options row, not a toggle) and the design brief's
+  aspirational "HTTPS-upgrade" toggle (no such setting exists in code) are out
+  of scope. 1 new regression test (`toggle_labels_report_current_state`,
+  asserts the label flips with the underlying `bool`). `cargo test -p
+  lumen-shell` and `cargo clippy -p lumen-shell --all-targets -- -D warnings`
+  both clean.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*
