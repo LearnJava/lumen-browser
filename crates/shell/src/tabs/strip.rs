@@ -59,10 +59,6 @@ fn adblock_cb_x_range(tab_left: f32) -> (f32, f32) {
 /// Colour of the vertical drop-indicator bar.
 const DROP_INDICATOR_COLOR: Color = Color { r: 255, g: 255, b: 255, a: 180 };
 
-/// Fallback tab-strip background for the layout-toggle button (always dark).
-/// The themed strip background comes from [`Palette::tab_bar_bg`]; this constant
-/// remains only for [`build_layout_toggle_btn`], which is not yet theme-aware.
-const BAR_BG: Color = Color { r: 22, g: 22, b: 26, a: 255 };
 const CLOSE_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
 
 /// Badge colour for BackgroundOld tier — amber "z" sleep icon.
@@ -603,14 +599,11 @@ pub fn hit_test_layout_btn(x: f32, y: f32, btn_x: f32) -> bool {
 /// `btn_x` — CSS-px x coordinate of the button's left edge (positioned between
 /// the tab strip and the archive button).  `tab_layout` controls the highlight:
 /// the button background is lit when [`TabLayout::Vertical`] is active.
-pub fn build_layout_toggle_btn(tab_layout: TabLayout, btn_x: f32) -> DisplayList {
+/// `pal` supplies the theme palette so the button matches the tab strip.
+pub fn build_layout_toggle_btn(tab_layout: TabLayout, btn_x: f32, pal: &Palette) -> DisplayList {
     let is_active = tab_layout == TabLayout::Vertical;
-    let bg = if is_active {
-        Color { r: 30, g: 60, b: 100, a: 255 }
-    } else {
-        BAR_BG
-    };
-    let icon_color = Color { r: 160, g: 160, b: 180, a: 255 };
+    let bg = if is_active { pal.item_selected_bg } else { pal.tab_bar_bg };
+    let icon_color = pal.text_dim;
     const ICON_SZ: f32 = 12.0;
     let icon_x = btn_x + (LAYOUT_BTN_W - ICON_SZ) * 0.5;
     let icon_y = (TAB_BAR_HEIGHT - ICON_SZ * 1.2) * 0.5;
@@ -651,13 +644,10 @@ pub fn hit_test_settings_btn(x: f32, y: f32, btn_x: f32) -> bool {
 /// `btn_x` — CSS-px x coordinate of the button's left edge (positioned between
 /// the tab strip and the layout-toggle button). `active` lights the background
 /// while the settings page is open, mirroring the layout button's highlight.
-pub fn build_settings_btn(btn_x: f32, active: bool) -> DisplayList {
-    let bg = if active {
-        Color { r: 30, g: 60, b: 100, a: 255 }
-    } else {
-        BAR_BG
-    };
-    let icon_color = Color { r: 160, g: 160, b: 180, a: 255 };
+/// `pal` supplies the theme palette so the button matches the tab strip.
+pub fn build_settings_btn(btn_x: f32, active: bool, pal: &Palette) -> DisplayList {
+    let bg = if active { pal.item_selected_bg } else { pal.tab_bar_bg };
+    let icon_color = pal.text_dim;
     const ICON_SZ: f32 = 12.0;
     let icon_x = btn_x + (SETTINGS_BTN_W - ICON_SZ) * 0.5;
     let icon_y = (TAB_BAR_HEIGHT - ICON_SZ * 1.2) * 0.5;
@@ -1796,7 +1786,7 @@ mod tests {
 
     #[test]
     fn build_layout_toggle_btn_emits_icon_text() {
-        let dl = build_layout_toggle_btn(TabLayout::Horizontal, 700.0);
+        let dl = build_layout_toggle_btn(TabLayout::Horizontal, 700.0, &Palette::DARK);
         let has_icon = dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { .. }));
         assert!(has_icon, "toggle button must emit an icon glyph");
     }
@@ -1819,7 +1809,7 @@ mod tests {
 
     #[test]
     fn build_settings_btn_emits_icon_text() {
-        let dl = build_settings_btn(700.0, false);
+        let dl = build_settings_btn(700.0, false, &Palette::DARK);
         let has_icon = dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { .. }));
         assert!(has_icon, "settings button must emit an icon glyph");
     }
