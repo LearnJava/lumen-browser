@@ -1017,6 +1017,17 @@ fn run_window_mode(
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
+        newtab_tiles: {
+            let path = adblock::browser_data_dir().join("newtab_tiles.db");
+            lumen_storage::NewtabTiles::open(&path).unwrap_or_else(|e| {
+                eprintln!(
+                    "newtab_tiles: cannot open {} ({e}); using in-memory store",
+                    path.display()
+                );
+                lumen_storage::NewtabTiles::open_in_memory()
+                    .expect("in-memory newtab_tiles always opens")
+            })
+        },
         notes: Vec::new(),
         read_later_store: lumen_knowledge::ReadLater::open_in_memory()
             .expect("read_later in-memory"),
@@ -7752,6 +7763,11 @@ struct Lumen {
     /// Seeded with `!g` (Google) and `!gh` (GitHub) on startup.  Custom aliases
     /// are addable via `set(trigger, expansion)`.
     omnibox_aliases: lumen_storage::OmniboxAliases,
+    /// SQLite-backed pinned `about:newtab` speed-dial tiles (DS-11).
+    ///
+    /// Portable-data store (`<exe_dir>/data/newtab_tiles.db`); falls back to
+    /// in-memory if the path cannot be opened.
+    newtab_tiles: lumen_storage::NewtabTiles,
     /// In-session notes created via `@notes <text>` in the omnibox.
     ///
     /// Persisted in-memory for the session; each entry is a raw text string.
@@ -15970,10 +15986,12 @@ impl Lumen {
                         self.navigate_fragment(frag.to_owned());
                     } else if links::is_navigable_href(&href) {
                         let resolved = self.source.resolve_href(&href);
-                        // A full-URL link to the current document differing only in
-                        // its fragment (`<a href="/page#x">` clicked from `/page`)
-                        // is a same-document fragment navigation, not a full reload.
-                        if let Some(frag) =
+                        // `about:newtab?...` special links (pin/unpin, "+",
+                        // restore-closed, DS-11) are handled in-place, never
+                        // as a real navigation.
+                        if let Some(action) = newtab::parse_action(&resolved) {
+                            self.apply_newtab_action(action);
+                        } else if let Some(frag) =
                             links::same_document_fragment(self.current_display_url(), &resolved)
                         {
                             if click_log::is_enabled() {
@@ -18018,11 +18036,19 @@ impl Lumen {
     ///
     /// Order: `sidebar:` prefix → bang aliases (`!g`) → `@notes` / `@read-later`
     /// → record in search_history → plain navigate.
-    /// Build a fresh `about:newtab` [`PageSource::Static`] from the current
-    /// history. Reads the top-[`newtab::MAX_TILES`] most-visited sites from
-    /// `history_store`; an empty/failed read yields a tile-less page.
+    /// Build a fresh `about:newtab` [`PageSource::Static`] from pinned tiles
+    /// (`newtab_tiles`) plus a top-sites filler from `history_store`
+    /// (DS-11). Pinned tiles always come first, in their stored order; an
+    /// empty/failed read of either store just yields fewer tiles.
     fn build_newtab_source(&self) -> PageSource {
-        let sites: Vec<newtab::TopSite> = self
+        let pinned: Vec<newtab::TopSite> = self
+            .newtab_tiles
+            .list_all()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| newtab::TopSite { url: t.url, title: t.title, pinned: true })
+            .collect();
+        let top_sites: Vec<newtab::TopSite> = self
             .history_store
             .most_visited(newtab::MAX_TILES as i64)
             .unwrap_or_default()
@@ -18033,13 +18059,54 @@ impl Lumen {
                 } else {
                     e.title
                 };
-                newtab::TopSite { url: e.url, title }
+                newtab::TopSite { url: e.url, title, pinned: false }
             })
             .collect();
+        let sites = newtab::merge_tiles(&pinned, &top_sites);
         PageSource::Static {
             html: newtab::build_newtab_html(&sites),
             url: newtab::NEWTAB_URL.to_owned(),
         }
+    }
+
+    /// Apply a [`newtab::NewtabAction`] parsed from a clicked `about:newtab?...`
+    /// link (pin/unpin toggle, the "+" tile, or "Restore closed"), then reload
+    /// the newtab page with the updated tile set.
+    ///
+    /// `RestoreClosed` reuses the cross-restart session-restore mechanism
+    /// (`restore_session`, backed by `session_store`) — Lumen has no separate
+    /// per-tab "closed tabs" stack, so this reopens the last persisted session
+    /// snapshot wholesale instead of undoing a single tab close.
+    fn apply_newtab_action(&mut self, action: newtab::NewtabAction) {
+        match action {
+            newtab::NewtabAction::Pin { url, title } => {
+                let _ = self.newtab_tiles.pin(&url, &title);
+            }
+            newtab::NewtabAction::Unpin { url } => {
+                let _ = self.newtab_tiles.unpin(&url);
+            }
+            newtab::NewtabAction::PinCurrent => {
+                if let Some(prev) = self.nav_back.last()
+                    && let Some(url) = prev.source.url_str()
+                {
+                    let title = self
+                        .history_store
+                        .get(url)
+                        .ok()
+                        .flatten()
+                        .map(|e| e.title)
+                        .filter(|t| !t.trim().is_empty())
+                        .unwrap_or_else(|| url.to_owned());
+                    let _ = self.newtab_tiles.pin(url, &title);
+                }
+            }
+            newtab::NewtabAction::RestoreClosed => {
+                self.restore_session();
+                self.request_redraw();
+                return;
+            }
+        }
+        self.navigate_to(self.build_newtab_source());
     }
 
     fn handle_omnibox_commit(&mut self, value: String) {
@@ -18086,8 +18153,15 @@ impl Lumen {
             return;
         }
 
-        // `about:newtab` — internal start page with a speed dial of the
-        // top-5 most-visited sites (task CC-5).
+        // `about:newtab?...` — pin/unpin/"+"/restore-closed special links
+        // (DS-11), committed e.g. by pasting a copied tile link.
+        if let Some(action) = newtab::parse_action(value.trim()) {
+            self.apply_newtab_action(action);
+            return;
+        }
+
+        // `about:newtab` — internal start page with a speed dial of pinned +
+        // most-visited sites (task CC-5, DS-11).
         if value.trim() == newtab::NEWTAB_URL {
             self.navigate_to(self.build_newtab_source());
             return;
@@ -18934,10 +19008,9 @@ impl Lumen {
                         self.navigate_fragment(frag.to_owned());
                     } else if links::is_navigable_href(&href) {
                         let resolved = self.source.resolve_href(&href);
-                        // A full-URL link to the current document differing only
-                        // in its fragment (`<a href="/page#x">` from `/page`) is a
-                        // same-document fragment navigation, not a full reload.
-                        if let Some(frag) =
+                        if let Some(action) = newtab::parse_action(&resolved) {
+                            self.apply_newtab_action(action);
+                        } else if let Some(frag) =
                             links::same_document_fragment(self.current_display_url(), &resolved)
                         {
                             self.navigate_fragment(frag);
