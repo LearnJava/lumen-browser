@@ -1672,9 +1672,9 @@
       {
        "id": "WPT-VENDOR-acid",
        "title": "WPT: вендорить + прогнать категорию `acid`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). исторические Acid1/2/3, не актуальный спек"
+       "note": "DONE 2026-07-23: вендорена (tests/wpt/acid/, 30 файлов: acid2/, acid3/), включена несмотря на скоуп 🚫 по тому же постоянному решению пользователя, что и accelerometer. Прогон run_report.py --all --root acid --recursive: 3 отобранных id — 2 типа reftest (не реализован у исполнителя, S8 будущий срез), 1 (numbered-tests.html, testharness) — TIMEOUT, многооконный скоринг-харнесс Acid3 вне однооконной модели. 0/1 harness OK. Не заводился отдельный BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет (см. заметку в docs/wpt-status.md)"
       },
       {
        "id": "WPT-VENDOR-ai",
