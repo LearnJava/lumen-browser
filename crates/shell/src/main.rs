@@ -836,6 +836,48 @@ fn run_window_mode(
     let (input_tx, input_rx) = input::channel();
     let (read_later_tx, read_later_rx) =
         std::sync::mpsc::channel::<(String, String, Vec<u8>)>();
+
+    // DS-14: persistent profile registry — first run seeds the 4 default
+    // profiles and makes the first one ("Личный") active. On later runs the
+    // registry already has rows and an active pointer, so this block is a
+    // no-op past the `count() == 0` check (persists across restart).
+    let profiles_registry = {
+        let path = adblock::browser_data_dir().join("profiles.db");
+        let reg = lumen_storage::ProfileRegistry::open(&path).unwrap_or_else(|e| {
+            eprintln!(
+                "profiles: cannot open {} ({e}); using in-memory store",
+                path.display()
+            );
+            lumen_storage::ProfileRegistry::open_in_memory()
+                .expect("in-memory profiles always opens")
+        });
+        if reg.count().unwrap_or(0) == 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            for (name, slug, _color) in panels::profile_menu::DEFAULT_PROFILES {
+                let _ = reg.create(name, &format!("profiles/{slug}/"), "", now);
+            }
+            if let Ok(Some(first)) = reg.get_by_name(panels::profile_menu::DEFAULT_PROFILES[0].0) {
+                let _ = reg.set_active(Some(first.id));
+            }
+        }
+        reg
+    };
+    let profile_entries: Vec<panels::profile_menu::ProfileEntry> = profiles_registry
+        .list_all()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(i, p)| panels::profile_menu::ProfileEntry {
+            id: p.id,
+            name: p.name.clone(),
+            color: panels::profile_menu::color_for_profile(&p.name, i),
+        })
+        .collect();
+    let active_profile_id = profiles_registry.active().ok().flatten().map(|p| p.id);
+
     let mut app = Lumen {
         display_list: Vec::new(),
         tile_grid: lumen_paint::TileGrid::default_size(),
@@ -993,6 +1035,13 @@ fn run_window_mode(
         workspace_panel: panels::workspace_panel::WorkspacePanel::new(),
         workspaces: lumen_storage::Workspaces::open_in_memory()
             .expect("workspaces in-memory"),
+        profile_menu: {
+            let mut pm = panels::profile_menu::ProfileMenuPanel::new();
+            pm.set_entries(profile_entries);
+            pm.set_active(active_profile_id);
+            pm
+        },
+        profiles: profiles_registry,
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new(),
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
@@ -7623,6 +7672,16 @@ struct Lumen {
     /// Persistent workspace storage — SQLite in-memory during testing; wired to
     /// a disk path in production via `Workspaces::open(path)`.
     workspaces: lumen_storage::Workspaces,
+    /// Profile switcher dropdown state (DS-14), anchored below the toolbar
+    /// avatar button (`toolbar::avatar_x()`).
+    profile_menu: panels::profile_menu::ProfileMenuPanel,
+    /// Persistent profile registry (§9.3, DS-14): profile metadata + which
+    /// one is active. Opened from the portable data dir
+    /// (`<exe_dir>/data/profiles.db`); first run seeds 4 default profiles
+    /// (Личный/Рабочий/Анонимный/Гость — `panels::profile_menu::DEFAULT_PROFILES`).
+    /// DS-14 scope: only the active pointer and visual signature (avatar,
+    /// chrome accent) are wired — per-profile data isolation is DS-16.
+    profiles: lumen_storage::ProfileRegistry,
     /// Shields floating panel state (7C.4).
     ///
     /// Shows blocked-request counts per domain, and lets the user toggle
@@ -12583,6 +12642,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     if y_css < toolbar::CHROME_H {
                         let win_w = self.viewport_width_css();
                         match toolbar::hit_test(x_css, y_css, win_w) {
+                            toolbar::ToolbarHit::Profile => {
+                                self.profile_menu.toggle();
+                                if self.profile_menu.visible {
+                                    self.refresh_profile_menu_entries();
+                                }
+                            }
                             toolbar::ToolbarHit::Back => self.navigate_back(),
                             toolbar::ToolbarHit::Forward => self.navigate_forward(),
                             toolbar::ToolbarHit::Reload => {
@@ -12752,6 +12817,31 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             Some(panels::tree_tabs::TreeTabHit::Empty) | None => {}
                         }
                         return;
+                    }
+
+                    // Profile switcher dropdown (DS-14): anchored below the
+                    // toolbar avatar button.
+                    if self.profile_menu.visible {
+                        let avatar_x = toolbar::avatar_x();
+                        if let Some(hit) = panels::profile_menu::hit_test(
+                            &self.profile_menu,
+                            x_css,
+                            y_css,
+                            avatar_x,
+                            toolbar::CHROME_H,
+                        ) {
+                            match hit {
+                                panels::profile_menu::ProfileMenuHit::SwitchTo(id) => {
+                                    if self.profiles.set_active(Some(id)).is_ok() {
+                                        self.profile_menu.set_active(Some(id));
+                                    }
+                                    self.profile_menu.visible = false;
+                                }
+                                panels::profile_menu::ProfileMenuHit::Empty => {}
+                            }
+                            self.request_redraw();
+                            return;
+                        }
                     }
 
                     // Shields floating panel (7C.4): top-right overlay.
@@ -14198,7 +14288,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Без find — page = self.display_list, overlay = только scrollbar.
                 // Resolved chrome palette for the active theme — passed to every
                 // themed overlay panel so they follow the light/dark setting.
-                let pal = self.shell_theme.palette(self.dark_mode);
+                // DS-14: the active profile's accent overrides the theme's own
+                // accent preset — profile (level 0) outranks the Appearance
+                // setting for this one field, matching "переключение профилей
+                // меняет ... accent всего хрома" in the DS-14 brief.
+                let mut pal = self.shell_theme.palette(self.dark_mode);
+                if let Some(entry) = self.profile_menu.active_entry() {
+                    pal.accent = entry.color;
+                }
 
                 let (mut page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
                     if self.find.is_open() {
@@ -14790,12 +14887,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         devtools: self.devtools_console.visible,
                         settings: self.settings_panel.visible,
                     };
+                    // DS-14: avatar badge — active profile's colour + initial
+                    // letter, falling back to the resolved accent/"?" while no
+                    // profile is cached yet (e.g. mid-startup).
+                    let avatar_entry = self.profile_menu.active_entry();
+                    let avatar = toolbar::AvatarBadge {
+                        letter: avatar_entry
+                            .and_then(|e| e.name.chars().next())
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "?".to_owned()),
+                        color: avatar_entry.map(|e| e.color).unwrap_or(pal.accent),
+                    };
                     let mut toolbar_cmds = toolbar::build_toolbar(
                         win_w,
                         &pal,
                         toolbar_active,
                         &self.address_bar,
                         self.current_display_url(),
+                        &avatar,
                     );
                     overlay_buf.append(&mut toolbar_cmds);
                     // Inline omnibox (DS-10): suggestion dropdown, anchored below
@@ -14810,6 +14919,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             &pal,
                         );
                         overlay_buf.append(&mut dropdown_cmds);
+                    }
+                    // Profile switcher dropdown (DS-14) — drawn after the
+                    // toolbar so it layers on top.
+                    if self.profile_menu.visible {
+                        let mut pm_cmds = panels::profile_menu::build_panel(
+                            &self.profile_menu,
+                            toolbar::avatar_x(),
+                            toolbar::CHROME_H,
+                            &pal,
+                        );
+                        overlay_buf.append(&mut pm_cmds);
                     }
                 }
 
@@ -19383,6 +19503,26 @@ impl Lumen {
             })
             .collect();
         self.workspace_panel.set_workspaces(entries);
+    }
+
+    /// Reload the profile list from `ProfileRegistry` into the dropdown's
+    /// cache (DS-14). Cheap — the registry only ever holds a handful of
+    /// rows — called each time the dropdown opens so it reflects any
+    /// external edit to `profiles.db` between sessions.
+    fn refresh_profile_menu_entries(&mut self) {
+        let entries: Vec<panels::profile_menu::ProfileEntry> = self
+            .profiles
+            .list_all()
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .map(|(i, p)| panels::profile_menu::ProfileEntry {
+                id: p.id,
+                name: p.name.clone(),
+                color: panels::profile_menu::color_for_profile(&p.name, i),
+            })
+            .collect();
+        self.profile_menu.set_entries(entries);
     }
 
     /// Reload the bookmark list from storage into the panel cache.

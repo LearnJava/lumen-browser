@@ -15,9 +15,17 @@
 //! actual field/text rendering to `address_bar::build_inline_field` (the
 //! suggestion dropdown is a separate overlay the caller draws on top, see
 //! `address_bar::build_dropdown`).
+//!
+//! DS-14: a profile avatar button (26×26 circle — the one chrome element the
+//! design system exempts from the squircle-only rule, since a circle is the
+//! profile's identity signature) sits first in the left cluster, before nav.
+//! Clicking it is `ToolbarHit::Profile`; the caller toggles
+//! `panels::profile_menu::ProfileMenuPanel` and renders its dropdown as a
+//! separate overlay anchored at `avatar_x()`, mirroring how the omnibox
+//! dropdown is layered on top of this module's own field rendering.
 
 use lumen_core::geom::Rect;
-use lumen_layout::{FontStyle, FontWeight};
+use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::address_bar;
@@ -61,11 +69,29 @@ const OMNI_PAD: f32 = 8.0;
 /// Gap between the star and shield icon-buttons.
 const OMNI_ICON_GAP: f32 = 2.0;
 
+/// Foreground colour of the avatar's initial-letter glyph — always white
+/// regardless of theme or profile colour, matching `.avatar{ color:#fff }`
+/// in the design reference (the coloured circle behind it always provides
+/// enough contrast, unlike arbitrary chrome text).
+const AVATAR_FG: Color = Color { r: 255, g: 255, b: 255, a: 255 };
+
+/// Rendering data for the profile avatar button (DS-14): the active
+/// profile's accent colour and the first letter of its display name.
+#[derive(Debug, Clone)]
+pub struct AvatarBadge {
+    /// Single-character (grapheme) label drawn centred on the circle.
+    pub letter: String,
+    /// Circle fill colour — the active profile's accent.
+    pub color: Color,
+}
+
 /// A click target within the toolbar row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolbarHit {
     /// No button under the cursor (still within the toolbar row).
     Empty,
+    /// Click on the profile avatar — toggles the profile switcher dropdown.
+    Profile,
     /// Navigate back one entry in session history.
     Back,
     /// Navigate forward one entry in session history.
@@ -113,9 +139,16 @@ pub struct ToolbarActive {
     pub settings: bool,
 }
 
-/// Left edge x-coordinate of each left-cluster button (back, forward, reload).
+/// Left edge x-coordinate of the profile avatar button (DS-14) — the
+/// leading element of the left cluster, before the nav buttons.
+pub fn avatar_x() -> f32 {
+    CLUSTER_PAD
+}
+
+/// Left edge x-coordinate of each nav-cluster button (back, forward,
+/// reload), offset past the avatar button.
 fn left_btn_x(idx: usize) -> f32 {
-    CLUSTER_PAD + idx as f32 * (BTN_SZ + BTN_GAP)
+    CLUSTER_PAD + BTN_SZ + BTN_GAP + idx as f32 * (BTN_SZ + BTN_GAP)
 }
 
 /// Left edge x-coordinate of the `idx`-th right-cluster button (0 = find,
@@ -131,7 +164,8 @@ fn right_btn_x(window_w: f32, idx: usize) -> f32 {
 /// and the text area between them. Shared by `hit_test` and `build_toolbar`
 /// (which delegates the field's own rendering to `address_bar`).
 pub fn omnibox_rects(window_w: f32) -> address_bar::FieldRects {
-    let left_cluster_w = 3.0 * BTN_SZ + 2.0 * BTN_GAP;
+    // Avatar + back/forward/reload = 4 elements.
+    let left_cluster_w = 4.0 * BTN_SZ + 3.0 * BTN_GAP;
     let right_cluster_w =
         RIGHT_BTN_COUNT as f32 * BTN_SZ + (RIGHT_BTN_COUNT - 1) as f32 * BTN_GAP;
     let avail_x0 = CLUSTER_PAD + left_cluster_w + OMNIBOX_GAP;
@@ -170,6 +204,10 @@ fn rect_contains(rect: Rect, x: f32, y: f32) -> bool {
 pub fn hit_test(x: f32, y: f32, window_w: f32) -> ToolbarHit {
     if !(TAB_BAR_HEIGHT..CHROME_H).contains(&y) {
         return ToolbarHit::Empty;
+    }
+    let ax = avatar_x();
+    if (ax..ax + BTN_SZ).contains(&x) {
+        return ToolbarHit::Profile;
     }
     let nav = [ToolbarHit::Back, ToolbarHit::Forward, ToolbarHit::Reload];
     for (i, hit) in nav.into_iter().enumerate() {
@@ -245,6 +283,38 @@ fn push_btn(out: &mut DisplayList, btn_x: f32, glyph: &str, active: bool, pal: &
     });
 }
 
+/// Push the profile avatar circle (DS-14): a filled circle in the profile's
+/// accent colour with its initial letter centred in white. Unlike
+/// [`push_btn`], this is unconditional — the avatar always renders filled,
+/// there is no "inactive/transparent" state.
+fn push_avatar(out: &mut DisplayList, badge: &AvatarBadge) {
+    let x = avatar_x();
+    let y = TAB_BAR_HEIGHT + (size::TOOLBAR_H - BTN_SZ) * 0.5;
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: Rect::new(x, y, BTN_SZ, BTN_SZ),
+        radii: corners(BTN_SZ * 0.5),
+        color: badge.color,
+    });
+    let letter_w = BTN_SZ * 0.6;
+    let letter_x = x + (BTN_SZ - letter_w) * 0.5;
+    let letter_y = y + (BTN_SZ - ICON_SZ * 1.2) * 0.5;
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(letter_x, letter_y, letter_w, ICON_SZ * 1.2),
+        text: badge.letter.clone(),
+        font_size: ICON_SZ,
+        color: AVATAR_FG,
+        font_family: Vec::new(),
+        font_weight: FontWeight::BOLD,
+        font_style: FontStyle::Normal,
+        font_variation_axes: Vec::new(),
+        font_features: Vec::new(),
+        font_palette: None,
+        tab_size: 0.0,
+        highlight_name: None,
+        text_orientation: None,
+    });
+}
+
 /// Build a viewport-locked display list for the toolbar row.
 ///
 /// Renders the bar background + bottom divider, the left navigation cluster
@@ -257,15 +327,18 @@ fn push_btn(out: &mut DisplayList, btn_x: f32, glyph: &str, active: bool, pal: &
 /// editable input.
 ///
 /// Does not draw the suggestion dropdown — see `address_bar::build_dropdown`,
-/// called separately by the caller only while the bar is focused.
+/// called separately by the caller only while the bar is focused. Likewise
+/// does not draw the profile switcher dropdown (DS-14) — the caller renders
+/// `panels::profile_menu::build_panel` separately while it is visible.
 pub fn build_toolbar(
     window_w: f32,
     pal: &Palette,
     active: ToolbarActive,
     address_bar_state: &address_bar::AddressBarState,
     current_url: &str,
+    avatar: &AvatarBadge,
 ) -> DisplayList {
-    let mut out = DisplayList::with_capacity(2 + 9 * 2 + 8);
+    let mut out = DisplayList::with_capacity(2 + 10 * 2 + 8);
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(0.0, TAB_BAR_HEIGHT, window_w, size::TOOLBAR_H),
         color: pal.toolbar_bg,
@@ -275,6 +348,7 @@ pub fn build_toolbar(
         color: pal.divider,
     });
 
+    push_avatar(&mut out, avatar);
     push_btn(&mut out, left_btn_x(0), "\u{2190}", false, pal); // ← back
     push_btn(&mut out, left_btn_x(1), "\u{2192}", false, pal); // → forward
     push_btn(&mut out, left_btn_x(2), "\u{21BB}", false, pal); // ↻ reload
@@ -302,10 +376,20 @@ mod tests {
         Palette::DARK
     }
 
+    fn avatar() -> AvatarBadge {
+        AvatarBadge { letter: "K".to_owned(), color: Color { r: 0, g: 102, b: 255, a: 255 } }
+    }
+
     #[test]
     fn hit_test_outside_row_is_empty() {
         assert_eq!(hit_test(20.0, 0.0, 1024.0), ToolbarHit::Empty);
         assert_eq!(hit_test(20.0, CHROME_H + 1.0, 1024.0), ToolbarHit::Empty);
+    }
+
+    #[test]
+    fn hit_test_avatar() {
+        let y = TAB_BAR_HEIGHT + 1.0;
+        assert_eq!(hit_test(avatar_x() + 2.0, y, 1024.0), ToolbarHit::Profile);
     }
 
     #[test]
@@ -359,7 +443,9 @@ mod tests {
     #[test]
     fn build_toolbar_emits_background_nine_buttons_and_omnibox_field() {
         let bar = address_bar::AddressBarState::default();
-        let cmds = build_toolbar(1024.0, &dark(), ToolbarActive::default(), &bar, "https://example.com");
+        let cmds = build_toolbar(
+            1024.0, &dark(), ToolbarActive::default(), &bar, "https://example.com", &avatar(),
+        );
         let fill_rects = cmds
             .iter()
             .filter(|c| matches!(c, DisplayCommand::FillRect { .. }))
@@ -370,24 +456,26 @@ mod tests {
             .count();
         let texts = cmds.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).count();
         // Background + divider = 2 plain FillRects; no button is "active" so
-        // no button-highlight FillRoundedRect is emitted — only the omnibox
-        // field's own border+background (2). 9 buttons + lock/star/shield +
-        // host text = 13 glyphs.
+        // no button-highlight FillRoundedRect is emitted — only the avatar
+        // circle (always drawn) + the omnibox field's own border+background
+        // (2) = 3. 9 buttons + avatar letter + lock/star/shield + host text
+        // = 14 glyphs.
         assert_eq!(fill_rects, 2);
-        assert_eq!(rounded_rects, 2);
-        assert_eq!(texts, 13);
+        assert_eq!(rounded_rects, 3);
+        assert_eq!(texts, 14);
     }
 
     #[test]
     fn build_toolbar_active_button_gets_highlight() {
         let active = ToolbarActive { settings: true, ..Default::default() };
         let bar = address_bar::AddressBarState::default();
-        let cmds = build_toolbar(1024.0, &dark(), active, &bar, "https://example.com");
+        let cmds =
+            build_toolbar(1024.0, &dark(), active, &bar, "https://example.com", &avatar());
         let highlights =
             cmds.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).count();
-        // 1 settings-button highlight + 2 for the (always-drawn) omnibox
-        // field border+background.
-        assert_eq!(highlights, 3);
+        // 1 settings-button highlight + avatar circle + 2 for the
+        // (always-drawn) omnibox field border+background.
+        assert_eq!(highlights, 4);
     }
 
     #[test]
