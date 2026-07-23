@@ -387,7 +387,8 @@ pub fn build_with_overlay(
 
 fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh): (u32, u32)) {
     let x = (ww as f32 - BAR_WIDTH - BAR_PAD).max(BAR_PAD);
-    let y = BAR_PAD;
+    // DS-9: floats below the permanent toolbar row, not the raw window top.
+    let y = crate::toolbar::CHROME_H + BAR_PAD;
 
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(x, y, BAR_WIDTH, BAR_HEIGHT),

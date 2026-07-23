@@ -70,6 +70,7 @@ mod session_persist;
 mod tab_lifecycle;
 mod tabs;
 mod theme_tokens;
+mod toolbar;
 mod tracks;
 mod zoom;
 mod network_service;
@@ -1962,8 +1963,9 @@ fn extract_import_session(
 /// Извлечь `--viewport <W>x<H>` из аргументов (DEVX-1).
 ///
 /// Overrides the window's CSS content viewport size (window height still adds
-/// `tabs::strip::TAB_BAR_HEIGHT` on top, same as the non-deterministic default —
-/// see `resumed()`). Needed because `--deterministic` forces a 1280×800 window,
+/// `toolbar::CHROME_H` — tab bar + toolbar — on top, same as the
+/// non-deterministic default — see `resumed()`). Needed because
+/// `--deterministic` forces a 1280×800 window,
 /// which breaks `graphic_tests/run.py --live`'s magenta-marker crop calibration
 /// (baked in at the pipeline's fixed 1024×720 viewport); this flag lets a caller
 /// combine `--deterministic` (freeze Date.now/Math.random/rAF) with the exact
@@ -5697,8 +5699,8 @@ fn decide_fullscreen_poll(prev: (u32, u32), cur: (u32, u32), attempts: u8) -> Fu
 /// from the full renderer surface size `surface` (already in CSS px).
 ///
 /// In an interactive window the page is composited *below* the browser chrome:
-/// the tab strip (`TAB_BAR_HEIGHT`) always, plus the workspace switcher
-/// (`SWITCHER_HEIGHT`) when visible. The page content is shifted down by that
+/// the tab strip + toolbar (`toolbar::CHROME_H`) always, plus the workspace
+/// switcher (`SWITCHER_HEIGHT`) when visible. The page content is shifted down by that
 /// chrome via `PushTransform`, and scroll clamping uses the same reduced height
 /// (`viewport_height_css`). The layout pass must therefore see the *content*
 /// height — not the full window — so that `vh`/`%`-heights/`@media (height)`
@@ -5712,7 +5714,7 @@ fn content_layout_viewport(surface: Size, has_window: bool, workspace_visible: b
     if !has_window {
         return (surface.width, surface.height);
     }
-    let chrome_h = tabs::strip::TAB_BAR_HEIGHT
+    let chrome_h = toolbar::CHROME_H
         + if workspace_visible {
             panels::workspace_panel::SWITCHER_HEIGHT
         } else {
@@ -10133,13 +10135,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             // `--viewport` (DEVX-1) wins over both defaults below — lets
             // `--deterministic` be combined with graphic_tests' fixed 1024×720
             // crop-calibration contract.
-            (w, h + tabs::strip::TAB_BAR_HEIGHT)
+            (w, h + toolbar::CHROME_H)
         } else if self.deterministic {
             (1280.0, 800.0)
         } else {
-            // Высота окна = CSS viewport (720) + tab bar (36) = 756, чтобы
-            // веб-контент получал ровно 720 CSS px, как ожидают graphic tests.
-            (1024.0, 720.0 + tabs::strip::TAB_BAR_HEIGHT)
+            // Высота окна = CSS viewport (720) + tab bar + toolbar (CHROME_H) = 792,
+            // чтобы веб-контент получал ровно 720 CSS px, как ожидают graphic tests.
+            (1024.0, 720.0 + toolbar::CHROME_H)
         };
         let attrs = Window::default_attributes()
             .with_title(window_title(self.title.as_deref()))
@@ -11835,7 +11837,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (position.x as f32) / dpr;
                     let y_css = (position.y as f32) / dpr;
-                    let hovered = if y_css < tabs::strip::TAB_BAR_HEIGHT {
+                    let hovered = if y_css < toolbar::CHROME_H {
                         None
                     } else {
                         let (page_x, page_y) = self.page_point(x_css, y_css);
@@ -11907,7 +11909,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let y_css = (position.y as f32) / dpr;
                         let (page_x, page_y) = (
                             x_css - left_dock_w + self.scroll_x,
-                            y_css - tabs::strip::TAB_BAR_HEIGHT + self.scroll_y,
+                            y_css - toolbar::CHROME_H + self.scroll_y,
                         );
                         let target_nid = self.layout_box.as_ref().and_then(|lb| {
                             hit_test(Point::new(page_x, page_y), lb)
@@ -11988,7 +11990,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .map_or(1.0_f32, |r| r.scale_factor() as f32)
                         .max(1e-6);
                     let win_w = self.viewport_width_css();
-                    let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + toolbar::CHROME_H;
                     self.pip.drag_to(
                         (position.x as f32) / dpr,
                         (position.y as f32) / dpr,
@@ -12019,7 +12021,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // (below) if hover changes so ordering vs enter/leave holds.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     self.pending_pointer_moves.push((x_css, y_css));
-                    let new_hovered = if y_css < tabs::strip::TAB_BAR_HEIGHT {
+                    let new_hovered = if y_css < toolbar::CHROME_H {
                         None
                     } else {
                         let (page_x, page_y) = self.page_point(x_css, y_css);
@@ -12452,7 +12454,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 x_css,
                                 y_css,
                                 win_w,
-                                tabs::strip::TAB_BAR_HEIGHT,
+                                toolbar::CHROME_H,
                             ) {
                                 Some(tabs::archive::ArchiveHit::Restore(id)) => {
                                     if let Some(entry) = self.archive.take(id)
@@ -12560,6 +12562,46 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                         return;
                     }
+                    // Toolbar (DS-9) occupies y = TAB_BAR_HEIGHT..toolbar::CHROME_H —
+                    // dispatch before any panel anchored below it.
+                    if y_css < toolbar::CHROME_H {
+                        let win_w = self.viewport_width_css();
+                        match toolbar::hit_test(x_css, y_css, win_w) {
+                            toolbar::ToolbarHit::Back => self.navigate_back(),
+                            toolbar::ToolbarHit::Forward => self.navigate_forward(),
+                            toolbar::ToolbarHit::Reload => {
+                                // Mirrors `KeyCommand::Reload`: routed through the
+                                // UserInteraction task source rather than called
+                                // directly (HTML §8.1.4).
+                                let flag = Rc::clone(&self.pending_reload);
+                                self.runtime.handle().queue_task(
+                                    runtime::TaskSource::UserInteraction,
+                                    move || { flag.set(true); },
+                                );
+                            }
+                            toolbar::ToolbarHit::Find => {
+                                self.hint.close();
+                                self.find.open();
+                            }
+                            toolbar::ToolbarHit::WebSidebar => self.sidebar.toggle(),
+                            toolbar::ToolbarHit::AiSidebar => {
+                                self.ai_panel.toggle();
+                                self.relayout_chrome();
+                            }
+                            toolbar::ToolbarHit::Downloads => self.downloads.toggle_visible(),
+                            toolbar::ToolbarHit::DevTools => self.devtools_console.toggle(),
+                            toolbar::ToolbarHit::Settings => {
+                                if self.settings_panel.visible {
+                                    self.close_settings_panel();
+                                } else {
+                                    self.open_settings_panel();
+                                }
+                            }
+                            toolbar::ToolbarHit::Empty => {}
+                        }
+                        self.request_redraw();
+                        return;
+                    }
                     // Archive panel: close on click below tab bar when open.
                     if self.archive.visible {
                         let win_w = self.viewport_width_css();
@@ -12568,7 +12610,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             x_css,
                             y_css,
                             win_w,
-                            tabs::strip::TAB_BAR_HEIGHT,
+                            toolbar::CHROME_H,
                         ) {
                             Some(tabs::archive::ArchiveHit::Restore(id)) => {
                                 if let Some(entry) = self.archive.take(id)
@@ -12609,12 +12651,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         && x_css >= vt_origin
                         && x_css < vt_origin + vt_w
                     {
-                        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                        let win_h = self.viewport_height_css() + toolbar::CHROME_H;
                         match panels::vertical_tabs::hit_test(
                             &self.tab_strip,
                             x_css - vt_origin,
                             y_css,
-                            tabs::strip::TAB_BAR_HEIGHT,
+                            toolbar::CHROME_H,
                             win_h,
                             self.vertical_tabs.scroll_y,
                             vt_w,
@@ -12642,13 +12684,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         && x_css >= tt_origin
                         && x_css < tt_origin + tt_w
                     {
-                        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                        let win_h = self.viewport_height_css() + toolbar::CHROME_H;
                         match panels::tree_tabs::hit_test(
                             &self.tab_strip,
                             &self.tree_tabs,
                             x_css - tt_origin,
                             y_css,
-                            tabs::strip::TAB_BAR_HEIGHT,
+                            toolbar::CHROME_H,
                             win_h,
                             tt_w,
                         ) {
@@ -12683,7 +12725,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Shields floating panel (7C.4): top-right overlay.
                     if self.shields.visible {
                         let win_w = self.viewport_width_css();
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         if let Some(hit) = panels::shields_panel::hit_test(
                             &self.shields,
                             x_css,
@@ -12708,7 +12750,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                     // Privacy network panel (V5): right-docked overlay.
                     if self.privacy.visible {
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         let win_w = self.viewport_width_css();
                         let win_h = self.viewport_height_css() + tab_h;
                         match panels::privacy_panel::hit_test(
@@ -12733,7 +12775,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                     // Permission popover (7C.2): top-left overlay below tab bar.
                     if self.permission.visible {
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         if let Some(hit) = panels::permission_panel::hit_test(
                             &self.permission,
                             x_css,
@@ -12759,7 +12801,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     if self.read_later_panel.visible {
                         use panels::read_later_panel::ReadLaterHit;
                         let win_w = self.viewport_width_css();
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         let px = win_w - panels::read_later_panel::PANEL_W - 4.0;
                         let py = tab_h + 4.0;
                         let hit = panels::read_later_panel::hit_test(
@@ -13228,7 +13270,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                     // AI sidebar panel (§12.8): cross-dockable AI assistant.
                     if self.ai_panel.visible {
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         let win_h = self.viewport_height_css() + tab_h;
                         let ai_w = self
                             .panel_layout
@@ -13264,7 +13306,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                     // Sidebar web panel (7D.3): cross-dockable panel.
                     if self.sidebar.visible {
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         let win_h = self.viewport_height_css() + tab_h;
                         let sb_w = self
                             .panel_layout
@@ -13301,7 +13343,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     if self.workspace_panel.visible {
                         let win_w = self.viewport_width_css();
                         let win_h = self.viewport_height_css()
-                            + tabs::strip::TAB_BAR_HEIGHT
+                            + toolbar::CHROME_H
                             + panels::workspace_panel::SWITCHER_HEIGHT;
                         if let Some(hit) = panels::workspace_panel::hit_test(
                             &self.workspace_panel,
@@ -13553,7 +13595,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         MouseScrollDelta::LineDelta(_, l) => l,
                         MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
                     };
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let tab_h = toolbar::CHROME_H;
                     let win_h = self.viewport_height_css() + tab_h;
                     let body_h = panels::privacy_panel::list_body_height(win_h, tab_h);
                     if lines > 0.0 {
@@ -13653,7 +13695,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         MouseScrollDelta::LineDelta(_, l) => l,
                         MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
                     };
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let tab_h = toolbar::CHROME_H;
                     let win_h = self.viewport_height_css() + tab_h;
                     let panel_h = win_h - tab_h;
                     self.vertical_tabs.scroll_by(
@@ -14384,7 +14426,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut priv_cmds = panels::privacy_panel::build_privacy_panel(
                         &self.privacy,
                         priv_win_size,
-                        tabs::strip::TAB_BAR_HEIGHT,
+                        toolbar::CHROME_H,
                         &pal,
                     );
                     overlay_buf.append(&mut priv_cmds);
@@ -14414,7 +14456,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut insp_cmds = devtools::inspector::build_inspector_panel(
                         &self.dom_inspector,
                         win_css,
-                        tabs::strip::TAB_BAR_HEIGHT,
+                        toolbar::CHROME_H,
                     );
                     overlay_buf.append(&mut insp_cmds);
                 }
@@ -14422,14 +14464,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Vertical tab panel: docked left sidebar, below the tab bar.
                 // Rendered before the tab bar so tab bar draws on top.
                 if self.vertical_tabs.visible {
-                    let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + toolbar::CHROME_H;
                     let vt_w = self.panel_layout.width_for(
                         panel_layout::ID_VERTICAL_TABS,
                         panels::vertical_tabs::PANEL_WIDTH,
                     );
                     let mut vt_cmds = panels::vertical_tabs::build_tab_bar_vertical(
                         &self.tab_strip,
-                        tabs::strip::TAB_BAR_HEIGHT,
+                        toolbar::CHROME_H,
                         win_h,
                         self.vertical_tabs.scroll_y,
                         &pal,
@@ -14446,7 +14488,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // parent-child indentation and collapse/expand arrows.
                 // Toggle via Ctrl+Shift+B; occupies the same PANEL_WIDTH as vertical_tabs.
                 if self.tree_tabs.visible {
-                    let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + toolbar::CHROME_H;
                     let tt_w = self.panel_layout.width_for(
                         panel_layout::ID_TREE_TABS,
                         panels::tree_tabs::PANEL_WIDTH,
@@ -14454,7 +14496,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut tt_cmds = panels::tree_tabs::build_panel(
                         &self.tab_strip,
                         &self.tree_tabs,
-                        tabs::strip::TAB_BAR_HEIGHT,
+                        toolbar::CHROME_H,
                         win_h,
                         &pal,
                         tt_w,
@@ -14470,7 +14512,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // the tab bar.  Refresh blocked counts before rendering.
                 if self.shields.visible {
                     self.shields.refresh();
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let tab_h = toolbar::CHROME_H;
                     let win_w = self.viewport_width_css();
                     let mut sh_cmds = panels::shields_panel::build_panel(
                         &self.shields,
@@ -14483,7 +14525,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 // Permission popover (7C.2): top-left overlay anchored below the tab bar.
                 if self.permission.visible {
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let tab_h = toolbar::CHROME_H;
                     let mut perm_cmds = panels::permission_panel::build_panel(
                         &self.permission,
                         tab_h,
@@ -14504,7 +14546,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 // AI sidebar panel (§12.8, GG-1): cross-dockable AI assistant.
                 if self.ai_panel.visible {
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let tab_h = toolbar::CHROME_H;
                     let win_h = self.viewport_height_css() + tab_h;
                     let ai_w = self
                         .panel_layout
@@ -14524,7 +14566,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 // Sidebar web panel (7D.3): cross-dockable secondary viewport.
                 if self.sidebar.visible {
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let tab_h = toolbar::CHROME_H;
                     let win_h = self.viewport_height_css() + tab_h;
                     let sb_w = self
                         .panel_layout
@@ -14548,7 +14590,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_w = self.viewport_width_css();
                     // Full window height including tab bar — bar is docked at bottom.
                     let win_h = self.viewport_height_css()
-                        + tabs::strip::TAB_BAR_HEIGHT
+                        + toolbar::CHROME_H
                         + panels::workspace_panel::SWITCHER_HEIGHT;
                     let mut ws_cmds = panels::workspace_panel::build_panel(
                         &self.workspace_panel,
@@ -14636,7 +14678,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // History panel (task D-5): centred floating overlay.
                 if self.history_panel.visible {
                     let win_w = self.viewport_width_css();
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let tab_h = toolbar::CHROME_H;
                     let mut hist_cmds =
                         panels::history_panel::build_panel(&self.history_panel, win_w, tab_h, &pal);
                     overlay_buf.append(&mut hist_cmds);
@@ -14645,7 +14687,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // §12.3 Read-later panel: right-docked overlay.
                 if self.read_later_panel.visible {
                     let win_w = self.viewport_width_css();
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let tab_h = toolbar::CHROME_H;
                     let mut rl_cmds = panels::read_later_panel::build_panel(
                         &self.read_later_panel,
                         win_w,
@@ -14682,7 +14724,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             if let Some(mut tooltip_cmds) = tabs::strip::build_tab_tooltip(
                                 tab,
                                 tab_center_x,
-                                tabs::strip::TAB_BAR_HEIGHT,
+                                toolbar::CHROME_H,
                             ) {
                                 overlay_buf.append(&mut tooltip_cmds);
                             }
@@ -14715,9 +14757,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut arch_panel = tabs::archive::build_panel(
                         &self.archive,
                         win_w,
-                        tabs::strip::TAB_BAR_HEIGHT,
+                        toolbar::CHROME_H,
                     );
                     overlay_buf.append(&mut arch_panel);
+                    // Permanent toolbar (DS-9): nav cluster + right action cluster.
+                    // Rendered after the tab bar/archive so it always sits on top.
+                    let toolbar_active = toolbar::ToolbarActive {
+                        find: self.find.is_open(),
+                        web_sidebar: self.sidebar.visible,
+                        ai_sidebar: self.ai_panel.visible,
+                        downloads: self.downloads.visible,
+                        devtools: self.devtools_console.visible,
+                        settings: self.settings_panel.visible,
+                    };
+                    let mut toolbar_cmds = toolbar::build_toolbar(win_w, &pal, toolbar_active);
+                    overlay_buf.append(&mut toolbar_cmds);
                 }
 
                 // CC-4: tab context menu — drawn above the tab strip.
@@ -14746,7 +14800,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if self.command_palette.visible {
                     let win_w = self.viewport_width_css();
                     let win_h =
-                        self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                        self.viewport_height_css() + toolbar::CHROME_H;
                     let mut cp_cmds = panels::command_palette::build_panel(
                         &self.command_palette,
                         win_w,
@@ -14778,7 +14832,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let elapsed_ms = now_ms - start_ms;
                     let win_w = self.viewport_width_css();
                     let win_h =
-                        self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                        self.viewport_height_css() + toolbar::CHROME_H;
                     if let Some(mut spinner) =
                         panels::restore_spinner::build_spinner(elapsed_ms, win_w, win_h)
                     {
@@ -14923,7 +14977,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .unwrap_or(&self.display_list);
                     if let Some(ref sv) = self.split_view {
                         let vp_w = self.viewport_width_css();
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         let vp_full_h = self.viewport_height_css() + tab_h;
                         let split_x = (vp_w / 2.0).floor();
                         Some(sv.build_combined_dl(
@@ -15002,7 +15056,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // единственный отвечает supports_page_offset=true) игнорирует
                         // их и рисует монолитом — контент списка тот же.
                         if inspector_box_dl.is_empty() && r.supports_page_offset() {
-                            r.set_page_offset(page_x_offset, tabs::strip::TAB_BAR_HEIGHT);
+                            r.set_page_offset(page_x_offset, toolbar::CHROME_H);
                             if let Err(err) = r.render(base, &overlay_buf, scroll_y, scroll_x) {
                                 eprintln!("Ошибка рендера: {err:?}");
                             }
@@ -15018,7 +15072,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             shifted.push(lumen_paint::DisplayCommand::PushTransform {
                                 matrix: Mat4::translation_2d(
                                     page_x_offset,
-                                    tabs::strip::TAB_BAR_HEIGHT,
+                                    toolbar::CHROME_H,
                                 ),
                             });
                             shifted.extend_from_slice(base);
@@ -15076,7 +15130,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             sw,
                             sh,
                             (self.scroll_x, self.scroll_y),
-                            (page_x_offset, tabs::strip::TAB_BAR_HEIGHT),
+                            (page_x_offset, toolbar::CHROME_H),
                         );
                         match self.last_frame_fp.map(|p| fp.delta_from(&p)) {
                             Some(d) => eprintln!("[frame] delta {d:?}"),
@@ -15273,7 +15327,7 @@ impl Lumen {
         };
         let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
+        let page_y = (y_css - toolbar::CHROME_H) + self.scroll_y;
         let hit = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
@@ -15309,7 +15363,7 @@ impl Lumen {
         let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         (
             (x_css - panel_x_offset) + self.scroll_x,
-            (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y,
+            (y_css - toolbar::CHROME_H) + self.scroll_y,
         )
     }
 
@@ -15326,7 +15380,7 @@ impl Lumen {
             if self.dom_inspector.is_panel_click(x_css, win_w_css) {
                 if self.dom_inspector.click_tab_at(
                     x_css, y_css, win_w_css,
-                    tabs::strip::TAB_BAR_HEIGHT,
+                    toolbar::CHROME_H,
                 ) {
                     self.request_redraw();
                 }
@@ -15494,11 +15548,11 @@ impl Lumen {
         // Single hit test shared by form dispatch and link navigation.
         // When the vertical/tree tabs panel is visible, page content is shifted
         // right by PANEL_WIDTH, so we subtract that offset to convert to page coords.
-        // Page content is also shifted down by TAB_BAR_HEIGHT via PushTransform,
+        // Page content is also shifted down by toolbar::CHROME_H via PushTransform,
         // so we subtract that offset from y to get layout coordinates.
         let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
+        let page_y = (y_css - toolbar::CHROME_H) + self.scroll_y;
         let hit_result = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
@@ -16685,7 +16739,7 @@ impl Lumen {
             return;
         }
         let win_w = self.viewport_width_css();
-        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+        let win_h = self.viewport_height_css() + toolbar::CHROME_H;
         let (src, poster) = self
             .layout_box
             .as_ref()
@@ -16700,7 +16754,7 @@ impl Lumen {
     /// created (no GPU surface, window-creation failure).
     fn open_pip_overlay(&mut self) {
         let win_w = self.viewport_width_css();
-        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+        let win_h = self.viewport_height_css() + toolbar::CHROME_H;
         let (src, poster) = self
             .layout_box
             .as_ref()
@@ -18938,7 +18992,7 @@ impl Lumen {
         } else {
             0.0
         };
-        (total - tabs::strip::TAB_BAR_HEIGHT - ws_bar).max(0.0)
+        (total - toolbar::CHROME_H - ws_bar).max(0.0)
     }
 
     /// Full logical (CSS px) window height including the tab bar. Used to
@@ -19105,7 +19159,7 @@ impl Lumen {
     /// Left docks have their handle at `x = width`; right docks at
     /// `x = viewport_width − width`.
     fn resize_edge_at(&self, x_css: f32, y_css: f32) -> Option<(panel_layout::Dock, &'static str)> {
-        if y_css < tabs::strip::TAB_BAR_HEIGHT {
+        if y_css < toolbar::CHROME_H {
             return None;
         }
         let grab = panel_layout::RESIZE_GRAB;
@@ -19388,7 +19442,7 @@ impl Lumen {
     fn history_panel_anchor(&self) -> (f32, f32) {
         let win_w = self.viewport_width_css();
         let px = (win_w - panels::history_panel::PANEL_W) * 0.5;
-        let py = tabs::strip::TAB_BAR_HEIGHT + 4.0;
+        let py = toolbar::CHROME_H + 4.0;
         (px, py)
     }
 
@@ -19637,7 +19691,7 @@ impl Lumen {
 
     /// Top-left anchor of the bookmark panel overlay (just under the tab bar).
     fn bookmark_anchor(&self) -> (f32, f32) {
-        (8.0, tabs::strip::TAB_BAR_HEIGHT + 4.0)
+        (8.0, toolbar::CHROME_H + 4.0)
     }
 
     /// Resolve a bookmark drag release: dropping on a folder re-files the
@@ -20153,9 +20207,9 @@ impl Lumen {
             scrollbar_icon
         } else if let Some(lb) = &self.layout_box {
             // Hit-test layout tree in page coordinates (viewport + scroll offset).
-            // Page content is shifted down by TAB_BAR_HEIGHT via PushTransform.
+            // Page content is shifted down by toolbar::CHROME_H via PushTransform.
             let page_x = x_css + self.scroll_x;
-            let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
+            let page_y = (y_css - toolbar::CHROME_H) + self.scroll_y;
             match hit_test(Point::new(page_x, page_y), lb) {
                 Some(result) => css_cursor_to_winit(result.cursor),
                 None => CursorIcon::Default,
@@ -21437,21 +21491,22 @@ impl Lumen {
         /// rendered *content-viewport* space — the same space `captureScreenshot`
         /// renders (no scroll subtraction needed, since it's relative to the
         /// already-scrolled visible viewport, not absolute document position) —
-        /// so only the tab-bar/panel offset is added, not scroll. Confirmed by
-        /// hand: without this, `input.performActions` clicks landed above the
-        /// target by exactly `TAB_BAR_HEIGHT` (real pixel offset validated with
-        /// a manual BiDi click→navigate scenario).
+        /// so only the tab-bar/toolbar/panel offset is added, not scroll. Confirmed
+        /// by hand: without this, `input.performActions` clicks landed above the
+        /// target by exactly `toolbar::CHROME_H` (real pixel offset validated with
+        /// a manual BiDi click→navigate scenario; DS-9 widened the offset from
+        /// the tab-bar-only height to include the new toolbar row).
         fn resolve_automation_target(&self, target: &lumen_driver::Target) -> Option<(f32, f32)> {
             use lumen_driver::Target;
             let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
             let page_to_viewport = |px: f32, py: f32| {
                 (
                     px - self.scroll_x + panel_x_offset,
-                    py - self.scroll_y + tabs::strip::TAB_BAR_HEIGHT,
+                    py - self.scroll_y + toolbar::CHROME_H,
                 )
             };
             match target {
-                Target::Point { x, y } => Some((x + panel_x_offset, y + tabs::strip::TAB_BAR_HEIGHT)),
+                Target::Point { x, y } => Some((x + panel_x_offset, y + toolbar::CHROME_H)),
                 Target::NodeId(id) => {
                     let lb = self.layout_box.as_ref()?;
                     let node = lumen_dom::NodeId::from_index(*id as usize);
@@ -22220,10 +22275,10 @@ mod tests {
     #[test]
     fn content_layout_viewport_subtracts_tab_strip() {
         // Interactive window at 1280×800 → page content area excludes the tab
-        // strip (TAB_BAR_HEIGHT) but keeps the full width.
+        // strip + toolbar (toolbar::CHROME_H) but keeps the full width.
         let (w, h) = content_layout_viewport(Size::new(1280.0, 800.0), true, false);
         assert!((w - 1280.0).abs() < 1e-3);
-        assert!((h - (800.0 - tabs::strip::TAB_BAR_HEIGHT)).abs() < 1e-3);
+        assert!((h - (800.0 - toolbar::CHROME_H)).abs() < 1e-3);
     }
 
     #[test]
@@ -22232,14 +22287,14 @@ mod tests {
         // the content height follows it too (no hardcoded 720).
         let (w, h) = content_layout_viewport(Size::new(640.0, 480.0), true, false);
         assert!((w - 640.0).abs() < 1e-3);
-        assert!((h - (480.0 - tabs::strip::TAB_BAR_HEIGHT)).abs() < 1e-3);
+        assert!((h - (480.0 - toolbar::CHROME_H)).abs() < 1e-3);
     }
 
     #[test]
     fn content_layout_viewport_default_window_yields_720() {
-        // The interactive window opens at 1024 × (720 + TAB_BAR_HEIGHT) so the
+        // The interactive window opens at 1024 × (720 + toolbar::CHROME_H) so the
         // page gets exactly 720 CSS px, as graphic tests expect.
-        let surface = Size::new(1024.0, 720.0 + tabs::strip::TAB_BAR_HEIGHT);
+        let surface = Size::new(1024.0, 720.0 + toolbar::CHROME_H);
         let (w, h) = content_layout_viewport(surface, true, false);
         assert!((w - 1024.0).abs() < 1e-3);
         assert!((h - 720.0).abs() < 1e-3);
@@ -22251,7 +22306,7 @@ mod tests {
         let surface = Size::new(1024.0, 800.0);
         let (_w, h) = content_layout_viewport(surface, true, true);
         let expected =
-            800.0 - tabs::strip::TAB_BAR_HEIGHT - panels::workspace_panel::SWITCHER_HEIGHT;
+            800.0 - toolbar::CHROME_H - panels::workspace_panel::SWITCHER_HEIGHT;
         assert!((h - expected).abs() < 1e-3);
     }
 

@@ -148,6 +148,71 @@
   "don't render an empty table" clause needed no code. `cargo test -p
   lumen-shell` and `cargo clippy -p lumen-shell --all-targets -- -D warnings`
   both clean.
+- **Done (DS-9 permanent toolbar, 2026-07-23):** new module
+  [`crates/shell/src/toolbar.rs`](../crates/shell/src/toolbar.rs), modeled on
+  `tabs/strip.rs`'s build/hit_test pattern. `build_toolbar` renders a 36 px row
+  (`theme_tokens::size::TOOLBAR_H`) below the tab strip: a left nav cluster
+  (back/forward/reload, 26×26 buttons) and a right action cluster (find,
+  web-sidebar, AI-sidebar, downloads, DevTools, settings) — the omnibox centre
+  is intentionally empty, landing in DS-10. Buttons whose panel is open render
+  lit (`Palette::item_selected_bg` + `accent` icon via a new `FillRoundedRect`
+  highlight); `Palette` gained a `toolbar_bg` field (`SURFACE_0`, one tier
+  darker than `tab_bar_bg`). `hit_test` is dispatched in `main.rs`'s mouse
+  handler right after the tab-bar block, calling the same handler bodies as
+  the corresponding `KeyCommand` arms (Reload queues via
+  `TaskSource::UserInteraction` like `KeyCommand::Reload`; toggles call
+  `request_redraw`/`relayout_chrome` where their `KeyCommand` counterpart
+  does).
+
+  **Geometry:** `toolbar::CHROME_H = TAB_BAR_HEIGHT + TOOLBAR_H` (72 px)
+  replaces every `tabs::strip::TAB_BAR_HEIGHT` reference in `main.rs` that
+  meant "where does chrome end / page content begin" — `content_layout_viewport`,
+  `viewport_height_css`, `resumed()`'s window sizing, all screen↔page
+  coordinate conversions (`page_point`, `handle_click_at`, pointer-move/hover
+  gating, `update_cursor_icon`), every floating panel's top-anchor (shields,
+  privacy, permission, AI, sidebar, vertical/tree tabs, workspace switcher,
+  history/bookmark/read-later anchors, archive dropdown, tab tooltip, command
+  palette, restore spinner, DOM inspector), and `resolve_automation_target`'s
+  `Target::Point` correction (BiDi/MCP click coordinates) — see the doc
+  comment there, "off by exactly `TAB_BAR_HEIGHT`" is now "off by exactly
+  `toolbar::CHROME_H`". Sites that mean "height of the tab-bar row itself"
+  (the tab-bar click-dispatch gate, the archive button's own row geometry,
+  the tab-hover gate) correctly keep `TAB_BAR_HEIGHT` unchanged — a full
+  `git grep TAB_BAR_HEIGHT crates/shell/src/main.rs` audit classified every
+  site by hand, not a blind find/replace. The `find.rs` overlay bar (floated
+  from a fixed `BAR_PAD` off the raw window top, independent of
+  `TAB_BAR_HEIGHT`) also moved to `toolbar::CHROME_H + BAR_PAD` so it no
+  longer overlaps the new row; `address_bar.rs`'s Ctrl+L overlay is
+  untouched — DS-10 replaces it with the inline omnibox, so it wasn't worth
+  shifting twice.
+
+  **Graphic-tests fallout:** the window grew 36 px taller
+  (`resumed()`: `720.0 + toolbar::CHROME_H` instead of `+ TAB_BAR_HEIGHT`);
+  TEST-00/03 (magenta-marker crop calibration) pass at exactly 0.00%,
+  confirming the viewport geometry itself is correct. Five pre-existing
+  `KNOWN_DEBTORS` entries (TEST-26/51/53/62/104, `graphic_tests/run.py`) that
+  compose masks/gradients/scroll-snap/scrollbars shifted upward — reproduced
+  identically on a freshly-built, unmodified `main` binary at the *old*
+  window height (their pre-DS-9 baseline held exactly), and identically
+  again across repeated DS-9 runs, ruling out both a pre-existing regression
+  and gdigrab flake. Root cause: moving the content's absolute on-screen Y
+  origin by another 36 px shifts the fractional/sub-pixel remainder that
+  drives anti-aliasing at rounded corners and gradient/mask edges — the same
+  `BUG-124`/"PS-1" pixel-snapping class already tracked for these tests, not
+  a new defect. Their `KNOWN_DEBTORS` baselines were ratcheted to the new
+  measured numbers with a comment recording the before/after and the
+  reasoning (mirrors the precedent set by the `P1-wgpu-flip` ratchet for the
+  same table). TEST-147 (`background-repeat: space`) also fails on this
+  branch, but reproduces byte-for-byte on unmodified `main` too — unrelated
+  pre-existing gap, filed as [BUG-330](../bugs/BUG-330-OPEN.md) for P3, not
+  ratcheted (it was never a `KNOWN_DEBTORS` entry).
+
+  DoD: MCP live-window click (`--mcp-live-port`) on the reload button
+  triggered a real page reload and the settings button returned success;
+  `graphic_tests/run.py --continue-on-fail` — 147/148 pass or known-debtor,
+  the one remaining FAIL is the pre-existing BUG-330. `cargo test -p
+  lumen-shell` (incl. new `toolbar::tests::*`) and `cargo clippy -p
+  lumen-shell --all-targets -- -D warnings` both clean.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*

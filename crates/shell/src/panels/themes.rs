@@ -205,6 +205,11 @@ pub struct Palette {
     pub item_bg: Color,
     /// Background of the selected dropdown / list item.
     pub item_selected_bg: Color,
+    /// Background of the permanent toolbar strip (`.toolbar` in the prototype).
+    /// One tier darker than [`tab_bar_bg`](Self::tab_bar_bg) — `SURFACE_0`
+    /// rather than `SURFACE_1` — so the toolbar reads as slightly recessed
+    /// below the tab strip, matching the prototype.
+    pub toolbar_bg: Color,
     /// Primary chrome text colour.
     pub text: Color,
     /// Secondary / dimmed chrome text colour.
@@ -248,6 +253,8 @@ impl Palette {
         // `.dd-row:hover` background in the prototype (no distinct "selected"
         // state exists there, only hover — reused for the selected item too).
         item_selected_bg: theme_tokens::dark::SURFACE_2,
+        // `.toolbar` background in the prototype.
+        toolbar_bg: theme_tokens::dark::SURFACE_0,
         text: theme_tokens::dark::TEXT_PRIMARY,
         text_dim: theme_tokens::dark::TEXT_SECONDARY,
         divider: theme_tokens::dark::STROKE,
@@ -268,6 +275,7 @@ impl Palette {
         input_bg: theme_tokens::light::SURFACE_1,
         item_bg: theme_tokens::light::SURFACE_1,
         item_selected_bg: theme_tokens::light::SURFACE_2,
+        toolbar_bg: theme_tokens::light::SURFACE_0,
         text: theme_tokens::light::TEXT_PRIMARY,
         text_dim: theme_tokens::light::TEXT_SECONDARY,
         divider: theme_tokens::light::STROKE,
