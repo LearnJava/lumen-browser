@@ -57,8 +57,10 @@
   `SurfaceManager` token set — ADR-009 migration is out of DS-track scope per
   `docs/tasks/p1-design-v3.md`); and `newtab.rs`/`reader_view.rs`'s embedded
   page-content CSS strings (New Tab tile grid, reader-mode article body — not
-  yet on the design-token system at all, deferred to DS-11/content-styling
-  work, not chrome paint radii). Verified: `cargo test -p lumen-shell` (1620
+  yet on the design-token system at all at the time of this bullet;
+  `newtab.rs` picked up `radius::LG` for its tile/badge radii in DS-11,
+  `reader_view.rs` remains deferred, not chrome paint radii). Verified:
+  `cargo test -p lumen-shell` (1620
   tests, unaffected `theme_tokens_radius_lg_matches_prototype` still pins
   `radius::LG == 6.0`); `cargo clippy -p lumen-shell --all-targets -- -D
   warnings` clean; headless `--screenshot` smoke-tested (no crash). Live
@@ -250,6 +252,48 @@
   the one remaining FAIL is the pre-existing BUG-330. `cargo test -p
   lumen-shell` (incl. new `toolbar::tests::*`) and `cargo clippy -p
   lumen-shell --all-targets -- -D warnings` both clean.
+- **Done (DS-11 newtab — 8 pinnable tiles + restore closed, 2026-07-23):**
+  [`crates/shell/src/newtab.rs`](../crates/shell/src/newtab.rs) grid grew from
+  `MAX_TILES=5` to `MAX_TILES=8` (7 site slots + a "+" tile shown whenever
+  fewer than 8 are pinned). New portable-data store
+  [`crates/storage/src/newtab_tiles.rs`](../crates/storage/src/newtab_tiles.rs)
+  (`NewtabTiles`, SQLite `pinned_tiles(position, url, title)`, modelled on
+  `omnibox_aliases.rs`) opened at `<exe_dir>/data/newtab_tiles.db` via
+  `adblock::browser_data_dir()`, falling back to in-memory on open failure
+  (same pattern as `settings_store`). `TopSite` gained a `pinned: bool` field;
+  `newtab::merge_tiles(pinned, top_sites)` puts pinned tiles first (in stored
+  position order) and fills remaining slots from `History::most_visited`,
+  deduping by URL. Pin/unpin/"+"/"Restore closed" are plain `<a href>` special
+  links (`about:newtab?pin=<url>&title=<title>` /
+  `?unpin=<url>` / `?pin-current` / `?restore-closed`, percent-encoded via the
+  existing `lumen_core::form::{encode_form_urlencoded, decode_form_value}`
+  helpers — no new encoder) rather than JS or a right-click menu:
+  `page_context_menu.rs` turned out to be spell-check-suggestion-specific, not
+  a generic context menu, so the special-link route from the DS-11 brief was
+  the cheaper path. `newtab::parse_action` recovers a `NewtabAction` from a
+  clicked link's resolved URL; `Lumen::apply_newtab_action` (new in
+  `main.rs`) is the single handler wired at all three points a link can
+  commit — the mouse link-click path, the keyboard-activation link path, and
+  `handle_omnibox_commit` (pasting/typing a tile link) — so a special link
+  never reaches real navigation. `PinCurrent` (the "+" tile) pins
+  `self.nav_back.last()` (the page navigated *from*, since by the time "+" is
+  clicked the current page is newtab itself), looking up its title via
+  `history_store.get(url)` with a URL fallback. `RestoreClosed` calls the
+  existing cross-restart `restore_session()` (`session_store`) — Lumen has no
+  separate per-tab "closed tabs" stack, so this reopens the last persisted
+  session wholesale rather than undoing a single tab close (documented as a
+  known semantic gap, not silently pretended otherwise). Tile radius (56×56
+  icon, tile corners) now reads `theme_tokens::radius::LG` instead of a local
+  literal — the first `newtab.rs` consumer of the token module (previously
+  deferred, see the DS-3 bullet above).
+
+  DoD: `cargo test -p lumen-shell` (new `newtab::tests::*`: merge/parse/html
+  coverage) and `cargo test -p lumen-storage` (new `newtab_tiles::tests::*`:
+  pin/unpin/cap-at-8/reuse-freed-slot) both green; `cargo clippy -p
+  lumen-shell --all-targets -- -D warnings` and `cargo clippy -p
+  lumen-storage --all-targets -- -D warnings` clean. Not in `graphic_tests/`
+  (newtab isn't one of the 70 magenta-frame pages), so no CPU-snapshot
+  regeneration needed.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*
