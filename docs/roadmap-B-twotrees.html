@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-23",
+ "generated": "2026-07-24",
  "counts": {
   "open": 33,
   "fixed": 267,
@@ -1728,9 +1728,9 @@
       {
        "id": "WPT-VENDOR-appmanifest",
        "title": "WPT: вендорить + прогнать категорию `appmanifest`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). PWA-инсталляция"
+       "note": "DONE 2026-07-24: вендорена (`tests/wpt/appmanifest/`, 253 файла: `META.yml`, `WEB_FEATURES.yml`, 19 `*-member/` подкатегорий) и прогнана через `run_report.py --all --root appmanifest --recursive`, включена несмотря на скоуп 🚫 (PWA-инсталляция) по тому же постоянному решению пользователя, что и `accelerometer`/`acid`/`ai`/`ambient-light`. Внекатегорийных хелперов не обнаружено. Категория целиком ручная по дизайну спеки (Web App Manifest тестируется установкой PWA вручную) — все настоящие тесты `-manual(.tentative)(.sub).html`, исключены фильтром `run_report.py`; фильтр всё же отобрал 5 id — не тесты вовсе, а pass/fail/shortcut лендинг-страницы без `testharness.js` (`shortcuts-member/shortcut_{fail,pass}.html`, `shortcuts_localized-member/shortcut_pass.html`, `start_url-member/{fail,pass}.html`), которые открывает сам ручной тест — WPT-манифест не находит их как тесты (`CRITICAL Unable to find any tests at the path(s)`), прогон падает до `suite_end`, 0/0, тот же класс гэпа, что `files/index.html` в `annotation-protocol`. Не заводился отдельный BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-attribution-reporting",
