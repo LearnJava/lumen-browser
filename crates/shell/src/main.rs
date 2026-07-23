@@ -13407,14 +13407,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                     }
                                 }
                                 panels::workspace_panel::WorkspaceHit::NewWorkspace => {
-                                    let n = self.workspace_panel.workspaces.len() + 1;
-                                    let name = format!("Workspace {n}");
+                                    let idx = self.workspace_panel.workspaces.len();
+                                    let name = format!("Workspace {}", idx + 1);
+                                    let color = panels::workspace_panel::default_color_for_index(idx);
                                     let now = std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .map(|d| d.as_secs() as i64)
                                         .unwrap_or(0);
                                     if let Ok(id) =
-                                        self.workspaces.create(&name, "#6482dc", "", None, now)
+                                        self.workspaces.create(&name, color, "", None, now)
                                     {
                                         self.refresh_workspaces();
                                         self.workspace_panel.set_active(Some(id));
@@ -14493,6 +14494,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.vertical_tabs.scroll_y,
                         &pal,
                         vt_w,
+                        self.workspace_panel.active_accent(),
                     );
                     // Cross-dock: the panel paints left-relative; re-home it onto
                     // the right edge when flipped there.
@@ -14731,6 +14733,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         tab_area_w,
                         &pal,
                         self.tab_drag.as_ref(),
+                        self.workspace_panel.active_accent(),
                     );
                     overlay_buf.append(&mut tab_cmds);
                     // Tab tier tooltip on hover.

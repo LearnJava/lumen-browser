@@ -111,6 +111,16 @@ impl WorkspacePanel {
     pub fn set_active(&mut self, id: Option<i64>) {
         self.active_id = id;
     }
+
+    /// Accent colour of the currently active workspace (DS-12, level-1
+    /// hierarchy marker). `None` when no workspace is selected or the active
+    /// id no longer matches a cached entry — callers fall back to
+    /// `Palette::accent`.
+    #[must_use]
+    pub fn active_accent(&self) -> Option<Color> {
+        let active_id = self.active_id?;
+        self.workspaces.iter().find(|w| w.id == active_id).map(|w| w.accent)
+    }
 }
 
 impl Default for WorkspacePanel {
@@ -330,6 +340,18 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32, pal: &P
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Default accent colours assigned to newly created workspaces, cycled by
+/// creation order (DS-12; reference design `docs/design/lumen-v3_3.html`
+/// lines 851–859: Личное/Проект Х/Чтение).
+const DEFAULT_WORKSPACE_COLORS: [&str; 3] = ["#0066FF", "#8B5CF6", "#1F9D55"];
+
+/// Pick a default colour for the `n`-th workspace created (0-indexed),
+/// cycling through [`DEFAULT_WORKSPACE_COLORS`].
+#[must_use]
+pub fn default_color_for_index(n: usize) -> &'static str {
+    DEFAULT_WORKSPACE_COLORS[n % DEFAULT_WORKSPACE_COLORS.len()]
+}
+
 /// Convert a stored CSS colour string (`#RRGGBB`, `#RGB`, or named colour
 /// `red`/`green`/`blue`/`purple`/…) into a render `Color`.  Falls back to a
 /// neutral blue-grey when the value cannot be parsed.
@@ -429,6 +451,25 @@ mod tests {
         assert_eq!(p.active_id, Some(3));
         p.set_active(None);
         assert_eq!(p.active_id, None);
+    }
+
+    #[test]
+    fn active_accent_none_when_no_workspace_selected() {
+        let p = make_panel(&["Work"], None);
+        assert_eq!(p.active_accent(), None);
+    }
+
+    #[test]
+    fn active_accent_matches_active_workspace() {
+        let mut p = make_panel(&["Personal", "Work"], Some(2));
+        p.workspaces[1].accent = Color { r: 139, g: 92, b: 246, a: 255 }; // #8B5CF6
+        assert_eq!(p.active_accent(), Some(Color { r: 139, g: 92, b: 246, a: 255 }));
+    }
+
+    #[test]
+    fn active_accent_none_when_id_not_cached() {
+        let p = make_panel(&["Work"], Some(99));
+        assert_eq!(p.active_accent(), None);
     }
 
     // ── Hit-testing ──────────────────────────────────────────────────────────
@@ -549,5 +590,13 @@ mod tests {
         let c = parse_ws_color("not-a-color");
         // Fallback must produce a fully-opaque colour.
         assert_eq!(c.a, 255);
+    }
+
+    #[test]
+    fn default_color_for_index_cycles_reference_palette() {
+        assert_eq!(default_color_for_index(0), "#0066FF");
+        assert_eq!(default_color_for_index(1), "#8B5CF6");
+        assert_eq!(default_color_for_index(2), "#1F9D55");
+        assert_eq!(default_color_for_index(3), "#0066FF");
     }
 }

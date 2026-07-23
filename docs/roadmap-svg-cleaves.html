@@ -3629,9 +3629,9 @@
       {
        "id": "DS-12",
        "title": "DS-12: Цвет пространства → сайдбар и активная вкладка",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Уровень 1 иерархии: цвет workspace (storage/workspaces.rs:22 color уже есть) красит маркер активной вкладки (низ 2px гориз. / лево 2px верт.) и активный элемент workspace-панели; hex→Color хелпер + тест"
+       "note": "Уровень 1 иерархии: цвет активного workspace (WorkspacePanel::active_accent) красит маркер активной вкладки (strip.rs низ 2px / vertical_tabs.rs лево 2px) через новый параметр ws_accent (fallback pal.accent); активный элемент workspace-панели и hex→Color хелпер (parse_ws_color) уже существовали; новые workspace получают цвет по циклу из эталонной палитры (#0066FF/#8B5CF6/#1F9D55)"
       },
       {
        "id": "DS-13",

@@ -140,7 +140,9 @@ pub fn hit_test(
 /// `tab_bar_height` (after scrolling) are skipped; rows whose top edge is at
 /// or below `window_h` are not emitted.
 /// `pal` provides theme-aware surface colors for the strip background, rows,
-/// dividers, text, and accent bar.
+/// dividers, and text. `ws_accent` — active workspace's colour (DS-12,
+/// level-1 hierarchy marker); overrides `pal.accent` for the active-tab left
+/// accent bar when `Some`. `None` falls back to `pal.accent`.
 pub fn build_tab_bar_vertical(
     strip: &TabStrip,
     tab_bar_height: f32,
@@ -148,6 +150,7 @@ pub fn build_tab_bar_vertical(
     scroll_y: f32,
     pal: &Palette,
     width: f32,
+    ws_accent: Option<Color>,
 ) -> DisplayList {
     let pw = width;
     let panel_h = (window_h - tab_bar_height).max(0.0);
@@ -184,11 +187,12 @@ pub fn build_tab_bar_vertical(
             color: row_bg,
         });
 
-        // Active-tab left accent bar (2 px).
+        // Active-tab left accent bar (2 px, DS-12: workspace colour — semantic
+        // exception to token-only rule).
         if is_active {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(0.0, row_top, 2.0, ROW_H),
-                color: pal.accent,
+                color: ws_accent.unwrap_or(pal.accent),
             });
         }
 
@@ -374,14 +378,14 @@ mod tests {
     #[test]
     fn build_panel_emits_commands() {
         let s = TabStrip::new();
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH, None);
         assert!(!dl.is_empty());
     }
 
     #[test]
     fn build_panel_has_title_text() {
         let s = TabStrip::new();
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH, None);
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
         });
@@ -389,9 +393,28 @@ mod tests {
     }
 
     #[test]
+    fn build_tab_bar_vertical_ws_accent_overrides_pal_accent() {
+        let s = TabStrip::new(); // one active tab
+        let pal_accent = Color { r: 230, g: 59, b: 111, a: 255 }; // rose
+        let ws_accent = Color { r: 31, g: 157, b: 85, a: 255 }; // workspace green
+        let pal = Palette { accent: pal_accent, ..Palette::DARK };
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &pal, PANEL_WIDTH, Some(ws_accent));
+        let has_ws_accent = dl.iter().any(|c| match c {
+            DisplayCommand::FillRect { color, .. } => *color == ws_accent,
+            _ => false,
+        });
+        let has_pal_accent = dl.iter().any(|c| match c {
+            DisplayCommand::FillRect { color, .. } => *color == pal_accent,
+            _ => false,
+        });
+        assert!(has_ws_accent, "active tab must use the workspace accent when provided");
+        assert!(!has_pal_accent, "workspace accent must override the palette accent");
+    }
+
+    #[test]
     fn build_panel_no_badge_for_active() {
         let s = TabStrip::new(); // single Active tab
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH, None);
         // Active tab has no badge (only FillRect background + accent bar, no badge radii for lifecycle)
         // Panel uses FillRoundedRect for favicon + possibly badge. Badge colors are BADGE_OLD/BADGE_HIB.
         let has_lifecycle_badge = dl.iter().any(|c| match c {
@@ -409,7 +432,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH, None);
         let has_amber = dl.iter().any(|c| match c {
             DisplayCommand::FillRoundedRect { color, .. } => {
                 color.r == BADGE_OLD.r && color.g == BADGE_OLD.g
@@ -424,7 +447,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::Hibernated);
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH, None);
         let has_grey = dl.iter().any(|c| match c {
             DisplayCommand::FillRoundedRect { color, .. } => {
                 color.r == BADGE_HIB.r && color.g == BADGE_HIB.g
@@ -443,7 +466,7 @@ mod tests {
         }
         // window_h only fits a few rows.
         let small_h = TAB_H + 3.0 * ROW_H;
-        let dl = build_tab_bar_vertical(&s, TAB_H, small_h, 0.0, &Palette::DARK, PANEL_WIDTH);
+        let dl = build_tab_bar_vertical(&s, TAB_H, small_h, 0.0, &Palette::DARK, PANEL_WIDTH, None);
         // Count DrawText commands with tab titles — must be <= 3 (rows that fit).
         let title_count = dl.iter().filter(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
@@ -460,7 +483,7 @@ mod tests {
         // which is above the panel top — it should be skipped.  The second
         // row is now the first visible one.
         let s = strip2(); // 2 tabs
-        let dl_scrolled = build_tab_bar_vertical(&s, TAB_H, WIN_H, ROW_H, &Palette::DARK, PANEL_WIDTH);
+        let dl_scrolled = build_tab_bar_vertical(&s, TAB_H, WIN_H, ROW_H, &Palette::DARK, PANEL_WIDTH, None);
         // Only the second tab title should appear.
         let titles: Vec<_> = dl_scrolled.iter().filter_map(|c| match c {
             DisplayCommand::DrawText { text, .. } if text.contains("вкладка") => Some(text.clone()),
