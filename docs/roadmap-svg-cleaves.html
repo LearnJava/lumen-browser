@@ -1717,9 +1717,9 @@
       {
        "id": "WPT-VENDOR-attribution-reporting",
        "title": "WPT: вендорить + прогнать категорию `attribution-reporting`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+       "note": "DONE 2026-07-24: вендорена (`tests/wpt/attribution-reporting/`, 13 файлов: `WEB_FEATURES.yml`, `resources/` — `helpers.js` + Python-хендлеры `wptserve`, `aggregatable-debug/` — 2 тестовых файла, плюс 5 корневых `.sub.https.html`) и прогнана через `run_report.py --all --root attribution-reporting --recursive`, включена несмотря на скоуп 🚫 (ad-tech/Privacy Sandbox) по тому же постоянному решению пользователя, что и `accelerometer`/`acid`/`ai`/`ambient-light`/`appmanifest`. Внекатегорийных хелперов не обнаружено. Прогон добежал за ~5 мин (24 отобранных id из 7 файлов, `referrer-policy`/`request-format` раскрываются в query-string варианты): 19 SKIP (`Executor does not support testdriver.js`, тот же гэп, что `accname`); оставшиеся 5 — целиком `.https.`-only, тот же HTTPS-порт-гэп, что `WebCryptoAPI`/`ai`/`ambient-light`/`animation-worklet` — 4 TIMEOUT + 1 ERROR (`automation channel closed`, то же проявление отсутствующего HTTPS-порта). 0/24 harness OK, 0/0 сабтестов. Не заводился отдельный BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-audio-output",
