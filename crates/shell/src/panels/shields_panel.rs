@@ -19,7 +19,6 @@
 //! list-format reason (`"easylist"`/`"hosts"`), not a tracker-vs-ad category,
 //! so a split would be fabricated rather than measured.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::Event;
@@ -59,40 +58,31 @@ const PANEL_RADIUS: f32 = crate::theme_tokens::radius::LG;
 
 // ── Blocked log ───────────────────────────────────────────────────────────────
 
-/// Shared accumulator for blocked-request counts, indexed by hostname.
+/// Shared accumulator for the total blocked-request count.
 ///
 /// Updated from the network thread via [`ShieldCountSink`]; read by the shell
-/// UI thread to refresh the panel display.  Counts persist for the lifetime of
-/// the browser process (they are NOT reset on navigation — call
+/// UI thread to refresh the panel display.  The count persists for the
+/// lifetime of the browser process (it is NOT reset on navigation — call
 /// [`BlockedLog::clear`] explicitly on page load).
 #[derive(Default)]
 pub struct BlockedLog {
-    /// Blocked-request count per hostname (`example.com → 3`).
-    pub counts: HashMap<String, u32>,
-    /// Total blocked across all domains since the last [`clear`] call.
+    /// Total requests blocked since the last [`clear`] call.
     pub total: u32,
 }
 
 impl BlockedLog {
-    /// Increment the count for the hostname extracted from `url`.
+    /// Increment the total if `url` has a valid HTTP(S) host.
     ///
     /// Non-HTTP/HTTPS URLs and malformed hostnames are silently ignored.
     pub fn record(&mut self, url: &str) {
-        if let Some(host) = extract_host(url) {
-            *self.counts.entry(host).or_insert(0) += 1;
+        if extract_host(url).is_some() {
             self.total += 1;
         }
     }
 
-    /// Clear all counts (call on every top-level navigation).
+    /// Clear the total (call on every top-level navigation).
     pub fn clear(&mut self) {
-        self.counts.clear();
         self.total = 0;
-    }
-
-    /// Blocked count for a specific hostname (0 if unseen).
-    pub fn count_for(&self, host: &str) -> u32 {
-        self.counts.get(host).copied().unwrap_or(0)
     }
 }
 
@@ -140,11 +130,9 @@ pub struct ShieldsPanel {
     ///
     /// `None` while no page is loaded or for local file: URLs.
     pub current_domain: Option<String>,
-    /// Snapshot of blocked counts (pulled from [`BlockedLog`] via
+    /// Snapshot of the total blocked count (pulled from [`BlockedLog`] via
     /// [`ShieldsPanel::refresh`]).
     blocked_total: u32,
-    /// Snapshot: blocked count for the current domain only.
-    blocked_domain: u32,
     /// Shared log produced by [`ShieldCountSink`].
     log: Arc<Mutex<BlockedLog>>,
 }
@@ -152,14 +140,7 @@ pub struct ShieldsPanel {
 impl ShieldsPanel {
     /// Create a new hidden panel backed by the given shared `log`.
     pub fn new(log: Arc<Mutex<BlockedLog>>) -> Self {
-        Self {
-            visible: false,
-            enabled: true,
-            current_domain: None,
-            blocked_total: 0,
-            blocked_domain: 0,
-            log,
-        }
+        Self { visible: false, enabled: true, current_domain: None, blocked_total: 0, log }
     }
 
     /// Flip panel visibility.
@@ -173,16 +154,11 @@ impl ShieldsPanel {
         self.refresh();
     }
 
-    /// Pull the latest counts from the shared [`BlockedLog`] into the panel
-    /// snapshot fields.  Call after every network event or on each redraw.
+    /// Pull the latest total from the shared [`BlockedLog`] into the panel
+    /// snapshot field.  Call after every network event or on each redraw.
     pub fn refresh(&mut self) {
         if let Ok(guard) = self.log.lock() {
             self.blocked_total = guard.total;
-            if let Some(ref d) = self.current_domain {
-                self.blocked_domain = guard.count_for(d);
-            } else {
-                self.blocked_domain = 0;
-            }
         }
     }
 
@@ -192,12 +168,6 @@ impl ShieldsPanel {
             guard.clear();
         }
         self.blocked_total = 0;
-        self.blocked_domain = 0;
-    }
-
-    /// Blocked-request count for the current domain (from last `refresh`).
-    pub fn blocked_domain_count(&self) -> u32 {
-        self.blocked_domain
     }
 
     /// Total blocked-request count for the current page (from last `refresh`).
@@ -509,7 +479,6 @@ mod tests {
         let mut log = BlockedLog::default();
         log.record("https://tracker.example.com/pixel.gif");
         log.record("https://tracker.example.com/other.js");
-        assert_eq!(log.count_for("tracker.example.com"), 2);
         assert_eq!(log.total, 2);
     }
 
@@ -527,14 +496,13 @@ mod tests {
         log.record("https://ads.example.com/ad.js");
         log.clear();
         assert_eq!(log.total, 0);
-        assert!(log.counts.is_empty());
     }
 
     #[test]
-    fn blocked_log_strips_port() {
+    fn blocked_log_counts_url_with_port() {
         let mut log = BlockedLog::default();
         log.record("https://ads.example.com:8080/track");
-        assert_eq!(log.count_for("ads.example.com"), 1);
+        assert_eq!(log.total, 1);
     }
 
     // ── extract_host ─────────────────────────────────────────────────────────
@@ -603,7 +571,6 @@ mod tests {
         let mut p = ShieldsPanel::new(log);
         p.current_domain = Some("tracker.com".to_owned());
         p.refresh();
-        assert_eq!(p.blocked_domain_count(), 2);
         assert_eq!(p.blocked_total_count(), 3);
     }
 
@@ -767,7 +734,7 @@ mod tests {
             reason: "easylist".to_owned(),
         });
         let guard = log.lock().unwrap();
-        assert_eq!(guard.count_for("tracker.example.com"), 1);
+        assert_eq!(guard.total, 1);
     }
 
     #[test]
