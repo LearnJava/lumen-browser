@@ -182,9 +182,46 @@
   site by hand, not a blind find/replace. The `find.rs` overlay bar (floated
   from a fixed `BAR_PAD` off the raw window top, independent of
   `TAB_BAR_HEIGHT`) also moved to `toolbar::CHROME_H + BAR_PAD` so it no
-  longer overlaps the new row; `address_bar.rs`'s Ctrl+L overlay is
-  untouched — DS-10 replaces it with the inline omnibox, so it wasn't worth
-  shifting twice.
+  longer overlaps the new row; `address_bar.rs`'s Ctrl+L overlay was left
+  untouched here — DS-10 replaced it with the inline omnibox.
+- **Done (DS-10 inline omnibox, 2026-07-23):** the omnibox moved from a
+  Ctrl+L full-window overlay into a permanent field in the centre of the
+  toolbar. `toolbar.rs` gained `omnibox_rects(window_w) ->
+  address_bar::FieldRects` — the field itself (centred between the nav and
+  action clusters, capped at `OMNIBOX_MAX_W = 680`, `OMNIBOX_H = 32` within
+  the 36 px row) plus lock/star/shield icon-button sub-rects and the text
+  area between them; `hit_test` gained `ToolbarHit::{Omnibox,Lock,Star,
+  Shield}` checked before the existing nav/action buttons. `address_bar.rs`
+  no longer owns any layout — its `build_bar_overlay`/`BarOverlay` (fixed
+  `BAR_W`/`BAR_H`/`PAD` floating-bar geometry) were replaced by two pure
+  render functions that take caller-supplied `Rect`s: `build_inline_field`
+  (always drawn — not focused shows `current_url` via `idn::display_host`
+  DS-6 guard, focused shows the live editable input/caret/selected-suggestion,
+  same state machine as before) and `build_dropdown` (only drawn while
+  `AddressBarState::is_open()`, anchored at `toolbar::CHROME_H` — i.e. below
+  the whole toolbar row, not directly under the field, per the DS-10 brief —
+  rather than a fixed offset from the field). `main.rs` calls
+  `build_inline_field` unconditionally from inside `toolbar::build_toolbar`
+  (so the field/host text/icons render every frame) and `build_dropdown`
+  separately, right after, only while focused. Clicking the field when not
+  yet focused calls the same `address_bar.open(current_url)` path as
+  Ctrl+L/F6 (guarded so clicking an *already*-focused field is a no-op —
+  otherwise it would reset in-progress typed input); lock opens the existing
+  `cert_panel` (same call as `KeyCommand::ToggleCert`), star calls the
+  existing `bookmark_current_page()` (same as Ctrl+D), shield calls
+  `self.shields.toggle()` (same as `KeyCommand::ToggleShields`) — no new
+  backend logic, only new click entry points onto handlers DS-9/pre-existing
+  code already had. Mouse click support for the omnibox/dropdown did not
+  exist at all before this task (it was Ctrl+L-keyboard-only); DS-10 adds
+  hit-testing for the field/icons but the dropdown rows themselves remain
+  keyboard-only (Up/Down + Enter), matching the pre-existing DoD scope.
+
+  DoD: Ctrl+L/F6/click-on-field focus the inline field; typed input,
+  Enter-to-navigate, and `@history`/`@notes`/etc. prefixes all still route
+  through the unchanged `AddressBarState`/`handle_omnibox_commit` machinery;
+  lock/star/shield are independently clickable via `toolbar::hit_test`.
+  `cargo test -p lumen-shell` (`address_bar::tests::*`, `toolbar::tests::*`)
+  and `cargo clippy -p lumen-shell --all-targets -- -D warnings` both clean.
 
   **Graphic-tests fallout:** the window grew 36 px taller
   (`resumed()`: `720.0 + toolbar::CHROME_H` instead of `+ TAB_BAR_HEIGHT`);

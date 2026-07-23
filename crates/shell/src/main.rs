@@ -12579,6 +12579,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                     move || { flag.set(true); },
                                 );
                             }
+                            toolbar::ToolbarHit::Omnibox => {
+                                // DS-10: click focuses the inline field, same as
+                                // Ctrl+L/F6. A no-op while already focused — `open()`
+                                // would otherwise reset the in-progress input/dropdown.
+                                if !self.address_bar.is_open() {
+                                    self.hint.close();
+                                    let current = self.current_display_url().to_owned();
+                                    self.address_bar.open(&current);
+                                }
+                            }
+                            toolbar::ToolbarHit::Lock => {
+                                let cert = self.cert_info.clone();
+                                self.cert_panel.toggle(cert);
+                            }
+                            toolbar::ToolbarHit::Star => self.bookmark_current_page(),
+                            toolbar::ToolbarHit::Shield => self.shields.toggle(),
                             toolbar::ToolbarHit::Find => {
                                 self.hint.close();
                                 self.find.open();
@@ -14285,21 +14301,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
 
-                // Адресная строка (Ctrl+L) — рисуется поверх всего остального.
-                if self.address_bar.is_open() {
-                    let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                        let s = w.inner_size();
-                        (s.width, s.height)
-                    });
-                    let mut bar = address_bar::build_bar_overlay(
-                        &self.address_bar,
-                        address_bar::BarOverlay { window_size: win_size },
-                        &pal,
-                    );
-                    bar.append(&mut overlay_buf);
-                    overlay_buf = bar;
-                }
-
                 // Compositor offload: если есть активные анимации с opacity/transform/
                 // color/background-color — пересобираем display list из layout_box с
                 // overrides, минуя relayout (BUG-231 распространил offload на цвета).
@@ -14770,8 +14771,27 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         devtools: self.devtools_console.visible,
                         settings: self.settings_panel.visible,
                     };
-                    let mut toolbar_cmds = toolbar::build_toolbar(win_w, &pal, toolbar_active);
+                    let mut toolbar_cmds = toolbar::build_toolbar(
+                        win_w,
+                        &pal,
+                        toolbar_active,
+                        &self.address_bar,
+                        self.current_display_url(),
+                    );
                     overlay_buf.append(&mut toolbar_cmds);
+                    // Inline omnibox (DS-10): suggestion dropdown, anchored below
+                    // the toolbar row (not directly under the field — DS-10 step
+                    // 3) — drawn after the field so it always sits on top.
+                    if self.address_bar.is_open() {
+                        let field = toolbar::omnibox_rects(win_w).field;
+                        let mut dropdown_cmds = address_bar::build_dropdown(
+                            &self.address_bar,
+                            field,
+                            toolbar::CHROME_H,
+                            &pal,
+                        );
+                        overlay_buf.append(&mut dropdown_cmds);
+                    }
                 }
 
                 // CC-4: tab context menu — drawn above the tab strip.

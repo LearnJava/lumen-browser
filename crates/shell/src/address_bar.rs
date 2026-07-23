@@ -1,7 +1,13 @@
-//! Адресная строка (Ctrl+L): состояние overlay-бара и его сборка в display list.
+//! Адресная строка: состояние омнибокса и его сборка в display list.
 //!
-//! Паттерн идентичен `find.rs`: stateless рендер — `build_bar_overlay` каждый
-//! кадр, stateful ввод — `AddressBarState` мутируется из event-handler-а.
+//! DS-10 — омнибокс постоянно виден как инлайн-поле в центре тулбара
+//! (`toolbar.rs`), а не как Ctrl+L-оверлей поверх всего окна. Этот модуль не
+//! знает о геометрии тулбара (кластеры кнопок, `CHROME_H`) — `toolbar.rs`
+//! считает раскладку (`omnibox_rects`) и передаёт сюда уже готовые `Rect`-ы;
+//! здесь только состояние (`AddressBarState`) и чистый рендер по этим rect-ам:
+//! `build_inline_field` — всегда видимое поле (не в фокусе — текущий URL,
+//! в фокусе — редактируемый ввод), `build_dropdown` — список подсказок,
+//! рисуется отдельно (anchored под тулбаром) только пока бар открыт.
 //!
 //! Commit-семантика: Enter → `take_commit()` возвращает URL/запрос и сбрасывает
 //! состояние. Caller обязан обработать навигацию или запрос.
@@ -26,22 +32,23 @@
 //! а под полем ввода рисуется красная строка-предупреждение.
 
 use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{DisplayCommand, DisplayList};
+use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 use lumen_core::geom::Rect;
 use lumen_core::idn::{HostDisplay, SpoofReason, display_host};
 use lumen_core::url::Url;
 
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 
 // ── Визуальные константы ──────────────────────────────────────────────────────
 //
 // Surface/text colours are theme-driven via [`Palette`] (passed into
-// `build_bar_overlay`). The focus ring and caret now follow `pal.accent`
-// (design-system prototype: `.omnibox:focus-within{ border-color:var(--accent) }`)
-// instead of a fixed blue, so both track the active profile's accent colour.
-// The result-tag legend below stays theme-invariant by design: it is a fixed
-// per-category colour code (history/notes/tabs/…), same rationale as the
-// lifecycle/container colours excluded from `Palette` in `tabs/strip.rs`.
+// `build_inline_field`/`build_dropdown`). The focus ring and caret follow
+// `pal.accent` (design-system prototype: `.omnibox:focus-within{
+// border-color:var(--accent) }`), so both track the active profile's accent
+// colour. The result-tag legend below stays theme-invariant by design: it is
+// a fixed per-category colour code (history/notes/tabs/…), same rationale as
+// the lifecycle/container colours excluded from `Palette` in `tabs/strip.rs`.
 
 /// Tag accent for FTS-history omnibox results — historically shared the same
 /// blue as the focus ring; kept as its own constant now that the ring reads
@@ -50,10 +57,10 @@ const HISTORY_TAG: Color = Color { r: 60, g: 120, b: 220, a: 255 };
 /// Green tag accent for search-query omnibox results.
 const ITEM_TAG: Color = Color { r: 72, g: 150, b: 90, a: 255 };
 
-const BAR_W: f32 = 560.0;
-const BAR_H: f32 = 52.0;
-const PAD: f32 = 10.0;
-const FONT: f32 = 16.0;
+/// Font size of the field's own text (URL / editable input) — the design
+/// reference's `.omnibox input{ font-size:12.5px }`, rounded to a value the
+/// bundled fonts render cleanly at.
+const FONT: f32 = 13.0;
 /// Высота одной строки в dropdown.
 const ITEM_H: f32 = 36.0;
 const ITEM_LABEL_SZ: f32 = 13.0;
@@ -475,81 +482,124 @@ impl AddressBarState {
 
 // ── Рендер ────────────────────────────────────────────────────────────────────
 
-/// Параметры для сборки overlay display list.
-pub struct BarOverlay {
-    /// Размер окна в физических пикселях (для позиционирования по центру).
-    pub window_size: (u32, u32),
+/// Rects for the always-visible chrome of the inline omnibox field. Computed
+/// by `toolbar::omnibox_rects` (which owns the toolbar's cluster layout) —
+/// this module only draws into them, it has no knowledge of button-cluster
+/// geometry.
+#[derive(Debug, Clone, Copy)]
+pub struct FieldRects {
+    /// The field's own background/border box.
+    pub field: Rect,
+    /// TLS padlock icon-button, left-aligned inside `field`.
+    pub lock: Rect,
+    /// Text area between `lock` and `star` — host / editable input + caret.
+    pub text: Rect,
+    /// Bookmark ("star") icon-button.
+    pub star: Rect,
+    /// Shields icon-button, right-aligned inside `field`.
+    pub shield: Rect,
 }
 
-/// Собирает display list адресной строки. Вызывается каждый кадр, пока
-/// `state.is_open()`. Возвращаемый список рисуется поверх страницы без
-/// scroll-смещения (viewport-locked).
-pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette) -> DisplayList {
-    let (ww, _wh) = bar.window_size;
-    let x = ((ww as f32 - BAR_W) * 0.5).max(PAD);
-    let y = PAD;
+/// Uniform corner radii helper (mirrors the identically-named private helper
+/// in other chrome modules, e.g. `toolbar.rs`, `page_context_menu.rs`).
+fn corners(r: f32) -> CornerRadii {
+    CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r }
+}
 
-    let sugg = state.suggestions();
-    let n_visible = sugg.len().min(MAX_VISIBLE);
-    let drop_h = n_visible as f32 * ITEM_H;
+/// Push one icon glyph centered in `rect`, no background (lock/star/shield
+/// inside the omnibox — unlike toolbar's nav/action buttons, these never
+/// render a highlighted "on" background).
+fn push_icon(out: &mut DisplayList, rect: Rect, glyph: &str, color: Color) {
+    out.push(DisplayCommand::DrawText {
+        rect,
+        text: glyph.to_owned(),
+        font_size: rect.height.min(rect.width),
+        color,
+        font_family: Vec::new(),
+        font_weight: FontWeight::NORMAL,
+        font_style: FontStyle::Normal,
+        font_variation_axes: Vec::new(),
+        font_features: Vec::new(),
+        font_palette: None,
+        tab_size: 0.0,
+        highlight_name: None,
+        text_orientation: None,
+    });
+}
+
+/// Собирает display list всегда-видимого поля омнибокса: фон+рамка (accent
+/// кольцо в фокусе — design-system `.omnibox:focus-within{
+/// border-color:var(--accent) }`), замок/звезда/щит и текст. Не в фокусе —
+/// `current_url` (IDN-guarded); в фокусе — живой ввод/выделенная подсказка +
+/// курсор, как раньше в overlay, и (если хост спуф-риск) красная строка
+/// предупреждения под полем.
+///
+/// Не рисует dropdown — см. `build_dropdown`.
+pub fn build_inline_field(
+    state: &AddressBarState,
+    current_url: &str,
+    rects: &FieldRects,
+    pal: &Palette,
+) -> DisplayList {
+    let focused = state.is_open();
+    let mut out = DisplayList::with_capacity(8);
+
+    // Рамка (на 1px шире с каждой стороны, тот же приём что был у overlay-бара).
+    let border_color = if focused { pal.accent } else { pal.divider };
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: Rect::new(
+            rects.field.x - 1.0,
+            rects.field.y - 1.0,
+            rects.field.width + 2.0,
+            rects.field.height + 2.0,
+        ),
+        radii: corners(radius::MD + 1.0),
+        color: border_color,
+    });
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: rects.field,
+        radii: corners(radius::MD),
+        color: if focused { pal.overlay_bg } else { pal.input_bg },
+    });
+
+    push_icon(&mut out, rects.lock, "\u{1F512}", pal.text_dim);
+    push_icon(&mut out, rects.star, "\u{2606}", pal.text_dim);
+    push_icon(&mut out, rects.shield, "\u{1F6E1}", pal.text_dim);
 
     // Отображаем строку выделенной подсказки в input field если она выбрана.
+    let sugg = state.suggestions();
     let display_input = if let Some(idx) = state.selected_idx() {
         sugg.get(idx).map(|s| s.commit_value()).unwrap_or(state.input())
     } else {
         state.input()
     };
-    let is_empty = display_input.is_empty();
-    let (display_text, text_color, spoof_reason) = if is_empty {
+    let is_empty = focused && display_input.is_empty();
+    let (display_text, text_color, spoof_reason) = if !focused {
+        let (guarded, reason) = guard_display_text(current_url);
+        let text = if guarded.is_empty() { "about:blank".to_string() } else { guarded };
+        (text, pal.text, reason)
+    } else if is_empty {
         ("Введите URL или поисковый запрос…".to_string(), pal.text_dim, None)
     } else {
         let (guarded, reason) = guard_display_text(display_input);
         (guarded, pal.text, reason)
     };
-    let warn_h = if spoof_reason.is_some() { WARN_H } else { 0.0 };
 
-    let cap = 6 + n_visible * 4 + if spoof_reason.is_some() { 2 } else { 0 };
-    let mut out = DisplayList::with_capacity(cap);
-
-    // ─ Основной бар ──────────────────────────────────────────────────────────
-
-    // Рамка (на 1px шире с каждой стороны) — accent профиля/темы (design-system:
-    // `.omnibox:focus-within{ border-color:var(--accent) }`).
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(x - 1.0, y - 1.0, BAR_W + 2.0, BAR_H + 2.0),
-        color: pal.accent,
-    });
-    // Фон бара.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(x, y, BAR_W, BAR_H),
-        color: pal.overlay_bg,
-    });
-
-    // Поле ввода.
-    let input_x = x + PAD;
-    let input_w = BAR_W - PAD * 2.0;
-    let input_h = BAR_H - PAD * 2.0;
-    let input_y = y + PAD;
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(input_x, input_y, input_w, input_h),
-        color: pal.input_bg,
-    });
-
-    let text_margin = 6.0;
+    let text_margin = 4.0;
     out.push(DisplayCommand::DrawText {
         rect: Rect::new(
-            input_x + text_margin,
-            input_y + (input_h - FONT * 1.2) * 0.5,
-            input_w - text_margin * 2.0 - 10.0,
+            rects.text.x + text_margin,
+            rects.text.y + (rects.text.height - FONT * 1.2) * 0.5,
+            (rects.text.width - text_margin * 2.0).max(0.0),
             FONT * 1.2,
         ),
         text: display_text,
         font_size: FONT,
         color: text_color,
-        // DS-4: omnibox URL text is monospace (bundled JetBrains Mono); the
-        // rest of the address bar (dropdown labels/tags below) stays the
-        // default chrome UI font (Golos Text, resolved from empty font_family).
-        font_family: vec!["JetBrains Mono".to_string()],
+        // DS-4: omnibox URL text is monospace (bundled JetBrains Mono) while
+        // focused; not focused it stays the default chrome UI font (Golos
+        // Text, resolved from empty font_family) matching the rest of the row.
+        font_family: if focused { vec!["JetBrains Mono".to_string()] } else { Vec::new() },
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
@@ -560,12 +610,12 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
         text_orientation: None,
     });
 
-    // Курсор — вертикальная линия. Не рисуется если выбрана подсказка.
-    if !is_empty && state.selected_idx().is_none() {
+    // Курсор — вертикальная линия. Только в фокусе, не рисуется если выбрана подсказка.
+    if focused && !is_empty && state.selected_idx().is_none() {
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(
-                input_x + input_w - text_margin - 2.0,
-                input_y + (input_h - FONT * 1.2) * 0.5,
+                rects.text.x + rects.text.width - text_margin - 2.0,
+                rects.text.y + (rects.text.height - FONT * 1.2) * 0.5,
                 2.0,
                 FONT * 1.2,
             ),
@@ -575,16 +625,17 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
 
     // ─ Спуфинг-предупреждение (DS-6) ────────────────────────────────────────
 
-    if let Some(reason) = spoof_reason {
+    if focused && let Some(reason) = spoof_reason {
+        let warn_y = rects.field.y + rects.field.height + 4.0;
         out.push(DisplayCommand::FillRect {
-            rect: Rect::new(x, y + BAR_H, BAR_W, WARN_H),
+            rect: Rect::new(rects.field.x, warn_y, rects.field.width, WARN_H),
             color: SPOOF_WARNING_BG,
         });
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(
-                x + PAD,
-                y + BAR_H + (WARN_H - ITEM_SUB_SZ * 1.3) * 0.5,
-                BAR_W - PAD * 2.0,
+                rects.field.x + 8.0,
+                warn_y + (WARN_H - ITEM_SUB_SZ * 1.3) * 0.5,
+                (rects.field.width - 16.0).max(0.0),
                 ITEM_SUB_SZ * 1.3,
             ),
             text: spoof_warning_message(reason).to_string(),
@@ -602,23 +653,39 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
         });
     }
 
-    // ─ Dropdown ───────────────────────────────────────────────────────────────
+    out
+}
 
+/// Собирает display list dropdown-подсказок. Вызывается только пока
+/// `state.is_open()`; anchored под тулбаром (`dropdown_top` = `toolbar::
+/// CHROME_H`, а не сразу под полем — DS-10 шаг 3), шириной поля `field`.
+/// Пустой список, если подсказок нет.
+pub fn build_dropdown(
+    state: &AddressBarState,
+    field: Rect,
+    dropdown_top: f32,
+    pal: &Palette,
+) -> DisplayList {
+    let sugg = state.suggestions();
+    let n_visible = sugg.len().min(MAX_VISIBLE);
     if n_visible == 0 {
-        return out;
+        return DisplayList::new();
     }
+    let drop_h = n_visible as f32 * ITEM_H;
+    let drop_x = field.x;
+    let drop_w = field.width;
+    let drop_y = dropdown_top;
 
-    let drop_y = y + BAR_H + warn_h;
-    let drop_x = x;
+    let mut out = DisplayList::with_capacity(2 + n_visible * 4);
 
     // Граница dropdown.
     out.push(DisplayCommand::FillRect {
-        rect: Rect::new(drop_x - 1.0, drop_y, BAR_W + 2.0, drop_h + 1.0),
+        rect: Rect::new(drop_x - 1.0, drop_y, drop_w + 2.0, drop_h + 1.0),
         color: pal.overlay_border,
     });
     // Фон dropdown.
     out.push(DisplayCommand::FillRect {
-        rect: Rect::new(drop_x, drop_y, BAR_W, drop_h),
+        rect: Rect::new(drop_x, drop_y, drop_w, drop_h),
         color: pal.item_bg,
     });
 
@@ -628,7 +695,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
 
         if selected {
             out.push(DisplayCommand::FillRect {
-                rect: Rect::new(drop_x, iy, BAR_W, ITEM_H),
+                rect: Rect::new(drop_x, iy, drop_w, ITEM_H),
                 color: pal.item_selected_bg,
             });
         }
@@ -647,7 +714,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
                 rect: Rect::new(
                     drop_x + ITEM_PAD,
                     iy + 4.0,
-                    BAR_W - ITEM_PAD * 3.0 - 60.0,
+                    drop_w - ITEM_PAD * 3.0 - 60.0,
                     ITEM_LABEL_SZ * 1.3,
                 ),
                 text: label,
@@ -667,7 +734,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
                 rect: Rect::new(
                     drop_x + ITEM_PAD,
                     iy + 4.0 + ITEM_LABEL_SZ * 1.3 + 1.0,
-                    BAR_W - ITEM_PAD * 3.0 - 60.0,
+                    drop_w - ITEM_PAD * 3.0 - 60.0,
                     ITEM_SUB_SZ * 1.3,
                 ),
                 text: sub,
@@ -689,7 +756,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
                 rect: Rect::new(
                     drop_x + ITEM_PAD,
                     iy + (ITEM_H - ITEM_LABEL_SZ * 1.3) * 0.5,
-                    BAR_W - ITEM_PAD * 3.0 - 60.0,
+                    drop_w - ITEM_PAD * 3.0 - 60.0,
                     ITEM_LABEL_SZ * 1.3,
                 ),
                 text: label,
@@ -710,7 +777,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
         // Тег справа.
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(
-                drop_x + BAR_W - 58.0,
+                drop_x + drop_w - 58.0,
                 iy + (ITEM_H - ITEM_SUB_SZ * 1.3) * 0.5,
                 54.0,
                 ITEM_SUB_SZ * 1.3,
@@ -823,14 +890,26 @@ mod tests {
         assert!(s.input().len() <= MAX_INPUT_LEN);
     }
 
+    /// Fixed field geometry for tests — mirrors what `toolbar::omnibox_rects`
+    /// would produce, but without depending on that module.
+    fn test_rects() -> FieldRects {
+        FieldRects {
+            field: Rect::new(100.0, 2.0, 680.0, 32.0),
+            lock: Rect::new(108.0, 7.0, 22.0, 22.0),
+            text: Rect::new(138.0, 2.0, 550.0, 32.0),
+            star: Rect::new(720.0, 7.0, 22.0, 22.0),
+            shield: Rect::new(750.0, 7.0, 22.0, 22.0),
+        }
+    }
+
     #[test]
-    fn overlay_has_rect_and_text_when_open() {
+    fn field_shows_input_text_when_open() {
         let s = {
             let mut x = AddressBarState::default();
             x.open("https://example.com");
             x
         };
-        let dl = build_bar_overlay(&s, BarOverlay { window_size: (1024, 720) }, &Palette::DARK);
+        let dl = build_inline_field(&s, "https://example.com", &test_rects(), &Palette::DARK);
         let has_text = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("example.com"))
         });
@@ -838,13 +917,13 @@ mod tests {
     }
 
     #[test]
-    fn overlay_shows_placeholder_when_empty() {
+    fn field_shows_placeholder_when_open_and_empty() {
         let s = {
             let mut x = AddressBarState::default();
             x.open("");
             x
         };
-        let dl = build_bar_overlay(&s, BarOverlay { window_size: (1024, 720) }, &Palette::DARK);
+        let dl = build_inline_field(&s, "", &test_rects(), &Palette::DARK);
         let has_placeholder = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("URL"))
         });
@@ -852,14 +931,31 @@ mod tests {
     }
 
     #[test]
-    fn overlay_has_border_rect_as_first_cmd() {
+    fn field_shows_current_url_when_not_focused() {
+        let s = AddressBarState::default();
+        let dl = build_inline_field(&s, "https://example.com/page", &test_rects(), &Palette::DARK);
+        let has_text = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("example.com/page"))
+        });
+        assert!(has_text);
+    }
+
+    #[test]
+    fn field_has_border_rect_as_first_cmd_when_focused() {
         let s = {
             let mut x = AddressBarState::default();
             x.open("x");
             x
         };
-        let dl = build_bar_overlay(&s, BarOverlay { window_size: (1024, 720) }, &Palette::DARK);
-        assert!(matches!(dl[0], DisplayCommand::FillRect { color, .. } if color == Palette::DARK.accent));
+        let dl = build_inline_field(&s, "x", &test_rects(), &Palette::DARK);
+        assert!(matches!(dl[0], DisplayCommand::FillRoundedRect { color, .. } if color == Palette::DARK.accent));
+    }
+
+    #[test]
+    fn field_border_is_not_accent_when_not_focused() {
+        let s = AddressBarState::default();
+        let dl = build_inline_field(&s, "https://example.com", &test_rects(), &Palette::DARK);
+        assert!(matches!(dl[0], DisplayCommand::FillRoundedRect { color, .. } if color == Palette::DARK.divider));
     }
 
     // ── Omnibox prefix ────────────────────────────────────────────────────────
@@ -976,10 +1072,10 @@ mod tests {
             },
             OmniboxSuggestion::SearchQuery { query: "rust async".into(), frequency: 5 },
         ]);
-        let dl = build_bar_overlay(&s, BarOverlay { window_size: (1024, 720) }, &Palette::DARK);
+        let dl = build_dropdown(&s, test_rects().field, 40.0, &Palette::DARK);
         let text_count = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).count();
-        // Input text + label1 + sub1 + tag1 + label2 + tag2 >= 6
-        assert!(text_count >= 6);
+        // label1 + sub1 + tag1 + label2 + tag2 >= 5
+        assert!(text_count >= 5);
     }
 
     // ── @notes prefix ─────────────────────────────────────────────────────────
@@ -1228,10 +1324,10 @@ mod tests {
     }
 
     #[test]
-    fn overlay_shows_warning_strip_for_spoofed_input() {
+    fn field_shows_warning_strip_for_spoofed_input() {
         let mut s = AddressBarState::default();
         s.open("https://аpple.com/login");
-        let dl = build_bar_overlay(&s, BarOverlay { window_size: (1024, 720) }, &Palette::DARK);
+        let dl = build_inline_field(&s, "https://аpple.com/login", &test_rects(), &Palette::DARK);
         let has_warning = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Punycode"))
         });
@@ -1243,10 +1339,10 @@ mod tests {
     }
 
     #[test]
-    fn overlay_has_no_warning_strip_for_safe_input() {
+    fn field_has_no_warning_strip_for_safe_input() {
         let mut s = AddressBarState::default();
         s.open("https://google.com");
-        let dl = build_bar_overlay(&s, BarOverlay { window_size: (1024, 720) }, &Palette::DARK);
+        let dl = build_inline_field(&s, "https://google.com", &test_rects(), &Palette::DARK);
         let has_warning = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Punycode"))
         });
@@ -1262,7 +1358,7 @@ mod tests {
             title: String::new(),
             snippet: String::new(),
         }]);
-        let dl = build_bar_overlay(&s, BarOverlay { window_size: (1024, 720) }, &Palette::DARK);
+        let dl = build_dropdown(&s, test_rects().field, 40.0, &Palette::DARK);
         let has_punycode_label = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("xn--pple-43d.com"))
         });
