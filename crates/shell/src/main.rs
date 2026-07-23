@@ -977,6 +977,14 @@ fn run_window_mode(
         cookie_jar: Arc::new(
             lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
         ),
+        // DS-16: Anonymous profile's own ephemeral cookie jar — kept
+        // separate from `cookie_jar` so Anonymous browsing never mixes
+        // cookies with Personal/Work/Guest. Reset to a fresh instance every
+        // time Anonymous becomes the active profile — see
+        // `active_cookie_jar`/`ProfileMenuHit::SwitchTo`.
+        anonymous_cookie_jar: Arc::new(
+            lumen_storage::CookieJar::open_in_memory().expect("anonymous_cookie_jar init"),
+        ),
         js_ctx: None,
         js_present: false,
         raf_pending_flag: None,
@@ -7440,8 +7448,18 @@ struct Lumen {
     /// Session-scoped cookie jar. Shared across all `HttpClient` instances so
     /// `Set-Cookie` headers received on one hop (including 3xx redirects) are
     /// sent back on subsequent requests to the same domain. In-memory in Phase 0;
-    /// wired to a per-profile SQLite file in Phase 2.
+    /// wired to a per-profile SQLite file in Phase 2. Used for every profile
+    /// except the ephemeral Anonymous one — see [`Self::anonymous_cookie_jar`]
+    /// and [`Self::active_cookie_jar`] (DS-16).
     cookie_jar: Arc<lumen_storage::CookieJar>,
+    /// Anonymous profile's own cookie jar (DS-16, §9.3 ADR-020) — kept out of
+    /// [`Self::cookie_jar`] so cookies set while browsing as Anonymous never
+    /// leak into Personal/Work/Guest and vice versa. Reset to a fresh
+    /// in-memory instance every time Anonymous becomes the active profile
+    /// (`ProfileMenuHit::SwitchTo`), so it never carries state from a
+    /// previous Anonymous session either — true ephemerality within the
+    /// running process, not just isolation.
+    anonymous_cookie_jar: Arc<lumen_storage::CookieJar>,
     /// Live JS context for the current page — keeps event listeners active after
     /// initial script execution. `None` when `quickjs` feature is disabled or
     /// no scripts were registered. Must be dropped before `layout_source` on
@@ -8972,7 +8990,7 @@ impl Lumen {
             PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return,
         };
         for (nid, url) in requests {
-            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink, Some(Arc::clone(&self.cookie_jar))) {
+            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink, Some(self.active_cookie_jar())) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("Lazy: пропуск {url}: {e}");
@@ -9123,7 +9141,7 @@ impl Lumen {
                 PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => continue,
             };
 
-            let bytes = match fetch_image_bytes(&src, &base, &self.event_sink, Some(Arc::clone(&self.cookie_jar))) {
+            let bytes = match fetch_image_bytes(&src, &base, &self.event_sink, Some(self.active_cookie_jar())) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("video GIF: пропуск {src}: {e}");
@@ -9623,7 +9641,7 @@ impl Lumen {
         let source = self.source.clone();
         let sink = Arc::clone(&self.event_sink);
         let proxy = self.load_proxy.clone();
-        let cookie_jar = Arc::clone(&self.cookie_jar);
+        let cookie_jar = self.active_cookie_jar();
         // BUG-268: media-контекст экрана — для гейта speculative-фетча
         // `<link rel=stylesheet media=...>`, чтобы print-only лист не грел
         // кэш и не слал CssLoaded (progressive-кадры не красятся print-стилями).
@@ -9785,7 +9803,7 @@ impl Lumen {
             }
             let base = base.clone();
             let sink = Arc::clone(&self.event_sink);
-            let cookie_jar = Arc::clone(&self.cookie_jar);
+            let cookie_jar = self.active_cookie_jar();
             let proxy = self.load_proxy.clone();
             let target = self.target_color_space();
             std::thread::spawn(move || {
@@ -9919,7 +9937,12 @@ impl Lumen {
         // Индексировать страницу в history_fts для omnibox (@history) и записать
         // в history_store для панели истории (Ctrl+H).
         // Пропускаем Empty и File sources — только HTTP(S) и bfcache snapshots.
-        if let Some(url) = self.source.url_str() {
+        // DS-16: while Anonymous is the active profile, skip both writes —
+        // an ephemeral session must leave no trace in the history a
+        // Personal/Work switch-back would then see (ADR-020).
+        if let Some(url) = self.source.url_str()
+            && !self.active_profile_is_anonymous()
+        {
             let title = page.title.as_deref().unwrap_or("");
             let _ = self.history_fts.index(self.next_history_id, url, title, "");
             self.next_history_id += 1;
@@ -9990,7 +10013,7 @@ impl Lumen {
             for pf in page.pending_web_fonts {
                 if let Some(base) = base_opt.clone() {
                     let sink = Arc::clone(&self.event_sink);
-                    let cookie_jar = Arc::clone(&self.cookie_jar);
+                    let cookie_jar = self.active_cookie_jar();
                     let proxy = self.load_proxy.clone();
                     std::thread::spawn(move || {
                         let raw = match fetch_image_bytes(&pf.url, &base, &sink, Some(cookie_jar)) {
@@ -10439,7 +10462,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // безопасно — следующая навигация пересоздаёт набор в streaming.
                 let sink = self.event_sink.clone();
                 let hp = Arc::clone(&self.hyp_provider);
-                let cookie_jar = Some(Arc::clone(&self.cookie_jar));
+                let cookie_jar = Some(self.active_cookie_jar());
                 let sw_worker_store = Some(Arc::clone(&self.sw_worker_store));
                 let cache_backend =
                     Some(Arc::clone(&self.cache_store) as Arc<dyn lumen_core::ext::CacheBackend>);
@@ -12834,6 +12857,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 panels::profile_menu::ProfileMenuHit::SwitchTo(id) => {
                                     if self.profiles.set_active(Some(id)).is_ok() {
                                         self.profile_menu.set_active(Some(id));
+                                        // DS-16: Anonymous is ephemeral — every
+                                        // time it becomes active, start from a
+                                        // fresh in-memory jar so no cookie
+                                        // survives a previous Anonymous session.
+                                        if self.active_profile_is_anonymous() {
+                                            self.anonymous_cookie_jar = Arc::new(
+                                                lumen_storage::CookieJar::open_in_memory()
+                                                    .expect("anonymous_cookie_jar reset"),
+                                            );
+                                        }
                                     }
                                     self.profile_menu.visible = false;
                                 }
@@ -13326,8 +13359,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     if self.history_panel.visible {
                         let (px, py) = self.history_panel_anchor();
                         use panels::history_panel::HistoryHit;
-                        let hit =
-                            panels::history_panel::hit_test(&self.history_panel, x_css, y_css, px, py);
+                        let hit = panels::history_panel::hit_test(
+                            &self.history_panel,
+                            x_css,
+                            y_css,
+                            px,
+                            py,
+                            self.active_profile_is_anonymous(),
+                        );
                         match hit {
                             HistoryHit::Close => {
                                 self.history_panel.visible = false;
@@ -14804,8 +14843,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if self.history_panel.visible {
                     let win_w = self.viewport_width_css();
                     let tab_h = toolbar::CHROME_H;
-                    let mut hist_cmds =
-                        panels::history_panel::build_panel(&self.history_panel, win_w, tab_h, &pal);
+                    // DS-16: banner + shrunk body while Anonymous is active.
+                    let is_anon = active_profile_name
+                        .as_deref()
+                        .is_some_and(panels::profile_menu::is_anonymous);
+                    let mut hist_cmds = panels::history_panel::build_panel(
+                        &self.history_panel,
+                        win_w,
+                        tab_h,
+                        &pal,
+                        is_anon,
+                    );
                     overlay_buf.append(&mut hist_cmds);
                 }
 
@@ -18320,7 +18368,7 @@ impl Lumen {
             if !sidebar_url.is_empty() {
                 let sink = Arc::clone(&self.event_sink);
                 let src = PageSource::from_arg(Some(&sidebar_url));
-                match src.load_bytes(sink, Some(Arc::clone(&self.cookie_jar))) {
+                match src.load_bytes(sink, Some(self.active_cookie_jar())) {
                     Ok(raw) => {
                         self.open_sidebar_page(sidebar_url, &raw.bytes, String::new());
                     }
@@ -19549,6 +19597,27 @@ impl Lumen {
         self.profile_menu.set_entries(entries);
     }
 
+    /// `true` while the active profile is the seeded Anonymous profile
+    /// (DS-16 ephemeral slice, ADR-020) — gates history writes, the
+    /// history-panel banner, and which cookie jar navigation uses.
+    fn active_profile_is_anonymous(&self) -> bool {
+        self.profile_menu
+            .active_entry()
+            .is_some_and(|e| panels::profile_menu::is_anonymous(&e.name))
+    }
+
+    /// Cookie jar used for outgoing HTTP requests on the active tab: the
+    /// shared jar for every profile except Anonymous, which gets its own
+    /// ephemeral jar (DS-16) so its cookies never leak into — or persist
+    /// past — any other profile's browsing.
+    fn active_cookie_jar(&self) -> Arc<lumen_storage::CookieJar> {
+        if self.active_profile_is_anonymous() {
+            Arc::clone(&self.anonymous_cookie_jar)
+        } else {
+            Arc::clone(&self.cookie_jar)
+        }
+    }
+
     /// Reload the bookmark list from storage into the panel cache.
     ///
     /// Call this after every bookmark mutation (add / delete / move) so the
@@ -19616,7 +19685,7 @@ impl Lumen {
     fn show_view_source_for_url(&mut self, url: &str) {
         let source = PageSource::from_arg(Some(url));
         let sink = Arc::clone(&self.event_sink);
-        let jar = Arc::clone(&self.cookie_jar);
+        let jar = self.active_cookie_jar();
         match source.load_bytes(sink, Some(jar)) {
             Ok(raw) => {
                 let html_str = String::from_utf8_lossy(&raw.bytes).into_owned();
@@ -21092,6 +21161,9 @@ impl Lumen {
         let event_sink = self.event_sink.clone();
         let cookie_banner_dismiss = self.cookie_banner_dismiss;
         let deterministic = self.deterministic;
+        // Computed up front: `&mut self.ls_storage` below would otherwise
+        // conflict with this `&self` method call as a later call argument.
+        let cookie_jar = self.active_cookie_jar();
         let (document_arc, js_ctx) = tab_lifecycle::hibernate::restore_js_context(
             &data.url,
             doc,
@@ -21101,7 +21173,7 @@ impl Lumen {
             &self.sw_backend,
             cookie_banner_dismiss,
             deterministic,
-            Some(Arc::clone(&self.cookie_jar)),
+            Some(cookie_jar),
         );
 
         let layout_source = LayoutSource {

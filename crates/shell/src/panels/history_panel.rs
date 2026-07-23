@@ -27,7 +27,7 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 use crate::panels::themes::Palette;
-use crate::theme_tokens::radius;
+use crate::theme_tokens::{badge, radius};
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
@@ -51,6 +51,14 @@ const ROW_H: f32 = 44.0;
 
 /// Footer height (clear-all button).
 const FOOTER_H: f32 = 36.0;
+
+/// Height of the "history not saved" banner (DS-16, `.hist-banner` in the
+/// design reference), shown between the search box and the body while
+/// Anonymous is the active profile. `0.0` when hidden — the body area grows
+/// to fill the reclaimed space (see [`build_panel`]/[`hit_test`]).
+const BANNER_H: f32 = 26.0;
+/// Banner copy — matches the DS-16 brief's wording verbatim.
+const ANONYMOUS_BANNER_TEXT: &str = "История не сохраняется — Анонимный профиль";
 
 /// Outer padding.
 const PAD: f32 = 10.0;
@@ -231,8 +239,17 @@ pub enum HistoryHit {
 
 /// Classify a click at `(mx, my)` in window-space CSS px.
 ///
-/// `(px, py)` is the panel's top-left corner.
-pub fn hit_test(panel: &HistoryPanel, mx: f32, my: f32, px: f32, py: f32) -> HistoryHit {
+/// `(px, py)` is the panel's top-left corner. `is_anonymous` (DS-16) reports
+/// whether the banner is currently drawn above the body, so row coordinates
+/// stay in sync with [`build_panel`].
+pub fn hit_test(
+    panel: &HistoryPanel,
+    mx: f32,
+    my: f32,
+    px: f32,
+    py: f32,
+    is_anonymous: bool,
+) -> HistoryHit {
     if mx < px || mx > px + PANEL_W || my < py || my > py + PANEL_H {
         return HistoryHit::Outside;
     }
@@ -247,6 +264,11 @@ pub fn hit_test(panel: &HistoryPanel, mx: f32, my: f32, px: f32, py: f32) -> His
     if my < py + HEADER_H + SEARCH_H {
         return HistoryHit::FocusSearch;
     }
+    let banner_h = if is_anonymous { BANNER_H } else { 0.0 };
+    // Banner (DS-16).
+    if my < py + HEADER_H + SEARCH_H + banner_h {
+        return HistoryHit::Inside;
+    }
     // Footer.
     let footer_y = py + PANEL_H - FOOTER_H;
     if my >= footer_y {
@@ -257,7 +279,7 @@ pub fn hit_test(panel: &HistoryPanel, mx: f32, my: f32, px: f32, py: f32) -> His
         return HistoryHit::Inside;
     }
     // Body rows.
-    let body_top = py + HEADER_H + SEARCH_H;
+    let body_top = py + HEADER_H + SEARCH_H + banner_h;
     let local_y = my - body_top + panel.scroll_y;
     let mut cursor = 0.0_f32;
     for row in &panel.rows {
@@ -284,8 +306,16 @@ pub fn hit_test(panel: &HistoryPanel, mx: f32, my: f32, px: f32, py: f32) -> His
 /// Build the panel display list.
 ///
 /// `(win_w, toolbar_h)` — full window width and toolbar height in CSS px.
-/// `pal` — active chrome palette; drives all surface colours.
-pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32, pal: &Palette) -> DisplayList {
+/// `pal` — active chrome palette; drives all surface colours. `is_anonymous`
+/// (DS-16) draws the "history not saved" banner below the search box and
+/// shrinks the body area to make room for it — mirrors `hit_test`.
+pub fn build_panel(
+    panel: &HistoryPanel,
+    win_w: f32,
+    toolbar_h: f32,
+    pal: &Palette,
+    is_anonymous: bool,
+) -> DisplayList {
     let mut dl: DisplayList = Vec::new();
     if !panel.visible {
         return dl;
@@ -372,9 +402,30 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32, pal: &Palet
     };
     dl.push(make_text(search_display, sx + 6.0, sy + 4.0, sw - 12.0, 12.0, FontWeight::NORMAL, stxt));
 
+    // ── Banner (DS-16) ───────────────────────────────────────────────────────
+    let banner_h = if is_anonymous {
+        let by = py + HEADER_H + SEARCH_H;
+        dl.push(DisplayCommand::FillRect {
+            rect: Rect::new(px + 1.0, by, PANEL_W - 2.0, BANNER_H),
+            color: pal.item_bg,
+        });
+        dl.push(make_text(
+            ANONYMOUS_BANNER_TEXT.to_owned(),
+            px + PAD,
+            by + 7.0,
+            PANEL_W - 2.0 * PAD,
+            11.0,
+            FontWeight::NORMAL,
+            badge::YELLOW,
+        ));
+        BANNER_H
+    } else {
+        0.0
+    };
+
     // ── Body ─────────────────────────────────────────────────────────────────
-    let body_top = py + HEADER_H + SEARCH_H;
-    let body_h = PANEL_H - HEADER_H - SEARCH_H - FOOTER_H;
+    let body_top = py + HEADER_H + SEARCH_H + banner_h;
+    let body_h = PANEL_H - HEADER_H - SEARCH_H - FOOTER_H - banner_h;
     dl.push(DisplayCommand::PushClipRect { rect: Rect::new(px, body_top, PANEL_W, body_h) });
 
     if panel.rows.is_empty() {
@@ -705,7 +756,7 @@ mod tests {
     #[test]
     fn hit_test_outside() {
         let panel = HistoryPanel::new();
-        let hit = hit_test(&panel, 0.0, 0.0, 200.0, 100.0);
+        let hit = hit_test(&panel, 0.0, 0.0, 200.0, 100.0, false);
         assert_eq!(hit, HistoryHit::Outside);
     }
 
@@ -715,7 +766,7 @@ mod tests {
         let px = 100.0_f32;
         let py = 50.0_f32;
         // Close button is at px + PANEL_W - 28.0 to px + PANEL_W, within header height.
-        let hit = hit_test(&panel, px + PANEL_W - 10.0, py + 5.0, px, py);
+        let hit = hit_test(&panel, px + PANEL_W - 10.0, py + 5.0, px, py, false);
         assert_eq!(hit, HistoryHit::Close);
     }
 
@@ -724,7 +775,7 @@ mod tests {
         let panel = HistoryPanel::new();
         let px = 100.0_f32;
         let py = 50.0_f32;
-        let hit = hit_test(&panel, px + 50.0, py + HEADER_H + 5.0, px, py);
+        let hit = hit_test(&panel, px + 50.0, py + HEADER_H + 5.0, px, py, false);
         assert_eq!(hit, HistoryHit::FocusSearch);
     }
 
@@ -734,14 +785,40 @@ mod tests {
         let px = 100.0_f32;
         let py = 50.0_f32;
         // Clear button is in footer, right side.
-        let hit = hit_test(&panel, px + PANEL_W - PAD - 5.0, py + PANEL_H - 15.0, px, py);
+        let hit = hit_test(&panel, px + PANEL_W - PAD - 5.0, py + PANEL_H - 15.0, px, py, false);
         assert_eq!(hit, HistoryHit::ClearAll);
+    }
+
+    // ── DS-16: Anonymous banner ──────────────────────────────────────────────
+
+    #[test]
+    fn hit_test_banner_is_inside_not_search_or_body() {
+        let panel = HistoryPanel::new();
+        let px = 100.0_f32;
+        let py = 50.0_f32;
+        // Just below the search box, inside the banner band — only present
+        // when `is_anonymous` is true.
+        let by = py + HEADER_H + SEARCH_H + 2.0;
+        assert_eq!(hit_test(&panel, px + 50.0, by, px, py, true), HistoryHit::Inside);
+    }
+
+    #[test]
+    fn hit_test_entry_row_respects_banner_offset() {
+        let mut panel = HistoryPanel::new();
+        panel.set_items(vec![make_item(1, "https://a.com", "A", 86400 * 100)]);
+        let px = 100.0_f32;
+        let py = 50.0_f32;
+        // Rows: Group(GROUP_H), then Entry(ROW_H). With the banner shown the
+        // entry row starts BANNER_H further down than without it.
+        let entry_y = py + HEADER_H + SEARCH_H + BANNER_H + GROUP_H + 5.0;
+        let hit = hit_test(&panel, px + 50.0, entry_y, px, py, true);
+        assert_eq!(hit, HistoryHit::Navigate("https://a.com".to_owned()));
     }
 
     #[test]
     fn build_panel_empty_no_crash() {
         let panel = HistoryPanel::new();
-        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK);
+        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK, false);
         assert!(dl.is_empty()); // panel is not visible
     }
 
@@ -749,8 +826,30 @@ mod tests {
     fn build_panel_visible_has_commands() {
         let mut panel = HistoryPanel::new();
         panel.toggle();
-        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK);
+        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK, false);
         assert!(!dl.is_empty());
+    }
+
+    #[test]
+    fn build_panel_draws_banner_when_anonymous() {
+        let mut panel = HistoryPanel::new();
+        panel.toggle();
+        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK, true);
+        let has_banner = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text == ANONYMOUS_BANNER_TEXT)
+        });
+        assert!(has_banner);
+    }
+
+    #[test]
+    fn build_panel_no_banner_when_not_anonymous() {
+        let mut panel = HistoryPanel::new();
+        panel.toggle();
+        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK, false);
+        let has_banner = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text == ANONYMOUS_BANNER_TEXT)
+        });
+        assert!(!has_banner);
     }
 
     #[test]

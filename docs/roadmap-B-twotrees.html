@@ -3668,16 +3668,16 @@
       {
        "id": "DS-15",
        "title": "DS-15: Сигнатуры профилей — обводка/монохром",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Anonymous → красная inset-обводка окна 2px (4 FillRect поверх кадра, profile::ANONYMOUS); Guest → desaturate() всей Palette (монохром). После DS-14"
+       "note": "Anonymous → красная inset-обводка окна 2px (4 FillRect поверх кадра, panels::themes::anonymous_border, profile::ANONYMOUS), появляется после сборки всех оверлеев; Guest → panels::themes::desaturate()/Palette::desaturated() (Rec.601 luma) применяется до Palette::accent override. Ключ активного профиля — profile_menu::is_anonymous/is_guest (сверка по имени, как color_for_profile)"
       },
       {
        "id": "DS-16",
        "title": "DS-16: ADR профилей + эфемерный Anonymous",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "ADR «Профили как контексты безопасности» (уровни изоляции, связь с ADR-012) + эфемерный срез: при Anonymous история/downloads не пишутся, cookie jar in-memory, баннер в history_panel. После DS-14"
+       "note": "ADR-020 (три уровня изоляции, связь с ADR-012 — нет DB-менеджера, ~36 store'ов поэтапно) + эфемерный срез Anonymous: LoadDone пропускает history_fts.index/History::record_visit, отдельный anonymous_cookie_jar (сбрасывается заново при каждом входе в Anonymous) через Lumen::active_cookie_jar(); баннер в history_panel между поиском и списком. Downloads уже in-memory для всех — код не потребовался (pre-existing debt, задокументирован в ADR)"
       },
       {
        "id": "DS-17",
