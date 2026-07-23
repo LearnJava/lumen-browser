@@ -1661,9 +1661,9 @@
       {
        "id": "WPT-VENDOR-ai",
        "title": "WPT: вендорить + прогнать категорию `ai`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). AI/Writer API — нет LLM-интеграции"
+       "note": "DONE 2026-07-23: вендорена (tests/wpt/ai/, 180 файлов: classifier/, language-model/, language_detection/, proofreader/, rewriter/, semantic_embedder/, summarizer/, translator/, writer/), включена несмотря на скоуп 🚫 по тому же постоянному решению пользователя, что и accelerometer/acid. Категория на 100% .https.-only (163 window.js + 6 html, 0 не-https тестов). Полный run_report.py --all --root ai --recursive не добежал до конца: пробный 10-минутный прогон дал только TIMEOUT (invalid port: \"None\", минимальный исполнитель не поднимает HTTPS-порт) — тот же класс ограничения, что WebCryptoAPI/FileAPI/BlobURL. Не заводился отдельный BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет (см. заметку в docs/wpt-status.md)"
       },
       {
        "id": "WPT-VENDOR-ambient-light",
