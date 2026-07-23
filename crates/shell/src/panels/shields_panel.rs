@@ -11,8 +11,14 @@
 //! `Event::RequestBlocked` events from the HTTP layer, and stored in a shared
 //! [`BlockedLog`] (`Arc<Mutex<…>>`).  The Lumen struct polls this on each
 //! redraw to refresh the panel display.
+//!
+//! The panel shows one honest counter — total requests blocked on the current
+//! page (DS-18) — and no trackers/ads breakdown: the installed filter
+//! (`lumen_network::EasyListFilter`, fed by the merged EasyList+EasyPrivacy
+//! body, see `crates/shell/src/adblock.rs`) tags every match with a
+//! list-format reason (`"easylist"`/`"hosts"`), not a tracker-vs-ad category,
+//! so a split would be fabricated rather than measured.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::Event;
@@ -52,40 +58,31 @@ const PANEL_RADIUS: f32 = crate::theme_tokens::radius::LG;
 
 // ── Blocked log ───────────────────────────────────────────────────────────────
 
-/// Shared accumulator for blocked-request counts, indexed by hostname.
+/// Shared accumulator for the total blocked-request count.
 ///
 /// Updated from the network thread via [`ShieldCountSink`]; read by the shell
-/// UI thread to refresh the panel display.  Counts persist for the lifetime of
-/// the browser process (they are NOT reset on navigation — call
+/// UI thread to refresh the panel display.  The count persists for the
+/// lifetime of the browser process (it is NOT reset on navigation — call
 /// [`BlockedLog::clear`] explicitly on page load).
 #[derive(Default)]
 pub struct BlockedLog {
-    /// Blocked-request count per hostname (`example.com → 3`).
-    pub counts: HashMap<String, u32>,
-    /// Total blocked across all domains since the last [`clear`] call.
+    /// Total requests blocked since the last [`clear`] call.
     pub total: u32,
 }
 
 impl BlockedLog {
-    /// Increment the count for the hostname extracted from `url`.
+    /// Increment the total if `url` has a valid HTTP(S) host.
     ///
     /// Non-HTTP/HTTPS URLs and malformed hostnames are silently ignored.
     pub fn record(&mut self, url: &str) {
-        if let Some(host) = extract_host(url) {
-            *self.counts.entry(host).or_insert(0) += 1;
+        if extract_host(url).is_some() {
             self.total += 1;
         }
     }
 
-    /// Clear all counts (call on every top-level navigation).
+    /// Clear the total (call on every top-level navigation).
     pub fn clear(&mut self) {
-        self.counts.clear();
         self.total = 0;
-    }
-
-    /// Blocked count for a specific hostname (0 if unseen).
-    pub fn count_for(&self, host: &str) -> u32 {
-        self.counts.get(host).copied().unwrap_or(0)
     }
 }
 
@@ -133,11 +130,9 @@ pub struct ShieldsPanel {
     ///
     /// `None` while no page is loaded or for local file: URLs.
     pub current_domain: Option<String>,
-    /// Snapshot of blocked counts (pulled from [`BlockedLog`] via
+    /// Snapshot of the total blocked count (pulled from [`BlockedLog`] via
     /// [`ShieldsPanel::refresh`]).
     blocked_total: u32,
-    /// Snapshot: blocked count for the current domain only.
-    blocked_domain: u32,
     /// Shared log produced by [`ShieldCountSink`].
     log: Arc<Mutex<BlockedLog>>,
 }
@@ -145,14 +140,7 @@ pub struct ShieldsPanel {
 impl ShieldsPanel {
     /// Create a new hidden panel backed by the given shared `log`.
     pub fn new(log: Arc<Mutex<BlockedLog>>) -> Self {
-        Self {
-            visible: false,
-            enabled: true,
-            current_domain: None,
-            blocked_total: 0,
-            blocked_domain: 0,
-            log,
-        }
+        Self { visible: false, enabled: true, current_domain: None, blocked_total: 0, log }
     }
 
     /// Flip panel visibility.
@@ -166,16 +154,11 @@ impl ShieldsPanel {
         self.refresh();
     }
 
-    /// Pull the latest counts from the shared [`BlockedLog`] into the panel
-    /// snapshot fields.  Call after every network event or on each redraw.
+    /// Pull the latest total from the shared [`BlockedLog`] into the panel
+    /// snapshot field.  Call after every network event or on each redraw.
     pub fn refresh(&mut self) {
         if let Ok(guard) = self.log.lock() {
             self.blocked_total = guard.total;
-            if let Some(ref d) = self.current_domain {
-                self.blocked_domain = guard.count_for(d);
-            } else {
-                self.blocked_domain = 0;
-            }
         }
     }
 
@@ -185,12 +168,6 @@ impl ShieldsPanel {
             guard.clear();
         }
         self.blocked_total = 0;
-        self.blocked_domain = 0;
-    }
-
-    /// Blocked-request count for the current domain (from last `refresh`).
-    pub fn blocked_domain_count(&self) -> u32 {
-        self.blocked_domain
     }
 
     /// Total blocked-request count for the current page (from last `refresh`).
@@ -343,17 +320,39 @@ pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32, pal: &Pa
         text_orientation: None,
     });
 
-    // Blocked-count row.
-    let count_text = format!(
-        "{} blocked (this page: {})",
-        panel.blocked_domain_count(),
-        panel.blocked_total_count(),
-    );
+    // Blocked-count row (DS-18): number in `accent` (bundled JetBrains Mono),
+    // label in `text_dim` — matches `.shield-stat .num`/`.lbl` in the design
+    // reference. Only a single honest counter is shown: the merged
+    // EasyList+EasyPrivacy filter classifies rules by list format
+    // ("easylist"/"hosts"), not by tracker-vs-ad intent, so a trackers/ads
+    // split would be fabricated data, not a real breakdown.
+    let blocked_num = panel.blocked_total_count().to_string();
+    let num_w = (blocked_num.chars().count() as f32 * 9.0).max(14.0);
     out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + 10.0, py + 40.0, PANEL_W - 20.0, FONT_SZ_SM * 1.3),
-        text: count_text,
+        rect: Rect::new(px + 10.0, py + 39.0, num_w, FONT_SZ * 1.3),
+        text: blocked_num,
+        font_size: FONT_SZ,
+        color: pal.accent,
+        font_family: vec!["JetBrains Mono".to_string()],
+        font_weight: FontWeight::BOLD,
+        font_style: FontStyle::Normal,
+        font_variation_axes: Vec::new(),
+        font_features: Vec::new(),
+        font_palette: None,
+        tab_size: 0.0,
+        highlight_name: None,
+        text_orientation: None,
+    });
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(
+            px + 10.0 + num_w + 4.0,
+            py + 40.0,
+            (PANEL_W - 20.0 - num_w - 4.0).max(0.0),
+            FONT_SZ_SM * 1.3,
+        ),
+        text: "запросов заблокировано".to_owned(),
         font_size: FONT_SZ_SM,
-        color: pal.text,
+        color: pal.text_dim,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -480,7 +479,6 @@ mod tests {
         let mut log = BlockedLog::default();
         log.record("https://tracker.example.com/pixel.gif");
         log.record("https://tracker.example.com/other.js");
-        assert_eq!(log.count_for("tracker.example.com"), 2);
         assert_eq!(log.total, 2);
     }
 
@@ -498,14 +496,13 @@ mod tests {
         log.record("https://ads.example.com/ad.js");
         log.clear();
         assert_eq!(log.total, 0);
-        assert!(log.counts.is_empty());
     }
 
     #[test]
-    fn blocked_log_strips_port() {
+    fn blocked_log_counts_url_with_port() {
         let mut log = BlockedLog::default();
         log.record("https://ads.example.com:8080/track");
-        assert_eq!(log.count_for("ads.example.com"), 1);
+        assert_eq!(log.total, 1);
     }
 
     // ── extract_host ─────────────────────────────────────────────────────────
@@ -574,7 +571,6 @@ mod tests {
         let mut p = ShieldsPanel::new(log);
         p.current_domain = Some("tracker.com".to_owned());
         p.refresh();
-        assert_eq!(p.blocked_domain_count(), 2);
         assert_eq!(p.blocked_total_count(), 3);
     }
 
@@ -668,6 +664,52 @@ mod tests {
         assert!(has_domain);
     }
 
+    #[test]
+    fn build_panel_blocked_number_uses_accent_color() {
+        let log = make_log();
+        {
+            let mut guard = log.lock().unwrap();
+            guard.record("https://tracker.example.com/pixel");
+            guard.record("https://ads.example.com/ad.js");
+        }
+        let mut p = ShieldsPanel::new(log);
+        p.visible = true;
+        p.current_domain = Some("example.com".to_owned());
+        p.refresh();
+        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
+        let has_accent_count = dl.iter().any(|c| {
+            matches!(
+                c,
+                DisplayCommand::DrawText { text, color, .. }
+                    if text == "2" && *color == Palette::DARK.accent
+            )
+        });
+        assert!(has_accent_count, "blocked count must render in accent colour");
+    }
+
+    #[test]
+    fn build_panel_blocked_label_uses_text_dim_and_no_breakdown() {
+        let p = make_panel_visible(true, Some("example.com"));
+        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
+        let has_dim_label = dl.iter().any(|c| {
+            matches!(
+                c,
+                DisplayCommand::DrawText { text, color, .. }
+                    if text.contains("заблокировано") && *color == Palette::DARK.text_dim
+            )
+        });
+        assert!(has_dim_label, "blocked-count label must use text_dim colour");
+
+        let has_breakdown = dl.iter().any(|c| {
+            matches!(
+                c,
+                DisplayCommand::DrawText { text, .. }
+                    if text.contains("трекер") || text.contains("реклам")
+            )
+        });
+        assert!(!has_breakdown, "must not fabricate a trackers/ads split");
+    }
+
     // ── ShieldCountSink ──────────────────────────────────────────────────────
 
     #[test]
@@ -692,7 +734,7 @@ mod tests {
             reason: "easylist".to_owned(),
         });
         let guard = log.lock().unwrap();
-        assert_eq!(guard.count_for("tracker.example.com"), 1);
+        assert_eq!(guard.total, 1);
     }
 
     #[test]

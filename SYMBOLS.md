@@ -4007,7 +4007,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:982` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1037` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (988 symbols)
+## lumen-shell  (986 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -4596,22 +4596,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/settings_panel.rs:495` **fn** `tooltip_for` — Describe whatever setting is under the cursor at `(mx, my)` (window CSS
 `crates/shell/src/panels/settings_panel.rs:638` **fn** `build_tooltip` — Render a small tooltip bubble anchored just below-right of `(mx, my)`
 `crates/shell/src/panels/settings_panel.rs:684` **fn** `build_panel` — Append display commands for the settings panel to `list`
-`crates/shell/src/panels/shields_panel.rs:62` **struct** `BlockedLog` — Shared accumulator for blocked-request counts, indexed by hostname
-`crates/shell/src/panels/shields_panel.rs:73` **fn** `record` — Increment the count for the hostname extracted from `url`
-`crates/shell/src/panels/shields_panel.rs:81` **fn** `clear` — Clear all counts (call on every top-level navigation)
-`crates/shell/src/panels/shields_panel.rs:87` **fn** `count_for` — Blocked count for a specific hostname (0 if unseen)
-`crates/shell/src/panels/shields_panel.rs:100` **struct** `ShieldCountSink` — [`EventSink`] wrapper that forwards every event to an inner sink AND
-`crates/shell/src/panels/shields_panel.rs:123` **struct** `ShieldsPanel` — Shields floating panel state (7C.4)
-`crates/shell/src/panels/shields_panel.rs:147` **fn** `new` — Create a new hidden panel backed by the given shared `log`
-`crates/shell/src/panels/shields_panel.rs:159` **fn** `toggle` — Flip panel visibility
-`crates/shell/src/panels/shields_panel.rs:164` **fn** `set_domain` — Update `current_domain` and refresh blocked counts
-`crates/shell/src/panels/shields_panel.rs:171` **fn** `refresh` — Pull the latest counts from the shared [`BlockedLog`] into the panel
-`crates/shell/src/panels/shields_panel.rs:183` **fn** `clear_log` — Clear the shared blocked log (call on top-level navigation)
-`crates/shell/src/panels/shields_panel.rs:192` **fn** `blocked_domain_count` — Blocked-request count for the current domain (from last `refresh`)
-`crates/shell/src/panels/shields_panel.rs:197` **fn** `blocked_total_count` — Total blocked-request count for the current page (from last `refresh`)
-`crates/shell/src/panels/shields_panel.rs:206` **enum** `ShieldsHit` — Result of a click inside the shields panel
-`crates/shell/src/panels/shields_panel.rs:219` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the shields panel
-`crates/shell/src/panels/shields_panel.rs:254` **fn** `build_panel` — Build the display list for the shields floating panel
+`crates/shell/src/panels/shields_panel.rs:68` **struct** `BlockedLog` — Shared accumulator for the total blocked-request count
+`crates/shell/src/panels/shields_panel.rs:77` **fn** `record` — Increment the total if `url` has a valid HTTP(S) host
+`crates/shell/src/panels/shields_panel.rs:84` **fn** `clear` — Clear the total (call on every top-level navigation)
+`crates/shell/src/panels/shields_panel.rs:97` **struct** `ShieldCountSink` — [`EventSink`] wrapper that forwards every event to an inner sink AND
+`crates/shell/src/panels/shields_panel.rs:120` **struct** `ShieldsPanel` — Shields floating panel state (7C.4)
+`crates/shell/src/panels/shields_panel.rs:142` **fn** `new` — Create a new hidden panel backed by the given shared `log`
+`crates/shell/src/panels/shields_panel.rs:147` **fn** `toggle` — Flip panel visibility
+`crates/shell/src/panels/shields_panel.rs:152` **fn** `set_domain` — Update `current_domain` and refresh blocked counts
+`crates/shell/src/panels/shields_panel.rs:159` **fn** `refresh` — Pull the latest total from the shared [`BlockedLog`] into the panel
+`crates/shell/src/panels/shields_panel.rs:166` **fn** `clear_log` — Clear the shared blocked log (call on top-level navigation)
+`crates/shell/src/panels/shields_panel.rs:174` **fn** `blocked_total_count` — Total blocked-request count for the current page (from last `refresh`)
+`crates/shell/src/panels/shields_panel.rs:183` **enum** `ShieldsHit` — Result of a click inside the shields panel
+`crates/shell/src/panels/shields_panel.rs:196` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the shields panel
+`crates/shell/src/panels/shields_panel.rs:231` **fn** `build_panel` — Build the display list for the shields floating panel
 `crates/shell/src/panels/shortcuts_panel.rs:48` **struct** `ShortcutRow` — One entry in the shortcuts list: human label + current binding
 `crates/shell/src/panels/shortcuts_panel.rs:61` **fn** `binding_label` — Formatted binding string shown in the key badge (e.g. `"Ctrl+R"`)
 `crates/shell/src/panels/shortcuts_panel.rs:77` **fn** `default_rows` — Compile-time default bindings for all displayed commands
@@ -5525,4 +5523,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5451 symbols in 23 crates*
+*Total: 5449 symbols in 23 crates*
