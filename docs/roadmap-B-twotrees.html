@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-23",
  "counts": {
-  "open": 32,
+  "open": 33,
   "fixed": 267,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 299,
+ "total_bugs": 300,
  "phases": [
   {
    "id": "P0",
@@ -3626,7 +3626,7 @@
       {
        "id": "DS-9",
        "title": "DS-9: Постоянный тулбар 36px",
-       "status": "planned",
+       "status": "done",
        "size": "M",
        "note": "Новый crates/shell/src/toolbar.rs (36px, по образцу strip.rs): назад/вперёд/reload + правый кластер (find/web/AI/загрузки/DevTools/настройки — зовут существующие панели); сдвиг content_layout_viewport и автоматика-офсетов Target::Point (+TOOLBAR_H); гейт: MCP live-клик + graphic_tests --only 00/03"
       },
@@ -5832,6 +5832,13 @@
    "component": "font (`system_fonts.rs`)",
    "date": "2026-07-22",
    "debtor": false
+  },
+  "BUG-330": {
+   "status": "open",
+   "title": "TEST-147 FAIL уже на чистом `main` (38e167c6, свежая пересборка) — `22.52%` vs порог 0.5%, не в `KNOWN_DEBTORS`. Не регрессия DS-9 (постоянный тулбар не трогает…",
+   "component": "paint/test-harness (`background-repeat: space`)",
+   "date": null,
+   "debtor": true
   }
  },
  "unlinked": {
@@ -6204,6 +6211,9 @@
   ],
   "paint/test-harness": [
    "BUG-240"
+  ],
+  "paint/test-harness (`background-repeat: space`)": [
+   "BUG-330"
   ],
   "shell": [
    "BUG-028",
