@@ -4,14 +4,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 **Usage:** grep for a symbol → get `file:line` → `Read file offset=N limit=30`.
 
-## lumen-a11y  (28 symbols)
+## lumen-a11y  (33 symbols)
 
-`crates/engine/a11y/src/lib.rs:25` **enum** `LiveRegion` — `aria-live` values per WAI-ARIA §6.6
-`crates/engine/a11y/src/lib.rs:34` **enum** `AriaCurrent` — `aria-current` values per WAI-ARIA §5.4.1
-`crates/engine/a11y/src/lib.rs:53` **struct** `AXState` — ARIA state and property flags for one accessibility node
-`crates/engine/a11y/src/lib.rs:114` **struct** `AXNode` — One node in the accessibility tree
-`crates/engine/a11y/src/lib.rs:146` **struct** `AXTree` — Accessibility tree rooted at a document node
-`crates/engine/a11y/src/lib.rs:161` **fn** `build_ax_tree` — Build an `AXTree` from a `Document` starting at `root_id`
+`crates/engine/a11y/src/chrome.rs:15` **struct** `ChromeTab` — One open tab, as shown in the synthetic `TabList`
+`crates/engine/a11y/src/chrome.rs:27` **struct** `ChromeButton` — One button in the synthetic `ToolBar` (profile avatar, nav cluster, right
+`crates/engine/a11y/src/chrome.rs:39` **struct** `ChromeSnapshot` — Snapshot of chrome UI state needed to build synthetic AX nodes
+`crates/engine/a11y/src/chrome.rs:91` **fn** `chrome_nodes` — Build the synthetic `TabList` and `ToolBar` nodes for `snapshot` — DS-17
+`crates/engine/a11y/src/chrome.rs:139` **fn** `attach_chrome` — Attach synthetic `chrome` nodes (from [`chrome_nodes`]) as siblings of the
+`crates/engine/a11y/src/lib.rs:26` **enum** `LiveRegion` — `aria-live` values per WAI-ARIA §6.6
+`crates/engine/a11y/src/lib.rs:35` **enum** `AriaCurrent` — `aria-current` values per WAI-ARIA §5.4.1
+`crates/engine/a11y/src/lib.rs:54` **struct** `AXState` — ARIA state and property flags for one accessibility node
+`crates/engine/a11y/src/lib.rs:115` **struct** `AXNode` — One node in the accessibility tree
+`crates/engine/a11y/src/lib.rs:147` **struct** `AXTree` — Accessibility tree rooted at a document node
+`crates/engine/a11y/src/lib.rs:162` **fn** `build_ax_tree` — Build an `AXTree` from a `Document` starting at `root_id`
 `crates/engine/a11y/src/names.rs:18` **fn** `compute_name` — Compute the accessible name for a DOM node (ACCNAME-1.2 §4.3)
 `crates/engine/a11y/src/names.rs:176` **fn** `compute_description` — Compute the accessible description for a DOM node (ACCNAME-1.2 §4.3.2)
 `crates/engine/a11y/src/platform/linux.rs:32` **struct** `AtSpiBridge` — Linux AT-SPI2 accessibility bridge
@@ -188,7 +193,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:73` **fn** `build_clip_mask` — Build a boolean clip mask by rasterizing `path` with even-odd rule
 `crates/engine/canvas/src/rasterize.rs:107` **fn** `collect_lines` — Extract `(x0, y0, x1, y1)` line tuples from `path`, tessellating Bézier curves
 
-## lumen-core  (283 symbols)
+## lumen-core  (286 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
@@ -386,9 +391,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/icc.rs:961` **fn** `cached_rgb_transform` — Returns the compiled RGB matrix-shaper transform for `profile_bytes`, building
 `crates/core/src/icc.rs:983` **fn** `cached_rgb_transform_to` — Returns the compiled RGB matrix-shaper transform for `profile_bytes` targeting
 `crates/core/src/icc.rs:1009` **fn** `cached_cmyk_transform` — Returns the compiled CMYK `A2B0` transform for `profile_bytes`, building and
-`crates/core/src/idn.rs:24` **fn** `domain_to_ascii` — Преобразует домен в ASCII-форму (IDNA `ToASCII`)
-`crates/core/src/idn.rs:53` **fn** `ensure_ascii` — Идемпотентная версия [`domain_to_ascii`] — если вход уже ASCII (например,
-`crates/core/src/idn.rs:59` **type** `IdnError` — Ошибка для случаев, когда метка не может быть закодирована. Пока
+`crates/core/src/idn.rs:28` **fn** `domain_to_ascii` — Преобразует домен в ASCII-форму (IDNA `ToASCII`)
+`crates/core/src/idn.rs:57` **fn** `ensure_ascii` — Идемпотентная версия [`domain_to_ascii`] — если вход уже ASCII (например,
+`crates/core/src/idn.rs:63` **type** `IdnError` — Ошибка для случаев, когда метка не может быть закодирована. Пока
+`crates/core/src/idn.rs:68` **enum** `SpoofReason` — Причина, по которой [`display_host`] решил не показывать Unicode-форму
+`crates/core/src/idn.rs:83` **enum** `HostDisplay` — Решение о том, как показать хост пользователю: как есть (Unicode) или в
+`crates/core/src/idn.rs:149` **fn** `display_host` — Решает, безопасно ли показать хост в Unicode, или его нужно показать в
 `crates/core/src/json.rs:15` **enum** `JsonValue`
 `crates/core/src/json.rs:27` **fn** `as_str`
 `crates/core/src/json.rs:35` **fn** `as_number`
@@ -1267,7 +1275,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:251` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:261` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (392 symbols)
+## lumen-js  (388 symbols)
 
 `crates/js/src/audio_bindings.rs:37` **fn** `new_session_seed` — Generate a unique per-session noise seed
 `crates/js/src/audio_bindings.rs:46` **fn** `install_audio_bindings` — Install the complete Web Audio API Level 2 into the JS context
@@ -1289,13 +1297,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/clipboard.rs:33` **fn** `set_clipboard_provider` — Install the host clipboard provider backing `navigator.clipboard`
 `crates/js/src/close_watcher.rs:19` **fn** `install_close_watcher` — Install `CloseWatcher` class + Escape key handler into the JS context
 `crates/js/src/contacts.rs:15` **fn** `init_contacts_manager` — Install the Contact Picker API stub into the JS context
-`crates/js/src/content_index.rs:18` **fn** `install_content_index_api` — Install Content Index API on `ServiceWorkerRegistration.prototype`
 `crates/js/src/cookie_banner.rs:30` **fn** `install_cookie_banner_bindings` — Install cookie-banner auto-dismiss shim into the JS context
 `crates/js/src/cookie_banner.rs:160` **fn** `install_with_selectors` — Build the `_LUMEN_CONSENT_SELECTORS` global value and inject the shim
 `crates/js/src/cookie_store.rs:17` **fn** `init_cookie_store` — Install the Cookie Store API into the JS context
 `crates/js/src/credentials.rs:50` **fn** `set_credential_provider` — Install the host credential provider backing `navigator.credentials`
 `crates/js/src/credentials.rs:66` **fn** `install_credentials_bindings` — Install the `navigator.credentials` JS shim
-`crates/js/src/csp.rs:12` **fn** `install_csp_bindings` — Install CSP JS bindings: `SecurityPolicyViolationEvent` class and
 `crates/js/src/css_properties_values_api.rs:14` **struct** `RegisteredPropertiesMap` — Maps property name (e.g. "--my-color") to its definition
 `crates/js/src/css_properties_values_api.rs:19` **fn** `new`
 `crates/js/src/css_properties_values_api.rs:24` **fn** `register` — Register a custom property definition
@@ -1361,7 +1367,6 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/highlight_api.rs:47` **fn** `get_highlights_registry`
 `crates/js/src/highlight_api.rs:52` **struct** `Highlight`
 `crates/js/src/highlight_api.rs:58` **fn** `new`
-`crates/js/src/highlight_api.rs:66` **fn** `install_highlight_api_bindings`
 `crates/js/src/idle_detection.rs:89` **fn** `install_idle_detection_bindings` — Install Idle Detection API bindings into the JS context
 `crates/js/src/iframe_element.rs:30` **fn** `install_iframe_element_bindings` — Install HTMLIFrameElement stubs into the JS context
 `crates/js/src/img_bitmap_store.rs:51` **fn** `set_img_bitmap` — Store a decoded `<img>` element identified by its node id
@@ -1375,65 +1380,65 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/import_meta.rs:23` **fn** `transform_import_meta` — Transform `import.meta` in `source`, binding `url` as `.url`
 `crates/js/src/intl_bindings.rs:42` **fn** `install_intl_bindings` — Install the `Intl` shim into the JS context
 `crates/js/src/launch_handler.rs:14` **fn** `install_launch_handler_api` — Install Launch Handler API bindings into the JS context
-`crates/js/src/lib.rs:169` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
-`crates/js/src/lib.rs:183` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
-`crates/js/src/lib.rs:459` **fn** `new`
-`crates/js/src/lib.rs:569` **fn** `with_sw_worker_store` — Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
-`crates/js/src/lib.rs:602` **fn** `register_module_source` — Register an ES module by specifier so it can be `import`-ed by other modules
-`crates/js/src/lib.rs:618` **fn** `set_import_map` — Set the import map (HTML LS §8.1.6.2) used by the module resolver
-`crates/js/src/lib.rs:628` **fn** `eval_module` — Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`)
-`crates/js/src/lib.rs:701` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:1410` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
-`crates/js/src/lib.rs:1419` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
-`crates/js/src/lib.rs:1436` **fn** `freeze_fingerprint` — Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3)
-`crates/js/src/lib.rs:1480` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
-`crates/js/src/lib.rs:1506` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
-`crates/js/src/lib.rs:1519` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/lib.rs:1545` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
-`crates/js/src/lib.rs:1563` **fn** `debug_memory_used` — TEMP BUG-272 diagnostics: QuickJS heap usage in bytes (malloc_size)
-`crates/js/src/lib.rs:1573` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:1583` **fn** `update_nav_state` — Update the authoritative navigation state from the shell
-`crates/js/src/lib.rs:1592` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
-`crates/js/src/lib.rs:1601` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued by `_lumen_navigation_report_intercept`
-`crates/js/src/lib.rs:1606` **fn** `push_nav_update` — Push a Navigation API update into the queue (called by `_lumen_navigation_request`)
-`crates/js/src/lib.rs:1619` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
-`crates/js/src/lib.rs:1629` **fn** `take_history_traversals` — Drain all `history.go(n)` / `back` / `forward` traversal deltas queued by
-`crates/js/src/lib.rs:1640` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
-`crates/js/src/lib.rs:1648` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
-`crates/js/src/lib.rs:1656` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:1665` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:1673` **fn** `has_raf_pending` — Non-consuming peek: `true` if `requestAnimationFrame` callbacks are queued
-`crates/js/src/lib.rs:1686` **fn** `raf_pending_flag` — ADR-016 M2.3: shared handle to the `requestAnimationFrame`-pending flag
-`crates/js/src/lib.rs:1698` **fn** `dom_dirty_flag` — ADR-016 M2.3: shared handle to the DOM-dirty flag (companion to
-`crates/js/src/lib.rs:1707` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:1716` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:1724` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:1733` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:1745` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:1754` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:1761` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
-`crates/js/src/lib.rs:1767` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
-`crates/js/src/lib.rs:1776` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/lib.rs:1787` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/lib.rs:1796` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
-`crates/js/src/lib.rs:1805` **fn** `pointer_capture_nid` — Returns the DOM node nid that currently holds pointer capture (pointer_id=1)
-`crates/js/src/lib.rs:1813` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
-`crates/js/src/lib.rs:1822` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/lib.rs:1831` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus` / `_lumen_request_blur`
-`crates/js/src/lib.rs:1840` **fn** `fire_dialog_close` — Close a `<dialog>` as the result of a `<form method="dialog">` submission
-`crates/js/src/lib.rs:1858` **fn** `notify_focus_changed` — Notify the JS runtime that the shell moved keyboard focus to a new node
-`crates/js/src/lib.rs:1875` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:1885` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:1904` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:1917` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
-`crates/js/src/lib.rs:1933` **fn** `register_img_bitmaps` — Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id
-`crates/js/src/lib.rs:1948` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
-`crates/js/src/lib.rs:1967` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
-`crates/js/src/lib.rs:1983` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
-`crates/js/src/lib.rs:2005` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
-`crates/js/src/lib.rs:2015` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
-`crates/js/src/lib.rs:2051` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
-`crates/js/src/lib.rs:2089` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
+`crates/js/src/lib.rs:168` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
+`crates/js/src/lib.rs:182` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
+`crates/js/src/lib.rs:458` **fn** `new`
+`crates/js/src/lib.rs:568` **fn** `with_sw_worker_store` — Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
+`crates/js/src/lib.rs:601` **fn** `register_module_source` — Register an ES module by specifier so it can be `import`-ed by other modules
+`crates/js/src/lib.rs:617` **fn** `set_import_map` — Set the import map (HTML LS §8.1.6.2) used by the module resolver
+`crates/js/src/lib.rs:627` **fn** `eval_module` — Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`)
+`crates/js/src/lib.rs:700` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:1373` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
+`crates/js/src/lib.rs:1382` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
+`crates/js/src/lib.rs:1399` **fn** `freeze_fingerprint` — Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3)
+`crates/js/src/lib.rs:1443` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
+`crates/js/src/lib.rs:1469` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
+`crates/js/src/lib.rs:1482` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/lib.rs:1508` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
+`crates/js/src/lib.rs:1526` **fn** `debug_memory_used` — TEMP BUG-272 diagnostics: QuickJS heap usage in bytes (malloc_size)
+`crates/js/src/lib.rs:1536` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:1546` **fn** `update_nav_state` — Update the authoritative navigation state from the shell
+`crates/js/src/lib.rs:1555` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
+`crates/js/src/lib.rs:1564` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued by `_lumen_navigation_report_intercept`
+`crates/js/src/lib.rs:1569` **fn** `push_nav_update` — Push a Navigation API update into the queue (called by `_lumen_navigation_request`)
+`crates/js/src/lib.rs:1582` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
+`crates/js/src/lib.rs:1592` **fn** `take_history_traversals` — Drain all `history.go(n)` / `back` / `forward` traversal deltas queued by
+`crates/js/src/lib.rs:1603` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
+`crates/js/src/lib.rs:1611` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
+`crates/js/src/lib.rs:1619` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:1628` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:1636` **fn** `has_raf_pending` — Non-consuming peek: `true` if `requestAnimationFrame` callbacks are queued
+`crates/js/src/lib.rs:1649` **fn** `raf_pending_flag` — ADR-016 M2.3: shared handle to the `requestAnimationFrame`-pending flag
+`crates/js/src/lib.rs:1661` **fn** `dom_dirty_flag` — ADR-016 M2.3: shared handle to the DOM-dirty flag (companion to
+`crates/js/src/lib.rs:1670` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:1679` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:1687` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:1696` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:1708` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:1717` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:1724` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
+`crates/js/src/lib.rs:1730` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
+`crates/js/src/lib.rs:1739` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/lib.rs:1750` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/lib.rs:1759` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
+`crates/js/src/lib.rs:1768` **fn** `pointer_capture_nid` — Returns the DOM node nid that currently holds pointer capture (pointer_id=1)
+`crates/js/src/lib.rs:1776` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
+`crates/js/src/lib.rs:1785` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/lib.rs:1794` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus` / `_lumen_request_blur`
+`crates/js/src/lib.rs:1803` **fn** `fire_dialog_close` — Close a `<dialog>` as the result of a `<form method="dialog">` submission
+`crates/js/src/lib.rs:1821` **fn** `notify_focus_changed` — Notify the JS runtime that the shell moved keyboard focus to a new node
+`crates/js/src/lib.rs:1838` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:1848` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:1867` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:1880` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/lib.rs:1896` **fn** `register_img_bitmaps` — Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id
+`crates/js/src/lib.rs:1911` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
+`crates/js/src/lib.rs:1930` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
+`crates/js/src/lib.rs:1946` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
+`crates/js/src/lib.rs:1968` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
+`crates/js/src/lib.rs:1978` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
+`crates/js/src/lib.rs:2014` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
+`crates/js/src/lib.rs:2052` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
 `crates/js/src/local_font_access.rs:19` **fn** `install_local_font_access_api` — Install Local Font Access API shim into the JS context
 `crates/js/src/long_animation_frames.rs:24` **fn** `install_long_animation_frames_bindings` — Install Long Animation Frames API into the QuickJS context
 `crates/js/src/media_capture.rs:54` **fn** `set_audio_capture_provider` — Install the platform audio capture backend
@@ -1475,11 +1480,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/paint_worklet.rs:61` **fn** `install_paint_worklet_api` — Install CSS.paintWorklet bindings into the JS context
 `crates/js/src/payment_request.rs:18` **fn** `init_payment_request` — Install the Payment Request API stub into the JS context
 `crates/js/src/periodic_sync.rs:19` **fn** `init_periodic_sync` — Install the Periodic Background Sync API stub into the JS context
-`crates/js/src/permissions_policy.rs:13` **fn** `install_permissions_policy_bindings` — Install Permissions Policy JS bindings: `document.featurePolicy` and the
 `crates/js/src/pip_bindings.rs:29` **enum** `PipRequest` — A picture-in-picture request emitted by the JS PiP API, awaiting the shell
 `crates/js/src/pip_bindings.rs:64` **fn** `enqueue` — Enqueue a PiP request. Public so non-JS engine paths can reuse the channel
 `crates/js/src/pip_bindings.rs:71` **fn** `take_pip_requests` — Drain and return all pending PiP requests
-`crates/js/src/pointer_capture.rs:23` **fn** `install_pointer_capture_bindings` — Install `_lumen_set_capture_state` and `_lumen_release_capture_state` into the
 `crates/js/src/pointer_lock.rs:42` **fn** `request_pointer_lock` — Request pointer lock for element with given node ID
 `crates/js/src/pointer_lock.rs:50` **fn** `exit_pointer_lock` — Exit pointer lock
 `crates/js/src/pointer_lock.rs:58` **fn** `set_movement` — Set relative mouse movement delta (called from shell DeviceEvent::MouseMotion)
@@ -1531,40 +1534,42 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/url_pattern.rs:14` **fn** `install_url_pattern_api` — Install URL Pattern API into the JS context
 `crates/js/src/v8_runtime.rs:55` **fn** `ensure_v8_platform` — Initialize the V8 platform for this process
 `crates/js/src/v8_runtime.rs:238` **struct** `V8JsRuntime` — V8-backed JS runtime implementing [`JsRuntime`]
-`crates/js/src/v8_runtime.rs:321` **fn** `new` — Create a new V8 runtime on a dedicated thread
-`crates/js/src/v8_runtime.rs:378` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/v8_runtime.rs:394` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS
-`crates/js/src/v8_runtime.rs:410` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's
-`crates/js/src/v8_runtime.rs:431` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/v8_runtime.rs:439` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/v8_runtime.rs:448` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/v8_runtime.rs:456` **fn** `take_print_requests` — Drain all print requests queued by `window.print()`
-`crates/js/src/v8_runtime.rs:466` **fn** `set_deterministic_mode` — Enable or disable deterministic render mode (8F) before calling `install_dom`
-`crates/js/src/v8_runtime.rs:476` **fn** `with_sw_worker_store` — Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
-`crates/js/src/v8_runtime.rs:483` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/v8_runtime.rs:489` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/v8_runtime.rs:495` **fn** `has_raf_pending` — Non-consuming peek: `true` if rAF callbacks are queued
-`crates/js/src/v8_runtime.rs:501` **fn** `raf_pending_flag` — ADR-016 M2.3: shared, lock-free handle to the rAF-pending flag
-`crates/js/src/v8_runtime.rs:507` **fn** `dom_dirty_flag` — ADR-016 M2.3: shared, lock-free handle to the DOM-dirty flag
-`crates/js/src/v8_runtime.rs:513` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/v8_runtime.rs:519` **fn** `update_viewport_size` — Update the current viewport dimensions
-`crates/js/src/v8_runtime.rs:525` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by JS
-`crates/js/src/v8_runtime.rs:531` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/v8_runtime.rs:537` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/v8_runtime.rs:543` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy`
-`crates/js/src/v8_runtime.rs:549` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY`/`pageYOffset`
-`crates/js/src/v8_runtime.rs:555` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/v8_runtime.rs:561` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/v8_runtime.rs:567` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/v8_runtime.rs:573` **fn** `take_history_url_updates` — Drain `history.pushState`/`history.replaceState` URL-update notifications
-`crates/js/src/v8_runtime.rs:579` **fn** `take_history_traversals` — Drain all `history.go(n)`/back/forward traversal deltas queued by JS
-`crates/js/src/v8_runtime.rs:585` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
-`crates/js/src/v8_runtime.rs:591` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued during event dispatch
-`crates/js/src/v8_runtime.rs:597` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()`/`exitFullscreen()`
-`crates/js/src/v8_runtime.rs:603` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus`/`_lumen_request_blur`
-`crates/js/src/v8_runtime.rs:610` **fn** `flush_canvas_updates` — Drain dirty `<canvas>` 2D buffers for GPU re-upload. Mirrors
-`crates/js/src/v8_runtime.rs:708` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
-`crates/js/src/v8_runtime.rs:777` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
+`crates/js/src/v8_runtime.rs:325` **fn** `new` — Create a new V8 runtime on a dedicated thread
+`crates/js/src/v8_runtime.rs:383` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/v8_runtime.rs:399` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS
+`crates/js/src/v8_runtime.rs:415` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's
+`crates/js/src/v8_runtime.rs:436` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/v8_runtime.rs:444` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/v8_runtime.rs:453` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/v8_runtime.rs:461` **fn** `take_print_requests` — Drain all print requests queued by `window.print()`
+`crates/js/src/v8_runtime.rs:471` **fn** `set_deterministic_mode` — Enable or disable deterministic render mode (8F) before calling `install_dom`
+`crates/js/src/v8_runtime.rs:481` **fn** `with_sw_worker_store` — Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
+`crates/js/src/v8_runtime.rs:488` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/v8_runtime.rs:494` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/v8_runtime.rs:500` **fn** `has_raf_pending` — Non-consuming peek: `true` if rAF callbacks are queued
+`crates/js/src/v8_runtime.rs:506` **fn** `raf_pending_flag` — ADR-016 M2.3: shared, lock-free handle to the rAF-pending flag
+`crates/js/src/v8_runtime.rs:512` **fn** `dom_dirty_flag` — ADR-016 M2.3: shared, lock-free handle to the DOM-dirty flag
+`crates/js/src/v8_runtime.rs:518` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/v8_runtime.rs:524` **fn** `update_viewport_size` — Update the current viewport dimensions
+`crates/js/src/v8_runtime.rs:530` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by JS
+`crates/js/src/v8_runtime.rs:536` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/v8_runtime.rs:542` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/v8_runtime.rs:548` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy`
+`crates/js/src/v8_runtime.rs:554` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY`/`pageYOffset`
+`crates/js/src/v8_runtime.rs:560` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/v8_runtime.rs:566` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/v8_runtime.rs:572` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/v8_runtime.rs:578` **fn** `take_history_url_updates` — Drain `history.pushState`/`history.replaceState` URL-update notifications
+`crates/js/src/v8_runtime.rs:584` **fn** `take_history_traversals` — Drain all `history.go(n)`/back/forward traversal deltas queued by JS
+`crates/js/src/v8_runtime.rs:590` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
+`crates/js/src/v8_runtime.rs:596` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued during event dispatch
+`crates/js/src/v8_runtime.rs:602` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()`/`exitFullscreen()`
+`crates/js/src/v8_runtime.rs:608` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus`/`_lumen_request_blur`
+`crates/js/src/v8_runtime.rs:617` **fn** `pointer_capture_nid` — Returns the DOM node nid that currently holds pointer capture (pointer_id=1)
+`crates/js/src/v8_runtime.rs:625` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
+`crates/js/src/v8_runtime.rs:632` **fn** `flush_canvas_updates` — Drain dirty `<canvas>` 2D buffers for GPU re-upload. Mirrors
+`crates/js/src/v8_runtime.rs:730` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
+`crates/js/src/v8_runtime.rs:799` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
 `crates/js/src/video_bindings.rs:46` **fn** `install_video_bindings` — Install HTMLVideoElement Phase 1 bindings into the JS context
 `crates/js/src/video_gif_store.rs:36` **struct** `VideoPlaybackState` — Per-`<video>` playback timing, stored by the shell after a GIF is decoded
 `crates/js/src/video_gif_store.rs:57` **fn** `current_ms` — Playback position in ms at a given real-clock instant
@@ -1646,7 +1651,6 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/webgpu.rs:58` **fn** `install_webgpu_bindings` — Install the WebGPU API bindings into the JS context
 `crates/js/src/webhid.rs:5` **fn** `install_webhid_bindings`
 `crates/js/src/webrtc_stub.rs:27` **fn** `install_webrtc_bindings` — Install the WebRTC mDNS-only stub into the JS context
-`crates/js/src/webtransport.rs:5` **fn** `install_webtransport_bindings`
 `crates/js/src/webusb.rs:5` **fn** `install_webusb_bindings`
 `crates/js/src/webxr.rs:7` **fn** `install_webxr_bindings` — Install WebXR Device API bindings into the JS context
 `crates/js/src/window_management.rs:21` **fn** `install_window_management_api` — Install Window Management API shim into the JS context
@@ -3646,9 +3650,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/backends/cpu_backend.rs:44` **fn** `new` — Создаёт headless CPU-бэкенд с заданным размером поверхности
 `crates/engine/paint/src/backends/cpu_backend.rs:49` **fn** `last_image` — Возвращает Image из последнего рендера, если он был выполнен
 `crates/engine/paint/src/backends/femtovg_backend.rs:480` **struct** `FemtovgBackend` — Реализует [`RenderBackend`] через femtovg 2D Canvas API поверх OpenGL
-`crates/engine/paint/src/backends/femtovg_backend.rs:1610` **fn** `new` — Создаёт оконный femtovg-бэкенд из winit-окна
-`crates/engine/paint/src/backends/femtovg_backend.rs:1766` **fn** `detach_gl_context` — Открепляет GL-контекст от текущего потока (`make_not_current`)
-`crates/engine/paint/src/backends/femtovg_backend.rs:1794` **fn** `attach_gl_context` — Привязывает GL-контекст к текущему потоку (`make_current`)
+`crates/engine/paint/src/backends/femtovg_backend.rs:1713` **fn** `new` — Создаёт оконный femtovg-бэкенд из winit-окна
+`crates/engine/paint/src/backends/femtovg_backend.rs:1885` **fn** `detach_gl_context` — Открепляет GL-контекст от текущего потока (`make_not_current`)
+`crates/engine/paint/src/backends/femtovg_backend.rs:1913` **fn** `attach_gl_context` — Привязывает GL-контекст к текущему потоку (`make_current`)
 `crates/engine/paint/src/backends/vello_backend.rs:43` **struct** `VelloBackend` — Phase 3 рендер-бэкенд на базе Vello (ADR-010, RB-7 заглушка)
 `crates/engine/paint/src/backends/vello_backend.rs:57` **fn** `new` — Создаёт заглушку `VelloBackend` с начальным размером поверхности
 `crates/engine/paint/src/backends/wgpu_backend.rs:52` **struct** `WgpuBackend` — wgpu-бэкенд: тонкая обёртка над [`Renderer`], реализующая [`RenderBackend`]
@@ -3739,9 +3743,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:3339` **fn** `strip_background_graphics` — Removes background-graphics paint commands from each print page when the
 `crates/engine/paint/src/display_list.rs:4628` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
 `crates/engine/paint/src/display_list.rs:4756` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
-`crates/engine/paint/src/display_list.rs:5652` **fn** `patch_scroll_layer` — In-place патч скролл-позиции overflow-контейнера в готовом display list —
-`crates/engine/paint/src/display_list.rs:5782` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:17685` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:5681` **fn** `patch_scroll_layer` — In-place патч скролл-позиции overflow-контейнера в готовом display list —
+`crates/engine/paint/src/display_list.rs:5811` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
+`crates/engine/paint/src/display_list.rs:17714` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/display_list_cache.rs:21` **struct** `CachedDisplayLayer` — Cached display list for a stacking context or page subtree
 `crates/engine/paint/src/display_list_cache.rs:45` **struct** `DisplayListCache` — LRU cache that maps `NodeId` (u32) to a pre-built `Vec<DisplayCommand>`
 `crates/engine/paint/src/display_list_cache.rs:59` **fn** `new` — Create a cache with the default 32 MB budget
@@ -3809,26 +3813,26 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:218` **fn** `sync_promoted_layers` — Remove promoted layers for nodes NOT in `current_nodes`
 `crates/engine/paint/src/layer_cache.rs:231` **fn** `promoted_count` — Number of nodes currently promoted to their own GPU layer
 `crates/engine/paint/src/layer_cache.rs:240` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
-`crates/engine/paint/src/lib.rs:63` **fn** `frame_log_level` — Уровень покадрового лога производительности (`LUMEN_FRAME_LOG`)
-`crates/engine/paint/src/lib.rs:75` **fn** `frame_log_enabled` — `true`, если включён покадровый лог производительности (`LUMEN_FRAME_LOG>=1`)
-`crates/engine/paint/src/lib.rs:88` **fn** `scroll_blit_enabled` — `true`, если включён scroll-blit путь рендера (ADR-016 M3.2.1)
-`crates/engine/paint/src/lib.rs:112` **struct** `FrameStats` — Аккумулятор времён кадров для сессионной сводки (`LUMEN_FRAME_LOG`)
-`crates/engine/paint/src/lib.rs:119` **struct** `FrameSummary` — Перцентильная сводка по временам кадров за сессию (миллисекунды)
-`crates/engine/paint/src/lib.rs:136` **fn** `new` — Создаёт пустой аккумулятор
-`crates/engine/paint/src/lib.rs:142` **fn** `record` — Учитывает время одного кадра (мс). Значения NaN/inf/отрицательные
-`crates/engine/paint/src/lib.rs:149` **fn** `len` — Количество учтённых кадров
-`crates/engine/paint/src/lib.rs:154` **fn** `is_empty` — `true`, если ни одного кадра ещё не учтено
-`crates/engine/paint/src/lib.rs:163` **fn** `summary` — Считает перцентильную сводку. Возвращает `None` для пустой выборки
-`crates/engine/paint/src/lib.rs:194` **fn** `display_with` — Оборачивает сводку в [`Display`] с произвольным префиксом-меткой вместо
-`crates/engine/paint/src/lib.rs:201` **struct** `LabeledSummary` — [`Display`]-обёртка над [`FrameSummary`] с произвольной меткой-префиксом
-`crates/engine/paint/src/lib.rs:368` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:378` **fn** `new`
-`crates/engine/paint/src/lib.rs:577` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:587` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:601` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
-`crates/engine/paint/src/lib.rs:615` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
-`crates/engine/paint/src/lib.rs:631` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
-`crates/engine/paint/src/lib.rs:646` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
+`crates/engine/paint/src/lib.rs:65` **fn** `frame_log_level` — Уровень покадрового лога производительности (`LUMEN_FRAME_LOG`)
+`crates/engine/paint/src/lib.rs:77` **fn** `frame_log_enabled` — `true`, если включён покадровый лог производительности (`LUMEN_FRAME_LOG>=1`)
+`crates/engine/paint/src/lib.rs:90` **fn** `scroll_blit_enabled` — `true`, если включён scroll-blit путь рендера (ADR-016 M3.2.1)
+`crates/engine/paint/src/lib.rs:114` **struct** `FrameStats` — Аккумулятор времён кадров для сессионной сводки (`LUMEN_FRAME_LOG`)
+`crates/engine/paint/src/lib.rs:121` **struct** `FrameSummary` — Перцентильная сводка по временам кадров за сессию (миллисекунды)
+`crates/engine/paint/src/lib.rs:138` **fn** `new` — Создаёт пустой аккумулятор
+`crates/engine/paint/src/lib.rs:144` **fn** `record` — Учитывает время одного кадра (мс). Значения NaN/inf/отрицательные
+`crates/engine/paint/src/lib.rs:151` **fn** `len` — Количество учтённых кадров
+`crates/engine/paint/src/lib.rs:156` **fn** `is_empty` — `true`, если ни одного кадра ещё не учтено
+`crates/engine/paint/src/lib.rs:165` **fn** `summary` — Считает перцентильную сводку. Возвращает `None` для пустой выборки
+`crates/engine/paint/src/lib.rs:196` **fn** `display_with` — Оборачивает сводку в [`Display`] с произвольным префиксом-меткой вместо
+`crates/engine/paint/src/lib.rs:203` **struct** `LabeledSummary` — [`Display`]-обёртка над [`FrameSummary`] с произвольной меткой-префиксом
+`crates/engine/paint/src/lib.rs:370` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:380` **fn** `new`
+`crates/engine/paint/src/lib.rs:579` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:589` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:603` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
+`crates/engine/paint/src/lib.rs:617` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
+`crates/engine/paint/src/lib.rs:633` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:648` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
 `crates/engine/paint/src/matrix_util.rs:19` **fn** `mat4_to_2d_affine` — Извлекает 2D-аффинные компоненты `[a, b, c, d, e, f]` из column-major
 `crates/engine/paint/src/overlay_partition.rs:76` **fn** `overlay_ranges` — Report the command index ranges of viewport-pinned **overlay** content in a
 `crates/engine/paint/src/overlay_partition.rs:124` **fn** `has_overlay` — `true` when `content` holds any viewport-pinned overlay content — i.e
@@ -3840,56 +3844,56 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/overlay_partition.rs:319` **fn** `is_spatial_layer_open` — `true` for a command that opens a **spatial** ancestor layer — clip, transform,
 `crates/engine/paint/src/overlay_partition.rs:335` **fn** `is_compositing_layer_open` — `true` for a command that opens a **compositing** ancestor layer — opacity, blend
 `crates/engine/paint/src/overlay_partition.rs:368` **fn** `spatial_layer_close` — The matching close command for a **spatial** ancestor layer open (ADR-016
-`crates/engine/paint/src/renderer.rs:1369` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
-`crates/engine/paint/src/renderer.rs:1400` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
-`crates/engine/paint/src/renderer.rs:1429` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
-`crates/engine/paint/src/renderer.rs:1576` **struct** `Renderer`
-`crates/engine/paint/src/renderer.rs:1889` **fn** `load_counter` — Reads a diagnostics counter
-`crates/engine/paint/src/renderer.rs:1966` **fn** `new`
-`crates/engine/paint/src/renderer.rs:2105` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
-`crates/engine/paint/src/renderer.rs:3614` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
-`crates/engine/paint/src/renderer.rs:3622` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
-`crates/engine/paint/src/renderer.rs:3639` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
-`crates/engine/paint/src/renderer.rs:3653` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
-`crates/engine/paint/src/renderer.rs:3666` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
-`crates/engine/paint/src/renderer.rs:3922` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
-`crates/engine/paint/src/renderer.rs:4298` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
-`crates/engine/paint/src/renderer.rs:4307` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
-`crates/engine/paint/src/renderer.rs:4315` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
-`crates/engine/paint/src/renderer.rs:4333` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
-`crates/engine/paint/src/renderer.rs:4402` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
-`crates/engine/paint/src/renderer.rs:4408` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
-`crates/engine/paint/src/renderer.rs:4415` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
-`crates/engine/paint/src/renderer.rs:4420` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
-`crates/engine/paint/src/renderer.rs:4428` **fn** `set_backdrop_cache_enabled` — Enables or disables the `backdrop-filter` result cache (CSS Filter
-`crates/engine/paint/src/renderer.rs:4437` **fn** `clear_backdrop_cache` — Drops every cached `backdrop-filter` texture and its metadata. The next
-`crates/engine/paint/src/renderer.rs:4444` **fn** `backdrop_cache_len` — Number of live cached `backdrop-filter` textures (for stats / tests)
-`crates/engine/paint/src/renderer.rs:4451` **fn** `backdrop_cache_on_memory_pressure` — Forwards a memory-pressure signal to the `backdrop-filter` cache and
-`crates/engine/paint/src/renderer.rs:4464` **fn** `atlas_on_memory_pressure` — Forwards a memory-pressure signal to the glyph atlas so it can evict
-`crates/engine/paint/src/renderer.rs:4470` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
-`crates/engine/paint/src/renderer.rs:4476` **fn** `access_layer` — Отметить layer как используемый текущим render pass
-`crates/engine/paint/src/renderer.rs:4483` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
-`crates/engine/paint/src/renderer.rs:4489` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
-`crates/engine/paint/src/renderer.rs:4505` **fn** `promote_layer` — Promote a node to its own GPU layer for `will-change: transform/opacity/filter`
-`crates/engine/paint/src/renderer.rs:4516` **fn** `is_layer_promoted` — Returns `true` if the given node has a promoted GPU layer
-`crates/engine/paint/src/renderer.rs:4521` **fn** `demote_layer` — Remove the promoted GPU layer for a node, freeing its cache entry
-`crates/engine/paint/src/renderer.rs:4527` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
-`crates/engine/paint/src/renderer.rs:4533` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
-`crates/engine/paint/src/renderer.rs:4538` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
-`crates/engine/paint/src/renderer.rs:4543` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
-`crates/engine/paint/src/renderer.rs:4549` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
-`crates/engine/paint/src/renderer.rs:4555` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
-`crates/engine/paint/src/renderer.rs:4585` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
-`crates/engine/paint/src/renderer.rs:4595` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
-`crates/engine/paint/src/renderer.rs:4605` **fn** `target_color_space` — Target color space for this renderer's output surface
-`crates/engine/paint/src/renderer.rs:4614` **fn** `set_canvas_background` — Updates the root-element canvas background used as the framebuffer clear colour
-`crates/engine/paint/src/renderer.rs:4660` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
-`crates/engine/paint/src/renderer.rs:5168` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
-`crates/engine/paint/src/renderer.rs:5181` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов
-`crates/engine/paint/src/renderer.rs:8813` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
-`crates/engine/paint/src/renderer.rs:8839` **fn** `render_tile`
-`crates/engine/paint/src/renderer.rs:8878` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
-`crates/engine/paint/src/renderer.rs:8981` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
+`crates/engine/paint/src/renderer.rs:1374` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
+`crates/engine/paint/src/renderer.rs:1405` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
+`crates/engine/paint/src/renderer.rs:1434` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
+`crates/engine/paint/src/renderer.rs:1581` **struct** `Renderer`
+`crates/engine/paint/src/renderer.rs:1902` **fn** `load_counter` — Reads a diagnostics counter
+`crates/engine/paint/src/renderer.rs:1979` **fn** `new`
+`crates/engine/paint/src/renderer.rs:2118` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
+`crates/engine/paint/src/renderer.rs:3644` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+`crates/engine/paint/src/renderer.rs:3652` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+`crates/engine/paint/src/renderer.rs:3669` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
+`crates/engine/paint/src/renderer.rs:3683` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
+`crates/engine/paint/src/renderer.rs:3696` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+`crates/engine/paint/src/renderer.rs:3979` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
+`crates/engine/paint/src/renderer.rs:4355` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
+`crates/engine/paint/src/renderer.rs:4364` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
+`crates/engine/paint/src/renderer.rs:4372` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
+`crates/engine/paint/src/renderer.rs:4390` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
+`crates/engine/paint/src/renderer.rs:4459` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
+`crates/engine/paint/src/renderer.rs:4465` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
+`crates/engine/paint/src/renderer.rs:4472` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
+`crates/engine/paint/src/renderer.rs:4477` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
+`crates/engine/paint/src/renderer.rs:4485` **fn** `set_backdrop_cache_enabled` — Enables or disables the `backdrop-filter` result cache (CSS Filter
+`crates/engine/paint/src/renderer.rs:4494` **fn** `clear_backdrop_cache` — Drops every cached `backdrop-filter` texture and its metadata. The next
+`crates/engine/paint/src/renderer.rs:4501` **fn** `backdrop_cache_len` — Number of live cached `backdrop-filter` textures (for stats / tests)
+`crates/engine/paint/src/renderer.rs:4508` **fn** `backdrop_cache_on_memory_pressure` — Forwards a memory-pressure signal to the `backdrop-filter` cache and
+`crates/engine/paint/src/renderer.rs:4521` **fn** `atlas_on_memory_pressure` — Forwards a memory-pressure signal to the glyph atlas so it can evict
+`crates/engine/paint/src/renderer.rs:4527` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
+`crates/engine/paint/src/renderer.rs:4533` **fn** `access_layer` — Отметить layer как используемый текущим render pass
+`crates/engine/paint/src/renderer.rs:4540` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
+`crates/engine/paint/src/renderer.rs:4546` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
+`crates/engine/paint/src/renderer.rs:4562` **fn** `promote_layer` — Promote a node to its own GPU layer for `will-change: transform/opacity/filter`
+`crates/engine/paint/src/renderer.rs:4573` **fn** `is_layer_promoted` — Returns `true` if the given node has a promoted GPU layer
+`crates/engine/paint/src/renderer.rs:4578` **fn** `demote_layer` — Remove the promoted GPU layer for a node, freeing its cache entry
+`crates/engine/paint/src/renderer.rs:4584` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
+`crates/engine/paint/src/renderer.rs:4590` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
+`crates/engine/paint/src/renderer.rs:4595` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
+`crates/engine/paint/src/renderer.rs:4600` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
+`crates/engine/paint/src/renderer.rs:4606` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
+`crates/engine/paint/src/renderer.rs:4612` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
+`crates/engine/paint/src/renderer.rs:4642` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
+`crates/engine/paint/src/renderer.rs:4652` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
+`crates/engine/paint/src/renderer.rs:4662` **fn** `target_color_space` — Target color space for this renderer's output surface
+`crates/engine/paint/src/renderer.rs:4671` **fn** `set_canvas_background` — Updates the root-element canvas background used as the framebuffer clear colour
+`crates/engine/paint/src/renderer.rs:4717` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
+`crates/engine/paint/src/renderer.rs:5225` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
+`crates/engine/paint/src/renderer.rs:5238` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов
+`crates/engine/paint/src/renderer.rs:8885` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
+`crates/engine/paint/src/renderer.rs:8911` **fn** `render_tile`
+`crates/engine/paint/src/renderer.rs:8950` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
+`crates/engine/paint/src/renderer.rs:9053` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
 `crates/engine/paint/src/scroll_cache.rs:60` **enum** `ScrollFramePlan` — What the render backend should do with the current frame, given the retained
 `crates/engine/paint/src/scroll_cache.rs:116` **fn** `label` — A stable one-word label for the plan variant — `"blit"`,
 `crates/engine/paint/src/scroll_cache.rs:131` **struct** `ScrollCache` — Bookkeeping for the retained scroll-content surface (ADR-016 M3)
@@ -4003,7 +4007,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:982` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1037` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (959 symbols)
+## lumen-shell  (988 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -4013,28 +4017,29 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/adblock.rs:74` **fn** `default_subscriptions` — The lists seeded on first run: EasyList (ads) + EasyPrivacy (trackers)
 `crates/shell/src/adblock.rs:171` **fn** `load_and_install` — Read the enabled subscriptions' cached bodies from disk, merge them into a
 `crates/shell/src/adblock.rs:208` **fn** `refresh` — Conditionally refresh all enabled subscriptions over the network
-`crates/shell/src/address_bar.rs:59` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
-`crates/shell/src/address_bar.rs:89` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
-`crates/shell/src/address_bar.rs:112` **enum** `OmniboxSuggestion` — Одна строка autocomplete в dropdown omnibox
-`crates/shell/src/address_bar.rs:201` **fn** `commit_value` — Строка, которая будет зафиксирована при выборе этой подсказки
-`crates/shell/src/address_bar.rs:214` **fn** `label` — Основной текст строки dropdown
-`crates/shell/src/address_bar.rs:238` **fn** `sub_label` — Дополнительный текст под основным label
-`crates/shell/src/address_bar.rs:292` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
-`crates/shell/src/address_bar.rs:307` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
-`crates/shell/src/address_bar.rs:315` **fn** `close`
-`crates/shell/src/address_bar.rs:323` **fn** `is_open`
-`crates/shell/src/address_bar.rs:327` **fn** `input`
-`crates/shell/src/address_bar.rs:332` **fn** `suggestions` — Текущий список подсказок (для рендера и клавиатурной навигации)
-`crates/shell/src/address_bar.rs:337` **fn** `selected_idx` — Индекс выделенной подсказки. `None` — ни одна не выделена
-`crates/shell/src/address_bar.rs:343` **fn** `set_suggestions` — Установить новый список подсказок и сбросить выделение
-`crates/shell/src/address_bar.rs:349` **fn** `select_next` — Перейти к следующей (вниз) подсказке
-`crates/shell/src/address_bar.rs:360` **fn** `select_prev` — Перейти к предыдущей (вверх) подсказке. `None` если уже на первой
-`crates/shell/src/address_bar.rs:368` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
-`crates/shell/src/address_bar.rs:382` **fn** `backspace` — Backspace — удалить последний Unicode-символ
-`crates/shell/src/address_bar.rs:392` **fn** `commit` — Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
-`crates/shell/src/address_bar.rs:409` **fn** `take_commit` — Вернуть зафиксированный URL/запрос (если есть) и сбросить его
-`crates/shell/src/address_bar.rs:417` **struct** `BarOverlay` — Параметры для сборки overlay display list
-`crates/shell/src/address_bar.rs:425` **fn** `build_bar_overlay` — Собирает display list адресной строки. Вызывается каждый кадр, пока
+`crates/shell/src/address_bar.rs:125` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
+`crates/shell/src/address_bar.rs:155` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
+`crates/shell/src/address_bar.rs:178` **enum** `OmniboxSuggestion` — Одна строка autocomplete в dropdown omnibox
+`crates/shell/src/address_bar.rs:267` **fn** `commit_value` — Строка, которая будет зафиксирована при выборе этой подсказки
+`crates/shell/src/address_bar.rs:280` **fn** `label` — Основной текст строки dropdown
+`crates/shell/src/address_bar.rs:304` **fn** `sub_label` — Дополнительный текст под основным label
+`crates/shell/src/address_bar.rs:358` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
+`crates/shell/src/address_bar.rs:373` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
+`crates/shell/src/address_bar.rs:381` **fn** `close`
+`crates/shell/src/address_bar.rs:389` **fn** `is_open`
+`crates/shell/src/address_bar.rs:393` **fn** `input`
+`crates/shell/src/address_bar.rs:398` **fn** `suggestions` — Текущий список подсказок (для рендера и клавиатурной навигации)
+`crates/shell/src/address_bar.rs:403` **fn** `selected_idx` — Индекс выделенной подсказки. `None` — ни одна не выделена
+`crates/shell/src/address_bar.rs:409` **fn** `set_suggestions` — Установить новый список подсказок и сбросить выделение
+`crates/shell/src/address_bar.rs:415` **fn** `select_next` — Перейти к следующей (вниз) подсказке
+`crates/shell/src/address_bar.rs:426` **fn** `select_prev` — Перейти к предыдущей (вверх) подсказке. `None` если уже на первой
+`crates/shell/src/address_bar.rs:434` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
+`crates/shell/src/address_bar.rs:448` **fn** `backspace` — Backspace — удалить последний Unicode-символ
+`crates/shell/src/address_bar.rs:458` **fn** `commit` — Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
+`crates/shell/src/address_bar.rs:478` **fn** `take_commit` — Вернуть зафиксированный URL/запрос (если есть) и сбросить его
+`crates/shell/src/address_bar.rs:490` **struct** `FieldRects` — Rects for the always-visible chrome of the inline omnibox field. Computed
+`crates/shell/src/address_bar.rs:538` **fn** `build_inline_field` — Собирает display list всегда-видимого поля омнибокса: фон+рамка (accent
+`crates/shell/src/address_bar.rs:663` **fn** `build_dropdown` — Собирает display list dropdown-подсказок. Вызывается только пока
 `crates/shell/src/animation_scheduler.rs:116` **struct** `AnimationScheduler` — Планировщик CSS-анимаций. Хранит timing-состояние между кадрами
 `crates/shell/src/animation_scheduler.rs:121` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:133` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
@@ -4328,8 +4333,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/momentum_anim.rs:83` **fn** `displacement_since` — Полное смещение (CSS px) от точки отсчёта за интервал `[t0_ms, t_ms]`,
 `crates/shell/src/network_service.rs:26` **struct** `NetworkServiceHandle` — Хендл живого подпроцесса `lumen-network-service`
 `crates/shell/src/network_service.rs:38` **fn** `spawn` — Запустить `lumen-network-service` из той же директории, что и текущий исполняемый файл
-`crates/shell/src/newtab.rs:23` **struct** `TopSite` — Одна плитка speed dial: целевой URL и отображаемый заголовок
-`crates/shell/src/newtab.rs:85` **fn** `build_newtab_html` — Строит полный HTML страницы `about:newtab` со speed dial из `sites`
+`crates/shell/src/newtab.rs:32` **struct** `TopSite` — Одна плитка speed dial: целевой URL, заголовок и признак закрепления
+`crates/shell/src/newtab.rs:50` **enum** `NewtabAction` — Действие, закодированное в спец-ссылке `about:newtab?...`
+`crates/shell/src/newtab.rs:63` **fn** `parse_action` — Разобрать резолвнутый URL кликнутой ссылки в [`NewtabAction`]; `None` —
+`crates/shell/src/newtab.rs:120` **fn** `merge_tiles` — Слить закреплённые плитки (`pinned`, уже в порядке позиции из store) с
+`crates/shell/src/newtab.rs:191` **fn** `build_newtab_html` — Строит полный HTML страницы `about:newtab` со speed dial из `sites`
 `crates/shell/src/notification.rs:18` **fn** `show_os_notification` — Show a desktop notification asynchronously
 `crates/shell/src/omnibox/mod.rs:20` **enum** `AliasAction` — Action produced by resolving a raw omnibox input against the alias table
 `crates/shell/src/omnibox/mod.rs:39` **fn** `resolve` — Resolve `input` against the alias table and built-in `@` actions
@@ -4359,47 +4367,47 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panel_layout.rs:252` **fn** `dock_for` — Effective dock side for panel `id`: the user's cross-dock override, or
 `crates/shell/src/panel_layout.rs:258` **fn** `set_dock` — Record a dock side for panel `id`. Returns `true` if the stored value
 `crates/shell/src/panel_layout.rs:272` **fn** `save` — Persist the layout to disk (best-effort)
-`crates/shell/src/panels/a11y_panel.rs:66` **struct** `A11yPanel` — Accessibility settings panel state
-`crates/shell/src/panels/a11y_panel.rs:75` **fn** `new` — Create a new hidden panel with default preferences
-`crates/shell/src/panels/a11y_panel.rs:87` **fn** `toggle` — Toggle panel visibility
-`crates/shell/src/panels/a11y_panel.rs:92` **fn** `load_draft` — Load current preferences into the draft so edits start from persisted values
-`crates/shell/src/panels/a11y_panel.rs:107` **enum** `A11yHit` — Result of a click on (or near) the accessibility panel
-`crates/shell/src/panels/a11y_panel.rs:133` **fn** `hit_test` — Classify a click at `(x, y)` CSS px
-`crates/shell/src/panels/a11y_panel.rs:223` **fn** `build_a11y_panel` — Build the centred accessibility settings panel overlay
-`crates/shell/src/panels/ai_panel.rs:57` **struct** `AiPanel` — AI assistant sidebar panel state (§12.8)
-`crates/shell/src/panels/ai_panel.rs:70` **fn** `new` — Create a new hidden AI panel with empty input and response
-`crates/shell/src/panels/ai_panel.rs:80` **fn** `toggle` — Toggle panel visibility
-`crates/shell/src/panels/ai_panel.rs:85` **fn** `close` — Close the panel (hide; input and response are preserved)
-`crates/shell/src/panels/ai_panel.rs:90` **fn** `push_char` — Append a character to the input field
-`crates/shell/src/panels/ai_panel.rs:95` **fn** `backspace` — Remove the last character from the input field (backspace)
-`crates/shell/src/panels/ai_panel.rs:110` **enum** `AiHit` — Result of a click inside the AI panel
-`crates/shell/src/panels/ai_panel.rs:124` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the AI panel
-`crates/shell/src/panels/ai_panel.rs:169` **fn** `build_panel` — Build the display list for the AI sidebar panel
-`crates/shell/src/panels/bookmark_panel.rs:87` **struct** `BmEntry` — Lightweight bookmark entry used for panel rendering (loaded from the
-`crates/shell/src/panels/bookmark_panel.rs:101` **struct** `BookmarkPanel` — Bookmark manager panel state
-`crates/shell/src/panels/bookmark_panel.rs:123` **fn** `new` — Create a new (hidden) panel with an empty bookmark list
-`crates/shell/src/panels/bookmark_panel.rs:137` **fn** `toggle` — Flip visibility.  Resets transient state (search focus, drag) when hiding
-`crates/shell/src/panels/bookmark_panel.rs:146` **fn** `set_data` — Replace the cached bookmark list and recompute the folder set
-`crates/shell/src/panels/bookmark_panel.rs:166` **fn** `visible_entries` — Bookmarks visible under the current folder filter and search query, in
-`crates/shell/src/panels/bookmark_panel.rs:183` **fn** `append_search` — Append typed text to the search query (called while `search_active`)
-`crates/shell/src/panels/bookmark_panel.rs:189` **fn** `backspace_search` — Delete the last character of the search query
-`crates/shell/src/panels/bookmark_panel.rs:195` **fn** `begin_drag` — Begin dragging the bookmark with the given id
-`crates/shell/src/panels/bookmark_panel.rs:200` **fn** `take_drag` — Take (and clear) the dragged bookmark id, if a drag is in progress
-`crates/shell/src/panels/bookmark_panel.rs:207` **fn** `scroll_by` — Scroll the bookmark list by `dy` CSS px, clamped to `[0, max]` where
-`crates/shell/src/panels/bookmark_panel.rs:227` **enum** `BookmarkHit` — Result of a click inside the bookmark panel
-`crates/shell/src/panels/bookmark_panel.rs:244` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the panel anchored with its
-`crates/shell/src/panels/bookmark_panel.rs:302` **fn** `build_panel` — Build the display list for the panel anchored at `(ax, ay)` (top-left)
-`crates/shell/src/panels/cert_panel.rs:55` **struct** `PanelCertData` — Certificate data shown in the panel
-`crates/shell/src/panels/cert_panel.rs:78` **fn** `has_data` — Returns `true` if there is meaningful data to display
-`crates/shell/src/panels/cert_panel.rs:87` **struct** `CertPanel` — Certificate viewer panel state
-`crates/shell/src/panels/cert_panel.rs:98` **fn** `new` — Create a new, hidden panel
-`crates/shell/src/panels/cert_panel.rs:105` **fn** `open` — Open the panel with the given certificate data
-`crates/shell/src/panels/cert_panel.rs:112` **fn** `close` — Close the panel
-`crates/shell/src/panels/cert_panel.rs:117` **fn** `toggle` — Toggle visibility.  On open: resets scroll to top
-`crates/shell/src/panels/cert_panel.rs:126` **fn** `scroll_by` — Scroll the content by `delta` CSS px (positive = down)
-`crates/shell/src/panels/cert_panel.rs:134` **fn** `hit_test` — Hit-test a pointer position relative to panel origin
-`crates/shell/src/panels/cert_panel.rs:147` **enum** `CertHit` — Result of a pointer hit test on the cert panel
-`crates/shell/src/panels/cert_panel.rs:243` **fn** `build_panel` — Append display commands for the cert panel to `buf`
+`crates/shell/src/panels/a11y_panel.rs:67` **struct** `A11yPanel` — Accessibility settings panel state
+`crates/shell/src/panels/a11y_panel.rs:76` **fn** `new` — Create a new hidden panel with default preferences
+`crates/shell/src/panels/a11y_panel.rs:88` **fn** `toggle` — Toggle panel visibility
+`crates/shell/src/panels/a11y_panel.rs:93` **fn** `load_draft` — Load current preferences into the draft so edits start from persisted values
+`crates/shell/src/panels/a11y_panel.rs:108` **enum** `A11yHit` — Result of a click on (or near) the accessibility panel
+`crates/shell/src/panels/a11y_panel.rs:134` **fn** `hit_test` — Classify a click at `(x, y)` CSS px
+`crates/shell/src/panels/a11y_panel.rs:224` **fn** `build_a11y_panel` — Build the centred accessibility settings panel overlay
+`crates/shell/src/panels/ai_panel.rs:58` **struct** `AiPanel` — AI assistant sidebar panel state (§12.8)
+`crates/shell/src/panels/ai_panel.rs:71` **fn** `new` — Create a new hidden AI panel with empty input and response
+`crates/shell/src/panels/ai_panel.rs:81` **fn** `toggle` — Toggle panel visibility
+`crates/shell/src/panels/ai_panel.rs:86` **fn** `close` — Close the panel (hide; input and response are preserved)
+`crates/shell/src/panels/ai_panel.rs:91` **fn** `push_char` — Append a character to the input field
+`crates/shell/src/panels/ai_panel.rs:96` **fn** `backspace` — Remove the last character from the input field (backspace)
+`crates/shell/src/panels/ai_panel.rs:111` **enum** `AiHit` — Result of a click inside the AI panel
+`crates/shell/src/panels/ai_panel.rs:125` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the AI panel
+`crates/shell/src/panels/ai_panel.rs:170` **fn** `build_panel` — Build the display list for the AI sidebar panel
+`crates/shell/src/panels/bookmark_panel.rs:88` **struct** `BmEntry` — Lightweight bookmark entry used for panel rendering (loaded from the
+`crates/shell/src/panels/bookmark_panel.rs:102` **struct** `BookmarkPanel` — Bookmark manager panel state
+`crates/shell/src/panels/bookmark_panel.rs:124` **fn** `new` — Create a new (hidden) panel with an empty bookmark list
+`crates/shell/src/panels/bookmark_panel.rs:138` **fn** `toggle` — Flip visibility.  Resets transient state (search focus, drag) when hiding
+`crates/shell/src/panels/bookmark_panel.rs:147` **fn** `set_data` — Replace the cached bookmark list and recompute the folder set
+`crates/shell/src/panels/bookmark_panel.rs:167` **fn** `visible_entries` — Bookmarks visible under the current folder filter and search query, in
+`crates/shell/src/panels/bookmark_panel.rs:184` **fn** `append_search` — Append typed text to the search query (called while `search_active`)
+`crates/shell/src/panels/bookmark_panel.rs:190` **fn** `backspace_search` — Delete the last character of the search query
+`crates/shell/src/panels/bookmark_panel.rs:196` **fn** `begin_drag` — Begin dragging the bookmark with the given id
+`crates/shell/src/panels/bookmark_panel.rs:201` **fn** `take_drag` — Take (and clear) the dragged bookmark id, if a drag is in progress
+`crates/shell/src/panels/bookmark_panel.rs:208` **fn** `scroll_by` — Scroll the bookmark list by `dy` CSS px, clamped to `[0, max]` where
+`crates/shell/src/panels/bookmark_panel.rs:228` **enum** `BookmarkHit` — Result of a click inside the bookmark panel
+`crates/shell/src/panels/bookmark_panel.rs:245` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the panel anchored with its
+`crates/shell/src/panels/bookmark_panel.rs:303` **fn** `build_panel` — Build the display list for the panel anchored at `(ax, ay)` (top-left)
+`crates/shell/src/panels/cert_panel.rs:56` **struct** `PanelCertData` — Certificate data shown in the panel
+`crates/shell/src/panels/cert_panel.rs:79` **fn** `has_data` — Returns `true` if there is meaningful data to display
+`crates/shell/src/panels/cert_panel.rs:88` **struct** `CertPanel` — Certificate viewer panel state
+`crates/shell/src/panels/cert_panel.rs:99` **fn** `new` — Create a new, hidden panel
+`crates/shell/src/panels/cert_panel.rs:106` **fn** `open` — Open the panel with the given certificate data
+`crates/shell/src/panels/cert_panel.rs:113` **fn** `close` — Close the panel
+`crates/shell/src/panels/cert_panel.rs:118` **fn** `toggle` — Toggle visibility.  On open: resets scroll to top
+`crates/shell/src/panels/cert_panel.rs:127` **fn** `scroll_by` — Scroll the content by `delta` CSS px (positive = down)
+`crates/shell/src/panels/cert_panel.rs:135` **fn** `hit_test` — Hit-test a pointer position relative to panel origin
+`crates/shell/src/panels/cert_panel.rs:148` **enum** `CertHit` — Result of a pointer hit test on the cert panel
+`crates/shell/src/panels/cert_panel.rs:244` **fn** `build_panel` — Append display commands for the cert panel to `buf`
 `crates/shell/src/panels/command_palette.rs:80` **enum** `PaletteAction` — A built-in browser action invokable from the palette
 `crates/shell/src/panels/command_palette.rs:111` **fn** `label` — Human-readable label shown in the result row
 `crates/shell/src/panels/command_palette.rs:130` **fn** `shortcut` — Keyboard-shortcut hint rendered right-aligned in the row (`""` if none)
@@ -4451,19 +4459,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/focus_panel.rs:218` **enum** `FocusHit` — Result of a click inside the focus widget card
 `crates/shell/src/panels/focus_panel.rs:234` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the focus widget card
 `crates/shell/src/panels/focus_panel.rs:257` **fn** `build_panel` — Build the display list for the focus widget overlay
-`crates/shell/src/panels/history_panel.rs:84` **struct** `HistoryItem` — Lightweight history entry for panel rendering
-`crates/shell/src/panels/history_panel.rs:99` **enum** `HistoryRow` — One display row in the scrollable body — either a date-group header or an entry
-`crates/shell/src/panels/history_panel.rs:108` **struct** `HistoryPanel` — History panel state
-`crates/shell/src/panels/history_panel.rs:138` **fn** `new` — Create a new, hidden panel
-`crates/shell/src/panels/history_panel.rs:143` **fn** `toggle` — Toggle visibility and reset scroll/search when opening
-`crates/shell/src/panels/history_panel.rs:152` **fn** `set_items` — Replace the displayed rows (call after data refresh or search)
-`crates/shell/src/panels/history_panel.rs:157` **fn** `append_search` — Append a character to the search query
-`crates/shell/src/panels/history_panel.rs:162` **fn** `backspace_search` — Delete the last character from the search query
-`crates/shell/src/panels/history_panel.rs:167` **fn** `scroll_by` — Scroll by `dy` CSS px (positive = down)
-`crates/shell/src/panels/history_panel.rs:173` **fn** `max_scroll` — Maximum scroll offset for the current row set
-`crates/shell/src/panels/history_panel.rs:214` **enum** `HistoryHit` — Result of a click inside the history panel
-`crates/shell/src/panels/history_panel.rs:234` **fn** `hit_test` — Classify a click at `(mx, my)` in window-space CSS px
-`crates/shell/src/panels/history_panel.rs:287` **fn** `build_panel` — Build the panel display list
+`crates/shell/src/panels/history_panel.rs:93` **struct** `HistoryItem` — Lightweight history entry for panel rendering
+`crates/shell/src/panels/history_panel.rs:108` **enum** `HistoryRow` — One display row in the scrollable body — either a date-group header or an entry
+`crates/shell/src/panels/history_panel.rs:117` **struct** `HistoryPanel` — History panel state
+`crates/shell/src/panels/history_panel.rs:147` **fn** `new` — Create a new, hidden panel
+`crates/shell/src/panels/history_panel.rs:152` **fn** `toggle` — Toggle visibility and reset scroll/search when opening
+`crates/shell/src/panels/history_panel.rs:161` **fn** `set_items` — Replace the displayed rows (call after data refresh or search)
+`crates/shell/src/panels/history_panel.rs:166` **fn** `append_search` — Append a character to the search query
+`crates/shell/src/panels/history_panel.rs:171` **fn** `backspace_search` — Delete the last character from the search query
+`crates/shell/src/panels/history_panel.rs:176` **fn** `scroll_by` — Scroll by `dy` CSS px (positive = down)
+`crates/shell/src/panels/history_panel.rs:182` **fn** `max_scroll` — Maximum scroll offset for the current row set
+`crates/shell/src/panels/history_panel.rs:223` **enum** `HistoryHit` — Result of a click inside the history panel
+`crates/shell/src/panels/history_panel.rs:245` **fn** `hit_test` — Classify a click at `(mx, my)` in window-space CSS px
+`crates/shell/src/panels/history_panel.rs:312` **fn** `build_panel` — Build the panel display list
 `crates/shell/src/panels/note_viewer.rs:59` **enum** `NoteHit` — Which region of the overlay was hit by a mouse click
 `crates/shell/src/panels/note_viewer.rs:70` **struct** `NoteViewerPanel` — Floating overlay for displaying a single user annotation
 `crates/shell/src/panels/note_viewer.rs:85` **fn** `new` — Create a hidden panel with empty state
@@ -4472,21 +4480,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/note_viewer.rs:110` **fn** `panel_height` — Total height of the overlay given the current content
 `crates/shell/src/panels/note_viewer.rs:118` **fn** `hit_test` — Hit-test a click at `(px, py)` in viewport coordinates
 `crates/shell/src/panels/note_viewer.rs:153` **fn** `build_note_viewer` — Build the display list for the note viewer overlay
-`crates/shell/src/panels/permission_panel.rs:56` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
-`crates/shell/src/panels/permission_panel.rs:77` **fn** `label` — Short display name for the permission row label
-`crates/shell/src/panels/permission_panel.rs:87` **fn** `icon` — Emoji icon shown to the left of the label
-`crates/shell/src/panels/permission_panel.rs:99` **enum** `PermissionState` — Grant state for a single permission on a single origin
-`crates/shell/src/panels/permission_panel.rs:112` **fn** `label` — Label shown on the toggle button
-`crates/shell/src/panels/permission_panel.rs:121` **fn** `cycle` — Cycle to the next state: Ask → Allow → Deny → Ask
-`crates/shell/src/panels/permission_panel.rs:133` **struct** `PermissionPanel` — Per-site permission popover state (7C.2)
-`crates/shell/src/panels/permission_panel.rs:148` **fn** `new` — Create a new hidden panel with no stored permissions
-`crates/shell/src/panels/permission_panel.rs:157` **fn** `toggle` — Flip panel visibility
-`crates/shell/src/panels/permission_panel.rs:162` **fn** `set_origin` — Update the current origin on navigation (does not clear stored grants)
-`crates/shell/src/panels/permission_panel.rs:169` **fn** `state_for` — Return the stored state for `kind` at the current origin
-`crates/shell/src/panels/permission_panel.rs:182` **fn** `cycle_permission` — Cycle the state for `kind` at the current origin to the next value
-`crates/shell/src/panels/permission_panel.rs:205` **enum** `PermissionHit` — Result of a click inside the permission panel
-`crates/shell/src/panels/permission_panel.rs:218` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
-`crates/shell/src/panels/permission_panel.rs:262` **fn** `build_panel` — Build the display list for the permission floating panel
+`crates/shell/src/panels/permission_panel.rs:70` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
+`crates/shell/src/panels/permission_panel.rs:91` **fn** `label` — Short display name for the permission row label
+`crates/shell/src/panels/permission_panel.rs:101` **fn** `icon` — Emoji icon shown to the left of the label
+`crates/shell/src/panels/permission_panel.rs:113` **enum** `PermissionState` — Grant state for a single permission on a single origin
+`crates/shell/src/panels/permission_panel.rs:126` **fn** `label` — Label shown on the toggle button
+`crates/shell/src/panels/permission_panel.rs:135` **fn** `cycle` — Cycle to the next state: Ask → Allow → Deny → Ask
+`crates/shell/src/panels/permission_panel.rs:147` **struct** `PermissionPanel` — Per-site permission popover state (7C.2)
+`crates/shell/src/panels/permission_panel.rs:162` **fn** `new` — Create a new hidden panel with no stored permissions
+`crates/shell/src/panels/permission_panel.rs:171` **fn** `toggle` — Flip panel visibility
+`crates/shell/src/panels/permission_panel.rs:176` **fn** `set_origin` — Update the current origin on navigation (does not clear stored grants)
+`crates/shell/src/panels/permission_panel.rs:183` **fn** `state_for` — Return the stored state for `kind` at the current origin
+`crates/shell/src/panels/permission_panel.rs:196` **fn** `cycle_permission` — Cycle the state for `kind` at the current origin to the next value
+`crates/shell/src/panels/permission_panel.rs:219` **enum** `PermissionHit` — Result of a click inside the permission panel
+`crates/shell/src/panels/permission_panel.rs:232` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
+`crates/shell/src/panels/permission_panel.rs:276` **fn** `build_panel` — Build the display list for the permission floating panel
 `crates/shell/src/panels/pip_os_window.rs:53` **struct** `PipOsConfig` — Geometry for the floating PiP window, in logical (CSS) pixels
 `crates/shell/src/panels/pip_os_window.rs:76` **fn** `sized` — A window sized to `width`×`height` (e.g. `documentPictureInPicture
 `crates/shell/src/panels/pip_os_window.rs:98` **fn** `pip_window_attributes` — Build the winit attributes for the floating PiP window
@@ -4499,35 +4507,35 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/pip_os_window.rs:225` **fn** `is_active` — `true` while an OS PiP window should be shown
 `crates/shell/src/panels/pip_os_window.rs:230` **fn** `on_enter` — Handle `_lumen_pip_enter(nid)`: open or re-target the floating window
 `crates/shell/src/panels/pip_os_window.rs:239` **fn** `on_exit` — Handle `_lumen_pip_exit(_)` or an OS close button: tear the window down
-`crates/shell/src/panels/pip_window.rs:65` **struct** `PipWindow` — Picture-in-picture window state
-`crates/shell/src/panels/pip_window.rs:88` **fn** `new` — Create an inactive PiP window positioned at the origin (re-anchored to the
-`crates/shell/src/panels/pip_window.rs:102` **fn** `open` — Open the PiP card for a `<video>` source, anchored to the bottom-right of
-`crates/shell/src/panels/pip_window.rs:120` **fn** `close` — Close the card (state is retained but no longer drawn)
-`crates/shell/src/panels/pip_window.rs:126` **fn** `toggle_play` — Flip the play / pause flag
-`crates/shell/src/panels/pip_window.rs:131` **fn** `default_pos` — Default bottom-right anchored top-left corner for a `win_w`×`win_h` window
-`crates/shell/src/panels/pip_window.rs:140` **fn** `clamp_to_window` — Clamp the card so it stays fully inside a `win_w`×`win_h` window, leaving
-`crates/shell/src/panels/pip_window.rs:148` **fn** `begin_drag` — Begin dragging the card: record the pointer offset from the card origin
-`crates/shell/src/panels/pip_window.rs:153` **fn** `dragging` — `true` while a title-bar drag is in progress
-`crates/shell/src/panels/pip_window.rs:159` **fn** `drag_to` — Update the card position from the pointer during a drag, clamped to the
-`crates/shell/src/panels/pip_window.rs:167` **fn** `end_drag` — End an in-progress drag
-`crates/shell/src/panels/pip_window.rs:182` **enum** `PipHit` — Result of a click inside the PiP card
-`crates/shell/src/panels/pip_window.rs:198` **fn** `hit_test` — Hit-test a click at window CSS-px `(x, y)` against the PiP card
-`crates/shell/src/panels/pip_window.rs:235` **fn** `build_panel` — Build the display list for the PiP overlay.  Empty when inactive
-`crates/shell/src/panels/print_panel.rs:57` **enum** `PaperSize` — Paper size for the print job
-`crates/shell/src/panels/print_panel.rs:68` **enum** `Orientation` — Page orientation for the print job
-`crates/shell/src/panels/print_panel.rs:77` **enum** `MarginPreset` — Margin preset for the print job
-`crates/shell/src/panels/print_panel.rs:88` **enum** `ColorMode` — Output colour mode for the print job
-`crates/shell/src/panels/print_panel.rs:97` **enum** `PrintField` — Which editable text field currently has keyboard focus in the print panel
-`crates/shell/src/panels/print_panel.rs:111` **struct** `PrintPanel` — Print dialog panel state
-`crates/shell/src/panels/print_panel.rs:138` **fn** `new` — Create a new hidden panel with default print settings
-`crates/shell/src/panels/print_panel.rs:154` **fn** `toggle` — Toggle panel visibility; clears the active editing field on hide
-`crates/shell/src/panels/print_panel.rs:162` **fn** `close` — Hide the panel and clear the editing field
-`crates/shell/src/panels/print_panel.rs:168` **fn** `push_char` — Append a character to the currently focused text field
-`crates/shell/src/panels/print_panel.rs:177` **fn** `pop_char` — Delete the last character from the currently focused text field
-`crates/shell/src/panels/print_panel.rs:188` **fn** `margin_px` — Resolve margin values (top/bottom, left/right) in CSS px at 96 DPI
-`crates/shell/src/panels/print_panel.rs:207` **enum** `PrintHit` — Result of a click on (or near) the print panel
-`crates/shell/src/panels/print_panel.rs:252` **fn** `hit_test` — Classify a click at `(x, y)` CSS px
-`crates/shell/src/panels/print_panel.rs:406` **fn** `build_panel` — Build the centred print dialog overlay
+`crates/shell/src/panels/pip_window.rs:66` **struct** `PipWindow` — Picture-in-picture window state
+`crates/shell/src/panels/pip_window.rs:89` **fn** `new` — Create an inactive PiP window positioned at the origin (re-anchored to the
+`crates/shell/src/panels/pip_window.rs:103` **fn** `open` — Open the PiP card for a `<video>` source, anchored to the bottom-right of
+`crates/shell/src/panels/pip_window.rs:121` **fn** `close` — Close the card (state is retained but no longer drawn)
+`crates/shell/src/panels/pip_window.rs:127` **fn** `toggle_play` — Flip the play / pause flag
+`crates/shell/src/panels/pip_window.rs:132` **fn** `default_pos` — Default bottom-right anchored top-left corner for a `win_w`×`win_h` window
+`crates/shell/src/panels/pip_window.rs:141` **fn** `clamp_to_window` — Clamp the card so it stays fully inside a `win_w`×`win_h` window, leaving
+`crates/shell/src/panels/pip_window.rs:149` **fn** `begin_drag` — Begin dragging the card: record the pointer offset from the card origin
+`crates/shell/src/panels/pip_window.rs:154` **fn** `dragging` — `true` while a title-bar drag is in progress
+`crates/shell/src/panels/pip_window.rs:160` **fn** `drag_to` — Update the card position from the pointer during a drag, clamped to the
+`crates/shell/src/panels/pip_window.rs:168` **fn** `end_drag` — End an in-progress drag
+`crates/shell/src/panels/pip_window.rs:183` **enum** `PipHit` — Result of a click inside the PiP card
+`crates/shell/src/panels/pip_window.rs:199` **fn** `hit_test` — Hit-test a click at window CSS-px `(x, y)` against the PiP card
+`crates/shell/src/panels/pip_window.rs:236` **fn** `build_panel` — Build the display list for the PiP overlay.  Empty when inactive
+`crates/shell/src/panels/print_panel.rs:58` **enum** `PaperSize` — Paper size for the print job
+`crates/shell/src/panels/print_panel.rs:69` **enum** `Orientation` — Page orientation for the print job
+`crates/shell/src/panels/print_panel.rs:78` **enum** `MarginPreset` — Margin preset for the print job
+`crates/shell/src/panels/print_panel.rs:89` **enum** `ColorMode` — Output colour mode for the print job
+`crates/shell/src/panels/print_panel.rs:98` **enum** `PrintField` — Which editable text field currently has keyboard focus in the print panel
+`crates/shell/src/panels/print_panel.rs:112` **struct** `PrintPanel` — Print dialog panel state
+`crates/shell/src/panels/print_panel.rs:139` **fn** `new` — Create a new hidden panel with default print settings
+`crates/shell/src/panels/print_panel.rs:155` **fn** `toggle` — Toggle panel visibility; clears the active editing field on hide
+`crates/shell/src/panels/print_panel.rs:163` **fn** `close` — Hide the panel and clear the editing field
+`crates/shell/src/panels/print_panel.rs:169` **fn** `push_char` — Append a character to the currently focused text field
+`crates/shell/src/panels/print_panel.rs:178` **fn** `pop_char` — Delete the last character from the currently focused text field
+`crates/shell/src/panels/print_panel.rs:189` **fn** `margin_px` — Resolve margin values (top/bottom, left/right) in CSS px at 96 DPI
+`crates/shell/src/panels/print_panel.rs:208` **enum** `PrintHit` — Result of a click on (or near) the print panel
+`crates/shell/src/panels/print_panel.rs:253` **fn** `hit_test` — Classify a click at `(x, y)` CSS px
+`crates/shell/src/panels/print_panel.rs:407` **fn** `build_panel` — Build the centred print dialog overlay
 `crates/shell/src/panels/privacy_panel.rs:71` **fn** `list_body_height` — Height in CSS px of the scrollable request-list area, given the full window
 `crates/shell/src/panels/privacy_panel.rs:80` **struct** `PrivacyPanel` — Privacy network panel (V5). Holds a snapshot of the shared [`NetworkLog`] and
 `crates/shell/src/panels/privacy_panel.rs:96` **fn** `new` — Create a new hidden panel backed by the given shared `log`
@@ -4543,38 +4551,51 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/privacy_panel.rs:173` **enum** `PrivacyHit` — Result of a click on (or near) the privacy panel
 `crates/shell/src/panels/privacy_panel.rs:184` **fn** `hit_test` — Classify a click at `(x, y)` CSS px. `tab_bar_h` is the tab strip height;
 `crates/shell/src/panels/privacy_panel.rs:215` **fn** `build_privacy_panel` — Build the right-docked privacy panel overlay
-`crates/shell/src/panels/read_later_panel.rs:51` **struct** `ReadLaterPanel` — Read-later panel state
-`crates/shell/src/panels/read_later_panel.rs:61` **fn** `new`
-`crates/shell/src/panels/read_later_panel.rs:66` **fn** `toggle` — Toggle visibility; resets scroll when opening
-`crates/shell/src/panels/read_later_panel.rs:74` **fn** `refresh` — Replace the cached entry list (call after save/delete or on open)
-`crates/shell/src/panels/read_later_panel.rs:78` **fn** `scroll_up`
-`crates/shell/src/panels/read_later_panel.rs:82` **fn** `scroll_down`
-`crates/shell/src/panels/read_later_panel.rs:87` **fn** `max_scroll` — Maximum scroll offset for the current entry count
-`crates/shell/src/panels/read_later_panel.rs:98` **enum** `ReadLaterHit` — Result of a click inside or near the panel
-`crates/shell/src/panels/read_later_panel.rs:114` **fn** `hit_test` — Classify a click at `(mx, my)` (window-space CSS px)
-`crates/shell/src/panels/read_later_panel.rs:152` **fn** `build_panel` — Build the panel display list
-`crates/shell/src/panels/read_later_panel.rs:352` **fn** `extract_title_from_html` — Extract the page title from raw HTML bytes
+`crates/shell/src/panels/profile_menu.rs:52` **fn** `color_for_profile` — Accent colour for a profile by name, falling back to a cyclic default (by
+`crates/shell/src/panels/profile_menu.rs:64` **fn** `is_anonymous` — `true` when `name` is the seeded Anonymous profile (DS-15: draws the red
+`crates/shell/src/panels/profile_menu.rs:71` **fn** `is_guest` — `true` when `name` is the seeded Guest profile (DS-15: desaturates the
+`crates/shell/src/panels/profile_menu.rs:79` **struct** `ProfileEntry` — One profile row as rendered in the dropdown
+`crates/shell/src/panels/profile_menu.rs:91` **struct** `ProfileMenuPanel` — Profile switcher dropdown state
+`crates/shell/src/panels/profile_menu.rs:104` **fn** `new` — Create a new hidden panel with an empty profile list
+`crates/shell/src/panels/profile_menu.rs:109` **fn** `toggle` — Flip dropdown visibility
+`crates/shell/src/panels/profile_menu.rs:115` **fn** `set_entries` — Replace the cached profile list (call after opening the dropdown or
+`crates/shell/src/panels/profile_menu.rs:120` **fn** `set_active` — Mark `id` as the active profile
+`crates/shell/src/panels/profile_menu.rs:127` **fn** `active_entry` — The cached entry matching `active_id`, if any — drives the toolbar
+`crates/shell/src/panels/profile_menu.rs:143` **enum** `ProfileMenuHit` — Result of a click inside the profile dropdown
+`crates/shell/src/panels/profile_menu.rs:155` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the profile dropdown
+`crates/shell/src/panels/profile_menu.rs:184` **fn** `build_panel` — Build the display list for the profile dropdown
+`crates/shell/src/panels/read_later_panel.rs:52` **struct** `ReadLaterPanel` — Read-later panel state
+`crates/shell/src/panels/read_later_panel.rs:62` **fn** `new`
+`crates/shell/src/panels/read_later_panel.rs:67` **fn** `toggle` — Toggle visibility; resets scroll when opening
+`crates/shell/src/panels/read_later_panel.rs:75` **fn** `refresh` — Replace the cached entry list (call after save/delete or on open)
+`crates/shell/src/panels/read_later_panel.rs:79` **fn** `scroll_up`
+`crates/shell/src/panels/read_later_panel.rs:83` **fn** `scroll_down`
+`crates/shell/src/panels/read_later_panel.rs:88` **fn** `max_scroll` — Maximum scroll offset for the current entry count
+`crates/shell/src/panels/read_later_panel.rs:99` **enum** `ReadLaterHit` — Result of a click inside or near the panel
+`crates/shell/src/panels/read_later_panel.rs:115` **fn** `hit_test` — Classify a click at `(mx, my)` (window-space CSS px)
+`crates/shell/src/panels/read_later_panel.rs:153` **fn** `build_panel` — Build the panel display list
+`crates/shell/src/panels/read_later_panel.rs:356` **fn** `extract_title_from_html` — Extract the page title from raw HTML bytes
 `crates/shell/src/panels/restore_spinner.rs:24` **fn** `build_spinner` — Build spinner overlay if restore has taken longer than THRESHOLD_MS
-`crates/shell/src/panels/settings_panel.rs:83` **enum** `SettingsSection` — The top-level settings sections
-`crates/shell/src/panels/settings_panel.rs:114` **fn** `label` — Display label for the tab
-`crates/shell/src/panels/settings_panel.rs:131` **enum** `SettingInput` — Which text input currently has keyboard focus
-`crates/shell/src/panels/settings_panel.rs:140` **struct** `SettingsPanel` — Settings panel UI state
-`crates/shell/src/panels/settings_panel.rs:171` **fn** `new` — Create a new, hidden panel
-`crates/shell/src/panels/settings_panel.rs:191` **fn** `open` — Open the panel, loading a fresh snapshot as the working draft
-`crates/shell/src/panels/settings_panel.rs:200` **fn** `toggle` — Toggle visibility. When opening, loads `snap` as the draft
-`crates/shell/src/panels/settings_panel.rs:209` **fn** `apply_draft` — Clone the current draft for persistence
-`crates/shell/src/panels/settings_panel.rs:215` **fn** `set_http3` — Populate the HTTP/3 draft toggle (Network section) from the currently
-`crates/shell/src/panels/settings_panel.rs:220` **fn** `set_tor_active` — Populate the read-only Tor status line (Privacy section)
-`crates/shell/src/panels/settings_panel.rs:225` **fn** `set_adblock_subs` — Populate the Adblock section's subscription list
-`crates/shell/src/panels/settings_panel.rs:230` **fn** `set_spell_locale` — Populate the read-only spellcheck locale line (Language section)
-`crates/shell/src/panels/settings_panel.rs:235` **fn** `append_char` — Append a printable character to the focused text field
-`crates/shell/src/panels/settings_panel.rs:244` **fn** `backspace` — Remove the last character from the focused text field
-`crates/shell/src/panels/settings_panel.rs:253` **fn** `scroll_by` — Scroll the content area by `dy` CSS px (positive = down)
-`crates/shell/src/panels/settings_panel.rs:268` **enum** `SettingsHit` — Result of classifying a click inside the settings panel
-`crates/shell/src/panels/settings_panel.rs:309` **fn** `hit_test` — Classify a click at `(mx, my)` in window CSS px. `(px, py)` is the panel
-`crates/shell/src/panels/settings_panel.rs:494` **fn** `tooltip_for` — Describe whatever setting is under the cursor at `(mx, my)` (window CSS
-`crates/shell/src/panels/settings_panel.rs:637` **fn** `build_tooltip` — Render a small tooltip bubble anchored just below-right of `(mx, my)`
-`crates/shell/src/panels/settings_panel.rs:683` **fn** `build_panel` — Append display commands for the settings panel to `list`
+`crates/shell/src/panels/settings_panel.rs:84` **enum** `SettingsSection` — The top-level settings sections
+`crates/shell/src/panels/settings_panel.rs:115` **fn** `label` — Display label for the tab
+`crates/shell/src/panels/settings_panel.rs:132` **enum** `SettingInput` — Which text input currently has keyboard focus
+`crates/shell/src/panels/settings_panel.rs:141` **struct** `SettingsPanel` — Settings panel UI state
+`crates/shell/src/panels/settings_panel.rs:172` **fn** `new` — Create a new, hidden panel
+`crates/shell/src/panels/settings_panel.rs:192` **fn** `open` — Open the panel, loading a fresh snapshot as the working draft
+`crates/shell/src/panels/settings_panel.rs:201` **fn** `toggle` — Toggle visibility. When opening, loads `snap` as the draft
+`crates/shell/src/panels/settings_panel.rs:210` **fn** `apply_draft` — Clone the current draft for persistence
+`crates/shell/src/panels/settings_panel.rs:216` **fn** `set_http3` — Populate the HTTP/3 draft toggle (Network section) from the currently
+`crates/shell/src/panels/settings_panel.rs:221` **fn** `set_tor_active` — Populate the read-only Tor status line (Privacy section)
+`crates/shell/src/panels/settings_panel.rs:226` **fn** `set_adblock_subs` — Populate the Adblock section's subscription list
+`crates/shell/src/panels/settings_panel.rs:231` **fn** `set_spell_locale` — Populate the read-only spellcheck locale line (Language section)
+`crates/shell/src/panels/settings_panel.rs:236` **fn** `append_char` — Append a printable character to the focused text field
+`crates/shell/src/panels/settings_panel.rs:245` **fn** `backspace` — Remove the last character from the focused text field
+`crates/shell/src/panels/settings_panel.rs:254` **fn** `scroll_by` — Scroll the content area by `dy` CSS px (positive = down)
+`crates/shell/src/panels/settings_panel.rs:269` **enum** `SettingsHit` — Result of classifying a click inside the settings panel
+`crates/shell/src/panels/settings_panel.rs:310` **fn** `hit_test` — Classify a click at `(mx, my)` in window CSS px. `(px, py)` is the panel
+`crates/shell/src/panels/settings_panel.rs:495` **fn** `tooltip_for` — Describe whatever setting is under the cursor at `(mx, my)` (window CSS
+`crates/shell/src/panels/settings_panel.rs:638` **fn** `build_tooltip` — Render a small tooltip bubble anchored just below-right of `(mx, my)`
+`crates/shell/src/panels/settings_panel.rs:684` **fn** `build_panel` — Append display commands for the settings panel to `list`
 `crates/shell/src/panels/shields_panel.rs:62` **struct** `BlockedLog` — Shared accumulator for blocked-request counts, indexed by hostname
 `crates/shell/src/panels/shields_panel.rs:73` **fn** `record` — Increment the count for the hostname extracted from `url`
 `crates/shell/src/panels/shields_panel.rs:81` **fn** `clear` — Clear all counts (call on every top-level navigation)
@@ -4591,31 +4612,31 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/shields_panel.rs:206` **enum** `ShieldsHit` — Result of a click inside the shields panel
 `crates/shell/src/panels/shields_panel.rs:219` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the shields panel
 `crates/shell/src/panels/shields_panel.rs:254` **fn** `build_panel` — Build the display list for the shields floating panel
-`crates/shell/src/panels/shortcuts_panel.rs:47` **struct** `ShortcutRow` — One entry in the shortcuts list: human label + current binding
-`crates/shell/src/panels/shortcuts_panel.rs:60` **fn** `binding_label` — Formatted binding string shown in the key badge (e.g. `"Ctrl+R"`)
-`crates/shell/src/panels/shortcuts_panel.rs:76` **fn** `default_rows` — Compile-time default bindings for all displayed commands
-`crates/shell/src/panels/shortcuts_panel.rs:125` **enum** `ShortcutsHit` — Hit result from `hit_test`
-`crates/shell/src/panels/shortcuts_panel.rs:136` **struct** `ShortcutsPanel` — Keyboard shortcuts panel UI state
-`crates/shell/src/panels/shortcuts_panel.rs:152` **fn** `new` — Create a new, hidden panel using compile-time default bindings
-`crates/shell/src/panels/shortcuts_panel.rs:164` **fn** `open` — Show the panel
-`crates/shell/src/panels/shortcuts_panel.rs:170` **fn** `toggle` — Toggle visibility
-`crates/shell/src/panels/shortcuts_panel.rs:175` **fn** `close` — Hide the panel and cancel any pending rebind
-`crates/shell/src/panels/shortcuts_panel.rs:181` **fn** `scroll_by` — Scroll the content area by `delta` px (clamped to valid range)
-`crates/shell/src/panels/shortcuts_panel.rs:190` **fn** `accept_rebind` — Called when a rebind keypress arrives
-`crates/shell/src/panels/shortcuts_panel.rs:206` **fn** `cancel_rebind` — Cancel the current rebind without changing the binding
-`crates/shell/src/panels/shortcuts_panel.rs:211` **fn** `hit_test` — Hit-test a click at `(cx, cy)` in panel-local coordinates
-`crates/shell/src/panels/shortcuts_panel.rs:231` **fn** `build_panel` — Render the panel into `dl`, anchored at `(ox, oy)` in screen space
-`crates/shell/src/panels/sidebar_panel.rs:59` **struct** `SidebarPanel` — Right-docked sidebar web panel state (7D.3)
-`crates/shell/src/panels/sidebar_panel.rs:78` **fn** `new` — Create a new hidden sidebar panel with no page loaded
-`crates/shell/src/panels/sidebar_panel.rs:91` **fn** `toggle` — Toggle panel visibility.  No-op when no URL has been set
-`crates/shell/src/panels/sidebar_panel.rs:101` **fn** `open` — Open the sidebar with `url`.  Clears content if the URL changed
-`crates/shell/src/panels/sidebar_panel.rs:114` **fn** `close` — Close the sidebar (hide; URL and content are preserved for re-open)
-`crates/shell/src/panels/sidebar_panel.rs:121` **fn** `set_page` — Store a freshly-rendered display list for the sidebar page
-`crates/shell/src/panels/sidebar_panel.rs:133` **fn** `update_page` — Replace the page display list after a width reflow (F2-6 drag-resize)
-`crates/shell/src/panels/sidebar_panel.rs:141` **fn** `max_scroll` — Maximum valid `scroll_y` (0 if content fits in viewport)
-`crates/shell/src/panels/sidebar_panel.rs:157` **enum** `SidebarHit` — Result of a click inside the sidebar panel
-`crates/shell/src/panels/sidebar_panel.rs:170` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the sidebar panel
-`crates/shell/src/panels/sidebar_panel.rs:212` **fn** `build_panel` — Build the display list for the docked sidebar panel
+`crates/shell/src/panels/shortcuts_panel.rs:48` **struct** `ShortcutRow` — One entry in the shortcuts list: human label + current binding
+`crates/shell/src/panels/shortcuts_panel.rs:61` **fn** `binding_label` — Formatted binding string shown in the key badge (e.g. `"Ctrl+R"`)
+`crates/shell/src/panels/shortcuts_panel.rs:77` **fn** `default_rows` — Compile-time default bindings for all displayed commands
+`crates/shell/src/panels/shortcuts_panel.rs:126` **enum** `ShortcutsHit` — Hit result from `hit_test`
+`crates/shell/src/panels/shortcuts_panel.rs:137` **struct** `ShortcutsPanel` — Keyboard shortcuts panel UI state
+`crates/shell/src/panels/shortcuts_panel.rs:153` **fn** `new` — Create a new, hidden panel using compile-time default bindings
+`crates/shell/src/panels/shortcuts_panel.rs:165` **fn** `open` — Show the panel
+`crates/shell/src/panels/shortcuts_panel.rs:171` **fn** `toggle` — Toggle visibility
+`crates/shell/src/panels/shortcuts_panel.rs:176` **fn** `close` — Hide the panel and cancel any pending rebind
+`crates/shell/src/panels/shortcuts_panel.rs:182` **fn** `scroll_by` — Scroll the content area by `delta` px (clamped to valid range)
+`crates/shell/src/panels/shortcuts_panel.rs:191` **fn** `accept_rebind` — Called when a rebind keypress arrives
+`crates/shell/src/panels/shortcuts_panel.rs:207` **fn** `cancel_rebind` — Cancel the current rebind without changing the binding
+`crates/shell/src/panels/shortcuts_panel.rs:212` **fn** `hit_test` — Hit-test a click at `(cx, cy)` in panel-local coordinates
+`crates/shell/src/panels/shortcuts_panel.rs:232` **fn** `build_panel` — Render the panel into `dl`, anchored at `(ox, oy)` in screen space
+`crates/shell/src/panels/sidebar_panel.rs:60` **struct** `SidebarPanel` — Right-docked sidebar web panel state (7D.3)
+`crates/shell/src/panels/sidebar_panel.rs:79` **fn** `new` — Create a new hidden sidebar panel with no page loaded
+`crates/shell/src/panels/sidebar_panel.rs:92` **fn** `toggle` — Toggle panel visibility.  No-op when no URL has been set
+`crates/shell/src/panels/sidebar_panel.rs:102` **fn** `open` — Open the sidebar with `url`.  Clears content if the URL changed
+`crates/shell/src/panels/sidebar_panel.rs:115` **fn** `close` — Close the sidebar (hide; URL and content are preserved for re-open)
+`crates/shell/src/panels/sidebar_panel.rs:122` **fn** `set_page` — Store a freshly-rendered display list for the sidebar page
+`crates/shell/src/panels/sidebar_panel.rs:134` **fn** `update_page` — Replace the page display list after a width reflow (F2-6 drag-resize)
+`crates/shell/src/panels/sidebar_panel.rs:142` **fn** `max_scroll` — Maximum valid `scroll_y` (0 if content fits in viewport)
+`crates/shell/src/panels/sidebar_panel.rs:158` **enum** `SidebarHit` — Result of a click inside the sidebar panel
+`crates/shell/src/panels/sidebar_panel.rs:171` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the sidebar panel
+`crates/shell/src/panels/sidebar_panel.rs:213` **fn** `build_panel` — Build the display list for the docked sidebar panel
 `crates/shell/src/panels/sleep_hint.rs:26` **fn** `build_sleep_hint` — Build the sleep-restore hint overlay if restore has taken longer than THRESHOLD_MS
 `crates/shell/src/panels/split_view.rs:22` **enum** `SplitFocus` — Which pane receives keyboard and scroll input
 `crates/shell/src/panels/split_view.rs:36` **struct** `SplitPane` — Frozen rendering state for the right pane in a split view
@@ -4628,42 +4649,47 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/split_view.rs:172` **fn** `toggle_focus` — Toggle keyboard/scroll focus between left and right pane
 `crates/shell/src/panels/split_view.rs:180` **fn** `focus_at` — Transfer focus to whichever pane contains `window_x`
 `crates/shell/src/panels/split_view.rs:190` **fn** `scroll_focused_by` — Scroll the focused pane by `dy` CSS px (clamped to content bounds)
-`crates/shell/src/panels/themes.rs:12` **enum** `AccentPreset` — Preset accent colours available in the Appearance settings section
-`crates/shell/src/panels/themes.rs:40` **fn** `color` — RGB colour for this preset
-`crates/shell/src/panels/themes.rs:52` **fn** `key` — Short lowercase key, used in settings serialisation
-`crates/shell/src/panels/themes.rs:64` **fn** `from_key` — Parse from the short key.  Unknown key falls back to `Blue`
-`crates/shell/src/panels/themes.rs:78` **enum** `ThemeBase` — Base brightness mode for the shell chrome
-`crates/shell/src/panels/themes.rs:93` **struct** `ShellTheme` — Shell appearance configuration: base brightness + accent colour
-`crates/shell/src/panels/themes.rs:102` **fn** `accent_color` — Accent colour for the active tab indicator and other chrome highlights
-`crates/shell/src/panels/themes.rs:110` **fn** `is_dark` — Whether the chrome should use the dark palette
-`crates/shell/src/panels/themes.rs:119` **fn** `parse` — Parse from the compact settings string (e.g. `"dark"`, `"light+rose"`)
-`crates/shell/src/panels/themes.rs:133` **fn** `to_settings_str` — Serialise to the compact settings string
-`crates/shell/src/panels/themes.rs:152` **fn** `palette` — Resolve the concrete chrome [`Palette`] for this theme
-`crates/shell/src/panels/themes.rs:169` **struct** `Palette` — Resolved chrome colour tokens for the shell UI (tab strip, address bar,
-`crates/shell/src/panels/tree_tabs.rs:82` **struct** `TreeTabsPanel` — Tree-style tabs panel state
-`crates/shell/src/panels/tree_tabs.rs:91` **fn** `new` — Create a new hidden panel with no collapsed subtrees
-`crates/shell/src/panels/tree_tabs.rs:96` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
-`crates/shell/src/panels/tree_tabs.rs:105` **fn** `toggle_collapsed` — Toggle the collapsed state of the subtree rooted at `tab_id`
-`crates/shell/src/panels/tree_tabs.rs:124` **enum** `TreeTabHit` — Result of a click inside the tree tabs panel
-`crates/shell/src/panels/tree_tabs.rs:139` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tree tabs panel
-`crates/shell/src/panels/tree_tabs.rs:182` **fn** `build_panel` — Build the display list for the tree-style tabs panel
-`crates/shell/src/panels/vertical_tabs.rs:52` **struct** `VerticalTabsPanel` — Vertical tabs panel: list of open tabs rendered as a left-docked sidebar
-`crates/shell/src/panels/vertical_tabs.rs:64` **fn** `new` — Create a new (hidden) panel
-`crates/shell/src/panels/vertical_tabs.rs:69` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
-`crates/shell/src/panels/vertical_tabs.rs:77` **fn** `scroll_by` — Scroll the panel by `delta` CSS px (positive = down)
-`crates/shell/src/panels/vertical_tabs.rs:93` **enum** `VTabHit` — Result of a click inside the vertical tab panel area
-`crates/shell/src/panels/vertical_tabs.rs:108` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the vertical tabs panel
-`crates/shell/src/panels/vertical_tabs.rs:143` **fn** `build_tab_bar_vertical` — Build the display list for the vertical tabs panel with scroll support
-`crates/shell/src/panels/workspace_panel.rs:65` **struct** `WsEntry` — Lightweight workspace entry used for panel rendering (loaded from storage on
-`crates/shell/src/panels/workspace_panel.rs:78` **struct** `WorkspacePanel` — Workspace switcher panel state
-`crates/shell/src/panels/workspace_panel.rs:90` **fn** `new` — Create a new (hidden) panel with an empty workspace list
-`crates/shell/src/panels/workspace_panel.rs:100` **fn** `toggle` — Flip visibility.  Caller must trigger redraw (and relayout if changing
-`crates/shell/src/panels/workspace_panel.rs:105` **fn** `set_workspaces` — Replace the cached workspace list (call after any storage mutation)
-`crates/shell/src/panels/workspace_panel.rs:110` **fn** `set_active` — Mark `id` as the active workspace
-`crates/shell/src/panels/workspace_panel.rs:125` **enum** `WorkspaceHit` — Result of a click inside the workspace switcher bar
-`crates/shell/src/panels/workspace_panel.rs:140` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the workspace switcher bar
-`crates/shell/src/panels/workspace_panel.rs:199` **fn** `build_panel` — Build the display list for the workspace switcher bar
-`crates/shell/src/panels/workspace_panel.rs:335` **fn** `parse_ws_color` — Convert a stored CSS colour string (`#RRGGBB`, `#RGB`, or named colour
+`crates/shell/src/panels/themes.rs:16` **enum** `AccentPreset` — Preset accent colours available in the Appearance settings section
+`crates/shell/src/panels/themes.rs:44` **fn** `color` — RGB colour for this preset
+`crates/shell/src/panels/themes.rs:56` **fn** `key` — Short lowercase key, used in settings serialisation
+`crates/shell/src/panels/themes.rs:68` **fn** `from_key` — Parse from the short key.  Unknown key falls back to `Blue`
+`crates/shell/src/panels/themes.rs:82` **enum** `ThemeBase` — Base brightness mode for the shell chrome
+`crates/shell/src/panels/themes.rs:97` **struct** `ShellTheme` — Shell appearance configuration: base brightness + accent colour
+`crates/shell/src/panels/themes.rs:106` **fn** `accent_color` — Accent colour for the active tab indicator and other chrome highlights
+`crates/shell/src/panels/themes.rs:114` **fn** `is_dark` — Whether the chrome should use the dark palette
+`crates/shell/src/panels/themes.rs:123` **fn** `parse` — Parse from the compact settings string (e.g. `"dark"`, `"light+rose"`)
+`crates/shell/src/panels/themes.rs:137` **fn** `to_settings_str` — Serialise to the compact settings string
+`crates/shell/src/panels/themes.rs:156` **fn** `palette` — Resolve the concrete chrome [`Palette`] for this theme
+`crates/shell/src/panels/themes.rs:184` **struct** `Palette` — Resolved chrome colour tokens for the shell UI (tab strip, address bar,
+`crates/shell/src/panels/themes.rs:293` **fn** `desaturated` — Desaturated copy of this palette (DS-15: Guest profile signature —
+`crates/shell/src/panels/themes.rs:320` **fn** `desaturate` — Convert `c` to a gray of equal perceived luminance (Rec. 601 luma:
+`crates/shell/src/panels/themes.rs:333` **fn** `anonymous_border` — Anonymous profile window outline (DS-15): a thin red inset frame around
+`crates/shell/src/panels/tree_tabs.rs:83` **struct** `TreeTabsPanel` — Tree-style tabs panel state
+`crates/shell/src/panels/tree_tabs.rs:92` **fn** `new` — Create a new hidden panel with no collapsed subtrees
+`crates/shell/src/panels/tree_tabs.rs:97` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
+`crates/shell/src/panels/tree_tabs.rs:106` **fn** `toggle_collapsed` — Toggle the collapsed state of the subtree rooted at `tab_id`
+`crates/shell/src/panels/tree_tabs.rs:125` **enum** `TreeTabHit` — Result of a click inside the tree tabs panel
+`crates/shell/src/panels/tree_tabs.rs:140` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tree tabs panel
+`crates/shell/src/panels/tree_tabs.rs:183` **fn** `build_panel` — Build the display list for the tree-style tabs panel
+`crates/shell/src/panels/vertical_tabs.rs:61` **struct** `VerticalTabsPanel` — Vertical tabs panel: list of open tabs rendered as a left-docked sidebar
+`crates/shell/src/panels/vertical_tabs.rs:73` **fn** `new` — Create a new (hidden) panel
+`crates/shell/src/panels/vertical_tabs.rs:78` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
+`crates/shell/src/panels/vertical_tabs.rs:86` **fn** `scroll_by` — Scroll the panel by `delta` CSS px (positive = down)
+`crates/shell/src/panels/vertical_tabs.rs:102` **enum** `VTabHit` — Result of a click inside the vertical tab panel area
+`crates/shell/src/panels/vertical_tabs.rs:117` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the vertical tabs panel
+`crates/shell/src/panels/vertical_tabs.rs:154` **fn** `build_tab_bar_vertical` — Build the display list for the vertical tabs panel with scroll support
+`crates/shell/src/panels/workspace_panel.rs:66` **struct** `WsEntry` — Lightweight workspace entry used for panel rendering (loaded from storage on
+`crates/shell/src/panels/workspace_panel.rs:79` **struct** `WorkspacePanel` — Workspace switcher panel state
+`crates/shell/src/panels/workspace_panel.rs:91` **fn** `new` — Create a new (hidden) panel with an empty workspace list
+`crates/shell/src/panels/workspace_panel.rs:101` **fn** `toggle` — Flip visibility.  Caller must trigger redraw (and relayout if changing
+`crates/shell/src/panels/workspace_panel.rs:106` **fn** `set_workspaces` — Replace the cached workspace list (call after any storage mutation)
+`crates/shell/src/panels/workspace_panel.rs:111` **fn** `set_active` — Mark `id` as the active workspace
+`crates/shell/src/panels/workspace_panel.rs:120` **fn** `active_accent` — Accent colour of the currently active workspace (DS-12, level-1
+`crates/shell/src/panels/workspace_panel.rs:136` **enum** `WorkspaceHit` — Result of a click inside the workspace switcher bar
+`crates/shell/src/panels/workspace_panel.rs:151` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the workspace switcher bar
+`crates/shell/src/panels/workspace_panel.rs:210` **fn** `build_panel` — Build the display list for the workspace switcher bar
+`crates/shell/src/panels/workspace_panel.rs:351` **fn** `default_color_for_index` — Pick a default colour for the `n`-th workspace created (0-indexed),
+`crates/shell/src/panels/workspace_panel.rs:358` **fn** `parse_ws_color` — Convert a stored CSS colour string (`#RRGGBB`, `#RGB`, or named colour
 `crates/shell/src/platform/audio_capture.rs:40` **struct** `PlatformAudioCapture` — Platform audio capture provider (WASAPI / ALSA via `cpal`)
 `crates/shell/src/platform/audio_player.rs:98` **struct** `PlatformAudioPlayer` — Shell-side implementation of `AudioPlaybackProvider` using `rodio`
 `crates/shell/src/platform/audio_player.rs:105` **fn** `new` — Create a new player (no OS resources allocated until the first handle)
@@ -4867,24 +4893,24 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tab_lifecycle/state.rs:136` **fn** `advance_tier` — Advance to the next tier. Returns `true` if a transition occurred
 `crates/shell/src/tab_lifecycle/state.rs:150` **fn** `should_transition_on_idle` — Returns `true` if the idle timeout for the current tier has elapsed
 `crates/shell/src/tab_lifecycle/state.rs:167` **fn** `suggested_pressure_state` — If memory pressure justifies an earlier-than-scheduled tier advance, returns
-`crates/shell/src/tabs/archive.rs:58` **struct** `ArchivedTab` — A tab that was auto-archived and removed from the visible tab strip
-`crates/shell/src/tabs/archive.rs:74` **enum** `ArchiveHit` — Hit result from the archive button or panel
-`crates/shell/src/tabs/archive.rs:86` **struct** `TabArchive` — State of the tab archive system
-`crates/shell/src/tabs/archive.rs:103` **fn** `new` — Create an empty archive with the panel closed
-`crates/shell/src/tabs/archive.rs:108` **fn** `push` — Push a newly-archived tab (prepend — newest entry shown first)
-`crates/shell/src/tabs/archive.rs:113` **fn** `take` — Remove and return the archived entry with the given original tab `id`
-`crates/shell/src/tabs/archive.rs:119` **fn** `count` — Number of archived entries
-`crates/shell/src/tabs/archive.rs:124` **fn** `toggle` — Toggle panel open/closed; resets scroll on open
-`crates/shell/src/tabs/archive.rs:132` **fn** `close` — Close panel without clearing entries
-`crates/shell/src/tabs/archive.rs:138` **fn** `scroll_up` — Scroll up by one row (clamped at zero)
-`crates/shell/src/tabs/archive.rs:144` **fn** `scroll_down` — Scroll down by one row (clamped at last page)
-`crates/shell/src/tabs/archive.rs:157` **fn** `archive_btn_x` — Pixel x-coordinate where the archive button begins (right of all tabs)
-`crates/shell/src/tabs/archive.rs:177` **fn** `hit_test_button` — Hit-test the archive toolbar button area
-`crates/shell/src/tabs/archive.rs:185` **fn** `hit_test_panel` — Hit-test the archive panel when it is open
-`crates/shell/src/tabs/archive.rs:238` **fn** `build_button` — Build the archive toolbar button appended to the right of the tab bar
-`crates/shell/src/tabs/archive.rs:317` **fn** `build_panel` — Build the drop-down archive panel anchored below the archive button
+`crates/shell/src/tabs/archive.rs:59` **struct** `ArchivedTab` — A tab that was auto-archived and removed from the visible tab strip
+`crates/shell/src/tabs/archive.rs:75` **enum** `ArchiveHit` — Hit result from the archive button or panel
+`crates/shell/src/tabs/archive.rs:87` **struct** `TabArchive` — State of the tab archive system
+`crates/shell/src/tabs/archive.rs:104` **fn** `new` — Create an empty archive with the panel closed
+`crates/shell/src/tabs/archive.rs:109` **fn** `push` — Push a newly-archived tab (prepend — newest entry shown first)
+`crates/shell/src/tabs/archive.rs:114` **fn** `take` — Remove and return the archived entry with the given original tab `id`
+`crates/shell/src/tabs/archive.rs:120` **fn** `count` — Number of archived entries
+`crates/shell/src/tabs/archive.rs:125` **fn** `toggle` — Toggle panel open/closed; resets scroll on open
+`crates/shell/src/tabs/archive.rs:133` **fn** `close` — Close panel without clearing entries
+`crates/shell/src/tabs/archive.rs:139` **fn** `scroll_up` — Scroll up by one row (clamped at zero)
+`crates/shell/src/tabs/archive.rs:145` **fn** `scroll_down` — Scroll down by one row (clamped at last page)
+`crates/shell/src/tabs/archive.rs:158` **fn** `archive_btn_x` — Pixel x-coordinate where the archive button begins (right of all tabs)
+`crates/shell/src/tabs/archive.rs:178` **fn** `hit_test_button` — Hit-test the archive toolbar button area
+`crates/shell/src/tabs/archive.rs:186` **fn** `hit_test_panel` — Hit-test the archive panel when it is open
+`crates/shell/src/tabs/archive.rs:239` **fn** `build_button` — Build the archive toolbar button appended to the right of the tab bar
+`crates/shell/src/tabs/archive.rs:318` **fn** `build_panel` — Build the drop-down archive panel anchored below the archive button
 `crates/shell/src/tabs/containers.rs:44` **enum** `ContainerKind` — Kind of tab container. Drives the border-top colour in the tab strip
-`crates/shell/src/tabs/containers.rs:65` **fn** `border_color` — Border-top strip colour, or `None` for [`ContainerKind::None`]
+`crates/shell/src/tabs/containers.rs:65` **fn** `border_color` — Accent strip colour, or `None` for [`ContainerKind::None`]
 `crates/shell/src/tabs/containers.rs:82` **fn** `name` — Human-readable container name for UI labels
 `crates/shell/src/tabs/containers.rs:112` **struct** `ContainerStore` — Origin+container → cookie/storage store id
 `crates/shell/src/tabs/containers.rs:122` **fn** `new` — Create an empty store. First minted id will be `0`
@@ -4942,17 +4968,24 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/strip.rs:579` **fn** `from_str` — Parse from a stored settings string (`"horizontal"` or `"vertical"`)
 `crates/shell/src/tabs/strip.rs:584` **fn** `as_str` — Serialize to a settings string
 `crates/shell/src/tabs/strip.rs:597` **fn** `hit_test_layout_btn` — Returns `true` if `(x, y)` falls inside the layout-mode toggle button
-`crates/shell/src/tabs/strip.rs:606` **fn** `build_layout_toggle_btn` — Build a display list for the vertical-tab layout toggle button
-`crates/shell/src/tabs/strip.rs:645` **fn** `hit_test_settings_btn` — Returns `true` if `(x, y)` falls inside the settings gear button
-`crates/shell/src/tabs/strip.rs:654` **fn** `build_settings_btn` — Build a display list for the settings gear button (opens `about:settings`)
-`crates/shell/src/tabs/strip.rs:698` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
-`crates/shell/src/tabs/strip.rs:740` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
-`crates/shell/src/tabs/strip.rs:949` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
+`crates/shell/src/tabs/strip.rs:607` **fn** `build_layout_toggle_btn` — Build a display list for the vertical-tab layout toggle button
+`crates/shell/src/tabs/strip.rs:642` **fn** `hit_test_settings_btn` — Returns `true` if `(x, y)` falls inside the settings gear button
+`crates/shell/src/tabs/strip.rs:652` **fn** `build_settings_btn` — Build a display list for the settings gear button (opens `about:settings`)
+`crates/shell/src/tabs/strip.rs:692` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:736` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/strip.rs:955` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
 `crates/shell/src/tabs/tree.rs:63` **struct** `VisibleRow` — A row item produced by [`visible_order`]
 `crates/shell/src/tabs/tree.rs:82` **fn** `visible_order` — Build the ordered list of visible tabs for tree-style rendering
+`crates/shell/src/toolbar.rs:81` **struct** `AvatarBadge` — Rendering data for the profile avatar button (DS-14): the active
+`crates/shell/src/toolbar.rs:90` **enum** `ToolbarHit` — A click target within the toolbar row
+`crates/shell/src/toolbar.rs:127` **struct** `ToolbarActive` — Which right-cluster buttons should render in their "open" (lit) state —
+`crates/shell/src/toolbar.rs:144` **fn** `avatar_x` — Left edge x-coordinate of the profile avatar button (DS-14) — the
+`crates/shell/src/toolbar.rs:166` **fn** `omnibox_rects` — Compute the geometry of the inline omnibox (DS-10): the field itself,
+`crates/shell/src/toolbar.rs:204` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the toolbar row
+`crates/shell/src/toolbar.rs:333` **fn** `build_toolbar` — Build a viewport-locked display list for the toolbar row
 `crates/shell/src/tracks.rs:24` **struct** `LoadedTrack` — Один `<track>` элемента `<video>`, отражённый в `TextTrack` JS-API
 `crates/shell/src/tracks.rs:39` **struct** `PageTracks` — Загруженные cues по каждому `<video>` страницы
 `crates/shell/src/tracks.rs:48` **fn** `is_empty` — Нет ни одного видео с загруженными cues
@@ -4965,7 +4998,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/zoom.rs:48` **fn** `preview_scale` — Preview scale for transform-first zoom (ADR-016 M0.3)
 `crates/shell/src/zoom.rs:64` **fn** `effective_viewport` — Compute the CSS layout viewport size from the physical window size
 
-## lumen-storage  (515 symbols)
+## lumen-storage  (523 symbols)
 
 `crates/storage/src/a11y_prefs.rs:38` **enum** `CursorSize` — Accessibility cursor magnification level
 `crates/storage/src/a11y_prefs.rs:50` **fn** `as_str` — Serialize to the storage string representation
@@ -5199,6 +5232,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/keyboard_shortcuts.rs:83` **fn** `get` — Return the stored override for `command`, or `None` if using default
 `crates/storage/src/keyboard_shortcuts.rs:100` **fn** `set` — Save (or overwrite) a binding override for `command`
 `crates/storage/src/keyboard_shortcuts.rs:113` **fn** `remove` — Remove the override for `command` (reverts to compile-time default)
+`crates/storage/src/newtab_tiles.rs:24` **struct** `PinnedTile` — One pinned newtab tile
+`crates/storage/src/newtab_tiles.rs:37` **struct** `NewtabTiles` — SQLite-backed registry of pinned newtab tiles
+`crates/storage/src/newtab_tiles.rs:49` **fn** `open` — Open persistent tile store at `path`
+`crates/storage/src/newtab_tiles.rs:56` **fn** `open_in_memory` — Open in-memory store (tests / ephemeral sessions)
+`crates/storage/src/newtab_tiles.rs:82` **fn** `pin` — Pin `url` (titled `title`) as a new tile at the next free position
+`crates/storage/src/newtab_tiles.rs:117` **fn** `unpin` — Unpin `url`. No-op if it isn't currently pinned
+`crates/storage/src/newtab_tiles.rs:126` **fn** `list_all` — All pinned tiles ordered by position
+`crates/storage/src/newtab_tiles.rs:146` **fn** `get` — `get(url).is_some()` shortcut, also useful as a `?row` existence check
 `crates/storage/src/notifications.rs:18` **struct** `Notification`
 `crates/storage/src/notifications.rs:34` **struct** `Notifications`
 `crates/storage/src/notifications.rs:45` **fn** `open`
@@ -5484,4 +5525,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5410 symbols in 23 crates*
+*Total: 5451 symbols in 23 crates*

@@ -10177,13 +10177,53 @@ impl Lumen {
         }
     }
 
+    /// Snapshot the tab strip, toolbar, and omnibox for the synthetic chrome
+    /// AX nodes (DS-17) — `lumen_a11y::chrome::chrome_nodes` turns this into
+    /// `TabList`/`ToolBar` siblings of the DOM-derived tree.
+    fn chrome_snapshot(&self) -> lumen_a11y::chrome::ChromeSnapshot {
+        use lumen_a11y::chrome::{ChromeButton, ChromeSnapshot, ChromeTab};
+
+        let tabs = self
+            .tab_strip
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(idx, tab)| ChromeTab { title: tab.title.clone(), selected: idx == self.tab_strip.active })
+            .collect();
+
+        let profile_name = self.profile_menu.active_entry().map(|e| e.name.as_str()).unwrap_or("?");
+        let buttons = vec![
+            ChromeButton { name: format!("Профиль: {profile_name}"), pressed: None },
+            ChromeButton { name: "Назад".to_owned(), pressed: None },
+            ChromeButton { name: "Вперёд".to_owned(), pressed: None },
+            ChromeButton { name: "Обновить".to_owned(), pressed: None },
+            ChromeButton { name: "Найти на странице".to_owned(), pressed: Some(self.find.is_open()) },
+            ChromeButton { name: "Веб-сайдбар".to_owned(), pressed: Some(self.sidebar.visible) },
+            ChromeButton { name: "ИИ-сайдбар".to_owned(), pressed: Some(self.ai_panel.visible) },
+            ChromeButton { name: "Загрузки".to_owned(), pressed: Some(self.downloads.visible) },
+            ChromeButton { name: "DevTools".to_owned(), pressed: Some(self.devtools_console.visible) },
+            ChromeButton { name: "Настройки".to_owned(), pressed: Some(self.settings_panel.visible) },
+        ];
+
+        let omnibox_value = if self.address_bar.is_open() {
+            self.address_bar.input().to_owned()
+        } else {
+            self.current_display_url().to_owned()
+        };
+
+        ChromeSnapshot { tabs, buttons, omnibox_value }
+    }
+
     /// Rebuild the platform accessibility tree from the current DOM and push it to
-    /// the OS bridge. Called after every full page load.
+    /// the OS bridge. Called after every full page load and tab switch — the
+    /// chrome nodes (DS-17) are attached as siblings so they stay live too.
     fn update_platform_ax_tree(&mut self) {
         let Some(src) = &self.layout_source else { return };
         let Ok(doc) = src.document.lock() else { return };
         let flat_tree = lumen_dom::build_flat_tree(&doc);
         let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &flat_tree);
+        let chrome = lumen_a11y::chrome::chrome_nodes(&self.chrome_snapshot());
+        let ax_tree = lumen_a11y::chrome::attach_chrome(ax_tree, chrome);
         self.platform_bridge.update(&ax_tree);
     }
 }
@@ -21891,6 +21931,8 @@ impl Lumen {
             let doc = source.document.lock().ok()?;
             let flat_tree = lumen_dom::build_flat_tree(&doc);
             let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &flat_tree);
+            let chrome = lumen_a11y::chrome::chrome_nodes(&self.chrome_snapshot());
+            let ax_tree = lumen_a11y::chrome::attach_chrome(ax_tree, chrome);
             Some(automation_ax_node(&ax_tree.root))
         }
 
@@ -22193,6 +22235,12 @@ impl Lumen {
         }
         // Otherwise the tab is blank (never loaded) — leave reset state.
 
+        // DS-17: the synthetic TabList's `selected` state is rebuilt fresh
+        // from `self.tab_strip.active` every time — without this, switching
+        // to an already-loaded tab (no navigation, so nothing else rebuilds
+        // the AX tree) left the OS bridge reporting the *previous* tab as
+        // selected until the next full page load.
+        self.update_platform_ax_tree();
         self.request_redraw();
     }
 }

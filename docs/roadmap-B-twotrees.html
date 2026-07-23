@@ -3682,9 +3682,9 @@
       {
        "id": "DS-17",
        "title": "DS-17: AX-узлы собственного хрома",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "lumen-a11y: синтетические chrome-узлы (TabList/Tab, ToolBar/Button, ComboBox-омнибокс) братьями к web-дереву в build_ax_tree (main.rs:10085); видно в MCP resource://a11y_tree; заодно поправить устаревший CAPABILITIES-пункт про «stubs» (Windows MSAA-мост уже реальный). После DS-9"
+       "note": "lumen_a11y::chrome (новый модуль): ChromeSnapshot/chrome_nodes() строят синтетические TabList[Tab×N]/ToolBar[Button×K,ComboBox] из состояния tab_strip/toolbar/omnibox шелла; attach_chrome() пришивает их братом к DOM-дереву под общим AXRole::Generic-корнем (синтетические NodeId — счёт вниз от u32::MAX, без коллизий с DOM). Обе точки построения дерева в main.rs (update_platform_ax_tree — после load/restore/switch_tab, automation_a11y_tree — MCP resource://a11y_tree) подключены; поправлен устаревший CAPABILITIES-пункт про «in-memory stubs» (Windows MSAA-мост — реальный Phase 1, только macOS/Linux ещё стабы). 6 новых тестов, cargo test -p lumen-a11y: 137 зелёных. После DS-9"
       },
       {
        "id": "DS-18",
