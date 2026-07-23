@@ -137,6 +137,10 @@ pub struct ToolbarActive {
     pub devtools: bool,
     /// `self.settings_panel.visible`.
     pub settings: bool,
+    /// `self.downloads.active_count() > 0` (DS-19): draws the green dot
+    /// indicator on the downloads button (`.tb-dot` in the design
+    /// reference), independent of whether the popover itself is open.
+    pub downloads_has_active: bool,
 }
 
 /// Left edge x-coordinate of the profile avatar button (DS-14) — the
@@ -252,8 +256,18 @@ fn corners(r: f32) -> CornerRadii {
     CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r }
 }
 
+/// Diameter of the active-download indicator dot (`.tb-dot`).
+const DOT_SZ: f32 = 6.0;
+/// Border ring width around the indicator dot (`.tb-dot{ border:1.5px solid … }`).
+const DOT_BORDER: f32 = 1.5;
+
 /// Push one button (rounded-rect background + centered glyph) into `out`.
-fn push_btn(out: &mut DisplayList, btn_x: f32, glyph: &str, active: bool, pal: &Palette) {
+///
+/// `dot` draws the small green indicator circle in the button's top-right
+/// corner (DS-19: `.tb-dot`, used by the downloads button while any download
+/// is active — independent of `active`, which lights the button when its
+/// panel is open).
+fn push_btn(out: &mut DisplayList, btn_x: f32, glyph: &str, active: bool, pal: &Palette, dot: bool) {
     let bg = if active { pal.item_selected_bg } else { pal.toolbar_bg };
     let icon_color = if active { pal.accent } else { pal.text_dim };
     let btn_y = TAB_BAR_HEIGHT + (size::TOOLBAR_H - BTN_SZ) * 0.5;
@@ -281,6 +295,21 @@ fn push_btn(out: &mut DisplayList, btn_x: f32, glyph: &str, active: bool, pal: &
         highlight_name: None,
         text_orientation: None,
     });
+    if dot {
+        let ring = DOT_SZ + DOT_BORDER * 2.0;
+        let ring_x = btn_x + BTN_SZ - ring - 3.0;
+        let ring_y = btn_y + 3.0;
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(ring_x, ring_y, ring, ring),
+            radii: corners(ring * 0.5),
+            color: pal.toolbar_bg,
+        });
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(ring_x + DOT_BORDER, ring_y + DOT_BORDER, DOT_SZ, DOT_SZ),
+            radii: corners(DOT_SZ * 0.5),
+            color: crate::theme_tokens::badge::GREEN,
+        });
+    }
 }
 
 /// Push the profile avatar circle (DS-14): a filled circle in the profile's
@@ -349,16 +378,16 @@ pub fn build_toolbar(
     });
 
     push_avatar(&mut out, avatar);
-    push_btn(&mut out, left_btn_x(0), "\u{2190}", false, pal); // ← back
-    push_btn(&mut out, left_btn_x(1), "\u{2192}", false, pal); // → forward
-    push_btn(&mut out, left_btn_x(2), "\u{21BB}", false, pal); // ↻ reload
+    push_btn(&mut out, left_btn_x(0), "\u{2190}", false, pal, false); // ← back
+    push_btn(&mut out, left_btn_x(1), "\u{2192}", false, pal, false); // → forward
+    push_btn(&mut out, left_btn_x(2), "\u{21BB}", false, pal, false); // ↻ reload
 
-    push_btn(&mut out, right_btn_x(window_w, 0), "\u{2315}", active.find, pal); // ⌕ find
-    push_btn(&mut out, right_btn_x(window_w, 1), "\u{25EB}", active.web_sidebar, pal); // ◫ web sidebar
-    push_btn(&mut out, right_btn_x(window_w, 2), "\u{2726}", active.ai_sidebar, pal); // ✦ AI sidebar
-    push_btn(&mut out, right_btn_x(window_w, 3), "\u{2B07}", active.downloads, pal); // ⬇ downloads
-    push_btn(&mut out, right_btn_x(window_w, 4), "\u{2692}", active.devtools, pal); // ⚒ DevTools
-    push_btn(&mut out, right_btn_x(window_w, 5), "\u{2699}", active.settings, pal); // ⚙ settings
+    push_btn(&mut out, right_btn_x(window_w, 0), "\u{2315}", active.find, pal, false); // ⌕ find
+    push_btn(&mut out, right_btn_x(window_w, 1), "\u{25EB}", active.web_sidebar, pal, false); // ◫ web sidebar
+    push_btn(&mut out, right_btn_x(window_w, 2), "\u{2726}", active.ai_sidebar, pal, false); // ✦ AI sidebar
+    push_btn(&mut out, right_btn_x(window_w, 3), "\u{2B07}", active.downloads, pal, active.downloads_has_active); // ⬇ downloads
+    push_btn(&mut out, right_btn_x(window_w, 4), "\u{2692}", active.devtools, pal, false); // ⚒ DevTools
+    push_btn(&mut out, right_btn_x(window_w, 5), "\u{2699}", active.settings, pal, false); // ⚙ settings
 
     let omni_rects = omnibox_rects(window_w);
     let mut field_cmds =
@@ -481,5 +510,35 @@ mod tests {
     #[test]
     fn chrome_h_is_tab_bar_plus_toolbar() {
         assert!((CHROME_H - (TAB_BAR_HEIGHT + size::TOOLBAR_H)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn downloads_active_indicator_adds_two_rounded_rects() {
+        let bar = address_bar::AddressBarState::default();
+        let without = build_toolbar(
+            1024.0, &dark(), ToolbarActive::default(), &bar, "https://example.com", &avatar(),
+        );
+        let active = ToolbarActive { downloads_has_active: true, ..Default::default() };
+        let with_dot =
+            build_toolbar(1024.0, &dark(), active, &bar, "https://example.com", &avatar());
+        let count = |cmds: &DisplayList| {
+            cmds.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).count()
+        };
+        // The dot is drawn as two rounded rects (border ring + fill), added
+        // on top of the button's own (inactive, so undrawn) highlight.
+        assert_eq!(count(&with_dot) - count(&without), 2);
+    }
+
+    #[test]
+    fn downloads_active_indicator_uses_green_badge_colour() {
+        let bar = address_bar::AddressBarState::default();
+        let active = ToolbarActive { downloads_has_active: true, ..Default::default() };
+        let cmds =
+            build_toolbar(1024.0, &dark(), active, &bar, "https://example.com", &avatar());
+        let has_green = cmds.iter().any(|c| {
+            matches!(c, DisplayCommand::FillRoundedRect { color, .. }
+                if *color == crate::theme_tokens::badge::GREEN)
+        });
+        assert!(has_green, "downloads button must show the green active-download dot");
     }
 }

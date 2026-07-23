@@ -14588,7 +14588,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.viewport_width_css() as u32,
                         self.window_height_css() as u32,
                     );
-                    let mut dl_cmds = download::build_download_bar(&self.downloads, win_size);
+                    let mut dl_cmds = download::build_download_bar(&self.downloads, win_size, &pal);
                     overlay_buf.append(&mut dl_cmds);
                 }
 
@@ -14983,6 +14983,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         downloads: self.downloads.visible,
                         devtools: self.devtools_console.visible,
                         settings: self.settings_panel.visible,
+                        downloads_has_active: self.downloads.active_count() > 0,
                     };
                     // DS-14: avatar badge — active profile's colour + initial
                     // letter, falling back to the resolved accent/"?" while no
