@@ -331,6 +331,29 @@
   problem), so the two-workspace-colour-switch screenshot from the DoD was not
   captured interactively. The colour-override logic itself is deterministic
   and fully covered by the unit tests above.
+- **Done (DS-13 container accent strip: top → left, 2026-07-23):** the
+  per-tab container marker (7D.2, [`tabs::containers::ContainerKind`](../crates/shell/src/tabs/containers.rs))
+  moved from a horizontal strip at the top of the tab button to a rounded
+  vertical bar along its left edge — 3 px wide, inset 2 px from the top/bottom
+  edge, `theme_tokens::radius::SM` corners, drawn with `FillRoundedRect`
+  instead of the old top-edge `FillRect`. `ContainerKind::border_color()`
+  colours are unchanged. [`tabs::strip::build_tab_bar`](../crates/shell/src/tabs/strip.rs)
+  draws it at the left edge of each tab (`CONTAINER_STRIP_WIDTH`/`_INSET`
+  constants). [`panels::vertical_tabs::build_tab_bar_vertical`](../crates/shell/src/panels/vertical_tabs.rs)
+  previously drew **no** container marker at all — DS-13 added the same strip
+  there too, positioned at `CONTAINER_STRIP_LEFT = 6.0` so it sits between the
+  active-tab accent bar (`x = 0..2`) and the favicon square (`x = 12`) without
+  overlapping either.
+
+  DoD: `tabs::strip` tests updated to assert `FillRoundedRect` geometry
+  instead of the old `FillRect` (helper `count_container_strips` rewritten);
+  2 new `panels::vertical_tabs` tests (`build_panel_no_strip_for_none_container`,
+  `build_panel_renders_strip_for_work_container`). 80 `tabs::strip` + 21
+  `panels::vertical_tabs` tests green; `cargo clippy -p lumen-shell
+  --all-targets -- -D warnings` clean. Live/screenshot verification was not
+  possible: `KeyCommand::SetTabContainer` still has no UI trigger (no
+  omnibox/context-menu wiring) — a pre-existing 7D.2 gap noted in
+  `containers.rs`, not introduced or closed by this slice.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*

@@ -46,6 +46,14 @@ const CLOSE_W: f32 = 16.0;
 const CLOSE_RIGHT_MARGIN: f32 = 8.0;
 /// Lifecycle badge dot diameter.
 const BADGE_SZ: f32 = 5.0;
+/// Left edge of the container accent strip (DS-13), between the active-tab
+/// accent bar (`x = 0..2`) and the favicon (`ICON_LEFT`).
+const CONTAINER_STRIP_LEFT: f32 = 6.0;
+/// Width of the container accent strip in CSS px (DS-13).
+const CONTAINER_STRIP_WIDTH: f32 = 3.0;
+/// Vertical inset of the container strip from the row's top/bottom edge
+/// (DS-13: "высота вкладки минус 2×2 px").
+const CONTAINER_STRIP_INSET: f32 = 2.0;
 
 // ── Panel state ───────────────────────────────────────────────────────────────
 
@@ -201,6 +209,22 @@ pub fn build_tab_bar_vertical(
             rect: Rect::new(0.0, row_top + ROW_H - 1.0, pw - 1.0, 1.0),
             color: pal.divider,
         });
+
+        // Container accent strip (DS-13). Rounded vertical bar between the
+        // active accent bar and the favicon. Skipped for `ContainerKind::None`.
+        if let Some(color) = tab.container.border_color() {
+            let r = radius::SM;
+            out.push(DisplayCommand::FillRoundedRect {
+                rect: Rect::new(
+                    CONTAINER_STRIP_LEFT,
+                    row_top + CONTAINER_STRIP_INSET,
+                    CONTAINER_STRIP_WIDTH,
+                    ROW_H - 2.0 * CONTAINER_STRIP_INSET,
+                ),
+                radii: CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r },
+                color,
+            });
+        }
 
         // Favicon placeholder square.
         let icon_top = row_top + (ROW_H - ICON_SZ) * 0.5;
@@ -512,5 +536,48 @@ mod tests {
         // scroll_y = ROW_H → row_y = ROW_H / 2 + ROW_H = 1.5 * ROW_H → idx = 1.
         let hit = hit_test(&s, 50.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, ROW_H, PANEL_WIDTH);
         assert_eq!(hit, Some(VTabHit::Tab(1)), "scroll offset must shift row index");
+    }
+
+    // ── Container strip (DS-13) ─────────────────────────────────────────────
+
+    /// Helper: count `FillRoundedRect` commands matching the container strip
+    /// geometry (width == `CONTAINER_STRIP_WIDTH`, x == `CONTAINER_STRIP_LEFT`).
+    fn count_container_strips(dl: &DisplayList, expected_color: Color) -> usize {
+        dl.iter()
+            .filter(|c| match c {
+                DisplayCommand::FillRoundedRect { rect, color, .. } => {
+                    (rect.width - CONTAINER_STRIP_WIDTH).abs() < f32::EPSILON
+                        && (rect.x - CONTAINER_STRIP_LEFT).abs() < f32::EPSILON
+                        && *color == expected_color
+                }
+                _ => false,
+            })
+            .count()
+    }
+
+    #[test]
+    fn build_panel_no_strip_for_none_container() {
+        let s = TabStrip::new(); // single tab, ContainerKind::None
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH, None);
+        let strips = dl
+            .iter()
+            .filter(|c| match c {
+                DisplayCommand::FillRoundedRect { rect, .. } => {
+                    (rect.width - CONTAINER_STRIP_WIDTH).abs() < f32::EPSILON
+                        && (rect.x - CONTAINER_STRIP_LEFT).abs() < f32::EPSILON
+                }
+                _ => false,
+            })
+            .count();
+        assert_eq!(strips, 0, "ContainerKind::None must not render a strip");
+    }
+
+    #[test]
+    fn build_panel_renders_strip_for_work_container() {
+        let mut s = TabStrip::new();
+        s.set_tab_container(0, crate::tabs::containers::ContainerKind::Work);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH, None);
+        let expected = crate::tabs::containers::ContainerKind::Work.border_color().expect("Work has colour");
+        assert_eq!(count_container_strips(&dl, expected), 1);
     }
 }
