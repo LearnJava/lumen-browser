@@ -294,6 +294,43 @@
   lumen-storage --all-targets -- -D warnings` clean. Not in `graphic_tests/`
   (newtab isn't one of the 70 magenta-frame pages), so no CPU-snapshot
   regeneration needed.
+- **Done (DS-12 workspace colour → level-1 hierarchy marker, 2026-07-23):**
+  the active workspace's colour now marks the active tab, not just the
+  workspace-switcher chip. Turned out most of the DS-12 brief already
+  existed: [`panels/workspace_panel.rs`](../crates/shell/src/panels/workspace_panel.rs)
+  already coloured its active chip's bottom bar from `entry.accent`, and
+  `parse_ws_color` (hex/named → `Color`, with tests) already existed — no
+  duplicate helper added. What was missing: `WorkspacePanel::active_accent()`
+  (new — looks up the `WsEntry` matching `active_id`, `None` when no
+  workspace selected or the id is stale) and threading that colour into the
+  two tab-render call sites. `tabs::strip::build_tab_bar` and
+  `panels::vertical_tabs::build_tab_bar_vertical` both gained a trailing
+  `ws_accent: Option<Color>` parameter — `Some` overrides the bottom/left 2 px
+  active-tab accent bar that previously always used `pal.accent`; `None`
+  keeps the old fallback. Both call sites in `main.rs` now pass
+  `self.workspace_panel.active_accent()`. Also fixed a stale doc comment on
+  `build_tab_bar` that referenced a nonexistent `accent` parameter. Separately,
+  new-workspace creation (`WorkspaceHit::NewWorkspace`) stopped hard-coding
+  `"#6482dc"` for every workspace — it now cycles through the reference
+  palette (`panels::workspace_panel::default_color_for_index`, new:
+  `#0066FF`/`#8B5CF6`/`#1F9D55`, `docs/design/lumen-v3_3.html:851-859`) by
+  creation order.
+
+  DoD: 6 new unit tests (`strip::tests::build_tab_bar_ws_accent_overrides_pal_accent`,
+  `vertical_tabs::tests::build_tab_bar_vertical_ws_accent_overrides_pal_accent`,
+  `workspace_panel::tests::active_accent_*` ×3,
+  `workspace_panel::tests::default_color_for_index_cycles_reference_palette`)
+  plus all 120 pre-existing `lumen-shell` tests touching these three modules
+  green; `cargo clippy -p lumen-shell --all-targets -- -D warnings` clean.
+  Live verification was limited to a smoke run (window launches, default
+  single-tab/no-workspace state renders unchanged, `Ctrl+B` vertical-tabs
+  toggle confirmed reachable) — `Ctrl+Shift+W` (workspace-switcher toggle)
+  could not be driven via synthetic `SendInput`/`keybd_event` in this
+  environment (suspected OS-level hotkey conflict unrelated to Lumen; `Ctrl+B`
+  using the identical injection method worked, ruling out a focus/injection
+  problem), so the two-workspace-colour-switch screenshot from the DoD was not
+  captured interactively. The colour-override logic itself is deterministic
+  and fully covered by the unit tests above.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*
