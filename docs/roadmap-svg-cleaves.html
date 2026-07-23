@@ -1703,9 +1703,9 @@
       {
        "id": "WPT-VENDOR-apng",
        "title": "WPT: вендорить + прогнать категорию `apng`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-23: вендорена (`tests/wpt/apng/`, 4 файла: `META.yml`, reftest-пара `animated-png-timeout.html`+`animated-png-timeout-ref.html`, `supported-in-source-type.html`) и прогнана через `run_report.py --all --root apng --recursive`. Внекатегорийные ресурсы `/images/apng.png`, `/images/green.png`, `/images/anim-gr.png`, `/images/anim-gr.gif` не довендорены, та же методология, что `FileAPI`/`ai`. Прогон добежал целиком за ~9с (2 отобранных id): reftest-пара — WPT-манифест тип `reftest`, исполнитель не поддерживает (`Unsupported test type reftest`, тот же класс гэпа, что `acid`/`accessibility`/`animation-worklet`), оба «not run»; `supported-in-source-type.html` (testharness) реально прогнан — 1/1 сабтестов passed, несмотря на 404 внекатегорийного `/images/anim-gr.gif` (тест проверяет только выбор `<picture><source>` по `currentSrc`, не факт загрузки картинки). Не заводился отдельный BUG-NNN — первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-appmanifest",
