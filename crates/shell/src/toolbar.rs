@@ -7,13 +7,20 @@
 //!
 //! Scope (DS-9, `docs/tasks/p1-design-v3.md`): navigation cluster (back /
 //! forward / reload) on the left, a fixed action cluster on the right (find,
-//! web sidebar, AI sidebar, downloads, DevTools, settings). The centre is
-//! left empty — the inline omnibox lands in DS-10.
+//! web sidebar, AI sidebar, downloads, DevTools, settings).
+//!
+//! DS-10: the centre hosts the inline omnibox (`address_bar` module) — this
+//! module owns its layout (`omnibox_rects`, sized/centred between the two
+//! clusters, capped at `OMNIBOX_MAX_W`) and hit-testing, but delegates the
+//! actual field/text rendering to `address_bar::build_inline_field` (the
+//! suggestion dropdown is a separate overlay the caller draws on top, see
+//! `address_bar::build_dropdown`).
 
 use lumen_core::geom::Rect;
 use lumen_layout::{FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::address_bar;
 use crate::panels::themes::Palette;
 use crate::tabs::strip::TAB_BAR_HEIGHT;
 use crate::theme_tokens::{radius, size};
@@ -38,6 +45,22 @@ const ICON_SZ: f32 = 12.0;
 /// Number of buttons in the right-hand action cluster.
 const RIGHT_BTN_COUNT: usize = 6;
 
+/// Max width of the inline omnibox field (design reference:
+/// `.omnibox-wrap{ max-width:680px }`).
+const OMNIBOX_MAX_W: f32 = 680.0;
+/// Height of the omnibox field (`.omnibox{ height:32px }`), centred within
+/// the taller `size::TOOLBAR_H` row.
+const OMNIBOX_H: f32 = 32.0;
+/// Gap between the omnibox field and the nav/action clusters on either side.
+const OMNIBOX_GAP: f32 = 8.0;
+/// Side length of the lock/star/shield icon-buttons inside the omnibox.
+const OMNI_ICON_SZ: f32 = 22.0;
+/// Horizontal padding inside the omnibox field, between its border and the
+/// lock icon / star+shield cluster.
+const OMNI_PAD: f32 = 8.0;
+/// Gap between the star and shield icon-buttons.
+const OMNI_ICON_GAP: f32 = 2.0;
+
 /// A click target within the toolbar row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolbarHit {
@@ -49,6 +72,15 @@ pub enum ToolbarHit {
     Forward,
     /// Reload the active tab.
     Reload,
+    /// Click on the omnibox field itself (outside the lock/star/shield
+    /// icons) — focuses it, same as Ctrl+L/F6.
+    Omnibox,
+    /// Click on the TLS padlock icon — opens the certificate panel.
+    Lock,
+    /// Click on the star icon — bookmarks the current page.
+    Star,
+    /// Click on the shield icon — toggles the shields popover.
+    Shield,
     /// Toggle the find-in-page bar.
     Find,
     /// Toggle the web sidebar.
@@ -93,6 +125,45 @@ fn right_btn_x(window_w: f32, idx: usize) -> f32 {
     window_w - CLUSTER_PAD - cluster_w + idx as f32 * (BTN_SZ + BTN_GAP)
 }
 
+/// Compute the geometry of the inline omnibox (DS-10): the field itself,
+/// centred in the space between the nav cluster and the action cluster and
+/// capped at `OMNIBOX_MAX_W`, plus the lock/star/shield icon-button sub-rects
+/// and the text area between them. Shared by `hit_test` and `build_toolbar`
+/// (which delegates the field's own rendering to `address_bar`).
+pub fn omnibox_rects(window_w: f32) -> address_bar::FieldRects {
+    let left_cluster_w = 3.0 * BTN_SZ + 2.0 * BTN_GAP;
+    let right_cluster_w =
+        RIGHT_BTN_COUNT as f32 * BTN_SZ + (RIGHT_BTN_COUNT - 1) as f32 * BTN_GAP;
+    let avail_x0 = CLUSTER_PAD + left_cluster_w + OMNIBOX_GAP;
+    let avail_x1 = window_w - CLUSTER_PAD - right_cluster_w - OMNIBOX_GAP;
+    let avail_w = (avail_x1 - avail_x0).max(0.0);
+    let field_w = avail_w.min(OMNIBOX_MAX_W);
+    let field_x = avail_x0 + (avail_w - field_w) * 0.5;
+    let field_y = TAB_BAR_HEIGHT + (size::TOOLBAR_H - OMNIBOX_H) * 0.5;
+    let field = Rect::new(field_x, field_y, field_w, OMNIBOX_H);
+
+    let icon_y = field.y + (OMNIBOX_H - OMNI_ICON_SZ) * 0.5;
+    let lock = Rect::new(field.x + OMNI_PAD, icon_y, OMNI_ICON_SZ, OMNI_ICON_SZ);
+    let shield = Rect::new(
+        field.x + field.width - OMNI_PAD - OMNI_ICON_SZ,
+        icon_y,
+        OMNI_ICON_SZ,
+        OMNI_ICON_SZ,
+    );
+    let star =
+        Rect::new(shield.x - OMNI_ICON_GAP - OMNI_ICON_SZ, icon_y, OMNI_ICON_SZ, OMNI_ICON_SZ);
+    let text_x0 = lock.x + lock.width + OMNI_PAD;
+    let text_x1 = star.x - OMNI_PAD;
+    let text = Rect::new(text_x0, field.y, (text_x1 - text_x0).max(0.0), field.height);
+
+    address_bar::FieldRects { field, lock, text, star, shield }
+}
+
+/// Whether CSS-px `(x, y)` falls inside `rect`.
+fn rect_contains(rect: Rect, x: f32, y: f32) -> bool {
+    (rect.x..rect.x + rect.width).contains(&x) && (rect.y..rect.y + rect.height).contains(&y)
+}
+
 /// Hit-test a click at CSS-px `(x, y)` against the toolbar row.
 ///
 /// Returns `ToolbarHit::Empty` if `y` falls outside `TAB_BAR_HEIGHT..CHROME_H`.
@@ -120,6 +191,19 @@ pub fn hit_test(x: f32, y: f32, window_w: f32) -> ToolbarHit {
         if (bx..bx + BTN_SZ).contains(&x) {
             return hit;
         }
+    }
+    let omni = omnibox_rects(window_w);
+    if rect_contains(omni.lock, x, y) {
+        return ToolbarHit::Lock;
+    }
+    if rect_contains(omni.star, x, y) {
+        return ToolbarHit::Star;
+    }
+    if rect_contains(omni.shield, x, y) {
+        return ToolbarHit::Shield;
+    }
+    if rect_contains(omni.field, x, y) {
+        return ToolbarHit::Omnibox;
     }
     ToolbarHit::Empty
 }
@@ -165,10 +249,23 @@ fn push_btn(out: &mut DisplayList, btn_x: f32, glyph: &str, active: bool, pal: &
 ///
 /// Renders the bar background + bottom divider, the left navigation cluster
 /// (back/forward/reload — always enabled; DoD only requires the buttons call
-/// the existing handlers, not disabled-state fidelity) and the right action
-/// cluster. `active` lights the buttons whose panel is currently open.
-pub fn build_toolbar(window_w: f32, pal: &Palette, active: ToolbarActive) -> DisplayList {
-    let mut out = DisplayList::with_capacity(2 + 9 * 2);
+/// the existing handlers, not disabled-state fidelity), the right action
+/// cluster, and the inline omnibox field (DS-10, delegated to
+/// `address_bar::build_inline_field`). `active` lights the buttons whose
+/// panel is currently open. `address_bar_state`/`current_url` drive the
+/// omnibox field: not focused shows `current_url`, focused shows the live
+/// editable input.
+///
+/// Does not draw the suggestion dropdown — see `address_bar::build_dropdown`,
+/// called separately by the caller only while the bar is focused.
+pub fn build_toolbar(
+    window_w: f32,
+    pal: &Palette,
+    active: ToolbarActive,
+    address_bar_state: &address_bar::AddressBarState,
+    current_url: &str,
+) -> DisplayList {
+    let mut out = DisplayList::with_capacity(2 + 9 * 2 + 8);
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(0.0, TAB_BAR_HEIGHT, window_w, size::TOOLBAR_H),
         color: pal.toolbar_bg,
@@ -188,6 +285,11 @@ pub fn build_toolbar(window_w: f32, pal: &Palette, active: ToolbarActive) -> Dis
     push_btn(&mut out, right_btn_x(window_w, 3), "\u{2B07}", active.downloads, pal); // ⬇ downloads
     push_btn(&mut out, right_btn_x(window_w, 4), "\u{2692}", active.devtools, pal); // ⚒ DevTools
     push_btn(&mut out, right_btn_x(window_w, 5), "\u{2699}", active.settings, pal); // ⚙ settings
+
+    let omni_rects = omnibox_rects(window_w);
+    let mut field_cmds =
+        address_bar::build_inline_field(address_bar_state, current_url, &omni_rects, pal);
+    out.append(&mut field_cmds);
 
     out
 }
@@ -234,26 +336,58 @@ mod tests {
     }
 
     #[test]
-    fn build_toolbar_emits_background_and_nine_buttons() {
-        let cmds = build_toolbar(1024.0, &dark(), ToolbarActive::default());
+    fn hit_test_omnibox_icons_and_field() {
+        let w = 1024.0;
+        let rects = omnibox_rects(w);
+        let icon_y = rects.lock.y + 2.0;
+        assert_eq!(hit_test(rects.lock.x + 2.0, icon_y, w), ToolbarHit::Lock);
+        assert_eq!(hit_test(rects.star.x + 2.0, icon_y, w), ToolbarHit::Star);
+        assert_eq!(hit_test(rects.shield.x + 2.0, icon_y, w), ToolbarHit::Shield);
+        // Text area sits at the same y-range as the field itself, above the
+        // (vertically inset) icon-buttons — pick a y outside their range.
+        assert_eq!(hit_test(rects.text.x + 2.0, rects.field.y + 1.0, w), ToolbarHit::Omnibox);
+    }
+
+    #[test]
+    fn omnibox_field_is_capped_at_max_width() {
+        // At 1920px there is plenty of room between the clusters — the field
+        // must stay at OMNIBOX_MAX_W, not stretch to fill it.
+        let rects = omnibox_rects(1920.0);
+        assert!((rects.field.width - OMNIBOX_MAX_W).abs() < 1e-3);
+    }
+
+    #[test]
+    fn build_toolbar_emits_background_nine_buttons_and_omnibox_field() {
+        let bar = address_bar::AddressBarState::default();
+        let cmds = build_toolbar(1024.0, &dark(), ToolbarActive::default(), &bar, "https://example.com");
         let fill_rects = cmds
             .iter()
             .filter(|c| matches!(c, DisplayCommand::FillRect { .. }))
             .count();
+        let rounded_rects = cmds
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. }))
+            .count();
         let texts = cmds.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).count();
-        // Background + divider = 2 FillRects; no button is "active" so no
-        // FillRoundedRect highlights are emitted; 9 buttons → 9 glyphs.
+        // Background + divider = 2 plain FillRects; no button is "active" so
+        // no button-highlight FillRoundedRect is emitted — only the omnibox
+        // field's own border+background (2). 9 buttons + lock/star/shield +
+        // host text = 13 glyphs.
         assert_eq!(fill_rects, 2);
-        assert_eq!(texts, 9);
+        assert_eq!(rounded_rects, 2);
+        assert_eq!(texts, 13);
     }
 
     #[test]
     fn build_toolbar_active_button_gets_highlight() {
         let active = ToolbarActive { settings: true, ..Default::default() };
-        let cmds = build_toolbar(1024.0, &dark(), active);
+        let bar = address_bar::AddressBarState::default();
+        let cmds = build_toolbar(1024.0, &dark(), active, &bar, "https://example.com");
         let highlights =
             cmds.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).count();
-        assert_eq!(highlights, 1);
+        // 1 settings-button highlight + 2 for the (always-drawn) omnibox
+        // field border+background.
+        assert_eq!(highlights, 3);
     }
 
     #[test]
