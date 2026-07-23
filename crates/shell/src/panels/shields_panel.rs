@@ -11,6 +11,13 @@
 //! `Event::RequestBlocked` events from the HTTP layer, and stored in a shared
 //! [`BlockedLog`] (`Arc<Mutex<…>>`).  The Lumen struct polls this on each
 //! redraw to refresh the panel display.
+//!
+//! The panel shows one honest counter — total requests blocked on the current
+//! page (DS-18) — and no trackers/ads breakdown: the installed filter
+//! (`lumen_network::EasyListFilter`, fed by the merged EasyList+EasyPrivacy
+//! body, see `crates/shell/src/adblock.rs`) tags every match with a
+//! list-format reason (`"easylist"`/`"hosts"`), not a tracker-vs-ad category,
+//! so a split would be fabricated rather than measured.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -343,17 +350,39 @@ pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32, pal: &Pa
         text_orientation: None,
     });
 
-    // Blocked-count row.
-    let count_text = format!(
-        "{} blocked (this page: {})",
-        panel.blocked_domain_count(),
-        panel.blocked_total_count(),
-    );
+    // Blocked-count row (DS-18): number in `accent` (bundled JetBrains Mono),
+    // label in `text_dim` — matches `.shield-stat .num`/`.lbl` in the design
+    // reference. Only a single honest counter is shown: the merged
+    // EasyList+EasyPrivacy filter classifies rules by list format
+    // ("easylist"/"hosts"), not by tracker-vs-ad intent, so a trackers/ads
+    // split would be fabricated data, not a real breakdown.
+    let blocked_num = panel.blocked_total_count().to_string();
+    let num_w = (blocked_num.chars().count() as f32 * 9.0).max(14.0);
     out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + 10.0, py + 40.0, PANEL_W - 20.0, FONT_SZ_SM * 1.3),
-        text: count_text,
+        rect: Rect::new(px + 10.0, py + 39.0, num_w, FONT_SZ * 1.3),
+        text: blocked_num,
+        font_size: FONT_SZ,
+        color: pal.accent,
+        font_family: vec!["JetBrains Mono".to_string()],
+        font_weight: FontWeight::BOLD,
+        font_style: FontStyle::Normal,
+        font_variation_axes: Vec::new(),
+        font_features: Vec::new(),
+        font_palette: None,
+        tab_size: 0.0,
+        highlight_name: None,
+        text_orientation: None,
+    });
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(
+            px + 10.0 + num_w + 4.0,
+            py + 40.0,
+            (PANEL_W - 20.0 - num_w - 4.0).max(0.0),
+            FONT_SZ_SM * 1.3,
+        ),
+        text: "запросов заблокировано".to_owned(),
         font_size: FONT_SZ_SM,
-        color: pal.text,
+        color: pal.text_dim,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -666,6 +695,52 @@ mod tests {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("example.com"))
         });
         assert!(has_domain);
+    }
+
+    #[test]
+    fn build_panel_blocked_number_uses_accent_color() {
+        let log = make_log();
+        {
+            let mut guard = log.lock().unwrap();
+            guard.record("https://tracker.example.com/pixel");
+            guard.record("https://ads.example.com/ad.js");
+        }
+        let mut p = ShieldsPanel::new(log);
+        p.visible = true;
+        p.current_domain = Some("example.com".to_owned());
+        p.refresh();
+        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
+        let has_accent_count = dl.iter().any(|c| {
+            matches!(
+                c,
+                DisplayCommand::DrawText { text, color, .. }
+                    if text == "2" && *color == Palette::DARK.accent
+            )
+        });
+        assert!(has_accent_count, "blocked count must render in accent colour");
+    }
+
+    #[test]
+    fn build_panel_blocked_label_uses_text_dim_and_no_breakdown() {
+        let p = make_panel_visible(true, Some("example.com"));
+        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
+        let has_dim_label = dl.iter().any(|c| {
+            matches!(
+                c,
+                DisplayCommand::DrawText { text, color, .. }
+                    if text.contains("заблокировано") && *color == Palette::DARK.text_dim
+            )
+        });
+        assert!(has_dim_label, "blocked-count label must use text_dim colour");
+
+        let has_breakdown = dl.iter().any(|c| {
+            matches!(
+                c,
+                DisplayCommand::DrawText { text, .. }
+                    if text.contains("трекер") || text.contains("реклам")
+            )
+        });
+        assert!(!has_breakdown, "must not fabricate a trackers/ads split");
     }
 
     // ── ShieldCountSink ──────────────────────────────────────────────────────
