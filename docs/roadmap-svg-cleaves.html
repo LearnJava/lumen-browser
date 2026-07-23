@@ -1689,16 +1689,16 @@
       {
        "id": "WPT-VENDOR-annotation-protocol",
        "title": "WPT: вендорить + прогнать категорию `annotation-protocol`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-23: вендорена (`tests/wpt/annotation-protocol/`, 58 файлов) и прогнана через `run_report.py --all --root annotation-protocol --recursive`. Категория целиком ручная по дизайну спеки, единственный тест — `-manual.html` (исключён фильтром run_report.py), единственный оставшийся кандидат `files/index.html` — не тест (манифест WPT: `Unable to find any tests at the path(s)`), 0/0. Вторая категория без единого автопрогоняемого теста после annotation-model. Не заводился отдельный BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет (см. заметку в docs/wpt-status.md)"
       },
       {
        "id": "WPT-VENDOR-annotation-vocab",
        "title": "WPT: вендорить + прогнать категорию `annotation-vocab`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-23: вендорена (`tests/wpt/annotation-vocab/`, 10 файлов: 6 `NN-*-manual.html`, `META.yml`, `tools/anno.jsonld`, `tools/README.md`, `tools/vocab_tester.py`) и прогнана через `run_report.py --all --root annotation-vocab --recursive`. Категория целиком ручная по дизайну спеки, все 6 тестов — `-manual.html` (исключены фильтром run_report.py), `.any.js`/`.window.js` нет — `no tests selected`, 0/0. Третья категория без единого автопрогоняемого теста после annotation-model/annotation-protocol. Не заводился отдельный BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет (см. заметку в docs/wpt-status.md)"
       },
       {
        "id": "WPT-VENDOR-apng",
