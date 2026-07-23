@@ -331,6 +331,27 @@
   problem), so the two-workspace-colour-switch screenshot from the DoD was not
   captured interactively. The colour-override logic itself is deterministic
   and fully covered by the unit tests above.
+- **Done (DS-14 profile switcher UI, 2026-07-23):** new
+  [`panels::profile_menu`](../crates/shell/src/panels/profile_menu.rs) —
+  profile-dropdown state (`ProfileMenuPanel`), hit-testing, and rendering
+  (colour dot + name per row, active row highlighted). A new 26×26 circular
+  avatar button (`toolbar::push_avatar`, the one chrome element the design
+  system exempts from the squircle-only rule) leads the toolbar's left
+  cluster before back/forward/reload (`toolbar::avatar_x()`,
+  `ToolbarHit::Profile`); clicking it toggles the dropdown, anchored below
+  the toolbar. First run seeds 4 default profiles (Личный/Рабочий/Анонимный/Гость,
+  colours from `theme_tokens::profile`) into the already-existing
+  `lumen_storage::ProfileRegistry` (`<exe_dir>/data/profiles.db`); clicking a
+  row calls `ProfileRegistry::set_active` (persists across restart) and
+  updates the avatar badge (colour + initial letter) and `Palette::accent`
+  for the whole chrome. Scope is deliberately narrow per the DS-14 brief:
+  only the active-profile pointer and the visual signature change — per-profile
+  data isolation (separate history/cookies/bookmarks) is out of scope, deferred
+  to DS-16.
+
+  DoD: 16 new `panels::profile_menu` tests + 2 new `toolbar` tests
+  (`hit_test_avatar`, avatar-aware `build_toolbar_*` assertions) — all green;
+  `cargo clippy -p lumen-shell --all-targets -- -D warnings` clean.
 - **Done (DS-13 container accent strip: top → left, 2026-07-23):** the
   per-tab container marker (7D.2, [`tabs::containers::ContainerKind`](../crates/shell/src/tabs/containers.rs))
   moved from a horizontal strip at the top of the tab button to a rounded
