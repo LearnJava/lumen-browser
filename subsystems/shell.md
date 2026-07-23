@@ -352,6 +352,31 @@
   DoD: 16 new `panels::profile_menu` tests + 2 new `toolbar` tests
   (`hit_test_avatar`, avatar-aware `build_toolbar_*` assertions) — all green;
   `cargo clippy -p lumen-shell --all-targets -- -D warnings` clean.
+- **Done (DS-15 Anonymous/Guest visual signatures, 2026-07-23):** nested-frame
+  rule, level 0. `panels::profile_menu::is_anonymous`/`is_guest` match the
+  active profile's name against the seeded `DEFAULT_PROFILES` slugs (same
+  exact-match convention as `color_for_profile`). Anonymous:
+  `panels::themes::anonymous_border(win_w, win_h, color)` builds 4
+  `FillRect`s (2 px, `theme_tokens::profile::ANONYMOUS`) along the window
+  perimeter, appended last to `overlay_buf` (after every other chrome
+  panel/modal, main.rs — right before the split-view assembly) so it sits on
+  top of everything; web content is never touched, only the chrome overlay
+  layer. Guest: `panels::themes::desaturate(Color) -> Color` (Rec. 601 luma,
+  alpha preserved) and `Palette::desaturated(&self) -> Palette` (converts
+  every field) are applied to the resolved chrome palette *before* the
+  existing DS-14 `pal.accent = entry.color` override, so the profile accent
+  (`theme_tokens::profile::GUEST`, already near-gray) lands on top rather than
+  being double-converted. Verified live: built `dev-release`, drove the real
+  window with synthetic OS clicks (`ctypes`/`SetCursorPos`+`mouse_event` —
+  `AutomationCommand::Click`/MCP `click` cannot reach chrome; it only calls
+  `handle_click_at`, the page-content path, while toolbar/tab-strip/profile-menu
+  hit-testing lives in `window_event`'s real `WindowEvent::MouseInput` arm),
+  captured via `ffmpeg gdigrab` + crop to the client area (offset (8,39),
+  1024×792) — screenshots confirm the red inset frame around the whole
+  window (Anonymous) and the gray avatar/accent with the page content still
+  fully colourful (Guest). 6 new `panels::themes` tests + 2 new
+  `panels::profile_menu` tests — all green; `cargo clippy -p lumen-shell
+  --all-targets -- -D warnings` clean.
 - **Done (DS-13 container accent strip: top → left, 2026-07-23):** the
   per-tab container marker (7D.2, [`tabs::containers::ContainerKind`](../crates/shell/src/tabs/containers.rs))
   moved from a horizontal strip at the top of the tab button to a rounded

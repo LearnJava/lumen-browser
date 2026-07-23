@@ -14292,7 +14292,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // accent preset — profile (level 0) outranks the Appearance
                 // setting for this one field, matching "переключение профилей
                 // меняет ... accent всего хрома" in the DS-14 brief.
+                // DS-15: profile visual signatures (level-0 nested-frame rule).
+                // Name cloned up front — the border draw below needs it after
+                // several intervening `&mut self` overlay-builder calls, past
+                // where a borrow of `self.profile_menu` would still be live.
+                let active_profile_name: Option<String> =
+                    self.profile_menu.active_entry().map(|e| e.name.clone());
                 let mut pal = self.shell_theme.palette(self.dark_mode);
+                if active_profile_name.as_deref().is_some_and(panels::profile_menu::is_guest) {
+                    pal = pal.desaturated();
+                }
                 if let Some(entry) = self.profile_menu.active_entry() {
                     pal.accent = entry.color;
                 }
@@ -15125,6 +15134,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             page_buf = Some(buf);
                         }
                     }
+                }
+
+                // DS-15: Anonymous profile draws a thin red inset outline
+                // around the whole window (design ref: `box-shadow: inset 0
+                // 0 0 2px var(--accent)` on `.app-frame`). Appended last of
+                // all chrome overlays so it sits above every panel/modal —
+                // web content itself is never touched, only the chrome layer.
+                if active_profile_name.as_deref().is_some_and(panels::profile_menu::is_anonymous) {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.window_height_css();
+                    overlay_buf.append(&mut panels::themes::anonymous_border(
+                        win_w,
+                        win_h,
+                        theme_tokens::profile::ANONYMOUS,
+                    ));
                 }
 
                 // Build the split-view combined DL before borrowing renderer,

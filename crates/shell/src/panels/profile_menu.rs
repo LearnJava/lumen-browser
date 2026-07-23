@@ -57,6 +57,21 @@ pub fn color_for_profile(name: &str, index: usize) -> Color {
         .unwrap_or_else(|| DEFAULT_PROFILES[index % DEFAULT_PROFILES.len()].2)
 }
 
+/// `true` when `name` is the seeded Anonymous profile (DS-15: draws the red
+/// inset window outline). Matched by name, same as [`color_for_profile`] —
+/// DS-14 ships no rename UI for the seeded four, so this stays exact-match.
+#[must_use]
+pub fn is_anonymous(name: &str) -> bool {
+    name == DEFAULT_PROFILES[2].0
+}
+
+/// `true` when `name` is the seeded Guest profile (DS-15: desaturates the
+/// whole chrome palette). See [`is_anonymous`] for the matching rationale.
+#[must_use]
+pub fn is_guest(name: &str) -> bool {
+    name == DEFAULT_PROFILES[3].0
+}
+
 // ── Data types ────────────────────────────────────────────────────────────────
 
 /// One profile row as rendered in the dropdown.
@@ -397,5 +412,21 @@ mod tests {
     fn color_for_profile_falls_back_to_cycle() {
         let c = color_for_profile("Кастомный", 1);
         assert_eq!(c, DEFAULT_PROFILES[1].2);
+    }
+
+    // ── DS-15: profile-kind matching ─────────────────────────────────────────
+
+    #[test]
+    fn is_anonymous_matches_seeded_name() {
+        assert!(is_anonymous("Анонимный"));
+        assert!(!is_anonymous("Личный"));
+        assert!(!is_anonymous("Гость"));
+    }
+
+    #[test]
+    fn is_guest_matches_seeded_name() {
+        assert!(is_guest("Гость"));
+        assert!(!is_guest("Личный"));
+        assert!(!is_guest("Анонимный"));
     }
 }

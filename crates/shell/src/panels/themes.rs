@@ -5,7 +5,9 @@
 //! The accent does not affect page CSS (`prefers-color-scheme` is still read
 //! from the OS unless the user explicitly locks to light or dark).
 
+use lumen_core::geom::Rect;
 use lumen_layout::Color;
+use lumen_paint::{DisplayCommand, DisplayList};
 
 use crate::theme_tokens;
 
@@ -281,6 +283,61 @@ impl Palette {
         divider: theme_tokens::light::STROKE,
         accent: theme_tokens::profile::PERSONAL,
     };
+
+    /// Desaturated copy of this palette (DS-15: Guest profile signature —
+    /// `filter: grayscale(1)` on `.app-frame` in the design reference).
+    /// Every field converts independently; callers still overwrite `accent`
+    /// with `theme_tokens::profile::GUEST` afterwards per the DS-15 brief,
+    /// which is harmless since that colour is already near-gray.
+    #[must_use]
+    pub fn desaturated(&self) -> Palette {
+        Palette {
+            tab_bar_bg: desaturate(self.tab_bar_bg),
+            tab_active_bg: desaturate(self.tab_active_bg),
+            tab_inactive_bg: desaturate(self.tab_inactive_bg),
+            tab_sleep_bg: desaturate(self.tab_sleep_bg),
+            tab_hibernate_bg: desaturate(self.tab_hibernate_bg),
+            overlay_bg: desaturate(self.overlay_bg),
+            header_bg: desaturate(self.header_bg),
+            row_alt_bg: desaturate(self.row_alt_bg),
+            overlay_border: desaturate(self.overlay_border),
+            input_bg: desaturate(self.input_bg),
+            item_bg: desaturate(self.item_bg),
+            item_selected_bg: desaturate(self.item_selected_bg),
+            toolbar_bg: desaturate(self.toolbar_bg),
+            text: desaturate(self.text),
+            text_dim: desaturate(self.text_dim),
+            divider: desaturate(self.divider),
+            accent: desaturate(self.accent),
+        }
+    }
+}
+
+/// Convert `c` to a gray of equal perceived luminance (Rec. 601 luma:
+/// `0.299 r + 0.587 g + 0.114 b`), preserving alpha. DS-15 Guest signature —
+/// see [`Palette::desaturated`].
+#[must_use]
+pub fn desaturate(c: Color) -> Color {
+    let luma = 0.299 * f32::from(c.r) + 0.587 * f32::from(c.g) + 0.114 * f32::from(c.b);
+    let gray = luma.round().clamp(0.0, 255.0) as u8;
+    Color { r: gray, g: gray, b: gray, a: c.a }
+}
+
+/// Anonymous profile window outline (DS-15): a thin red inset frame around
+/// the whole window, matching `box-shadow: inset 0 0 0 2px var(--accent)` on
+/// `.app-frame` in the design reference. `win_w`/`win_h` are the full logical
+/// (CSS px) window size; `color` is `theme_tokens::profile::ANONYMOUS`. The
+/// caller appends this last to the overlay display list so it sits above
+/// every other chrome layer, including modals.
+#[must_use]
+pub fn anonymous_border(win_w: f32, win_h: f32, color: Color) -> DisplayList {
+    const T: f32 = 2.0;
+    vec![
+        DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, win_w, T), color },
+        DisplayCommand::FillRect { rect: Rect::new(0.0, win_h - T, win_w, T), color },
+        DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, T, win_h), color },
+        DisplayCommand::FillRect { rect: Rect::new(win_w - T, 0.0, T, win_h), color },
+    ]
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -391,6 +448,60 @@ mod tests {
         let p = t.palette(true); // os_dark ignored for explicit Light
         assert_eq!(p.tab_bar_bg, Palette::LIGHT.tab_bar_bg);
         assert_eq!(p.text, Palette::LIGHT.text);
+    }
+
+    // ── DS-15: Anonymous/Guest profile signatures ────────────────────────────
+
+    #[test]
+    fn desaturate_pure_red_matches_luma() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let gray = desaturate(red);
+        assert_eq!(gray, Color { r: 76, g: 76, b: 76, a: 255 });
+    }
+
+    #[test]
+    fn desaturate_preserves_alpha() {
+        let translucent = Color { r: 10, g: 200, b: 30, a: 140 };
+        assert_eq!(desaturate(translucent).a, 140);
+    }
+
+    #[test]
+    fn desaturate_gray_input_is_idempotent() {
+        let gray = Color { r: 100, g: 100, b: 100, a: 255 };
+        assert_eq!(desaturate(gray), gray);
+    }
+
+    #[test]
+    fn desaturate_output_has_equal_channels() {
+        let c = Color { r: 12, g: 240, b: 88, a: 255 };
+        let g = desaturate(c);
+        assert_eq!(g.r, g.g);
+        assert_eq!(g.g, g.b);
+    }
+
+    #[test]
+    fn palette_desaturated_converts_every_field() {
+        let d = Palette::DARK.desaturated();
+        assert_eq!(d.tab_bar_bg, desaturate(Palette::DARK.tab_bar_bg));
+        assert_eq!(d.accent, desaturate(Palette::DARK.accent));
+        assert_eq!(d.text, desaturate(Palette::DARK.text));
+        assert_eq!(d.overlay_border, desaturate(Palette::DARK.overlay_border));
+        // Sanity: a colourful field actually loses its hue (r != g != b before,
+        // r == g == b after) rather than staying untouched.
+        assert_ne!(Palette::DARK.accent.r, Palette::DARK.accent.g);
+        assert_eq!(d.accent.r, d.accent.g);
+    }
+
+    #[test]
+    fn anonymous_border_emits_four_rects_covering_perimeter() {
+        let dl = anonymous_border(1024.0, 720.0, theme_tokens::profile::ANONYMOUS);
+        assert_eq!(dl.len(), 4);
+        for cmd in &dl {
+            let DisplayCommand::FillRect { color, .. } = cmd else {
+                panic!("expected FillRect, got {cmd:?}");
+            };
+            assert_eq!(*color, theme_tokens::profile::ANONYMOUS);
+        }
     }
 
     #[test]
