@@ -1,5 +1,6 @@
 //! Download manager: background HTTP downloads with progress tracking and
-//! a viewport-locked bottom panel UI.
+//! a viewport-locked bottom-right popover (DS-19, design reference
+//! `.downloads-panel`).
 //!
 //! # Architecture
 //!
@@ -12,11 +13,15 @@
 //! # Panel
 //!
 //! `build_download_bar` returns a viewport-locked `DisplayList` that renders
-//! a collapsible panel at the bottom of the window.  The caller appends it to
-//! `overlay_buf` before the tab strip (so downloads appear below content but
-//! above nothing).
+//! a 320px popover anchored at the bottom-right corner of the window (14px
+//! margins), matching `docs/design/lumen-v3_3.html` lines 517-538/1320-1342.
+//! The caller appends it to `overlay_buf` before the tab strip (so downloads
+//! appear below content but above nothing).
 //!
-//! Toggle visibility with `Ctrl+Shift+J`.
+//! Toggle visibility with `Ctrl+Shift+J` or the downloads button in the
+//! permanent toolbar (`toolbar::ToolbarHit::Downloads`, DS-9) — the button
+//! shows a green dot indicator while any download is active
+//! (`ToolbarActive::downloads_has_active`), independent of popover visibility.
 //!
 //! # Wiring status
 //!
@@ -36,7 +41,10 @@ use std::sync::{
 
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{DisplayCommand, DisplayList};
+use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
+
+use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 
 // ── IDs and status ────────────────────────────────────────────────────────────
 
@@ -630,84 +638,108 @@ unsafe fn windows_shell_execute(verb: *const u16, path: *const u16) -> isize {
 
 // ── Panel UI ──────────────────────────────────────────────────────────────────
 
-const PANEL_BG: Color = Color { r: 28, g: 30, b: 34, a: 245 };
-const PANEL_HEADER_BG: Color = Color { r: 35, g: 38, b: 44, a: 255 };
-const ITEM_BG: Color = Color { r: 40, g: 43, b: 49, a: 255 };
-const PANEL_FG: Color = Color { r: 220, g: 221, b: 225, a: 255 };
-const PANEL_DIM: Color = Color { r: 140, g: 142, b: 150, a: 255 };
-const PROGRESS_BG: Color = Color { r: 55, g: 58, b: 66, a: 255 };
-const PROGRESS_FG: Color = Color { r: 66, g: 133, b: 244, a: 255 };
+// Semantic indicator colours — meaning-bearing, theme-invariant (mirrors
+// `shields_panel`'s convention of keeping status colours out of `Palette`).
 const STATUS_OK: Color = Color { r: 82, g: 196, b: 103, a: 255 };
 const STATUS_ERR: Color = Color { r: 237, g: 80, b: 80, a: 255 };
 const STATUS_CANCEL: Color = Color { r: 150, g: 152, b: 160, a: 255 };
 
-const PANEL_WIDTH_FRAC: f32 = 0.42; // fraction of window width
-const PANEL_MIN_WIDTH: f32 = 360.0;
-const PANEL_MAX_WIDTH: f32 = 600.0;
-const HEADER_HEIGHT: f32 = 36.0;
-const ITEM_HEIGHT: f32 = 60.0;
-/// Maximum number of entries shown before the panel clips.
-const MAX_VISIBLE_ITEMS: usize = 5;
-const BAR_H: f32 = 6.0; // progress bar height
-const FONT_SIZE: f32 = 13.0;
-const FONT_SIZE_SM: f32 = 11.0;
-const H_PAD: f32 = 14.0;
-const V_PAD: f32 = 10.0;
-/// Action-button width / height and the gap between stacked buttons.
-const BTN_W: f32 = 70.0;
-const BTN_H: f32 = 22.0;
-const BTN_GAP: f32 = 6.0;
+/// Fixed popover width in CSS px (`.downloads-panel{ width:320px }`).
+const PANEL_W: f32 = 320.0;
+/// Right/bottom margin from the window edges (`.downloads-panel{ right:14px; bottom:14px }`).
+const PANEL_MARGIN: f32 = 14.0;
+/// Cap on total popover height (`.downloads-panel{ max-height:400px }`) —
+/// bounds how many cards fit before the list would need to scroll (scrolling
+/// itself is not implemented; excess entries are clipped, oldest first).
+const PANEL_MAX_H: f32 = 400.0;
+/// Header row height (`.dl-header` padding + line height).
+const HEADER_H: f32 = 40.0;
+/// Fixed card height (own `10,10,12,10` padding drawn as `10` all round,
+/// hover-row not modelled). Sized for the busiest case (name + meta +
+/// progress track + actions row); simpler entries just leave the unused
+/// rows blank rather than varying card height per status.
+const CARD_H: f32 = 82.0;
+/// Maximum number of cards shown before the popover clips (derived from
+/// `(PANEL_MAX_H - HEADER_H) / CARD_H`).
+const MAX_VISIBLE_ITEMS: usize = 4;
+/// List inset from the popover edges (`.dl-list{ padding:8px }`).
+const LIST_PAD: f32 = 8.0;
+/// Card interior padding (`.dl-card{ padding:10px }`).
+const CARD_PAD: f32 = 10.0;
+/// Extension-badge icon side (`.dl-icon{ width:28px; height:28px }`).
+const ICON_SZ: f32 = 28.0;
+/// Gap between the icon and the name/meta text column (`.dl-row{ gap:8px }`).
+const ROW_GAP: f32 = 8.0;
+const NAME_FONT: f32 = 12.0;
+const META_FONT: f32 = 10.5;
+/// Progress-bar track height (`.dl-progress-track{ height:2px }`).
+const BAR_H: f32 = 2.0;
+/// Gap above the progress track / actions row (`margin-top:8px` in both).
+const ROW_MT: f32 = 8.0;
+/// Action-button height and gap (`.dl-actions{ gap:6px }`, button padding `4px 8px`).
+const ACTION_BTN_H: f32 = 22.0;
+const ACTION_BTN_GAP: f32 = 6.0;
+const ACTION_BTN_PAD_X: f32 = 8.0;
 /// Square header close (×) button side.
-const CLOSE_BTN: f32 = 22.0;
-const BTN_BG: Color = Color { r: 60, g: 64, b: 72, a: 255 };
+const CLOSE_BTN: f32 = 20.0;
 
-/// Geometry of the panel for a given window size: top-left corner and size.
+/// Geometry of the popover for a given window size: top-left corner and size.
 ///
 /// Mirrors the layout in [`build_download_bar`] so [`hit_test`] stays in sync.
 /// Returns `(panel_x, panel_y, panel_w, panel_h, skip)` where `skip` is the
 /// number of leading entries scrolled off the top (oldest hidden first).
 fn panel_geometry(manager: &DownloadManager, win_w: u32, win_h: u32) -> (f32, f32, f32, f32, usize) {
     let entries = manager.entries();
-    let panel_w = (win_w as f32 * PANEL_WIDTH_FRAC).clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
     let visible_count = entries.len().min(MAX_VISIBLE_ITEMS);
-    let panel_h = HEADER_HEIGHT + (visible_count as f32) * ITEM_HEIGHT;
-    let panel_x = win_w as f32 - panel_w - 8.0;
-    let panel_y = win_h as f32 - panel_h - 8.0;
+    let panel_h = (HEADER_H + (visible_count as f32) * CARD_H).min(PANEL_MAX_H);
+    let panel_x = win_w as f32 - PANEL_W - PANEL_MARGIN;
+    let panel_y = win_h as f32 - panel_h - PANEL_MARGIN;
     let skip = entries.len().saturating_sub(MAX_VISIBLE_ITEMS);
-    (panel_x, panel_y, panel_w, panel_h, skip)
+    (panel_x, panel_y, PANEL_W, panel_h, skip)
 }
 
 /// Rect of the header close (×) button.
 fn close_button_rect(panel_x: f32, panel_y: f32, panel_w: f32) -> Rect {
     Rect::new(
-        panel_x + panel_w - CLOSE_BTN - 8.0,
-        panel_y + (HEADER_HEIGHT - CLOSE_BTN) / 2.0,
+        panel_x + panel_w - CLOSE_BTN - CARD_PAD,
+        panel_y + (HEADER_H - CLOSE_BTN) / 2.0,
         CLOSE_BTN,
         CLOSE_BTN,
     )
 }
 
-/// Action buttons for one entry, right-aligned and vertically arranged.
+/// Width of an action button sized to fit `label` (rough glyph-width estimate;
+/// matches `.dl-actions button` padding `4px 8px` around the text).
+fn action_btn_w(label: &str) -> f32 {
+    label.chars().count() as f32 * 6.5 + ACTION_BTN_PAD_X * 2.0
+}
+
+/// Action buttons for one entry, left-aligned in a horizontal row under the
+/// card content (`.dl-actions{ display:flex; gap:6px }`).
 ///
 /// Completed downloads get Open + Reveal; in-flight ones get Cancel; finished
 /// (failed/cancelled) entries get no buttons.
-fn entry_buttons(entry: &DownloadEntry, panel_x: f32, item_y: f32, panel_w: f32) -> Vec<(DownloadAction, Rect, &'static str)> {
-    let bx = panel_x + panel_w - H_PAD - BTN_W;
+fn entry_buttons(entry: &DownloadEntry, card_x: f32, card_y: f32) -> Vec<(DownloadAction, Rect, &'static str)> {
+    let y = card_y + CARD_H - CARD_PAD - ACTION_BTN_H;
+    let x0 = card_x + CARD_PAD;
     match &entry.status {
         DownloadStatus::Done { .. } => {
-            let y0 = item_y + (ITEM_HEIGHT - (BTN_H * 2.0 + BTN_GAP)) / 2.0;
-            vec![
-                (DownloadAction::Open(entry.id), Rect::new(bx, y0, BTN_W, BTN_H), "Открыть"),
-                (
-                    DownloadAction::Reveal(entry.id),
-                    Rect::new(bx, y0 + BTN_H + BTN_GAP, BTN_W, BTN_H),
-                    "Папка",
-                ),
-            ]
+            let labels = ["Открыть", "В папке"];
+            let mut x = x0;
+            labels
+                .into_iter()
+                .zip([DownloadAction::Open(entry.id), DownloadAction::Reveal(entry.id)])
+                .map(|(label, action)| {
+                    let w = action_btn_w(label);
+                    let rect = Rect::new(x, y, w, ACTION_BTN_H);
+                    x += w + ACTION_BTN_GAP;
+                    (action, rect, label)
+                })
+                .collect()
         }
         DownloadStatus::InProgress | DownloadStatus::Pending => {
-            let y0 = item_y + (ITEM_HEIGHT - BTN_H) / 2.0;
-            vec![(DownloadAction::Cancel(entry.id), Rect::new(bx, y0, BTN_W, BTN_H), "Отмена")]
+            let label = "Отмена";
+            vec![(DownloadAction::Cancel(entry.id), Rect::new(x0, y, action_btn_w(label), ACTION_BTN_H), label)]
         }
         _ => Vec::new(),
     }
@@ -717,11 +749,11 @@ fn rect_contains(r: &Rect, x: f32, y: f32) -> bool {
     x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
 }
 
-/// Hit-test a click at `(x, y)` (CSS px) against the download panel.
+/// Hit-test a click at `(x, y)` (CSS px) against the download popover.
 ///
-/// Returns `None` when the panel is hidden. Otherwise returns the action the
-/// click maps to: a button, the close (×), `Inside` (swallow), or `Outside`
-/// (caller should close the panel).
+/// Returns `None` when the popover is hidden. Otherwise returns the action
+/// the click maps to: a button, the close (×), `Inside` (swallow), or
+/// `Outside` (caller should close the popover).
 pub fn hit_test(manager: &DownloadManager, x: f32, y: f32, (win_w, win_h): (u32, u32)) -> Option<DownloadAction> {
     if !manager.visible {
         return None;
@@ -735,8 +767,8 @@ pub fn hit_test(manager: &DownloadManager, x: f32, y: f32, (win_w, win_h): (u32,
         return Some(DownloadAction::Close);
     }
     for (i, entry) in manager.entries().iter().skip(skip).enumerate() {
-        let item_y = panel_y + HEADER_HEIGHT + (i as f32) * ITEM_HEIGHT;
-        for (action, rect, _) in entry_buttons(entry, panel_x, item_y, panel_w) {
+        let card_y = panel_y + HEADER_H + (i as f32) * CARD_H;
+        for (action, rect, _) in entry_buttons(entry, panel_x, card_y) {
             if rect_contains(&rect, x, y) {
                 return Some(action);
             }
@@ -745,14 +777,22 @@ pub fn hit_test(manager: &DownloadManager, x: f32, y: f32, (win_w, win_h): (u32,
     Some(DownloadAction::Inside)
 }
 
-/// Build the viewport-locked download panel overlay.
+/// Uniform corner radii helper (mirrors the identically-named private helper
+/// in other chrome modules, e.g. `toolbar.rs`/`shields_panel.rs`).
+fn corners(r: f32) -> CornerRadii {
+    CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r }
+}
+
+/// Build the viewport-locked download popover overlay.
 ///
-/// Returns an empty `DisplayList` when the panel is closed (`!manager.visible`)
-/// or when there are no entries.
+/// Returns an empty `DisplayList` when the popover is closed
+/// (`!manager.visible`).
 ///
-/// The panel is anchored to the bottom-right corner and expands upward.
-/// `(win_w, win_h)` are physical window dimensions in CSS pixels.
-pub fn build_download_bar(manager: &DownloadManager, (win_w, win_h): (u32, u32)) -> DisplayList {
+/// The popover is anchored to the bottom-right corner (`PANEL_MARGIN`
+/// insets) per the design reference. `(win_w, win_h)` are physical window
+/// dimensions in CSS pixels; `pal` supplies the theme surface tokens
+/// (status colours stay theme-invariant, see the `STATUS_*` constants).
+pub fn build_download_bar(manager: &DownloadManager, (win_w, win_h): (u32, u32), pal: &Palette) -> DisplayList {
     if !manager.visible {
         return Vec::new();
     }
@@ -763,50 +803,48 @@ pub fn build_download_bar(manager: &DownloadManager, (win_w, win_h): (u32, u32))
 
     let mut out: DisplayList = Vec::with_capacity(8 + visible_count * 14);
 
-    // Panel background
-    out.push(DisplayCommand::FillRect {
+    // Popover background + border (`.downloads-panel`).
+    out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(panel_x, panel_y, panel_w, panel_h),
-        color: PANEL_BG,
+        radii: corners(radius::LG),
+        color: pal.overlay_border,
+    });
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: Rect::new(panel_x + 1.0, panel_y + 1.0, panel_w - 2.0, panel_h - 2.0),
+        radii: corners(radius::LG - 1.0),
+        color: pal.overlay_bg,
     });
 
-    // Header
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(panel_x, panel_y, panel_w, HEADER_HEIGHT),
-        color: PANEL_HEADER_BG,
-    });
-
-    let active = manager.active_count();
-    let title = if active > 0 {
-        format!("Загрузки ({active} активных)")
-    } else {
-        format!("Загрузки — {} файлов", entries.len())
-    };
-
+    // Header (`.dl-header`): title + close button, bottom divider.
     out.push(make_text(
-        title,
-        panel_x + H_PAD,
-        panel_y + (HEADER_HEIGHT - FONT_SIZE) / 2.0,
-        panel_w - H_PAD * 2.0 - CLOSE_BTN - 12.0,
-        FONT_SIZE,
-        PANEL_FG,
+        "Загрузки".to_string(),
+        panel_x + CARD_PAD,
+        panel_y + (HEADER_H - NAME_FONT) / 2.0,
+        panel_w - CARD_PAD * 2.0 - CLOSE_BTN,
+        NAME_FONT,
+        pal.text,
+        FontWeight::BOLD,
     ));
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(panel_x, panel_y + HEADER_H - 1.0, panel_w, 1.0),
+        color: pal.divider,
+    });
 
-    // Header close (×) button.
     let close = close_button_rect(panel_x, panel_y, panel_w);
-    out.push(DisplayCommand::FillRect { rect: close, color: BTN_BG });
     out.push(make_text(
         "×".to_string(),
-        close.x + 7.0,
-        close.y + (CLOSE_BTN - FONT_SIZE) / 2.0,
-        CLOSE_BTN,
-        FONT_SIZE,
-        PANEL_FG,
+        close.x + (CLOSE_BTN - NAME_FONT) / 2.0,
+        close.y + (CLOSE_BTN - NAME_FONT) / 2.0,
+        NAME_FONT,
+        NAME_FONT,
+        pal.text_dim,
+        FontWeight::NORMAL,
     ));
 
-    // Entries (most recent first; oldest scrolled off the top).
+    // Cards (most recent first; oldest scrolled off the top).
     for (i, entry) in entries.iter().skip(skip).enumerate() {
-        let item_y = panel_y + HEADER_HEIGHT + (i as f32) * ITEM_HEIGHT;
-        append_entry(&mut out, entry, panel_x, item_y, panel_w);
+        let card_y = panel_y + HEADER_H + (i as f32) * CARD_H;
+        append_entry(&mut out, entry, panel_x, card_y, panel_w, pal);
     }
 
     out
@@ -816,118 +854,105 @@ fn append_entry(
     out: &mut DisplayList,
     entry: &DownloadEntry,
     panel_x: f32,
-    item_y: f32,
+    card_y: f32,
     panel_w: f32,
+    pal: &Palette,
 ) {
-    // Item background (alternating shade handled by the single color here)
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(panel_x + 1.0, item_y, panel_w - 2.0, ITEM_HEIGHT - 1.0),
-        color: ITEM_BG,
+    let icon_x = panel_x + LIST_PAD + CARD_PAD;
+    let icon_y = card_y + CARD_PAD;
+
+    // Extension-badge icon (`.dl-icon`): nearest SURFACE_2-tier token, reusing
+    // `item_selected_bg` per the `Palette` doc's "several roles share one
+    // physical shade" convention (no bespoke "surface_2" field exists).
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: Rect::new(icon_x, icon_y, ICON_SZ, ICON_SZ),
+        radii: corners(radius::MD),
+        color: pal.item_selected_bg,
     });
-
-    // Text column leaves room for the right-aligned action buttons.
-    let text_w = panel_w - H_PAD * 2.0 - BTN_W - 10.0;
-    let bar_w = text_w;
-
-    // Filename
     out.push(make_text(
-        entry.filename.clone(),
-        panel_x + H_PAD,
-        item_y + V_PAD,
-        text_w,
-        FONT_SIZE,
-        PANEL_FG,
+        extension_label(&entry.filename),
+        icon_x,
+        icon_y + (ICON_SZ - META_FONT) / 2.0,
+        ICON_SZ,
+        META_FONT * 0.9,
+        pal.text_dim,
+        FontWeight::BOLD,
     ));
 
-    // Status label + progress bar
-    match &entry.status {
-        DownloadStatus::Pending => {
-            out.push(make_text(
-                "В очереди…".to_string(),
-                panel_x + H_PAD,
-                item_y + V_PAD + FONT_SIZE + 4.0,
-                text_w,
-                FONT_SIZE_SM,
-                PANEL_DIM,
-            ));
-        }
+    let text_x = icon_x + ICON_SZ + ROW_GAP;
+    let text_w = panel_x + panel_w - CARD_PAD - LIST_PAD - text_x;
+
+    // Filename (`.dl-name`).
+    out.push(make_text(
+        entry.filename.clone(),
+        text_x,
+        icon_y,
+        text_w,
+        NAME_FONT,
+        pal.text,
+        FontWeight::NORMAL,
+    ));
+
+    // Meta line (`.dl-meta`): size + status.
+    let meta_y = icon_y + NAME_FONT * 1.3;
+    let (meta_text, meta_color) = match &entry.status {
+        DownloadStatus::Pending => ("В очереди…".to_string(), pal.text_dim),
         DownloadStatus::InProgress => {
-            let bar_y = item_y + ITEM_HEIGHT - BAR_H - 4.0;
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(panel_x + H_PAD, bar_y, bar_w, BAR_H),
-                color: PROGRESS_BG,
-            });
-            // Determinate fill once the total is known (disk-write phase);
-            // before that, an indeterminate 60% block signals "in progress".
-            let fill = entry.progress_fraction().unwrap_or(0.6);
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(panel_x + H_PAD, bar_y, bar_w * fill, BAR_H),
-                color: PROGRESS_FG,
-            });
-            let label = match entry.total {
+            let text = match entry.total {
                 Some(t) if t > 0 => format!(
-                    "{} / {}",
+                    "{} / {} — идёт загрузка…",
                     human_bytes(entry.received),
                     human_bytes(t)
                 ),
                 _ => "Загрузка…".to_string(),
             };
-            out.push(make_text(
-                label,
-                panel_x + H_PAD,
-                item_y + V_PAD + FONT_SIZE + 4.0,
-                text_w,
-                FONT_SIZE_SM,
-                PANEL_DIM,
-            ));
+            (text, pal.text_dim)
         }
-        DownloadStatus::Done { bytes } => {
-            let bar_y = item_y + ITEM_HEIGHT - BAR_H - 4.0;
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(panel_x + H_PAD, bar_y, bar_w, BAR_H),
-                color: STATUS_OK,
-            });
-            out.push(make_text(
-                format!("Готово — {}", human_bytes(*bytes)),
-                panel_x + H_PAD,
-                item_y + V_PAD + FONT_SIZE + 4.0,
-                text_w,
-                FONT_SIZE_SM,
-                STATUS_OK,
-            ));
-        }
-        DownloadStatus::Failed(reason) => {
-            out.push(make_text(
-                format!("Ошибка: {reason}"),
-                panel_x + H_PAD,
-                item_y + V_PAD + FONT_SIZE + 4.0,
-                text_w,
-                FONT_SIZE_SM,
-                STATUS_ERR,
-            ));
-        }
-        DownloadStatus::Cancelled => {
-            out.push(make_text(
-                "Отменено".to_string(),
-                panel_x + H_PAD,
-                item_y + V_PAD + FONT_SIZE + 4.0,
-                text_w,
-                FONT_SIZE_SM,
-                STATUS_CANCEL,
-            ));
-        }
+        DownloadStatus::Done { bytes } => (format!("{} — готово", human_bytes(*bytes)), STATUS_OK),
+        DownloadStatus::Failed(reason) => (format!("Ошибка: {reason}"), STATUS_ERR),
+        DownloadStatus::Cancelled => ("Отменено".to_string(), STATUS_CANCEL),
+    };
+    out.push(make_text(meta_text, text_x, meta_y, text_w, META_FONT, meta_color, FontWeight::NORMAL));
+
+    // Progress track (`.dl-progress-track`/`.dl-progress-fill`) — only while
+    // in flight; other statuses fold their outcome into the meta line above.
+    if matches!(entry.status, DownloadStatus::InProgress) {
+        let bar_y = meta_y + META_FONT * 1.3 + ROW_MT;
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(text_x, bar_y, text_w, BAR_H),
+            radii: corners(BAR_H / 2.0),
+            color: pal.item_selected_bg,
+        });
+        // Determinate fill once the total is known (disk-write phase);
+        // before that, an indeterminate 60% block signals "in progress".
+        let fill = entry.progress_fraction().unwrap_or(0.6);
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(text_x, bar_y, text_w * fill, BAR_H),
+            radii: corners(BAR_H / 2.0),
+            color: pal.accent,
+        });
     }
 
-    // Action buttons (Open / Reveal / Cancel), right-aligned.
-    for (_, rect, label) in entry_buttons(entry, panel_x, item_y, panel_w) {
-        out.push(DisplayCommand::FillRect { rect, color: BTN_BG });
+    // Action buttons (`.dl-actions`): Open+Reveal / Cancel, left-aligned.
+    for (_, rect, label) in entry_buttons(entry, panel_x, card_y) {
+        out.push(DisplayCommand::FillRoundedRect {
+            rect,
+            radii: corners(radius::SM),
+            color: pal.overlay_border,
+        });
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(rect.x + 1.0, rect.y + 1.0, rect.width - 2.0, rect.height - 2.0),
+            radii: corners((radius::SM - 1.0).max(0.0)),
+            color: pal.overlay_bg,
+        });
         out.push(make_text(
             label.to_string(),
-            rect.x + 8.0,
-            rect.y + (BTN_H - FONT_SIZE_SM) / 2.0,
-            BTN_W - 12.0,
-            FONT_SIZE_SM,
-            PANEL_FG,
+            rect.x + ACTION_BTN_PAD_X,
+            rect.y + (ACTION_BTN_H - META_FONT) / 2.0,
+            rect.width - ACTION_BTN_PAD_X * 2.0,
+            META_FONT,
+            pal.text,
+            FontWeight::NORMAL,
         ));
     }
 }
@@ -941,6 +966,7 @@ fn make_text(
     w: f32,
     font_size: f32,
     color: Color,
+    font_weight: FontWeight,
 ) -> DisplayCommand {
     DisplayCommand::DrawText {
         rect: Rect::new(x, y, w, font_size * 1.4),
@@ -948,7 +974,7 @@ fn make_text(
         font_size,
         color,
         font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
+        font_weight,
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         font_features: Vec::new(),
@@ -957,6 +983,17 @@ fn make_text(
         highlight_name: None,
         text_orientation: None,
     }
+}
+
+/// Derive the short badge label shown on a download's icon chip
+/// (`.dl-icon`): the file extension, uppercased and capped at 4 chars, or
+/// the first characters of the name when there is none.
+fn extension_label(filename: &str) -> String {
+    let label = match std::path::Path::new(filename).extension().and_then(|e| e.to_str()) {
+        Some(ext) => ext.to_string(),
+        None => filename.to_string(),
+    };
+    label.to_uppercase().chars().take(4).collect()
 }
 
 fn human_bytes(b: u64) -> String {
@@ -1154,14 +1191,14 @@ mod tests {
     #[test]
     fn build_bar_hidden_returns_empty() {
         let dm = DownloadManager::new(); // visible = false
-        assert!(build_download_bar(&dm, (1280, 800)).is_empty());
+        assert!(build_download_bar(&dm, (1280, 800), &Palette::DARK).is_empty());
     }
 
     #[test]
     fn build_bar_visible_no_entries_has_header() {
         let mut dm = DownloadManager::new();
         dm.open();
-        let dl = build_download_bar(&dm, (1280, 800));
+        let dl = build_download_bar(&dm, (1280, 800), &Palette::DARK);
         // Must contain at least the background FillRect and a header DrawText.
         assert!(!dl.is_empty());
         let has_text = dl.iter().any(|c| {
@@ -1178,7 +1215,7 @@ mod tests {
             "file:///tmp/report.pdf".to_string(),
             PathBuf::from("/tmp/report.pdf"),
         );
-        let dl = build_download_bar(&dm, (1280, 800));
+        let dl = build_download_bar(&dm, (1280, 800), &Palette::DARK);
         let has_name = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "report.pdf")
         });
@@ -1195,7 +1232,7 @@ mod tests {
                 PathBuf::from(format!("/tmp/file{i}.bin")),
             );
         }
-        let dl = build_download_bar(&dm, (1280, 800));
+        let dl = build_download_bar(&dm, (1280, 800), &Palette::DARK);
         // Exactly MAX_VISIBLE_ITEMS filename labels visible (file5..file9).
         // Match only the short filename (no '/'), not the URL which also ends in .bin.
         let name_count = dl
@@ -1338,10 +1375,10 @@ mod tests {
         dm.open();
         let id = dm.start_download("file:///tmp/d.bin".into(), PathBuf::from("/tmp/d.bin"));
         done_entry(&mut dm, id, 100);
-        let (px, py, pw, _, skip) = panel_geometry(&dm, 1280, 800);
-        let item_y = py + HEADER_HEIGHT + 0.0 * ITEM_HEIGHT;
+        let (px, py, _, _, skip) = panel_geometry(&dm, 1280, 800);
+        let card_y = py + HEADER_H;
         assert_eq!(skip, 0);
-        let buttons = entry_buttons(&dm.entries()[0], px, item_y, pw);
+        let buttons = entry_buttons(&dm.entries()[0], px, card_y);
         assert_eq!(buttons.len(), 2);
         let (open_action, open_rect, _) = buttons[0];
         assert_eq!(open_action, DownloadAction::Open(id));
@@ -1358,9 +1395,9 @@ mod tests {
         let mut dm = DownloadManager::new();
         dm.open();
         let id = dm.start_download("file:///tmp/c.bin".into(), PathBuf::from("/tmp/c.bin"));
-        let (px, py, pw, _, _) = panel_geometry(&dm, 1280, 800);
-        let item_y = py + HEADER_HEIGHT;
-        let buttons = entry_buttons(&dm.entries()[0], px, item_y, pw);
+        let (px, py, _, _, _) = panel_geometry(&dm, 1280, 800);
+        let card_y = py + HEADER_H;
+        let buttons = entry_buttons(&dm.entries()[0], px, card_y);
         assert_eq!(buttons.len(), 1);
         let (_, rect, label) = buttons[0];
         assert_eq!(label, "Отмена");
@@ -1374,7 +1411,7 @@ mod tests {
         dm.open();
         let (px, py, pw, _, _) = panel_geometry(&dm, 1280, 800);
         // Header centre, away from the close button.
-        let hit = hit_test(&dm, px + pw / 2.0, py + HEADER_HEIGHT / 2.0, (1280, 800));
+        let hit = hit_test(&dm, px + pw / 2.0, py + HEADER_H / 2.0, (1280, 800));
         assert_eq!(hit, Some(DownloadAction::Inside));
     }
 
@@ -1384,13 +1421,40 @@ mod tests {
         dm.open();
         let id = dm.start_download("file:///tmp/r.bin".into(), PathBuf::from("/tmp/r.bin"));
         done_entry(&mut dm, id, 100);
-        let dl = build_download_bar(&dm, (1280, 800));
+        let dl = build_download_bar(&dm, (1280, 800), &Palette::DARK);
         let has_open = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "Открыть")
         });
         let has_folder = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == "Папка")
+            matches!(c, DisplayCommand::DrawText { text, .. } if text == "В папке")
         });
         assert!(has_open && has_folder);
+    }
+
+    #[test]
+    fn extension_label_uses_uppercase_extension() {
+        assert_eq!(extension_label("report.pdf"), "PDF");
+        assert_eq!(extension_label("archive.tar.gz"), "GZ");
+        assert_eq!(extension_label("no_extension"), "NO_E");
+    }
+
+    #[test]
+    fn build_bar_shows_progress_track_for_in_progress_only() {
+        let mut dm = DownloadManager::new();
+        dm.open();
+        let id = dm.start_download("file:///tmp/prog.bin".into(), PathBuf::from("/tmp/prog.bin"));
+        dm.tx
+            .send(DownloadEvent::Progress { id, received: 50, total: 100 })
+            .unwrap();
+        dm.poll();
+        let dl = build_download_bar(&dm, (1280, 800), &Palette::DARK);
+        let track_and_fill = dl
+            .iter()
+            .filter(|c| {
+                matches!(c, DisplayCommand::FillRoundedRect { color, .. }
+                    if *color == Palette::DARK.item_selected_bg || *color == Palette::DARK.accent)
+            })
+            .count();
+        assert!(track_and_fill >= 2, "expected track + fill rounded rects while in progress");
     }
 }
