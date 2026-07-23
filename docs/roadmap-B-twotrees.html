@@ -3701,6 +3701,182 @@
        "note": "download.rs: нижний бар → поповер правый-низ 320px (карточки: иконка-расширение+имя+мета+прогресс 2px+«Открыть»/«В папке»/«Отмена», всё через Palette); кнопка «Загрузки» тулбара получила зелёную точку-индикатор (ToolbarActive::downloads_has_active) при активной загрузке, независимо от видимости поповера. После DS-9"
       }
      ]
+    },
+    {
+     "id": "CC",
+     "title": "CC: Хром через собственный CSS-движок",
+     "status": "planned",
+     "note": "Дорожка «Хром через собственный CSS-движок» (Вариант A; владелец — P1, назначено 2026-07-24, ВКЛЮЧАЯ CSS-срезы CC-CSS-* — осознанное отступление от роли P4 по решению пользователя). Хром рисуется конвейером html-parser→css-parser→layout→paint из эталона docs/design/lumen-v3_3.html; compile-time: парс-гейт + кодогенерация (ids/ChromeAction/шаблоны) в build.rs крейта lumen-chrome; runtime за флагом LUMEN_CSS_CHROME до паритета, затем флип дефолта по образцу ADR-018. Полный бриф — docs/tasks/p1-css-chrome.md",
+     "tasks": [
+      {
+       "id": "CC-0",
+       "title": "CC-0: ADR «Хром через движок»",
+       "status": "ready",
+       "size": "S",
+       "note": "ADR (хром через движок): флаг-стратегия по образцу ADR-018, судьба ручной DS-дорожки (DS-1…19 завершены, новых ручных не заводить, legacy живёт до этапа D)"
+      },
+      {
+       "id": "CC-1",
+       "title": "CC-1: Ассеты хрома + рендер-смоук",
+       "status": "planned",
+       "size": "M",
+       "note": "scripts/gen_chrome_assets.py: эталон → assets/chrome/ (минус demo-bar/QA-панель/JS/Google-Fonts, шрифты бандленные DS-4); смоук about:chrome-preview через существующий PageSource::Static; скрин-сверка с эталоном (2 темы, 4 профиля), расхождения → BUG-NNN. После CC-0"
+      },
+      {
+       "id": "CC-2",
+       "title": "CC-2: SVG-спрайт иконок (fallback)",
+       "status": "planned",
+       "size": "S",
+       "note": "Если svg use href=#id не поддержан движком — build-time инлайн символов спрайта (~35 иконок) в gen_chrome_assets.py как fallback до CC-CSS-5. После CC-1"
+      },
+      {
+       "id": "CC-3",
+       "title": "CC-3: Крейт lumen-chrome + кодогенерация",
+       "status": "planned",
+       "size": "M",
+       "note": "Крейт lumen-chrome + build.rs: парс-гейт (битый CSS/неизвестное свойство = ошибка сборки, allowlist -webkit-*), кодогенерация резолвера id, enum ChromeAction из data-action, реестр template-узлов; юнит-тест резолвера на реальном ассете. После CC-1"
+      },
+      {
+       "id": "CC-4",
+       "title": "CC-4: Рантайм-хост за флагом",
+       "status": "planned",
+       "size": "M",
+       "note": "Рантайм-хост за LUMEN_CSS_CHROME=1: chrome Document+Stylesheet парсятся при старте, layout_measured_hyp по размеру окна, paint → начало overlay_buf; rect элемента page-host заменяет CHROME_H/page_x_offset; legacy tab-bar/toolbar при флаге не строятся. После CC-3"
+      },
+      {
+       "id": "CC-5",
+       "title": "CC-5: Hit-test, hover, диспетч действий",
+       "status": "planned",
+       "size": "M",
+       "note": "lumen_paint::hit_test по layout хрома → подъём по path до data-action → диспетч ChromeAction в существующие обработчики; hover/active через set_interactive_state (страничные thread-locals ставить/чистить вокруг каждого прохода раздельно); курсор из HitTestResult. После CC-4"
+      },
+      {
+       "id": "CC-6",
+       "title": "CC-6: ChromeModel и мутация DOM",
+       "status": "planned",
+       "size": "M",
+       "note": "ChromeModel (вкладки/URL/профиль/тема/счётчики) → мутации chrome-DOM: текст, атрибуты data-theme/data-profile/data-layout, классы, клоны template для списков; dirty → релэйаут хрома; Palette для движкового хрома не используется. После CC-5"
+      },
+      {
+       "id": "CC-7",
+       "title": "CC-7: Тулбар + омнибокс (гибрид ввода)",
+       "status": "planned",
+       "size": "M",
+       "note": "Тулбар+омнибокс: рендер поля/замка/star/shield движком; редактирование текста — гибрид (существующая логика address_bar пишет значение/каретку в chrome-DOM); омоглиф-warning показом/скрытием класса. После CC-6"
+      },
+      {
+       "id": "CC-8",
+       "title": "CC-8: Таб-бар — оба layout",
+       "status": "planned",
+       "size": "M",
+       "note": "Вертикальный сайдбар (коллапс, дерево, контейнер-полоса, спиннер @keyframes) + workspaces с ws-color + data-layout=horizontal; DnD вкладок — legacy-механика поверх rect-ов из layout хрома. После CC-6"
+      },
+      {
+       "id": "CC-9",
+       "title": "CC-9: Поповеры — батч 1",
+       "status": "planned",
+       "size": "M",
+       "note": "Dropdown омнибокса (клоны шаблона), поповер разрешений/щита, панель загрузок, find-bar; позиционирование CSS absolute/fixed вместо ручных координат; legacy-аналоги при флаге отключены. После CC-7"
+      },
+      {
+       "id": "CC-10",
+       "title": "CC-10: Панели — батч 2",
+       "status": "planned",
+       "size": "M",
+       "note": "History/bookmarks/settings (6 секций), палитра Ctrl+K, модалы сертификата/печати, правый AI/Web-сайдбар; при разрастании разбить на 2 среза. После CC-9"
+      },
+      {
+       "id": "CC-11",
+       "title": "CC-11: Анимации хрома движком",
+       "status": "planned",
+       "size": "S",
+       "note": "Отдельные экземпляры Transition/AnimationScheduler для chrome-документа, подключены к кадровому циклу: hover-transitions, спиннер, прогресс загрузок. После CC-8"
+      },
+      {
+       "id": "CC-12",
+       "title": "CC-12: Перф-гейт хрома",
+       "status": "planned",
+       "size": "S",
+       "note": "Бенч (по образцу bench_frames.rs): цикл мутация→рестайл→релэйаут→paint chrome-документа (~400 узлов) на hover-флип и символ ввода; бюджет ≤2 мс; при провале — layout_mutation_incremental для хрома. После CC-7"
+      },
+      {
+       "id": "CC-13",
+       "title": "CC-13: A11y хрома из движка",
+       "status": "planned",
+       "size": "S",
+       "note": "AX-дерево хрома из движкового построителя (ARIA-атрибуты добавляются в ассеты генератором), замена синтетики lumen_a11y::chrome из DS-17; MSAA-мост отдаёт движковое дерево при флаге. После CC-10"
+      },
+      {
+       "id": "CC-14",
+       "title": "CC-14: Флип дефолта",
+       "status": "planned",
+       "size": "M",
+       "note": "Чек-лист паритета (навигация, вкладки, панели, темы, DPI/zoom, split view) → движковый хром по умолчанию, LUMEN_LEGACY_CHROME=1 — откат; CAPABILITIES.md/README. После CC-10..CC-13"
+      },
+      {
+       "id": "CC-15",
+       "title": "CC-15: Удаление legacy-хрома",
+       "status": "planned",
+       "size": "S",
+       "note": "Удаление legacy слайсами (по образцу S12b): toolbar.rs-билдер, tabs/strip.rs-рендер, DisplayList-код panels/*, Palette-константы (кроме непокрытого макетом — риск 5 брифа); финал — удаление rollback-флага"
+      },
+      {
+       "id": "CC-16",
+       "title": "CC-16: Пред-парсинг при сборке (опц.)",
+       "status": "opt",
+       "size": "M",
+       "note": "Сериализация распарсенных Document+Stylesheet хрома в build.rs (serde-фича или кодогенерация конструкторов) + include_bytes — пропуск парсинга при старте; делать только если профиль старта оправдает. После CC-14"
+      },
+      {
+       "id": "CC-17",
+       "title": "CC-17: Разрез конвейера после матчинга (опц.)",
+       "status": "opt",
+       "size": "L",
+       "note": "Research: разрез конвейера «после матчинга» — пред-вычисленные списки деклараций на узел (+альтернативные наборы для hover/тем/профилей) и вход в layout мимо Stylesheet; требует расчленения compute_style/build_box; только при доказанной перф-нужде из CC-12"
+      },
+      {
+       "id": "CC-CSS-1",
+       "title": "CC-CSS-1: -webkit-скроллбары + font-smoothing",
+       "status": "planned",
+       "size": "S",
+       "note": "css-parser: псевдоэлементы ::-webkit-scrollbar/-thumb/-track → маппинг на стандартные scrollbar-width/scrollbar-color (эталон 575-577, сейчас правила молча роняются); -webkit-font-smoothing — parse-and-ignore + allowlist парс-гейта. Graphic-тест. После CC-1"
+      },
+      {
+       "id": "CC-CSS-2",
+       "title": "CC-CSS-2: overflow:auto — вложенный скролл",
+       "status": "planned",
+       "size": "S",
+       "note": "overflow:auto — проверить/довести рендер и колёсную прокрутку ВЛОЖЕННЫХ scroll-контейнеров (список вкладок сайдбара, настройки, дропдауны); инвентарь CSS-SPECS:~179 держит «scroll ⬜ rendering» против done в P4 #22. Graphic-тест. После CC-1"
+      },
+      {
+       "id": "CC-CSS-3",
+       "title": "CC-CSS-3: sticky scroll-follow",
+       "status": "planned",
+       "size": "S",
+       "note": "position:sticky — довести scroll-follow (слои уже рисуются, renderer.rs:5680; следование скроллу shell-side/частично, CAPABILITIES:74). Эталон: .site-nav, .net-table th. Graphic-тест. После CC-1"
+      },
+      {
+       "id": "CC-CSS-4",
+       "title": "CC-CSS-4: resize — drag-ресайз блока",
+       "status": "planned",
+       "size": "M",
+       "note": "resize:vertical — drag-UI (свойство парсится, UI нет, CSS-SPECS:591): hit-зона у края блока, drag меняет used-height + релэйаут. Эталон: .devtools. После CC-1"
+      },
+      {
+       "id": "CC-CSS-5",
+       "title": "CC-CSS-5: SVG use/symbol",
+       "status": "planned",
+       "size": "S",
+       "note": "SVG use href=#id / symbol в движке (поддержка неизвестна до смоука CC-1): развернуть use→symbol в движке (предпочтительно, полезно и страницам) либо закрыть n/a, признав build-инлайн CC-2 постоянным. После CC-1"
+      },
+      {
+       "id": "CC-CSS-6",
+       "title": "CC-CSS-6: user-select/pointer-events",
+       "status": "planned",
+       "size": "XS",
+       "note": "user-select:none / pointer-events enforcement в хроме (парсятся, enforcement 🟡 CSS-SPECS:588-589): UI-текст не выделяется мышью, тултипы не перехватывают курсор. После CC-5"
+      }
+     ]
     }
    ],
    "date": "36–48 мес"
