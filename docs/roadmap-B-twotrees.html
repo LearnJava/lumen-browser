@@ -1742,9 +1742,9 @@
       {
        "id": "WPT-VENDOR-audio-output",
        "title": "WPT: вендорить + прогнать категорию `audio-output`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+       "note": "DONE 2026-07-24: вендорена (`tests/wpt/audio-output/`, 12 файлов: `META.yml`, `idlharness.https.window.js`, 9 `*.https(.sub).html`, `setSinkId-manual.https.html`) и прогнана через `run_report.py --all --root audio-output --recursive`, включена несмотря на скоуп 🚫 (медиа-конвейер) по тому же постоянному решению пользователя, что и `accelerometer`/`acid`/`ai`/`ambient-light`/`appmanifest`/`attribution-reporting`. Внекатегорийные хелперы `/common/get-host-info.sub.js`, `/common/gc.js`, `/permissions-policy/resources/permissions-policy.js` не довендорены, та же методология, что `FileAPI`/`ai`. Прогон добежал за ~1 мин (10 отобранных id из 12 файлов, `setSinkId-manual.https.html` исключён фильтром `-manual`): 5 SKIP (`Executor does not support testdriver.js`, тот же гэп, что `accname`/`attribution-reporting`); 3 `.https.`-only TIMEOUT (`invalid url: invalid port: \"None\"`, тот же HTTPS-порт-гэп, что `WebCryptoAPI`/`ai`/`ambient-light`/`animation-worklet`/`attribution-reporting`); 2 ERROR — `secure-context.html` (единственный не-`.https.` тест, реально прогнан по HTTP) упал на собственном допущении `assert_false(window.isSecureContext)`: спека считает `http://127.0.0.1` потенциально доверенным происхождением («localhost»), поэтому `isSecureContext` корректно возвращает `true`, как и в настоящих браузерах — тест сформулирован для окружения без такого исключения, не движковый баг; `selectAudioOutput-sans-user-activation.https.html` — тот же артефакт переиспользования сессии, что `accelerometer`/`ambient-light`/`animation-worklet` (результат пришёл с URL предыдущего теста `secure-context.html`). 0/10 harness OK, 0/0 сабтестов. Не заводился отдельный BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-audio-session",
