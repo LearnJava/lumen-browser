@@ -400,6 +400,27 @@
   possible: `KeyCommand::SetTabContainer` still has no UI trigger (no
   omnibox/context-menu wiring) — a pre-existing 7D.2 gap noted in
   `containers.rs`, not introduced or closed by this slice.
+- **Done (DS-19 downloads popover, 2026-07-23, closes the DS track DS-1…DS-19):**
+  [`crates/shell/src/download.rs`](../crates/shell/src/download.rs)'s panel
+  rendering was rebuilt to match `.downloads-panel` in the design reference
+  (lines 517-538/1320-1342): a fixed 320px popover anchored bottom-right
+  (`PANEL_MARGIN = 14.0`, capped at `PANEL_MAX_H = 400.0`, replacing the old
+  window-fraction-width bottom bar). Each card (`append_entry`) shows an
+  extension-badge icon (`extension_label`, uppercased file extension), the
+  filename, a size/status meta line, a 2px `Palette::accent`-filled progress
+  track while `DownloadStatus::InProgress`, and a left-aligned action row
+  (`entry_buttons`: Open+Reveal when `Done`, Cancel when in flight) — all
+  surface colours now come from `&Palette` (threaded through
+  `build_download_bar`'s new parameter) instead of the old hardcoded
+  dark-only constants; only the status colours (`STATUS_OK/ERR/CANCEL`) stay
+  theme-invariant, matching `shields_panel`'s convention. `toolbar.rs` gained
+  a `ToolbarActive::downloads_has_active` flag (`self.downloads.active_count()
+  > 0` in `main.rs`) — `push_btn` draws a small green ring+dot (`.tb-dot`,
+  `theme_tokens::badge::GREEN`) in the downloads button's top-right corner
+  whenever it's true, independent of `ToolbarActive::downloads` (which only
+  lights the button while the popover itself is open). 34 `download` + 12
+  `toolbar` tests green (2 new in each); `cargo clippy -p lumen-shell
+  --all-targets -- -D warnings` clean.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*
