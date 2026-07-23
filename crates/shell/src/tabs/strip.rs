@@ -81,9 +81,13 @@ const CLOSE_SZ: f32 = 14.0;
 const CLOSE_MARGIN: f32 = 4.0;
 /// Font size for the "Z"/"z" sleep-icon badge on T2/T3 tabs.
 const BADGE_Z_SZ: f32 = 9.0;
-/// Height of the container border-top strip in CSS px (7D.2). Drawn at the
-/// very top of each tab button when its `container` is not `ContainerKind::None`.
-const CONTAINER_STRIP_HEIGHT: f32 = 3.0;
+/// Width of the container accent strip in CSS px (7D.2, DS-13). Drawn as a
+/// rounded vertical bar along the left edge of each tab button when its
+/// `container` is not `ContainerKind::None`.
+const CONTAINER_STRIP_WIDTH: f32 = 3.0;
+/// Vertical inset of the container strip from the tab's top/bottom edge
+/// (DS-13: "высота вкладки минус 2×2 px").
+const CONTAINER_STRIP_INSET: f32 = 2.0;
 /// Height of the tab-group accent bar in CSS px (CC-6). Drawn at the bottom
 /// edge of a grouped tab in its group's [`GroupColor`].
 const GROUP_BAR_HEIGHT: f32 = 3.0;
@@ -112,8 +116,8 @@ pub struct TabEntry {
     /// because `opener_id` is set once at creation and always points to an
     /// already-existing tab.
     pub opener_id: Option<usize>,
-    /// Container assigned to this tab (7D.2). Drives the border-top strip
-    /// rendered above the tab and the cookie/storage isolation key.
+    /// Container assigned to this tab (7D.2). Drives the left accent strip
+    /// (DS-13) rendered on the tab and the cookie/storage isolation key.
     ///
     /// Default `ContainerKind::None` — no container, shared state. New
     /// tabs inherit `None`; the user changes containers via the shell's
@@ -798,11 +802,19 @@ pub fn build_tab_bar(
             });
         }
 
-        // Container border-top strip (7D.2). 3 px tall coloured bar at the
-        // very top edge of the tab. Skipped for ContainerKind::None.
+        // Container accent strip (7D.2, DS-13). 3 px wide rounded bar along
+        // the left edge of the tab, inset 2 px top/bottom. Skipped for
+        // ContainerKind::None. `ContainerKind` colours are unchanged.
         if let Some(color) = tab.container.border_color() {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(left, 0.0, right - left, CONTAINER_STRIP_HEIGHT),
+            let r = crate::theme_tokens::radius::SM;
+            out.push(DisplayCommand::FillRoundedRect {
+                rect: Rect::new(
+                    left,
+                    CONTAINER_STRIP_INSET,
+                    CONTAINER_STRIP_WIDTH,
+                    TAB_BAR_HEIGHT - 2.0 * CONTAINER_STRIP_INSET,
+                ),
+                radii: CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r },
                 color,
             });
         }
@@ -1203,16 +1215,15 @@ mod tests {
         assert_eq!(s.tabs[0].container, ContainerKind::None);
     }
 
-    /// Helper: count `FillRect` commands whose rect matches the container
-    /// border-top strip — height equals `CONTAINER_STRIP_HEIGHT` and origin
-    /// `y == 0.0`. Excludes the full-bar background rect (its height ==
-    /// `TAB_BAR_HEIGHT`).
+    /// Helper: count `FillRoundedRect` commands whose rect matches the
+    /// container accent strip — width equals `CONTAINER_STRIP_WIDTH` and
+    /// origin `y == CONTAINER_STRIP_INSET`.
     fn count_container_strips(dl: &DisplayList, expected_color: Color) -> usize {
         dl.iter()
             .filter(|c| match c {
-                DisplayCommand::FillRect { rect, color } => {
-                    (rect.height - CONTAINER_STRIP_HEIGHT).abs() < f32::EPSILON
-                        && rect.y.abs() < f32::EPSILON
+                DisplayCommand::FillRoundedRect { rect, color, .. } => {
+                    (rect.width - CONTAINER_STRIP_WIDTH).abs() < f32::EPSILON
+                        && (rect.y - CONTAINER_STRIP_INSET).abs() < f32::EPSILON
                         && *color == expected_color
                 }
                 _ => false,
@@ -1269,13 +1280,13 @@ mod tests {
     fn build_tab_bar_no_strip_for_none_container() {
         let s = TabStrip::new(); // single tab, ContainerKind::None
         let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        // No FillRect of CONTAINER_STRIP_HEIGHT may exist when container is None.
+        // No FillRoundedRect of CONTAINER_STRIP_WIDTH may exist when container is None.
         let strips = dl
             .iter()
             .filter(|c| match c {
-                DisplayCommand::FillRect { rect, .. } => {
-                    (rect.height - CONTAINER_STRIP_HEIGHT).abs() < f32::EPSILON
-                        && rect.y.abs() < f32::EPSILON
+                DisplayCommand::FillRoundedRect { rect, .. } => {
+                    (rect.width - CONTAINER_STRIP_WIDTH).abs() < f32::EPSILON
+                        && (rect.y - CONTAINER_STRIP_INSET).abs() < f32::EPSILON
                 }
                 _ => false,
             })
