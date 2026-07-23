@@ -17,6 +17,7 @@ pub mod permission_panel;
 pub mod pip_os_window;
 pub mod pip_window;
 pub mod privacy_panel;
+pub mod profile_menu;
 pub mod read_later_panel;
 pub mod restore_spinner;
 pub mod sleep_hint;
