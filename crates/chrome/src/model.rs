@@ -36,6 +36,27 @@ pub struct ChromeModel {
     pub tabs: Vec<ChromeTabModel>,
     /// Workspaces shown in the sidebar switcher.
     pub workspaces: Vec<ChromeWorkspaceModel>,
+    /// Omnibox `#omniInput` value + spoof-warning banner (CC-7).
+    pub omnibox: OmniboxModel,
+}
+
+/// Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
+/// (CC-7, `docs/tasks/p1-css-chrome.md`).
+///
+/// Editing itself (caret, IME, selection) stays owned by the shell's legacy
+/// `address_bar::AddressBarState` — this is only the text/warning it writes
+/// into the chrome document each `bind_model` call, mirroring how CC-6 binds
+/// tabs/workspaces without owning their state either.
+#[derive(Debug, Clone, Default)]
+pub struct OmniboxModel {
+    /// Text written into `#omniInput`'s `value` attribute: the current
+    /// display URL while not editing, or the live `address_bar` input while
+    /// editing (both already IDN-guarded by the caller). Empty falls back to
+    /// the asset's own `placeholder` text.
+    pub value: String,
+    /// `Some(message)` shows `#omniWarn` (adds `.show`) with this spoof-guard
+    /// warning text; `None` hides it.
+    pub warning: Option<String>,
 }
 
 /// One tab row for the sidebar tab list (`#sbTabs`).
@@ -93,6 +114,30 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     }
     if let Some(container) = find_by_attr(doc, "data-testid", "workspace-switcher") {
         rebuild_workspace_list(doc, container, &model.workspaces);
+    }
+    bind_omnibox(doc, &model.omnibox);
+}
+
+/// Writes [`OmniboxModel`] into `#omniInput`'s `value` attribute and toggles
+/// `#omniWarn`'s `.show` class (CC-7). The warning's text content is only
+/// rebuilt while a warning is present — hidden (`.show` absent) stale text
+/// left over from a previous warning is harmless, since CSS keeps it
+/// `display:none`.
+fn bind_omnibox(doc: &mut Document, omnibox: &OmniboxModel) {
+    if let Some(input) = doc.find_by_id(crate::ids::OMNI_INPUT) {
+        set_attr(doc, input, "value", &omnibox.value);
+    }
+    let Some(warn) = doc.find_by_id(crate::ids::OMNI_WARN) else { return };
+    set_class_token(doc, warn, "show", omnibox.warning.is_some());
+    if let Some(message) = &omnibox.warning {
+        let children: Vec<NodeId> = doc.get(warn).children.clone();
+        for child in children {
+            doc.detach(child);
+        }
+        append_text(doc, warn, "\u{26A0} ");
+        let span = doc.create_element(QualName::html("span"));
+        append_text(doc, span, message);
+        doc.append_child(warn, span);
     }
 }
 
@@ -200,6 +245,18 @@ fn remove_children_with_class(doc: &mut Document, container: NodeId, class: &str
 
 fn has_class(doc: &Document, id: NodeId, class: &str) -> bool {
     doc.get(id).get_attr("class").is_some_and(|c| c.split_whitespace().any(|t| t == class))
+}
+
+/// Adds (`present: true`) or removes (`present: false`) a single class token
+/// on `id`'s `class` attribute, preserving the rest.
+fn set_class_token(doc: &mut Document, id: NodeId, token: &str, present: bool) {
+    let current = doc.get(id).get_attr("class").unwrap_or("").to_owned();
+    let mut tokens: Vec<&str> = current.split_whitespace().filter(|&t| t != token).collect();
+    if present {
+        tokens.push(token);
+    }
+    let joined = tokens.join(" ");
+    set_attr(doc, id, "class", &joined);
 }
 
 fn append_text(doc: &mut Document, parent: NodeId, text: &str) {
@@ -336,5 +393,54 @@ mod tests {
             .expect("the '+' button must still be present");
         let last_item_pos = children.iter().position(|&c| c == items[1]).unwrap();
         assert!(add_btn_pos > last_item_pos, "the '+' button must stay after every rebuilt workspace item");
+    }
+
+    #[test]
+    fn omnibox_value_is_written_to_the_input_element() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            omnibox: OmniboxModel { value: "https://example.com".to_owned(), warning: None },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let input = doc.find_by_id(crate::ids::OMNI_INPUT).expect("asset has #omniInput");
+        assert_eq!(doc.get(input).get_attr("value"), Some("https://example.com"));
+    }
+
+    #[test]
+    fn omnibox_warning_shows_the_warn_banner_with_its_message() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            omnibox: OmniboxModel { value: String::new(), warning: Some("spoof risk".to_owned()) },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let warn = doc.find_by_id(crate::ids::OMNI_WARN).expect("asset has #omniWarn");
+        assert!(has_class(&doc, warn, "show"));
+        let span = doc
+            .get(warn)
+            .children
+            .iter()
+            .copied()
+            .find(|&c| matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local.eq_ignore_ascii_case("span")))
+            .expect("#omniWarn rebuilds a <span> with the warning message");
+        let text: String = doc
+            .get(span)
+            .children
+            .iter()
+            .filter_map(|&c| match &doc.get(c).data {
+                NodeData::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "spoof risk");
+    }
+
+    #[test]
+    fn no_warning_hides_the_warn_banner() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel::default());
+        let warn = doc.find_by_id(crate::ids::OMNI_WARN).expect("asset has #omniWarn");
+        assert!(!has_class(&doc, warn, "show"));
     }
 }

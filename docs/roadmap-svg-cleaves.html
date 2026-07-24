@@ -3745,9 +3745,9 @@
       {
        "id": "CC-7",
        "title": "CC-7: Тулбар + омнибокс (гибрид ввода)",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Тулбар+омнибокс: рендер поля/замка/star/shield движком; редактирование текста — гибрид (существующая логика address_bar пишет значение/каретку в chrome-DOM); омоглиф-warning показом/скрытием класса. После CC-6"
+       "note": "Поле/замок/star/shield рендерятся движком из статичного ассета; редактирование — гибрид: `address_bar::chrome_omnibox_value()` пишет значение (не-фокус — текущий URL, фокус — живой ввод/выбранная подсказка, обе ветки IDN-guarded) в `#omniInput`'s `value` через новый `lumen_chrome::OmniboxModel`/`bind_omnibox`; омоглиф-warning — класс `.show` на `#omniWarn` + перестройка текста. `:focus`/`:focus-within` заведены в `set_interactive_state` (фокус = `address_bar.is_open()`). Каретка по-прежнему рисуется вручную поверх `chrome_omni_input_rect` (нет нативной каретки `<input>`). Клик по `#omniInput` спецкейснут в hit-test (нет `data-action` — не из чего было бы сгенерировать `onfocus`). Dropdown подсказок — вне DoD этого среза, остаётся невидимым до CC-9 (клавиатурный выбор уже работает функционально, просто не отрисован). Найден и исправлен риск при ревью: `relayout_chrome_host()` перезаписывает chrome-DOM только по explicit-триггерам (resize/клик/т.п.), не каждый `RedrawRequested` — исходная реализация не звала его после мутаций `address_bar` (набор текста/Backspace/стрелки/Escape/Enter/Ctrl+L/F6/палитра), поэтому движковое поле визуально не обновлялось при вводе; добавлены вызовы после каждой такой мутации (no-op вне флага). `cargo test -p lumen-chrome` (24/24) + `cargo test -p lumen-shell` (1701/1701) + workspace clippy зелёные. После CC-6"
       },
       {
        "id": "CC-8",

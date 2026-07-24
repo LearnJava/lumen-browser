@@ -910,6 +910,7 @@ fn run_window_mode(
         chrome_page_host_rect: None,
         chrome_hovered_nid: None,
         chrome_active_nid: None,
+        chrome_omni_input_rect: None,
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         transition_scheduler: TransitionScheduler::new(),
@@ -7149,6 +7150,12 @@ struct Lumen {
     /// [`Self::chrome_hovered_nid`] but for `:active`, set from
     /// `WindowEvent::MouseInput` press.
     chrome_active_nid: Option<NodeId>,
+    /// CC-7 (docs/tasks/p1-css-chrome.md): `#omniInput`'s post-layout rect
+    /// from the last [`Self::relayout_chrome_host`] pass — the anchor for the
+    /// hand-painted caret overlay (editing itself stays owned by the legacy
+    /// `address_bar::AddressBarState`, no native caret exists for `<input>`
+    /// yet). `None` off the flag or before the first chrome layout.
+    chrome_omni_input_rect: Option<Rect>,
     /// HTML event loop runtime. На каждой итерации winit-loop (AboutToWait)
     /// выполняется одна task, на RedrawRequested — run_rendering_step
     /// (вызывает rAF-callback-и), на WindowEvent::Resized —
@@ -8403,14 +8410,15 @@ impl Lumen {
     /// thing that can currently change its layout.
     ///
     /// CC-5: hover/active state comes from [`Self::chrome_hovered_nid`]/
-    /// [`Self::chrome_active_nid`] (chrome has no `:focus` handling yet — no
-    /// text input in the asset besides the omnibox, whose caret CC-7 still
-    /// routes through the legacy `address_bar` overlay). The interactive
-    /// thread-locals are process-wide (brief risk #6), so this pass
-    /// explicitly sets them from chrome's own state rather than inheriting
-    /// whatever the page's last [`Self::relayout`] left behind, and clears
-    /// them again afterward so a subsequent page relayout does not inherit
-    /// chrome's state either.
+    /// [`Self::chrome_active_nid`]. CC-7 adds `:focus`/`:focus-within` for
+    /// `#omniInput` — `Some` exactly while the legacy `address_bar` is open;
+    /// its caret is still hand-painted (no native `<input>` caret exists,
+    /// see [`Self::chrome_omni_input_rect`]), only editing state moved to
+    /// chrome-DOM. The interactive thread-locals are process-wide (brief
+    /// risk #6), so this pass explicitly sets them from chrome's own state
+    /// rather than inheriting whatever the page's last [`Self::relayout`]
+    /// left behind, and clears them again afterward so a subsequent page
+    /// relayout does not inherit chrome's state either.
     ///
     /// The design reference's `#contentArea` — the container it reserves for
     /// live tab content, doubling as the brief's "`#page-host`" (no new id
@@ -8443,7 +8451,13 @@ impl Lumen {
         lumen_chrome::bind_model(doc, &model);
         let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
         let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
-        lumen_layout::set_interactive_state(self.chrome_hovered_nid, None, self.chrome_active_nid);
+        // CC-7: `#omniInput` is focused (`:focus`/`:focus-within`, e.g. the
+        // `.omnibox` accent ring) exactly while the legacy `address_bar` is
+        // open — there is no other focusable element in the chrome document
+        // yet, so a single node id is enough.
+        let omni_input = doc.find_by_id(lumen_chrome::ids::OMNI_INPUT);
+        let chrome_focus = if self.address_bar.is_open() { omni_input } else { None };
+        lumen_layout::set_interactive_state(self.chrome_hovered_nid, chrome_focus, self.chrome_active_nid);
         let mut layout = lumen_layout::layout_measured_hyp(
             doc,
             sheet,
@@ -8457,6 +8471,11 @@ impl Lumen {
             .find_by_id(lumen_chrome::ids::CONTENT_AREA)
             .and_then(|id| take_layout_box_by_node(&mut layout, id))
             .map(|content_area| content_area.rect);
+        // CC-7: captured non-destructively (unlike `#contentArea` above) —
+        // `#omniInput` stays in the tree and paints normally.
+        self.chrome_omni_input_rect = omni_input
+            .and_then(|id| lumen_layout::find_box_by_node(&layout, id))
+            .map(|b| b.rect);
         let dl = paint_ordered(&layout);
         self.chrome_layout = Some((layout, dl));
     }
@@ -8465,7 +8484,8 @@ impl Lumen {
     /// theme, tab layout, and active profile into a [`lumen_chrome::ChromeModel`]
     /// — [`Self::relayout_chrome_host`] binds this before every chrome layout
     /// pass. Mirrors the same shell fields [`Self::chrome_snapshot`] (DS-17 a11y
-    /// tree) reads, shaped for [`lumen_chrome::bind_model`] instead.
+    /// tree) reads, shaped for [`lumen_chrome::bind_model`] instead. CC-7 adds
+    /// the omnibox value/spoof-warning, read from the legacy `address_bar`.
     fn chrome_model_snapshot(&self) -> lumen_chrome::ChromeModel {
         let active_id = self.tab_strip.tabs.get(self.tab_strip.active).map(|t| t.id);
         let tabs = self
@@ -8494,12 +8514,20 @@ impl Lumen {
             .active_entry()
             .and_then(|e| panels::profile_menu::slug_for_profile(&e.name))
             .map(str::to_owned);
+        // CC-7: same not-focused/focused branching `build_inline_field` uses
+        // for the legacy overlay text, retargeted at `#omniInput`'s `value`.
+        let (omnibox_value, omnibox_warning) =
+            address_bar::chrome_omnibox_value(&self.address_bar, self.current_display_url());
         lumen_chrome::ChromeModel {
             dark_theme: self.dark_mode,
             layout_vertical: self.vertical_tabs.visible,
             profile_slug,
             tabs,
             workspaces,
+            omnibox: lumen_chrome::OmniboxModel {
+                value: omnibox_value,
+                warning: omnibox_warning.map(str::to_owned),
+            },
         }
     }
 
@@ -13065,10 +13093,36 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             let hit = self.chrome_hit_test(x_css, y_css);
                             self.chrome_active_nid = hit.as_ref().map(|r| r.node);
                             self.relayout_chrome_host();
-                            if let Some(hit) = hit
-                                && let Some((nid, action)) = self.chrome_action_at(&hit)
-                            {
-                                self.dispatch_chrome_action(nid, action, event_loop);
+                            if let Some(hit) = hit {
+                                // CC-7: `.omnibox`/`#omniInput` carries no
+                                // `data-action` (nothing to translate an
+                                // `onfocus` handler from — the frozen design
+                                // reference has none either, see CC-7 in
+                                // docs/tasks/p1-css-chrome.md) — special-cased
+                                // here exactly like the legacy
+                                // `toolbar::ToolbarHit::Omnibox` branch it
+                                // mirrors: a no-op while already open so an
+                                // in-progress edit/dropdown selection isn't reset.
+                                let omni_input = self
+                                    .chrome_doc
+                                    .as_ref()
+                                    .and_then(|(doc, _)| doc.find_by_id(lumen_chrome::ids::OMNI_INPUT));
+                                if omni_input.is_some_and(|id| hit.path.contains(&id)) {
+                                    if !self.address_bar.is_open() {
+                                        self.hint.close();
+                                        let current = self.current_display_url().to_owned();
+                                        self.address_bar.open(&current);
+                                        // CC-7: the relayout above ran before
+                                        // `open()` — redo it so the
+                                        // `:focus-within` ring/caret show on
+                                        // this same click, not one input
+                                        // later (see the matching comment in
+                                        // `Self::handle_address_bar_key`).
+                                        self.relayout_chrome_host();
+                                    }
+                                } else if let Some((nid, action)) = self.chrome_action_at(&hit) {
+                                    self.dispatch_chrome_action(nid, action, event_loop);
+                                }
                             }
                             self.request_redraw();
                             return;
@@ -14945,6 +14999,32 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         framed.push(lumen_paint::DisplayCommand::PushClipRect { rect: strip });
                         framed.extend_from_slice(chrome_dl);
                         framed.push(lumen_paint::DisplayCommand::PopClip);
+                    }
+                    // CC-7: `#omniInput` editing stays owned by the legacy
+                    // `address_bar` state machine — no native `<input>` caret
+                    // exists (`crates/chrome/src/model.rs` only binds the
+                    // *value*), so it's hand-painted here, on top of the
+                    // chrome document just painted above. Same simplified
+                    // "flush right of the field" placement `build_inline_field`
+                    // used for the old overlay caret (`address_bar.rs`) — not
+                    // per-glyph-measured, and it never needed to be while
+                    // `AddressBarState` only supports append/backspace at the
+                    // end of the string. Hidden while a dropdown suggestion is
+                    // selected, mirroring the same overlay behavior.
+                    if self.address_bar.is_open()
+                        && self.address_bar.selected_idx().is_none()
+                        && !self.address_bar.input().is_empty()
+                        && let Some(field) = self.chrome_omni_input_rect
+                    {
+                        framed.push(lumen_paint::DisplayCommand::FillRect {
+                            rect: Rect::new(
+                                field.x + field.width - 8.0,
+                                field.y + 4.0,
+                                2.0,
+                                (field.height - 8.0).max(0.0),
+                            ),
+                            color: lumen_layout::Color { a: 220, ..pal.accent },
+                        });
                     }
                     framed.append(&mut overlay_buf);
                     overlay_buf = framed;
@@ -17300,6 +17380,10 @@ impl Lumen {
                 self.hint.close();
                 let current = self.current_display_url().to_owned();
                 self.address_bar.open(&current);
+                // CC-7: reflect the now-open state (focus ring, value) in
+                // the engine-rendered `#omniInput` — see the comment on the
+                // matching call in `Self::handle_address_bar_key`.
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::HintModeOpen => {
@@ -18828,6 +18912,16 @@ impl Lumen {
                 }
             }
         }
+        // CC-7 (docs/tasks/p1-css-chrome.md): `#omniInput`'s engine-rendered
+        // value/warning/caret (`Self::chrome_model_snapshot`,
+        // `Self::chrome_omni_input_rect`) is baked into `self.chrome_layout`
+        // at `relayout_chrome_host` time, not recomputed every
+        // `RedrawRequested` — every branch above mutates `self.address_bar`
+        // (text, selection, or open/closed), so without this call the
+        // on-screen field would keep showing stale text while the user
+        // types. No-op off the flag (`Self::relayout_chrome_host` early-
+        // returns when `chrome_doc` is `None`).
+        self.relayout_chrome_host();
     }
 
     /// Process a committed omnibox value: resolve aliases, then navigate or act.
@@ -20506,6 +20600,9 @@ impl Lumen {
                     self.hint.close();
                     let current = self.current_display_url().to_owned();
                     self.address_bar.open(&current);
+                    // CC-7: see the comment on the matching call in
+                    // `Self::handle_address_bar_key`.
+                    self.relayout_chrome_host();
                 }
                 PaletteAction::ToggleBookmarks => {
                     self.bookmark_panel.toggle();
