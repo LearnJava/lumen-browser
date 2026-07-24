@@ -594,110 +594,110 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
     <!-- ============ VERTICAL SIDEBAR ============ -->
     <aside class="sidebar vertical-only" id="sidebar" data-testid="sidebar">
       <div class="sb-profile">
-        <div class="avatar" id="avatarBtn" data-testid="profile-avatar" onclick="toggleProfileMenu()">К</div>
+        <div class="avatar" id="avatarBtn" data-testid="profile-avatar" data-action="toggle-profile-menu">К</div>
         <div class="who">
           <div class="name" id="profileName">Костя</div>
           <div class="sub" id="profileSub">Личный профиль</div>
         </div>
         <div class="profile-menu" id="profileMenu">
-          <button class="pm-item" onclick="setProfile('personal')"><span class="pm-dot" style="background:#0066FF"></span>Личный</button>
-          <button class="pm-item" onclick="setProfile('work')"><span class="pm-dot" style="background:#8B5CF6"></span>Рабочий</button>
-          <button class="pm-item" onclick="setProfile('anonymous')"><span class="pm-dot" style="background:#FF3B30"></span>Анонимный</button>
-          <button class="pm-item" onclick="setProfile('guest')"><span class="pm-dot" style="background:#8E8E93"></span>Гость</button>
+          <button class="pm-item" data-action="set-profile" data-profile="personal"><span class="pm-dot" style="background:#0066FF"></span>Личный</button>
+          <button class="pm-item" data-action="set-profile" data-profile="work"><span class="pm-dot" style="background:#8B5CF6"></span>Рабочий</button>
+          <button class="pm-item" data-action="set-profile" data-profile="anonymous"><span class="pm-dot" style="background:#FF3B30"></span>Анонимный</button>
+          <button class="pm-item" data-action="set-profile" data-profile="guest"><span class="pm-dot" style="background:#8E8E93"></span>Гость</button>
         </div>
       </div>
       <div class="sb-divider"></div>
 
       <div class="sb-workspaces" data-testid="workspace-switcher">
-        <button class="ws-item active" data-ws="personal" style="--ws-color:#0066FF" onclick="selectWs(this)">
+        <button class="ws-item active" data-ws="personal" style="--ws-color:#0066FF" data-action="select-workspace">
           <span class="ws-icon" style="background:#0066FF">Л</span><span class="lbl">Личное</span>
         </button>
-        <button class="ws-item" data-ws="work" style="--ws-color:#8B5CF6" onclick="selectWs(this)">
+        <button class="ws-item" data-ws="work" style="--ws-color:#8B5CF6" data-action="select-workspace">
           <span class="ws-icon" style="background:#8B5CF6">Р</span><span class="lbl">Проект Х</span>
         </button>
-        <button class="ws-item" data-ws="reading" style="--ws-color:#1F9D55" onclick="selectWs(this)">
+        <button class="ws-item" data-ws="reading" style="--ws-color:#1F9D55" data-action="select-workspace">
           <span class="ws-icon" style="background:#1F9D55">Ч</span><span class="lbl">Чтение</span>
         </button>
-        <button class="ws-add" onclick="alert('Демо: создание нового пространства')"><svg class="icon"><use href="#i-plus"/></svg><span class="lbl">Новое пространство</span></button>
+        <button class="ws-add" data-action="add-workspace"><svg class="icon"><use href="#i-plus"/></svg><span class="lbl">Новое пространство</span></button>
       </div>
       <div class="sb-divider"></div>
 
       <div class="sb-tabs" id="sbTabs" data-testid="tab-list">
         <div class="sb-section-label" id="sbSectionLabel">Вкладки · Личное</div>
 
-        <div class="tab-row active" data-ws="personal" data-title="Дизайн-система Lumen — Figma" data-url="figma.com/file/lumen-ds" onclick="selectTab(this)">
+        <div class="tab-row active" data-ws="personal" data-title="Дизайн-система Lumen — Figma" data-url="figma.com/file/lumen-ds" data-action="select-tab">
           <span class="container-stripe" style="background:#0066FF"></span>
           <span class="tab-fav">L</span>
           <span class="tab-title">Дизайн-система Lumen — Figma</span>
-          <button class="tab-close" onclick="event.stopPropagation()"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="personal" data-title="Почта — Входящие (12)" data-url="mail.example.com/inbox" onclick="selectTab(this)">
+        <div class="tab-row" data-ws="personal" data-title="Почта — Входящие (12)" data-url="mail.example.com/inbox" data-action="select-tab">
           <span class="tab-fav">M</span>
           <span class="tab-title">Почта — Входящие (12)</span>
-          <button class="tab-close" onclick="event.stopPropagation()"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row child" data-ws="personal" data-title="Re: правки по релизу" data-url="mail.example.com/thread/482" onclick="selectTab(this)">
+        <div class="tab-row child" data-ws="personal" data-title="Re: правки по релизу" data-url="mail.example.com/thread/482" data-action="select-tab">
           <span class="tree-line"></span>
           <span class="tab-fav">✎</span>
           <span class="tab-title">Re: правки по релизу</span>
-          <button class="tab-close" onclick="event.stopPropagation()"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="personal" data-title="Т-Банк — Счета" data-url="tbank.example/accounts" onclick="selectTab(this)" style="margin-top:2px">
+        <div class="tab-row" data-ws="personal" data-title="Т-Банк — Счета" data-url="tbank.example/accounts" style="margin-top:2px" data-action="select-tab">
           <span class="container-stripe" style="background:#1F9D55"></span>
           <span class="tab-fav">Б</span>
           <span class="tab-title">Т-Банк — Счета</span>
-          <button class="tab-close" onclick="event.stopPropagation()"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
-        <div class="tab-row child" data-ws="personal" data-title="Выписка за июль" data-url="tbank.example/accounts/statement" onclick="selectTab(this)">
+        <div class="tab-row child" data-ws="personal" data-title="Выписка за июль" data-url="tbank.example/accounts/statement" data-action="select-tab">
           <span class="tree-line"></span>
           <span class="container-stripe" style="background:#1F9D55"></span>
           <span class="tab-fav">Б</span>
           <span class="tab-title">Выписка за июль</span>
-          <button class="tab-close" onclick="event.stopPropagation()"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="work" data-title="lumen/core — PR #482" data-url="github.com/lumen/core/pull/482" onclick="selectTab(this)">
+        <div class="tab-row" data-ws="work" data-title="lumen/core — PR #482" data-url="github.com/lumen/core/pull/482" data-action="select-tab">
           <span class="tab-fav">G</span>
           <span class="tab-title">lumen/core — PR #482: wgpu surface</span>
-          <button class="tab-close" onclick="event.stopPropagation()"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row sleeping" data-ws="work" data-title="Аналитика — Dashboard Q3" data-url="analytics.example/q3" onclick="selectTab(this)">
+        <div class="tab-row sleeping" data-ws="work" data-title="Аналитика — Dashboard Q3" data-url="analytics.example/q3" data-action="select-tab">
           <span class="tab-fav">A</span>
           <span class="tab-title">Аналитика — Dashboard Q3</span>
           <span class="tab-badge" title="Гибернирована">✦</span>
-          <button class="tab-close" onclick="event.stopPropagation()"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="work" data-title="Восстановление вкладки" data-url="" onclick="selectTab(this)">
+        <div class="tab-row" data-ws="work" data-title="Восстановление вкладки" data-url="" data-action="select-tab">
           <span class="spinner"></span>
           <span class="tab-title">Восстановление…</span>
         </div>
 
-        <div class="tab-row" data-ws="work" data-title="Notion — Roadmap Lumen" data-url="notion.so/lumen-roadmap" onclick="selectTab(this)">
+        <div class="tab-row" data-ws="work" data-title="Notion — Roadmap Lumen" data-url="notion.so/lumen-roadmap" data-action="select-tab">
           <span class="tab-fav">N</span>
           <span class="tab-title">Notion — Roadmap Lumen</span>
-          <button class="tab-close" onclick="event.stopPropagation()"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="reading" data-title="Почему borders дешевле теней" data-url="blog.example/borders-vs-shadows" onclick="selectTab(this)">
+        <div class="tab-row" data-ws="reading" data-title="Почему borders дешевле теней" data-url="blog.example/borders-vs-shadows" data-action="select-tab">
           <span class="tab-fav"><svg class="icon" style="width:9px;height:9px"><use href="#i-book"/></svg></span>
           <span class="tab-title">Почему borders дешевле теней</span>
-          <button class="tab-close" onclick="event.stopPropagation()"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="reading" data-title="Anti-aliasing в кастомных рендерах" data-url="gfx.example/aa-notes" onclick="selectTab(this)">
+        <div class="tab-row" data-ws="reading" data-title="Anti-aliasing в кастомных рендерах" data-url="gfx.example/aa-notes" data-action="select-tab">
           <span class="tab-fav"><svg class="icon" style="width:9px;height:9px"><use href="#i-book"/></svg></span>
           <span class="tab-title">Anti-aliasing в кастомных рендерах</span>
-          <button class="tab-close" onclick="event.stopPropagation()"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
       </div>
 
       <div class="sb-footer">
-        <button class="sb-collapse" onclick="toggleSidebar()"><svg class="icon"><use href="#i-chevleft" id="collapseIcon"/></svg><span class="lbl">Свернуть сайдбар</span></button>
+        <button class="sb-collapse" data-action="toggle-sidebar"><svg class="icon"><use href="#i-chevleft" id="collapseIcon"/></svg><span class="lbl">Свернуть сайдбар</span></button>
       </div>
     </aside>
 
@@ -706,23 +706,23 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
       <!-- ============ HORIZONTAL TOP ROW 1 ============ -->
       <div class="hbar-row1 horizontal-only row1-horizontal">
         <button class="hbar-menu"><svg class="icon"><use href="#i-menu"/></svg></button>
-        <button class="hbar-profile" onclick="toggleProfileMenu()"><span class="pm-dot" style="background:var(--accent)"></span><span id="profileNameH">Костя · Личный</span></button>
+        <button class="hbar-profile" data-action="toggle-profile-menu"><span class="pm-dot" style="background:var(--accent)"></span><span id="profileNameH">Костя · Личный</span></button>
         <div class="hbar-divider"></div>
         <div class="hbar-ws">
-          <button class="hbar-ws-pill active" data-ws="personal" style="--ws-color:#0066FF" onclick="selectWsH(this)">Личное</button>
-          <button class="hbar-ws-pill" data-ws="work" style="--ws-color:#8B5CF6" onclick="selectWsH(this)">Проект Х</button>
-          <button class="hbar-ws-pill" data-ws="reading" style="--ws-color:#1F9D55" onclick="selectWsH(this)">Чтение</button>
+          <button class="hbar-ws-pill active" data-ws="personal" style="--ws-color:#0066FF" data-action="select-workspace">Личное</button>
+          <button class="hbar-ws-pill" data-ws="work" style="--ws-color:#8B5CF6" data-action="select-workspace">Проект Х</button>
+          <button class="hbar-ws-pill" data-ws="reading" style="--ws-color:#1F9D55" data-action="select-workspace">Чтение</button>
         </div>
         <div class="hbar-divider"></div>
         <div class="hbar-tabs" id="hbarTabs">
-          <div class="hbar-tab active" data-ws="personal" data-title="Дизайн-система Lumen — Figma" data-url="figma.com/file/lumen-ds" onclick="selectTab(this)"><span class="tab-fav">L</span><span class="tab-title">Дизайн-система Lumen</span></div>
-          <div class="hbar-tab" data-ws="personal" data-title="Почта — Входящие (12)" data-url="mail.example.com/inbox" onclick="selectTab(this)"><span class="tab-fav">M</span><span class="tab-title">Почта — Входящие</span></div>
-          <div class="hbar-tab" data-ws="personal" data-title="Т-Банк — Счета" data-url="tbank.example/accounts" onclick="selectTab(this)"><span class="tab-fav">Б</span><span class="tab-title">Т-Банк — Счета</span></div>
-          <div class="hbar-tab" data-ws="work" data-title="lumen/core — PR #482" data-url="github.com/lumen/core/pull/482" onclick="selectTab(this)"><span class="tab-fav">G</span><span class="tab-title">lumen/core — PR #482</span></div>
-          <div class="hbar-tab" data-ws="work" data-title="Аналитика — Dashboard Q3" data-url="analytics.example/q3" onclick="selectTab(this)"><span class="tab-fav">A</span><span class="tab-title">Аналитика Q3</span></div>
-          <div class="hbar-tab" data-ws="reading" data-title="Почему borders дешевле теней" data-url="blog.example/borders-vs-shadows" onclick="selectTab(this)"><span class="tab-fav">✎</span><span class="tab-title">Почему borders дешевле теней</span></div>
+          <div class="hbar-tab active" data-ws="personal" data-title="Дизайн-система Lumen — Figma" data-url="figma.com/file/lumen-ds" data-action="select-tab"><span class="tab-fav">L</span><span class="tab-title">Дизайн-система Lumen</span></div>
+          <div class="hbar-tab" data-ws="personal" data-title="Почта — Входящие (12)" data-url="mail.example.com/inbox" data-action="select-tab"><span class="tab-fav">M</span><span class="tab-title">Почта — Входящие</span></div>
+          <div class="hbar-tab" data-ws="personal" data-title="Т-Банк — Счета" data-url="tbank.example/accounts" data-action="select-tab"><span class="tab-fav">Б</span><span class="tab-title">Т-Банк — Счета</span></div>
+          <div class="hbar-tab" data-ws="work" data-title="lumen/core — PR #482" data-url="github.com/lumen/core/pull/482" data-action="select-tab"><span class="tab-fav">G</span><span class="tab-title">lumen/core — PR #482</span></div>
+          <div class="hbar-tab" data-ws="work" data-title="Аналитика — Dashboard Q3" data-url="analytics.example/q3" data-action="select-tab"><span class="tab-fav">A</span><span class="tab-title">Аналитика Q3</span></div>
+          <div class="hbar-tab" data-ws="reading" data-title="Почему borders дешевле теней" data-url="blog.example/borders-vs-shadows" data-action="select-tab"><span class="tab-fav">✎</span><span class="tab-title">Почему borders дешевле теней</span></div>
         </div>
-        <button class="hbar-add" onclick="alert('Демо: новая вкладка')"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <button class="hbar-add" data-action="new-tab"><svg class="icon"><use href="#i-plus"/></svg></button>
       </div>
 
       <!-- ============ TOOLBAR ============ -->
@@ -730,38 +730,38 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
         <div class="tb-nav">
           <button class="tb-btn"><svg class="icon"><use href="#i-back"/></svg></button>
           <button class="tb-btn"><svg class="icon"><use href="#i-fwd"/></svg></button>
-          <button class="tb-btn" onclick="fakeReload(this)"><svg class="icon"><use href="#i-reload"/></svg></button>
+          <button class="tb-btn" data-action="reload"><svg class="icon"><use href="#i-reload"/></svg></button>
         </div>
 
         <div class="omnibox-wrap">
           <div class="omnibox" data-testid="omnibox">
-            <button class="lock-btn" id="lockBtn" onclick="openCertViewer(event)"><svg class="icon"><use href="#i-lock"/></svg></button>
-            <input id="omniInput" type="text" placeholder="Поиск или адрес сайта… (попробуйте: аpple.com)" oninput="onOmniInput(this.value)" onfocus="openDropdown()">
+            <button class="lock-btn" id="lockBtn" data-action="open-cert-viewer"><svg class="icon"><use href="#i-lock"/></svg></button>
+            <input id="omniInput" type="text" placeholder="Поиск или адрес сайта… (попробуйте: аpple.com)">
             <div class="omnibox-actions">
               <button class="tb-btn" title="В закладки"><svg class="icon"><use href="#i-star"/></svg></button>
-              <button class="tb-btn" id="shieldBtn" data-testid="shield-btn" onclick="toggleShieldPopover(event)"><svg class="icon"><use href="#i-shield"/></svg></button>
+              <button class="tb-btn" id="shieldBtn" data-testid="shield-btn" data-action="toggle-shield-popover"><svg class="icon"><use href="#i-shield"/></svg></button>
             </div>
           </div>
           <div class="omnibox-warn" id="omniWarn">⚠ <span>Похоже на омоглиф-домен — отображается как <b>xn--pple-43d.com</b></span></div>
 
           <div class="dropdown" id="omniDropdown">
-            <div class="dd-row" onclick="ddGo('page','Дизайн-система Lumen — Figma')">
+            <div class="dd-row" data-action="omni-go">
               <span class="dd-icon" style="background:#0B6FE0"><svg class="icon"><use href="#i-tabicon"/></svg></span>
               <div class="dd-text"><div class="dd-title">@tabs · Дизайн-система Lumen — Figma</div><div class="dd-sub">Открытая вкладка</div></div>
             </div>
-            <div class="dd-row" onclick="ddGo('history')">
+            <div class="dd-row" data-action="show-view" data-view="history">
               <span class="dd-icon" style="background:#8E8E93"><svg class="icon"><use href="#i-clock"/></svg></span>
               <div class="dd-text"><div class="dd-title">@history · figma.com/file/lumen-ds</div><div class="dd-sub">Посещено вчера в 21:14</div></div>
             </div>
-            <div class="dd-row" onclick="ddGo('bookmarks')">
+            <div class="dd-row" data-action="show-view" data-view="bookmarks">
               <span class="dd-icon" style="background:#D8A400"><svg class="icon"><use href="#i-star"/></svg></span>
               <div class="dd-text"><div class="dd-title">@bookmarks · Rust wgpu Guide</div><div class="dd-sub">wgpu.rs/guide</div></div>
             </div>
-            <div class="dd-row" onclick="ddGo('bookmarks')">
+            <div class="dd-row" data-action="show-view" data-view="bookmarks">
               <span class="dd-icon" style="background:#F08A2E"><svg class="icon"><use href="#i-book"/></svg></span>
               <div class="dd-text"><div class="dd-title">@read-later · Почему borders дешевле теней</div><div class="dd-sub">Непрочитано · 6 мин чтения</div></div>
             </div>
-            <div class="dd-row" onclick="openAiSidebar()">
+            <div class="dd-row" data-action="open-ai-sidebar">
               <span class="dd-icon" style="background:#8B5CF6"><svg class="icon"><use href="#i-spark"/></svg></span>
               <div class="dd-text"><div class="dd-title">@ai · Спросить ИИ про текущую страницу</div><div class="dd-sub">Открыть AI-сайдбар</div></div>
             </div>
@@ -778,30 +778,30 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               <svg class="icon icon-lg" style="position:relative"><use href="#i-camera"/></svg>
               <div class="perm-name">Камера</div>
               <div class="perm-actions">
-                <button class="perm-btn allow" onclick="setPerm(this,'allow')" title="Разрешить">✓</button>
-                <button class="perm-btn deny" onclick="setPerm(this,'deny')" title="Запретить">✕</button>
+                <button class="perm-btn allow" title="Разрешить" data-action="set-permission" data-perm="allow">✓</button>
+                <button class="perm-btn deny" title="Запретить" data-action="set-permission" data-perm="deny">✕</button>
               </div>
             </div>
             <div class="perm-row">
               <svg class="icon icon-lg" style="position:relative"><use href="#i-mic"/></svg>
               <div class="perm-name">Микрофон</div>
               <div class="perm-actions">
-                <button class="perm-btn allow selected-allow" onclick="setPerm(this,'allow')" title="Разрешить">✓</button>
-                <button class="perm-btn deny" onclick="setPerm(this,'deny')" title="Запретить">✕</button>
+                <button class="perm-btn allow selected-allow" title="Разрешить" data-action="set-permission" data-perm="allow">✓</button>
+                <button class="perm-btn deny" title="Запретить" data-action="set-permission" data-perm="deny">✕</button>
               </div>
             </div>
-            <div class="fine-print">«Разрешить» действует только для этого сеанса. Чтобы разрешить навсегда — <a class="link" href="javascript:void(0)" onclick="showView('settings')" style="color:var(--accent)">about:settings/privacy</a>.</div>
+            <div class="fine-print">«Разрешить» действует только для этого сеанса. Чтобы разрешить навсегда — <a class="link" href="javascript:void(0)" style="color:var(--accent)" data-action="show-view" data-view="settings">about:settings/privacy</a>.</div>
           </div>
         </div>
 
         <div class="tb-right">
-          <button class="tb-btn" onclick="toggleFind()"><svg class="icon"><use href="#i-search"/></svg></button>
-          <button class="tb-btn" onclick="openWebSidebar()"><svg class="icon"><use href="#i-panel"/></svg></button>
-          <button class="tb-btn" onclick="openAiSidebar()"><svg class="icon"><use href="#i-spark"/></svg></button>
-          <button class="tb-btn" id="dlToggleBtn" onclick="toggleDownloads()"><svg class="icon"><use href="#i-download"/></svg><span class="tb-dot"></span></button>
-          <button class="tb-btn" onclick="openPrintDialog()"><svg class="icon"><use href="#i-printer"/></svg></button>
-          <button class="tb-btn" id="devtoolsBtn" onclick="toggleDevtools()"><svg class="icon"><use href="#i-code"/></svg></button>
-          <button class="tb-btn" onclick="showView('settings')"><svg class="icon"><use href="#i-gear"/></svg></button>
+          <button class="tb-btn" data-action="toggle-find"><svg class="icon"><use href="#i-search"/></svg></button>
+          <button class="tb-btn" data-action="open-web-sidebar"><svg class="icon"><use href="#i-panel"/></svg></button>
+          <button class="tb-btn" data-action="open-ai-sidebar"><svg class="icon"><use href="#i-spark"/></svg></button>
+          <button class="tb-btn" id="dlToggleBtn" data-action="toggle-downloads"><svg class="icon"><use href="#i-download"/></svg><span class="tb-dot"></span></button>
+          <button class="tb-btn" data-action="open-print-dialog"><svg class="icon"><use href="#i-printer"/></svg></button>
+          <button class="tb-btn" id="devtoolsBtn" data-action="toggle-devtools"><svg class="icon"><use href="#i-code"/></svg></button>
+          <button class="tb-btn" data-action="show-view" data-view="settings"><svg class="icon"><use href="#i-gear"/></svg></button>
         </div>
       </div>
 
@@ -913,8 +913,8 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                   <div class="bm-card"><div class="bm-fav">R</div><div class="bm-title">Rust wgpu Guide</div><div class="bm-url">wgpu.rs/guide</div></div>
                   <div class="bm-card"><div class="bm-fav">F</div><div class="bm-title">Figma — Lumen DS</div><div class="bm-url">figma.com/file/lumen-ds</div></div>
                   <div class="bm-card"><div class="bm-fav">G</div><div class="bm-title">lumen-browser/core</div><div class="bm-url">github.com/lumen/core</div></div>
-                  <div class="bm-card readlater" onclick="alert('Демо: карточка помечена как прочитанная и архивирована')"><span class="rl-badge">Непрочитано</span><div class="bm-fav"><svg class="icon"><use href="#i-book"/></svg></div><div class="bm-title">Почему borders дешевле теней</div><div class="bm-url">blog.example/borders-vs-shadows</div></div>
-                  <div class="bm-card readlater" onclick="alert('Демо: карточка помечена как прочитанная и архивирована')"><span class="rl-badge">Непрочитано</span><div class="bm-fav"><svg class="icon"><use href="#i-book"/></svg></div><div class="bm-title">Anti-aliasing в кастомных рендерах</div><div class="bm-url">gfx.example/aa-notes</div></div>
+                  <div class="bm-card readlater" data-action="archive-card"><span class="rl-badge">Непрочитано</span><div class="bm-fav"><svg class="icon"><use href="#i-book"/></svg></div><div class="bm-title">Почему borders дешевле теней</div><div class="bm-url">blog.example/borders-vs-shadows</div></div>
+                  <div class="bm-card readlater" data-action="archive-card"><span class="rl-badge">Непрочитано</span><div class="bm-fav"><svg class="icon"><use href="#i-book"/></svg></div><div class="bm-title">Anti-aliasing в кастомных рендерах</div><div class="bm-url">gfx.example/aa-notes</div></div>
                   <div class="bm-card"><div class="bm-fav">N</div><div class="bm-title">Notion — Roadmap Lumen</div><div class="bm-url">notion.so/lumen-roadmap</div></div>
                 </div>
               </div>
@@ -925,12 +925,12 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           <div class="view" id="view-settings">
             <div class="settings-wrap">
               <div class="set-nav">
-                <button class="item" onclick="setSetSection(this,'general')">General</button>
-                <button class="item active" onclick="setSetSection(this,'privacy')">Privacy</button>
-                <button class="item" onclick="setSetSection(this,'appearance')">Appearance</button>
-                <button class="item" onclick="setSetSection(this,'sync')">Синхронизация</button>
-                <button class="item" onclick="setSetSection(this,'ext')">Расширения</button>
-                <button class="item" onclick="setSetSection(this,'qa')">QA / Тестировщикам</button>
+                <button class="item" data-action="set-settings-section" data-section="general">General</button>
+                <button class="item active" data-action="set-settings-section" data-section="privacy">Privacy</button>
+                <button class="item" data-action="set-settings-section" data-section="appearance">Appearance</button>
+                <button class="item" data-action="set-settings-section" data-section="sync">Синхронизация</button>
+                <button class="item" data-action="set-settings-section" data-section="ext">Расширения</button>
+                <button class="item" data-action="set-settings-section" data-section="qa">QA / Тестировщикам</button>
               </div>
               <div class="set-main">
                 <div class="set-section" data-set="general">
@@ -964,15 +964,15 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                   <h3>Adblock & Fingerprinting</h3>
                   <div class="set-row">
                     <div class="st-text"><div class="st-title">Блокировать рекламу</div><div class="st-desc">Блокировка скриптов: Выкл</div></div>
-                    <div class="toggle on" onclick="toggleSwitch(this)"><div class="thumb"></div></div>
+                    <div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div>
                   </div>
                   <div class="set-row">
                     <div class="st-text"><div class="st-title">Блокировать фингерпринтинг</div><div class="st-desc">Маскировка: Вкл &nbsp;·&nbsp; <a class="link" href="javascript:void(0)">Посмотреть, что именно маскируется</a></div></div>
-                    <div class="toggle on" onclick="toggleSwitch(this)"><div class="thumb"></div></div>
+                    <div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div>
                   </div>
                   <div class="set-row">
                     <div class="st-text"><div class="st-title">Принудительный HTTPS</div><div class="st-desc">Автоматический апгрейд: Выкл</div></div>
-                    <div class="toggle" onclick="toggleSwitch(this)"><div class="thumb"></div></div>
+                    <div class="toggle" data-action="toggle-switch"><div class="thumb"></div></div>
                   </div>
                 </div>
 
@@ -1010,16 +1010,16 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 
                 <div class="set-section" data-set="ext">
                   <div class="set-block"><h3>Расширения</h3><div class="desc">Установленные дополнения.</div>
-                    <div class="set-row"><div class="st-text"><div class="st-title">uBlock Origin</div><div class="st-desc">Активно · 1.54</div></div><div class="toggle on" onclick="toggleSwitch(this)"><div class="thumb"></div></div></div>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Bitwarden</div><div class="st-desc">Активно · 2024.6</div></div><div class="toggle on" onclick="toggleSwitch(this)"><div class="thumb"></div></div></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">uBlock Origin</div><div class="st-desc">Активно · 1.54</div></div><div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Bitwarden</div><div class="st-desc">Активно · 2024.6</div></div><div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div></div>
                   </div>
                 </div>
 
                 <div class="set-section" data-set="qa">
                   <div class="set-block"><h3>QA / Тестировщикам</h3><div class="desc">Инструменты для ручного и авто-тестирования. Полная панель — по кнопке ниже или «QA-панель» на демо-полосе.</div>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Открыть панель тестировщика</div><div class="st-desc">FPS/кадр, test-id оверлей, эмуляция сети и вьюпорта, feature-flags, экспорт состояния</div></div><a class="link" href="javascript:void(0)" onclick="showView('page');toggleQa()">Открыть →</a></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Открыть панель тестировщика</div><div class="st-desc">FPS/кадр, test-id оверлей, эмуляция сети и вьюпорта, feature-flags, экспорт состояния</div></div><a class="link" href="javascript:void(0)" data-action="show-view" data-view="page">Открыть →</a></div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Режим сборки</div><div class="st-desc">Стабильные функции скрывают экспериментальные флаги</div></div><a class="link" href="javascript:void(0)">Nightly ▾</a></div>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Стабильные test-id</div><div class="st-desc">Гарантия неизменных <span style="font-family:var(--font-mono)">data-testid</span> для автотестов</div></div><div class="toggle on" onclick="toggleSwitch(this)"><div class="thumb"></div></div></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Стабильные test-id</div><div class="st-desc">Гарантия неизменных <span style="font-family:var(--font-mono)">data-testid</span> для автотестов</div></div><div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div></div>
                   </div>
                 </div>
               </div>
@@ -1028,21 +1028,21 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 
           <!-- Find bar -->
           <div class="find-bar" id="findBar">
-            <input id="findInput" placeholder="Найти на странице" oninput="onFindInput(this.value)">
+            <input id="findInput" placeholder="Найти на странице">
             <span class="find-count" id="findCount">0/0</span>
             <button title="Вверх">↑</button>
             <button title="Вниз">↓</button>
-            <button onclick="toggleFind()"><svg class="icon"><use href="#i-x"/></svg></button>
+            <button data-action="toggle-find"><svg class="icon"><use href="#i-x"/></svg></button>
           </div>
 
           <!-- DevTools -->
           <div class="devtools" id="devtools">
             <div class="dt-tabs">
-              <div class="dt-tab active" onclick="setDtTab(this,'elements')">Elements</div>
-              <div class="dt-tab" onclick="setDtTab(this,'console')">Console</div>
-              <div class="dt-tab" onclick="setDtTab(this,'network')">Network</div>
-              <div class="dt-tab" onclick="setDtTab(this,'sources')">Sources</div>
-              <button class="dt-close" onclick="toggleDevtools()"><svg class="icon"><use href="#i-x"/></svg></button>
+              <div class="dt-tab active" data-action="set-devtools-tab" data-dt-tab="elements">Elements</div>
+              <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="console">Console</div>
+              <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="network">Network</div>
+              <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="sources">Sources</div>
+              <button class="dt-close" data-action="toggle-devtools"><svg class="icon"><use href="#i-x"/></svg></button>
             </div>
             <div class="dt-panel active" id="dt-elements">
               <div class="elements-tree"><span class="tag">&lt;div</span> <span class="attr">class</span>=<span class="val">"tab-row active"</span><span class="tag">&gt;</span>
@@ -1080,7 +1080,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 
           <!-- Downloads panel -->
           <div class="downloads-panel" id="downloadsPanel">
-            <div class="dl-header">Загрузки<button class="dl-close" onclick="toggleDownloads()"><svg class="icon"><use href="#i-x"/></svg></button></div>
+            <div class="dl-header">Загрузки<button class="dl-close" data-action="toggle-downloads"><svg class="icon"><use href="#i-x"/></svg></button></div>
             <div class="dl-list">
               <div class="dl-card" id="dlActive">
                 <div class="dl-row"><div class="dl-icon">PDF</div><div><div class="dl-name">lumen-design-system.pdf</div><div class="dl-meta" id="dlMeta">2.1 MB — идёт загрузка…</div></div></div>
@@ -1103,9 +1103,9 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           </div>
 
           <!-- Command palette -->
-          <div class="cp-overlay" id="cpOverlay" onclick="if(event.target===this) closePalette()">
+          <div class="cp-overlay" id="cpOverlay" data-action="close-palette">
             <div class="cp-box">
-              <div class="cp-input-wrap"><svg class="icon icon-lg"><use href="#i-search"/></svg><input id="cpInput" placeholder="Команда, вкладка или закладка…" oninput="onCpInput(this.value)"></div>
+              <div class="cp-input-wrap"><svg class="icon icon-lg"><use href="#i-search"/></svg><input id="cpInput" placeholder="Команда, вкладка или закладка…"></div>
               <div class="cp-list" id="cpList"></div>
             </div>
           </div>
@@ -1114,18 +1114,18 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           <div class="focus-timer">
             <svg class="icon" style="stroke:#fff"><use href="#i-clock"/></svg>
             <span id="focusTime">25:00</span>
-            <button class="ft-toggle" id="focusToggle" onclick="toggleFocusTimer()"><svg class="icon"><use href="#i-play"/></svg></button>
-            <button class="focus-exit" onclick="toggleFocus()"><svg class="icon" style="stroke:#fff;width:11px;height:11px"><use href="#i-x"/></svg></button>
+            <button class="ft-toggle" id="focusToggle" data-action="toggle-focus-timer"><svg class="icon"><use href="#i-play"/></svg></button>
+            <button class="focus-exit" data-action="toggle-focus"><svg class="icon" style="stroke:#fff;width:11px;height:11px"><use href="#i-x"/></svg></button>
           </div>
           <div class="focus-done" id="focusDone"><svg class="icon" style="stroke:#fff;width:12px;height:12px"><use href="#i-clock"/></svg>Помодоро завершён — пора сделать перерыв</div>
 
           <!-- Certificate Viewer -->
-          <div class="modal-overlay" id="certOverlay" onclick="if(event.target===this) closeModal('certOverlay')">
+          <div class="modal-overlay" id="certOverlay" data-action="close-modal">
             <div class="modal">
               <div class="modal-head">
                 <svg class="icon icon-lg" style="color:var(--green)"><use href="#i-lock"/></svg>
                 <h3>Сертификат — figma.com</h3>
-                <button class="modal-close" onclick="closeModal('certOverlay')"><svg class="icon"><use href="#i-x"/></svg></button>
+                <button class="modal-close" data-action="close-modal"><svg class="icon"><use href="#i-x"/></svg></button>
               </div>
               <div class="modal-body">
                 <div class="cert-status">
@@ -1150,19 +1150,19 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 </div>
               </div>
               <div class="modal-foot">
-                <button onclick="closeModal('certOverlay')">Закрыть</button>
-                <button class="primary" onclick="closeModal('certOverlay')">Экспорт .pem</button>
+                <button data-action="close-modal">Закрыть</button>
+                <button class="primary" data-action="close-modal">Экспорт .pem</button>
               </div>
             </div>
           </div>
 
           <!-- Print dialog -->
-          <div class="modal-overlay" id="printOverlay" onclick="if(event.target===this) closeModal('printOverlay')">
+          <div class="modal-overlay" id="printOverlay" data-action="close-modal">
             <div class="modal wide">
               <div class="modal-head">
                 <svg class="icon icon-lg"><use href="#i-printer"/></svg>
                 <h3>Печать — Дизайн-система Lumen</h3>
-                <button class="modal-close" onclick="closeModal('printOverlay')"><svg class="icon"><use href="#i-x"/></svg></button>
+                <button class="modal-close" data-action="close-modal"><svg class="icon"><use href="#i-x"/></svg></button>
               </div>
               <div class="print-body">
                 <div class="print-preview">
@@ -1183,8 +1183,8 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 </div>
               </div>
               <div class="modal-foot">
-                <button onclick="closeModal('printOverlay')">Отмена</button>
-                <button class="primary" onclick="closeModal('printOverlay')">Печать</button>
+                <button data-action="close-modal">Отмена</button>
+                <button class="primary" data-action="close-modal">Печать</button>
               </div>
             </div>
           </div>
@@ -1203,10 +1203,10 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <svg class="icon icon-lg"><use href="#i-spark"/></svg>
             <div class="title" id="rsTitle">AI</div>
             <div class="rs-tabs">
-              <button class="rs-tab active" onclick="setRsTab(this,'ai')">AI</button>
-              <button class="rs-tab" onclick="setRsTab(this,'web')">Web</button>
+              <button class="rs-tab active" data-action="set-sidebar-tab" data-rs-tab="ai">AI</button>
+              <button class="rs-tab" data-action="set-sidebar-tab" data-rs-tab="web">Web</button>
             </div>
-            <button class="tb-btn" onclick="closeRightSidebar()"><svg class="icon"><use href="#i-x"/></svg></button>
+            <button class="tb-btn" data-action="close-right-sidebar"><svg class="icon"><use href="#i-x"/></svg></button>
           </div>
           <div class="rs-body" id="rsBodyAi">
             <div class="rs-chat-msg">Спроси меня о текущей странице — я вижу открытую вкладку «Дизайн-система Lumen — Figma».</div>

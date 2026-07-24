@@ -3735,9 +3735,9 @@
       {
        "id": "CC-3",
        "title": "CC-3: Крейт lumen-chrome + кодогенерация",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Крейт lumen-chrome + build.rs: парс-гейт (битый CSS/неизвестное свойство = ошибка сборки, allowlist -webkit-*), кодогенерация резолвера id, enum ChromeAction из data-action, реестр template-узлов; юнит-тест резолвера на реальном ассете. После CC-1"
+       "note": "Крейт `lumen-chrome` (`crates/chrome`): `build.rs` парсит `assets/chrome/chrome.html` реальными `lumen_html_parser`/`lumen_css_parser` и ломает сборку на неизвестном свойстве/селекторе (allowlist: `-webkit-font-smoothing` парсится-и-игнорируется, `::-webkit-scrollbar*` — CC-CSS-1 уже маппит их на стандартные свойства). Кодогенерация (`OUT_DIR/chrome_gen.rs`, `src/gate.rs` шарится с `build.rs` через `include!` для юнит-тестируемости): `ids` (94 строковых константы), `ChromeIds::resolve(&Document) -> Result<Self, ChromeIdError>` (без unwrap/panic в рантайме), `ChromeAction` (30 вариантов из `data-action`), `templates::IDS` (пусто — в ассете нет `<template>`, появятся в CC-6). `scripts/gen_chrome_assets.py` дополнен `add_data_actions()`: 98 демо-onclick-обработчиков эталона переведены в декларативные `data-action`+контекст-атрибуты (неизвестный обработчик = `GenError` при генерации). 13 тестов (`cargo test -p lumen-chrome`); вручную проверено, что порча CSS в ассете ломает `cargo build` с внятным сообщением. После CC-1"
       },
       {
        "id": "CC-4",
