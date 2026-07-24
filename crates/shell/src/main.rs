@@ -885,6 +885,11 @@ fn run_window_mode(
         .collect();
     let active_profile_id = profiles_registry.active().ok().flatten().map(|p| p.id);
 
+    // CC-4 (docs/tasks/p1-css-chrome.md): opt-in engine-drawn chrome host, read
+    // once at startup like `LUMEN_ENGINE_THREAD` (`spawn_engine_thread_if_enabled`
+    // above) — default off, so shell behavior is byte-identical without the flag.
+    let css_chrome_enabled = std::env::var("LUMEN_CSS_CHROME").as_deref() == Ok("1");
+
     let mut app = Lumen {
         display_list: Vec::new(),
         tile_grid: lumen_paint::TileGrid::default_size(),
@@ -899,6 +904,10 @@ fn run_window_mode(
         window: None,
         display_color_profile: platform::display_color_profile::PlatformDisplayColorProfile::new(),
         renderer: None,
+        css_chrome_enabled,
+        chrome_doc: css_chrome_enabled.then(|| lumen_chrome::parse_document(chrome_preview::HTML)),
+        chrome_layout: None,
+        chrome_page_host_rect: None,
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         transition_scheduler: TransitionScheduler::new(),
@@ -5734,6 +5743,21 @@ fn collect_layout_rects_rec(lb: &LayoutBox, map: &mut HashMap<u32, [f32; 4]>) {
     }
 }
 
+/// CC-4: removes and returns the [`LayoutBox`] for `node` from `lb`'s
+/// subtree (depth-first, first match), used by
+/// [`Lumen::relayout_chrome_host`] to prune `#contentArea` out of the chrome
+/// layout tree entirely before painting — not just its children, but its own
+/// box (and background paint command) too, so the real page painted
+/// separately at that rect is never covered by it. Never matches `lb`
+/// itself, only descendants — `#contentArea` is never the chrome document's
+/// root box.
+fn take_layout_box_by_node(lb: &mut LayoutBox, node: lumen_dom::NodeId) -> Option<LayoutBox> {
+    if let Some(idx) = lb.children.iter().position(|c| c.node == node) {
+        return Some(lb.children.remove(idx));
+    }
+    lb.children.iter_mut().find_map(|child| take_layout_box_by_node(child, node))
+}
+
 /// Строит display list с правильным painting order (CSS 2.1 Appendix E, z-index stacking).
 fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
     let tree = StackingTree::build(layout);
@@ -7083,6 +7107,33 @@ struct Lumen {
     #[allow(dead_code)] // потребитель появится при P3 wiring (ph3-color-management Step 1)
     display_color_profile: platform::display_color_profile::PlatformDisplayColorProfile,
     renderer: Option<Box<dyn RenderBackend>>,
+    /// CC-4 (docs/tasks/p1-css-chrome.md): the engine-drawn browser chrome, kept
+    /// behind `LUMEN_CSS_CHROME=1` (read once at startup — see
+    /// [`css_chrome_enabled`]). `None` off the flag, leaving every other field
+    /// below `None`/unread and shell behavior byte-identical to before CC-4.
+    css_chrome_enabled: bool,
+    /// CC-4: chrome document + stylesheet, parsed once at startup via
+    /// [`lumen_chrome::parse_document`] from `chrome_preview::HTML` — the same
+    /// bytes `build.rs` already CSS-gated. Only relaid out on resize
+    /// ([`Lumen::relayout_chrome_host`]); the asset has no dynamic content yet
+    /// (`ChromeModel` DOM mutation is CC-6), so nothing else invalidates it.
+    chrome_doc: Option<(lumen_dom::Document, lumen_css_parser::Stylesheet)>,
+    /// CC-4: `LayoutBox` + display list of the last `relayout_chrome_host` pass,
+    /// painted at the front of `overlay_buf` every frame (legacy panels/tab-bar/
+    /// toolbar still draw over it, painter's order). `None` until the first
+    /// resize after startup provides a window size. `#contentArea` — the
+    /// design reference's placeholder for tab content, doubling as the
+    /// brief's "`#page-host`" — is pruned out of this tree entirely (not just
+    /// its children) before painting, so neither its demo markup nor its own
+    /// `background:var(--surface-0)` fill can end up on top of the real page
+    /// painted separately at [`Self::chrome_page_host_rect`]'s rect.
+    chrome_layout: Option<(lumen_layout::LayoutBox, lumen_paint::DisplayList)>,
+    /// CC-4: `#contentArea`'s rect, captured from the layout tree right
+    /// before [`Self::relayout_chrome_host`] prunes that node out — replaces
+    /// the legacy `left_dock()` width / `toolbar::CHROME_H` pair at the two
+    /// render-time page-offset call sites. `None` until the first chrome
+    /// layout exists (mirrors `chrome_layout`).
+    chrome_page_host_rect: Option<Rect>,
     /// HTML event loop runtime. На каждой итерации winit-loop (AboutToWait)
     /// выполняется одна task, на RedrawRequested — run_rendering_step
     /// (вызывает rAF-callback-и), на WindowEvent::Resized —
@@ -8323,6 +8374,65 @@ impl Lumen {
                 self.prev_styles.len(),
             );
         }
+    }
+
+    /// CC-4 (docs/tasks/p1-css-chrome.md): re-lays-out and re-paints the
+    /// engine-drawn chrome document at the current window size. No-op when
+    /// `LUMEN_CSS_CHROME` is off ([`Self::css_chrome_enabled`] false —
+    /// `chrome_doc` is `None`) or the renderer/window is not ready yet
+    /// (mirrors the degenerate-size guard in [`Self::relayout_viewport`]).
+    ///
+    /// Called once the renderer has a first non-zero size and again on every
+    /// `WindowEvent::Resized`. The chrome asset has no dynamic content yet
+    /// (`ChromeModel` DOM mutation lands in CC-6), so a resize is the only
+    /// thing that can currently change its layout.
+    ///
+    /// Chrome has no hover/focus/active state of its own yet (hit-test/hover
+    /// dispatch is CC-5): the interactive thread-locals are process-wide
+    /// (brief risk #6), so this pass explicitly sets them to "none" rather
+    /// than inheriting whatever the page's last [`Self::relayout`] left
+    /// behind, and clears them again afterward so a subsequent page relayout
+    /// does not inherit chrome's (empty) state either.
+    ///
+    /// The design reference's `#contentArea` — the container it reserves for
+    /// live tab content, doubling as the brief's "`#page-host`" (no new id
+    /// was introduced) — carries its own placeholder markup (new-tab tiles, a
+    /// demo site page, …) meant for standalone preview
+    /// (`about:chrome-preview`, CC-1), not for stacking under the real tab
+    /// content this host paints separately at that same rect
+    /// ([`Self::chrome_page_host_rect`]). Since this pass's display list
+    /// paints *above* the page in `overlay_buf`, leaving that placeholder in
+    /// — or even just clearing its children but keeping its own box — would
+    /// permanently hide the real page behind either the placeholder markup or
+    /// `#contentArea`'s own `background:var(--surface-0)` fill. This pass
+    /// therefore removes `#contentArea` from the tree entirely
+    /// ([`take_layout_box_by_node`]) right after layout, capturing its rect
+    /// into `chrome_page_host_rect` first, and before [`paint_ordered`].
+    fn relayout_chrome_host(&mut self) {
+        let Some((doc, sheet)) = self.chrome_doc.as_ref() else { return };
+        let Some(r) = self.renderer.as_ref() else { return };
+        let viewport = r.viewport_size();
+        if viewport.width <= 0.0 || viewport.height <= 0.0 {
+            return;
+        }
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        lumen_layout::set_interactive_state(None, None, None);
+        let mut layout = lumen_layout::layout_measured_hyp(
+            doc,
+            sheet,
+            viewport,
+            &measurer,
+            &*self.hyp_provider,
+            self.dark_mode,
+        );
+        lumen_layout::clear_interactive_state();
+        self.chrome_page_host_rect = doc
+            .find_by_id(lumen_chrome::ids::CONTENT_AREA)
+            .and_then(|id| take_layout_box_by_node(&mut layout, id))
+            .map(|content_area| content_area.rect);
+        let dl = paint_ordered(&layout);
+        self.chrome_layout = Some((layout, dl));
     }
 
     /// ADR-016 M2.2b: route an **async-safe chrome-inset relayout** off the UI
@@ -10362,6 +10472,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
         self.window = Some(window);
         self.renderer = Some(renderer);
+        // CC-4: first chrome layout pass, now that the renderer knows the
+        // window's initial size. No-op off `LUMEN_CSS_CHROME`.
+        self.relayout_chrome_host();
 
         // GG-4: Restore vertical-tab layout from persisted settings.
         if tabs::strip::TabLayout::from_str(&self.settings_store.tab_layout())
@@ -11920,6 +12033,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     r.resize(size.width, size.height);
                 }
                 self.relayout();
+                // CC-4: re-lay-out the engine-drawn chrome at the new window
+                // size. No-op off `LUMEN_CSS_CHROME`.
+                self.relayout_chrome_host();
                 // HTML §8.1.5.1, шаг 13: ResizeObserver delivery.
                 // JS-observers are delivered inside relayout() via deliver_layout_observers().
                 // The shell runtime.deliver_observer_records delivers Rust-level observers.
@@ -14427,6 +14543,57 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         (None, Vec::new())
                     };
 
+                // CC-4 (docs/tasks/p1-css-chrome.md): the engine-drawn chrome
+                // paints first — every legacy panel/scrollbar/find-bar/tab-bar/
+                // toolbar built below still lands on top of it, painter's order
+                // (brief: "остальное пока legacy поверх"). Painted through 4
+                // clip "frame" strips around the page-host rect (top/bottom/
+                // left/right), not one plain copy: `#contentArea`'s ancestors
+                // (`body{background:var(--surface-1); height:100vh}`) still emit
+                // a full-window background box even with `#contentArea` itself
+                // pruned out of the layout tree (`relayout_chrome_host`) — an
+                // unclipped copy would paint that full-window background *over*
+                // the real page, which renders separately (as `content`, so it
+                // draws *under* `overlay_buf`) at exactly that rect. Clipping to
+                // the 4 strips surrounding the rect lets every other chrome
+                // pixel (sidebar, toolbar, any future popover CC-9+ adds outside
+                // that rect) through unchanged while guaranteeing nothing paints
+                // inside the live page's own rect. No-op off the flag
+                // (`chrome_layout` stays `None`).
+                if let (Some((_layout, chrome_dl)), Some(host)) =
+                    (self.chrome_layout.as_ref(), self.chrome_page_host_rect)
+                {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.window_height_css();
+                    let strips = [
+                        Rect { x: 0.0, y: 0.0, width: win_w, height: host.y },
+                        Rect {
+                            x: 0.0,
+                            y: host.y + host.height,
+                            width: win_w,
+                            height: (win_h - (host.y + host.height)).max(0.0),
+                        },
+                        Rect { x: 0.0, y: host.y, width: host.x, height: host.height },
+                        Rect {
+                            x: host.x + host.width,
+                            y: host.y,
+                            width: (win_w - (host.x + host.width)).max(0.0),
+                            height: host.height,
+                        },
+                    ];
+                    let mut framed = lumen_paint::DisplayList::new();
+                    for strip in strips {
+                        if strip.width <= 0.0 || strip.height <= 0.0 {
+                            continue;
+                        }
+                        framed.push(lumen_paint::DisplayCommand::PushClipRect { rect: strip });
+                        framed.extend_from_slice(chrome_dl);
+                        framed.push(lumen_paint::DisplayCommand::PopClip);
+                    }
+                    framed.append(&mut overlay_buf);
+                    overlay_buf = framed;
+                }
+
                 // Scrollbar встаёт перед find-bar в overlay-буфере: рисуется
                 // первым = находится под find-bar-ом в painter's order. Они не
                 // пересекаются по x (bar занимает левее `ww - 12`, scrollbar
@@ -14935,7 +15102,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Hidden in focus mode (task #25) for a distraction-free view;
                 // the page transform offset is left unchanged so toggling focus
                 // mode never reflows content (the strip shows page background).
-                if !self.focus.active {
+                // CC-4 (docs/tasks/p1-css-chrome.md): under `LUMEN_CSS_CHROME=1`
+                // the engine-drawn chrome (painted above) already covers this
+                // whole strip — the legacy tab-bar/toolbar builders (and their
+                // attached layout-toggle/settings/archive buttons, which are
+                // positioned relative to this same strip) do not run, so the
+                // two chromes never overlap.
+                if !self.focus.active && !self.css_chrome_enabled {
                     let win_w = self.viewport_width_css();
                     // Tab strip uses the area to the left of the settings/layout/archive buttons.
                     let tab_area_w = win_w
@@ -15311,7 +15484,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Width of any left-docked sidebar, computed before the renderer
                 // borrow so the page transform can shift right of it. Cross-dock
                 // aware across all four sidebars (tabs / AI / web).
-                let page_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
+                //
+                // CC-4 (docs/tasks/p1-css-chrome.md): under `LUMEN_CSS_CHROME=1`
+                // both offsets instead come from the engine-drawn chrome's
+                // `#contentArea` rect (the brief's "#page-host") — replacing the
+                // legacy `left_dock()` width / `toolbar::CHROME_H` pair, which is
+                // never read in this branch. Falls back to `(0.0, CHROME_H)` only
+                // if the chrome layout is not ready yet (first resize still
+                // pending), matching `relayout_chrome_host`'s own degenerate-size
+                // guard — this frame paints the page flush with the window until
+                // the next resize event supplies a chrome layout.
+                let (page_x_offset, page_y_offset) = if self.css_chrome_enabled {
+                    self.chrome_page_host_rect
+                        .map(|r| (r.x, r.y))
+                        .unwrap_or((0.0, toolbar::CHROME_H))
+                } else {
+                    (self.left_dock().map_or(0.0, |(_, w)| w), toolbar::CHROME_H)
+                };
 
                 // CSS Backgrounds §3.11.1: clear the whole surface to the canvas
                 // background (the root element's propagated background color) so the
@@ -15348,7 +15537,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // единственный отвечает supports_page_offset=true) игнорирует
                         // их и рисует монолитом — контент списка тот же.
                         if inspector_box_dl.is_empty() && r.supports_page_offset() {
-                            r.set_page_offset(page_x_offset, toolbar::CHROME_H);
+                            r.set_page_offset(page_x_offset, page_y_offset);
                             if let Err(err) = r.render(base, &overlay_buf, scroll_y, scroll_x) {
                                 eprintln!("Ошибка рендера: {err:?}");
                             }
@@ -15364,7 +15553,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             shifted.push(lumen_paint::DisplayCommand::PushTransform {
                                 matrix: Mat4::translation_2d(
                                     page_x_offset,
-                                    toolbar::CHROME_H,
+                                    page_y_offset,
                                 ),
                             });
                             shifted.extend_from_slice(base);

@@ -10,8 +10,10 @@
 //! * `ChromeAction` — an enum of the distinct `data-action` attribute values.
 //! * `templates::IDS` — ids of `<template>` elements (empty until CC-6).
 //!
-//! Nothing in this crate runs the chrome document yet — that is the runtime
-//! host introduced in CC-4.
+//! [`parse_document`] is the runtime counterpart used by the chrome host
+//! introduced in CC-4 (`crates/shell/src/main.rs`): it re-parses the same
+//! asset bytes `build.rs` already validated, so [`ChromeIds::resolve`] against
+//! its result cannot fail in practice.
 
 #[cfg(test)]
 mod gate;
@@ -43,6 +45,42 @@ fn find(doc: &lumen_dom::Document, id: &'static str) -> Result<lumen_dom::NodeId
     doc.find_by_id(id).ok_or(ChromeIdError { id })
 }
 
+/// Parses `html` (the chrome asset's contents — a runtime host passes
+/// [`crate`]-external `chrome_preview::HTML`, the same bytes `build.rs`
+/// already validated) into a [`lumen_dom::Document`] plus the
+/// [`lumen_css_parser::Stylesheet`] collected from its `<style>` elements.
+///
+/// Mirrors `build.rs`'s own parse step exactly (same parsers, same
+/// `<style>`-text collection walk) so a [`ChromeIds::resolve`] against the
+/// returned document resolves every `ids::*` constant.
+pub fn parse_document(html: &str) -> (lumen_dom::Document, lumen_css_parser::Stylesheet) {
+    let doc = lumen_html_parser::parse(html);
+    let style_text = collect_style_text(&doc);
+    let sheet = lumen_css_parser::parse(&style_text);
+    (doc, sheet)
+}
+
+fn collect_style_text(doc: &lumen_dom::Document) -> String {
+    let mut style_text = String::new();
+    let mut stack = vec![doc.root()];
+    while let Some(id) = stack.pop() {
+        let node = doc.get(id);
+        if let lumen_dom::NodeData::Element { name, .. } = &node.data
+            && name.local.eq_ignore_ascii_case("style")
+        {
+            for &child in &node.children {
+                if let lumen_dom::NodeData::Text(text) = &doc.get(child).data {
+                    style_text.push_str(text);
+                }
+            }
+        }
+        for &child in node.children.iter().rev() {
+            stack.push(child);
+        }
+    }
+    style_text
+}
+
 include!(concat!(env!("OUT_DIR"), "/chrome_gen.rs"));
 
 #[cfg(test)]
@@ -60,6 +98,16 @@ mod tests {
     fn resolves_every_id_on_the_real_asset() {
         let doc = parse_asset();
         ChromeIds::resolve(&doc).expect("every ids::* constant must resolve against the real asset");
+    }
+
+    #[test]
+    fn parse_document_produces_a_document_and_stylesheet_ids_resolve_against() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        let (doc, sheet) = parse_document(&html);
+        ChromeIds::resolve(&doc).expect("parse_document's Document must carry every ids::* id");
+        assert!(!sheet.rules.is_empty(), "parse_document must collect <style> rules");
     }
 
     #[test]

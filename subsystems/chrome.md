@@ -11,8 +11,9 @@ CSS property or selector `lumen-layout` does not implement. On success it code-g
 `ChromeIds` resolver, the `ChromeAction` enum (from `data-action` attribute values), and the
 `<template>` id registry.
 
-**Not in scope:** actually running/rendering the chrome document (CC-4 runtime host), hit-test
-dispatch of `ChromeAction` (CC-5), `ChromeModel` → DOM mutation (CC-6).
+**Not in scope:** hit-test dispatch of `ChromeAction` (CC-5), `ChromeModel` → DOM mutation (CC-6).
+The runtime host (parse-once + relayout-on-resize + paint) is CC-4, done — see below and
+`crates/shell/src/main.rs`.
 
 ## Done
 
@@ -36,17 +37,41 @@ dispatch of `ChromeAction` (CC-5), `ChromeModel` → DOM mutation (CC-6).
   (no `unwrap`/`panic!` — the build-gate guarantees every id exists, but resolution still returns a
   `Result`); `ChromeAction` enum + `from_attr_value`/`attr_value`; `templates::IDS` (currently
   empty — the asset has no `<template>` markup yet, see Invariants).
-- **Tests**: 13 `cargo test -p lumen-chrome` (gate unit tests with synthetic CSS fixtures +
+- **Tests**: 14 `cargo test -p lumen-chrome` (gate unit tests with synthetic CSS fixtures +
   `to_snake_case`/`to_pascal_case` conversion + real-asset `ChromeIds::resolve` + `ChromeAction`
-  round-trip). Verified manually (not a `cargo test`, since it would require corrupting the
-  committed asset): injecting an unknown property into `assets/chrome/chrome.html` makes
-  `cargo build -p lumen-chrome` fail with a clear message; reverting restores a clean build.
+  round-trip + `parse_document` round-trip). Verified manually (not a `cargo test`, since it would
+  require corrupting the committed asset): injecting an unknown property into
+  `assets/chrome/chrome.html` makes `cargo build -p lumen-chrome` fail with a clear message;
+  reverting restores a clean build.
+- **CC-4 runtime host** (`crates/shell/src/main.rs`, behind `LUMEN_CSS_CHROME=1` read once at
+  startup — `run_window_mode`'s `css_chrome_enabled`): [`parse_document`] parses
+  `chrome_preview::HTML` once into `Lumen::chrome_doc: Option<(Document, Stylesheet)>`.
+  `relayout_chrome_host()` — called once from `resumed()` (first window size) and again on every
+  `WindowEvent::Resized` — runs `layout_measured_hyp` over the full window size (bundled Inter
+  measurer, no web fonts) and `paint_ordered`, caching the result in `Lumen::chrome_layout: Option<
+  (LayoutBox, DisplayList)>`. The frame loop prepends `chrome_layout`'s display list to the very
+  front of `overlay_buf` (painted first, everything else — panels/scrollbar/tab-bar/toolbar — still
+  draws over it) and, under the flag, skips building the legacy tab-bar/toolbar entirely (their
+  attached layout-toggle/settings/archive buttons are anchored to that same strip, so they go with
+  it) so the two chromes never overlap. The design reference's `#contentArea` element — already the
+  container the design reserves for live tab content — doubles as the brief's "`#page-host`"; no new
+  id was introduced. `#contentArea` carries its own placeholder markup (new-tab tiles, a demo site
+  page — content meant for standalone `about:chrome-preview`, not for stacking under a real page):
+  `relayout_chrome_host` removes it from the layout tree entirely (`take_layout_box_by_node`, not
+  just its children — its own `background:var(--surface-0)` fill would otherwise paint over the real
+  page too, since chrome paints above content in `overlay_buf`) right after layout, capturing its
+  rect into `Lumen::chrome_page_host_rect: Option<Rect>` first. That rect replaces the legacy
+  `left_dock()` width / `toolbar::CHROME_H` pair in the two render-time page-offset call sites only
+  (`set_page_offset` / the `PushTransform` fallback) — **not** in
+  `content_layout_viewport`/`viewport_height_css`, so the
+  page's own CSS layout viewport width is unaffected by the flag, matching the pre-existing
+  vertical-tabs-sidebar limitation already documented on `content_layout_viewport` ("Width is
+  unaffected"). No hit-test/hover/click yet (CC-5) — the chrome is static under the flag. Off the
+  flag (default), `chrome_doc`/`chrome_layout` stay `None` and every touched call site takes its old
+  branch — zero behavior change.
 
 ## Deferred
 
-- **CC-4**: runtime host — parse the asset once at startup behind `LUMEN_CSS_CHROME=1`, layout +
-  paint into `overlay_buf`, `#page-host` rect replacing `CHROME_H`/`page_x_offset`.
-  `ChromeIds::resolve`/`ChromeAction` have no caller until then.
 - **CC-5**: hit-test → `data-action` → `ChromeAction` dispatch. Note for that slice: dispatch must
   climb from the hit leaf to the *nearest* ancestor-or-self carrying `data-action` (not just any
   ancestor) — `.tab-close`'s `close-tab` sits inside a `.tab-row`'s `select-tab`, and the two modal
