@@ -61,6 +61,13 @@
     background: radial-gradient(circle at 50% 50%, #e94560 0%, #533483 50%, #0f3460 100%);
   }
 
+  /* CC-CSS-1: ::-webkit-scrollbar/-thumb/-track translated onto
+     scrollbar-width/scrollbar-color — should render identically to the
+     standard-property box next to it. */
+  .cc-css-1-webkit-sb::-webkit-scrollbar { width: 9px; }
+  .cc-css-1-webkit-sb::-webkit-scrollbar-thumb { background: #e94560; }
+  .cc-css-1-webkit-sb::-webkit-scrollbar-track { background: #0f3460; }
+
   /* No-overflow: overflow:scroll but content fits → no scrollbar visible */
   .scroll-nooverflow {
     width: 200px; height: 120px;
@@ -111,6 +118,20 @@
     <div style="display:inline-block; width:180px; height:60px; background:#533483; margin:10px 4px 0 4px; vertical-align:top;"></div>
     <div style="display:inline-block; width:180px; height:60px; background:#e94560; margin:10px 4px 0 4px; vertical-align:top;"></div>
     <div style="display:inline-block; width:180px; height:60px; background:#0f3460; margin:10px 4px 0 4px; vertical-align:top;"></div>
+  </div>
+
+  <div style="overflow:hidden; clear:both; height:0"></div>
+
+  <!-- ::-webkit-scrollbar mapping (CC-CSS-1) vs. equivalent standard properties -->
+  <div class="cc-css-1-webkit-sb" style="float:left; width:180px; height:120px; overflow-y:scroll; overflow-x:hidden; background:#16213e; border:2px solid #0f3460; margin-top:20px; margin-right:24px;">
+    <div style="width:100%; height:80px; background:#533483; margin-bottom:4px;"></div>
+    <div style="width:100%; height:80px; background:#e94560; margin-bottom:4px;"></div>
+    <div style="width:100%; height:80px; background:#0f3460;"></div>
+  </div>
+  <div style="float:left; width:180px; height:120px; overflow-y:scroll; overflow-x:hidden; background:#16213e; border:2px solid #0f3460; margin-top:20px; scrollbar-width:thin; scrollbar-color:#e94560 #0f3460;">
+    <div style="width:100%; height:80px; background:#533483; margin-bottom:4px;"></div>
+    <div style="width:100%; height:80px; background:#e94560; margin-bottom:4px;"></div>
+    <div style="width:100%; height:80px; background:#0f3460;"></div>
   </div>
 </div>
 </body>

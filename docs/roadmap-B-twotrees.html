@@ -3840,9 +3840,9 @@
       {
        "id": "CC-CSS-1",
        "title": "CC-CSS-1: -webkit-скроллбары + font-smoothing",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "css-parser: псевдоэлементы ::-webkit-scrollbar/-thumb/-track → маппинг на стандартные scrollbar-width/scrollbar-color (эталон 575-577, сейчас правила молча роняются); -webkit-font-smoothing — parse-and-ignore + allowlist парс-гейта. Graphic-тест. После CC-1"
+       "note": "`PseudoElementKind::Unknown` уже парсит/матчит `::-webkit-scrollbar`/`-thumb`/`-track` — новый `apply_webkit_scrollbar_pseudos()` (style.rs) переводит их декларации в стандартные `scrollbar-width`/`scrollbar-color` через `compute_pseudo_element_style()`; ширина бакетизируется thin/auto по 9px. `-webkit-font-smoothing` уже no-op через catch-all `apply_declaration`, доп. кода не требовалось. 4 unit-теста + graphic-тест 51 (сравнение с эквивалентом на стандартных свойствах). После CC-1"
       },
       {
        "id": "CC-CSS-2",

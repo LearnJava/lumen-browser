@@ -7183,7 +7183,60 @@ pub fn compute_style(
         _ => None,
     };
 
+    apply_webkit_scrollbar_pseudos(doc, node, sheet, &mut style, viewport, dark_mode);
+
     style
+}
+
+/// CC-CSS-1: legacy WebKit scrollbar pseudo-elements (`::-webkit-scrollbar`,
+/// `::-webkit-scrollbar-thumb`, `::-webkit-scrollbar-track`) are not part of the
+/// standard cascade — `PseudoElementKind::Unknown` already parses and matches them
+/// (see `pseudo_element_matches`), so this translates their declarations onto the
+/// standard `scrollbar-width`/`scrollbar-color` fields, letting pages/chrome that
+/// only style scrollbars through the WebKit-only idiom still get a styled result.
+/// `-webkit-font-smoothing` needs no handling here: it falls through the ordinary
+/// `apply_declaration` catch-all (parsed, then silently ignored) like any other
+/// unrecognized property.
+fn apply_webkit_scrollbar_pseudos(
+    doc: &Document,
+    node: NodeId,
+    sheet: &Stylesheet,
+    style: &mut ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+) {
+    // `scrollbar-width` (CSS Scrollbars 1 §2) has no numeric keyword — bucket the
+    // pixel width into the closest of the two sized keywords. 9px is the midpoint
+    // between `thin`'s 6px and `auto`'s 12px used-width (`display_list.rs`), and
+    // matches Lumen's own chrome reference (`docs/design/lumen-v3_3.html`).
+    if let Some(bar) =
+        compute_pseudo_element_style(doc, node, "-webkit-scrollbar", sheet, style, viewport, dark_mode)
+        && let Some(w) = bar.width.as_ref().and_then(|l| l.resolve(bar.font_size, None, viewport))
+    {
+        style.scrollbar_width = if w <= 0.0 {
+            ScrollbarWidth::None
+        } else if w <= 9.0 {
+            ScrollbarWidth::Thin
+        } else {
+            ScrollbarWidth::Auto
+        };
+    }
+    let webkit_thumb = compute_pseudo_element_style(
+        doc, node, "-webkit-scrollbar-thumb", sheet, style, viewport, dark_mode,
+    )
+    .and_then(|s| s.background_color)
+    .map(|c| c.resolve(style.color));
+    let webkit_track = compute_pseudo_element_style(
+        doc, node, "-webkit-scrollbar-track", sheet, style, viewport, dark_mode,
+    )
+    .and_then(|s| s.background_color)
+    .map(|c| c.resolve(style.color));
+    // Both sides required: `scrollbar-color`'s used value is a (thumb, track) pair,
+    // and there is no honest per-side "unset" fallback to reach for here — the UA
+    // defaults live one layer down, in `paint::display_list`.
+    if let (Some(thumb), Some(track)) = (webkit_thumb, webkit_track) {
+        style.scrollbar_color = Some((thumb, track));
+    }
 }
 
 /// CSS Color 4 §6.2 — resolve `CssColor::System` variants in all CssColor-typed
@@ -7777,10 +7830,16 @@ pub fn compute_pseudo_element_style(
     // ::selection applies to active text selection — no content required (CSS Pseudo-elements L4 §5.6).
     // ::placeholder styles the UA-generated placeholder hint text — no content required
     // (CSS Pseudo-elements L4 §4.10).
+    // CC-CSS-1: `::-webkit-scrollbar`/`-thumb`/`-track` are legacy scrollbar-styling
+    // pseudo-elements (translated onto `scrollbar-width`/`scrollbar-color` by
+    // `apply_webkit_scrollbar_pseudos`) — no `content:` required either.
     if pseudo.eq_ignore_ascii_case("first-letter")
         || pseudo.eq_ignore_ascii_case("first-line")
         || pseudo.eq_ignore_ascii_case("selection")
         || pseudo.eq_ignore_ascii_case("placeholder")
+        || pseudo.eq_ignore_ascii_case("-webkit-scrollbar")
+        || pseudo.eq_ignore_ascii_case("-webkit-scrollbar-thumb")
+        || pseudo.eq_ignore_ascii_case("-webkit-scrollbar-track")
     {
         Some(style)
     } else if pseudo.eq_ignore_ascii_case("marker") {
@@ -21805,6 +21864,68 @@ mod tests {
         assert_eq!(st.ruby_position, RubyPosition::Over);
         assert_eq!(st.ruby_align, RubyAlign::SpaceAround);
         assert_eq!(st.ruby_merge, RubyMerge::Separate);
+    }
+
+    #[test]
+    fn webkit_scrollbar_width_maps_to_scrollbar_width_keyword() {
+        // CC-CSS-1: `::-webkit-scrollbar{width}` has no standard keyword equivalent —
+        // bucketed into thin (<=9px) vs auto (>9px). The chrome reference's own
+        // 9px falls on the `thin` side of the bucket boundary.
+        let sheet = lumen_css_parser::parse("div::-webkit-scrollbar { width: 9px; }");
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let did = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        assert_eq!(st.scrollbar_width, ScrollbarWidth::Thin);
+
+        let sheet = lumen_css_parser::parse("div::-webkit-scrollbar { width: 16px; }");
+        let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        assert_eq!(st.scrollbar_width, ScrollbarWidth::Auto);
+
+        let sheet = lumen_css_parser::parse("div::-webkit-scrollbar { width: 0; }");
+        let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        assert_eq!(st.scrollbar_width, ScrollbarWidth::None);
+    }
+
+    #[test]
+    fn webkit_scrollbar_thumb_track_map_to_scrollbar_color() {
+        // CC-CSS-1: `-thumb`/`-track{background}` translate onto the standard
+        // `scrollbar-color` (thumb, track) pair — chrome reference pattern.
+        let sheet = lumen_css_parser::parse(
+            "div::-webkit-scrollbar-thumb { background: #112233; } \
+             div::-webkit-scrollbar-track { background: #445566; }",
+        );
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let did = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        let (thumb, track) = st.scrollbar_color.expect("scrollbar-color should be set");
+        assert_eq!(thumb, Color { r: 0x11, g: 0x22, b: 0x33, a: 255 });
+        assert_eq!(track, Color { r: 0x44, g: 0x55, b: 0x66, a: 255 });
+    }
+
+    #[test]
+    fn webkit_scrollbar_thumb_without_track_leaves_scrollbar_color_unset() {
+        // Only one side declared: no honest per-side default to graft onto the
+        // missing side, so the standard `scrollbar-color` stays untouched (falls
+        // back to UA defaults in paint) rather than fabricating a track color.
+        let sheet = lumen_css_parser::parse("div::-webkit-scrollbar-thumb { background: #112233; }");
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let did = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        assert_eq!(st.scrollbar_color, None);
+    }
+
+    #[test]
+    fn webkit_font_smoothing_is_parsed_and_ignored() {
+        // -webkit-font-smoothing has no Lumen equivalent (rasterizer antialiasing
+        // is always on) — the declaration must not error or drop the rest of the
+        // rule; it just falls through apply_declaration's catch-all as a no-op.
+        let sheet = lumen_css_parser::parse(
+            "p { -webkit-font-smoothing: antialiased; color: rgb(1, 2, 3); }",
+        );
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(&doc, pid, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        assert_eq!(st.color, Color { r: 1, g: 2, b: 3, a: 255 });
     }
 
     #[test]
