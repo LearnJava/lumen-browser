@@ -3860,9 +3860,9 @@
       {
        "id": "CC-CSS-6",
        "title": "CC-CSS-6: user-select/pointer-events",
-       "status": "planned",
+       "status": "done",
        "size": "XS",
-       "note": "user-select:none / pointer-events enforcement в хроме (парсятся, enforcement 🟡 CSS-SPECS:588-589): UI-текст не выделяется мышью, тултипы не перехватывают курсор. После CC-5"
+       "note": "`pointer-events` уже enforced бесплатно (общий `lumen_paint::hit_test`, chrome tooltip-DoD n/a — нет tooltip-элемента в ассете). Реальный пробел был в `user-select`: во всём Lumen нет drag-выделения мышью вообще (Selection API только программный, через JS) — DoD-предпосылка спекулятивна не только для хрома. Сделано корректное и проверяемое: UA-дефолт `html{user-select:none}` в `lumen_chrome::parse_document` (только для chrome-документа, эталон не трогался), задел на будущий drag-select. После CC-5"
       }
      ]
     }

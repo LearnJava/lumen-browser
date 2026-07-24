@@ -37,12 +37,22 @@ relayout-on-resize + paint, CC-4) and hit-test/hover/dispatch (CC-5) are done �
   (no `unwrap`/`panic!` — the build-gate guarantees every id exists, but resolution still returns a
   `Result`); `ChromeAction` enum + `from_attr_value`/`attr_value`; `templates::IDS` (currently
   empty — the asset has no `<template>` markup yet, see Invariants).
-- **Tests**: 14 `cargo test -p lumen-chrome` (gate unit tests with synthetic CSS fixtures +
+- **Tests**: 16 `cargo test -p lumen-chrome` (gate unit tests with synthetic CSS fixtures +
   `to_snake_case`/`to_pascal_case` conversion + real-asset `ChromeIds::resolve` + `ChromeAction`
-  round-trip + `parse_document` round-trip). Verified manually (not a `cargo test`, since it would
-  require corrupting the committed asset): injecting an unknown property into
-  `assets/chrome/chrome.html` makes `cargo build -p lumen-chrome` fail with a clear message;
-  reverting restores a clean build.
+  round-trip + `parse_document` round-trip + CC-CSS-6 `UA_DEFAULTS` pair below). Verified manually
+  (not a `cargo test`, since it would require corrupting the committed asset): injecting an unknown
+  property into `assets/chrome/chrome.html` makes `cargo build -p lumen-chrome` fail with a clear
+  message; reverting restores a clean build.
+- **CC-CSS-6 `user-select` UA default** (`parse_document`): prepends `html{user-select:none}` as the
+  textually-first rule before the asset's own collected `<style>` text — `user-select` is inherited,
+  so this makes all chrome UI text non-selectable by default without touching the frozen design
+  reference (which declares no `user-select` of its own; the property has no visual effect). A later
+  author rule of equal specificity still overrides it (`ua_defaults_can_be_overridden_by_a_later_author_rule`).
+  `pointer-events:none` needed no chrome-specific work: `chrome_hit_test` already calls the same
+  `lumen_paint::hit_test` DOM pages use, which already skips such boxes generically. No live
+  mouse-drag text-selection feature exists anywhere in Lumen yet (page or chrome) — `Selection`/
+  `SelectionHighlight` are wired only to the JS `window.getSelection()` shim — so this is a
+  forward-looking default, not something end-to-end-testable via a real drag today.
 - **CC-4 runtime host** (`crates/shell/src/main.rs`, behind `LUMEN_CSS_CHROME=1` read once at
   startup — `run_window_mode`'s `css_chrome_enabled`): [`parse_document`] parses
   `chrome_preview::HTML` once into `Lumen::chrome_doc: Option<(Document, Stylesheet)>`.
