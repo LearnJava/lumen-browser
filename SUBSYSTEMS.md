@@ -30,4 +30,5 @@ Updated with every plan-item commit. For ground truth — `git log --oneline` + 
 | lumen-bench | ✅ pipeline benchmark | [subsystems/bench.md](subsystems/bench.md) |
 | lumen-canvas | ✅ Canvas 2D CPU rasterizer (Phase 0) | [subsystems/canvas.md](subsystems/canvas.md) |
 | lumen-ai | ⬜ crate skeleton only (feature-flagged, not in default bundle) | [subsystems/ai.md](subsystems/ai.md) |
+| lumen-chrome | 🟡 build.rs parse-gate + id/action codegen, no runtime host yet | [subsystems/chrome.md](subsystems/chrome.md) |
 | Infrastructure | workspace + test counts + dep policy | [subsystems/infra.md](subsystems/infra.md) |

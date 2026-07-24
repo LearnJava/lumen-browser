@@ -2182,6 +2182,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-chrome"
+version = "0.5.0"
+dependencies = [
+ "lumen-css-parser",
+ "lumen-dom",
+ "lumen-html-parser",
+ "workspace-hack",
+]
+
+[[package]]
 name = "lumen-core"
 version = "0.5.0"
 dependencies = [

@@ -139,6 +139,127 @@ def strip_tooltip_attrs(html: str) -> str:
     return html
 
 
+# CC-3 step 2 (docs/tasks/p1-css-chrome.md): the reference wires interactions
+# through inline `onclick`/`onfocus`/`oninput` calling a `<script>` that this
+# generator already strips (`strip_script`) — those handlers would otherwise
+# be dead attributes referencing undefined functions. Each surviving
+# `onclick` becomes a declarative `data-action="…"` (+ optional context
+# attribute) that `lumen-chrome`'s build.rs turns into the `ChromeAction`
+# enum; CC-5 will dispatch on it from hit-test instead of a JS engine.
+#
+# Keyed by the exact onclick body so a reference change that adds a new
+# interaction — or changes an existing call's shape — fails generation
+# loudly (GenError) instead of silently shipping a stale/dead attribute.
+ONCLICK_EXACT_ACTIONS: dict[str, tuple[str, dict[str, str]]] = {
+    "toggleFind()": ("toggle-find", {}),
+    "toggleDevtools()": ("toggle-devtools", {}),
+    "toggleDownloads()": ("toggle-downloads", {}),
+    "toggleFocusTimer()": ("toggle-focus-timer", {}),
+    "toggleFocus()": ("toggle-focus", {}),
+    "toggleProfileMenu()": ("toggle-profile-menu", {}),
+    "toggleSidebar()": ("toggle-sidebar", {}),
+    "toggleShieldPopover(event)": ("toggle-shield-popover", {}),
+    "toggleSwitch(this)": ("toggle-switch", {}),
+    "closeRightSidebar()": ("close-right-sidebar", {}),
+    "openAiSidebar()": ("open-ai-sidebar", {}),
+    "openCertViewer(event)": ("open-cert-viewer", {}),
+    "openPrintDialog()": ("open-print-dialog", {}),
+    "openWebSidebar()": ("open-web-sidebar", {}),
+    "selectTab(this)": ("select-tab", {}),
+    "selectWs(this)": ("select-workspace", {}),
+    "selectWsH(this)": ("select-workspace", {}),
+    "fakeReload(this)": ("reload", {}),
+    "showView('settings')": ("show-view", {"data-view": "settings"}),
+    # Compound demo handler; `toggleQa()` targets the QA/tester panel already
+    # removed by `strip_qa_panel_html` — only the view-switch survives.
+    "showView('page');toggleQa()": ("show-view", {"data-view": "page"}),
+    "ddGo('bookmarks')": ("show-view", {"data-view": "bookmarks"}),
+    "ddGo('history')": ("show-view", {"data-view": "history"}),
+    "closeModal('certOverlay')": ("close-modal", {}),
+    "closeModal('printOverlay')": ("close-modal", {}),
+    "if(event.target===this) closeModal('certOverlay')": ("close-modal", {}),
+    "if(event.target===this) closeModal('printOverlay')": ("close-modal", {}),
+    "if(event.target===this) closePalette()": ("close-palette", {}),
+    "setDtTab(this,'elements')": ("set-devtools-tab", {"data-dt-tab": "elements"}),
+    "setDtTab(this,'console')": ("set-devtools-tab", {"data-dt-tab": "console"}),
+    "setDtTab(this,'network')": ("set-devtools-tab", {"data-dt-tab": "network"}),
+    "setDtTab(this,'sources')": ("set-devtools-tab", {"data-dt-tab": "sources"}),
+    "setRsTab(this,'ai')": ("set-sidebar-tab", {"data-rs-tab": "ai"}),
+    "setRsTab(this,'web')": ("set-sidebar-tab", {"data-rs-tab": "web"}),
+    "setPerm(this,'allow')": ("set-permission", {"data-perm": "allow"}),
+    "setPerm(this,'deny')": ("set-permission", {"data-perm": "deny"}),
+    "setSetSection(this,'appearance')": ("set-settings-section", {"data-section": "appearance"}),
+    "setSetSection(this,'ext')": ("set-settings-section", {"data-section": "ext"}),
+    "setSetSection(this,'general')": ("set-settings-section", {"data-section": "general"}),
+    "setSetSection(this,'privacy')": ("set-settings-section", {"data-section": "privacy"}),
+    "setSetSection(this,'qa')": ("set-settings-section", {"data-section": "qa"}),
+    "setSetSection(this,'sync')": ("set-settings-section", {"data-section": "sync"}),
+    "setProfile('personal')": ("set-profile", {"data-profile": "personal"}),
+    "setProfile('work')": ("set-profile", {"data-profile": "work"}),
+    "setProfile('anonymous')": ("set-profile", {"data-profile": "anonymous"}),
+    "setProfile('guest')": ("set-profile", {"data-profile": "guest"}),
+}
+
+# A handful of onclick bodies carry no real signal (JS-only bubbling guard,
+# or a demo `alert()` stub) — the true action is identified by the element's
+# `class` instead. Checked before `ONCLICK_EXACT_ACTIONS`.
+CLASS_ONCLICK_ACTIONS: dict[str, tuple[str, dict[str, str]]] = {
+    "tab-close": ("close-tab", {}),  # onclick was only `event.stopPropagation()`
+    "ws-add": ("add-workspace", {}),  # onclick was a demo `alert(...)` stub
+    "hbar-add": ("new-tab", {}),
+    "bm-card readlater": ("archive-card", {}),
+}
+
+_TAG_RE = re.compile(r"<([a-zA-Z][\w-]*)((?:\s+[^<>]*?)?)(/?)>")
+_ATTR_RE = re.compile(r'([a-zA-Z_:][-\w:.]*)(?:\s*=\s*"([^"]*)")?')
+_JS_HANDLER_ATTRS = ("onclick", "onfocus", "oninput")
+
+
+def _classify_onclick(value: str, class_value: str) -> tuple[str, dict[str, str]]:
+    if class_value in CLASS_ONCLICK_ACTIONS:
+        return CLASS_ONCLICK_ACTIONS[class_value]
+    if value in ONCLICK_EXACT_ACTIONS:
+        return ONCLICK_EXACT_ACTIONS[value]
+    if value.startswith("ddGo('page',"):
+        return ("omni-go", {})
+    raise GenError(
+        f"add_data_actions: unmapped onclick={value!r} class={class_value!r} — "
+        "reference gained a new interaction; add it to ONCLICK_EXACT_ACTIONS "
+        "or CLASS_ONCLICK_ACTIONS"
+    )
+
+
+def add_data_actions(html: str) -> str:
+    """Replace `onclick`/`onfocus`/`oninput` with declarative `data-action` (+ context).
+
+    See `ONCLICK_EXACT_ACTIONS`/`CLASS_ONCLICK_ACTIONS` above.
+    """
+
+    def rewrite(m: re.Match[str]) -> str:
+        tag, attr_str, selfclose = m.group(1), m.group(2), m.group(3)
+        attrs = [(am.group(1), am.group(2)) for am in _ATTR_RE.finditer(attr_str) if am.group(1)]
+        attr_map = dict(attrs)
+        if not any(name in attr_map for name in _JS_HANDLER_ATTRS):
+            return m.group(0)
+
+        action = None
+        extra: dict[str, str] = {}
+        if "onclick" in attr_map:
+            action, extra = _classify_onclick(attr_map["onclick"], attr_map.get("class", ""))
+        # onfocus/oninput (address bar, command palette, find bar) carry no
+        # data-action of their own — CC-7/CC-9 wire text editing separately
+        # (hybrid `address_bar` model, brief risk #1). Just drop the dead attr.
+
+        kept = [(n, v) for n, v in attrs if n not in _JS_HANDLER_ATTRS]
+        if action is not None:
+            kept.append(("data-action", action))
+            kept.extend(extra.items())
+        rebuilt = "".join(f' {n}="{v}"' if v is not None else f" {n}" for n, v in kept)
+        return f"<{tag}{rebuilt}{selfclose}>"
+
+    return _TAG_RE.sub(rewrite, html)
+
+
 def collapse_blank_lines(html: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", html)
 
@@ -154,6 +275,7 @@ def generate() -> str:
     html = strip_qa_panel_html(html)
     html = strip_script(html)
     html = strip_tooltip_attrs(html)
+    html = add_data_actions(html)
     html = collapse_blank_lines(html)
 
     html = html.replace("<!DOCTYPE html>\n", "<!DOCTYPE html>\n" + GENERATED_HEADER, 1)
