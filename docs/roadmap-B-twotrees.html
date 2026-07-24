@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-24",
  "counts": {
-  "open": 35,
+  "open": 36,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 307,
+ "total_bugs": 308,
  "phases": [
   {
    "id": "P0",
@@ -3742,9 +3742,9 @@
       {
        "id": "CC-4",
        "title": "CC-4: Рантайм-хост за флагом",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Рантайм-хост за LUMEN_CSS_CHROME=1: chrome Document+Stylesheet парсятся при старте, layout_measured_hyp по размеру окна, paint → начало overlay_buf; rect элемента page-host заменяет CHROME_H/page_x_offset; legacy tab-bar/toolbar при флаге не строятся. После CC-3"
+       "note": "Рантайм-хост за LUMEN_CSS_CHROME=1: chrome Document+Stylesheet парсятся один раз при старте (`lumen_chrome::parse_document`), layout_measured_hyp + paint на каждый ресайз → начало overlay_buf; `#contentArea` (эталонный `#page-host`) вырезается из layout-дерева целиком перед покраской и красится через 4 клип-полосы вокруг его rect, иначе фон предков (`body`) перекрывал бы настоящую страницу; legacy tab-bar/toolbar при флаге не строятся. Проверено вручную PrintWindow-снимками живого окна (флаг вкл/выкл, ресайз) — MCP screenshot идёт через CPU-путь, хром не рисующий. После CC-3"
       },
       {
        "id": "CC-5",
@@ -6070,6 +6070,13 @@
    "component": "driver/shell (`WinitSession::scroll`, `navigate_fragment`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-339": {
+   "status": "open",
+   "title": "`ch_approximated_as_half_em`/`ex_approximated_as_half_em` проходят изолированно, но падают в полном прогоне `cargo test -p lumen-layout --lib` — тест-харнесс пе…",
+   "component": "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6272,6 +6279,9 @@
    "BUG-236",
    "BUG-237",
    "BUG-241"
+  ],
+  "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)": [
+   "BUG-339"
   ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"

@@ -180,6 +180,30 @@ Sticky-слои рисуются ([renderer.rs:5680](../../crates/engine/paint/s
 
 В шелле при `LUMEN_CSS_CHROME=1`: распарсить ассеты при старте (1 раз), держать `chrome_doc: Document` + `chrome_sheet: Stylesheet` + `chrome_layout: LayoutBox`; на каждый кадр/ресайз — `layout_measured_hyp` по размеру окна CSS-px, `paint_ordered` → в начало `overlay_buf` (до legacy-панелей). Из layout читать rect элемента `#page-host` (добавить его в ассеты: контейнер, где живёт страница) → он заменяет `CHROME_H`/`page_x_offset` при активном флаге. Legacy tab-bar/toolbar при флаге не строятся; всё остальное (панели, дропдауны) пока legacy поверх. **DoD:** окно с флагом показывает движковый хром (статичный, некликабельный) + живую страницу в правильном прямоугольнике; без флага — ноль отличий; ресайз окна корректен.
 
+**Закрыто (2026-07-24, P1).** `#contentArea` (эталонный контейнер под контент вкладки)
+уже и есть искомый `#page-host` — новый id заводить не понадобилось. `lumen_chrome::
+parse_document` (новая рантайм-функция крейта, зеркалирует парсинг `build.rs`) парсит
+`chrome_preview::HTML` один раз при старте; `Lumen::relayout_chrome_host` гоняет
+`layout_measured_hyp`/`paint_ordered` на первый известный размер окна и на каждый
+`WindowEvent::Resized`. Единственная содержательная находка среза: `#contentArea`
+несёт собственную демо-разметку эталона (плитки нового таба, макет сайта — контент
+для автономного `about:chrome-preview`, не для наложения под настоящую страницу) и
+собственный фон (`.content-area{background:var(--surface-0)}`), а его предки (`body{
+background:var(--surface-1); height:100vh}`) — свой, во всё окно; поскольку хром красится
+в `overlay_buf` (поверх `content`), простое обнуление детей `#contentArea` оставляло бы
+и демо-плитки, и фон `body` поверх настоящей страницы. Фикс — `#contentArea` целиком
+вырезается из layout-дерева (`take_layout_box_by_node`) перед покраской (rect
+сохраняется в `chrome_page_host_rect` до вырезания), а сам `chrome_dl` красится не одной
+копией, а через 4 клип-полосы вокруг этого rect (top/bottom/left/right) — так фон `body`
+не протекает в rect страницы, а остальной хром (сайдбар, тулбар, будущие поповеры CC-9+)
+рисуется как обычно. Под флагом legacy tab-bar/toolbar (и анкернутые к той же полосе
+layout-toggle/settings/archive-кнопки) не строятся вовсе. Проверено вручную: `PrintWindow`-
+снимками живого окна (не MCP `resource://screenshot` — тот идёт через CPU-путь, который
+хром/overlay в принципе не рисует) — хром + страница видны раздельно и корректно на
+дефолтном и на изменённом размере окна; без флага — байт-в-байт прежнее поведение.
+`cargo test -p lumen-chrome` (14/14, +1 новый на `parse_document`), `cargo clippy
+--workspace --all-targets -D warnings` и `scripts/scoped-test.sh` зелёные.
+
 ### CC-5 (M): Hit-test, hover/active, курсор, диспетч действий
 
 Мышиные события при `y` внутри хрома (и вообще при попадании в непрозрачные области хрома — сайдбар слева!) → `lumen_paint::hit_test` по `chrome_layout` → подъём по `path` до ближайшего `data-action` → `ChromeAction` → существующие обработчики шелла (Back/Forward/Reload/OpenSettings/…). Hover: `set_interactive_state(chrome_hovered, …)` + релэйаут хрома (страничные thread-locals ставить/чистить вокруг каждого прохода раздельно). Курсор — из `HitTestResult.cursor`. **DoD:** кнопки тулбара и вкладки кликабельны и подсвечиваются по hover при флаге; двойной учёт кликов (хром+страница) исключён.

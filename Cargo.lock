@@ -2426,6 +2426,7 @@ dependencies = [
  "lumen-a11y",
  "lumen-ai",
  "lumen-bidi-server",
+ "lumen-chrome",
  "lumen-core",
  "lumen-css-parser",
  "lumen-devtools",
