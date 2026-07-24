@@ -1773,9 +1773,9 @@
       {
        "id": "WPT-VENDOR-battery-status",
        "title": "WPT: вендорить + прогнать категорию `battery-status`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+       "note": "DONE 2026-07-24: вендорена (`tests/wpt/battery-status/`, 30 файлов: `META.yml`, `WEB_FEATURES.yml`, 22 тестовых/header-файла, `resources/` — 4 хелпера) и прогнана через `run_report.py --all --root battery-status --recursive`, включена несмотря на скоуп 🚫 (датчик устройства) по тому же постоянному решению пользователя, что и `accelerometer`/`acid`/`ai`/`ambient-light`/`appmanifest`/`attribution-reporting`/`audio-output`/`audio-session`/`autoplay-policy-detection`/`background-fetch`/`background-sync`/`badging`. Манифест отбирает 17 id (5 `-manual.https.html` исключены): `page-visibility.https.html` — SKIP (testdriver.js не поддерживается исполнителем), остальные 16 `.https.`-only — TIMEOUT (HTTPS-порт-гэп минимального исполнителя). Прогон добежал за ~5:00. 0/17 harness OK, 0/0 сабтестов. Не заводился отдельный BUG-NNN — первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-beacon",
