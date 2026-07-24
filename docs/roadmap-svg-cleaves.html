@@ -1801,9 +1801,9 @@
       {
        "id": "WPT-VENDOR-captured-mouse-events",
        "title": "WPT: вендорить + прогнать категорию `captured-mouse-events`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/captured-mouse-events/`, 6 файлов: `META.yml`, 4 тестовых файла, `idlharness.https.window.js`) и прогнана через `run_report.py --all --root captured-mouse-events --recursive`, скоуп ⬜ (Captured Mouse Events, расширения `CapturedMouseEvent`/`CaptureController` для Screen Capture). Внекатегорийный хелпер не довендорен: `idlharness.https.window.js` ссылается на `/resources/WebIDLParser.js`+`/resources/idlharness.js`, та же методология, что `FileAPI`/`audio-session`. Манифест отбирает 4 id (`capturing-mouse-coordinates-manual.tentative.https.html` исключён как `-manual`): 2 не-https конструкторных теста — harness OK, 0/6 сабтестов FAIL (`CapturedMouseEvent is not defined`, API не реализован); `capture-controller-oncapturedmousechange.https.html` — TIMEOUT (тот же HTTPS-порт-гэп, что `WebCryptoAPI`/`ai`/`bluetooth`/`browsing-topics`); `idlharness.https.window.html` — ERROR (session/URL-reuse артефакт, тот же класс, что `accelerometer`/`beacon`/`browsing-topics`). Прогон добежал полностью. 2/4 harness OK, 0/6 сабтестов. Не заводился отдельный BUG-NNN — первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-clear-site-data",
