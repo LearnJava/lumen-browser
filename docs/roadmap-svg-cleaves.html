@@ -1780,9 +1780,9 @@
       {
        "id": "WPT-VENDOR-beacon",
        "title": "WPT: вендорить + прогнать категорию `beacon`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-24: вендорена (`tests/wpt/beacon/`, 22 файла: `META.yml`, `WEB_FEATURES.yml`, 5 корневых `.https.` тестовых файлов, `beacon-common.sub.js`, `idlharness.any.js`, `headers/` — 9 файлов + `header-referrer.js`, `resources/` — 4 Python-хендлера) и прогнана через `run_report.py --all --root beacon --recursive`, скоуп ⬜ (Beacon API, `navigator.sendBeacon`, уже в скоупе, не 🚫-исключение как предыдущие категории бэклога). Внекатегорийные хелперы не довендорены: `/common/utils.js`, `/common/get-host-info.sub.js`, `/common/redirect.py`, `/common/blank.html`, `/common/text-plain.txt`, `idlharness.any.js`'s `/resources/WebIDLParser.js`+`/resources/idlharness.js` — та же методология, что `FileAPI`/`ai`/`audio-session`. Первая смешанная (не только `.https.`) категория в этом бэклоге: 9 из 16 отобранных id — обычный HTTP, что впервые вскрыло реальный эффект невендоренных `/common/*`-хелперов помимо HTTPS-порт-гэпа — `header-content-type-and-body.html` харнесс OK, но 0/6 сабтестов FAIL (`self.token is not a function`, `/common/utils.js` 404); ещё 3 не-https теста TIMEOUT (тот же `self.token`/`get_host_info is not defined`, брошенные до регистрации теста — харнесс зависает); `idlharness.any.html` TIMEOUT (`idl_test is not defined`, тот же паттерн, что `audio-session`). Оставшиеся 9 `.https.`-тестов — 7 TIMEOUT + 2 ERROR (session/URL-reuse артефакт, тот же класс, что `accelerometer`/`ambient-light`) с тем же HTTPS-порт-гэпом (`invalid url: invalid port: \"None\"`). Прогон добежал целиком за ~6:16. 1/16 harness OK, 0/6 сабтестов. Не заводился отдельный BUG-NNN — первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-bluetooth",
