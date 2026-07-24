@@ -76,11 +76,11 @@
  "generated": "2026-07-24",
  "counts": {
   "open": 33,
-  "fixed": 270,
+  "fixed": 271,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 303,
+ "total_bugs": 304,
  "phases": [
   {
    "id": "P0",
@@ -3847,9 +3847,9 @@
       {
        "id": "CC-CSS-2",
        "title": "CC-CSS-2: overflow:auto — вложенный скролл",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "overflow:auto — проверить/довести рендер и колёсную прокрутку ВЛОЖЕННЫХ scroll-контейнеров (список вкладок сайдбара, настройки, дропдауны); инвентарь CSS-SPECS:~179 держит «scroll ⬜ rendering» против done в P4 #22. Graphic-тест. После CC-1"
+       "note": "Механика (сборка scroll-контейнеров + hit-test по глубине для wheel-роутинга, `collect_scroll_containers`/`find_scroll_container_at` в lumen-layout) уже поддерживала вложенность и покрыта unit-тестами (`find_scroll_container_at_innermost_wins`) — это и есть done из P4 #22. Рендер — нет: найден и исправлен **BUG-335** (P1) — `PushScrollLayer` в wgpu `renderer.rs` не применял `apply_transform_to_clip()` к своему clip_rect (в отличие от `PushClipRect*`, пофикшенных BUG-276), из-за чего под живым chrome-transform содержимое вложенных `overflow:auto`-контейнеров пропадало в живом окне. Graphic-тест 149 (3 сценария: независимые скроллбары, вложенный border-radius clip, z-index в скролл-слое) 18.01%→7.91% после фикса, остаток — известный класс BUG-288 (overlay-скроллбар) + отдельный wgpu-градиентный долг (не nesting-специфичный). CSS-SPECS.md `overflow` `scroll ⬜ rendering` не трогалась (речь про статичный scrollbar Lumen vs overlay Edge, отдельный вопрос от этой задачи). После CC-1"
       },
       {
        "id": "CC-CSS-3",
@@ -6042,6 +6042,13 @@
    "component": "layout (SVG `use`/`symbol`, `box_tree.rs:1170-1180`)",
    "date": "2026-07-24",
    "debtor": false
+  },
+  "BUG-335": {
+   "status": "fixed",
+   "title": "Содержимое `overflow:auto`/`scroll`-контейнеров (за пределами первого ребёнка, иногда целиком) пропадало в живом wgpu-окне при активном накопленном трансформе (…",
+   "component": "paint (wgpu `WgpuBackend`/`renderer.rs`, `PushScrollLayer`)",
+   "date": "2026-07-24",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6395,6 +6402,9 @@
   ],
   "paint (test-harness baseline, не движок)": [
    "BUG-287"
+  ],
+  "paint (wgpu `WgpuBackend`/`renderer.rs`, `PushScrollLayer`)": [
+   "BUG-335"
   ],
   "paint/cpu_raster": [
    "BUG-052"
