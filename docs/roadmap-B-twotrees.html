@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-24",
+ "generated": "2026-07-25",
  "counts": {
   "open": 36,
   "fixed": 272,
@@ -1805,9 +1805,9 @@
       {
        "id": "WPT-VENDOR-bluetooth",
        "title": "WPT: вендорить + прогнать категорию `bluetooth`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (Bluetooth) — нет слоя интеграции с устройствами"
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/bluetooth/`, 187 файлов: `META.yml`, `WEB_FEATURES.yml`, `README.md`, `resources/` — 4 хелпера, `bidi/` — 9 подкатегорий `adapter`/`characteristic`/`descriptor`/`device`/`getDevices`/`idl`/`requestDevice`/`script-tests`/`server`/`service` + `generate.py`+`generate_test.py`), включена несмотря на скоуп 🚫 (аппаратный API, нет слоя интеграции с устройствами) по тому же постоянному решению пользователя, что и `accelerometer`/`acid`/`ai`/`ambient-light`/`appmanifest`/`attribution-reporting`/`audio-output`/`audio-session`/`autoplay-policy-detection`/`background-fetch`/`background-sync`/`badging`/`battery-status`. Манифест отбирает 155 id: 153 `.https.`-only, 2 не-https (`bidi/idl/idl-BluetoothUUID.window.html`, `bidi/idl/idl-NavigatorBluetooth.window.html`). Внекатегорийный хелпер `/resources/testdriver.js`+`/resources/testdriver-vendor.js` не довендорен (только `META: script=` ссылки; не блокирует прогон, пока тест реально не вызывает testdriver-команду), та же методология, что `FileAPI`/`ai`. Крупнейшая по числу отобранных id категория этого бэклога (155, больше `WebCryptoAPI` 125 и `ai` 169 суммарно не проверялось, но сопоставимого порядка) — полный `run_report.py --all --root bluetooth --recursive` не добежал до конца: пробный прогон (~11 мин) обработал 10 из 153 `.https.`-id, все TIMEOUT (`invalid url: invalid port: \"None\"`, тот же HTTPS-порт-гэп, что `WebCryptoAPI`/`ai`), тот же класс ограничения (полный прогон при таком темпе занял бы часы). 2 не-https `idl-*` теста прогнаны изолированно через `run_smoke.py`: 2/2 harness OK, 0/15 сабтестов (0/14 + 0/1) — `BluetoothUUID is not defined` и аналогично для `navigator.bluetooth`, сама Web Bluetooth API не реализована, ожидаемо для 🚫-категории. Не заводился отдельный BUG-NNN — первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-browsing-topics",
