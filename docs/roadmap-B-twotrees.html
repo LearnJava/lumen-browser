@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-24",
+ "generated": "2026-07-25",
  "counts": {
   "open": 36,
   "fixed": 272,
@@ -3756,9 +3756,9 @@
       {
        "id": "CC-6",
        "title": "CC-6: ChromeModel и мутация DOM",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "ChromeModel (вкладки/URL/профиль/тема/счётчики) → мутации chrome-DOM: текст, атрибуты data-theme/data-profile/data-layout, классы, клоны template для списков; dirty → релэйаут хрома; Palette для движкового хрома не используется. После CC-5"
+       "note": "`ChromeModel`/`bind_model` (`crates/chrome/src/model.rs`): вкладки/workspace/тема/layout/профиль → мутации chrome-DOM (`data-theme/profile/layout` на `<body>`, полная пересборка `#sbTabs`/`.sb-workspaces` из свежих узлов). Эталон без `<template>` — вместо клонов узлы строятся программно (`create_element`), задокументировано отклонение от брифа. Нет dirty-флага — `bind_model` дешёвый, вызывается в начале каждого `relayout_chrome_host`; клики `select-tab/close-tab/select-workspace/add-workspace` резолвятся через `data-tab-id`/`data-ws-id` в реальные `tab_strip`/`workspace_panel`. `SetProfile`-клик в новом хроме остаётся no-op (поповер профиля ещё legacy — CC-9/10), но `data-profile` уже отражает переключение через legacy-поповер. Счётчик щитов/прогресс загрузок не привязаны — вне DoD-предложения, отдельный follow-up. Palette не используется (по брифу). После CC-5"
       },
       {
        "id": "CC-7",

@@ -8427,12 +8427,20 @@ impl Lumen {
     /// ([`take_layout_box_by_node`]) right after layout, capturing its rect
     /// into `chrome_page_host_rect` first, and before [`paint_ordered`].
     fn relayout_chrome_host(&mut self) {
-        let Some((doc, sheet)) = self.chrome_doc.as_ref() else { return };
+        if self.chrome_doc.is_none() {
+            return;
+        }
         let Some(r) = self.renderer.as_ref() else { return };
         let viewport = r.viewport_size();
         if viewport.width <= 0.0 || viewport.height <= 0.0 {
             return;
         }
+        // CC-6: rebind ChromeModel from current shell state before every
+        // layout pass — no separate dirty flag, `bind_model` is cheap (a
+        // handful of attribute/text mutations + two small list rebuilds).
+        let model = self.chrome_model_snapshot();
+        let Some((doc, sheet)) = self.chrome_doc.as_mut() else { return };
+        lumen_chrome::bind_model(doc, &model);
         let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
         let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
         lumen_layout::set_interactive_state(self.chrome_hovered_nid, None, self.chrome_active_nid);
@@ -8451,6 +8459,48 @@ impl Lumen {
             .map(|content_area| content_area.rect);
         let dl = paint_ordered(&layout);
         self.chrome_layout = Some((layout, dl));
+    }
+
+    /// CC-6 (docs/tasks/p1-css-chrome.md): snapshots tab strip, workspaces,
+    /// theme, tab layout, and active profile into a [`lumen_chrome::ChromeModel`]
+    /// — [`Self::relayout_chrome_host`] binds this before every chrome layout
+    /// pass. Mirrors the same shell fields [`Self::chrome_snapshot`] (DS-17 a11y
+    /// tree) reads, shaped for [`lumen_chrome::bind_model`] instead.
+    fn chrome_model_snapshot(&self) -> lumen_chrome::ChromeModel {
+        let active_id = self.tab_strip.tabs.get(self.tab_strip.active).map(|t| t.id);
+        let tabs = self
+            .tab_strip
+            .tabs
+            .iter()
+            .map(|t| lumen_chrome::ChromeTabModel {
+                id: t.id,
+                title: t.title.clone(),
+                active: Some(t.id) == active_id,
+                sleeping: t.tab_state == TabState::Hibernated,
+            })
+            .collect();
+        let workspaces = self
+            .workspace_panel
+            .workspaces
+            .iter()
+            .map(|w| lumen_chrome::ChromeWorkspaceModel {
+                id: w.id,
+                name: w.name.clone(),
+                active: Some(w.id) == self.workspace_panel.active_id,
+            })
+            .collect();
+        let profile_slug = self
+            .profile_menu
+            .active_entry()
+            .and_then(|e| panels::profile_menu::slug_for_profile(&e.name))
+            .map(str::to_owned);
+        lumen_chrome::ChromeModel {
+            dark_theme: self.dark_mode,
+            layout_vertical: self.vertical_tabs.visible,
+            profile_slug,
+            tabs,
+            workspaces,
+        }
     }
 
     /// CC-5 (docs/tasks/p1-css-chrome.md): where the page content starts, in
@@ -8524,16 +8574,37 @@ impl Lumen {
         })
     }
 
-    /// CC-5: routes a chrome `data-action` click to the shell's existing
+    /// CC-6: reads and parses a `data-tab-id`/`data-ws-id`-style integer
+    /// attribute off `nid` in the live `chrome_doc` — the id `ChromeModel`
+    /// (`crates/chrome/src/model.rs`) stamps on rebuilt tab rows/workspace
+    /// buttons so a click can be resolved back to a `tab_strip`/
+    /// `workspace_panel` entry. `None` off the flag, before the first chrome
+    /// layout, or if the attribute is missing/unparsable.
+    fn chrome_data_id(&self, nid: NodeId, attr: &str) -> Option<i64> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        doc.get(nid).get_attr(attr)?.parse().ok()
+    }
+
+    /// CC-5/CC-6: routes a chrome `data-action` click to the shell's existing
     /// handlers — the same functions the legacy toolbar/tab-strip hit-
     /// testers call, so behavior (reload semantics, panel toggling, …)
-    /// matches exactly. Actions whose only visible effect would be a
-    /// `chrome_doc` DOM mutation the shell cannot yet produce (tab
-    /// selection, workspace/profile switches, popover-local toggles, …) are
-    /// deliberately no-ops here: `ChromeModel` → DOM binding lands in CC-6,
-    /// and the popovers themselves are still legacy overlays pending
-    /// CC-9/CC-10 migration.
-    fn dispatch_chrome_action(&mut self, nid: NodeId, action: lumen_chrome::ChromeAction) {
+    /// matches exactly. `SelectTab`/`CloseTab`/`SelectWorkspace`/`AddWorkspace`
+    /// resolve the clicked row back to a real `tab_strip`/`workspace_panel`
+    /// entry via the `data-tab-id`/`data-ws-id` attribute `ChromeModel`
+    /// stamped on it (CC-6, `crates/chrome/src/model.rs`) — `nid` is the
+    /// `data-action`-carrying node itself for these four. Actions whose only
+    /// visible effect would still need a `chrome_doc` DOM mutation this slice
+    /// doesn't cover (`SetProfile`, popover-local toggles, …) remain no-ops:
+    /// the popovers themselves are still legacy overlays pending CC-9/CC-10
+    /// migration, and `data-profile` already updates automatically on any
+    /// profile switch made through the legacy profile-menu popover (it is
+    /// read fresh from `self.profile_menu` by every [`Self::chrome_model_snapshot`]).
+    fn dispatch_chrome_action(
+        &mut self,
+        nid: NodeId,
+        action: lumen_chrome::ChromeAction,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
         use lumen_chrome::ChromeAction;
         match action {
             ChromeAction::Reload => {
@@ -8590,15 +8661,50 @@ impl Lumen {
                     }
                 }
             }
+            ChromeAction::SelectTab => {
+                if let Some(id) = self.chrome_data_id(nid, "data-tab-id")
+                    && let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id as usize)
+                {
+                    self.switch_tab(idx);
+                }
+            }
+            ChromeAction::CloseTab => {
+                if let Some(id) = self.chrome_data_id(nid, "data-tab-id")
+                    && let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id as usize)
+                {
+                    self.close_tab(idx, event_loop);
+                }
+            }
+            ChromeAction::SelectWorkspace => {
+                if let Some(id) = self.chrome_data_id(nid, "data-ws-id") {
+                    self.workspace_panel.set_active(Some(id));
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::AddWorkspace => {
+                let idx = self.workspace_panel.workspaces.len();
+                let name = format!("Workspace {}", idx + 1);
+                let color = panels::workspace_panel::default_color_for_index(idx);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                if let Ok(id) = self.workspaces.create(&name, color, "", None, now) {
+                    self.refresh_workspaces();
+                    self.workspace_panel.set_active(Some(id));
+                    self.relayout_chrome_host();
+                }
+            }
             // Demo-only actions on the static preview markup: no shell state
-            // backs them yet (CC-6 ChromeModel binding / CC-9-CC-10 popover
-            // migration). Recognised (so the click doesn't fall through to
-            // legacy geometry) but otherwise a no-op for now.
-            ChromeAction::SelectTab
-            | ChromeAction::CloseTab
-            | ChromeAction::SelectWorkspace
-            | ChromeAction::AddWorkspace
-            | ChromeAction::SetProfile
+            // backs them yet (CC-9/CC-10 popover migration). Recognised (so
+            // the click doesn't fall through to legacy geometry) but
+            // otherwise a no-op for now. `SetProfile` specifically: the
+            // profile-menu popover is still a legacy overlay (its click
+            // handling — and the actual `profiles.set_active` call — lives
+            // in the `WindowEvent::MouseInput` legacy-popover branch, not
+            // here), and `ChromeModel` already reflects whatever profile
+            // that path activates on the very next relayout.
+            ChromeAction::SetProfile
             | ChromeAction::SetPermission
             | ChromeAction::ArchiveCard
             | ChromeAction::SetSettingsSection
@@ -12962,7 +13068,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             if let Some(hit) = hit
                                 && let Some((nid, action)) = self.chrome_action_at(&hit)
                             {
-                                self.dispatch_chrome_action(nid, action);
+                                self.dispatch_chrome_action(nid, action, event_loop);
                             }
                             self.request_redraw();
                             return;
@@ -13293,6 +13399,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                         }
                                     }
                                     self.profile_menu.visible = false;
+                                    // CC-6: re-sync the CSS chrome's data-profile (no-op off the flag).
+                                    self.relayout_chrome_host();
                                 }
                                 panels::profile_menu::ProfileMenuHit::Empty => {}
                             }
@@ -19489,6 +19597,8 @@ impl Lumen {
             }
         }
         self.settings_panel.visible = false;
+        // CC-6: re-sync the CSS chrome's data-theme/data-layout (no-op off the flag).
+        self.relayout_chrome_host();
     }
 
     /// Handle keyboard input when the settings panel is visible.
@@ -22156,6 +22266,8 @@ impl Lumen {
         self.reset_to_blank_tab();
         // Register the new tab with the lifecycle manager.
         self.lifecycle_mgr.open_tab(new_id as u64);
+        // CC-6: re-sync the CSS chrome's tab list (no-op off the flag).
+        self.relayout_chrome_host();
         self.request_redraw();
     }
 
@@ -22232,6 +22344,8 @@ impl Lumen {
             let _ = self.t2_store.delete(closing_id as i64);
             self.tab_strip.remove(idx);
         }
+        // CC-6: re-sync the CSS chrome's tab list (no-op off the flag).
+        self.relayout_chrome_host();
         self.request_redraw();
     }
 
@@ -22714,6 +22828,8 @@ impl Lumen {
         // the AX tree) left the OS bridge reporting the *previous* tab as
         // selected until the next full page load.
         self.update_platform_ax_tree();
+        // CC-6: re-sync the CSS chrome's active-tab highlight (no-op off the flag).
+        self.relayout_chrome_host();
         self.request_redraw();
     }
 }
