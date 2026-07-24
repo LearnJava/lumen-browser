@@ -6663,10 +6663,18 @@ impl Renderer {
                 // translation on the transform stack; PopScrollLayer unwinds both.
                 DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } => {
                     // Clip (same as PushClipRect, accounting for sticky dx/dy).
+                    // Apply the accumulated transform so the clip lands in screen
+                    // space (BUG-276 fix, missed here originally — BUG-335): the
+                    // clip_rect is in the PARENT's page-space, same as
+                    // PushClipRect's, and must go through the SAME transform
+                    // (captured before this push's own scroll translate is
+                    // added to the stack below) before intersecting with
+                    // clip_stack, which already holds screen-space rects.
                     let scrolled_clip = translate_rect(*clip_rect, dx, dy);
+                    let in_screen = apply_transform_to_clip(scrolled_clip, transform_stack.last());
                     let new_clip = match clip_stack.last() {
-                        Some(prev) => intersect_rects(*prev, scrolled_clip),
-                        None => scrolled_clip,
+                        Some(prev) => intersect_rects(*prev, in_screen),
+                        None => in_screen,
                     };
                     clip_stack.push(new_clip);
                     // Scroll translate: shift content by -scroll_x, -scroll_y.

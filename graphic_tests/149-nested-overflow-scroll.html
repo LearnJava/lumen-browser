@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 149 nested overflow:auto scroll</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; font-family: sans-serif; }
+    .__f {
+      background: #1a1a2e;
+      width: 1022px; height: 718px;
+      margin: 1px;
+      padding: 20px;
+      overflow: hidden;
+    }
+    h2 { color: #e2e2f0; font-size: 16px; margin-bottom: 12px; }
+    .col { display: inline-block; width: 320px; vertical-align: top; margin-right: 20px; }
+    .label { color: #a0a0c0; font-size: 11px; margin-top: 6px; }
+
+    /* Col A: outer overflow:auto scroll container with a nested overflow:auto
+       child — both should get their own scrollbar (CC-CSS-2: nested scroll
+       containers, mechanism in collect_scroll_containers/find_scroll_container_at
+       already routes wheel to the innermost container under the cursor). */
+    .outer-a {
+      width: 300px; height: 220px;
+      overflow: auto;
+      background: #16213e;
+      border: 2px solid #0f3460;
+    }
+    .outer-a-item {
+      width: 100%; height: 60px;
+      background: #533483;
+      margin-bottom: 6px;
+    }
+    .inner-a {
+      width: 260px; height: 90px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      background: #0f3460;
+      border: 2px solid #e94560;
+      margin-bottom: 6px;
+    }
+    .inner-a-item {
+      width: 100%; height: 30px;
+      line-height: 30px;
+      padding-left: 8px;
+      color: #ffd0d8;
+      font-size: 12px;
+      background: #533483;
+      border-bottom: 1px solid #0f3460;
+    }
+
+    /* Col B: nested overflow:auto with border-radius on both levels — clip
+       must round correctly at both nesting depths (BUG-132/249 class). */
+    .outer-b {
+      width: 300px; height: 220px;
+      overflow: auto;
+      background: #16213e;
+      border: 2px solid #0f3460;
+      border-radius: 16px;
+    }
+    .outer-b-pad { padding: 14px; }
+    .inner-b {
+      width: 100%; height: 100px;
+      overflow: auto;
+      background: #0f3460;
+      border: 2px solid #e94560;
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    .inner-b-content {
+      width: 320px; height: 200px;
+      background: radial-gradient(circle at 50% 50%, #e94560 0%, #533483 50%, #0f3460 100%);
+    }
+    .outer-b-item {
+      width: 100%; height: 50px;
+      background: #533483;
+      margin-bottom: 8px;
+      border-radius: 6px;
+    }
+
+    /* Col C: z-indexed element inside a nested scroll container (BUG-159
+       regression, combined with nesting) — must stay clipped to the inner
+       container's own scroll layer, not escape past the outer container. */
+    .outer-c {
+      width: 300px; height: 220px;
+      overflow: auto;
+      background: #16213e;
+      border: 2px solid #0f3460;
+      padding: 10px;
+    }
+    .outer-c-spacer {
+      width: 100%; height: 40px;
+      background: #533483;
+      margin-bottom: 8px;
+    }
+    .inner-c {
+      position: relative;
+      width: 100%; height: 100px;
+      overflow: auto;
+      background: #0f3460;
+      border: 2px solid #e94560;
+      margin-bottom: 8px;
+    }
+    .inner-c-content {
+      width: 100%; height: 220px;
+      background: linear-gradient(to bottom, #533483, #e94560, #533483, #0f3460);
+    }
+    .inner-c-badge {
+      position: absolute;
+      top: 8px; right: 8px;
+      z-index: 5;
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: #ffbb33;
+    }
+    .outer-c-tail {
+      width: 100%; height: 90px;
+      background: #533483;
+    }
+  </style>
+</head>
+<body>
+  <div class="__f">
+    <h2>Nested overflow:auto — independent scroll containers</h2>
+    <div class="col">
+      <div class="outer-a">
+        <div class="outer-a-item"></div>
+        <div class="inner-a">
+          <div class="inner-a-item">Item 1</div>
+          <div class="inner-a-item">Item 2</div>
+          <div class="inner-a-item">Item 3</div>
+          <div class="inner-a-item">Item 4</div>
+          <div class="inner-a-item">Item 5</div>
+        </div>
+        <div class="outer-a-item"></div>
+        <div class="outer-a-item"></div>
+      </div>
+      <div class="label">outer + inner: both get own scrollbar</div>
+    </div>
+
+    <div class="col">
+      <div class="outer-b">
+        <div class="outer-b-pad">
+          <div class="inner-b">
+            <div class="inner-b-content"></div>
+          </div>
+          <div class="outer-b-item"></div>
+          <div class="outer-b-item"></div>
+          <div class="outer-b-item"></div>
+        </div>
+      </div>
+      <div class="label">nested border-radius clip (16px / 10px)</div>
+    </div>
+
+    <div class="col">
+      <div class="outer-c">
+        <div class="outer-c-spacer"></div>
+        <div class="inner-c">
+          <div class="inner-c-content"></div>
+          <div class="inner-c-badge"></div>
+        </div>
+        <div class="outer-c-tail"></div>
+      </div>
+      <div class="label">z-index badge stays in inner scroll layer (BUG-159 class)</div>
+    </div>
+  </div>
+</body>
+</html>
