@@ -908,6 +908,8 @@ fn run_window_mode(
         chrome_doc: css_chrome_enabled.then(|| lumen_chrome::parse_document(chrome_preview::HTML)),
         chrome_layout: None,
         chrome_page_host_rect: None,
+        chrome_hovered_nid: None,
+        chrome_active_nid: None,
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         transition_scheduler: TransitionScheduler::new(),
@@ -7134,6 +7136,19 @@ struct Lumen {
     /// render-time page-offset call sites. `None` until the first chrome
     /// layout exists (mirrors `chrome_layout`).
     chrome_page_host_rect: Option<Rect>,
+    /// CC-5 (docs/tasks/p1-css-chrome.md): hovered node in `chrome_layout`'s
+    /// tree, or `None` when the pointer isn't over the chrome's own opaque
+    /// area (or off the flag). Set from `WindowEvent::CursorMoved`; feeds
+    /// `:hover` into the next [`Self::relayout_chrome_host`] pass. Kept
+    /// separate from [`Self::hovered_nid`] (the page's own hover state) for
+    /// the same reason `relayout_chrome_host` explicitly resets the
+    /// interactive thread-locals rather than inheriting them — the two
+    /// documents' hover state must never leak into each other's layout pass.
+    chrome_hovered_nid: Option<NodeId>,
+    /// CC-5: pressed node in `chrome_layout`'s tree — mirrors
+    /// [`Self::chrome_hovered_nid`] but for `:active`, set from
+    /// `WindowEvent::MouseInput` press.
+    chrome_active_nid: Option<NodeId>,
     /// HTML event loop runtime. На каждой итерации winit-loop (AboutToWait)
     /// выполняется одна task, на RedrawRequested — run_rendering_step
     /// (вызывает rAF-callback-и), на WindowEvent::Resized —
@@ -8387,12 +8402,15 @@ impl Lumen {
     /// (`ChromeModel` DOM mutation lands in CC-6), so a resize is the only
     /// thing that can currently change its layout.
     ///
-    /// Chrome has no hover/focus/active state of its own yet (hit-test/hover
-    /// dispatch is CC-5): the interactive thread-locals are process-wide
-    /// (brief risk #6), so this pass explicitly sets them to "none" rather
-    /// than inheriting whatever the page's last [`Self::relayout`] left
-    /// behind, and clears them again afterward so a subsequent page relayout
-    /// does not inherit chrome's (empty) state either.
+    /// CC-5: hover/active state comes from [`Self::chrome_hovered_nid`]/
+    /// [`Self::chrome_active_nid`] (chrome has no `:focus` handling yet — no
+    /// text input in the asset besides the omnibox, whose caret CC-7 still
+    /// routes through the legacy `address_bar` overlay). The interactive
+    /// thread-locals are process-wide (brief risk #6), so this pass
+    /// explicitly sets them from chrome's own state rather than inheriting
+    /// whatever the page's last [`Self::relayout`] left behind, and clears
+    /// them again afterward so a subsequent page relayout does not inherit
+    /// chrome's state either.
     ///
     /// The design reference's `#contentArea` — the container it reserves for
     /// live tab content, doubling as the brief's "`#page-host`" (no new id
@@ -8417,7 +8435,7 @@ impl Lumen {
         }
         let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
         let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
-        lumen_layout::set_interactive_state(None, None, None);
+        lumen_layout::set_interactive_state(self.chrome_hovered_nid, None, self.chrome_active_nid);
         let mut layout = lumen_layout::layout_measured_hyp(
             doc,
             sheet,
@@ -8433,6 +8451,168 @@ impl Lumen {
             .map(|content_area| content_area.rect);
         let dl = paint_ordered(&layout);
         self.chrome_layout = Some((layout, dl));
+    }
+
+    /// CC-5 (docs/tasks/p1-css-chrome.md): where the page content starts, in
+    /// window CSS pixels — the single source of truth input-coordinate
+    /// conversion ([`Self::page_point`], [`Self::update_cursor_icon`]) and
+    /// the render-time page transform share, so a click/hover always lands
+    /// on the same page element the frame actually painted there.
+    ///
+    /// Under `LUMEN_CSS_CHROME=1` this is [`Self::chrome_page_host_rect`]'s
+    /// origin (falling back to `(0, CHROME_H)` before the first chrome
+    /// layout exists, mirroring [`Self::relayout_chrome_host`]'s own
+    /// degenerate-size guard — that frame paints the page flush with the
+    /// window too). Off the flag it is the legacy left-docked-panel width /
+    /// `toolbar::CHROME_H` pair.
+    fn page_offset(&self) -> (f32, f32) {
+        if self.css_chrome_enabled {
+            self.chrome_page_host_rect
+                .map(|r| (r.x, r.y))
+                .unwrap_or((0.0, toolbar::CHROME_H))
+        } else {
+            (self.left_dock().map_or(0.0, |(_, w)| w), toolbar::CHROME_H)
+        }
+    }
+
+    /// CC-5: `true` when `(x_css, y_css)` falls outside the page-content
+    /// rect — i.e. over an opaque chrome furniture area (sidebar, toolbar,
+    /// tab strip) — under `LUMEN_CSS_CHROME=1`. Always `false` off the flag.
+    /// A `None` [`Self::chrome_page_host_rect`] (no chrome layout yet)
+    /// counts as "over chrome": mirrors [`Self::relayout_chrome_host`]'s
+    /// guard — nothing is painted at the page rect either in that frame, so
+    /// there is no page underneath to click through to yet.
+    fn point_over_chrome(&self, x_css: f32, y_css: f32) -> bool {
+        if !self.css_chrome_enabled {
+            return false;
+        }
+        match self.chrome_page_host_rect {
+            Some(r) => {
+                x_css < r.x || x_css >= r.right() || y_css < r.y || y_css >= r.bottom()
+            }
+            None => true,
+        }
+    }
+
+    /// CC-5: hit-tests [`Self::chrome_layout`] at window-CSS coordinates —
+    /// the chrome document paints at the window origin, no scroll/page
+    /// transform involved. `None` off the flag or before the first chrome
+    /// layout exists.
+    fn chrome_hit_test(&self, x_css: f32, y_css: f32) -> Option<lumen_paint::HitTestResult> {
+        let (layout, _) = self.chrome_layout.as_ref()?;
+        hit_test(Point::new(x_css, y_css), layout)
+    }
+
+    /// CC-5: walks `hit.path` (bubble order, closest node first — the same
+    /// list `HitTestResult` already builds for event-dispatch bubbling) for
+    /// the nearest ancestor carrying a recognised `data-action`, mirroring
+    /// how the legacy toolbar/tab-strip hit-testers resolve a click to one
+    /// semantic action regardless of which child element (icon, label,
+    /// badge) the point actually landed on. Returns the carrying node too —
+    /// `dispatch_chrome_action` needs it to read action-specific sibling
+    /// attributes (`data-view`, …).
+    fn chrome_action_at(
+        &self,
+        hit: &lumen_paint::HitTestResult,
+    ) -> Option<(NodeId, lumen_chrome::ChromeAction)> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        hit.path.iter().find_map(|&nid| {
+            doc.get(nid)
+                .get_attr("data-action")
+                .and_then(lumen_chrome::ChromeAction::from_attr_value)
+                .map(|action| (nid, action))
+        })
+    }
+
+    /// CC-5: routes a chrome `data-action` click to the shell's existing
+    /// handlers — the same functions the legacy toolbar/tab-strip hit-
+    /// testers call, so behavior (reload semantics, panel toggling, …)
+    /// matches exactly. Actions whose only visible effect would be a
+    /// `chrome_doc` DOM mutation the shell cannot yet produce (tab
+    /// selection, workspace/profile switches, popover-local toggles, …) are
+    /// deliberately no-ops here: `ChromeModel` → DOM binding lands in CC-6,
+    /// and the popovers themselves are still legacy overlays pending
+    /// CC-9/CC-10 migration.
+    fn dispatch_chrome_action(&mut self, nid: NodeId, action: lumen_chrome::ChromeAction) {
+        use lumen_chrome::ChromeAction;
+        match action {
+            ChromeAction::Reload => {
+                // Mirrors `toolbar::ToolbarHit::Reload` — routed through the
+                // UserInteraction task source rather than called directly
+                // (HTML §8.1.4).
+                let flag = Rc::clone(&self.pending_reload);
+                self.runtime.handle().queue_task(
+                    runtime::TaskSource::UserInteraction,
+                    move || { flag.set(true); },
+                );
+            }
+            ChromeAction::NewTab => self.open_new_tab(),
+            ChromeAction::OpenCertViewer => {
+                let cert = self.cert_info.clone();
+                self.cert_panel.toggle(cert);
+            }
+            ChromeAction::ToggleShieldPopover => self.shields.toggle(),
+            ChromeAction::ToggleFind => {
+                if self.find.is_open() {
+                    self.find.close();
+                } else {
+                    self.hint.close();
+                    self.find.open();
+                }
+            }
+            ChromeAction::OpenWebSidebar => self.sidebar.toggle(),
+            ChromeAction::OpenAiSidebar => {
+                self.ai_panel.toggle();
+                self.relayout_chrome();
+            }
+            ChromeAction::ToggleDownloads => self.downloads.toggle_visible(),
+            ChromeAction::OpenPrintDialog => self.print_panel.toggle(),
+            ChromeAction::ToggleDevtools => self.devtools_console.toggle(),
+            ChromeAction::ToggleProfileMenu => {
+                self.profile_menu.toggle();
+                if self.profile_menu.visible {
+                    self.refresh_profile_menu_entries();
+                }
+            }
+            ChromeAction::ShowView => {
+                // `data-view` picks the target — only `settings` has a real
+                // engine-independent panel today; the rest (history,
+                // bookmarks, page) are chrome-only views awaiting CC-10.
+                let view = self
+                    .chrome_doc
+                    .as_ref()
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-view"));
+                if view == Some("settings") {
+                    if self.settings_panel.visible {
+                        self.close_settings_panel();
+                    } else {
+                        self.open_settings_panel();
+                    }
+                }
+            }
+            // Demo-only actions on the static preview markup: no shell state
+            // backs them yet (CC-6 ChromeModel binding / CC-9-CC-10 popover
+            // migration). Recognised (so the click doesn't fall through to
+            // legacy geometry) but otherwise a no-op for now.
+            ChromeAction::SelectTab
+            | ChromeAction::CloseTab
+            | ChromeAction::SelectWorkspace
+            | ChromeAction::AddWorkspace
+            | ChromeAction::SetProfile
+            | ChromeAction::SetPermission
+            | ChromeAction::ArchiveCard
+            | ChromeAction::SetSettingsSection
+            | ChromeAction::ToggleSwitch
+            | ChromeAction::CloseModal
+            | ChromeAction::ClosePalette
+            | ChromeAction::ToggleFocusTimer
+            | ChromeAction::ToggleFocus
+            | ChromeAction::SetSidebarTab
+            | ChromeAction::CloseRightSidebar
+            | ChromeAction::SetDevtoolsTab
+            | ChromeAction::ToggleSidebar
+            | ChromeAction::OmniGo => {}
+        }
     }
 
     /// ADR-016 M2.2b: route an **async-safe chrome-inset relayout** off the UI
@@ -12287,13 +12467,47 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (position.x as f32) / dpr;
                     let y_css = (position.y as f32) / dpr;
+                    // CC-5: independent hover tracking for the engine-drawn
+                    // chrome document — separate thread-locals/relayout pass
+                    // from the page's own `:hover` below (`relayout_chrome_host`'s
+                    // doc comment explains why the two must not share state).
+                    // `point_over_chrome`/`chrome_hit_test` both answer "no
+                    // chrome" once the pointer is over the page, so moving out
+                    // of the sidebar/toolbar correctly clears this again.
+                    if self.css_chrome_enabled {
+                        let new_chrome_hovered = if self.point_over_chrome(x_css, y_css) {
+                            self.chrome_hit_test(x_css, y_css).map(|r| r.node)
+                        } else {
+                            None
+                        };
+                        if new_chrome_hovered != self.chrome_hovered_nid {
+                            self.chrome_hovered_nid = new_chrome_hovered;
+                            self.relayout_chrome_host();
+                            self.request_redraw();
+                        }
+                    }
                     // Pointer Events L3 §4.1: buffer this raw sample instead of
                     // dispatching immediately. Flushed as one coalesced
                     // `pointermove` on the next `about_to_wait` tick, or sooner
                     // (below) if hover changes so ordering vs enter/leave holds.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     self.pending_pointer_moves.push((x_css, y_css));
-                    let new_hovered = if y_css < toolbar::CHROME_H {
+                    // CC-5: `point_over_chrome` replaces the legacy `y_css <
+                    // toolbar::CHROME_H` gate under the flag — that constant no
+                    // longer describes where the chrome's opaque area ends
+                    // (variable-width sidebar, differently-sized toolbar row).
+                    // Off the flag this is byte-identical to the original check.
+                    let new_hovered = if self.css_chrome_enabled {
+                        if self.point_over_chrome(x_css, y_css) {
+                            None
+                        } else {
+                            let (page_x, page_y) = self.page_point(x_css, y_css);
+                            self.layout_box
+                                .as_ref()
+                                .and_then(|lb| hit_test(Point::new(page_x, page_y), lb))
+                                .map(|r| r.node)
+                        }
+                    } else if y_css < toolbar::CHROME_H {
                         None
                     } else {
                         let (page_x, page_y) = self.page_point(x_css, y_css);
@@ -12542,6 +12756,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (cursor.x as f32) / dpr;
                     let y_css = (cursor.y as f32) / dpr;
+                    // CC-5: chrome's own `:active` — mirrors the page's
+                    // `active_nid` handling above but scoped to `chrome_layout`
+                    // (see `relayout_chrome_host`'s doc comment for why the two
+                    // documents can't share interactive thread-locals).
+                    if self.css_chrome_enabled && self.point_over_chrome(x_css, y_css) {
+                        self.chrome_active_nid = self.chrome_hit_test(x_css, y_css).map(|r| r.node);
+                        self.relayout_chrome_host();
+                        self.request_redraw();
+                    }
                     // F2-6: a press on a docked panel's inner edge begins a
                     // resize drag; the click never reaches the page / panels.
                     if let Some(edge) = self.resize_edge_at(x_css, y_css) {
@@ -12718,8 +12941,33 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Tab bar occupies y = 0..TAB_BAR_HEIGHT — dispatch first.
-                    if y_css < tabs::strip::TAB_BAR_HEIGHT {
+                    // CC-5 (docs/tasks/p1-css-chrome.md): under the flag the
+                    // engine-drawn chrome (CC-4) already covers the whole
+                    // top-strip/sidebar area the two legacy hit-testers below
+                    // assume — falling through to both would double-count the
+                    // same physical click (nothing paints the legacy geometry
+                    // to click on, yet their y/x-range checks don't know
+                    // that). Route exclusively through the chrome hit-test +
+                    // `data-action` dispatch instead; a click outside the
+                    // chrome's own opaque area (i.e. on real page content,
+                    // including any floating popover panel drawn above it —
+                    // those stay positioned within the page-content rect) is
+                    // left unhandled here and falls through unchanged to the
+                    // panel checks below.
+                    if self.css_chrome_enabled {
+                        if self.point_over_chrome(x_css, y_css) {
+                            let hit = self.chrome_hit_test(x_css, y_css);
+                            self.chrome_active_nid = hit.as_ref().map(|r| r.node);
+                            self.relayout_chrome_host();
+                            if let Some(hit) = hit
+                                && let Some((nid, action)) = self.chrome_action_at(&hit)
+                            {
+                                self.dispatch_chrome_action(nid, action);
+                            }
+                            self.request_redraw();
+                            return;
+                        }
+                    } else if y_css < tabs::strip::TAB_BAR_HEIGHT {
                         let win_w = self.viewport_width_css();
                         // Archive panel: close on click-outside before checking button.
                         if self.archive.visible {
@@ -12838,7 +13086,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                     // Toolbar (DS-9) occupies y = TAB_BAR_HEIGHT..toolbar::CHROME_H —
                     // dispatch before any panel anchored below it.
-                    if y_css < toolbar::CHROME_H {
+                    else if y_css < toolbar::CHROME_H {
                         let win_w = self.viewport_width_css();
                         match toolbar::hit_test(x_css, y_css, win_w) {
                             toolbar::ToolbarHit::Profile => {
@@ -15841,11 +16089,8 @@ impl Lumen {
     /// [`Lumen::handle_click_at`] so hit tests stay consistent across input
     /// paths.
     fn page_point(&self, x_css: f32, y_css: f32) -> (f32, f32) {
-        let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
-        (
-            (x_css - panel_x_offset) + self.scroll_x,
-            (y_css - toolbar::CHROME_H) + self.scroll_y,
-        )
+        let (offset_x, offset_y) = self.page_offset();
+        ((x_css - offset_x) + self.scroll_x, (y_css - offset_y) + self.scroll_y)
     }
 
     fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
@@ -20789,16 +21034,24 @@ impl Lumen {
         let scrollbar_icon = cursor_icon_for_hover(hover, self.scroll_drag.is_some());
 
         // F2-6: a docked-panel resize drag (or hovering an edge) shows the
-        // horizontal-resize cursor, ahead of scrollbar/page hover.
+        // horizontal-resize cursor, ahead of scrollbar/page/chrome hover.
         let desired = if self.panel_resize.is_some() || self.resize_edge_at(x_css, y_css).is_some() {
             CursorIcon::EwResize
+        } else if self.css_chrome_enabled && self.point_over_chrome(x_css, y_css) {
+            // CC-5: the engine-drawn chrome owns the cursor over its own
+            // opaque area (sidebar, toolbar, tab strip) — ahead of
+            // scrollbar/page hit-test below, which assume page coordinates.
+            match self.chrome_hit_test(x_css, y_css) {
+                Some(result) => css_cursor_to_winit(result.cursor),
+                None => CursorIcon::Default,
+            }
         } else if scrollbar_icon != CursorIcon::Default {
             scrollbar_icon
         } else if let Some(lb) = &self.layout_box {
             // Hit-test layout tree in page coordinates (viewport + scroll offset).
-            // Page content is shifted down by toolbar::CHROME_H via PushTransform.
-            let page_x = x_css + self.scroll_x;
-            let page_y = (y_css - toolbar::CHROME_H) + self.scroll_y;
+            let (offset_x, offset_y) = self.page_offset();
+            let page_x = (x_css - offset_x) + self.scroll_x;
+            let page_y = (y_css - offset_y) + self.scroll_y;
             match hit_test(Point::new(page_x, page_y), lb) {
                 Some(result) => css_cursor_to_winit(result.cursor),
                 None => CursorIcon::Default,
