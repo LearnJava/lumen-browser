@@ -1763,9 +1763,9 @@
       {
        "id": "WPT-VENDOR-avif",
        "title": "WPT: вендорить + прогнать категорию `avif`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-24: вендорена (`tests/wpt/avif/`, 4 файла: `META.yml`, `WEB_FEATURES.yml`, reftest-пара `animated-avif-timeout.html`+`animated-avif-timeout-ref.html`) и прогнана через `run_report.py --all --root avif --recursive`. Внекатегорийные картинки `/images/animated-avif.avif`+`/images/green.avif` не довендорены (та же методология, что `apng`/`FileAPI`). Единственный тест — reftest (`<link rel=\"match\">`), тип `reftest` минимальным исполнителем не поддержан (как `acid`/`apng`/`animation-worklet`), пара `-ref.html` — reference-файл, не тест; прогон добежал за ~5с, отобрав 0 исполнимых тестов (`Ran 0 checks` / `No tests ran`), 0/0. Первая категория из этого бэклога, чей единственный тест — reftest → ноль автоматически исполнимых, как у `annotation-model`/`annotation-vocab`, но через reftest-гэп, а не `-manual`. Не заводился отдельный BUG-NNN — первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-background-fetch",
