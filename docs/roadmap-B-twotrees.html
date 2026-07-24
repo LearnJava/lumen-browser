@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-24",
  "counts": {
-  "open": 33,
-  "fixed": 267,
+  "open": 32,
+  "fixed": 269,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 300,
+ "total_bugs": 301,
  "phases": [
   {
    "id": "P0",
@@ -1749,16 +1749,16 @@
       {
        "id": "WPT-VENDOR-audio-session",
        "title": "WPT: вендорить + прогнать категорию `audio-session`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+       "note": "DONE 2026-07-24: вендорена (`tests/wpt/audio-session/`, 3 файла: `audiosession-default-values.https.html`, `audiosession-type-setter.https.html`, `idlharness.window.js`) и прогнана через `run_report.py --all --root audio-session --recursive`, включена несмотря на скоуп 🚫 (медиа-конвейер) по тому же постоянному решению пользователя, что и `accelerometer`/`acid`/`ai`/`ambient-light`/`appmanifest`/`attribution-reporting`/`audio-output`. `idlharness.window.js` ссылается на невендоренные `/resources/WebIDLParser.js`+`/resources/idlharness.js`, та же методология, что `FileAPI`/`animation-worklet`. Прогон добежал за ~1:30 (3 отобранных id, все из корня категории): 2 `.https.`-only TIMEOUT (`invalid url: invalid port: \"None\"`, тот же HTTPS-порт-гэп, что `WebCryptoAPI`/`ai`/`ambient-light`/`animation-worklet`/`attribution-reporting`/`audio-output`); `idlharness.window.js` реально прогнан по HTTP, но упал 404-м на невендоренные хелперы (`idl_test is not defined`), харнесс так и не отрапортовал — TIMEOUT. 0/3 harness OK, 0/0 сабтестов. Не заводился отдельный BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-autoplay-policy-detection",
        "title": "WPT: вендорить + прогнать категорию `autoplay-policy-detection`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+       "note": "DONE 2026-07-24: вендорена (`tests/wpt/autoplay-policy-detection/`, 4 файла: `META.yml`, `autoplaypolicy.html`, `autoplaypolicy_media_element.html`, `idlharness.window.js`) и прогнана через `run_report.py --all --root autoplay-policy-detection --recursive`, включена несмотря на скоуп 🚫 (медиа-конвейер) по тому же постоянному решению пользователя, что и `accelerometer`/`acid`/`ai`/`ambient-light`/`appmanifest`/`attribution-reporting`/`audio-output`/`audio-session`. Внекатегорийные хелперы `/common/media.js`, `/resources/WebIDLParser.js`+`/resources/idlharness.js` не довендорены, та же методология, что `FileAPI`/`audio-session`. Прогон добежал за ~13с (3 отобранных id, первая категория этой серии без `.https.`-only гэпа): `autoplaypolicy.html` — харнесс OK, 0/3 сабтестов FAIL (`getAutoplayPolicy is not a function` — сама API не реализована, ожидаемо для 🚫-категории); `autoplaypolicy_media_element.html` — харнесс OK, 0/2 FAIL (404 на невендоренный `/common/media.js`); `idlharness.window.js` реально прогнан по HTTP, но упал на 404 невендоренных хелперов — TIMEOUT. 2/3 harness OK, 0/5 сабтестов. Не заводился отдельный BUG-NNN — первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-avif",
@@ -5954,10 +5954,10 @@
    "debtor": false
   },
   "BUG-327": {
-   "status": "open",
-   "title": "`PAINT_RE` требует, чтобы `[frame] paint …` заканчивалась сразу на `swap X.XXms)`, но текущий формат лога несёт ещё поле `culled N/M leaf)` перед закрывающей ск…",
-   "component": "tooling (`scripts/scroll_perf.py`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`Node.prototype.hasChildNodes()` отсутствовал вовсе (`TypeError: ... is not a function`), а обычная live-обёртка узла (`_lumen_build_element`, обслуживает и эле…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": "2026-07-21",
    "debtor": false
   },
   "BUG-315": {
@@ -6015,6 +6015,13 @@
    "component": "paint/test-harness (`background-repeat: space`)",
    "date": null,
    "debtor": true
+  },
+  "BUG-332": {
+   "status": "fixed",
+   "title": "`PAINT_RE` требовал, чтобы `[frame] paint …` заканчивалась сразу на `swap X.XXms)`, но текущий формат лога несёт ещё поле `culled N/M leaf)` перед закрывающей с…",
+   "component": "tooling (`scripts/scroll_perf.py`)",
+   "date": "2026-07-23",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6109,7 +6116,8 @@
    "BUG-322",
    "BUG-323",
    "BUG-324",
-   "BUG-325"
+   "BUG-325",
+   "BUG-327"
   ],
   "js (WEB_API_SHIM, dom.rs) + native `v8_runtime.rs`/`dom.rs` (оба движка)": [
    "BUG-326"
@@ -6456,7 +6464,7 @@
    "BUG-297"
   ],
   "tooling (`scripts/scroll_perf.py`)": [
-   "BUG-327"
+   "BUG-332"
   ],
   "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
    "BUG-301"
