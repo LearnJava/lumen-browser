@@ -12,7 +12,8 @@ CSS property or selector `lumen-layout` does not implement. On success it code-g
 `<template>` id registry.
 
 The runtime host (parse-once + relayout-on-resize + paint, CC-4), hit-test/hover/dispatch (CC-5),
-and `ChromeModel` → DOM mutation (CC-6) are done — see below and `crates/shell/src/main.rs`.
+`ChromeModel` → DOM mutation (CC-6), and the toolbar/omnibox hybrid (CC-7) are done — see below and
+`crates/shell/src/main.rs`.
 
 ## Done
 
@@ -135,6 +136,32 @@ and `ChromeModel` → DOM mutation (CC-6) are done — see below and `crates/she
   sentence, a follow-up. 5 new tests in `model.rs` (`cargo test -p lumen-chrome`: 21/21) + 2 in
   `panels::profile_menu` (`slug_for_profile`); real click/hover via OS injection not driven — same
   gap CC-5 documented, no injector in this environment.
+- **CC-7 toolbar/omnibox** (`src/model.rs`'s new `OmniboxModel`/`bind_omnibox`;
+  `crates/shell/src/address_bar.rs`'s new `chrome_omnibox_value`; `crates/shell/src/main.rs`): the
+  padlock/star/shield icons and the field itself render from the static asset (already engine-drawn
+  since CC-4) — only the omnibox's *dynamic* pieces needed wiring. `chrome_omnibox_value` mirrors
+  `build_inline_field`'s not-focused/focused branching (current URL vs. live `address_bar` input or
+  selected suggestion, both IDN-guarded via `guard_display_text`) and feeds
+  `ChromeModel::omnibox: OmniboxModel { value, warning }`; `bind_omnibox` writes `value` onto
+  `#omniInput`'s `value` attribute and toggles `#omniWarn`'s `.show` class (rebuilding its message
+  `<span>` only while a warning is present). `:focus`/`:focus-within` styling comes from
+  `set_interactive_state`'s third argument, now `Some(#omniInput)` exactly while
+  `address_bar.is_open()`. The caret stays hand-painted (`FillRect` in `overlay_buf`, anchored to
+  `Lumen::chrome_omni_input_rect` — `#omniInput`'s post-layout rect, captured non-destructively each
+  `relayout_chrome_host` pass) since no native `<input>` caret exists; hidden while a dropdown
+  suggestion is selected, matching the old overlay's behavior. A click inside `#omniInput` is
+  special-cased in the chrome hit-test (no `data-action` exists to generate an `onfocus` handler
+  from) to open `address_bar` exactly like the legacy `toolbar::ToolbarHit::Omnibox` branch it
+  mirrors. **Fixed during review:** `relayout_chrome_host()` only re-binds+re-lays-out on explicit
+  triggers (resize, a dispatched action, …), not every `RedrawRequested` — the omnibox needed a call
+  after *every* `address_bar`-mutating key/mouse path (typed char, Backspace, arrow-key suggestion
+  select, Escape, Enter/commit, the click-to-open branch, and both `OpenAddressBar` shortcuts —
+  Ctrl+L/F6 and the command palette) or the engine-rendered field would visibly freeze while typing;
+  all of those call sites now call it (no-op off the flag). The suggestion **dropdown** itself is out
+  of this slice's DoD — arrow-key selection already works (`address_bar`'s own state), it just isn't
+  painted until CC-9 migrates it. `cargo test -p lumen-chrome` (24/24, 3 new) + `cargo test -p
+  lumen-shell` (1701/1701, 4 new in `address_bar::tests`) + `cargo clippy -p lumen-chrome -p
+  lumen-shell --all-targets -D warnings` green.
 
 ## Deferred
 
@@ -151,7 +178,11 @@ and `ChromeModel` → DOM mutation (CC-6) are done — see below and `crates/she
   the legacy popover (CC-9/10); the ~13 remaining demo-only `ChromeAction`s dispatched as no-ops by
   CC-5 (`SetPermission`, `ArchiveCard`, `SetSettingsSection`, `ToggleSwitch`, `CloseModal`,
   `ClosePalette`, `ToggleFocusTimer`, `ToggleFocus`, `SetSidebarTab`, `CloseRightSidebar`,
-  `SetDevtoolsTab`, `ToggleSidebar`, `OmniGo`) await CC-7/CC-9/CC-10 popover migration.
+  `SetDevtoolsTab`, `ToggleSidebar`, `OmniGo`) await CC-9/CC-10 popover migration.
+- Omnibox suggestion **dropdown** rendering (CC-9): keyboard `ArrowUp`/`ArrowDown` selection already
+  updates `address_bar`'s own state (and `chrome_omnibox_value` already reflects a selected
+  suggestion in `#omniInput`'s value), but the dropdown list itself is not painted under the flag —
+  the legacy dropdown builder is gated off alongside the rest of the legacy toolbar (CC-4).
 
 ## Invariants
 

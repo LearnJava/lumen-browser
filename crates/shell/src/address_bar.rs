@@ -118,6 +118,26 @@ fn spoof_warning_message(reason: SpoofReason) -> &'static str {
     }
 }
 
+/// CC-7 (`docs/tasks/p1-css-chrome.md`): chrome-DOM equivalent of the value
+/// [`build_inline_field`] draws — the not-focused/focused branching (current
+/// URL vs. live input or selected suggestion), IDN-guarded, minus glyph-rect
+/// placement. Returned `value` is written into `#omniInput`'s `value`
+/// attribute (`lumen_chrome::OmniboxModel::value`); empty lets the asset's
+/// own `placeholder` attribute show through, so unlike the legacy overlay
+/// this never needs an "about:blank"/"Введите URL…" text fallback.
+pub(crate) fn chrome_omnibox_value(state: &AddressBarState, current_url: &str) -> (String, Option<&'static str>) {
+    if !state.is_open() {
+        let (guarded, _) = guard_display_text(current_url);
+        return (guarded, None);
+    }
+    let display_input = match state.selected_idx() {
+        Some(idx) => state.suggestions().get(idx).map(|s| s.commit_value()).unwrap_or(state.input()),
+        None => state.input(),
+    };
+    let (guarded, reason) = guard_display_text(display_input);
+    (guarded, reason.map(spoof_warning_message))
+}
+
 // ── Omnibox prefix ────────────────────────────────────────────────────────────
 
 /// Префикс @-команды, распознанный в строке ввода.
@@ -949,6 +969,43 @@ mod tests {
         };
         let dl = build_inline_field(&s, "x", &test_rects(), &Palette::DARK);
         assert!(matches!(dl[0], DisplayCommand::FillRoundedRect { color, .. } if color == Palette::DARK.accent));
+    }
+
+    #[test]
+    fn chrome_omnibox_value_shows_current_url_when_not_focused() {
+        let s = AddressBarState::default();
+        let (value, warning) = chrome_omnibox_value(&s, "https://example.com/page");
+        assert_eq!(value, "https://example.com/page");
+        assert_eq!(warning, None);
+    }
+
+    #[test]
+    fn chrome_omnibox_value_shows_live_input_when_focused() {
+        let mut s = AddressBarState::default();
+        s.open("https://example.com");
+        s.append_str("/more");
+        let (value, warning) = chrome_omnibox_value(&s, "https://example.com");
+        assert_eq!(value, "https://example.com/more");
+        assert_eq!(warning, None);
+    }
+
+    #[test]
+    fn chrome_omnibox_value_shows_selected_suggestion() {
+        let mut s = AddressBarState::default();
+        s.open("");
+        s.set_suggestions(vec![OmniboxSuggestion::SearchQuery { query: "rust book".to_owned(), frequency: 3 }]);
+        s.select_next();
+        let (value, _) = chrome_omnibox_value(&s, "");
+        assert_eq!(value, "rust book");
+    }
+
+    #[test]
+    fn chrome_omnibox_value_flags_spoof_risk_host_when_focused() {
+        let mut s = AddressBarState::default();
+        s.open("https://аpple.com/login");
+        let (value, warning) = chrome_omnibox_value(&s, "https://аpple.com/login");
+        assert!(value.contains("xn--"), "spoof-risk host must be shown as punycode: {value}");
+        assert!(warning.is_some());
     }
 
     #[test]
