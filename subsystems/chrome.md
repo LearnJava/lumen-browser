@@ -12,8 +12,8 @@ CSS property or selector `lumen-layout` does not implement. On success it code-g
 `<template>` id registry.
 
 The runtime host (parse-once + relayout-on-resize + paint, CC-4), hit-test/hover/dispatch (CC-5),
-`ChromeModel` → DOM mutation (CC-6), and the toolbar/omnibox hybrid (CC-7) are done — see below and
-`crates/shell/src/main.rs`.
+`ChromeModel` → DOM mutation (CC-6), the toolbar/omnibox hybrid (CC-7), and the sidebar/workspace
+tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/main.rs`.
 
 ## Done
 
@@ -162,6 +162,32 @@ The runtime host (parse-once + relayout-on-resize + paint, CC-4), hit-test/hover
   painted until CC-9 migrates it. `cargo test -p lumen-chrome` (24/24, 3 new) + `cargo test -p
   lumen-shell` (1701/1701, 4 new in `address_bar::tests`) + `cargo clippy -p lumen-chrome -p
   lumen-shell --all-targets -D warnings` green.
+- **CC-8 sidebar + workspace tab-bar, both layouts** (`src/model.rs`: `ChromeModel::sidebar_collapsed`,
+  `ChromeTabModel::is_child`/`container_color`, `ChromeWorkspaceModel::color`, plus the new
+  `rebuild_hbar_tab_list`/`rebuild_hbar_ws_list` mirrors of CC-6's `#sbTabs`/`.sb-workspaces`
+  rebuilds; `crates/shell/src/main.rs`): `bind_model` now also toggles `#sidebar.collapsed`
+  (`ChromeAction::ToggleSidebar` flips the new `Lumen::chrome_sidebar_collapsed` field and calls
+  `relayout_chrome_host`), rebuilds `.hbar-tabs`/`.hbar-ws` — previously left showing the asset's
+  static demo rows regardless of layout, since only the vertical sidebar's containers were bound —
+  so switching to the horizontal layout (`vertical_tabs.visible = false`) now reflects real tab/
+  workspace state there too. `ChromeTabModel::is_child` (from `TabEntry::opener_id.is_some()`, tree-
+  style tabs 7A.2) drives the `.child` class + a `.tree-line` connector span; the asset's CSS only
+  indents one nesting level (`.tab-row.child`), so a grandchild renders at its parent's indent rather
+  than one level deeper — a limitation of the frozen reference itself, not this binding (deeper trees
+  already work correctly in the legacy `tree_tabs.rs` panel, which isn't CSS-indent-limited).
+  `container_color`/workspace `color` are `#RRGGBB` strings (`Lumen::chrome_hex_color`, dropping
+  alpha) written as `.container-stripe`'s `style="background:…"` and `--ws-color` respectively — the
+  latter feeds both `.ws-item`/`.hbar-ws-pill`'s CSS custom property and the `.ws-icon` swatch
+  background directly (no CSS `var()` needed there). Tab drag-and-drop stays on the legacy pixel-math
+  mechanic per the brief (CC-8's DoD doesn't require porting it) — it already operates over
+  `chrome_layout`-derived rects via `page_offset()`/hit-test since CC-5, so nothing new was needed for
+  it to keep working under the flag. The spinner's `@keyframes spin` is inert (no CSS-animation ticker
+  runs over the chrome document yet, CC-11) — the asset's `.spinner` element renders static, which is
+  in-scope: CC-8's DoD only requires both layouts functional, not chrome animations. 8 new tests in
+  `model.rs` (`cargo test -p lumen-chrome`: 28/28) + `cargo test -p lumen-shell` (green, unchanged
+  count — no new shell-side branching beyond the `ChromeAction::ToggleSidebar` one-liner and the
+  `chrome_model_snapshot` field additions) + `cargo clippy -p lumen-chrome -p lumen-shell
+  --all-targets -D warnings` green.
 
 ## Deferred
 
@@ -175,14 +201,23 @@ The runtime host (parse-once + relayout-on-resize + paint, CC-4), hit-test/hover
   description but not required by its DoD sentence; same rebuild pattern as tabs/workspaces once
   picked up.
 - `SetProfile` dispatched from the *new* chrome (profile-menu popover click) — still routed through
-  the legacy popover (CC-9/10); the ~13 remaining demo-only `ChromeAction`s dispatched as no-ops by
+  the legacy popover (CC-9/10); the ~12 remaining demo-only `ChromeAction`s dispatched as no-ops by
   CC-5 (`SetPermission`, `ArchiveCard`, `SetSettingsSection`, `ToggleSwitch`, `CloseModal`,
   `ClosePalette`, `ToggleFocusTimer`, `ToggleFocus`, `SetSidebarTab`, `CloseRightSidebar`,
-  `SetDevtoolsTab`, `ToggleSidebar`, `OmniGo`) await CC-9/CC-10 popover migration.
+  `SetDevtoolsTab`, `OmniGo`) await CC-9/CC-10 popover migration. `ToggleSidebar` is wired (CC-8).
 - Omnibox suggestion **dropdown** rendering (CC-9): keyboard `ArrowUp`/`ArrowDown` selection already
   updates `address_bar`'s own state (and `chrome_omnibox_value` already reflects a selected
   suggestion in `#omniInput`'s value), but the dropdown list itself is not painted under the flag —
   the legacy dropdown builder is gated off alongside the rest of the legacy toolbar (CC-4).
+- Chrome-document CSS-animation ticking (CC-11): `.spinner`'s `@keyframes spin` is present in the
+  asset and parses fine (CC-3's build-gate already validated it), but no `AnimationScheduler`
+  instance runs over `chrome_doc` yet — only the page document is ticked
+  (`Lumen::animation_scheduler`). A "restoring…" tab row renders the spinner element statically until
+  CC-11 wires a chrome-side scheduler instance into the frame loop.
+- Tree-tab indentation beyond one level (`.tab-row.child`): the asset's CSS has no `depth`-scaled
+  indent rule, so `ChromeTabModel::is_child` collapses `tabs::tree::depth_of`'s full depth to a single
+  boolean — a grandchild renders at the same indent as its parent's direct children. Would need a new
+  CSS construct in the reference (out of scope for CC-8/CC-CSS-*, this is a markup gap not an engine one).
 
 ## Invariants
 

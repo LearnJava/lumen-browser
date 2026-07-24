@@ -3770,9 +3770,9 @@
       {
        "id": "CC-8",
        "title": "CC-8: Таб-бар — оба layout",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Вертикальный сайдбар (коллапс, дерево, контейнер-полоса, спиннер @keyframes) + workspaces с ws-color + data-layout=horizontal; DnD вкладок — legacy-механика поверх rect-ов из layout хрома. После CC-6"
+       "note": "`rebuild_hbar_tab_list`/`rebuild_hbar_ws_list` (`crates/chrome/src/model.rs`) зеркалят CC-6's `#sbTabs`/`.sb-workspaces` в `#hbarTabs`/`.hbar-ws` — горизонтальный layout раньше показывал статичные demo-строки. `ChromeModel::sidebar_collapsed` + `ChromeAction::ToggleSidebar` (был no-op) переключают `.collapsed` на `#sidebar`. `ChromeTabModel::is_child` (из `TabEntry::opener_id`) даёт `.child`+`.tree-line` (один уровень отступа — предел CSS эталона); `container_color`/workspace `color` — `#RRGGBB` из `ContainerKind::border_color()`/`WsEntry::accent` в `.container-stripe`/`--ws-color`. DnD вкладок и спиннер-анимация (CC-11) вне среза без изменений. `cargo test -p lumen-chrome` (28/28, 8 новых) + `cargo test -p lumen-shell` (1701/1701) + workspace clippy зелёные. После CC-6"
       },
       {
        "id": "CC-9",

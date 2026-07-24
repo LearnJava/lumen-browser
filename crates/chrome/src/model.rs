@@ -38,6 +38,10 @@ pub struct ChromeModel {
     pub workspaces: Vec<ChromeWorkspaceModel>,
     /// Omnibox `#omniInput` value + spoof-warning banner (CC-7).
     pub omnibox: OmniboxModel,
+    /// `true` narrows the vertical sidebar to its icon rail (`#sidebar.collapsed`,
+    /// CC-8) — independent of [`Self::layout_vertical`], which picks vertical vs.
+    /// horizontal layout in the first place.
+    pub sidebar_collapsed: bool,
 }
 
 /// Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
@@ -74,6 +78,18 @@ pub struct ChromeTabModel {
     /// swaps the close button for a `.tab-badge` (mirrors the asset's own
     /// hibernated row, which carries no close button).
     pub sleeping: bool,
+    /// `true` when the tab has an opener (`TabEntry::opener_id`, tree-style
+    /// tabs 7A.2) — adds the `.child` class + a `.tree-line` connector span
+    /// (CC-8). The asset's CSS only defines indentation for a single nesting
+    /// level (`.tab-row.child`), so a grandchild renders at the same indent
+    /// as its parent's children rather than one level deeper — a known
+    /// limitation of the frozen reference, not this binding.
+    pub is_child: bool,
+    /// `#RRGGBB` accent for the container strip (`.container-stripe`) — the
+    /// caller derives this from `TabEntry::container.border_color()`, or
+    /// `None` for `ContainerKind::None`, in which case the strip is omitted
+    /// entirely (matching the asset: only container-scoped rows carry it).
+    pub container_color: Option<String>,
 }
 
 /// One workspace button for the sidebar switcher (`.sb-workspaces`).
@@ -86,6 +102,11 @@ pub struct ChromeWorkspaceModel {
     pub name: String,
     /// `true` for the active workspace — adds the `.active` class.
     pub active: bool,
+    /// `#RRGGBB` accent colour, written as the `--ws-color` custom property
+    /// (CC-8) on the switcher item/pill and its icon background — the CSS
+    /// asset's `.ws-item.active`/`.hbar-ws-pill.active` border falls back to
+    /// this when active.
+    pub color: String,
 }
 
 /// Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
@@ -109,11 +130,20 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
             None => remove_attr(doc, body, "data-profile"),
         }
     }
+    if let Some(sidebar) = doc.find_by_id(crate::ids::SIDEBAR) {
+        set_class_token(doc, sidebar, "collapsed", model.sidebar_collapsed);
+    }
     if let Some(container) = doc.find_by_id(crate::ids::SB_TABS) {
         rebuild_tab_list(doc, container, &model.tabs);
     }
+    if let Some(container) = doc.find_by_id(crate::ids::HBAR_TABS) {
+        rebuild_hbar_tab_list(doc, container, &model.tabs);
+    }
     if let Some(container) = find_by_attr(doc, "data-testid", "workspace-switcher") {
         rebuild_workspace_list(doc, container, &model.workspaces);
+    }
+    if let Some(container) = find_by_class(doc, "hbar-ws") {
+        rebuild_hbar_ws_list(doc, container, &model.workspaces);
     }
     bind_omnibox(doc, &model.omnibox);
 }
@@ -151,14 +181,30 @@ fn rebuild_tab_list(doc: &mut Document, container: NodeId, tabs: &[ChromeTabMode
 
 fn build_tab_row(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
     let row = doc.create_element(QualName::html("div"));
-    let class = match (tab.active, tab.sleeping) {
-        (true, _) => "tab-row active",
-        (false, true) => "tab-row sleeping",
-        (false, false) => "tab-row",
+    let mut class = match (tab.active, tab.sleeping) {
+        (true, _) => "tab-row active".to_owned(),
+        (false, true) => "tab-row sleeping".to_owned(),
+        (false, false) => "tab-row".to_owned(),
     };
-    set_attr(doc, row, "class", class);
+    if tab.is_child {
+        class.push_str(" child");
+    }
+    set_attr(doc, row, "class", &class);
     set_attr(doc, row, "data-action", "select-tab");
     set_attr(doc, row, "data-tab-id", &tab.id.to_string());
+
+    if tab.is_child {
+        let tree_line = doc.create_element(QualName::html("span"));
+        set_attr(doc, tree_line, "class", "tree-line");
+        doc.append_child(row, tree_line);
+    }
+
+    if let Some(color) = &tab.container_color {
+        let stripe = doc.create_element(QualName::html("span"));
+        set_attr(doc, stripe, "class", "container-stripe");
+        set_attr(doc, stripe, "style", &format!("background:{color}"));
+        doc.append_child(row, stripe);
+    }
 
     let fav = doc.create_element(QualName::html("span"));
     set_attr(doc, fav, "class", "tab-fav");
@@ -216,9 +262,11 @@ fn build_workspace_item(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId
     set_attr(doc, item, "class", if ws.active { "ws-item active" } else { "ws-item" });
     set_attr(doc, item, "data-action", "select-workspace");
     set_attr(doc, item, "data-ws-id", &ws.id.to_string());
+    set_attr(doc, item, "style", &format!("--ws-color:{}", ws.color));
 
     let icon = doc.create_element(QualName::html("span"));
     set_attr(doc, icon, "class", "ws-icon");
+    set_attr(doc, icon, "style", &format!("background:{}", ws.color));
     append_text(doc, icon, &first_letter(&ws.name));
     doc.append_child(item, icon);
 
@@ -228,6 +276,59 @@ fn build_workspace_item(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId
     doc.append_child(item, lbl);
 
     item
+}
+
+/// Mirrors [`rebuild_tab_list`] into `#hbarTabs` (`.hbar-tab` rows, CC-8's
+/// horizontal-layout tab bar) so switching layouts doesn't leave the
+/// horizontal bar showing stale asset demo data. The asset's `.hbar-tab`
+/// markup has no tree/container-strip visuals (flat list only), so this
+/// intentionally omits [`ChromeTabModel::is_child`]/`container_color`
+/// unlike [`build_tab_row`].
+fn rebuild_hbar_tab_list(doc: &mut Document, container: NodeId, tabs: &[ChromeTabModel]) {
+    remove_children_with_class(doc, container, "hbar-tab");
+    for tab in tabs {
+        let row = build_hbar_tab(doc, tab);
+        doc.append_child(container, row);
+    }
+}
+
+fn build_hbar_tab(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
+    let row = doc.create_element(QualName::html("div"));
+    set_attr(doc, row, "class", if tab.active { "hbar-tab active" } else { "hbar-tab" });
+    set_attr(doc, row, "data-action", "select-tab");
+    set_attr(doc, row, "data-tab-id", &tab.id.to_string());
+
+    let fav = doc.create_element(QualName::html("span"));
+    set_attr(doc, fav, "class", "tab-fav");
+    append_text(doc, fav, &first_letter(&tab.title));
+    doc.append_child(row, fav);
+
+    let title = doc.create_element(QualName::html("span"));
+    set_attr(doc, title, "class", "tab-title");
+    append_text(doc, title, &tab.title);
+    doc.append_child(row, title);
+
+    row
+}
+
+/// Mirrors [`rebuild_workspace_list`] into `.hbar-ws` (`.hbar-ws-pill`
+/// buttons, CC-8's horizontal-layout workspace switcher).
+fn rebuild_hbar_ws_list(doc: &mut Document, container: NodeId, workspaces: &[ChromeWorkspaceModel]) {
+    remove_children_with_class(doc, container, "hbar-ws-pill");
+    for ws in workspaces {
+        let pill = build_hbar_ws_pill(doc, ws);
+        doc.append_child(container, pill);
+    }
+}
+
+fn build_hbar_ws_pill(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId {
+    let pill = doc.create_element(QualName::html("button"));
+    set_attr(doc, pill, "class", if ws.active { "hbar-ws-pill active" } else { "hbar-ws-pill" });
+    set_attr(doc, pill, "data-action", "select-workspace");
+    set_attr(doc, pill, "data-ws-id", &ws.id.to_string());
+    set_attr(doc, pill, "style", &format!("--ws-color:{}", ws.color));
+    append_text(doc, pill, &ws.name);
+    pill
 }
 
 fn first_letter(s: &str) -> String {
@@ -297,6 +398,23 @@ fn find_by_attr(doc: &Document, name: &str, value: &str) -> Option<NodeId> {
     None
 }
 
+/// Finds the first element carrying `class` as one of its class tokens —
+/// used for containers the asset marks only by class, e.g. `.hbar-ws`
+/// (no `id`/`data-testid` of its own).
+fn find_by_class(doc: &Document, class: &str) -> Option<NodeId> {
+    let mut stack: Vec<NodeId> = vec![doc.root()];
+    while let Some(id) = stack.pop() {
+        let node = doc.get(id);
+        if matches!(node.data, NodeData::Element { .. }) && has_class(doc, id, class) {
+            return Some(id);
+        }
+        for &child in node.children.iter().rev() {
+            stack.push(child);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,8 +458,14 @@ mod tests {
     fn tab_list_is_rebuilt_from_the_model() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![
-            ChromeTabModel { id: 7, title: "Alpha".to_owned(), active: true, sleeping: false },
-            ChromeTabModel { id: 9, title: "Beta".to_owned(), active: false, sleeping: true },
+            ChromeTabModel {
+                id: 7, title: "Alpha".to_owned(), active: true, sleeping: false,
+                is_child: false, container_color: None,
+            },
+            ChromeTabModel {
+                id: 9, title: "Beta".to_owned(), active: false, sleeping: true,
+                is_child: false, container_color: None,
+            },
         ]);
         bind_model(&mut doc, &model);
         let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
@@ -373,8 +497,8 @@ mod tests {
         let mut doc = parse_asset();
         let model = ChromeModel {
             workspaces: vec![
-                ChromeWorkspaceModel { id: 1, name: "Личное".to_owned(), active: true },
-                ChromeWorkspaceModel { id: 2, name: "Проект Х".to_owned(), active: false },
+                ChromeWorkspaceModel { id: 1, name: "Личное".to_owned(), active: true, color: "#0066FF".to_owned() },
+                ChromeWorkspaceModel { id: 2, name: "Проект Х".to_owned(), active: false, color: "#8B5CF6".to_owned() },
             ],
             ..ChromeModel::default()
         };
@@ -385,6 +509,7 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(doc.get(items[0]).get_attr("data-ws-id"), Some("1"));
         assert!(has_class(&doc, items[0], "active"));
+        assert_eq!(doc.get(items[0]).get_attr("style"), Some("--ws-color:#0066FF"));
         assert_eq!(doc.get(items[1]).get_attr("data-ws-id"), Some("2"));
         assert!(!has_class(&doc, items[1], "active"));
         let add_btn_pos = children
@@ -393,6 +518,93 @@ mod tests {
             .expect("the '+' button must still be present");
         let last_item_pos = children.iter().position(|&c| c == items[1]).unwrap();
         assert!(add_btn_pos > last_item_pos, "the '+' button must stay after every rebuilt workspace item");
+    }
+
+    #[test]
+    fn hbar_tab_list_mirrors_the_sidebar_tab_list() {
+        let mut doc = parse_asset();
+        let model = model_with_tabs(vec![
+            ChromeTabModel {
+                id: 3, title: "Gamma".to_owned(), active: true, sleeping: false,
+                is_child: false, container_color: None,
+            },
+        ]);
+        bind_model(&mut doc, &model);
+        let container = doc.find_by_id(crate::ids::HBAR_TABS).expect("asset has #hbarTabs");
+        let rows: Vec<NodeId> = doc
+            .get(container)
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| has_class(&doc, c, "hbar-tab"))
+            .collect();
+        assert_eq!(rows.len(), 1, "old demo hbar rows must be gone, only the 1 model tab remains");
+        assert!(has_class(&doc, rows[0], "active"));
+        assert_eq!(doc.get(rows[0]).get_attr("data-tab-id"), Some("3"));
+    }
+
+    #[test]
+    fn hbar_workspace_pills_mirror_the_sidebar_switcher() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            workspaces: vec![
+                ChromeWorkspaceModel { id: 5, name: "Чтение".to_owned(), active: true, color: "#1F9D55".to_owned() },
+            ],
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let container = find_by_class(&doc, "hbar-ws").expect("asset has .hbar-ws");
+        let pills: Vec<NodeId> = doc
+            .get(container)
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| has_class(&doc, c, "hbar-ws-pill"))
+            .collect();
+        assert_eq!(pills.len(), 1, "old demo pills must be gone, only the 1 model workspace remains");
+        assert!(has_class(&doc, pills[0], "active"));
+        assert_eq!(doc.get(pills[0]).get_attr("data-ws-id"), Some("5"));
+        assert_eq!(doc.get(pills[0]).get_attr("style"), Some("--ws-color:#1F9D55"));
+    }
+
+    #[test]
+    fn sidebar_collapsed_flag_toggles_the_collapsed_class() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel { sidebar_collapsed: true, ..ChromeModel::default() });
+        let sidebar = doc.find_by_id(crate::ids::SIDEBAR).expect("asset has #sidebar");
+        assert!(has_class(&doc, sidebar, "collapsed"));
+
+        bind_model(&mut doc, &ChromeModel { sidebar_collapsed: false, ..ChromeModel::default() });
+        assert!(!has_class(&doc, sidebar, "collapsed"), "a later bind_model with the flag off must remove the class");
+    }
+
+    #[test]
+    fn child_tab_gets_the_child_class_tree_line_and_container_stripe() {
+        let mut doc = parse_asset();
+        let model = model_with_tabs(vec![ChromeTabModel {
+            id: 11, title: "Reply".to_owned(), active: false, sleeping: false,
+            is_child: true, container_color: Some("#1F9D55".to_owned()),
+        }]);
+        bind_model(&mut doc, &model);
+        let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
+        let row = doc
+            .get(container)
+            .children
+            .iter()
+            .copied()
+            .find(|&c| has_class(&doc, c, "tab-row"))
+            .expect("one tab row bound");
+        assert!(has_class(&doc, row, "child"));
+        let has_tree_line = doc.get(row).children.iter().any(|&c| has_class(&doc, c, "tree-line"));
+        assert!(has_tree_line, "child row must carry a .tree-line connector span");
+        let stripe = doc
+            .get(row)
+            .children
+            .iter()
+            .copied()
+            .find(|&c| has_class(&doc, c, "container-stripe"))
+            .expect("container_color must render a .container-stripe span");
+        assert_eq!(doc.get(stripe).get_attr("style"), Some("background:#1F9D55"));
     }
 
     #[test]

@@ -911,6 +911,7 @@ fn run_window_mode(
         chrome_hovered_nid: None,
         chrome_active_nid: None,
         chrome_omni_input_rect: None,
+        chrome_sidebar_collapsed: false,
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         transition_scheduler: TransitionScheduler::new(),
@@ -7156,6 +7157,13 @@ struct Lumen {
     /// `address_bar::AddressBarState`, no native caret exists for `<input>`
     /// yet). `None` off the flag or before the first chrome layout.
     chrome_omni_input_rect: Option<Rect>,
+    /// CC-8 (docs/tasks/p1-css-chrome.md): `true` collapses the vertical
+    /// sidebar to its icon rail (`#sidebar.collapsed`, `--sidebar-w-collapsed`
+    /// in the asset). Toggled by `ChromeAction::ToggleSidebar`
+    /// (`.sb-collapse` button). Independent of [`Self::vertical_tabs`]'s own
+    /// `visible` flag — that one picks vertical vs. horizontal layout,
+    /// this one narrows the vertical sidebar without hiding it.
+    chrome_sidebar_collapsed: bool,
     /// HTML event loop runtime. На каждой итерации winit-loop (AboutToWait)
     /// выполняется одна task, на RedrawRequested — run_rendering_step
     /// (вызывает rAF-callback-и), на WindowEvent::Resized —
@@ -8497,6 +8505,13 @@ impl Lumen {
                 title: t.title.clone(),
                 active: Some(t.id) == active_id,
                 sleeping: t.tab_state == TabState::Hibernated,
+                // CC-8: tree-style tabs (7A.2) — a tab with an opener is
+                // rendered as a `.child` row with a `.tree-line` connector.
+                // The asset's CSS only indents one nesting level, so this
+                // collapses depth ≥1 to a single boolean rather than
+                // threading `tabs::tree::depth_of`'s full depth through.
+                is_child: t.opener_id.is_some(),
+                container_color: t.container.border_color().map(Self::chrome_hex_color),
             })
             .collect();
         let workspaces = self
@@ -8507,6 +8522,7 @@ impl Lumen {
                 id: w.id,
                 name: w.name.clone(),
                 active: Some(w.id) == self.workspace_panel.active_id,
+                color: Self::chrome_hex_color(w.accent),
             })
             .collect();
         let profile_slug = self
@@ -8528,7 +8544,17 @@ impl Lumen {
                 value: omnibox_value,
                 warning: omnibox_warning.map(str::to_owned),
             },
+            sidebar_collapsed: self.chrome_sidebar_collapsed,
         }
+    }
+
+    /// CC-8: renders a [`lumen_layout::Color`] as the `#RRGGBB` string
+    /// `ChromeModel`'s container/workspace colour fields need (CSS custom
+    /// properties and inline `style="background:…"` are both plain text).
+    /// Drops alpha — every caller (container accent, workspace accent) is
+    /// opaque in practice.
+    fn chrome_hex_color(c: lumen_layout::Color) -> String {
+        format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
     }
 
     /// CC-5 (docs/tasks/p1-css-chrome.md): where the page content starts, in
@@ -8723,6 +8749,10 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
             }
+            ChromeAction::ToggleSidebar => {
+                self.chrome_sidebar_collapsed = !self.chrome_sidebar_collapsed;
+                self.relayout_chrome_host();
+            }
             // Demo-only actions on the static preview markup: no shell state
             // backs them yet (CC-9/CC-10 popover migration). Recognised (so
             // the click doesn't fall through to legacy geometry) but
@@ -8744,7 +8774,6 @@ impl Lumen {
             | ChromeAction::SetSidebarTab
             | ChromeAction::CloseRightSidebar
             | ChromeAction::SetDevtoolsTab
-            | ChromeAction::ToggleSidebar
             | ChromeAction::OmniGo => {}
         }
     }
