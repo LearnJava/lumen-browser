@@ -57,6 +57,19 @@ pub fn color_for_profile(name: &str, index: usize) -> Color {
         .unwrap_or_else(|| DEFAULT_PROFILES[index % DEFAULT_PROFILES.len()].2)
 }
 
+/// Chrome `data-profile` slug for `name` (CC-6, `docs/tasks/p1-css-chrome.md`)
+/// — `None` for a profile outside the seeded four, since the engine-drawn
+/// chrome's CSS only carries `body[data-profile="…"]` branches for those
+/// slugs (see `assets/chrome/chrome.html`); the attribute is then omitted by
+/// the caller rather than guessed, leaving the chrome on its `:root` default
+/// tokens. Unlike [`color_for_profile`], no cyclic fallback — a wrong slug
+/// would silently apply another profile's accent tokens, which is worse than
+/// applying none.
+#[must_use]
+pub fn slug_for_profile(name: &str) -> Option<&'static str> {
+    DEFAULT_PROFILES.iter().find(|(n, ..)| *n == name).map(|(_, slug, _)| *slug)
+}
+
 /// `true` when `name` is the seeded Anonymous profile (DS-15: draws the red
 /// inset window outline). Matched by name, same as [`color_for_profile`] —
 /// DS-14 ships no rename UI for the seeded four, so this stays exact-match.
@@ -428,5 +441,20 @@ mod tests {
         assert!(is_guest("Гость"));
         assert!(!is_guest("Личный"));
         assert!(!is_guest("Анонимный"));
+    }
+
+    // ── CC-6: `data-profile` slug lookup ─────────────────────────────────────
+
+    #[test]
+    fn slug_for_profile_matches_seeded_names() {
+        assert_eq!(slug_for_profile("Личный"), Some("personal"));
+        assert_eq!(slug_for_profile("Рабочий"), Some("work"));
+        assert_eq!(slug_for_profile("Анонимный"), Some("anonymous"));
+        assert_eq!(slug_for_profile("Гость"), Some("guest"));
+    }
+
+    #[test]
+    fn slug_for_profile_none_for_custom_name() {
+        assert_eq!(slug_for_profile("Кастомный"), None);
     }
 }

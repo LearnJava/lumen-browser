@@ -17,6 +17,8 @@
 
 #[cfg(test)]
 mod gate;
+mod model;
+pub use model::{bind_model, ChromeModel, ChromeTabModel, ChromeWorkspaceModel};
 
 /// Error returned by [`ChromeIds::resolve`] when the chrome [`lumen_dom::Document`]
 /// it was given is missing an element id present in `assets/chrome/chrome.html`.

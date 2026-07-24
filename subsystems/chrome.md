@@ -11,9 +11,8 @@ CSS property or selector `lumen-layout` does not implement. On success it code-g
 `ChromeIds` resolver, the `ChromeAction` enum (from `data-action` attribute values), and the
 `<template>` id registry.
 
-**Not in scope:** `ChromeModel` → DOM mutation (CC-6). The runtime host (parse-once +
-relayout-on-resize + paint, CC-4) and hit-test/hover/dispatch (CC-5) are done — see below and
-`crates/shell/src/main.rs`.
+The runtime host (parse-once + relayout-on-resize + paint, CC-4), hit-test/hover/dispatch (CC-5),
+and `ChromeModel` → DOM mutation (CC-6) are done — see below and `crates/shell/src/main.rs`.
 
 ## Done
 
@@ -111,12 +110,48 @@ relayout-on-resize + paint, CC-4) and hit-test/hover/dispatch (CC-5) are done �
   driven automatically (no OS-level input injector in the repo; the existing `--mcp`/IPC `click`
   bypasses chrome/panel dispatch by design, targeting page content only), so this remains verified
   by code review + the pre-existing CC-4 manual-`PrintWindow` protocol, not a screenshot diff.
+- **CC-6 `ChromeModel`/`bind_model`** (`src/model.rs`, new; `Lumen::chrome_model_snapshot`/
+  `dispatch_chrome_action` in `crates/shell/src/main.rs`): binds real shell state into `chrome_doc`
+  before every `relayout_chrome_host()` call — no separate dirty flag, the rebind is cheap. `<body>`
+  gets `data-theme`/`data-layout`/`data-profile` (from `Lumen::dark_mode`/`vertical_tabs.visible`/
+  `profile_menu.active_entry()` via the new `panels::profile_menu::slug_for_profile`, `None` omits
+  the attribute for a non-seeded profile rather than guessing). `#sbTabs`/`.sb-workspaces` are fully
+  rebuilt from `tab_strip.tabs`/`workspace_panel.workspaces` on every call: the frozen design
+  reference has no `<template>` markup at all, so rows are built with `Document::create_element`/
+  `create_text` instead of cloning one (more robust than depending on one particular static demo
+  row's exact class/child shape) — icon glyphs (favicon symbol, `×` close icon) are simplified to a
+  first-letter fallback, a documented visual-finish gap, not a DoD item. Each rebuilt tab
+  row/workspace button carries `data-tab-id`/`data-ws-id` so `dispatch_chrome_action` can resolve a
+  click back to a real `TabEntry`/`WsEntry`; `SelectTab`/`CloseTab`/`SelectWorkspace`/`AddWorkspace`
+  now call the real `switch_tab`/`close_tab`/`workspace_panel.set_active`/`workspaces.create`
+  (`dispatch_chrome_action` gained an `event_loop: &ActiveEventLoop` parameter for `close_tab`).
+  `open_new_tab`/`close_tab`/`switch_tab`, the legacy profile-menu popover's switch branch, and
+  `close_settings_panel` (theme/tab-layout) each call `relayout_chrome_host()` directly too, so the
+  chrome stays in sync regardless of whether the change came through the new chrome dispatch or
+  legacy UI. `SetProfile` clicked *in the new chrome* is still a no-op — the profile-menu popover
+  itself remains a legacy overlay (CC-9/10) — but a profile switch made through that legacy popover
+  is already reflected (`bind_model` reads `profile_menu` fresh every call). Shields count/downloads
+  progress from the `ChromeModel` brief description are not bound — outside the explicit DoD
+  sentence, a follow-up. 5 new tests in `model.rs` (`cargo test -p lumen-chrome`: 21/21) + 2 in
+  `panels::profile_menu` (`slug_for_profile`); real click/hover via OS injection not driven — same
+  gap CC-5 documented, no injector in this environment.
 
 ## Deferred
 
-- **CC-6**: `<template>` markup + `templates::IDS` population, once `ChromeModel` → DOM diffing
-  needs real list cloning (tab rows, omnibox suggestions, download cards, history entries) — also
-  the point where the ~17 demo-only `ChromeAction`s dispatched as no-ops by CC-5 get real backing.
+- **`<template>` markup + `templates::IDS` population**: the frozen design reference has none —
+  CC-6's list rebuilds (tab rows, workspace buttons) construct nodes programmatically instead (see
+  above). Revisit if/when the reference grows real `<template>` markup (e.g. omnibox suggestions,
+  download cards, history entries in CC-9/CC-10) rather than retrofitting it onto CC-6's rebuilds.
+- Tab-row icon glyphs (favicon symbol, `×` close icon) in `bind_model`'s rebuilt rows — simplified to
+  a first-letter fallback; visual finish, not blocking any DoD.
+- Shields-count / downloads-progress `ChromeModel` binding — mentioned in the CC-6 brief's
+  description but not required by its DoD sentence; same rebuild pattern as tabs/workspaces once
+  picked up.
+- `SetProfile` dispatched from the *new* chrome (profile-menu popover click) — still routed through
+  the legacy popover (CC-9/10); the ~13 remaining demo-only `ChromeAction`s dispatched as no-ops by
+  CC-5 (`SetPermission`, `ArchiveCard`, `SetSettingsSection`, `ToggleSwitch`, `CloseModal`,
+  `ClosePalette`, `ToggleFocusTimer`, `ToggleFocus`, `SetSidebarTab`, `CloseRightSidebar`,
+  `SetDevtoolsTab`, `ToggleSidebar`, `OmniGo`) await CC-7/CC-9/CC-10 popover migration.
 
 ## Invariants
 
