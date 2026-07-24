@@ -588,7 +588,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `user-select` | 🟡 | HitTestResult wire-up ✅; text selection enforcement ⬜ |
 | `pointer-events` | 🟡 | none ✅ (cursor wired); auto/shell enforcement ⬜ |
 | `touch-action` | 🟡 | parsed; gesture ⬜ |
-| `resize` | 🟡 | parsed; drag-UI ⬜ |
+| `resize` | ✅ | parsed + drag-UI (grip hit-test, axis-gated by `resize` value + `writing-mode`, CC-CSS-4) |
 | `appearance` | ✅ | none/auto/compat/base-select; `appearance:none` strips UA box + suppresses native indicator (p4-appearance-none 2026-06-14); `base-select` renders `<select>` as an author-styleable widget tree + author-styled `<option>` picker (p1-select-base 2026-07-17) |
 | `caret-color` | 🟡 | parsed; text input ⬜ |
 | `will-change` | 🟡 | parsed; GPU hints ⬜ |

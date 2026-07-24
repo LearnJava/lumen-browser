@@ -8052,11 +8052,14 @@ struct Lumen {
     /// `Some(ms)` = spinner overlay is active; `None` = no restoration in progress.
     /// Set at the start of `restore_hibernated_tab` and cleared when restore completes.
     restore_spinner_start_ms: Option<f64>,
-    /// Active element resize: `Some((node_id, start_x, start_y))` when user is dragging
-    /// the resize grip. `None` when no resize is active.
+    /// Active element resize: `Some((node_id, start_x, start_y, allow_width, allow_height))`
+    /// when user is dragging the resize grip. `None` when no resize is active.
     /// Set on MouseInput Pressed over a resize grip, cleared on MouseInput Released.
-    /// During CursorMoved, width/height are updated via JS binding.
-    resize_active: Option<(lumen_dom::NodeId, f32, f32)>,
+    /// `allow_width`/`allow_height` are the grip node's `Resize` CSS value resolved to
+    /// physical axes (CC-CSS-4: `Resize::allowed_axes`, writing-mode aware) at press
+    /// time — they gate which of width/height is updated during CursorMoved via the
+    /// JS binding, so `resize: vertical` no longer also changes width on a diagonal drag.
+    resize_active: Option<(lumen_dom::NodeId, f32, f32, bool, bool)>,
     /// In-progress tab drag-and-drop (§O-9).
     ///
     /// `Some` from the moment the user presses on a tab until they release.
@@ -8138,23 +8141,27 @@ enum PendingIntercepted {
 
 impl Lumen {
     /// Finds a layout box with a resize grip at position (x, y) in the layout tree.
-    /// Returns the NodeId of that element, or None if no grip is found.
+    /// Returns `(node_id, allow_width, allow_height)` — the latter two are the box's
+    /// `resize` value resolved to physical axes (CC-CSS-4: `Resize::allowed_axes`,
+    /// writing-mode aware), so the caller knows which dimension(s) a drag from this
+    /// grip is allowed to change. Returns `None` if no grip is found.
     /// This is used in B-7: CSS Resize property Phase 1 to detect mouse clicks on grips.
     fn find_resize_grip_node(
         &self,
         b: &lumen_layout::LayoutBox,
         x: f32,
         y: f32,
-    ) -> Option<lumen_dom::NodeId> {
+    ) -> Option<(lumen_dom::NodeId, bool, bool)> {
         // Check this box first
         if lumen_paint::point_on_resize_grip(b, x, y) {
-            return Some(b.node);
+            let (allow_w, allow_h) = b.style.resize.allowed_axes(b.style.writing_mode);
+            return Some((b.node, allow_w, allow_h));
         }
 
         // Recursively check children
         for child in &b.children {
-            if let Some(nid) = self.find_resize_grip_node(child, x, y) {
-                return Some(nid);
+            if let Some(hit) = self.find_resize_grip_node(child, x, y) {
+                return Some(hit);
             }
         }
 
@@ -12280,9 +12287,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.request_redraw();
                     }
                 }
-                // B-7: Active resize — update element width/height as mouse moves.
+                // B-7/CC-CSS-4: Active resize — update element width/height as mouse
+                // moves, gated to the axes the grip's `resize` value allows (a pure
+                // `resize: vertical` grip must not also change width on a diagonal drag).
                 #[cfg(any(feature = "quickjs", feature = "v8"))]
-                if let Some((node_id, start_x, start_y)) = self.resize_active {
+                if let Some((node_id, start_x, start_y, allow_w, allow_h)) = self.resize_active {
                     let dpr = self
                         .renderer
                         .as_ref()
@@ -12290,8 +12299,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (position.x as f32) / dpr;
                     let y_css = (position.y as f32) / dpr;
-                    let delta_x = x_css - start_x;
-                    let delta_y = y_css - start_y;
+                    let delta_x = if allow_w { x_css - start_x } else { 0.0 };
+                    let delta_y = if allow_h { y_css - start_y } else { 0.0 };
                     let nid_u32 = node_id.index() as u32;
                     // ADR-016 M2.2c-2d: resize-eval через `route_eval_js` — снимаем прямое
                     // `self.js_ctx`-обращение. Чистый fire-and-forget void без чтения
@@ -12520,8 +12529,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // B-7: Check if click is on resize grip of any element in layout tree.
                     // If so, activate resize mode. This must be checked before other UI panels.
                     if let Some(ref layout_box) = self.layout_box
-                        && let Some(nid) = self.find_resize_grip_node(layout_box, x_css, y_css) {
-                            self.resize_active = Some((nid, x_css, y_css));
+                        && let Some((nid, allow_w, allow_h)) = self.find_resize_grip_node(layout_box, x_css, y_css) {
+                            self.resize_active = Some((nid, x_css, y_css, allow_w, allow_h));
                             self.request_redraw();
                             return;
                         }

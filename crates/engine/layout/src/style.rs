@@ -2887,7 +2887,7 @@ pub struct ComputedStyle {
     /// CSS UI L4 §6.2 — `user-select`. Inherited (по спеке).
     pub user_select: UserSelect,
     /// CSS Basic UI L4 §6 — `resize`. NOT inherited. Initial: `None`.
-    /// Phase 0: parse + store; drag-resize UI — задача P3/UI.
+    /// Drag-resize UI (grip hit-test, apply): `crates/shell/src/main.rs` (CC-CSS-4).
     pub resize: Resize,
     /// CSS Overflow L3 — `scroll-behavior`. Inherited.
     pub scroll_behavior: ScrollBehavior,
@@ -3705,17 +3705,48 @@ impl PointerEvents {
 
 /// CSS Basic UI L4 §6 — `resize`. NOT inherited. Initial: `None`.
 /// Позволяет пользователю изменять размер элемента мышью.
-/// Phase 0: parse + store; реальный drag-resize — задача P3/UI.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Resize {
     /// `none` — resize запрещён.
     #[default]
     None,
+    /// `both` — resize по обеим физическим осям.
     Both,
+    /// `horizontal` — resize только по физической ширине.
     Horizontal,
+    /// `vertical` — resize только по физической высоте.
     Vertical,
+    /// `block` — resize вдоль block-оси (логическая, зависит от `writing-mode`).
     Block,
+    /// `inline` — resize вдоль inline-оси (логическая, зависит от `writing-mode`).
     Inline,
+}
+
+impl Resize {
+    /// Разрешает логическую ось `resize` (`Block`/`Inline`) в физическую пару
+    /// `(разрешена ширина, разрешена высота)` с учётом `writing-mode`.
+    ///
+    /// В `horizontal-tb` block-ось — вертикальная, inline-ось — горизонтальная;
+    /// в вертикальных режимах (`vertical-rl`/`vertical-lr`/`sideways-rl`) — наоборот.
+    /// Используется драг-хендлером grip-а (`crates/shell/src/main.rs`), чтобы
+    /// вложенный корректно гейтить, какую из осей (`width`/`height`) двигать.
+    pub fn allowed_axes(self, writing_mode: WritingMode) -> (bool, bool) {
+        let vertical_wm = matches!(
+            writing_mode,
+            WritingMode::VerticalRl
+                | WritingMode::VerticalLr
+                | WritingMode::SidewaysRl
+                | WritingMode::SidewaysLr
+        );
+        match self {
+            Resize::None => (false, false),
+            Resize::Both => (true, true),
+            Resize::Horizontal => (true, false),
+            Resize::Vertical => (false, true),
+            Resize::Block => (vertical_wm, !vertical_wm),
+            Resize::Inline => (!vertical_wm, vertical_wm),
+        }
+    }
 }
 
 /// CSS Containment L3 §3 — `contain` property.
@@ -29444,6 +29475,34 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.resize, Resize::None);
+    }
+
+    #[test]
+    fn resize_allowed_axes_physical() {
+        assert_eq!(Resize::None.allowed_axes(WritingMode::HorizontalTb), (false, false));
+        assert_eq!(Resize::Both.allowed_axes(WritingMode::HorizontalTb), (true, true));
+        assert_eq!(Resize::Horizontal.allowed_axes(WritingMode::HorizontalTb), (true, false));
+        assert_eq!(Resize::Vertical.allowed_axes(WritingMode::HorizontalTb), (false, true));
+        // Physical axes ignore writing-mode.
+        assert_eq!(Resize::Horizontal.allowed_axes(WritingMode::VerticalRl), (true, false));
+        assert_eq!(Resize::Vertical.allowed_axes(WritingMode::VerticalRl), (false, true));
+    }
+
+    #[test]
+    fn resize_allowed_axes_logical() {
+        // horizontal-tb: block-axis = vertical, inline-axis = horizontal.
+        assert_eq!(Resize::Block.allowed_axes(WritingMode::HorizontalTb), (false, true));
+        assert_eq!(Resize::Inline.allowed_axes(WritingMode::HorizontalTb), (true, false));
+        // vertical-rl/lr and sideways-rl/lr: block-axis = horizontal, inline-axis = vertical.
+        for wm in [
+            WritingMode::VerticalRl,
+            WritingMode::VerticalLr,
+            WritingMode::SidewaysRl,
+            WritingMode::SidewaysLr,
+        ] {
+            assert_eq!(Resize::Block.allowed_axes(wm), (true, false));
+            assert_eq!(Resize::Inline.allowed_axes(wm), (false, true));
+        }
     }
 
     // ── line-break ────────────────────────────────────────────────────────────
