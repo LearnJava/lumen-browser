@@ -71,7 +71,7 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 - ✅ Multi-column (`column-count`/`column-width`/`column-gap`/`column-rule`/`column-span`, `column-fill: balance|auto` — balanced atomic-box distribution via binary-searched column height).
 - ✅ Table layout (colspan/rowspan, column widths) — live path `box_tree.rs` (note: `table.rs` is dead code).
 - ✅ `border-radius` elliptical corners (`10px / 20px` syntax, CSS Backgrounds L3 §5.5): separate x/y radius fields per corner (`ComputedStyle::border_top_left_radius_y` etc.), threaded through `CornerRadii::from_style_and_box` into both the femtovg and CPU raster paths.
-- ✅ Positioned: relative, absolute/fixed (out-of-flow + containing-block threading); `position: sticky` partial (offsets computed, scroll wiring shell-side).
+- ✅ Positioned: relative, absolute/fixed (out-of-flow + containing-block threading); `position: sticky` (page-level and nested inside `overflow:auto`/`scroll` ancestors — wgpu default backend, `renderer.rs::sticky_bound()`, BUG-336; femtovg fallback backend still page-level-only, BUG-337).
 - ✅ SVG layout pass (viewBox, rect/circle/ellipse/line/path, `<use>` with cycle detection); `<text>` with `text-anchor`/`dominant-baseline` (presentation attribute **and** CSS property — CSS overrides the attribute and inherits from `<g>`); vertical writing modes (`vertical-rl/lr`).
 - ✅ Replaced: `<img>` (picture/srcset picker), `<iframe>` placeholder.
 - ✅ Cascade: specificity + `!important`, RTL selector matching, all CSS3 structural + L4 form/UI pseudo, `:has()`, `:state()` (custom-state, matches `data-lumen-state-<name>` sentinel attr), `::before/::after` (string content), `::first-line/::first-letter` (drop-cap float), `initial-letter` (size/sink drop cap, Phase 0).
