@@ -919,22 +919,46 @@ fn compute_preserve_aspect_ratio_transform(
     (sx, sy, ox - view_box.min_x * sx, oy - view_box.min_y * sy)
 }
 
+/// Best-effort CSS-px size of an `<svg>` root's own viewport, computed at box-tree-build
+/// time (before layout runs, so percentage width/height cannot resolve against a containing
+/// block yet — only the `None` percent-basis case). Mirrors the intrinsic-size fallback chain
+/// `lay_out_svg_root` uses later for the box's own rect (CSS width/height → viewBox dims → SVG
+/// default 300×150). BUG-334: this is the "current viewport" a descendant `<use>`/`<symbol>`
+/// without explicit width/height should size itself against (SVG 2 §5.7/§7.10 — the used value
+/// is 100% of the current viewport), not the target's own viewBox dimensions.
+fn svg_root_own_size(style: &ComputedStyle, view_box: Option<&ViewBox>, viewport: Size) -> Size {
+    let em = style.font_size;
+    let width = style.width.as_ref()
+        .and_then(|l| l.resolve(em, None, viewport))
+        .or_else(|| view_box.map(|vb| vb.width))
+        .unwrap_or(300.0)
+        .max(0.0);
+    let height = style.height.as_ref()
+        .and_then(|l| l.resolve(em, None, viewport))
+        .or_else(|| view_box.map(|vb| vb.height))
+        .unwrap_or(150.0)
+        .max(0.0);
+    Size { width, height }
+}
+
 /// Builds `SvgShape` and `Block` (for `<g>`) layout boxes for the SVG subtree rooted at
 /// `parent_id`. Because the HTML5 parser does not implement SVG foreign-content mode, self-
 /// closing SVG tags like `<rect/>` are treated as open tags and subsequent siblings become
 /// DOM children. This function performs a depth-first recursive scan, collecting SVG shape
 /// elements wherever they appear in the subtree.
+#[allow(clippy::too_many_arguments)]
 fn build_svg_children(
     doc: &Document,
     sheet: &Stylesheet,
     parent_id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    own_svg_size: Size,
     flat: &FlatTree,
     dark_mode: bool,
 ) -> Vec<LayoutBox> {
     let mut out = Vec::new();
-    collect_svg_shapes(doc, sheet, parent_id, inherited, viewport, flat, &mut out, dark_mode);
+    collect_svg_shapes(doc, sheet, parent_id, inherited, viewport, own_svg_size, flat, &mut out, dark_mode);
     out
 }
 
@@ -949,11 +973,12 @@ fn collect_svg_shapes(
     parent_id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    own_svg_size: Size,
     flat: &FlatTree,
     out: &mut Vec<LayoutBox>,
     dark_mode: bool,
 ) {
-    collect_svg_shapes_impl(doc, sheet, parent_id, inherited, viewport, flat, out, dark_mode, &[]);
+    collect_svg_shapes_impl(doc, sheet, parent_id, inherited, viewport, own_svg_size, flat, out, dark_mode, &[]);
 }
 
 /// Inner recursive worker for `collect_svg_shapes`. Carries `use_stack` for cycle detection.
@@ -964,13 +989,14 @@ fn collect_svg_shapes_impl(
     parent_id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    own_svg_size: Size,
     flat: &FlatTree,
     out: &mut Vec<LayoutBox>,
     dark_mode: bool,
     use_stack: &[NodeId],
 ) {
     for child_id in flat.children_of(doc, parent_id) {
-        process_svg_node(doc, sheet, *child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        process_svg_node(doc, sheet, *child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
     }
 }
 
@@ -983,6 +1009,7 @@ fn process_svg_node(
     child_id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    own_svg_size: Size,
     flat: &FlatTree,
     out: &mut Vec<LayoutBox>,
     dark_mode: bool,
@@ -1016,7 +1043,7 @@ fn process_svg_node(
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
             // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "circle" => {
             out.push(LayoutBox {
@@ -1032,7 +1059,7 @@ fn process_svg_node(
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "ellipse" => {
             out.push(LayoutBox {
@@ -1049,7 +1076,7 @@ fn process_svg_node(
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "line" => {
             out.push(LayoutBox {
@@ -1066,7 +1093,7 @@ fn process_svg_node(
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "path" => {
             let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
@@ -1075,7 +1102,7 @@ fn process_svg_node(
                 kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity() },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "text" | "tspan" | "textPath" => {
             // SVG text element: collect text content from this element and descendants.
@@ -1106,12 +1133,12 @@ fn process_svg_node(
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
             // Recurse for potential nested text/tspan/textPath elements.
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "g" => {
             // Group: collect children shapes, then wrap in a Block box.
             let mut group_children: Vec<LayoutBox> = Vec::new();
-            collect_svg_shapes_impl(doc, sheet, child_id, &style, viewport, flat, &mut group_children, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, &style, viewport, own_svg_size, flat, &mut group_children, dark_mode, use_stack);
             let group_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
@@ -1166,7 +1193,9 @@ fn process_svg_node(
                 && let Some(vb) = parse_view_box(doc, target_id)
             {
                 // Viewport size: `<use>` width/height win; else the symbol's own
-                // width/height; else fall back to the viewBox dims (→ identity).
+                // width/height; else BUG-334: fall back to the enclosing `<svg>`'s own
+                // CSS-resolved viewport (SVG 2 §5.7/§7.10 "100% of current viewport"),
+                // not the target's viewBox dims (that was the BUG-246-era identity bug).
                 let attr_dim = |id: NodeId, attr: &str| -> Option<f32> {
                     doc.get(id).get_attr(attr)
                         .and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok())
@@ -1174,10 +1203,10 @@ fn process_svg_node(
                 };
                 let vp_w = attr_dim(child_id, "width")
                     .or_else(|| attr_dim(target_id, "width"))
-                    .unwrap_or(vb.width);
+                    .unwrap_or(own_svg_size.width);
                 let vp_h = attr_dim(child_id, "height")
                     .or_else(|| attr_dim(target_id, "height"))
-                    .unwrap_or(vb.height);
+                    .unwrap_or(own_svg_size.height);
                 let par = parse_preserve_aspect_ratio(doc, target_id);
                 let (sx, sy, tx, ty) =
                     compute_preserve_aspect_ratio_transform(&vb, vp_w, vp_h, &par);
@@ -1186,10 +1215,10 @@ fn process_svg_node(
 
             if matches!(target_tag.as_str(), "g" | "symbol") {
                 // Container: recursively collect its children as the clone content.
-                collect_svg_shapes_impl(doc, sheet, target_id, &style, viewport, flat, &mut use_children, dark_mode, &new_stack);
+                collect_svg_shapes_impl(doc, sheet, target_id, &style, viewport, own_svg_size, flat, &mut use_children, dark_mode, &new_stack);
             } else {
                 // Single shape or other element: process the node directly.
-                process_svg_node(doc, sheet, target_id, &style, viewport, flat, &mut use_children, dark_mode, &new_stack);
+                process_svg_node(doc, sheet, target_id, &style, viewport, own_svg_size, flat, &mut use_children, dark_mode, &new_stack);
             }
 
             if !use_children.is_empty() {
@@ -1207,7 +1236,7 @@ fn process_svg_node(
             // mis-nested as its DOM children. Scan them into `out` as siblings —
             // mirror the rect/circle workaround. A `<use>`'s rendered content comes
             // from its target, never from its DOM children, so this is unambiguous.
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "polygon" | "polyline" => {
             // SVG 1.1 §9.6/§9.7: render via the `<path>` pipeline. A polygon
@@ -1222,7 +1251,7 @@ fn process_svg_node(
                 });
             }
             // Mis-nested siblings (HTML5 parser wraps them inside the self-closed shape).
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "defs" | "symbol" => {
             // `<defs>` (SVG 2 §5.5) and `<symbol>` (§5.7) are never rendered
@@ -1232,7 +1261,7 @@ fn process_svg_node(
         }
         _ => {
             // Unknown SVG element: skip self, but scan children for shapes.
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
     }
 }
@@ -4423,8 +4452,9 @@ fn build_box(
     }
 
     // SVG root: build SVG shape children (separate from HTML box-tree flow).
-    if matches!(kind, BoxKind::SvgRoot { .. }) {
-        children = build_svg_children(doc, sheet, id, &style, viewport, flat, dark_mode);
+    if let BoxKind::SvgRoot { view_box, .. } = &kind {
+        let own_svg_size = svg_root_own_size(&style, view_box.as_ref(), viewport);
+        children = build_svg_children(doc, sheet, id, &style, viewport, own_svg_size, flat, dark_mode);
     }
 
     // Read HTML colspan/rowspan attributes for table-cell elements.
@@ -14914,6 +14944,36 @@ mod tests {
         assert_eq!(rects.len(), 2, "both <use> instances should clone the symbol rect; got {rects:?}");
         assert!(rects.iter().any(|r| (r.width - 40.0).abs() < 0.5), "width=40 instance should render at 40px; got {rects:?}");
         assert!(rects.iter().any(|r| (r.width - 80.0).abs() < 0.5), "width=80 instance should scale to 80px; got {rects:?}");
+    }
+
+    #[test]
+    fn svg_use_symbol_no_explicit_size_scales_to_css_icon_size() {
+        // BUG-334: an icon sprite pattern — `<use href="#s">` with no width/height
+        // attributes at all, sized purely via CSS on the enclosing `<svg>` (e.g.
+        // `.icon { width: 14px; height: 14px }`). Per SVG 2 §5.7/§7.10 the used
+        // viewport for the reference is 100% of the *enclosing* svg's own
+        // (CSS-resolved) viewport, not the symbol's viewBox dims (that was the
+        // BUG-246-era identity-scale regression this test guards against).
+        let html = "<svg class=\"icon\"><symbol id=\"s\" viewBox=\"0 0 24 24\">\
+                    <rect x=\"0\" y=\"0\" width=\"24\" height=\"24\"/></symbol>\
+                    <use href=\"#s\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("body{margin:0} .icon{width:14px;height:14px}");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn collect_rects(b: &super::LayoutBox, acc: &mut Vec<super::Rect>) {
+            if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Rect { .. }, .. }) {
+                acc.push(b.rect);
+            }
+            b.children.iter().for_each(|c| collect_rects(c, acc));
+        }
+        let mut rects = Vec::new();
+        collect_rects(&root, &mut rects);
+        assert_eq!(rects.len(), 1, "use should clone the symbol rect; got {rects:?}");
+        assert!(
+            (rects[0].width - 14.0).abs() < 0.5,
+            "icon should scale to the CSS-sized 14px viewport, not the viewBox's 24px; got {rects:?}"
+        );
     }
 
     #[test]

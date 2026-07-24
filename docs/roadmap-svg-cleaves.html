@@ -57,8 +57,8 @@
 {
  "generated": "2026-07-24",
  "counts": {
-  "open": 34,
-  "fixed": 269,
+  "open": 33,
+  "fixed": 270,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3706,10 +3706,13 @@
       },
       {
        "id": "CC-2",
-       "title": "CC-2: SVG-спрайт иконок (fallback)",
-       "status": "planned",
+       "title": "CC-2: SVG-спрайт иконок (движок вместо fallback)",
+       "status": "done",
        "size": "S",
-       "note": "Если svg use href=#id не поддержан движком — build-time инлайн символов спрайта (~35 иконок) в gen_chrome_assets.py как fallback до CC-CSS-5. После CC-1"
+       "note": "`<use href=#id>` структурно поддержан движком — фикс BUG-334 (`svg_root_own_size()`, CSS-размер внешнего svg как fallback вместо viewBox-identity) вместо build-time инлайна; все ~35 иконок эталона в `about:chrome-preview` дают w/h=14.00 в dump-layout. После CC-1",
+       "bugs": [
+        "BUG-334"
+       ]
       },
       {
        "id": "CC-3",
@@ -6013,10 +6016,10 @@
    "debtor": false
   },
   "BUG-334": {
-   "status": "open",
-   "title": "Иконки хрома (`<use href=\"#i-...\">` без явных `width`/`height`, размер задан CSS на внешнем `<svg class=\"icon\">` 14×14) рисуются искажёнными — путь красится 1:1…",
+   "status": "fixed",
+   "title": "Иконки хрома (`<use href=\"#i-...\">` без явных `width`/`height`, размер задан CSS на внешнем `<svg class=\"icon\">` 14×14) рисовались искажёнными — путь красился 1…",
    "component": "layout (SVG `use`/`symbol`, `box_tree.rs:1170-1180`)",
-   "date": null,
+   "date": "2026-07-24",
    "debtor": false
   }
  },
@@ -6217,9 +6220,6 @@
    "BUG-236",
    "BUG-237",
    "BUG-241"
-  ],
-  "layout (SVG `use`/`symbol`, `box_tree.rs:1170-1180`)": [
-   "BUG-334"
   ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"

@@ -1,8 +1,14 @@
 # BUG-334: SVG `<use>` без `width`/`height` не наследует 100%-размер текущего viewport'а (иконки хрома искажены)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-24
 **Компонент:** layout (SVG `<use>`/`<symbol>`, `crates/engine/layout/src/box_tree.rs:1157-1185`)
 **Найден:** P1, CC-1 (`docs/tasks/p1-css-chrome.md`), скрин-сверка `about:chrome-preview` с эталоном 2026-07-24
+**Исправлено:** P1, CC-2 2026-07-24 — `svg_root_own_size()` резолвит CSS-размер внешнего `<svg>`
+и передаётся как `own_svg_size` вниз по рекурсии; fallback-цепочка `vp_w`/`vp_h` теперь
+использует его вместо `vb.width`/`vb.height`. Подтверждено `--dump-layout about:chrome-preview`:
+все `SvgRoot` icon-инстансы дают `w=14.00 h=14.00` (было — path красился в 24-юнитных
+координатах поверх 14px контейнера). Новый регресс-тест
+`box_tree::tests::svg_use_symbol_no_explicit_size_scales_to_css_icon_size`.
 
 ## Симптом
 
