@@ -3843,9 +3843,9 @@
       {
        "id": "CC-CSS-4",
        "title": "CC-CSS-4: resize — drag-ресайз блока",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "resize:vertical — drag-UI (свойство парсится, UI нет, CSS-SPECS:591): hit-зона у края блока, drag меняет used-height + релэйаут. Эталон: .devtools. После CC-1"
+       "note": "Grip hit-test + drag-resize (`_lumen_apply_resize`) уже существовали в шелле (B-7, до CC-CSS-4) — ROADMAP-описание «UI нет» было устаревшим (CSS-SPECS:591 расходился с кодом). Реальный пробел: диагональный drag двигал width И height независимо от значения `resize` — новый `Resize::allowed_axes()` (style.rs, writing-mode aware) гейтит `delta_x`/`delta_y` в `main.rs`, `resize:vertical`/`horizontal` теперь двигают только свою ось. 2 unit-теста. Графич.тест не добавлен — drag-взаимодействие не детерминированно скриншотится (тот же класс, что BUG-338). После CC-1"
       },
       {
        "id": "CC-CSS-5",
