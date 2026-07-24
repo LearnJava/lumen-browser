@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-24",
  "counts": {
-  "open": 32,
+  "open": 34,
   "fixed": 269,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 301,
+ "total_bugs": 303,
  "phases": [
   {
    "id": "P0",
@@ -3718,7 +3718,7 @@
       {
        "id": "CC-1",
        "title": "CC-1: Ассеты хрома + рендер-смоук",
-       "status": "planned",
+       "status": "done",
        "size": "M",
        "note": "scripts/gen_chrome_assets.py: эталон → assets/chrome/ (минус demo-bar/QA-панель/JS/Google-Fonts, шрифты бандленные DS-4); смоук about:chrome-preview через существующий PageSource::Static; скрин-сверка с эталоном (2 темы, 4 профиля), расхождения → BUG-NNN. После CC-0"
       },
@@ -6022,6 +6022,20 @@
    "component": "tooling (`scripts/scroll_perf.py`)",
    "date": "2026-07-23",
    "debtor": false
+  },
+  "BUG-333": {
+   "status": "open",
+   "title": "В хроме `about:chrome-preview` все `.tab-row` (список вкладок сайдбара) рендерятся с `h=0.00` вместо `height:var(--tab-h)`=28px — текст соседних строк налезает…",
+   "component": "layout (flex `height: var()`, `box_tree.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-334": {
+   "status": "open",
+   "title": "Иконки хрома (`<use href=\"#i-...\">` без явных `width`/`height`, размер задан CSS на внешнем `<svg class=\"icon\">` 14×14) рисуются искажёнными — путь красится 1:1…",
+   "component": "layout (SVG `use`/`symbol`, `box_tree.rs:1170-1180`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6222,8 +6236,14 @@
    "BUG-237",
    "BUG-241"
   ],
+  "layout (SVG `use`/`symbol`, `box_tree.rs:1170-1180`)": [
+   "BUG-334"
+  ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"
+  ],
+  "layout (flex `height: var()`, `box_tree.rs`)": [
+   "BUG-333"
   ],
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"

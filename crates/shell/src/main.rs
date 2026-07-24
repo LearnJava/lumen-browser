@@ -32,6 +32,7 @@ mod click_log;
 mod health_log;
 mod backend_factory;
 mod bench_frames;
+mod chrome_preview;
 use lumen_bidi_server::spawn as bidi_spawn;
 mod config;
 mod deterministic;
@@ -565,6 +566,12 @@ fn page_source_for_automation_url(url: &str) -> PageSource {
     }
     if url == "about:blank" {
         return PageSource::AboutBlank;
+    }
+    if url == chrome_preview::URL {
+        return PageSource::Static {
+            html: chrome_preview::HTML.to_owned(),
+            url: chrome_preview::URL.to_owned(),
+        };
     }
     if let Some(rest) = url.strip_prefix("file://") {
         let path = rest
@@ -3472,6 +3479,10 @@ impl PageSource {
                 PageSource::Url(s.to_owned())
             }
             Some("about:blank") => PageSource::AboutBlank,
+            Some(s) if s == chrome_preview::URL => PageSource::Static {
+                html: chrome_preview::HTML.to_owned(),
+                url: chrome_preview::URL.to_owned(),
+            },
             Some(s) => PageSource::File(PathBuf::from(s)),
             None => PageSource::Empty,
         }
@@ -18400,6 +18411,16 @@ impl Lumen {
         // most-visited sites (task CC-5, DS-11).
         if value.trim() == newtab::NEWTAB_URL {
             self.navigate_to(self.build_newtab_source());
+            return;
+        }
+
+        // `about:chrome-preview` — CC-1 render-smoke for the engine-drawn
+        // chrome asset (docs/tasks/p1-css-chrome.md).
+        if value.trim() == chrome_preview::URL {
+            self.navigate_to(PageSource::Static {
+                html: chrome_preview::HTML.to_owned(),
+                url: chrome_preview::URL.to_owned(),
+            });
             return;
         }
 

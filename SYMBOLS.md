@@ -4139,26 +4139,26 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/devtools/network_panel.rs:387` **fn** `scroll_up` — Scroll up by `n` rows (towards older requests)
 `crates/shell/src/devtools/network_panel.rs:393` **fn** `scroll_down` — Scroll down by `n` rows (towards newer requests)
 `crates/shell/src/devtools/network_panel.rs:405` **fn** `build_network_panel` — Build the viewport-locked network panel overlay
-`crates/shell/src/download.rs:45` **struct** `DownloadId` — Opaque identifier for a single download entry
-`crates/shell/src/download.rs:50` **enum** `DownloadStatus` — Current state of a download entry
-`crates/shell/src/download.rs:71` **struct** `DownloadEntry` — A single download: source URL, destination path, and current status
-`crates/shell/src/download.rs:93` **fn** `progress_fraction` — Fraction written so far in `0.0..=1.0`, or `None` when the total size is
-`crates/shell/src/download.rs:106` **enum** `DownloadAction` — The result of hit-testing a click against the download panel
-`crates/shell/src/download.rs:143` **struct** `DownloadManager` — Manages concurrent background downloads and the visibility of the download
-`crates/shell/src/download.rs:163` **fn** `new` — Create a new, empty download manager
-`crates/shell/src/download.rs:182` **fn** `start_download` — Start a background download of `url` into `dest`
-`crates/shell/src/download.rs:219` **fn** `cancel` — Request cancellation of download `id`
-`crates/shell/src/download.rs:236` **fn** `open_download` — Open the file in the default OS application
-`crates/shell/src/download.rs:250` **fn** `show_in_folder` — Reveal the downloaded file in the OS file manager (Explorer / Finder /
-`crates/shell/src/download.rs:269` **fn** `start_url_download` — Start a download of `url`, choosing a destination automatically
-`crates/shell/src/download.rs:283` **fn** `poll` — Drain the internal mpsc channel and update entry statuses
-`crates/shell/src/download.rs:324` **fn** `entries` — All entries in insertion order (most recent last)
-`crates/shell/src/download.rs:329` **fn** `active_count` — Number of entries whose status is `InProgress` or `Pending`
-`crates/shell/src/download.rs:339` **fn** `toggle_visible` — Toggle panel visibility
-`crates/shell/src/download.rs:344` **fn** `open` — Show the panel
-`crates/shell/src/download.rs:349` **fn** `close` — Hide the panel
-`crates/shell/src/download.rs:725` **fn** `hit_test` — Hit-test a click at `(x, y)` (CSS px) against the download panel
-`crates/shell/src/download.rs:755` **fn** `build_download_bar` — Build the viewport-locked download panel overlay
+`crates/shell/src/download.rs:53` **struct** `DownloadId` — Opaque identifier for a single download entry
+`crates/shell/src/download.rs:58` **enum** `DownloadStatus` — Current state of a download entry
+`crates/shell/src/download.rs:79` **struct** `DownloadEntry` — A single download: source URL, destination path, and current status
+`crates/shell/src/download.rs:101` **fn** `progress_fraction` — Fraction written so far in `0.0..=1.0`, or `None` when the total size is
+`crates/shell/src/download.rs:114` **enum** `DownloadAction` — The result of hit-testing a click against the download panel
+`crates/shell/src/download.rs:151` **struct** `DownloadManager` — Manages concurrent background downloads and the visibility of the download
+`crates/shell/src/download.rs:171` **fn** `new` — Create a new, empty download manager
+`crates/shell/src/download.rs:190` **fn** `start_download` — Start a background download of `url` into `dest`
+`crates/shell/src/download.rs:227` **fn** `cancel` — Request cancellation of download `id`
+`crates/shell/src/download.rs:244` **fn** `open_download` — Open the file in the default OS application
+`crates/shell/src/download.rs:258` **fn** `show_in_folder` — Reveal the downloaded file in the OS file manager (Explorer / Finder /
+`crates/shell/src/download.rs:277` **fn** `start_url_download` — Start a download of `url`, choosing a destination automatically
+`crates/shell/src/download.rs:291` **fn** `poll` — Drain the internal mpsc channel and update entry statuses
+`crates/shell/src/download.rs:332` **fn** `entries` — All entries in insertion order (most recent last)
+`crates/shell/src/download.rs:337` **fn** `active_count` — Number of entries whose status is `InProgress` or `Pending`
+`crates/shell/src/download.rs:347` **fn** `toggle_visible` — Toggle panel visibility
+`crates/shell/src/download.rs:352` **fn** `open` — Show the panel
+`crates/shell/src/download.rs:357` **fn** `close` — Hide the panel
+`crates/shell/src/download.rs:757` **fn** `hit_test` — Hit-test a click at `(x, y)` (CSS px) against the download popover
+`crates/shell/src/download.rs:795` **fn** `build_download_bar` — Build the viewport-locked download popover overlay
 `crates/shell/src/engine_thread.rs:117` **struct** `EngineThread` — Хэндл долгоживущего движкового потока (ADR-016 M2.2)
 `crates/shell/src/engine_thread.rs:141` **fn** `spawn_with_state` — Запускает именованный движковый поток с состоянием `initial` и возвращает
 `crates/shell/src/engine_thread.rs:155` **fn** `submit` — Ставит задание движковому потоку (fire-and-forget). `generation` —
@@ -4980,10 +4980,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/toolbar.rs:81` **struct** `AvatarBadge` — Rendering data for the profile avatar button (DS-14): the active
 `crates/shell/src/toolbar.rs:90` **enum** `ToolbarHit` — A click target within the toolbar row
 `crates/shell/src/toolbar.rs:127` **struct** `ToolbarActive` — Which right-cluster buttons should render in their "open" (lit) state —
-`crates/shell/src/toolbar.rs:144` **fn** `avatar_x` — Left edge x-coordinate of the profile avatar button (DS-14) — the
-`crates/shell/src/toolbar.rs:166` **fn** `omnibox_rects` — Compute the geometry of the inline omnibox (DS-10): the field itself,
-`crates/shell/src/toolbar.rs:204` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the toolbar row
-`crates/shell/src/toolbar.rs:333` **fn** `build_toolbar` — Build a viewport-locked display list for the toolbar row
+`crates/shell/src/toolbar.rs:148` **fn** `avatar_x` — Left edge x-coordinate of the profile avatar button (DS-14) — the
+`crates/shell/src/toolbar.rs:170` **fn** `omnibox_rects` — Compute the geometry of the inline omnibox (DS-10): the field itself,
+`crates/shell/src/toolbar.rs:208` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the toolbar row
+`crates/shell/src/toolbar.rs:362` **fn** `build_toolbar` — Build a viewport-locked display list for the toolbar row
 `crates/shell/src/tracks.rs:24` **struct** `LoadedTrack` — Один `<track>` элемента `<video>`, отражённый в `TextTrack` JS-API
 `crates/shell/src/tracks.rs:39` **struct** `PageTracks` — Загруженные cues по каждому `<video>` страницы
 `crates/shell/src/tracks.rs:48` **fn** `is_empty` — Нет ни одного видео с загруженными cues
