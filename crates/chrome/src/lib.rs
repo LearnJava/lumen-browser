@@ -45,17 +45,32 @@ fn find(doc: &lumen_dom::Document, id: &'static str) -> Result<lumen_dom::NodeId
     doc.find_by_id(id).ok_or(ChromeIdError { id })
 }
 
+/// UA-default rule for the chrome document (CC-CSS-6): real browsers make
+/// their own chrome UI text non-selectable by default, and the frozen design
+/// reference (`docs/design/lumen-v3_3.html`) carries no `user-select`
+/// declaration of its own since the property has no visual effect there —
+/// nothing to strip/translate the way CC-CSS-1 did for `::-webkit-scrollbar`.
+/// Textually first in the collected style text so any later author rule of
+/// equal specificity still overrides it (e.g. a future `.omni-field`
+/// exception for editable text). `user-select` is an inherited property, so
+/// setting it on `html` covers every chrome element by default.
+const UA_DEFAULTS: &str = "html{user-select:none}";
+
 /// Parses `html` (the chrome asset's contents — a runtime host passes
 /// [`crate`]-external `chrome_preview::HTML`, the same bytes `build.rs`
 /// already validated) into a [`lumen_dom::Document`] plus the
-/// [`lumen_css_parser::Stylesheet`] collected from its `<style>` elements.
+/// [`lumen_css_parser::Stylesheet`] collected from its `<style>` elements
+/// (prefixed with [`UA_DEFAULTS`]).
 ///
-/// Mirrors `build.rs`'s own parse step exactly (same parsers, same
-/// `<style>`-text collection walk) so a [`ChromeIds::resolve`] against the
-/// returned document resolves every `ids::*` constant.
+/// Mirrors `build.rs`'s own parse step for the `Document` exactly (same
+/// parser, same `<style>`-text collection walk) so a [`ChromeIds::resolve`]
+/// against the returned document resolves every `ids::*` constant; the
+/// `Stylesheet` additionally carries the UA defaults build.rs's own CSS gate
+/// does not need to see (codegen only inspects HTML structure).
 pub fn parse_document(html: &str) -> (lumen_dom::Document, lumen_css_parser::Stylesheet) {
     let doc = lumen_html_parser::parse(html);
-    let style_text = collect_style_text(&doc);
+    let mut style_text = String::from(UA_DEFAULTS);
+    style_text.push_str(&collect_style_text(&doc));
     let sheet = lumen_css_parser::parse(&style_text);
     (doc, sheet)
 }
@@ -139,5 +154,42 @@ mod tests {
     #[test]
     fn template_registry_is_empty_until_cc6() {
         assert!(templates::IDS.is_empty());
+    }
+
+    /// CC-CSS-6: `UA_DEFAULTS` must make chrome UI text non-selectable by
+    /// default — checked against a real text-bearing element (the profile
+    /// name label) rather than a synthetic fixture, since the point is that
+    /// the frozen design reference itself carries no `user-select`
+    /// declaration and still ends up `None` after `parse_document`.
+    #[test]
+    fn ua_defaults_make_chrome_text_non_selectable() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        let (doc, sheet) = parse_document(&html);
+        let chrome_ids = ChromeIds::resolve(&doc).expect("asset must resolve every id");
+        let root = lumen_layout::layout(&doc, &sheet, lumen_core::geom::Size::new(1280.0, 800.0));
+        let profile_name = lumen_layout::find_box_by_node(&root, chrome_ids.profile_name)
+            .expect("#profileName must have a layout box");
+        assert_eq!(
+            profile_name.style.user_select,
+            lumen_layout::UserSelect::None,
+            "chrome UI text must be non-selectable by default (CC-CSS-6)"
+        );
+    }
+
+    /// `UA_DEFAULTS` is textually first, so an author rule of equal
+    /// specificity declared later in the collected style text still wins —
+    /// verified with a synthetic override rather than the frozen asset
+    /// (which declares no `user-select` of its own, CC-CSS-6).
+    #[test]
+    fn ua_defaults_can_be_overridden_by_a_later_author_rule() {
+        let html = r#"<html><body><input id="omniInput"></body></html>"#;
+        let (doc, mut sheet) = parse_document(html);
+        sheet.rules.extend(lumen_css_parser::parse("#omniInput{user-select:text}").rules);
+        let root = lumen_layout::layout(&doc, &sheet, lumen_core::geom::Size::new(800.0, 600.0));
+        let omni_input = doc.find_by_id("omniInput").expect("test fixture has #omniInput");
+        let b = lumen_layout::find_box_by_node(&root, omni_input).expect("#omniInput must have a layout box");
+        assert_eq!(b.style.user_select, lumen_layout::UserSelect::Text);
     }
 }
