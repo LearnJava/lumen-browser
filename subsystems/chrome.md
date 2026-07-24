@@ -11,8 +11,8 @@ CSS property or selector `lumen-layout` does not implement. On success it code-g
 `ChromeIds` resolver, the `ChromeAction` enum (from `data-action` attribute values), and the
 `<template>` id registry.
 
-**Not in scope:** hit-test dispatch of `ChromeAction` (CC-5), `ChromeModel` → DOM mutation (CC-6).
-The runtime host (parse-once + relayout-on-resize + paint) is CC-4, done — see below and
+**Not in scope:** `ChromeModel` → DOM mutation (CC-6). The runtime host (parse-once +
+relayout-on-resize + paint, CC-4) and hit-test/hover/dispatch (CC-5) are done — see below and
 `crates/shell/src/main.rs`.
 
 ## Done
@@ -66,18 +66,47 @@ The runtime host (parse-once + relayout-on-resize + paint) is CC-4, done — see
   `content_layout_viewport`/`viewport_height_css`, so the
   page's own CSS layout viewport width is unaffected by the flag, matching the pre-existing
   vertical-tabs-sidebar limitation already documented on `content_layout_viewport` ("Width is
-  unaffected"). No hit-test/hover/click yet (CC-5) — the chrome is static under the flag. Off the
-  flag (default), `chrome_doc`/`chrome_layout` stay `None` and every touched call site takes its old
-  branch — zero behavior change.
+  unaffected"). Off the flag (default), `chrome_doc`/`chrome_layout` stay `None` and every touched
+  call site takes its old branch — zero behavior change.
+- **CC-5 hit-test/hover/active/dispatch** (`crates/shell/src/main.rs`): `Lumen::page_offset()` is
+  the single source of truth for where page content starts on screen (`chrome_page_host_rect`'s
+  origin under the flag, the legacy left-dock/`CHROME_H` pair off it) — `page_point`/
+  `update_cursor_icon`'s page-hit-test branch now both read it (previously hardcoded, a latent
+  input-coordinate bug under the flag: clicks/hover/cursor near the page's top edge would have
+  targeted the wrong page node once `chrome_page_host_rect` diverged from `CHROME_H`).
+  `Lumen::point_over_chrome(x, y)` — rect-membership test against `chrome_page_host_rect` — decides
+  whether a pointer event belongs to the chrome furniture or to the page/floating popovers drawn
+  above it. `Lumen::chrome_hit_test` runs `lumen_paint::hit_test` against `chrome_layout` in window
+  coordinates; `Lumen::chrome_action_at` walks its `HitTestResult::path` (innermost first) for the
+  nearest ancestor-or-self carrying `data-action`, satisfying the deferred note above about
+  `.tab-close`/`.close-tab` nesting inside `.tab-row`/`select-tab`. `Lumen::dispatch_chrome_action`
+  routes the ~12 actions with a real shell equivalent (`reload`, `open-cert-viewer`,
+  `toggle-shield-popover`, `toggle-find`, `open-web-sidebar`, `open-ai-sidebar`,
+  `toggle-downloads`, `open-print-dialog`, `toggle-devtools`, `toggle-profile-menu`, `new-tab`,
+  `show-view data-view=settings`) to the exact functions the legacy toolbar dispatcher already
+  called; the other ~17 actions only make sense once `ChromeModel` → DOM mutation exists (CC-6) or
+  their popover has an engine-drawn equivalent (CC-9/CC-10) — recognised but a no-op for now.
+  `chrome_hovered_nid`/`chrome_active_nid` (separate fields from the page's `hovered_nid`/
+  `active_nid`, mirroring why `relayout_chrome_host` resets the interactive thread-locals rather
+  than inheriting them) feed `:hover`/`:active` into the next `relayout_chrome_host` pass from
+  `CursorMoved`/`MouseInput`. Double-dispatch avoidance: the legacy tab-strip/toolbar hit-testers in
+  `WindowEvent::MouseInput`/`CursorMoved` (unconditional before this slice — they don't paint under
+  the flag, CC-4, but were still live code) are now gated `if self.css_chrome_enabled { <chrome
+  path> } else { <legacy path> }`; a click/hover outside the chrome's opaque area (real page content,
+  including floating popovers CC-5 opens, e.g. `shields`/`downloads`/`print_panel`) falls through
+  unchanged to the existing panel/page dispatch below, since those stay positioned within the
+  page-content rect. Verified: `cargo test -p lumen-chrome` (14/14) + `cargo test -p lumen-shell`
+  (1695/1695) + `cargo clippy -p lumen-shell --all-targets -D warnings` green; manual smoke launch
+  with `LUMEN_CSS_CHROME=1` (no crash, first frame renders) — full click/hover interaction was not
+  driven automatically (no OS-level input injector in the repo; the existing `--mcp`/IPC `click`
+  bypasses chrome/panel dispatch by design, targeting page content only), so this remains verified
+  by code review + the pre-existing CC-4 manual-`PrintWindow` protocol, not a screenshot diff.
 
 ## Deferred
 
-- **CC-5**: hit-test → `data-action` → `ChromeAction` dispatch. Note for that slice: dispatch must
-  climb from the hit leaf to the *nearest* ancestor-or-self carrying `data-action` (not just any
-  ancestor) — `.tab-close`'s `close-tab` sits inside a `.tab-row`'s `select-tab`, and the two modal
-  backdrops' `close-modal`/`close-palette` sit around content that must not itself trigger them.
 - **CC-6**: `<template>` markup + `templates::IDS` population, once `ChromeModel` → DOM diffing
-  needs real list cloning (tab rows, omnibox suggestions, download cards, history entries).
+  needs real list cloning (tab rows, omnibox suggestions, download cards, history entries) — also
+  the point where the ~17 demo-only `ChromeAction`s dispatched as no-ops by CC-5 get real backing.
 
 ## Invariants
 

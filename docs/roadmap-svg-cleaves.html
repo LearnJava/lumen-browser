@@ -3731,9 +3731,9 @@
       {
        "id": "CC-5",
        "title": "CC-5: Hit-test, hover, диспетч действий",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "lumen_paint::hit_test по layout хрома → подъём по path до data-action → диспетч ChromeAction в существующие обработчики; hover/active через set_interactive_state (страничные thread-locals ставить/чистить вокруг каждого прохода раздельно); курсор из HitTestResult. После CC-4"
+       "note": "`point_over_chrome`/`chrome_hit_test`/`chrome_action_at` (path-walk до ближайшего data-action)/`dispatch_chrome_action` в main.rs; ~12 действий с реальным эквивалентом (reload/find/downloads/print/devtools/cert/shield/ai-web-sidebar/profile-menu/new-tab/settings), ~17 демо-only no-op до ChromeModel (CC-6). chrome_hovered_nid/chrome_active_nid отдельны от страничных — кормят relayout_chrome_host. Двойной учёт кликов исключён: CursorMoved/MouseInput гейтят легаси tab-strip/toolbar-хиттест `if !css_chrome_enabled`. Попутно исправлена нестыковка CC-4: page_point/update_cursor_icon использовали захардкоженный CHROME_H вместо chrome_page_host_rect — вынесено в page_offset(). cargo test -p lumen-chrome (14/14) + cargo test -p lumen-shell (1695/1695) + workspace clippy зелёные; смоук-запуск LUMEN_CSS_CHROME=1 без падений (реальный клик/hover через OS-инжекцию не гонялся — инструмента в репо нет, --mcp click намеренно обходит хром-диспетч). После CC-4"
       },
       {
        "id": "CC-6",

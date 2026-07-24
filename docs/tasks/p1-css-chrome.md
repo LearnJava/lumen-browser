@@ -204,9 +204,32 @@ layout-toggle/settings/archive-кнопки) не строятся вовсе. �
 `cargo test -p lumen-chrome` (14/14, +1 новый на `parse_document`), `cargo clippy
 --workspace --all-targets -D warnings` и `scripts/scoped-test.sh` зелёные.
 
-### CC-5 (M): Hit-test, hover/active, курсор, диспетч действий
+### CC-5 (M, done): Hit-test, hover/active, курсор, диспетч действий
 
-Мышиные события при `y` внутри хрома (и вообще при попадании в непрозрачные области хрома — сайдбар слева!) → `lumen_paint::hit_test` по `chrome_layout` → подъём по `path` до ближайшего `data-action` → `ChromeAction` → существующие обработчики шелла (Back/Forward/Reload/OpenSettings/…). Hover: `set_interactive_state(chrome_hovered, …)` + релэйаут хрома (страничные thread-locals ставить/чистить вокруг каждого прохода раздельно). Курсор — из `HitTestResult.cursor`. **DoD:** кнопки тулбара и вкладки кликабельны и подсвечиваются по hover при флаге; двойной учёт кликов (хром+страница) исключён.
+`Lumen::point_over_chrome(x, y)` (rect-тест против `chrome_page_host_rect`) решает, чей это
+пойнтер-эвент — хрома или страницы/плавающих поповеров над ней. `chrome_hit_test` гоняет
+`lumen_paint::hit_test` по `chrome_layout` в оконных координатах; `chrome_action_at` поднимается по
+`HitTestResult::path` (от листа к корню) до ближайшего `data-action` → `ChromeAction`;
+`dispatch_chrome_action` разводит ~12 действий с реальным эквивалентом в шелле (`reload`,
+`open-cert-viewer`, `toggle-shield-popover`, `toggle-find`, `open-web-sidebar`, `open-ai-sidebar`,
+`toggle-downloads`, `open-print-dialog`, `toggle-devtools`, `toggle-profile-menu`, `new-tab`,
+`show-view` при `data-view="settings"`) на те же функции, что вызывал легаси-тулбар; остальные ~17
+(демо-only — переключение вкладок/воркспейсов/профиля, поповер-локальные тумблеры) без backing-стейта
+до `ChromeModel` (CC-6) — распознаются, но no-op. `chrome_hovered_nid`/`chrome_active_nid` — отдельные
+от страничных поля, кормят `:hover`/`:active` в `relayout_chrome_host` из `CursorMoved`/`MouseInput`.
+Двойной учёт кликов исключён явным `if self.css_chrome_enabled { хром-путь } else { легаси
+tab-strip/toolbar-путь }` в обоих обработчиках (легаси-хиттестеры раньше не красились под флагом
+(CC-4), но оставались живым кодом и продолжали бы реагировать на клики/hover в той же области).
+`page_offset()` — единый источник правды для смещения страницы, используется `page_point`/
+`update_cursor_icon`/рендер-оффсетом (попутно исправлена задержавшаяся с CC-4 нестыковка: обе первые
+функции использовали захардкоженный `toolbar::CHROME_H`/`left_dock()` вместо
+`chrome_page_host_rect`). Курсор — из `HitTestResult.cursor`, приоритет выше scrollbar/страницы, когда
+`point_over_chrome`. Проверено: `cargo test -p lumen-chrome` (14/14) + `cargo test -p lumen-shell`
+(1695/1695) + `cargo clippy -p lumen-shell --all-targets -D warnings` зелёные; смоук-запуск
+`LUMEN_CSS_CHROME=1` без падений. Автоматической прогонки реального клика/hover через OS-инжекцию
+нет (в репо такого инструмента нет, а `--mcp`/IPC `click` намеренно обходит хром/панельный диспетч,
+целясь только в контент страницы) — та же протокольная граница, что CC-4 (PrintWindow-снимки, не
+скриншот-дифф).
 
 ### CC-6 (M): ChromeModel и мутация DOM
 
