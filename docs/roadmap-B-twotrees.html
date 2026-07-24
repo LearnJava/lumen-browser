@@ -1784,9 +1784,9 @@
       {
        "id": "WPT-VENDOR-badging",
        "title": "WPT: вендорить + прогнать категорию `badging`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). PWA/ОС-интеграция"
+       "note": "DONE 2026-07-24: вендорена (`tests/wpt/badging/`, 9 файлов: `META.yml`, `WEB_FEATURES.yml`, `badge-error.https.any.js`, `badge-success.https.any.js`, `idlharness.https.any.js`, `non-fully-active.https.html`, `setAppBadge_cross_origin.sub.https.html`, `resources/badge_iframe.html`, `resources/message-handler.js`) и прогнана через `run_report.py --all --root badging --recursive`, включена несмотря на скоуп 🚫 (PWA/ОС-интеграция) по тому же постоянному решению пользователя, что и `accelerometer`/`acid`/`ai`/`ambient-light`/`appmanifest`/`attribution-reporting`/`audio-output`/`audio-session`/`autoplay-policy-detection`/`background-fetch`/`background-sync`. Вся категория `.https.`-only (все 5 отобранных id), тот же класс, что `background-sync`/`background-fetch`: прогон добежал за ~2:36, все 5 — TIMEOUT (`invalid url: invalid port: \"None\"`, тот же HTTPS-порт-гэп минимального исполнителя). 0/5 harness OK, 0/0 сабтестов. Не заводился отдельный BUG-NNN — первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-battery-status",
