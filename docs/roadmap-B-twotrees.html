@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-25",
  "counts": {
-  "open": 39,
+  "open": 40,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 311,
+ "total_bugs": 312,
  "phases": [
   {
    "id": "P0",
@@ -1871,9 +1871,9 @@
       {
        "id": "WPT-VENDOR-compute-pressure",
        "title": "WPT: вендорить + прогнать категорию `compute-pressure`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (нагрузка CPU/GPU)"
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/compute-pressure/`, 37 файлов), включена несмотря на скоуп 🚫 по прямому запросу пользователя, и прогнана через `run_report.py --all --root compute-pressure --recursive`. 39 отобранных id, почти вся категория `.https.`-only: 38 TIMEOUT (HTTPS-порт-гэп, тот же класс, что `WebCryptoAPI`/`ai`), единственный не-https файл — harness OK, 0/1 сабтест FAIL (Permissions Policy не объявляет `compute-pressure`). 1/39 harness OK, 0/1 сабтестов. Не заводился отдельный BUG-NNN — первый проход категории"
       },
       {
        "id": "WPT-VENDOR-connection-allowlist",
@@ -6108,6 +6108,13 @@
    "component": "js (`crates/js/src/v8_compat.rs::v8_to_jsvalue`, `native_fn_trampoline`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-343": {
+   "status": "open",
+   "title": "Найден при расследовании расхождения CPU-снепшота `1000000-final` после частичного фикса BUG-341. `lay_out_flex`'s финальный проход НЕОБРАТИМО перезаписывает `s…",
+   "component": "layout (`box_tree.rs`, `lay_out_flex`) — **general engine bug, not chrome-specific**",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6315,7 +6322,8 @@
    "BUG-241"
   ],
   "layout (`box_tree.rs`, `lay_out_flex`) — **general engine bug, not chrome-specific**": [
-   "BUG-341"
+   "BUG-341",
+   "BUG-343"
   ],
   "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)": [
    "BUG-339"
