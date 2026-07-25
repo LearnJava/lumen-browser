@@ -1,7 +1,9 @@
-//! Integration tests for lumen-a11y's synthetic chrome nodes (DS-17).
+//! Integration tests for lumen-a11y's chrome accessibility nodes (DS-17, CC-13).
 
-use lumen_a11y::chrome::{attach_chrome, chrome_nodes, ChromeButton, ChromeSnapshot, ChromeTab};
-use lumen_a11y::{build_ax_tree, AXRole};
+use lumen_a11y::chrome::{
+    attach_chrome, chrome_nodes, chrome_root_from_document, ChromeButton, ChromeSnapshot, ChromeTab,
+};
+use lumen_a11y::{build_ax_tree, AXNode, AXRole};
 use lumen_dom::build_flat_tree;
 use lumen_html_parser::parse;
 
@@ -104,5 +106,93 @@ fn attach_chrome_wrapper_id_does_not_collide_with_chrome_ids() {
     assert!(
         !chrome_ids.contains(&combined.root.node_id),
         "wrapper root id must not collide with a chrome node id"
+    );
+}
+
+// ── chrome_root_from_document (CC-13) ───────────────────────────────────────
+
+fn find_role_dfs(node: &AXNode, role: AXRole) -> Option<&AXNode> {
+    if node.role == role {
+        return Some(node);
+    }
+    node.children.iter().find_map(|child| find_role_dfs(child, role))
+}
+
+/// Mirrors the shape `scripts/gen_chrome_assets.py` injects into
+/// `assets/chrome/chrome.html`: a `role="tablist"` container with two
+/// `role="tab"` rows (one `aria-selected`), a `role="toolbar"` with an
+/// icon-only labelled button and a `role="combobox"` address bar.
+const CHROME_LIKE_HTML: &str = r#"<body>
+    <div id="sbTabs" role="tablist">
+        <div role="tab" aria-selected="true">Активная</div>
+        <div role="tab" aria-selected="false">Пример</div>
+    </div>
+    <div data-testid="toolbar" role="toolbar">
+        <button aria-label="Обновить"></button>
+        <input id="omniInput" role="combobox" aria-autocomplete="list" value="https://example.com">
+    </div>
+</body>"#;
+
+#[test]
+fn chrome_root_from_document_derives_roles_from_markup() {
+    let doc = parse(CHROME_LIKE_HTML);
+    let flat_tree = build_flat_tree(&doc);
+    let root = chrome_root_from_document(&doc, doc.root(), &flat_tree);
+
+    let tablist = find_role_dfs(&root, AXRole::TabList).expect("expected TabList from role=\"tablist\"");
+    assert_eq!(tablist.children.len(), 2, "expected two role=\"tab\" rows");
+    assert_eq!(tablist.children[0].state.selected, Some(true));
+    assert_eq!(tablist.children[1].state.selected, Some(false));
+
+    let toolbar = find_role_dfs(&root, AXRole::Toolbar).expect("expected Toolbar from role=\"toolbar\"");
+    let button = toolbar
+        .children
+        .iter()
+        .find(|c| c.role == AXRole::Button)
+        .expect("expected Button in toolbar");
+    assert_eq!(button.name, "Обновить", "aria-label should become the accessible name");
+    assert!(
+        toolbar.children.iter().any(|c| c.role == AXRole::ComboBox),
+        "expected ComboBox from role=\"combobox\" address bar"
+    );
+}
+
+#[test]
+fn chrome_root_from_document_ids_are_synthetic_and_unique() {
+    let doc = parse(CHROME_LIKE_HTML);
+    let flat_tree = build_flat_tree(&doc);
+    let root = chrome_root_from_document(&doc, doc.root(), &flat_tree);
+
+    let mut ids = Vec::new();
+    collect_ids(&root, &mut ids);
+    let unique: std::collections::HashSet<_> = ids.iter().collect();
+    assert_eq!(unique.len(), ids.len(), "expected all remapped node ids to be unique");
+    // Real DOM node indices grow from 0 (see `synthetic_id`'s doc comment) —
+    // every remapped id must land well above that range so it can never
+    // collide with the page document's own (also 0-based) NodeIds.
+    assert!(
+        ids.iter().all(|id| id.index() > 1_000_000),
+        "expected every chrome_root_from_document id to be remapped into the synthetic range"
+    );
+}
+
+#[test]
+fn chrome_root_from_document_attaches_via_attach_chrome() {
+    let chrome_doc = parse(CHROME_LIKE_HTML);
+    let chrome_flat_tree = build_flat_tree(&chrome_doc);
+    let chrome_root = chrome_root_from_document(&chrome_doc, chrome_doc.root(), &chrome_flat_tree);
+
+    let page_doc = parse("<body><p>Hello</p></body>");
+    let page_flat_tree = build_flat_tree(&page_doc);
+    let page_tree = build_ax_tree(&page_doc, page_doc.root(), &page_flat_tree);
+    let page_root_id = page_tree.root.node_id;
+
+    let combined = attach_chrome(page_tree, vec![chrome_root]);
+
+    assert_eq!(combined.root.children.len(), 2, "expected [chrome subtree, page tree]");
+    assert_eq!(combined.root.children[1].node_id, page_root_id, "page tree stays the last sibling");
+    assert!(
+        find_role_dfs(&combined.root, AXRole::TabList).is_some(),
+        "engine-derived chrome roles should survive attach_chrome"
     );
 }

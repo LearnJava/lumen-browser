@@ -260,6 +260,118 @@ def add_data_actions(html: str) -> str:
     return _TAG_RE.sub(rewrite, html)
 
 
+# CC-13 (docs/tasks/p1-css-chrome.md): declarative `role`/`aria-*` injection
+# so `lumen_a11y::build_ax_tree` — the same builder that already reads ARIA
+# off web pages — derives real chrome accessibility nodes (tab list, tabs,
+# toolbar, address bar) straight from this markup, replacing the hand-rolled
+# `lumen_a11y::chrome` synthetic snapshot (DS-17) when `LUMEN_CSS_CHROME=1`.
+# Keyed off `id`/`data-testid`/`data-action` — all already stable, either
+# native to the reference or synthesized by `add_data_actions` above (this
+# function must run after it).
+ARIA_ROLE_BY_ID: dict[str, dict[str, str]] = {
+    "sbTabs": {"role": "tablist"},
+    "hbarTabs": {"role": "tablist"},
+    "omniInput": {"role": "combobox", "aria-autocomplete": "list"},
+}
+ARIA_ROLE_BY_TESTID: dict[str, dict[str, str]] = {
+    "toolbar": {"role": "toolbar"},
+}
+
+
+def add_aria_roles(html: str) -> str:
+    """Inject `role`/`aria-*` keyed by stable `id`/`data-testid`, plus
+    `role="tab"` + `aria-selected` for every `data-action="select-tab"`
+    element (vertical `.tab-row` and horizontal `.hbar-tab` mirrors alike).
+    """
+
+    def rewrite(m: re.Match[str]) -> str:
+        tag, attr_str, selfclose = m.group(1), m.group(2), m.group(3)
+        attrs = [(am.group(1), am.group(2)) for am in _ATTR_RE.finditer(attr_str) if am.group(1)]
+        attr_map = dict(attrs)
+
+        extra: dict[str, str] = {}
+        extra.update(ARIA_ROLE_BY_ID.get(attr_map.get("id", ""), {}))
+        extra.update(ARIA_ROLE_BY_TESTID.get(attr_map.get("data-testid", ""), {}))
+        if attr_map.get("data-action") == "select-tab":
+            extra["role"] = "tab"
+            classes = (attr_map.get("class") or "").split()
+            extra["aria-selected"] = "true" if "active" in classes else "false"
+
+        if not extra:
+            return m.group(0)
+
+        kept = attrs + [(n, v) for n, v in extra.items() if n not in attr_map]
+        rebuilt = "".join(f' {n}="{v}"' if v is not None else f" {n}" for n, v in kept)
+        return f"<{tag}{rebuilt}{selfclose}>"
+
+    return _TAG_RE.sub(rewrite, html)
+
+
+# data-action (+ required extra attrs) → accessible label, for icon-only
+# `<button>`s that carry no other visible text (checked by `add_aria_labels`
+# below) — same set of controls DS-17's synthetic `ChromeButton` list named,
+# now sourced from the real markup instead of hand-duplicated shell state.
+# Buttons with their own visible text (e.g. the profile-menu toggle showing
+# the current profile name) are left alone — the native text-derived name
+# already carries more information than a static label would.
+#
+# Keyed by `data-action` alone, so a handful of actions reused on a
+# structurally different icon-only button in another panel (e.g.
+# "toggle-find"/"toggle-downloads"/"toggle-devtools" also dismiss their own
+# panel via the same action) inherit the toolbar-toggle's label rather than
+# a more precise "close panel" — an imprecise name beats the empty one these
+# buttons had before ARIA injection existed, and a per-container label needs
+# more context than this single-element regex pass has. Not chased further —
+# out of this S-sized slice's DoD, same class of gap as CC-9/CC-10's
+# per-download-card buttons.
+ARIA_LABEL_RULES: list[tuple[str, dict[str, str], str]] = [
+    ("reload", {}, "Обновить"),
+    ("open-cert-viewer", {}, "Просмотр сертификата"),
+    ("toggle-shield-popover", {}, "Экран приватности"),
+    ("toggle-find", {}, "Найти на странице"),
+    ("open-web-sidebar", {}, "Веб-сайдбар"),
+    ("open-ai-sidebar", {}, "ИИ-сайдбар"),
+    ("toggle-downloads", {}, "Загрузки"),
+    ("toggle-devtools", {}, "DevTools"),
+    ("show-view", {"data-view": "settings"}, "Настройки"),
+    ("close-tab", {}, "Закрыть вкладку"),
+]
+
+_BUTTON_RE = re.compile(r"<button([^>]*)>((?:(?!</button>).)*?)</button>", re.DOTALL)
+_STRIP_TAGS_RE = re.compile(r"<[^>]+>")
+
+
+def add_aria_labels(html: str) -> str:
+    """Give icon-only `<button>`s an `aria-label` per `ARIA_LABEL_RULES`.
+
+    Runs over whole `<button>...</button>` elements (not just the opening
+    tag, unlike `add_aria_roles`) because it needs to see whether the button
+    already has visible text — icon-only buttons need a synthesized name,
+    buttons with a text label (or an existing `aria-label`) don't.
+    """
+
+    def rewrite(m: re.Match[str]) -> str:
+        attr_str, inner = m.group(1), m.group(2)
+        attrs = [(am.group(1), am.group(2)) for am in _ATTR_RE.finditer(attr_str) if am.group(1)]
+        attr_map = dict(attrs)
+        action = attr_map.get("data-action")
+        if action is None or "aria-label" in attr_map:
+            return m.group(0)
+        if _STRIP_TAGS_RE.sub("", inner).strip():
+            return m.group(0)  # has its own visible text — don't shadow it
+
+        for rule_action, extra, label in ARIA_LABEL_RULES:
+            if rule_action != action:
+                continue
+            if any(attr_map.get(k) != v for k, v in extra.items()):
+                continue
+            rebuilt = "".join(f' {n}="{v}"' if v is not None else f" {n}" for n, v in attrs)
+            return f"<button{rebuilt} aria-label=\"{label}\">{inner}</button>"
+        return m.group(0)
+
+    return _BUTTON_RE.sub(rewrite, html)
+
+
 def collapse_blank_lines(html: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", html)
 
@@ -276,6 +388,8 @@ def generate() -> str:
     html = strip_script(html)
     html = strip_tooltip_attrs(html)
     html = add_data_actions(html)
+    html = add_aria_roles(html)
+    html = add_aria_labels(html)
     html = collapse_blank_lines(html)
 
     html = html.replace("<!DOCTYPE html>\n", "<!DOCTYPE html>\n" + GENERATED_HEADER, 1)

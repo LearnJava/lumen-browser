@@ -32,6 +32,14 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   exhaustive `ONCLICK_EXACT_ACTIONS`/`CLASS_ONCLICK_ACTIONS` table; an unmapped handler raises
   `GenError` at generation time instead of shipping a dead attribute. 30 distinct actions across 98
   elements in the current asset.
+- **ARIA `role`/`aria-*` attributes** (`scripts/gen_chrome_assets.py::add_aria_roles`/
+  `add_aria_labels`, CC-13, docs/tasks/p1-css-chrome.md): runs after `add_data_actions` (keys off
+  its `data-action` output) — `role="tablist"` on `#sbTabs`/`#hbarTabs`, `role="tab"`+
+  `aria-selected` on every `data-action="select-tab"` element, `role="toolbar"`, `role="combobox"`
+  +`aria-autocomplete` on `#omniInput`; `aria-label` on icon-only `<button>`s with no other visible
+  text, keyed by `data-action` via `ARIA_LABEL_RULES` (buttons with their own text, e.g. the
+  profile-menu toggle, are left alone). Consumed by `lumen_a11y::chrome::chrome_root_from_document`
+  — see `subsystems/a11y.md`.
 - **Codegen** (`build.rs`): `ids` module (one `&str` const per `id`-carrying element, 94 in the
   current asset); `ChromeIds` struct + `ChromeIds::resolve(&Document) -> Result<Self, ChromeIdError>`
   (no `unwrap`/`panic!` — the build-gate guarantees every id exists, but resolution still returns a

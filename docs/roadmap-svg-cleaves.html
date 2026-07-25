@@ -3794,9 +3794,9 @@
       {
        "id": "CC-13",
        "title": "CC-13: A11y хрома из движка",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "AX-дерево хрома из движкового построителя (ARIA-атрибуты добавляются в ассеты генератором), замена синтетики lumen_a11y::chrome из DS-17; MSAA-мост отдаёт движковое дерево при флаге. После CC-10"
+       "note": "Закрыто (2026-07-25, P1). `scripts/gen_chrome_assets.py` инжектит `role=\"tablist\"/\"tab\"/\"toolbar\"/\"combobox\"` + `aria-selected`/`aria-label` в `assets/chrome/chrome.html` при генерации; `lumen_a11y::chrome::chrome_root_from_document` гоняет тот же `build_ax_tree`, что и для страниц, по `chrome_doc`, ремапя id в синтетический диапазон `chrome_nodes` (та же NodeId-коллизия, что решала CC-11). `Lumen::chrome_ax_nodes()` — единая точка ветвления движковое/синтетика под `LUMEN_CSS_CHROME`, никогда оба сразу. Побочный эффект: все панели хрома получают ARIA бесплатно. 3 новых теста `cargo test -p lumen-a11y` (134/134) + workspace clippy зелёные. После CC-10"
       },
       {
        "id": "CC-14",

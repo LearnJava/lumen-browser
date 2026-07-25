@@ -910,6 +910,12 @@ fn build_tab_row(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
     set_attr(doc, row, "class", &class);
     set_attr(doc, row, "data-action", "select-tab");
     set_attr(doc, row, "data-tab-id", &tab.id.to_string());
+    // CC-13: mirrors the `role="tab"`/`aria-selected` `scripts/gen_chrome_assets.py`
+    // bakes into the static asset — this row replaces that static markup
+    // wholesale (`rebuild_tab_list`), so the generator's injection never
+    // reaches it and has to be set here instead.
+    set_attr(doc, row, "role", "tab");
+    set_attr(doc, row, "aria-selected", if tab.active { "true" } else { "false" });
 
     if tab.is_child {
         let tree_line = doc.create_element(QualName::html("span"));
@@ -944,6 +950,7 @@ fn build_tab_row(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
         let close = doc.create_element(QualName::html("button"));
         set_attr(doc, close, "class", "tab-close");
         set_attr(doc, close, "data-action", "close-tab");
+        set_attr(doc, close, "aria-label", "Закрыть вкладку");
         // Carries its own copy of `data-tab-id` (not just the parent row) so
         // the shell's `chrome_action_at`/`dispatch_chrome_action` — which
         // only sees the `data-action`-carrying node, not the full hit path —
@@ -1015,6 +1022,10 @@ fn build_hbar_tab(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
     set_attr(doc, row, "class", if tab.active { "hbar-tab active" } else { "hbar-tab" });
     set_attr(doc, row, "data-action", "select-tab");
     set_attr(doc, row, "data-tab-id", &tab.id.to_string());
+    // CC-13: see the matching comment in `build_tab_row` — this row also
+    // replaces static markup wholesale, so ARIA has to be set here too.
+    set_attr(doc, row, "role", "tab");
+    set_attr(doc, row, "aria-selected", if tab.active { "true" } else { "false" });
 
     let fav = doc.create_element(QualName::html("span"));
     set_attr(doc, fav, "class", "tab-fav");
@@ -1380,6 +1391,54 @@ mod tests {
             .find(|&c| has_class(&doc, c, "container-stripe"))
             .expect("container_color must render a .container-stripe span");
         assert_eq!(doc.get(stripe).get_attr("style"), Some("background:#1F9D55"));
+    }
+
+    /// CC-13: `rebuild_tab_list`/`rebuild_hbar_tab_list` replace the asset's
+    /// static `.tab-row`/`.hbar-tab` markup wholesale, so the `role="tab"`/
+    /// `aria-selected` `scripts/gen_chrome_assets.py` bakes into the static
+    /// asset never reaches a real bound row — this must be set in Rust
+    /// instead, mirroring `data-action`.
+    #[test]
+    fn bound_tab_rows_carry_role_tab_and_aria_selected_in_both_layouts() {
+        let mut doc = parse_asset();
+        let model = model_with_tabs(vec![
+            ChromeTabModel { id: 1, title: "Активная".to_owned(), active: true, sleeping: false, is_child: false, container_color: None },
+            ChromeTabModel { id: 2, title: "Пример".to_owned(), active: false, sleeping: false, is_child: false, container_color: None },
+        ]);
+        bind_model(&mut doc, &model);
+
+        for container_id in [crate::ids::SB_TABS, crate::ids::HBAR_TABS] {
+            let container = doc.find_by_id(container_id).expect("asset has the tab-list container");
+            let rows: Vec<NodeId> = doc
+                .get(container)
+                .children
+                .iter()
+                .copied()
+                .filter(|&c| has_class(&doc, c, "tab-row") || has_class(&doc, c, "hbar-tab"))
+                .collect();
+            assert_eq!(rows.len(), 2, "expected both bound tabs as rows under {container_id:?}");
+            assert_eq!(doc.get(rows[0]).get_attr("role"), Some("tab"));
+            assert_eq!(doc.get(rows[0]).get_attr("aria-selected"), Some("true"));
+            assert_eq!(doc.get(rows[1]).get_attr("role"), Some("tab"));
+            assert_eq!(doc.get(rows[1]).get_attr("aria-selected"), Some("false"));
+        }
+
+        let sb_container = doc.find_by_id(crate::ids::SB_TABS).unwrap();
+        let first_row = doc
+            .get(sb_container)
+            .children
+            .iter()
+            .copied()
+            .find(|&c| has_class(&doc, c, "tab-row"))
+            .unwrap();
+        let close = doc
+            .get(first_row)
+            .children
+            .iter()
+            .copied()
+            .find(|&c| has_class(&doc, c, "tab-close"))
+            .expect("active tab row has a close button");
+        assert_eq!(doc.get(close).get_attr("aria-label"), Some("Закрыть вкладку"));
     }
 
     #[test]
