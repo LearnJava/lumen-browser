@@ -42,6 +42,108 @@ pub struct ChromeModel {
     /// CC-8) — independent of [`Self::layout_vertical`], which picks vertical vs.
     /// horizontal layout in the first place.
     pub sidebar_collapsed: bool,
+    /// `#omniDropdown` suggestion list + open state (CC-9).
+    pub dropdown: ChromeDropdownModel,
+    /// `#findBar` snapshot (CC-9).
+    pub find: ChromeFindModel,
+    /// `true` shows `#downloadsPanel` (CC-9) — mirrors `DownloadManager::visible`.
+    pub downloads_open: bool,
+    /// Download entries rendered into `#downloadsPanel`'s `.dl-list` (CC-9).
+    pub downloads: Vec<ChromeDownloadModel>,
+    /// `true` shows `#permPopover` (CC-9) — the frozen design merges the
+    /// shields counters and the permission rows into one popover, so this
+    /// follows either `ShieldsPanel::visible` or `PermissionPanel::visible`.
+    pub popover_open: bool,
+    /// Total blocked-request count written into `#statTrackers` (CC-9).
+    ///
+    /// `#statAds`/`#statFp` stay at the asset's own `"0"` — `ShieldsPanel`
+    /// only tracks a single honest total (its own doc comment explains why a
+    /// trackers/ads/fingerprint breakdown would be fabricated), so this binds
+    /// only the one real number rather than inventing the other two.
+    pub blocked_total: u32,
+    /// Grant state for the two permission rows the frozen design covers, in
+    /// asset order (`Камера`, `Микрофон`) — `PermissionKind::ALL`'s first two
+    /// entries. The design has no rows for `Notifications`/`Clipboard`.
+    pub permissions: [ChromePermState; 2],
+}
+
+/// `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
+/// rows, rebuilt the same way [`ChromeTabModel`] rebuilds `#sbTabs`.
+#[derive(Debug, Clone, Default)]
+pub struct ChromeDropdownModel {
+    /// `true` shows the dropdown — mirrors the legacy gate
+    /// (`AddressBarState::is_open()` with a non-empty suggestion list).
+    pub open: bool,
+    /// Suggestion rows, in display order.
+    pub suggestions: Vec<ChromeSuggestionModel>,
+}
+
+/// One `.dd-row` in `#omniDropdown` (CC-9).
+///
+/// Mirrors the shell's `OmniboxSuggestion` (`address_bar.rs`) shaped down to
+/// what the asset's row markup can show — label, sub-label, and an accent
+/// color for the `.dd-icon` swatch. Like [`ChromeTabModel`]'s favicon
+/// fallback, this deliberately skips cloning the asset's inline SVG icon
+/// sprite (visual finish, not part of this slice's DoD).
+#[derive(Debug, Clone)]
+pub struct ChromeSuggestionModel {
+    /// Round-trips through `data-sugg-idx` so a click on the rebuilt row can
+    /// be resolved back to `AddressBarState::suggestions()[idx]`.
+    pub idx: usize,
+    /// Main text (`.dd-title`).
+    pub label: String,
+    /// Secondary text (`.dd-sub`).
+    pub sub_label: String,
+    /// `#RRGGBB` accent for the `.dd-icon` swatch background.
+    pub color: String,
+}
+
+/// `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
+/// legacy `FindState` still owns editing" split (CC-7).
+#[derive(Debug, Clone, Default)]
+pub struct ChromeFindModel {
+    /// `true` shows the bar — mirrors `FindState::is_open()`.
+    pub open: bool,
+    /// Written into `#findInput`'s `value` attribute.
+    pub value: String,
+    /// Written into `#findCount`'s text (e.g. `"2/5"` or `"0/0"`).
+    pub count_label: String,
+}
+
+/// One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9).
+///
+/// Pre-formatted by the shell (`Lumen::chrome_model_snapshot`, reusing
+/// `download::extension_label`/`human_bytes`) so this crate stays free of
+/// download-domain formatting logic, matching how [`ChromeTabModel`] already
+/// receives a pre-derived `container_color` rather than a `ContainerKind`.
+#[derive(Debug, Clone)]
+pub struct ChromeDownloadModel {
+    /// Round-trips through `data-dl-id` (`DownloadId`, opaque here).
+    pub id: u32,
+    /// Uppercase extension badge text (`.dl-icon`), e.g. `"PDF"`.
+    pub ext_label: String,
+    /// File name (`.dl-name`).
+    pub name: String,
+    /// Size/status line (`.dl-meta`), e.g. `"2.1 MB — идёт загрузка…"`.
+    pub meta: String,
+    /// `Some(fraction)` shows a `.dl-progress-track`/`.dl-progress-fill` bar
+    /// at this fill (in-flight downloads only); `None` omits the bar
+    /// (matches the asset's own "done" cards, which carry no progress track).
+    pub progress_fraction: Option<f32>,
+}
+
+/// Grant state for one permission row (CC-9) — mirrors the shell's
+/// `PermissionState` shaped down to the asset's two-button (allow/deny, no
+/// explicit "ask" control) markup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChromePermState {
+    /// Adds `.selected-allow` to the row's `.perm-btn.allow` button.
+    Allow,
+    /// Adds `.selected-deny` to the row's `.perm-btn.deny` button.
+    Deny,
+    /// Neither button is marked selected.
+    #[default]
+    Ask,
 }
 
 /// Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
@@ -146,6 +248,152 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
         rebuild_hbar_ws_list(doc, container, &model.workspaces);
     }
     bind_omnibox(doc, &model.omnibox);
+    bind_dropdown(doc, &model.dropdown);
+    bind_find_bar(doc, &model.find);
+    bind_downloads(doc, model.downloads_open, &model.downloads);
+    bind_popover(doc, model.popover_open, model.blocked_total, &model.permissions);
+}
+
+/// Rebuilds `#omniDropdown`'s `.dd-row` list from
+/// [`ChromeDropdownModel::suggestions`] and toggles its `.open` class (CC-9).
+fn bind_dropdown(doc: &mut Document, dropdown: &ChromeDropdownModel) {
+    let Some(container) = doc.find_by_id(crate::ids::OMNI_DROPDOWN) else { return };
+    set_class_token(doc, container, "open", dropdown.open);
+    remove_children_with_class(doc, container, "dd-row");
+    for s in &dropdown.suggestions {
+        let row = build_dd_row(doc, s);
+        doc.append_child(container, row);
+    }
+}
+
+fn build_dd_row(doc: &mut Document, s: &ChromeSuggestionModel) -> NodeId {
+    let row = doc.create_element(QualName::html("div"));
+    set_attr(doc, row, "class", "dd-row");
+    set_attr(doc, row, "data-action", "omni-go");
+    set_attr(doc, row, "data-sugg-idx", &s.idx.to_string());
+
+    let icon = doc.create_element(QualName::html("span"));
+    set_attr(doc, icon, "class", "dd-icon");
+    set_attr(doc, icon, "style", &format!("background:{}", s.color));
+    doc.append_child(row, icon);
+
+    let text = doc.create_element(QualName::html("div"));
+    set_attr(doc, text, "class", "dd-text");
+    let title = doc.create_element(QualName::html("div"));
+    set_attr(doc, title, "class", "dd-title");
+    append_text(doc, title, &s.label);
+    doc.append_child(text, title);
+    let sub = doc.create_element(QualName::html("div"));
+    set_attr(doc, sub, "class", "dd-sub");
+    append_text(doc, sub, &s.sub_label);
+    doc.append_child(text, sub);
+    doc.append_child(row, text);
+
+    row
+}
+
+/// Toggles `#findBar`'s `.open` class and writes [`ChromeFindModel::value`]/
+/// `count_label` into `#findInput`/`#findCount` (CC-9). Editing (caret,
+/// append/backspace) stays owned by the legacy `FindState`, mirroring
+/// [`bind_omnibox`].
+fn bind_find_bar(doc: &mut Document, find: &ChromeFindModel) {
+    let Some(bar) = doc.find_by_id(crate::ids::FIND_BAR) else { return };
+    set_class_token(doc, bar, "open", find.open);
+    if let Some(input) = doc.find_by_id(crate::ids::FIND_INPUT) {
+        set_attr(doc, input, "value", &find.value);
+    }
+    if let Some(count) = doc.find_by_id(crate::ids::FIND_COUNT) {
+        let children: Vec<NodeId> = doc.get(count).children.clone();
+        for child in children {
+            doc.detach(child);
+        }
+        append_text(doc, count, &find.count_label);
+    }
+}
+
+/// Toggles `#downloadsPanel`'s `.open` class and rebuilds `.dl-card` rows
+/// from `downloads` (CC-9).
+fn bind_downloads(doc: &mut Document, open: bool, downloads: &[ChromeDownloadModel]) {
+    let Some(panel) = doc.find_by_id(crate::ids::DOWNLOADS_PANEL) else { return };
+    set_class_token(doc, panel, "open", open);
+    let Some(list) = find_by_class(doc, "dl-list") else { return };
+    remove_children_with_class(doc, list, "dl-card");
+    for d in downloads {
+        let card = build_dl_card(doc, d);
+        doc.append_child(list, card);
+    }
+}
+
+fn build_dl_card(doc: &mut Document, d: &ChromeDownloadModel) -> NodeId {
+    let card = doc.create_element(QualName::html("div"));
+    set_attr(doc, card, "class", "dl-card");
+    set_attr(doc, card, "data-dl-id", &d.id.to_string());
+
+    let row = doc.create_element(QualName::html("div"));
+    set_attr(doc, row, "class", "dl-row");
+    let icon = doc.create_element(QualName::html("div"));
+    set_attr(doc, icon, "class", "dl-icon");
+    append_text(doc, icon, &d.ext_label);
+    doc.append_child(row, icon);
+
+    let text_wrap = doc.create_element(QualName::html("div"));
+    let name = doc.create_element(QualName::html("div"));
+    set_attr(doc, name, "class", "dl-name");
+    append_text(doc, name, &d.name);
+    doc.append_child(text_wrap, name);
+    let meta = doc.create_element(QualName::html("div"));
+    set_attr(doc, meta, "class", "dl-meta");
+    append_text(doc, meta, &d.meta);
+    doc.append_child(text_wrap, meta);
+    doc.append_child(row, text_wrap);
+    doc.append_child(card, row);
+
+    if let Some(fraction) = d.progress_fraction {
+        let track = doc.create_element(QualName::html("div"));
+        set_attr(doc, track, "class", "dl-progress-track");
+        let fill = doc.create_element(QualName::html("div"));
+        set_attr(doc, fill, "class", "dl-progress-fill");
+        set_attr(doc, fill, "style", &format!("width:{}%", (fraction.clamp(0.0, 1.0) * 100.0)));
+        doc.append_child(track, fill);
+        doc.append_child(card, track);
+    }
+
+    card
+}
+
+/// Toggles `#permPopover`'s `.open` class, writes `blocked_total` into
+/// `#statTrackers`, and marks the two permission rows' allow/deny buttons
+/// per `permissions` (CC-9).
+fn bind_popover(doc: &mut Document, open: bool, blocked_total: u32, permissions: &[ChromePermState; 2]) {
+    let Some(popover) = doc.find_by_id(crate::ids::PERM_POPOVER) else { return };
+    set_class_token(doc, popover, "open", open);
+    if let Some(stat) = doc.find_by_id(crate::ids::STAT_TRACKERS) {
+        let children: Vec<NodeId> = doc.get(stat).children.clone();
+        for child in children {
+            doc.detach(child);
+        }
+        append_text(doc, stat, &blocked_total.to_string());
+    }
+    let rows: Vec<NodeId> =
+        doc.get(popover).children.iter().copied().filter(|&c| has_class(doc, c, "perm-row")).collect();
+    for (row, state) in rows.into_iter().zip(permissions.iter()) {
+        bind_permission_row(doc, row, *state);
+    }
+}
+
+fn bind_permission_row(doc: &mut Document, row: NodeId, state: ChromePermState) {
+    let Some(actions) = doc.get(row).children.iter().copied().find(|&c| has_class(doc, c, "perm-actions"))
+    else {
+        return;
+    };
+    let buttons: Vec<NodeId> = doc.get(actions).children.clone();
+    for btn in buttons {
+        if has_class(doc, btn, "allow") {
+            set_class_token(doc, btn, "selected-allow", state == ChromePermState::Allow);
+        } else if has_class(doc, btn, "deny") {
+            set_class_token(doc, btn, "selected-deny", state == ChromePermState::Deny);
+        }
+    }
 }
 
 /// Writes [`OmniboxModel`] into `#omniInput`'s `value` attribute and toggles
@@ -654,5 +902,153 @@ mod tests {
         bind_model(&mut doc, &ChromeModel::default());
         let warn = doc.find_by_id(crate::ids::OMNI_WARN).expect("asset has #omniWarn");
         assert!(!has_class(&doc, warn, "show"));
+    }
+
+    #[test]
+    fn dropdown_is_rebuilt_from_suggestions_and_toggles_open() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            dropdown: ChromeDropdownModel {
+                open: true,
+                suggestions: vec![ChromeSuggestionModel {
+                    idx: 0,
+                    label: "figma.com".to_owned(),
+                    sub_label: "Посещено вчера".to_owned(),
+                    color: "#0B6FE0".to_owned(),
+                }],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let container = doc.find_by_id(crate::ids::OMNI_DROPDOWN).expect("asset has #omniDropdown");
+        assert!(has_class(&doc, container, "open"));
+        let rows: Vec<NodeId> =
+            doc.get(container).children.iter().copied().filter(|&c| has_class(&doc, c, "dd-row")).collect();
+        assert_eq!(rows.len(), 1, "old demo rows must be gone, only the 1 model suggestion remains");
+        assert_eq!(doc.get(rows[0]).get_attr("data-sugg-idx"), Some("0"));
+    }
+
+    #[test]
+    fn dropdown_closed_hides_the_open_class() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel::default());
+        let container = doc.find_by_id(crate::ids::OMNI_DROPDOWN).expect("asset has #omniDropdown");
+        assert!(!has_class(&doc, container, "open"));
+    }
+
+    #[test]
+    fn find_bar_binds_value_count_and_open_state() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            find: ChromeFindModel { open: true, value: "needle".to_owned(), count_label: "2/5".to_owned() },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let bar = doc.find_by_id(crate::ids::FIND_BAR).expect("asset has #findBar");
+        assert!(has_class(&doc, bar, "open"));
+        let input = doc.find_by_id(crate::ids::FIND_INPUT).expect("asset has #findInput");
+        assert_eq!(doc.get(input).get_attr("value"), Some("needle"));
+        let count = doc.find_by_id(crate::ids::FIND_COUNT).expect("asset has #findCount");
+        let text: String = doc
+            .get(count)
+            .children
+            .iter()
+            .filter_map(|&c| match &doc.get(c).data {
+                NodeData::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "2/5");
+    }
+
+    #[test]
+    fn downloads_panel_is_rebuilt_from_entries_and_toggles_open() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            downloads_open: true,
+            downloads: vec![ChromeDownloadModel {
+                id: 1,
+                ext_label: "PDF".to_owned(),
+                name: "report.pdf".to_owned(),
+                meta: "1.0 MB — идёт загрузка…".to_owned(),
+                progress_fraction: Some(0.5),
+            }],
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::DOWNLOADS_PANEL).expect("asset has #downloadsPanel");
+        assert!(has_class(&doc, panel, "open"));
+        let list = find_by_class(&doc, "dl-list").expect("asset has .dl-list");
+        let cards: Vec<NodeId> =
+            doc.get(list).children.iter().copied().filter(|&c| has_class(&doc, c, "dl-card")).collect();
+        assert_eq!(cards.len(), 1, "old demo cards must be gone, only the 1 model entry remains");
+        assert_eq!(doc.get(cards[0]).get_attr("data-dl-id"), Some("1"));
+        let fill = doc
+            .get(cards[0])
+            .children
+            .iter()
+            .find(|&&c| has_class(&doc, c, "dl-progress-track"))
+            .and_then(|&track| doc.get(track).children.iter().copied().find(|&c| has_class(&doc, c, "dl-progress-fill")))
+            .expect("in-flight entry must render a progress fill");
+        assert_eq!(doc.get(fill).get_attr("style"), Some("width:50%"));
+    }
+
+    #[test]
+    fn empty_downloads_clears_all_cards() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel::default());
+        let list = find_by_class(&doc, "dl-list").expect("asset has .dl-list");
+        let cards = doc.get(list).children.iter().filter(|&&c| has_class(&doc, c, "dl-card")).count();
+        assert_eq!(cards, 0);
+    }
+
+    #[test]
+    fn popover_binds_blocked_total_and_permission_rows() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            popover_open: true,
+            blocked_total: 42,
+            permissions: [ChromePermState::Allow, ChromePermState::Deny],
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let popover = doc.find_by_id(crate::ids::PERM_POPOVER).expect("asset has #permPopover");
+        assert!(has_class(&doc, popover, "open"));
+        let stat = doc.find_by_id(crate::ids::STAT_TRACKERS).expect("asset has #statTrackers");
+        let text: String = doc
+            .get(stat)
+            .children
+            .iter()
+            .filter_map(|&c| match &doc.get(c).data {
+                NodeData::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "42");
+
+        let rows: Vec<NodeId> =
+            doc.get(popover).children.iter().copied().filter(|&c| has_class(&doc, c, "perm-row")).collect();
+        assert_eq!(rows.len(), 2);
+        let camera_actions = doc.get(rows[0]).children.iter().copied().find(|&c| has_class(&doc, c, "perm-actions")).unwrap();
+        let camera_allow = doc.get(camera_actions).children.iter().copied().find(|&c| has_class(&doc, c, "allow")).unwrap();
+        assert!(has_class(&doc, camera_allow, "selected-allow"));
+
+        let mic_actions = doc.get(rows[1]).children.iter().copied().find(|&c| has_class(&doc, c, "perm-actions")).unwrap();
+        let mic_deny = doc.get(mic_actions).children.iter().copied().find(|&c| has_class(&doc, c, "deny")).unwrap();
+        assert!(has_class(&doc, mic_deny, "selected-deny"));
+    }
+
+    #[test]
+    fn ask_state_selects_neither_button() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel::default());
+        let popover = doc.find_by_id(crate::ids::PERM_POPOVER).expect("asset has #permPopover");
+        let rows: Vec<NodeId> =
+            doc.get(popover).children.iter().copied().filter(|&c| has_class(&doc, c, "perm-row")).collect();
+        let actions = doc.get(rows[0]).children.iter().copied().find(|&c| has_class(&doc, c, "perm-actions")).unwrap();
+        for &btn in &doc.get(actions).children {
+            assert!(!has_class(&doc, btn, "selected-allow"));
+            assert!(!has_class(&doc, btn, "selected-deny"));
+        }
     }
 }

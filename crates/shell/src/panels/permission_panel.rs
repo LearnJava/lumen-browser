@@ -204,6 +204,20 @@ impl PermissionPanel {
             .unwrap_or_default();
         self.permissions.insert((origin.clone(), kind), current.cycle());
     }
+
+    /// Set the state for `kind` at the current origin directly (CC-9's
+    /// engine-rendered popover has two distinct allow/deny buttons — unlike
+    /// the legacy panel's single [`Self::cycle_permission`] toggle button,
+    /// there's no "ask" control to cycle back to, so this sets the state a
+    /// click actually asked for instead of advancing a cycle).
+    ///
+    /// Does nothing if `current_origin` is `None`.
+    pub fn set_permission(&mut self, kind: PermissionKind, state: PermissionState) {
+        let Some(ref origin) = self.current_origin.clone() else {
+            return;
+        };
+        self.permissions.insert((origin.clone(), kind), state);
+    }
 }
 
 impl Default for PermissionPanel {

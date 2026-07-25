@@ -52,6 +52,15 @@ use crate::theme_tokens::radius;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DownloadId(u32);
 
+impl DownloadId {
+    /// Raw numeric id — round-tripped through `ChromeDownloadModel::id` /
+    /// `#downloadsPanel`'s `data-dl-id` (CC-9). Not used for anything
+    /// order-sensitive; the cards themselves stay in `entries()`'s order.
+    pub(crate) fn raw(self) -> u32 {
+        self.0
+    }
+}
+
 /// Current state of a download entry.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -988,7 +997,11 @@ fn make_text(
 /// Derive the short badge label shown on a download's icon chip
 /// (`.dl-icon`): the file extension, uppercased and capped at 4 chars, or
 /// the first characters of the name when there is none.
-fn extension_label(filename: &str) -> String {
+///
+/// `pub(crate)`: also used by `Lumen::chrome_model_snapshot`
+/// (`ChromeDownloadModel::ext_label`, CC-9) so the engine-rendered popover's
+/// badge text matches the legacy overlay's exactly.
+pub(crate) fn extension_label(filename: &str) -> String {
     let label = match std::path::Path::new(filename).extension().and_then(|e| e.to_str()) {
         Some(ext) => ext.to_string(),
         None => filename.to_string(),
@@ -996,7 +1009,9 @@ fn extension_label(filename: &str) -> String {
     label.to_uppercase().chars().take(4).collect()
 }
 
-fn human_bytes(b: u64) -> String {
+/// `pub(crate)`: also used by `Lumen::chrome_model_snapshot`
+/// (`ChromeDownloadModel::meta`, CC-9).
+pub(crate) fn human_bytes(b: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;
     const GB: u64 = 1024 * MB;

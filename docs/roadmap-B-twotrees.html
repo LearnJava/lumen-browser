@@ -3777,9 +3777,9 @@
       {
        "id": "CC-9",
        "title": "CC-9: Поповеры — батч 1",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Dropdown омнибокса (клоны шаблона), поповер разрешений/щита, панель загрузок, find-bar; позиционирование CSS absolute/fixed вместо ручных координат; legacy-аналоги при флаге отключены. После CC-7"
+       "note": "Закрыто (2026-07-25, P1). Структурный блокер: `#findBar`/`#downloadsPanel` — дети `#contentArea`, а `relayout_chrome_host` целиком выпиливал `#contentArea` из дерева (CC-4) — новый `take_content_area` (main.rs) спасает эти два узла обратно на место `#contentArea` перед покраской (position:absolute не создаёт свой stacking context у `#contentArea`, поэтому пересадка не меняет z-порядок — 2 unit-теста подтверждают). `#omniDropdown` (реальные саджесты из `AddressBarState::suggestions()`, клик коммитит через новый `AddressBarState::commit_suggestion`), `#findBar` (value/count из `FindState`, легаси-бар выключен под флагом), `#downloadsPanel` (реальные `DownloadEntry` вместо демо-карточек), `#permPopover` (реальный `blocked_total`, 2 permission-строки Camera/Microphone через новый `PermissionPanel::set_permission` — прямая установка, не cycle, т.к. в макете 2 отдельные кнопки без \"ask\"). Per-download-card кнопки Open/Reveal/Cancel — вне DoD: в замороженном `docs/design/lumen-v3_3.html` у них нет onclick вообще (чисто декоративные в макете), тот же класс пробела что CC-6 `SetProfile`. `#statAds`/`#statFp` остаются \"0\" — `ShieldsPanel` хранит только один честный total, разбивку трекеры/реклама/fingerprint фабриковать не стали. 14 новых тестов `cargo test -p lumen-chrome` (35/35) + 2 новых `cargo test -p lumen-shell` (1703/1703) + workspace clippy зелёные. После CC-7"
       },
       {
        "id": "CC-10",

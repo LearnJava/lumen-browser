@@ -5747,19 +5747,60 @@ fn collect_layout_rects_rec(lb: &LayoutBox, map: &mut HashMap<u32, [f32; 4]>) {
     }
 }
 
-/// CC-4: removes and returns the [`LayoutBox`] for `node` from `lb`'s
-/// subtree (depth-first, first match), used by
-/// [`Lumen::relayout_chrome_host`] to prune `#contentArea` out of the chrome
-/// layout tree entirely before painting — not just its children, but its own
-/// box (and background paint command) too, so the real page painted
-/// separately at that rect is never covered by it. Never matches `lb`
-/// itself, only descendants — `#contentArea` is never the chrome document's
-/// root box.
-fn take_layout_box_by_node(lb: &mut LayoutBox, node: lumen_dom::NodeId) -> Option<LayoutBox> {
+/// CC-4/CC-9: removes `#contentArea`'s [`LayoutBox`] from `lb`'s subtree
+/// (depth-first, first match) — not just its children, but its own box (and
+/// background paint command) too, so the real page painted separately at
+/// that rect is never covered by it. Never matches `lb` itself, only
+/// descendants — `#contentArea` is never the chrome document's root box.
+///
+/// CC-9: two of `#contentArea`'s own children — `#findBar`, `#downloadsPanel`
+/// — are real popovers this pass *does* want painted (they sit outside the
+/// pruned rect via `position:absolute`, CSS Positioned Layout L3 §9.10, so
+/// splicing them elsewhere in the tree does not change which stacking
+/// context they join: `#contentArea` itself creates none). `salvage_ids`
+/// lists which descendant node ids to keep; they're spliced back into `lb`
+/// at the exact slot `#contentArea` occupied, preserving both their absolute
+/// paint rects (already resolved by the out-of-flow layout pass) and their
+/// tree-order position relative to `#contentArea`'s former siblings.
+fn take_content_area(
+    lb: &mut LayoutBox,
+    node: lumen_dom::NodeId,
+    salvage_ids: &[&str],
+    doc: &lumen_dom::Document,
+) -> Option<Rect> {
     if let Some(idx) = lb.children.iter().position(|c| c.node == node) {
-        return Some(lb.children.remove(idx));
+        let mut removed = lb.children.remove(idx);
+        let rect = removed.rect;
+        let mut salvaged = Vec::new();
+        salvage_layout_boxes(&mut removed, salvage_ids, doc, &mut salvaged);
+        for (offset, b) in salvaged.into_iter().enumerate() {
+            lb.children.insert(idx + offset, b);
+        }
+        return Some(rect);
     }
-    lb.children.iter_mut().find_map(|child| take_layout_box_by_node(child, node))
+    lb.children.iter_mut().find_map(|child| take_content_area(child, node, salvage_ids, doc))
+}
+
+/// Depth-first: removes every descendant of `lb` whose element id is in
+/// `salvage_ids`, appending it to `out` in tree order. Used by
+/// [`take_content_area`] to rescue specific popovers out of `#contentArea`
+/// before the rest of its subtree is discarded.
+fn salvage_layout_boxes(
+    lb: &mut LayoutBox,
+    salvage_ids: &[&str],
+    doc: &lumen_dom::Document,
+    out: &mut Vec<LayoutBox>,
+) {
+    let mut i = 0;
+    while i < lb.children.len() {
+        let matches = doc.get(lb.children[i].node).get_attr("id").is_some_and(|id| salvage_ids.contains(&id));
+        if matches {
+            out.push(lb.children.remove(i));
+        } else {
+            salvage_layout_boxes(&mut lb.children[i], salvage_ids, doc, out);
+            i += 1;
+        }
+    }
 }
 
 /// Строит display list с правильным painting order (CSS 2.1 Appendix E, z-index stacking).
@@ -8440,8 +8481,11 @@ impl Lumen {
     /// permanently hide the real page behind either the placeholder markup or
     /// `#contentArea`'s own `background:var(--surface-0)` fill. This pass
     /// therefore removes `#contentArea` from the tree entirely
-    /// ([`take_layout_box_by_node`]) right after layout, capturing its rect
-    /// into `chrome_page_host_rect` first, and before [`paint_ordered`].
+    /// ([`take_content_area`]) right after layout, capturing its rect into
+    /// `chrome_page_host_rect` first, and before [`paint_ordered`] — except
+    /// `#findBar`/`#downloadsPanel` (CC-9), salvaged back into the tree at
+    /// `#contentArea`'s former slot since they're real popovers, not preview
+    /// placeholder content.
     fn relayout_chrome_host(&mut self) {
         if self.chrome_doc.is_none() {
             return;
@@ -8475,12 +8519,14 @@ impl Lumen {
             self.dark_mode,
         );
         lumen_layout::clear_interactive_state();
+        // CC-9: `#findBar`/`#downloadsPanel` are salvaged out of
+        // `#contentArea` before the rest of it is discarded — see
+        // `take_content_area`'s doc comment.
         self.chrome_page_host_rect = doc
             .find_by_id(lumen_chrome::ids::CONTENT_AREA)
-            .and_then(|id| take_layout_box_by_node(&mut layout, id))
-            .map(|content_area| content_area.rect);
-        // CC-7: captured non-destructively (unlike `#contentArea` above) —
-        // `#omniInput` stays in the tree and paints normally.
+            .and_then(|id| take_content_area(&mut layout, id, &[lumen_chrome::ids::FIND_BAR, lumen_chrome::ids::DOWNLOADS_PANEL], doc));
+        // CC-7/CC-9: captured non-destructively (unlike `#contentArea`
+        // above) — these nodes stay in the tree and paint normally.
         self.chrome_omni_input_rect = omni_input
             .and_then(|id| lumen_layout::find_box_by_node(&layout, id))
             .map(|b| b.rect);
@@ -8534,6 +8580,87 @@ impl Lumen {
         // for the legacy overlay text, retargeted at `#omniInput`'s `value`.
         let (omnibox_value, omnibox_warning) =
             address_bar::chrome_omnibox_value(&self.address_bar, self.current_display_url());
+        // CC-9: same `MAX_VISIBLE` cap the legacy `address_bar::build_dropdown`
+        // applies — the asset's `.dropdown` isn't scroll-clipped, so an
+        // uncapped list would grow the popover past its designed height.
+        let dropdown_suggestions: Vec<lumen_chrome::ChromeSuggestionModel> = self
+            .address_bar
+            .suggestions()
+            .iter()
+            .take(address_bar::MAX_VISIBLE)
+            .enumerate()
+            .map(|(idx, s)| lumen_chrome::ChromeSuggestionModel {
+                idx,
+                label: s.label().to_owned(),
+                sub_label: s.sub_label().to_owned(),
+                color: Self::chrome_hex_color(s.tag_color()),
+            })
+            .collect();
+        let dropdown = lumen_chrome::ChromeDropdownModel {
+            open: self.address_bar.is_open() && !dropdown_suggestions.is_empty(),
+            suggestions: dropdown_suggestions,
+        };
+        // CC-9: `current_matches()` re-scans the display list for the query —
+        // cheap relative to a full relayout, and this snapshot only runs on
+        // explicit chrome-relayout triggers (resize/click/key), not every
+        // `RedrawRequested` frame (see `Self::relayout_chrome_host`'s doc).
+        let find_matches_len = if self.find.is_open() { self.current_matches().len() } else { 0 };
+        let find = lumen_chrome::ChromeFindModel {
+            open: self.find.is_open(),
+            value: self.find.query().to_owned(),
+            count_label: if find_matches_len == 0 {
+                "0/0".to_owned()
+            } else {
+                format!("{}/{}", self.find.active_index() + 1, find_matches_len)
+            },
+        };
+        let downloads: Vec<lumen_chrome::ChromeDownloadModel> = self
+            .downloads
+            .entries()
+            .iter()
+            .map(|d| {
+                let (meta, progress_fraction) = match &d.status {
+                    download::DownloadStatus::Pending => ("В очереди…".to_owned(), None),
+                    download::DownloadStatus::InProgress => {
+                        let text = match d.total {
+                            Some(t) if t > 0 => format!(
+                                "{} / {} — идёт загрузка…",
+                                download::human_bytes(d.received),
+                                download::human_bytes(t)
+                            ),
+                            _ => "Загрузка…".to_owned(),
+                        };
+                        (text, Some(d.progress_fraction().unwrap_or(0.6)))
+                    }
+                    download::DownloadStatus::Done { bytes } => {
+                        (format!("{} — готово", download::human_bytes(*bytes)), None)
+                    }
+                    download::DownloadStatus::Failed(reason) => (format!("Ошибка: {reason}"), None),
+                    download::DownloadStatus::Cancelled => ("Отменено".to_owned(), None),
+                };
+                lumen_chrome::ChromeDownloadModel {
+                    id: d.id.raw(),
+                    ext_label: download::extension_label(&d.filename),
+                    name: d.filename.clone(),
+                    meta,
+                    progress_fraction,
+                }
+            })
+            .collect();
+        // CC-9: the frozen design merges shields' blocked-count and the
+        // permission rows into one `#permPopover` — no separate engine
+        // control exists for `PermissionPanel::visible` (`Ctrl+Shift+P`), so
+        // either legacy toggle shows it.
+        let popover_open = self.shields.visible || self.permission.visible;
+        let permissions = [
+            panels::permission_panel::PermissionKind::Camera,
+            panels::permission_panel::PermissionKind::Microphone,
+        ]
+        .map(|kind| match self.permission.state_for(kind) {
+            panels::permission_panel::PermissionState::Allow => lumen_chrome::ChromePermState::Allow,
+            panels::permission_panel::PermissionState::Deny => lumen_chrome::ChromePermState::Deny,
+            panels::permission_panel::PermissionState::Ask => lumen_chrome::ChromePermState::Ask,
+        });
         lumen_chrome::ChromeModel {
             dark_theme: self.dark_mode,
             layout_vertical: self.vertical_tabs.visible,
@@ -8545,6 +8672,13 @@ impl Lumen {
                 warning: omnibox_warning.map(str::to_owned),
             },
             sidebar_collapsed: self.chrome_sidebar_collapsed,
+            dropdown,
+            find,
+            downloads_open: self.downloads.visible,
+            downloads,
+            popover_open,
+            blocked_total: self.shields.blocked_total_count(),
+            permissions,
         }
     }
 
@@ -8676,7 +8810,14 @@ impl Lumen {
                 let cert = self.cert_info.clone();
                 self.cert_panel.toggle(cert);
             }
-            ChromeAction::ToggleShieldPopover => self.shields.toggle(),
+            ChromeAction::ToggleShieldPopover => {
+                self.shields.toggle();
+                // CC-9: `#permPopover`'s `.open` class is baked into
+                // `chrome_layout` at `relayout_chrome_host` time, same gap
+                // CC-7 found for `#omniInput` — without this the popover
+                // wouldn't show until some other trigger relayouts chrome.
+                self.relayout_chrome_host();
+            }
             ChromeAction::ToggleFind => {
                 if self.find.is_open() {
                     self.find.close();
@@ -8684,13 +8825,17 @@ impl Lumen {
                     self.hint.close();
                     self.find.open();
                 }
+                self.relayout_chrome_host();
             }
             ChromeAction::OpenWebSidebar => self.sidebar.toggle(),
             ChromeAction::OpenAiSidebar => {
                 self.ai_panel.toggle();
                 self.relayout_chrome();
             }
-            ChromeAction::ToggleDownloads => self.downloads.toggle_visible(),
+            ChromeAction::ToggleDownloads => {
+                self.downloads.toggle_visible();
+                self.relayout_chrome_host();
+            }
             ChromeAction::OpenPrintDialog => self.print_panel.toggle(),
             ChromeAction::ToggleDevtools => self.devtools_console.toggle(),
             ChromeAction::ToggleProfileMenu => {
@@ -8753,17 +8898,59 @@ impl Lumen {
                 self.chrome_sidebar_collapsed = !self.chrome_sidebar_collapsed;
                 self.relayout_chrome_host();
             }
+            // CC-9: `#omniDropdown` rows carry `data-sugg-idx` (stamped by
+            // `bind_dropdown`, mirroring `data-tab-id`) — resolve it back to
+            // `AddressBarState::suggestions()[idx]` and commit exactly like
+            // `AddressBarState::commit()`'s `selected_idx` branch would, just
+            // without requiring keyboard navigation to have set that index
+            // first.
+            ChromeAction::OmniGo => {
+                if let Some(idx) =
+                    self.chrome_data_id(nid, "data-sugg-idx").and_then(|i| usize::try_from(i).ok())
+                {
+                    self.address_bar.commit_suggestion(idx);
+                    if let Some(value) = self.address_bar.take_commit() {
+                        self.handle_omnibox_commit(value);
+                    }
+                    self.relayout_chrome_host();
+                }
+            }
+            // CC-9: resolves the clicked button's `.perm-row` ancestor back
+            // to a `PermissionKind` by position (the asset's two static rows
+            // are Camera then Microphone, `PermissionKind::ALL`'s first two —
+            // see `Self::chrome_permission_kind_for_node`), then sets it
+            // directly per `data-perm` ("allow"/"deny"). Unlike the legacy
+            // panel's single cycle button, the design has two distinct
+            // buttons with no "ask" control, so this sets state directly
+            // rather than calling `PermissionPanel::cycle_permission`.
+            ChromeAction::SetPermission => {
+                if let Some(kind) = self.chrome_permission_kind_for_node(nid)
+                    && let Some(perm) = self
+                        .chrome_doc
+                        .as_ref()
+                        .and_then(|(doc, _)| doc.get(nid).get_attr("data-perm"))
+                {
+                    let state = match perm {
+                        "allow" => Some(panels::permission_panel::PermissionState::Allow),
+                        "deny" => Some(panels::permission_panel::PermissionState::Deny),
+                        _ => None,
+                    };
+                    if let Some(state) = state {
+                        self.permission.set_permission(kind, state);
+                        self.relayout_chrome_host();
+                    }
+                }
+            }
             // Demo-only actions on the static preview markup: no shell state
-            // backs them yet (CC-9/CC-10 popover migration). Recognised (so
-            // the click doesn't fall through to legacy geometry) but
-            // otherwise a no-op for now. `SetProfile` specifically: the
-            // profile-menu popover is still a legacy overlay (its click
-            // handling — and the actual `profiles.set_active` call — lives
-            // in the `WindowEvent::MouseInput` legacy-popover branch, not
-            // here), and `ChromeModel` already reflects whatever profile
-            // that path activates on the very next relayout.
+            // backs them yet (CC-10 panel migration). Recognised (so the
+            // click doesn't fall through to legacy geometry) but otherwise a
+            // no-op for now. `SetProfile` specifically: the profile-menu
+            // popover is still a legacy overlay (its click handling — and
+            // the actual `profiles.set_active` call — lives in the
+            // `WindowEvent::MouseInput` legacy-popover branch, not here),
+            // and `ChromeModel` already reflects whatever profile that path
+            // activates on the very next relayout.
             ChromeAction::SetProfile
-            | ChromeAction::SetPermission
             | ChromeAction::ArchiveCard
             | ChromeAction::SetSettingsSection
             | ChromeAction::ToggleSwitch
@@ -8773,9 +8960,29 @@ impl Lumen {
             | ChromeAction::ToggleFocus
             | ChromeAction::SetSidebarTab
             | ChromeAction::CloseRightSidebar
-            | ChromeAction::SetDevtoolsTab
-            | ChromeAction::OmniGo => {}
+            | ChromeAction::SetDevtoolsTab => {}
         }
+    }
+
+    /// CC-9: walks up from `nid` (a `.perm-btn` inside `#permPopover`) to its
+    /// `.perm-row` ancestor, then resolves that row's position among
+    /// `#permPopover`'s `.perm-row` children to a [`PermissionKind`] —
+    /// `PermissionKind::ALL`'s first two entries, matching the frozen
+    /// design's fixed row order (Camera, Microphone; it has no rows for
+    /// Notifications/Clipboard). `None` if `nid` isn't inside a `.perm-row`,
+    /// or the row's index has no matching kind.
+    fn chrome_permission_kind_for_node(&self, nid: NodeId) -> Option<panels::permission_panel::PermissionKind> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        let has_class = |id: NodeId, class: &str| {
+            doc.get(id).get_attr("class").is_some_and(|c| c.split_whitespace().any(|t| t == class))
+        };
+        let mut cur = doc.get(nid).parent?;
+        while !has_class(cur, "perm-row") {
+            cur = doc.get(cur).parent?;
+        }
+        let popover = doc.find_by_id(lumen_chrome::ids::PERM_POPOVER)?;
+        let idx = doc.get(popover).children.iter().copied().filter(|&c| has_class(c, "perm-row")).position(|c| c == cur)?;
+        panels::permission_panel::PermissionKind::ALL.get(idx).copied()
     }
 
     /// ADR-016 M2.2b: route an **async-safe chrome-inset relayout** off the UI
@@ -14962,21 +15169,32 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 let (mut page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
                     if self.find.is_open() {
-                        let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                            let s = w.inner_size();
-                            (s.width, s.height)
-                        });
                         let matches = self.current_matches();
                         let page = find::build_page_with_highlights(
                             &self.display_list,
                             &self.find,
                             &matches,
                         );
-                        let bar = find::build_bar_overlay(
-                            &self.find,
-                            matches.len(),
-                            find::BarOverlay { window_size: win_size },
-                        );
+                        // CC-9: the bar itself is gated off the flag — under
+                        // `LUMEN_CSS_CHROME=1` it's rendered by the engine
+                        // chrome instead (`#findBar`, bound in
+                        // `Self::relayout_chrome_host`), mirroring the CC-5
+                        // gate a few lines below for the tab-bar/toolbar/
+                        // dropdown. The highlighted-page overlay above is
+                        // page content, not chrome, and stays unconditional.
+                        let bar = if self.css_chrome_enabled {
+                            Vec::new()
+                        } else {
+                            let win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                                let s = w.inner_size();
+                                (s.width, s.height)
+                            });
+                            find::build_bar_overlay(
+                                &self.find,
+                                matches.len(),
+                                find::BarOverlay { window_size: win_size },
+                            )
+                        };
                         (Some(page), bar)
                     } else {
                         (None, Vec::new())
@@ -19430,6 +19648,14 @@ impl Lumen {
                 }
             }
         }
+        // CC-9 (docs/tasks/p1-css-chrome.md): `#findBar`'s engine-rendered
+        // value/count (`Self::chrome_model_snapshot`) is baked into
+        // `self.chrome_layout` at `relayout_chrome_host` time, not
+        // recomputed every `RedrawRequested` — every branch above mutates
+        // `self.find`, so without this call the on-screen bar would keep
+        // showing stale text/count. Mirrors the same call at the end of
+        // `Self::handle_address_bar_key` (CC-7). No-op off the flag.
+        self.relayout_chrome_host();
     }
 
     /// Handle a key while the bookmark panel search box is focused.
@@ -23282,6 +23508,76 @@ mod tests {
                 a: 255,
             }
         );
+    }
+
+    // ── CC-9: #contentArea pruning salvages #findBar/#downloadsPanel ────────
+
+    #[test]
+    fn take_content_area_salvages_find_bar_and_downloads_panel() {
+        let html = concat!(
+            "<html><body>",
+            "<div id=\"before\"></div>",
+            "<div id=\"contentArea\">",
+            "<div id=\"placeholder\">demo</div>",
+            "<div id=\"findBar\">find</div>",
+            "<div id=\"downloadsPanel\">downloads</div>",
+            "</div>",
+            "<div id=\"after\"></div>",
+            "</body></html>",
+        );
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let mut layout = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let content_area = doc.find_by_id("contentArea").expect("fixture has #contentArea");
+
+        let rect = take_content_area(&mut layout, content_area, &["findBar", "downloadsPanel"], &doc);
+        assert!(rect.is_some(), "must return #contentArea's own rect");
+
+        assert!(
+            lumen_layout::find_box_by_node(&layout, content_area).is_none(),
+            "#contentArea's own box must be gone"
+        );
+        let placeholder = doc.find_by_id("placeholder").expect("fixture has #placeholder");
+        assert!(
+            lumen_layout::find_box_by_node(&layout, placeholder).is_none(),
+            "non-salvaged descendants of #contentArea must be discarded"
+        );
+
+        let find_bar = doc.find_by_id("findBar").expect("fixture has #findBar");
+        let downloads_panel = doc.find_by_id("downloadsPanel").expect("fixture has #downloadsPanel");
+        assert!(lumen_layout::find_box_by_node(&layout, find_bar).is_some(), "#findBar must be salvaged");
+        assert!(
+            lumen_layout::find_box_by_node(&layout, downloads_panel).is_some(),
+            "#downloadsPanel must be salvaged"
+        );
+
+        // Salvaged boxes must land at #contentArea's former slot, in document
+        // order, as direct children of #contentArea's former parent (<body>)
+        // — not nested under some other unrelated box.
+        let body_box = lumen_layout::find_box_by_node(&layout, doc.body().expect("fixture has <body>"))
+            .expect("<body> must have a layout box");
+        let before = doc.find_by_id("before").expect("fixture has #before");
+        let after = doc.find_by_id("after").expect("fixture has #after");
+        let order: Vec<NodeId> = body_box.children.iter().map(|b| b.node).collect();
+        assert_eq!(order, vec![before, find_bar, downloads_panel, after]);
+    }
+
+    #[test]
+    fn take_content_area_with_no_salvage_ids_behaves_like_a_plain_prune() {
+        let html = concat!(
+            "<html><body>",
+            "<div id=\"contentArea\"><div id=\"placeholder\">demo</div></div>",
+            "</body></html>",
+        );
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let mut layout = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let content_area = doc.find_by_id("contentArea").expect("fixture has #contentArea");
+
+        assert!(take_content_area(&mut layout, content_area, &[], &doc).is_some());
+        assert!(lumen_layout::find_box_by_node(&layout, content_area).is_none());
+        let placeholder = doc.find_by_id("placeholder").expect("fixture has #placeholder");
+        assert!(lumen_layout::find_box_by_node(&layout, placeholder).is_none());
     }
 
     // ── Ph3 P3-bfcache: Cache-Control: no-store eligibility filter ──────────

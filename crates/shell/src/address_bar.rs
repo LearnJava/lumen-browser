@@ -66,8 +66,9 @@ const ITEM_H: f32 = 36.0;
 const ITEM_LABEL_SZ: f32 = 13.0;
 const ITEM_SUB_SZ: f32 = 11.0;
 const ITEM_PAD: f32 = 8.0;
-/// Максимум строк в dropdown.
-const MAX_VISIBLE: usize = 7;
+/// Максимум строк в dropdown. Also the cap `Lumen::chrome_model_snapshot`
+/// applies to `#omniDropdown`'s rebuilt row list (CC-9).
+pub(crate) const MAX_VISIBLE: usize = 7;
 /// Максимальная длина строки ввода. Защита от случайной paste-атаки.
 const MAX_INPUT_LEN: usize = 2048;
 /// Высота красной строки-предупреждения о спуфинге (DS-6), рисуется под
@@ -358,7 +359,9 @@ impl OmniboxSuggestion {
         }
     }
 
-    fn tag_color(&self) -> Color {
+    /// CC-9: also read by `Lumen::chrome_model_snapshot` for `#omniDropdown`'s
+    /// `.dd-icon` swatch color, mirroring the legacy overlay's own tag color.
+    pub(crate) fn tag_color(&self) -> Color {
         match self {
             OmniboxSuggestion::HistoryFts { .. } => HISTORY_TAG,
             OmniboxSuggestion::Note { .. } => Color { r: 180, g: 120, b: 60, a: 255 },
@@ -497,6 +500,20 @@ impl AddressBarState {
     /// Caller обязан обработать результат в этом же кадре.
     pub fn take_commit(&mut self) -> Option<String> {
         self.pending_commit.take()
+    }
+
+    /// Фиксирует подсказку `idx` напрямую (CC-9: клик по движковому
+    /// `#omniDropdown` не проходит через `selected_idx`, который отслеживает
+    /// только клавиатурную навигацию) — та же spoof-guard и
+    /// close-затем-pending_commit последовательность, что и в [`Self::commit`].
+    pub fn commit_suggestion(&mut self, idx: usize) {
+        if !self.open {
+            return;
+        }
+        let value = self.suggestions.get(idx).map(|s| s.commit_value().to_owned());
+        let value = value.map(|v| guard_display_text(&v).0);
+        self.close();
+        self.pending_commit = value;
     }
 }
 
