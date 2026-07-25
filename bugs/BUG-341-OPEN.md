@@ -4,6 +4,43 @@
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
 **Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
 
+## Follow-up (P1, 2026-07-25, fourth session): profiled the *remaining* cost — the "layout-result cache" plan is insufficient; real fix is incremental **cascade** + layout
+
+Re-profiled the current code (main + all three prior fixes below) with
+`LUMEN_PROFILE_TREE=1`, averaged over 77 `layout_measured_hyp` passes of
+`cc12_chrome_perf_gate` (dev-release). Split of one full layout pass:
+
+| Stage | Avg | Share | What it does |
+|---|---:|---:|---|
+| `precompute_counters` | 155 ms | **53 %** | **full style cascade** — one `compute_style` per node, cached into `CounterMap::styles` for `build_box` |
+| `lay_out` | 102 ms | **35 %** | box placement (where `lay_out_flex`'s double-layout lived) |
+| `build_box` | 22 ms | 8 % | box-tree construction (reuses the cascade cache) |
+| `post_layout_passes` | 3 ms | 1 % | container queries, anchor, first-line split |
+
+(Absolute ms ~3× this machine's runs vs. the `p50≈85 ms` recorded below — a
+machine/contention difference; the **relative split is the load-bearing result**
+and is stable across runs. Clean re-measure this session: `CC12_HOVER
+p50≈298 ms p95≈487 ms`, `CC12_KEY p50≈245 ms p95≈313 ms` — same shape, higher
+absolute.)
+
+**This overturns the "Fix scope note" plan below.** A layout-result cache
+targets only `lay_out` — **35 %** of the cost. Even making `lay_out` free leaves
+`precompute_counters` (53 %) + `build_box` (8 %) = **61 %** standing (~52 ms on
+the reference machine, still **~26× over the 2 ms budget**). The dominant cost
+is the **style cascade**, which *every* current entry point —
+`layout_measured_hyp`, `layout_streaming_incremental`,
+`layout_mutation_incremental` — recomputes in full every call. There is **no
+persistent per-node `ComputedStyle` cache and no restyle-damage model** today.
+
+**Correct fix (design brief: [`docs/tasks/p1-bug341-incremental-restyle.md`](../docs/tasks/p1-bug341-incremental-restyle.md)):**
+make per-interaction work O(changed subtree) across *all three* stages —
+incremental cascade (restyle-damage + a persisted `ComputedStyle` cache) +
+incremental box-build + the already-existing incremental layout. This is a
+Servo/Blink-class incremental-restyle system on the hottest, most correctness-
+sensitive path in the engine; sliced S1–S6 in the brief, each gated on an
+`incremental == full` bit-identical differential test plus graphic tests / CPU
+snapshots. S1 (this profiling + the brief) is done; S2+ is the implementation.
+
 ## Симптом
 
 CC-12's perf gate measures exactly the mutate→restyle→relayout→paint cycle
