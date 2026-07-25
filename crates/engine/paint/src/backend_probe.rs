@@ -25,8 +25,24 @@
 //!   цепочка DX12 → Vulkan → GL (поведение до яруса 0);
 //! - `LUMEN_FRAME_LOG=1` — подробный лог сигналов по каждому кандидату.
 //!
-//! Побочный эффект: на время пробы (~0.2–1 с) окно показывает кадр(ы)
-//! пробного цвета — осознанная плата за автоматический выбор API.
+//! Побочный эффект: на время пробы (~0.2–1 с на кандидата, до ~1.7 с суммарно
+//! на первом запуске) окно показывает кадр(ы) пробного цвета — осознанная
+//! плата за автоматический выбор API.
+//!
+//! **Кэш результата (BUG-274, "Probe 1.7с — кэшировать выбранный API между
+//! запусками").** Кандидат, принятый в прошлый раз, пробуется первым при
+//! следующем запуске — на типичной машине (одна и та же GPU/драйвер) это
+//! сокращает пробу с 3 кандидатов до 1 (~1.7с → ~0.4–0.5с). Кэш не меняет
+//! правильность выбора: принятый кандидат всё равно проходит ту же полную
+//! валидацию (readback + захват презентации через DWM) — устаревший или
+//! неверный кэш просто отклоняется пробой и проба сама скатывается на
+//! оставшихся двух кандидатов в обычном порядке (self-healing, не риск).
+//! Файл — `<exe_dir>/data/paint/backend_probe.txt`, единственная строка —
+//! короткое имя кандидата ("Vulkan"/"GL"/"DX12"). Тот же портативный
+//! конвенция, что `shell::adblock::browser_data_dir` (только папка браузера,
+//! никогда OS-каталоги) — paint не может зависеть от shell (архитектурное
+//! направление `lumen-core → … → paint → shell`), поэтому здесь свой
+//! маленький самодостаточный резолвер `<exe_dir>/data`.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -122,8 +138,63 @@ fn probe_disabled() -> bool {
         || std::env::var("WGPU_BACKEND").is_ok_and(|v| !v.trim().is_empty())
 }
 
+/// `<exe_dir>/data/paint/backend_probe.txt` — портативное хранилище кэша
+/// пробы (не OS-каталог), см. модульную документацию. Падает на
+/// относительный `data/paint/...`, если путь исполняемого файла недоступен.
+fn cache_path() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.join("data").join("paint")))
+        .unwrap_or_else(|| std::path::PathBuf::from("data/paint"))
+        .join("backend_probe.txt")
+}
+
+/// Читает закэшированного победителя прошлой пробы. `None` — файла нет,
+/// нечитаем или содержит не одно из трёх известных имён (проба тогда идёт
+/// в исходном порядке Vulkan → GL → DX12, как без кэша).
+fn read_cached_backend() -> Option<wgpu::Backends> {
+    match std::fs::read_to_string(cache_path()).ok()?.trim() {
+        "Vulkan" => Some(wgpu::Backends::VULKAN),
+        "GL" => Some(wgpu::Backends::GL),
+        "DX12" => Some(wgpu::Backends::DX12),
+        _ => None,
+    }
+}
+
+/// Сохраняет принятого пробой кандидата для следующего запуска.
+/// Best-effort: любая ошибка ФС (нет прав на запись в `data/`, диск только
+/// для чтения) молча игнорируется — следующий запуск просто снова пройдёт
+/// полную пробу без кэша, поведение не хуже, чем до этого среза.
+fn write_cached_backend(name: &str) {
+    let path = cache_path();
+    if let Some(dir) = path.parent()
+        && std::fs::create_dir_all(dir).is_err()
+    {
+        return;
+    }
+    let _ = std::fs::write(path, name);
+}
+
+/// Переставляет `cached` (если он есть среди `candidates`) на первое место,
+/// не трогая относительный порядок остальных. Чистая функция — тестируется
+/// без wgpu-контекста.
+fn reorder_by_cache<T: Copy>(
+    candidates: [(wgpu::Backends, T); 3],
+    cached: Option<wgpu::Backends>,
+) -> Vec<(wgpu::Backends, T)> {
+    let mut order: Vec<(wgpu::Backends, T)> = candidates.to_vec();
+    if let Some(cached) = cached
+        && let Some(pos) = order.iter().position(|(b, _)| *b == cached)
+    {
+        let hit = order.remove(pos);
+        order.insert(0, hit);
+    }
+    order
+}
+
 /// Авто-проба бэкендов: возвращает первый кандидат из цепочки
-/// Vulkan → GL → DX12, чей пробный кадр реально виден на экране.
+/// Vulkan → GL → DX12 (или закэшированный кандидат первым, см. модульную
+/// документацию), чей пробный кадр реально виден на экране.
 ///
 /// `None` — проба выключена/неприменима (env-override, не Windows) или все
 /// кандидаты провалились; вызывающий код использует статическую цепочку.
@@ -139,6 +210,7 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<wgpu::Backends> {
         (wgpu::Backends::GL, "GL"),
         (wgpu::Backends::DX12, "DX12"),
     ];
+    let candidates = reorder_by_cache(candidates, read_cached_backend());
     for (backends, name) in candidates {
         let t0 = Instant::now();
         match probe_candidate(window, backends).await {
@@ -160,6 +232,7 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<wgpu::Backends> {
                         "[probe] бэкенд выбран за {} мс: {name}",
                         started.elapsed().as_millis()
                     );
+                    write_cached_backend(name);
                     return Some(backends);
                 }
             }
@@ -628,5 +701,57 @@ mod tests {
         assert_eq!(expected_byte(0.25, false), 64);
         let srgb = expected_byte(0.25, true);
         assert!((130..=143).contains(&srgb), "sRGB(0.25) ≈ 137, получили {srgb}");
+    }
+
+    const CANDIDATES: [(wgpu::Backends, &str); 3] = [
+        (wgpu::Backends::VULKAN, "Vulkan"),
+        (wgpu::Backends::GL, "GL"),
+        (wgpu::Backends::DX12, "DX12"),
+    ];
+
+    #[test]
+    fn reorder_by_cache_no_cache_keeps_default_order() {
+        let order = reorder_by_cache(CANDIDATES, None);
+        assert_eq!(order, CANDIDATES.to_vec());
+    }
+
+    #[test]
+    fn reorder_by_cache_moves_cached_candidate_first() {
+        let order = reorder_by_cache(CANDIDATES, Some(wgpu::Backends::DX12));
+        assert_eq!(
+            order,
+            vec![
+                (wgpu::Backends::DX12, "DX12"),
+                (wgpu::Backends::VULKAN, "Vulkan"),
+                (wgpu::Backends::GL, "GL"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reorder_by_cache_already_first_is_noop() {
+        let order = reorder_by_cache(CANDIDATES, Some(wgpu::Backends::VULKAN));
+        assert_eq!(order, CANDIDATES.to_vec());
+    }
+
+    #[test]
+    fn reorder_by_cache_unknown_backend_keeps_default_order() {
+        // Не одно из трёх известных значений (например, PRIMARY) — не находится
+        // в `candidates`, порядок не меняется.
+        let order = reorder_by_cache(CANDIDATES, Some(wgpu::Backends::PRIMARY));
+        assert_eq!(order, CANDIDATES.to_vec());
+    }
+
+    #[test]
+    fn cache_roundtrip_writes_and_reads_back() {
+        // cache_path() резолвится от current_exe() — при `cargo test` это тестовый
+        // бинарник в target/…/deps/, поэтому запись реально изолирована per-run
+        // (не пересекается с production `lumen.exe`).
+        let path = cache_path();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(read_cached_backend(), None);
+        write_cached_backend("DX12");
+        assert_eq!(read_cached_backend(), Some(wgpu::Backends::DX12));
+        let _ = std::fs::remove_file(&path);
     }
 }
