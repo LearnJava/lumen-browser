@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-25",
  "counts": {
-  "open": 37,
+  "open": 38,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 309,
+ "total_bugs": 310,
  "phases": [
   {
    "id": "P0",
@@ -3787,9 +3787,9 @@
       {
        "id": "CC-12",
        "title": "CC-12: Перф-гейт хрома",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Бенч (по образцу bench_frames.rs): цикл мутация→рестайл→релэйаут→paint chrome-документа (~400 узлов) на hover-флип и символ ввода; бюджет ≤2 мс; при провале — layout_mutation_incremental для хрома. После CC-7"
+       "note": "Закрыто (2026-07-25, P1). Headless-тест `cc12_chrome_perf_gate_hover_and_keystroke_cycles` (`crates/shell/src/main.rs`, `#[ignore]`) вместо живого `LUMEN_BENCH` — таймит ровно тело `relayout_chrome_host` (`bind_model`→`layout_measured_hyp`→`paint_ordered`), GPU не трогает (frame-бенч измерил бы не то). Числа (dev-release, 6 вкладок/3 воркспейса, warmup=10 samples=60): `CC12_HOVER p50=587ms p95=744ms`, `CC12_KEY p50=575ms p95=637ms` — бюджет 2мс НЕ выдержан, ~300×. Разбивка по стадиям: `bind_model`/`paint_ordered` <1мс каждая, вся стоимость внутри `layout_measured_hyp`, не масштабируется от роста `Document::node_count()` под несобранным мусором повторных `bind_model` — не артефакт бенча, реальная примерно-постоянная цена полного layout-прохода (риск №3 брифа материализовался кратно хуже ожидания). Заведён BUG-341 — жёсткий блокер CC-14 (сама оптимизация `layout_mutation_incremental` вне DoD этого S-среза). Гейт (тест+assert на бюджет) сделан и намеренно остаётся красным, пока BUG-341 открыт. После CC-7"
       },
       {
        "id": "CC-13",
@@ -6073,6 +6073,13 @@
    "component": "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-341": {
+   "status": "open",
+   "title": "Новый headless перф-гейт CC-12 (`cc12_chrome_perf_gate_hover_and_keystroke_cycles`) показал `relayout_chrome_host`'s mutate→restyle→relayout→paint цикл стоит ~5…",
+   "component": "layout (`box_tree.rs`, `layout_measured_hyp`) — chrome document",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6278,6 +6285,9 @@
    "BUG-236",
    "BUG-237",
    "BUG-241"
+  ],
+  "layout (`box_tree.rs`, `layout_measured_hyp`) — chrome document": [
+   "BUG-341"
   ],
   "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)": [
    "BUG-339"
