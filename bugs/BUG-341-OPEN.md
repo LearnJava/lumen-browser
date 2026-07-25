@@ -144,6 +144,62 @@ whole layout test suite (graphic tests, WPT flex coverage, scoped-test) rather
 than a same-session fix bolted onto this investigation. Filed as a dedicated
 follow-up rather than attempted here.
 
+## Attempted mitigation (P1, 2026-07-25): incremental layout for chrome — no effect
+
+Tried the brief's own risk-#3 mitigation (`docs/tasks/p1-css-chrome.md`:
+*"ворота CC-12, страховка — инкрементальный layout"*) as a possible way to
+unblock CC-14 without the full layout-result cache: switched
+`relayout_chrome_host` from `layout_measured_hyp` to
+`lumen_layout::layout_mutation_incremental` (`graft_geometry`, same mechanism
+ADR-016 M4 already uses for page-side rAF mutations), keeping a pristine
+pre-`take_content_area` tree as the `prev` basis (`take_content_area`'s
+salvage-reparenting shifts sibling indices, which would otherwise misalign
+`graft_geometry`'s by-index matching for everything after `#contentArea`),
+with a viewport-change guard to avoid grafting stale-size geometry across a
+resize.
+
+**Result: no measurable improvement.** `cc12_chrome_perf_gate` (dev-release):
+
+```
+CC12_HOVER count=60 min=564.94ms p50=607.78ms p95=774.07ms p99=815.14ms max=815.14ms
+CC12_KEY   count=60 min=556.77ms p50=578.19ms p95=622.98ms p99=630.17ms max=630.17ms
+```
+
+vs. the CC-12 baseline (`p50=587/575ms`, `p95=744/637ms`) — within noise,
+not the 10x+ speedup `layout_mutation_incremental`'s own doc comment
+describes for a typical single-node style toggle. Change reverted, not
+merged (adds a `LayoutBox::clone()` per pass — real overhead — for zero
+benefit as things stand).
+
+**Root cause of the non-improvement:** `graft_geometry` matches subtrees by
+stable `NodeId` (plus box-kind and computed style). `lumen_chrome::bind_model`
+(`crates/chrome/src/model.rs::rebuild_tab_list` /
+`rebuild_hbar_tab_list` / `rebuild_hbar_ws_list`) unconditionally
+`remove_children_with_class` + rebuilds every tab-row / hbar-tab / workspace
+row from scratch on **every single call**, regardless of whether the tab/
+workspace list actually changed — each rebuilt row is a freshly
+`doc.create_element`'d node with a brand new `NodeId`. Since
+`relayout_chrome_host` calls `bind_model` unconditionally before every
+layout pass (CC-6: "no separate dirty flag, `bind_model` is cheap"), the
+6-tab/3-workspace chrome document used by the perf gate gets its tab-row/
+hbar-tab/ws-pill subtrees entirely re-identified every single interaction —
+`graft_geometry`'s node-id comparison fails immediately at those subtrees,
+and (per its by-index matching over the parent's `children` list) forces a
+fresh full layout for essentially the whole document regardless of how
+small the actual on-screen change was. This is an **independent
+node-churn problem layered on top of the `lay_out_flex` double-layout bug**:
+fixing BUG-341's flex algorithm alone would still leave chrome paying a full
+relayout on every hover/keystroke unless `bind_model`'s list rebuilders are
+also made to diff-and-patch (reuse existing row nodes, only touching the
+subset whose displayed fields actually changed) instead of destroy-and-
+recreate. Neither half alone gets CC-12's gate green; both would need
+fixing together, roughly doubling the scope of an already out-of-session-
+scope fix. Not attempted here — `rebuild_tab_list`/`rebuild_hbar_tab_list`/
+`rebuild_hbar_ws_list` are core to every list-rendering CC slice (CC-6/CC-8/
+CC-13's ARIA roles are set inside these same rebuild functions), so
+diff-based rewrites need their own scoped review against all of them rather
+than a bolt-on for this investigation.
+
 ## Impact
 
 CC-track chrome rendering is currently opt-in (`LUMEN_CSS_CHROME=1`), not
