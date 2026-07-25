@@ -92,6 +92,15 @@ impl CounterMap {
     pub fn style_for(&self, id: NodeId) -> Option<&ComputedStyle> {
         self.styles.get(&id)
     }
+
+    /// Returns the full per-node `ComputedStyle` cascade cache (BUG-341 S2).
+    ///
+    /// The map the full cascade produced, keyed by `NodeId`. It is the reference
+    /// the incremental cascade (BUG-341 S3+) must reproduce bit-for-bit; the
+    /// `incr == full` differential tests compare two such maps directly.
+    pub fn styles(&self) -> &HashMap<NodeId, ComputedStyle> {
+        &self.styles
+    }
 }
 
 /// Mutable state threaded through the pre-order DOM traversal.

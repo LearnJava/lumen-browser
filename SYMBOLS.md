@@ -1765,7 +1765,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:107` **fn** `unindex_semantic` — Remove a history entry's embedding from the semantic index, if present
 `crates/knowledge/src/store.rs:118` **fn** `search_semantic` — Semantic (embedding-similarity) search over history entries indexed
 
-## lumen-layout  (635 symbols)
+## lumen-layout  (637 symbols)
 
 `crates/engine/layout/src/anchor.rs:47` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:76` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -1847,16 +1847,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:2568` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
 `crates/engine/layout/src/box_tree.rs:2593` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
 `crates/engine/layout/src/box_tree.rs:2606` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:2672` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
-`crates/engine/layout/src/box_tree.rs:2709` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
-`crates/engine/layout/src/box_tree.rs:2757` **fn** `layout_mutation_incremental` — Incremental re-layout for JS DOM mutations (ADR-016 M4)
-`crates/engine/layout/src/box_tree.rs:2845` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
-`crates/engine/layout/src/box_tree.rs:2918` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
-`crates/engine/layout/src/box_tree.rs:9379` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:9562` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:9581` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:9611` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:10583` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:2629` **fn** `layout_measured_hyp_with_counters` — Like [`layout_measured_hyp`], but also returns the [`CounterMap`] the cascade
+`crates/engine/layout/src/box_tree.rs:2695` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
+`crates/engine/layout/src/box_tree.rs:2732` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
+`crates/engine/layout/src/box_tree.rs:2780` **fn** `layout_mutation_incremental` — Incremental re-layout for JS DOM mutations (ADR-016 M4)
+`crates/engine/layout/src/box_tree.rs:2868` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
+`crates/engine/layout/src/box_tree.rs:2941` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
+`crates/engine/layout/src/box_tree.rs:9433` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:9616` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:9635` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:9665` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:10637` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
@@ -1874,17 +1875,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/counters.rs:80` **fn** `counters` — Returns the counter snapshot for `id`, if any
 `crates/engine/layout/src/counters.rs:86` **fn** `quote_depths` — Returns the ordered quote-depth indices for the given `(id, slot)`'s
 `crates/engine/layout/src/counters.rs:92` **fn** `style_for` — Returns the `ComputedStyle` this map's traversal computed for `id`, if
-`crates/engine/layout/src/counters.rs:168` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
-`crates/engine/layout/src/counters.rs:286` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
-`crates/engine/layout/src/counters.rs:353` **enum** `CounterSystem` — Numbering algorithm for a `@counter-style` rule — CSS Counter Styles L3 §4
-`crates/engine/layout/src/counters.rs:372` **struct** `RangeBound` — Counter range bound: `None` means ±infinite (CSS Counter Styles L3 §5)
-`crates/engine/layout/src/counters.rs:381` **enum** `CounterRange` — Range descriptor value (CSS Counter Styles L3 §5)
-`crates/engine/layout/src/counters.rs:390` **struct** `CounterStyleDef` — Parsed `@counter-style` rule — CSS Counter Styles L3 §2
-`crates/engine/layout/src/counters.rs:428` **type** `CounterStyleRegistry` — Maps counter style names to their parsed `CounterStyleDef`
-`crates/engine/layout/src/counters.rs:431` **fn** `build_counter_style_registry` — Build a `CounterStyleRegistry` from all `@counter-style` rules in a stylesheet
-`crates/engine/layout/src/counters.rs:710` **fn** `format_counter_with_registry` — Format a counter value using the registry (custom `@counter-style`) first,
-`crates/engine/layout/src/counters.rs:880` **fn** `resolve_counter_value` — CSS Counter Styles L3 §2 — format counter `n` using a resolved `CounterStyleDef`
-`crates/engine/layout/src/counters.rs:893` **fn** `build_list_marker_text` — CSS Lists L3 §2.1 — canonical wiring point for `list-style-type` + `@counter-style`
+`crates/engine/layout/src/counters.rs:101` **fn** `styles` — Returns the full per-node `ComputedStyle` cascade cache (BUG-341 S2)
+`crates/engine/layout/src/counters.rs:177` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
+`crates/engine/layout/src/counters.rs:295` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
+`crates/engine/layout/src/counters.rs:362` **enum** `CounterSystem` — Numbering algorithm for a `@counter-style` rule — CSS Counter Styles L3 §4
+`crates/engine/layout/src/counters.rs:381` **struct** `RangeBound` — Counter range bound: `None` means ±infinite (CSS Counter Styles L3 §5)
+`crates/engine/layout/src/counters.rs:390` **enum** `CounterRange` — Range descriptor value (CSS Counter Styles L3 §5)
+`crates/engine/layout/src/counters.rs:399` **struct** `CounterStyleDef` — Parsed `@counter-style` rule — CSS Counter Styles L3 §2
+`crates/engine/layout/src/counters.rs:437` **type** `CounterStyleRegistry` — Maps counter style names to their parsed `CounterStyleDef`
+`crates/engine/layout/src/counters.rs:440` **fn** `build_counter_style_registry` — Build a `CounterStyleRegistry` from all `@counter-style` rules in a stylesheet
+`crates/engine/layout/src/counters.rs:719` **fn** `format_counter_with_registry` — Format a counter value using the registry (custom `@counter-style`) first,
+`crates/engine/layout/src/counters.rs:889` **fn** `resolve_counter_value` — CSS Counter Styles L3 §2 — format counter `n` using a resolved `CounterStyleDef`
+`crates/engine/layout/src/counters.rs:902` **fn** `build_list_marker_text` — CSS Lists L3 §2.1 — canonical wiring point for `list-style-type` + `@counter-style`
 `crates/engine/layout/src/field_sizing.rs:47` **fn** `field_sizing_content_intrinsic` — Computes content-based intrinsic dimensions for an HTML form control under
 `crates/engine/layout/src/font_palette.rs:20` **struct** `PaletteColorOverride` — Resolved CPAL color override: `(palette_index, color)`
 `crates/engine/layout/src/font_palette.rs:38` **fn** `resolve_font_palette_overrides` — Resolves `@font-palette-values` overrides for a given element
@@ -1915,29 +1917,29 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/inert.rs:47` **fn** `is_inert` — Returns `true` if `node` or any of its ancestors carries the `inert`
 `crates/engine/layout/src/inert.rs:67` **struct** `InertRegion` — A rectangular region in the layout tree that belongs to an inert subtree
 `crates/engine/layout/src/inert.rs:87` **fn** `collect_inert_regions` — Walk the layout tree and return every inert root box as an [`InertRegion`]
-`crates/engine/layout/src/lib.rs:160` **struct** `SelectionHighlight` — Computed `::selection` highlight data — passed to the paint layer so it can
-`crates/engine/layout/src/lib.rs:176` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
-`crates/engine/layout/src/lib.rs:243` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
-`crates/engine/layout/src/lib.rs:264` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
-`crates/engine/layout/src/lib.rs:285` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:514` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
-`crates/engine/layout/src/lib.rs:547` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:610` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
-`crates/engine/layout/src/lib.rs:683` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
-`crates/engine/layout/src/lib.rs:701` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:734` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:913` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
-`crates/engine/layout/src/lib.rs:1012` **struct** `SnapTargets` — The snap areas a container is currently snapped to, one per axis
-`crates/engine/layout/src/lib.rs:1035` **fn** `find_snapped_nodes` — Determine which snap areas a container is snapped to at scroll offset `scroll`
-`crates/engine/layout/src/lib.rs:1085` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
-`crates/engine/layout/src/lib.rs:1117` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
-`crates/engine/layout/src/lib.rs:1173` **fn** `overscroll_should_propagate` — CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
-`crates/engine/layout/src/lib.rs:1221` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
-`crates/engine/layout/src/lib.rs:1252` **fn** `find_box_by_node` — Update the scroll position of a node in the layout tree
-`crates/engine/layout/src/lib.rs:1259` **fn** `set_scroll_position`
-`crates/engine/layout/src/lib.rs:1292` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
-`crates/engine/layout/src/lib.rs:1329` **fn** `collect_view_transition_groups`
-`crates/engine/layout/src/lib.rs:1355` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
+`crates/engine/layout/src/lib.rs:161` **struct** `SelectionHighlight` — Computed `::selection` highlight data — passed to the paint layer so it can
+`crates/engine/layout/src/lib.rs:177` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
+`crates/engine/layout/src/lib.rs:244` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
+`crates/engine/layout/src/lib.rs:265` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
+`crates/engine/layout/src/lib.rs:286` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:515` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
+`crates/engine/layout/src/lib.rs:548` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:611` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
+`crates/engine/layout/src/lib.rs:684` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
+`crates/engine/layout/src/lib.rs:702` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:735` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:914` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
+`crates/engine/layout/src/lib.rs:1013` **struct** `SnapTargets` — The snap areas a container is currently snapped to, one per axis
+`crates/engine/layout/src/lib.rs:1036` **fn** `find_snapped_nodes` — Determine which snap areas a container is snapped to at scroll offset `scroll`
+`crates/engine/layout/src/lib.rs:1086` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
+`crates/engine/layout/src/lib.rs:1118` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
+`crates/engine/layout/src/lib.rs:1174` **fn** `overscroll_should_propagate` — CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
+`crates/engine/layout/src/lib.rs:1222` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
+`crates/engine/layout/src/lib.rs:1253` **fn** `find_box_by_node` — Update the scroll position of a node in the layout tree
+`crates/engine/layout/src/lib.rs:1260` **fn** `set_scroll_position`
+`crates/engine/layout/src/lib.rs:1293` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
+`crates/engine/layout/src/lib.rs:1330` **fn** `collect_view_transition_groups`
+`crates/engine/layout/src/lib.rs:1356` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
 `crates/engine/layout/src/masonry.rs:33` **fn** `lay_out_masonry` — Greedy waterfall masonry placement algorithm (CSS Grid L3 §14)
 `crates/engine/layout/src/masonry.rs:64` **fn** `min_track_idx` — Returns the index of the track with the minimum running height
 `crates/engine/layout/src/mathml.rs:28` **enum** `MathStyle` — CSS `math-style` (MathML Core §2.1.1). Inherited. Initial: `Normal`
@@ -5555,4 +5557,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5478 symbols in 24 crates*
+*Total: 5480 symbols in 24 crates*
