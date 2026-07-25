@@ -621,7 +621,11 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 }
 
 /// Format a Unix timestamp (seconds) as "HH:MM".
-fn format_time_hhmm(unix_secs: i64) -> String {
+///
+/// `pub(crate)` (not just module-private) since `Lumen::chrome_model_snapshot`
+/// (CC-10b, `main.rs`) formats `#view-history`'s `.hist-time` the same way
+/// `build_panel` does for the legacy overlay.
+pub(crate) fn format_time_hhmm(unix_secs: i64) -> String {
     if unix_secs < 0 {
         return "--:--".to_owned();
     }

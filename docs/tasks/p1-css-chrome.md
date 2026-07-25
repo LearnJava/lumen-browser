@@ -296,6 +296,61 @@ Dropdown омнибокса (клоны шаблона саджеста), поп
 ### CC-10b (M): Панели, батч 2 — history/bookmarks/settings + AI-Web-сайдбар
 Внутренние страницы-виды (history, bookmarks, settings — 6 секций c тумблерами/radio-cards/perm-table), правый сайдбар (AI/Web). **DoD:** соответствующие legacy-билдеры не вызываются при флаге.
 
+**Закрыто (2026-07-25, P1).** `#view-page`/`#view-history`/`#view-bookmarks`/`#view-settings` — 4
+взаимоисключающих `.view.active` (новый `ChromeContentView`, `bind_content_view`), производные от
+того, у какой из трёх legacy-панелей (`history_panel`/`bookmark_panel`/`settings_panel`) сейчас
+`visible == true` — тот же принцип «legacy-флаг = источник истины», что CC-9/CC-10a уже применяли к
+`print_panel`/`cert_panel`/`command_palette`. `ChromeAction::ShowView` расковычен для всех четырёх
+`data-view` (раньше — только `"settings"`), держит их взаимоисключающими и переиспользует ровно те
+же `open_settings_panel`/`close_settings_panel`/`refresh_history`/`refresh_bookmarks`, что и
+клавиатурные шорткаты (`Ctrl+,`/`Ctrl+H`/`Ctrl+Shift+O`) — поведение (загрузка данных, флюш
+чернового settings-снапшота) идентично.
+
+История и закладки рендерятся из **настоящих** данных, не статичного демо: `bind_history`
+перестраивает `.hist-day`/`.hist-item` из `HistoryPanel::rows` (та же `Group`/`Entry`-структура,
+что и у legacy `build_panel`; время — вынесенный в `pub(crate) format_time_hhmm`), `bind_bookmarks`
+— `.bm-tree`/`.bm-grid` из `BookmarkPanel::folders`/`visible_entries()`. Namesake-принцип
+CC-9/CC-10a («честность важнее выдумывания»): `.hist-actions` (звезда/копия/корзина) и клик по
+`.bm-folder`/истории-записи не привязаны — в замороженной разметке на них нет `data-action`, тот
+же класс пробела, что и per-download-card кнопки CC-9.
+
+Settings: 6 секций дизайна (general/privacy/appearance/sync/ext/qa) не совпадают с 7 секциями
+legacy `SettingsPanel::SettingsSection` (нет sync/ext/qa там, нет downloads/network/adblock/language
+здесь) — активная секция хранится в новом чисто движковом поле `Lumen::chrome_settings_section`, не
+проекции legacy-enum. Из всех тумблеров/radio-cards экрана Privacy привязаны только 2 (`.set-nav`
+секция privacy, `.toggle`-элементы по позиции 0/1) — «Блокировать рекламу»→`shields_enabled`,
+«Блокировать фингерпринтинг»→`fingerprint_mode != "off"`; Shields-radio (Standard/Strict/Tor-like),
+«Принудительный HTTPS», General/Appearance/Sync radio-cards и Permissions-таблица оставлены статичным
+демо-контентом дизайна — ни для одного нет чистого 1:1 поля в `BrowserSettingsSnapshot`
+(Shields — просто bool, не 3 уровня; force-HTTPS-настройки не существует; кросс-сайтового списка
+разрешений в шелле нет). Клик по тумблеру (`ToggleSwitch`) остаётся no-op — разрешить конкретный
+`.toggle` по `data-action` нечем (все 6 делят одно значение), нужен структурный резолвер вроде
+`chrome_permission_kind_for_node`; вне DoD этого среза.
+
+Правый сайдбар: `#rightSidebar` в дизайне — **один** табовый компонент, легаси же держит `ai_panel`/
+`sidebar` как независимо-докуемые панели. `dispatch_chrome_action`'s `OpenAiSidebar`/
+`OpenWebSidebar`/`SetSidebarTab`/`CloseRightSidebar` держат их взаимоисключающими под флагом, так
+что `sidebar.visible` однозначно определяет активный таб. `#rightSidebar` — настоящий flex-сосед
+`#contentArea` в дизайне (`.body-row{display:flex}`), не оверлей поверх — открытие таба по-настоящему
+сжимает `#contentArea` через движковый layout; это первый срез CC-трека, где открытие
+движковой панели двигает `chrome_page_host_rect`. Найден и исправлен риск двойного вычитания
+ширины: `Self::dockable_sidebars()` (питает `page_content_width_css()`'s клампинг горизонтального
+скролла) раньше не знал о флаге — под `LUMEN_CSS_CHROME=1` `ID_AI`/`ID_SIDEBAR` теперь всегда
+`visible:false` там, поскольку их ширина уже учтена в `chrome_page_host_rect`.
+
+Найден и исправлен **более серьёзный** баг того же класса, что CC-5 чинила для legacy tab-strip/
+toolbar: гейтинг *отрисовки* (`!self.css_chrome_enabled`) без гейтинга её MouseInput-хиттеста
+оставляет невидимую legacy-панель «съедающей» клики по настоящей странице под ней. Обнаружено для
+всех пяти панелей этого среза (`bookmark_panel`/`settings_panel`/`history_panel`/`ai_panel`/
+`sidebar`) — и, при ревизии по аналогии, для **`print_panel`/`cert_panel`**, чьи хиттесты CC-10a
+гейтировала только на отрисовке, не на клике (баг существовал с CC-10a, найден и исправлен здесь).
+Все 7 MouseInput-блоков теперь `&& !self.css_chrome_enabled`.
+
+12 новых unit-тестов (`cargo test -p lumen-chrome`: 49/49) + `cargo test -p lumen-shell`: 1703/1703
+без регрессий + `cargo clippy -p lumen-chrome -p lumen-shell --all-targets -D warnings` зелёные.
+Живой смоук-запуск/интерактивная OS-инжекция не гонялись — тот же пробел, что предыдущие срезы
+документировали (инструмента в репо нет).
+
 ### CC-11 (S): Анимации и transitions хрома
 Прогнать `TransitionScheduler`/`AnimationScheduler` по chrome-документу (отдельные экземпляры от страничных), подключить к кадровому циклу. **DoD:** hover-transitions, спиннер, прогресс загрузки анимируются движком.
 

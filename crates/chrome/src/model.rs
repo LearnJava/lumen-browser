@@ -75,6 +75,154 @@ pub struct ChromeModel {
     /// only open/close state is bound, same class of scope cut as CC-9's
     /// per-download-card buttons (frozen markup has nothing to bind to).
     pub print_open: bool,
+    /// Which `#contentArea` view is shown (CC-10b).
+    pub content_view: ChromeContentView,
+    /// `#view-history` snapshot (CC-10b).
+    pub history: ChromeHistoryModel,
+    /// `#view-bookmarks` snapshot (CC-10b).
+    pub bookmarks: ChromeBookmarksModel,
+    /// `#view-settings` snapshot (CC-10b).
+    pub settings: ChromeSettingsModel,
+    /// `#rightSidebar` snapshot (CC-10b).
+    pub right_sidebar: ChromeRightSidebarModel,
+}
+
+/// Which content view fills `#contentArea` (CC-10b) — bound to `.view.active`
+/// on `#view-page`/`#view-history`/`#view-bookmarks`/`#view-settings`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChromeContentView {
+    /// The active tab's page — `#view-page`.
+    #[default]
+    Page,
+    /// `#view-history`.
+    History,
+    /// `#view-bookmarks`.
+    Bookmarks,
+    /// `#view-settings`.
+    Settings,
+}
+
+/// `#view-history` snapshot (CC-10b) — mirrors `HistoryPanel::rows`.
+#[derive(Debug, Clone, Default)]
+pub struct ChromeHistoryModel {
+    /// `true` shows `#histBanner` (mirrors the legacy DS-16 "Anonymous,
+    /// history not saved" banner — the design always carries the banner
+    /// markup, this only controls whether it's shown).
+    pub banner: bool,
+    /// Day-group headers and entry rows, in display order — mirrors
+    /// `HistoryPanel::rows` (`Group`/`Entry`), shaped for the asset's
+    /// `.hist-day`/`.hist-item` markup.
+    pub rows: Vec<ChromeHistoryRow>,
+}
+
+/// One row of [`ChromeHistoryModel::rows`].
+#[derive(Debug, Clone)]
+pub enum ChromeHistoryRow {
+    /// A `.hist-day` date-group label (e.g. `"Сегодня"`).
+    Group(String),
+    /// A `.hist-item` entry. Per-row actions (star/copy/delete, `.hist-actions`
+    /// in the design) carry no `data-action`/id hooks in the frozen markup —
+    /// same class of gap as CC-9's per-download-card buttons — so this binds
+    /// only the display fields and the row itself omits `.hist-actions`.
+    Entry {
+        /// `.hist-title`.
+        title: String,
+        /// `.hist-url`.
+        url: String,
+        /// `.hist-time`, pre-formatted by the caller (e.g. `"14:02"`).
+        time_label: String,
+    },
+}
+
+/// `#view-bookmarks` snapshot (CC-10b) — mirrors `BookmarkPanel`.
+#[derive(Debug, Clone, Default)]
+pub struct ChromeBookmarksModel {
+    /// `.bm-tree` folder rows, in display order — `"Все закладки"` (the
+    /// `None`-filter entry) followed by `BookmarkPanel::folders`. Clicking a
+    /// folder is out of this slice's DoD (`.bm-folder` carries no
+    /// `data-action` hook in the frozen markup) — only the active-folder
+    /// highlight is bound.
+    pub folders: Vec<ChromeBookmarkFolderModel>,
+    /// `.bm-toolbar .title` — the active folder's display name.
+    pub title: String,
+    /// `.bm-grid` cards, in `BookmarkPanel::visible_entries()` order.
+    pub cards: Vec<ChromeBookmarkCardModel>,
+}
+
+/// One `.bm-folder` row.
+#[derive(Debug, Clone)]
+pub struct ChromeBookmarkFolderModel {
+    /// Folder label (`"Все закладки"` for the root/no-filter entry).
+    pub label: String,
+    /// `true` for the currently selected filter — adds `.active`.
+    pub active: bool,
+}
+
+/// One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Per-card
+/// actions are out of this slice's DoD — same gap as
+/// [`ChromeHistoryRow::Entry`].
+#[derive(Debug, Clone)]
+pub struct ChromeBookmarkCardModel {
+    /// `.bm-fav` single-letter fallback (first letter of `title`/`url`).
+    pub fav_letter: String,
+    /// `.bm-title`.
+    pub title: String,
+    /// `.bm-url`.
+    pub url: String,
+}
+
+/// `#view-settings` snapshot (CC-10b) — mirrors a subset of `SettingsPanel`.
+///
+/// The design's 6 section tabs (general/privacy/appearance/sync/ext/qa) only
+/// partially overlap `SettingsPanel::SettingsSection`'s 7 (no sync/ext/qa
+/// section exists there; no downloads/network/adblock/language section
+/// exists here) — `active_section` is therefore engine-chrome-only UI state
+/// (`Lumen::chrome_settings_section`), not a projection of the legacy enum.
+/// Only the two Adblock & Fingerprinting toggles with a clean 1:1 backing
+/// field are bound (`ad_block_on`/`fingerprint_on`); the Shields
+/// radio-cards, "Принудительный HTTPS" toggle, the General/Appearance/Sync
+/// radio-cards, and the Permissions table are left as the design's static
+/// demo content — none has a matching real-state field (shields is a single
+/// on/off, not the 3-tier Standard/Strict/Tor-like the design shows; there
+/// is no force-HTTPS setting; there is no cross-site permission list) — same
+/// honesty-over-fabrication call CC-9/CC-10a made for `#statAds`/`#statFp`
+/// and the cert panel's missing TLS-version row.
+#[derive(Debug, Clone, Default)]
+pub struct ChromeSettingsModel {
+    /// `data-section`/`data-set` slug of the active `.set-nav` tab /
+    /// `.set-section`.
+    pub active_section: String,
+    /// `SettingsPanel::draft.shields_enabled` — binds the "Блокировать
+    /// рекламу" toggle.
+    pub ad_block_on: bool,
+    /// `SettingsPanel::draft.fingerprint_mode != "off"` — binds the
+    /// "Блокировать фингерпринтинг" toggle.
+    pub fingerprint_on: bool,
+}
+
+/// `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
+/// `SidebarPanel` (independently dockable) into the design's single tabbed
+/// panel. The shell keeps them mutually exclusive under the flag
+/// (`Lumen::dispatch_chrome_action`) so `tab` is unambiguous.
+#[derive(Debug, Clone, Default)]
+pub struct ChromeRightSidebarModel {
+    /// `true` shows `#rightSidebar` — mirrors `AiPanel::visible ||
+    /// SidebarPanel::visible`.
+    pub open: bool,
+    /// Which tab is active.
+    pub tab: ChromeSidebarTab,
+}
+
+/// `#rightSidebar`'s two tabs (CC-10b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChromeSidebarTab {
+    /// AI assistant chat — `#rsBodyAi`.
+    #[default]
+    Ai,
+    /// Embedded web widget — `#rsBodyWeb`. Its content is a real secondary
+    /// webview in the legacy panel (`SidebarPanel`), not representable as
+    /// static markup, so the design's own placeholder text is left as-is.
+    Web,
 }
 
 /// `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
@@ -322,6 +470,187 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_cert(doc, &model.cert);
     if let Some(overlay) = doc.find_by_id(crate::ids::PRINT_OVERLAY) {
         set_class_token(doc, overlay, "open", model.print_open);
+    }
+    bind_content_view(doc, model.content_view);
+    bind_history(doc, &model.history);
+    bind_bookmarks(doc, &model.bookmarks);
+    bind_settings(doc, &model.settings);
+    bind_right_sidebar(doc, &model.right_sidebar);
+}
+
+/// Toggles `.active` on exactly one of `#view-page`/`#view-history`/
+/// `#view-bookmarks`/`#view-settings` per `view` (CC-10b).
+fn bind_content_view(doc: &mut Document, view: ChromeContentView) {
+    let views = [
+        (crate::ids::VIEW_PAGE, ChromeContentView::Page),
+        (crate::ids::VIEW_HISTORY, ChromeContentView::History),
+        (crate::ids::VIEW_BOOKMARKS, ChromeContentView::Bookmarks),
+        (crate::ids::VIEW_SETTINGS, ChromeContentView::Settings),
+    ];
+    for (id, kind) in views {
+        if let Some(node) = doc.find_by_id(id) {
+            set_class_token(doc, node, "active", kind == view);
+        }
+    }
+}
+
+/// Toggles `#histBanner` and rebuilds `.hist-day`/`.hist-item` rows inside
+/// `.hist-wrap` from [`ChromeHistoryModel::rows`] (CC-10b). Only the two
+/// row classes are removed/rebuilt — `.hist-banner`/`.hist-head` (search box
+/// + toolbar buttons) are static siblings, left untouched.
+fn bind_history(doc: &mut Document, history: &ChromeHistoryModel) {
+    if let Some(banner) = doc.find_by_id(crate::ids::HIST_BANNER) {
+        set_attr(doc, banner, "style", if history.banner { "" } else { "display:none" });
+    }
+    let Some(wrap) = find_by_class(doc, "hist-wrap") else { return };
+    remove_children_with_class(doc, wrap, "hist-day");
+    remove_children_with_class(doc, wrap, "hist-item");
+    for row in &history.rows {
+        let node = match row {
+            ChromeHistoryRow::Group(label) => {
+                let day = doc.create_element(QualName::html("div"));
+                set_attr(doc, day, "class", "hist-day");
+                append_text(doc, day, label);
+                day
+            }
+            ChromeHistoryRow::Entry { title, url, time_label } => {
+                build_hist_item(doc, title, url, time_label)
+            }
+        };
+        doc.append_child(wrap, node);
+    }
+}
+
+fn build_hist_item(doc: &mut Document, title: &str, url: &str, time_label: &str) -> NodeId {
+    let item = doc.create_element(QualName::html("div"));
+    set_attr(doc, item, "class", "hist-item");
+
+    let fav = doc.create_element(QualName::html("div"));
+    set_attr(doc, fav, "class", "hist-fav");
+    append_text(doc, fav, &first_letter(title));
+    doc.append_child(item, fav);
+
+    let text = doc.create_element(QualName::html("div"));
+    let title_el = doc.create_element(QualName::html("div"));
+    set_attr(doc, title_el, "class", "hist-title");
+    append_text(doc, title_el, title);
+    doc.append_child(text, title_el);
+    let url_el = doc.create_element(QualName::html("div"));
+    set_attr(doc, url_el, "class", "hist-url");
+    append_text(doc, url_el, url);
+    doc.append_child(text, url_el);
+    doc.append_child(item, text);
+
+    let time = doc.create_element(QualName::html("div"));
+    set_attr(doc, time, "class", "hist-time");
+    append_text(doc, time, time_label);
+    doc.append_child(item, time);
+
+    item
+}
+
+/// Rebuilds `.bm-tree`'s `.bm-folder` list, `.bm-toolbar .title`, and
+/// `.bm-grid`'s `.bm-card` list from `bookmarks` (CC-10b).
+fn bind_bookmarks(doc: &mut Document, bookmarks: &ChromeBookmarksModel) {
+    if let Some(tree) = find_by_class(doc, "bm-tree") {
+        remove_children_with_class(doc, tree, "bm-folder");
+        for (i, folder) in bookmarks.folders.iter().enumerate() {
+            let node = doc.create_element(QualName::html("div"));
+            let mut class = "bm-folder".to_owned();
+            if folder.active {
+                class.push_str(" active");
+            }
+            if i > 0 {
+                class.push_str(" indent");
+            }
+            set_attr(doc, node, "class", &class);
+            append_text(doc, node, &folder.label);
+            doc.append_child(tree, node);
+        }
+    }
+    if let Some(toolbar) = find_by_class(doc, "bm-toolbar")
+        && let Some(title) = find_descendant_by_class(doc, toolbar, "title")
+    {
+        set_text(doc, title, &bookmarks.title);
+    }
+    let Some(grid) = find_by_class(doc, "bm-grid") else { return };
+    remove_children_with_class(doc, grid, "bm-card");
+    for card in &bookmarks.cards {
+        let node = build_bm_card(doc, card);
+        doc.append_child(grid, node);
+    }
+}
+
+fn build_bm_card(doc: &mut Document, card: &ChromeBookmarkCardModel) -> NodeId {
+    let node = doc.create_element(QualName::html("div"));
+    set_attr(doc, node, "class", "bm-card");
+
+    let fav = doc.create_element(QualName::html("div"));
+    set_attr(doc, fav, "class", "bm-fav");
+    append_text(doc, fav, &card.fav_letter);
+    doc.append_child(node, fav);
+
+    let title = doc.create_element(QualName::html("div"));
+    set_attr(doc, title, "class", "bm-title");
+    append_text(doc, title, &card.title);
+    doc.append_child(node, title);
+
+    let url = doc.create_element(QualName::html("div"));
+    set_attr(doc, url, "class", "bm-url");
+    append_text(doc, url, &card.url);
+    doc.append_child(node, url);
+
+    node
+}
+
+/// Toggles `.set-nav .item`/`.set-section` `.active` per
+/// [`ChromeSettingsModel::active_section`], and the two mapped
+/// `.toggle`s' `.on` class inside the Privacy section (CC-10b).
+fn bind_settings(doc: &mut Document, settings: &ChromeSettingsModel) {
+    if let Some(nav) = find_by_class(doc, "set-nav") {
+        for item in doc.get(nav).children.clone() {
+            let is_active = doc.get(item).get_attr("data-section") == Some(settings.active_section.as_str());
+            set_class_token(doc, item, "active", is_active);
+        }
+    }
+    let Some(main) = find_by_class(doc, "set-main") else { return };
+    for section in doc.get(main).children.clone() {
+        let is_active = doc.get(section).get_attr("data-set") == Some(settings.active_section.as_str());
+        set_class_token(doc, section, "active", is_active);
+    }
+    let privacy =
+        doc.get(main).children.iter().copied().find(|&c| doc.get(c).get_attr("data-set") == Some("privacy"));
+    if let Some(privacy) = privacy {
+        let toggles = find_descendants_by_class(doc, privacy, "toggle");
+        if let Some(&ad) = toggles.first() {
+            set_class_token(doc, ad, "on", settings.ad_block_on);
+        }
+        if let Some(&fp) = toggles.get(1) {
+            set_class_token(doc, fp, "on", settings.fingerprint_on);
+        }
+    }
+}
+
+/// Toggles `#rightSidebar`'s `.open` class, the active `.rs-tab`, `#rsTitle`,
+/// and swaps `#rsBodyAi`/`#rsBodyWeb` visibility per `sidebar.tab` (CC-10b).
+fn bind_right_sidebar(doc: &mut Document, sidebar: &ChromeRightSidebarModel) {
+    let Some(panel) = doc.find_by_id(crate::ids::RIGHT_SIDEBAR) else { return };
+    set_class_token(doc, panel, "open", sidebar.open);
+    let is_ai = sidebar.tab == ChromeSidebarTab::Ai;
+    if let Some(tabs) = find_descendant_by_class(doc, panel, "rs-tabs") {
+        for tab_btn in doc.get(tabs).children.clone() {
+            let this_is_ai = doc.get(tab_btn).get_attr("data-rs-tab") == Some("ai");
+            set_class_token(doc, tab_btn, "active", this_is_ai == is_ai);
+        }
+    }
+    if let Some(title) = doc.find_by_id(crate::ids::RS_TITLE) {
+        set_text(doc, title, if is_ai { "AI" } else { "Web" });
+    }
+    if let Some(ai_body) = doc.find_by_id(crate::ids::RS_BODY_AI) {
+        set_attr(doc, ai_body, "style", if is_ai { "" } else { "display:none" });
+    }
+    if let Some(web_body) = doc.find_by_id(crate::ids::RS_BODY_WEB) {
+        set_attr(doc, web_body, "style", if is_ai { "display:none" } else { "" });
     }
 }
 
@@ -1374,5 +1703,185 @@ mod tests {
 
         bind_model(&mut doc, &ChromeModel { print_open: false, ..ChromeModel::default() });
         assert!(!has_class(&doc, overlay, "open"));
+    }
+
+    fn text_of(doc: &Document, id: NodeId) -> String {
+        doc.get(id)
+            .children
+            .iter()
+            .filter_map(|&c| match &doc.get(c).data {
+                NodeData::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn default_content_view_is_page() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel::default());
+        let page = doc.find_by_id(crate::ids::VIEW_PAGE).expect("asset has #view-page");
+        assert!(has_class(&doc, page, "active"));
+        let history = doc.find_by_id(crate::ids::VIEW_HISTORY).expect("asset has #view-history");
+        assert!(!has_class(&doc, history, "active"));
+    }
+
+    #[test]
+    fn content_view_switches_active_view_exclusively() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel { content_view: ChromeContentView::Settings, ..ChromeModel::default() });
+        let page = doc.find_by_id(crate::ids::VIEW_PAGE).expect("asset has #view-page");
+        let history = doc.find_by_id(crate::ids::VIEW_HISTORY).expect("asset has #view-history");
+        let bookmarks = doc.find_by_id(crate::ids::VIEW_BOOKMARKS).expect("asset has #view-bookmarks");
+        let settings = doc.find_by_id(crate::ids::VIEW_SETTINGS).expect("asset has #view-settings");
+        assert!(!has_class(&doc, page, "active"));
+        assert!(!has_class(&doc, history, "active"));
+        assert!(!has_class(&doc, bookmarks, "active"));
+        assert!(has_class(&doc, settings, "active"));
+    }
+
+    #[test]
+    fn history_banner_and_rows_are_rebuilt_from_the_model() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            history: ChromeHistoryModel {
+                banner: true,
+                rows: vec![
+                    ChromeHistoryRow::Group("Сегодня".to_owned()),
+                    ChromeHistoryRow::Entry {
+                        title: "Example".to_owned(),
+                        url: "example.com".to_owned(),
+                        time_label: "14:02".to_owned(),
+                    },
+                ],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let banner = doc.find_by_id(crate::ids::HIST_BANNER).expect("asset has #histBanner");
+        assert_eq!(doc.get(banner).get_attr("style"), Some(""));
+        let wrap = find_by_class(&doc, "hist-wrap").expect("asset has .hist-wrap");
+        let days: Vec<NodeId> = doc.get(wrap).children.iter().copied().filter(|&c| has_class(&doc, c, "hist-day")).collect();
+        assert_eq!(days.len(), 1, "old demo groups must be gone, only the 1 model group remains");
+        assert_eq!(text_of(&doc, days[0]), "Сегодня");
+        let items: Vec<NodeId> = doc.get(wrap).children.iter().copied().filter(|&c| has_class(&doc, c, "hist-item")).collect();
+        assert_eq!(items.len(), 1, "old demo entries must be gone, only the 1 model entry remains");
+        let title = doc.get(items[0]).children.iter().copied().nth(1).expect("entry has a text wrapper");
+        let title_el = doc.get(title).children.iter().copied().find(|&c| has_class(&doc, c, "hist-title")).unwrap();
+        assert_eq!(text_of(&doc, title_el), "Example");
+    }
+
+    #[test]
+    fn history_banner_hidden_when_not_anonymous() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel::default());
+        let banner = doc.find_by_id(crate::ids::HIST_BANNER).expect("asset has #histBanner");
+        assert_eq!(doc.get(banner).get_attr("style"), Some("display:none"));
+    }
+
+    #[test]
+    fn bookmarks_folders_and_cards_are_rebuilt_from_the_model() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            bookmarks: ChromeBookmarksModel {
+                folders: vec![
+                    ChromeBookmarkFolderModel { label: "Все закладки".to_owned(), active: false },
+                    ChromeBookmarkFolderModel { label: "Работа".to_owned(), active: true },
+                ],
+                title: "Работа".to_owned(),
+                cards: vec![ChromeBookmarkCardModel {
+                    fav_letter: "R".to_owned(),
+                    title: "Rust".to_owned(),
+                    url: "rust-lang.org".to_owned(),
+                }],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let tree = find_by_class(&doc, "bm-tree").expect("asset has .bm-tree");
+        let folders: Vec<NodeId> =
+            doc.get(tree).children.iter().copied().filter(|&c| has_class(&doc, c, "bm-folder")).collect();
+        assert_eq!(folders.len(), 2, "old demo folders must be gone, only the 2 model folders remain");
+        assert!(!has_class(&doc, folders[0], "active"));
+        assert!(has_class(&doc, folders[1], "active"));
+        assert!(has_class(&doc, folders[1], "indent"), "every folder but the first gets .indent");
+        let grid = find_by_class(&doc, "bm-grid").expect("asset has .bm-grid");
+        let cards: Vec<NodeId> =
+            doc.get(grid).children.iter().copied().filter(|&c| has_class(&doc, c, "bm-card")).collect();
+        assert_eq!(cards.len(), 1, "old demo cards must be gone, only the 1 model card remains");
+        let title_el = doc.get(cards[0]).children.iter().copied().find(|&c| has_class(&doc, c, "bm-title")).unwrap();
+        assert_eq!(text_of(&doc, title_el), "Rust");
+    }
+
+    #[test]
+    fn settings_section_toggles_nav_and_section_active_class() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            settings: ChromeSettingsModel { active_section: "appearance".to_owned(), ..ChromeSettingsModel::default() },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let nav = find_by_class(&doc, "set-nav").expect("asset has .set-nav");
+        let active_items: Vec<NodeId> =
+            doc.get(nav).children.iter().copied().filter(|&c| has_class(&doc, c, "active")).collect();
+        assert_eq!(active_items.len(), 1);
+        assert_eq!(doc.get(active_items[0]).get_attr("data-section"), Some("appearance"));
+        let main = find_by_class(&doc, "set-main").expect("asset has .set-main");
+        let active_sections: Vec<NodeId> =
+            doc.get(main).children.iter().copied().filter(|&c| has_class(&doc, c, "active")).collect();
+        assert_eq!(active_sections.len(), 1);
+        assert_eq!(doc.get(active_sections[0]).get_attr("data-set"), Some("appearance"));
+    }
+
+    #[test]
+    fn settings_privacy_toggles_reflect_ad_block_and_fingerprint_state() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "privacy".to_owned(),
+                ad_block_on: true,
+                fingerprint_on: false,
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let main = find_by_class(&doc, "set-main").expect("asset has .set-main");
+        let privacy = doc
+            .get(main)
+            .children
+            .iter()
+            .copied()
+            .find(|&c| doc.get(c).get_attr("data-set") == Some("privacy"))
+            .expect("asset has the privacy section");
+        let toggles = find_descendants_by_class(&doc, privacy, "toggle");
+        assert!(toggles.len() >= 2, "privacy section must have at least the 2 mapped toggles");
+        assert!(has_class(&doc, toggles[0], "on"), "ad_block_on must set the first toggle's .on class");
+        assert!(!has_class(&doc, toggles[1], "on"), "fingerprint_on=false must clear the second toggle's .on class");
+    }
+
+    #[test]
+    fn right_sidebar_open_and_tab_are_bound() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            right_sidebar: ChromeRightSidebarModel { open: true, tab: ChromeSidebarTab::Web },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::RIGHT_SIDEBAR).expect("asset has #rightSidebar");
+        assert!(has_class(&doc, panel, "open"));
+        let title = doc.find_by_id(crate::ids::RS_TITLE).expect("asset has #rsTitle");
+        assert_eq!(text_of(&doc, title), "Web");
+        let ai_body = doc.find_by_id(crate::ids::RS_BODY_AI).expect("asset has #rsBodyAi");
+        assert_eq!(doc.get(ai_body).get_attr("style"), Some("display:none"));
+        let web_body = doc.find_by_id(crate::ids::RS_BODY_WEB).expect("asset has #rsBodyWeb");
+        assert_eq!(doc.get(web_body).get_attr("style"), Some(""));
+    }
+
+    #[test]
+    fn right_sidebar_closed_hides_open_class() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel::default());
+        let panel = doc.find_by_id(crate::ids::RIGHT_SIDEBAR).expect("asset has #rightSidebar");
+        assert!(!has_class(&doc, panel, "open"));
     }
 }
