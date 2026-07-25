@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-25",
  "counts": {
-  "open": 38,
+  "open": 39,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 310,
+ "total_bugs": 311,
  "phases": [
   {
    "id": "P0",
@@ -1854,16 +1854,19 @@
       {
        "id": "WPT-VENDOR-compat",
        "title": "WPT: вендорить + прогнать категорию `compat`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (коммит ed90cf49, tests/wpt/compat/, 56 файлов) и прогнана через run_report.py --all --root compat --recursive. 13 отобранных id (reftest-пары не подхватываются раннером), 10/13 harness OK, 9/71 сабтестов passed. Крупнейший кластер — legacy webkit-CSSOM-алиасы (webkitAlignContent и т.п.) вовсе не реализованы (57 сабтестов), плюс webkit-box вертикальное центрирование, -webkit-radial-gradient()/-webkit-gradient() парсер слишком нестрогий, insertRule ::-webkit-scrollbar падает (см. заметку в docs/wpt-status.md). Не заводился отдельный BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-compression",
        "title": "WPT: вендорить + прогнать категорию `compression`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (tests/wpt/compression/, 28 файлов) и прогнана через run_report.py --all --root compression --recursive, скоуп ⬜ (Compression Streams API, уже реализована в Lumen). 19 отобранных id, 14/19 harness OK, 20/317 сабтестов. Основная масса FAIL — не отсутствие API, а реальный V8-специфичный движковый баг: _lumen_compress_bytes/_lumen_sha_digest под V8 всегда получают пустой Vec<u8>-аргумент независимо от переданных данных, root-caused до v8_to_jsvalue (crates/js/src/v8_compat.rs), молча маппящей Array/Object в JsValue::Null. Заведён BUG-342 (широкий охват — любой _lumen_*-нативный биндинг с Vec-аргументом под V8). См. docs/wpt-status.md, tests/wpt/VENDOR.md",
+       "bugs": [
+        "BUG-342"
+       ]
       },
       {
        "id": "WPT-VENDOR-compute-pressure",
@@ -6095,7 +6098,14 @@
   "BUG-341": {
    "status": "open",
    "title": "Новый headless перф-гейт CC-12 (`cc12_chrome_perf_gate_hover_and_keystroke_cycles`) показал `relayout_chrome_host`'s mutate→restyle→relayout→paint цикл стоит ~5…",
-   "component": "layout (`box_tree.rs`, `layout_measured_hyp`) — chrome document",
+   "component": "layout (`box_tree.rs`, `lay_out_flex`) — **general engine bug, not chrome-specific**",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-342": {
+   "status": "open",
+   "title": "**V8-only, широкий охват.** `native_fn_trampoline` конвертирует аргументы нативных функций через `v8_to_jsvalue`, которая для Array/Object всегда возвращает `Js…",
+   "component": "js (`crates/js/src/v8_compat.rs::v8_to_jsvalue`, `native_fn_trampoline`)",
    "date": null,
    "debtor": false
   }
@@ -6304,7 +6314,7 @@
    "BUG-237",
    "BUG-241"
   ],
-  "layout (`box_tree.rs`, `layout_measured_hyp`) — chrome document": [
+  "layout (`box_tree.rs`, `lay_out_flex`) — **general engine bug, not chrome-specific**": [
    "BUG-341"
   ],
   "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)": [
