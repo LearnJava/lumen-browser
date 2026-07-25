@@ -1815,9 +1815,9 @@
       {
        "id": "WPT-VENDOR-client-hints",
        "title": "WPT: вендорить + прогнать категорию `client-hints`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/client-hints/`, 276 файлов: `META.yml`, `accept-ch`/`accept-ch-stickiness`/`clear-site-data`/`critical-ch`/`inner-delegation`/`permissions-policy`/`sandbox`/`service-workers`/`viewport-size` подкатегории + корневые тесты + `resources/`), скоуп ⬜ (Client Hints Infrastructure, спека WICG). Внекатегорийные хелперы не довендорены: `/common/get-host-info.sub.js`, `/common/utils.js`, та же методология, что `clear-site-data`/`FileAPI`. Манифест отбирает 133 id: 127 `.https.`-only + 6 не-https. Крупная категория (133 id, сопоставимого порядка с `WebCryptoAPI` 125) — полный `run_report.py --all --root client-hints --recursive` не добежал до конца: пробный прогон (~11 мин, остановлен вручную) обработал 17 из 133 id: 15 TIMEOUT (`invalid url: invalid port: \"None\"`, тот же HTTPS-порт-гэп, что `WebCryptoAPI`/`ai`/`bluetooth`), 1 ERROR (session/URL-reuse артефакт, тот же класс, что `accelerometer`/`beacon`/`captured-mouse-events`/`clear-site-data`), 1 не-https (`accept-ch/non-secure.http.html`) — harness OK, 0/1 сабтест FAIL (`fetch error: invalid url: missing scheme` на относительный URL `resources/echo-client-hints-received.py` — тот же движковый гэп с относительным `fetch()`, что и `fetch-topics-insecure-context` в `browsing-topics`). 1/17 harness OK, 0/1 сабтестов. Не заводился отдельный BUG-NNN — первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-clipboard-apis",
