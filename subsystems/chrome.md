@@ -207,6 +207,26 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   invisible legacy panel could still swallow clicks meant for the page underneath — same bug class
   CC-5 fixed for the tab-strip/toolbar.
 
+- **Animations + transitions** (CC-11): two new `Lumen` fields —
+  `chrome_animation_scheduler`/`chrome_transition_scheduler` — mirror the page's own scheduler pair
+  but as fully separate instances, ticked on every `RedrawRequested` and synced at the end of
+  `relayout_chrome_host`. Separate instances are a correctness requirement, not a style choice:
+  `chrome_doc` and the page `Document` number `NodeId`s independently (both start at 0), so a shared
+  scheduler would collide entries between the two trees (regression-tested:
+  `chrome_transition_scheduler_stays_independent_of_page_scheduler_for_same_node_id`). Unlike the
+  page scheduler, `chrome_animation_scheduler` is never `.clear()`-ed — chrome's DOM nodes persist for
+  the process lifetime (no reload equivalent), and `relayout_chrome_host` runs far more often than
+  page relayouts (any hover/click), so clearing on every pass would restart the `.spinner`'s
+  `infinite` animation on every interaction. Applied via the same compositor-offload path the page
+  uses (`AnimationFrame::to_compositor_frame` — opacity/transform/color/background-color patched into
+  `chrome_dl` without a second relayout): this animates `.spinner` (`@keyframes spin`), the
+  `.hist-actions` hover-opacity fade, and `.toggle .thumb`'s transform/background. `width` transitions
+  (`#sidebar`'s collapse, `.dl-progress-fill`) stay unanimated — `width` isn't in
+  `TransitionScheduler::sync`'s Phase-0 animatable-property table for either document, a pre-existing
+  engine limitation, not a CC-11 gap. 1 new test (`cargo test -p lumen-shell`: 1704/1704) +
+  `cargo clippy -p lumen-shell --all-targets -D warnings` green. Live smoke
+  (`LUMEN_CSS_CHROME=1 LUMEN_FRAME_LOG=1`, ~45s) painted multiple frames with no panics.
+
 ## Deferred
 
 - **`<template>` markup + `templates::IDS` population**: the frozen design reference has none —

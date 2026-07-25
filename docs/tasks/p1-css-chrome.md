@@ -354,6 +354,27 @@ toolbar: гейтинг *отрисовки* (`!self.css_chrome_enabled`) без
 ### CC-11 (S): Анимации и transitions хрома
 Прогнать `TransitionScheduler`/`AnimationScheduler` по chrome-документу (отдельные экземпляры от страничных), подключить к кадровому циклу. **DoD:** hover-transitions, спиннер, прогресс загрузки анимируются движком.
 
+**Закрыто (2026-07-25, P1).** Два новых поля `Lumen`: `chrome_animation_scheduler`/
+`chrome_transition_scheduler` — по образцу страничной пары, но полностью отдельные экземпляры,
+тикаются на каждом `RedrawRequested` и синхронизируются в конце `relayout_chrome_host`. Раздельность —
+не стилевой выбор, а необходимость: `chrome_doc` и страничный `Document` нумеруют `NodeId` независимо
+(оба с 0), общий планировщик коллизировал бы записи между деревьями (регрессионный тест
+`chrome_transition_scheduler_stays_independent_of_page_scheduler_for_same_node_id`). В отличие от
+страничного, `chrome_animation_scheduler` никогда не `.clear()`-ится: узлы chrome-документа живут весь
+процесс (нет аналога reload/навигации), а `relayout_chrome_host` вызывается заметно чаще страничного
+relayout (любой hover/клик) — сброс на каждом проходе рестартовал бы `infinite`-анимацию спиннера при
+каждом взаимодействии. Применение — тем же compositor-offload путём, что у страницы
+(`AnimationFrame::to_compositor_frame` — opacity/transform/color/background-color патчатся в
+`chrome_dl` без повторного relayout): анимируются `.spinner` (`@keyframes spin`), hover-переход
+opacity `.hist-actions`, transform/background `.toggle .thumb`. `width`-переходы (`#sidebar`'s
+collapse, `.dl-progress-fill`) остаются неанимированными — `width` не входит в Phase-0
+animatable-таблицу `TransitionScheduler::sync` ни для одного из документов, это пред-существующее
+ограничение движка (не пробел CC-11) — расширение таблицы `width`-интерполяцией с патчем геометрии
+без relayout вне scope среза "S". 1 новый тест (`cargo test -p lumen-shell`: 1704/1704) +
+`cargo clippy -p lumen-shell --all-targets -D warnings` зелёные. Живой смоук-запуск
+(`LUMEN_CSS_CHROME=1 LUMEN_FRAME_LOG=1`, ~45с) отрисовал несколько кадров без падений — впервые в
+CC-треке живой смоук реально прогнан, а не документирован как пробел.
+
 ## Этап D — качество и переключение дефолта
 
 ### CC-12 (S): Перф-гейт

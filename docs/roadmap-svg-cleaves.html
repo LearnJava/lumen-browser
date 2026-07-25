@@ -3780,9 +3780,9 @@
       {
        "id": "CC-11",
        "title": "CC-11: Анимации хрома движком",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Отдельные экземпляры Transition/AnimationScheduler для chrome-документа, подключены к кадровому циклу: hover-transitions, спиннер, прогресс загрузок. После CC-8"
+       "note": "Закрыто (2026-07-25, P1). `chrome_animation_scheduler`/`chrome_transition_scheduler` — отдельные от страничных экземпляры (chrome_doc/страничный Document независимо нумеруют NodeId с 0 — общий планировщик коллизировал бы), тикаются на RedrawRequested, sync в конце relayout_chrome_host, никогда не `.clear()`-ятся (иначе спиннер рестартовал бы на каждый hover). Compositor-offload анимирует `.spinner`/`.hist-actions`/`.toggle .thumb`; `width`-переходы (#sidebar, .dl-progress-fill) вне Phase-0 animatable-таблицы движка — пред-существующее ограничение, не пробел среза. `cargo test -p lumen-shell` (1704/1704, 1 новый) + workspace clippy зелёные. Живой смоук `LUMEN_CSS_CHROME=1` без падений. После CC-8"
       },
       {
        "id": "CC-12",
