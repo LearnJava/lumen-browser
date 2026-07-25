@@ -1822,9 +1822,9 @@
       {
        "id": "WPT-VENDOR-clipboard-apis",
        "title": "WPT: вендорить + прогнать категорию `clipboard-apis`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/clipboard-apis/`, 76 файлов: `META.yml`, корневые тесты, `detached-iframe/`+`events/`+`permissions/`+`permissions-policy/` подкатегории, каждая со своим `WEB_FEATURES.yml`) и прогнана через `run_report.py --all --root clipboard-apis --recursive`, скоуп ⬜ (Clipboard API and events, спека W3C `clipboard-apis`). Внекатегорийные хелперы не довендорены: `/common/subset-tests.js`, `/permissions-policy/resources/permissions-policy.js`, `/resources/testdriver.js`+`testdriver-vendor.js`+`testdriver-action.js`+`testdriver-actions.js`, та же методология, что `FileAPI`/`ai`. Манифест отбирает 58 id: 53 `.https.`-only + 5 не-https. Прогон добежал полностью (~34с): 51 SKIP (`Executor does not support testdriver.js` — 50 из `.https.` подмножества, 1 не-https `events/copy-event.html` — синтетические copy/cut/paste и permissions-тесты требуют testdriver-эмуляции разрешений/действий, тот же гэп, что `accname`/`attribution-reporting`/`clear-site-data`); 3 `.https.` ERROR (session/URL-reuse артефакт, тот же класс, что `accelerometer`/`beacon`/`captured-mouse-events`/`client-hints`); из 5 не-https: `drag-multiple-urls.html` — TIMEOUT (харнесс зависает на drag-and-drop тексте `text/uri-list`, не связан с HTTPS-портом), 3 — harness OK, 0 сабтестов passed (`clipboard-events-synthetic.html` 0/9 — синтетические copy/cut/paste события не проставляют `composed`; `data-transfer-file-list-change-reference-updates.html` 0/1 — `DataTransfer.files` не отражает изменения; `dataTransfer-clearData.html` 0/1 — `DataTransfer.clearData()` не работает). 3/58 harness OK, 0/12 сабтестов. Не заводился отдельный BUG-NNN — первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-close-watcher",
