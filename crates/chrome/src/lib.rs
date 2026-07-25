@@ -19,8 +19,9 @@
 mod gate;
 mod model;
 pub use model::{
-    bind_model, ChromeDownloadModel, ChromeDropdownModel, ChromeFindModel, ChromeModel,
-    ChromePermState, ChromeSuggestionModel, ChromeTabModel, ChromeWorkspaceModel, OmniboxModel,
+    bind_model, ChromeCertModel, ChromeDownloadModel, ChromeDropdownModel, ChromeFindModel,
+    ChromeModel, ChromePaletteModel, ChromePaletteResultModel, ChromePermState,
+    ChromeSuggestionModel, ChromeTabModel, ChromeWorkspaceModel, OmniboxModel,
 };
 
 /// Error returned by [`ChromeIds::resolve`] when the chrome [`lumen_dom::Document`]

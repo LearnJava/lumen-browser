@@ -3764,11 +3764,18 @@
        "note": "Закрыто (2026-07-25, P1). Структурный блокер: `#findBar`/`#downloadsPanel` — дети `#contentArea`, а `relayout_chrome_host` целиком выпиливал `#contentArea` из дерева (CC-4) — новый `take_content_area` (main.rs) спасает эти два узла обратно на место `#contentArea` перед покраской (position:absolute не создаёт свой stacking context у `#contentArea`, поэтому пересадка не меняет z-порядок — 2 unit-теста подтверждают). `#omniDropdown` (реальные саджесты из `AddressBarState::suggestions()`, клик коммитит через новый `AddressBarState::commit_suggestion`), `#findBar` (value/count из `FindState`, легаси-бар выключен под флагом), `#downloadsPanel` (реальные `DownloadEntry` вместо демо-карточек), `#permPopover` (реальный `blocked_total`, 2 permission-строки Camera/Microphone через новый `PermissionPanel::set_permission` — прямая установка, не cycle, т.к. в макете 2 отдельные кнопки без \"ask\"). Per-download-card кнопки Open/Reveal/Cancel — вне DoD: в замороженном `docs/design/lumen-v3_3.html` у них нет onclick вообще (чисто декоративные в макете), тот же класс пробела что CC-6 `SetProfile`. `#statAds`/`#statFp` остаются \"0\" — `ShieldsPanel` хранит только один честный total, разбивку трекеры/реклама/fingerprint фабриковать не стали. 14 новых тестов `cargo test -p lumen-chrome` (35/35) + 2 новых `cargo test -p lumen-shell` (1703/1703) + workspace clippy зелёные. После CC-7"
       },
       {
-       "id": "CC-10",
-       "title": "CC-10: Панели — батч 2",
+       "id": "CC-10a",
+       "title": "CC-10a: Палитра + модалы сертификата/печати",
+       "status": "done",
+       "size": "S",
+       "note": "Закрыто (2026-07-25, P1). Разбивка CC-10 на 2 среза по факту (бриф это допускал) — эта половина: палитра Ctrl+K + модалы сертификата/печати. Попутно найден и исправлен пробел CC-9: легаси-рендереры `#downloadsPanel`/`#permPopover` (`download::build_download_bar`, `panels::shields_panel::build_panel`, `panels::permission_panel::build_panel`) не были гейтированы `css_chrome_enabled` — под флагом оба рендерера рисовались одновременно; `shields.refresh()` вынесен из-под гейта отдельно (иначе `#statTrackers` не обновлялся бы под флагом). `#cpOverlay`/`#certOverlay`/`#printOverlay` добавлены в список `take_content_area` (все три — `position:absolute` прямые дети `#contentArea`). Палитра: `ChromePaletteModel`/`bind_palette` перестраивает `.cp-row` из `CommandPalette::filtered()` (design не имел статичного примера строки — форма `.dd-icon`/`.dd-text` изобретена по CSS-классам `.cp-row .dd-icon{...}`); клик по строке вне DoD (в макете нет `data-action` на строках, только клавиатурный выбор). Сертификат: `ChromeCertModel`/`bind_cert` пишет реальные поля `PanelCertData` в 6 статичных `.cert-row`+`.cert-fp`+`<h3>`; design покрывает подмножество из 9 легаси-полей (нет TLS-version слота) — недостающее рендерится как «—», не выдумывается (тот же принцип что CC-9 для `#statAds`/`#statFp`). Печать: только open/close (`#printOverlay` содержит голые `<select>`/`<input type=checkbox>` без `data-action`/id — привязка `PrintPanel`-полей вне DoD этого среза, тот же класс пробела что per-download-card кнопки CC-9). `ChromeAction::ClosePalette`/`CloseModal` расковычены из no-op; `CloseModal` шарится между cert/print — резолвится обходом предков от `nid` (`chrome_modal_ancestor`, зеркалит `chrome_permission_kind_for_node`). Найдены и исправлены недостающие `relayout_chrome_host()` в `ToggleCommandPalette`/`TogglePrint`/`ToggleCert`/`OpenCertViewer`/`OpenPrintDialog` (тот же класс бага, что CC-7/CC-9 находили раньше). 5 новых unit-тестов `cargo test -p lumen-chrome` (40/40) + `cargo test -p lumen-shell` без регрессий + workspace clippy зелёные. После CC-9"
+      },
+      {
+       "id": "CC-10b",
+       "title": "CC-10b: History/bookmarks/settings + AI-Web-сайдбар",
        "status": "planned",
        "size": "M",
-       "note": "History/bookmarks/settings (6 секций), палитра Ctrl+K, модалы сертификата/печати, правый AI/Web-сайдбар; при разрастании разбить на 2 среза. После CC-9"
+       "note": "History/bookmarks/settings (6 секций c тумблерами/radio-cards/perm-table), правый AI/Web-сайдбар. **DoD:** соответствующие legacy-билдеры не вызываются при флаге. После CC-10a"
       },
       {
        "id": "CC-11",
