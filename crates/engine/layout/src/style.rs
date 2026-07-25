@@ -15,7 +15,7 @@
 //! фазы со «честным» Selectors-движком.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::color_mix::{HueInterpolationMethod, MixColorSpace, mix_colors_hue};
 use crate::font_palette::{resolve_font_palette_overrides, ResolvedFontPalette};
@@ -10991,6 +10991,82 @@ pub fn set_interactive_state(
 /// Clears hover/focus/active state after layout.
 pub fn clear_interactive_state() {
     set_interactive_state(None, None, None);
+}
+
+/// `node`'s ancestor chain, root-first, `node` itself last. Empty if `node` is
+/// `None`.
+fn ancestor_chain_inclusive(doc: &Document, node: Option<NodeId>) -> Vec<NodeId> {
+    let Some(node) = node else { return Vec::new() };
+    let mut chain = Vec::new();
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        chain.push(n);
+        cur = doc.get(n).parent;
+    }
+    chain.reverse();
+    chain
+}
+
+/// BUG-341 S3 — conservative restyle root-set (brief §4) for an interactive-
+/// state transition (`:hover` / `:focus` / `:active`, each read via
+/// [`set_interactive_state`]).
+///
+/// `:hover`/`:active` match the affected element *and all its ancestors*
+/// (CSS Selectors L4 §4.3/§4.5); `:focus-within` matches an ancestor of the
+/// focused element the same way. Moving the state from `prev` to `new`
+/// therefore flips the pseudo-class boolean on every node strictly below
+/// their lowest common ancestor (the LCA's own boolean is unaffected — it was
+/// already true, and stays true, for either "some descendant is `prev`" or
+/// "some descendant is `new`"). For each flipped node `N`, this invalidates
+/// `N`'s *parent's* whole subtree rather than just `N`'s own — the brief's
+/// sanctioned v1 over-approximation, covering sibling/descendant combinators
+/// (`N:hover + X`, `N:hover ~ X`, `N:hover X`) without a selector-dependency
+/// index (deferred to S6).
+///
+/// Returns an empty set for a no-op transition (`prev == new`).
+pub fn restyle_root_set_for_state_change(
+    doc: &Document,
+    prev: Option<NodeId>,
+    new: Option<NodeId>,
+) -> HashSet<NodeId> {
+    let mut set = HashSet::new();
+    if prev == new {
+        return set;
+    }
+    let prev_chain = ancestor_chain_inclusive(doc, prev);
+    let new_chain = ancestor_chain_inclusive(doc, new);
+    let common = prev_chain
+        .iter()
+        .zip(new_chain.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    for &n in &prev_chain[common..] {
+        set.insert(doc.get(n).parent.unwrap_or(n));
+    }
+    for &n in &new_chain[common..] {
+        set.insert(doc.get(n).parent.unwrap_or(n));
+    }
+    set
+}
+
+/// BUG-341 S3 — conservative restyle root-set (brief §4) for a DOM attribute/
+/// class/structural change on `node` (chrome `bind_model` diff or a JS DOM
+/// mutation).
+///
+/// Unlike interactive state, class/attribute/structural selectors don't match
+/// ancestors (this engine has no `:has()`), so invalidating `node`'s parent's
+/// whole subtree is enough: it covers `node` itself, descendant selectors
+/// rooted at `node` (`node X`), and sibling combinators (`node + X`,
+/// `node ~ X`) — all resolve within the parent's subtree. A node with no
+/// parent (the document root) invalidates itself.
+pub fn restyle_root_set_for_node_change(
+    doc: &Document,
+    nodes: impl IntoIterator<Item = NodeId>,
+) -> HashSet<NodeId> {
+    nodes
+        .into_iter()
+        .map(|n| doc.get(n).parent.unwrap_or(n))
+        .collect()
 }
 
 thread_local! {

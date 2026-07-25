@@ -425,8 +425,79 @@ treated as high priority before that slice is attempted. Given the
 general-engine scope, the fix likely belongs to whichever developer/slice
 owns layout-engine performance work broadly, not narrowly to the CC track.
 
+## S3 — incremental cascade v1 (conservative invalidation)
+
+Landed the mechanism the S1/S2 profiling pointed at: `precompute_counters`
+(53% of the cycle) recomputed every node's `ComputedStyle` on every call, with
+no notion of "what changed". S3 adds an incremental entry point
+(`lumen_layout::counters::incremental_precompute_counters` +
+`RestyleDelta { prev_styles, dirty_roots }`) that reuses the previous cascade's
+per-node `ComputedStyle` outside a conservative dirty root-set, and derives
+that root-set for the two change classes in scope
+(`style::restyle_root_set_for_state_change` for `:hover`/`:focus`/`:active`
+transitions — ancestor-chain-toggle-aware, since `:hover` matches ancestors
+too — and `style::restyle_root_set_for_node_change` for DOM attribute/class
+mutations). Gated behind `INCREMENTAL_RESTYLE` (thread-local, off by default);
+`incremental_precompute_counters` falls back to a full recompute when the flag
+is off, so nothing observes any behaviour change until a caller opts in.
+
+**Not wired into any pipeline yet** — `layout_measured_hyp` /
+`layout_mutation_incremental` still call the full `precompute_counters`
+unconditionally; that wiring (plus re-measuring `cc12_chrome_perf_gate`) is
+S5. S3 is the cascade mechanism + differential tests + a standalone
+measurement, deliberately scoped that way so S4 (box-build skip) lands before
+the two get wired together.
+
+**Correctness:** `cargo test -p lumen-layout` — 4 differential tests in
+`incremental.rs` (`incr_cascade_matches_full_trivial`,
+`incr_cascade_matches_full_interactive_rules`,
+`incr_cascade_hover_transition_matches_full_and_recomputes_subset`,
+`incr_cascade_class_change_matches_full_and_recomputes_subset`), the last two
+exercising a *real* root-set (not the empty/steady-state case) and asserting
+strictly fewer `compute_style` calls than a full cascade, not just equality.
+Full crate suite: 3256 passed, 2 failed — both the pre-existing BUG-339
+`FONT_CH_EX` flaky pair (confirmed pre-existing, unrelated to this change).
+
+**Measured `precompute_counters` wall-time drop** (standalone, real chrome
+doc via `lumen_chrome::parse_document` + `bind_model` with the CC-12 6-tab/
+3-workspace fixture, dev-release,
+`cargo test -p lumen-shell --profile dev-release
+bug341_s3_incremental_cascade_precompute_share -- --ignored --nocapture`):
+
+```
+BUG341_S3_FULL_PRECOMPUTE        count=60 min=38.40ms p50=41.98ms p95=44.45ms
+BUG341_S3_INCREMENTAL_PRECOMPUTE count=60 min=18.14ms p50=19.35ms p95=20.98ms
+BUG341_S3: 828 nodes, dirty_roots=1; drop=53.9% (p50)
+```
+
+For a **representative** interaction — hover moving between two sibling tab
+rows, the common case for real mouse movement over already-hovered chrome —
+`precompute_counters` drops ~54%. Since S1 measured this stage at 53% of the
+full cycle, this alone is roughly a ~29% cut of the whole
+mutate→restyle→relayout→paint cost once wired in (S5), before S4's
+`build_box` skip or S6's tightening.
+
+**Documented worst case, not silently omitted:** the *same* measurement using
+CC-12's own hover fixture shape (`SIDEBAR`/`None` toggle every cycle, as
+`cc12_chrome_perf_gate_hover_and_keystroke_cycles` does) shows only **1.2%**
+drop, `dirty_roots` covering most of the document. This is *correct* behaviour
+of the v1 model, not a bug in it: `:hover` matches an element **and all its
+ancestors** (CSS Selectors L4 §4.3), so a transition from "nothing hovered" to
+"`SIDEBAR` hovered" flips the `:hover` boolean on every ancestor from
+`SIDEBAR` up to the document root — conservatively invalidating from close to
+the root is the correct (if expensive) answer for that specific transition
+shape, not a defect in the invalidation logic. Real mouse movement over an
+already-interactive page rarely produces a "nothing hovered" state except at
+the very first mouse-enter of a session; CC-12's on/off toggle is a
+simplification of the benchmark harness, not representative of steady-state
+interaction. Worth revisiting when S5 wires this in: either give CC-12's
+fixture a "something is always hovered" steady state (closer to real usage),
+or treat the first mouse-enter transition as a one-time cost outside the
+per-interaction budget. Flagging now so S5/S6 don't have to rediscover it.
+
 ## Repro
 
 ```bash
 cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s3_incremental_cascade_precompute_share -- --ignored --nocapture
 ```

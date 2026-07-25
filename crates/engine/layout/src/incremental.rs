@@ -849,14 +849,17 @@ mod tests {
         }
     }
 
-    // ── BUG-341 S2: incremental-cascade differential-test scaffold ────────────
+    // ── BUG-341 S3: incremental-cascade differential tests ─────────────────────
     //
-    // The incremental cascade (BUG-341 S3+) must reproduce the full cascade's
-    // per-node `ComputedStyle` map bit-for-bit for the same final state (brief
-    // §4 "Correctness gate"). These helpers lock that harness in now, while the
-    // "incremental" path is still a trivial full recompute — so S3 only has to
-    // swap `incremental_cascade`'s body for the real incremental entry point and
-    // the `assert_cascades_eq` assertion already guards its correctness.
+    // The incremental cascade must reproduce the full cascade's per-node
+    // `ComputedStyle` map bit-for-bit for the same final state (brief §4
+    // "Correctness gate"). `incremental_cascade` below now calls the real
+    // entry point (`incremental_precompute_counters`); the trivial/interactive
+    // tests exercise the reuse path across a *steady state* (nothing changed),
+    // and the transition tests further down exercise a genuine root-set
+    // derivation (`restyle_root_set_for_state_change` /
+    // `restyle_root_set_for_node_change`) and assert it recomputes a strict
+    // subset of the document.
 
     /// Full-cascade reference: the `styles` map a complete `layout_measured_hyp`
     /// pass produces for `html` under the `css` stylesheet.
@@ -871,13 +874,33 @@ mod tests {
         layout_measured_hyp_with_counters(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false).1
     }
 
-    /// Incremental-cascade result. S2: identical to [`full_cascade`] — the
-    /// incremental path does not exist yet, so this is a trivial full recompute
-    /// that is equal by construction. S3 swaps this body for the real incremental
-    /// cascade entry point; the differential assertion in the tests below then
-    /// guards that it still matches the full cascade exactly.
+    /// Incremental-cascade result via the real incremental entry point
+    /// (BUG-341 S3): builds a baseline cascade over the same `html`/`css`, then
+    /// re-cascades through [`crate::counters::incremental_precompute_counters`]
+    /// with an *empty* dirty root-set — the steady-state case where nothing
+    /// changed since the baseline. Every node must reuse its cached
+    /// `ComputedStyle` (none are in the root-set), so this exercises the reuse
+    /// path for the whole document while still having to match a fresh full
+    /// recompute exactly.
     fn incremental_cascade(html: &str, css: &str) -> crate::counters::CounterMap {
-        full_cascade(html, css)
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use lumen_dom::build_flat_tree;
+        use crate::counters::{incremental_precompute_counters, precompute_counters, set_incremental_restyle, RestyleDelta};
+        let doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+        let flat = build_flat_tree(&doc);
+
+        crate::style::invalidate_rule_idx_cache();
+        let prev = precompute_counters(&doc, &sheet, vp, &flat, false);
+
+        set_incremental_restyle(true);
+        crate::style::invalidate_rule_idx_cache();
+        let delta = RestyleDelta { prev_styles: prev.styles(), dirty_roots: Default::default() };
+        let result = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        set_incremental_restyle(false);
+        result
     }
 
     /// Assert two cascade maps are identical: same node set, same `ComputedStyle`
@@ -893,9 +916,9 @@ mod tests {
 
     #[test]
     fn incr_cascade_matches_full_trivial() {
-        // Scaffold sanity: with the S2 trivial incremental == full recompute, the
-        // two cascade maps must be identical. Locks the differential harness so
-        // S3's real incremental cascade has an assertion to satisfy from day one.
+        // Steady state: the whole document is reused from `prev_styles`
+        // (empty dirty root-set). Must still match a fresh full recompute —
+        // this is the reuse path's correctness baseline.
         let html = r#"<div class="a"><p>one</p><p>two</p></div><span>three</span>"#;
         let css = ".a { color: red; } p { font-weight: bold; }";
         let full = full_cascade(html, css);
@@ -905,10 +928,10 @@ mod tests {
 
     #[test]
     fn incr_cascade_matches_full_interactive_rules() {
-        // A doc with :hover/:focus-dependent rules — exactly the class S3's
-        // invalidation model must handle. In S2 both paths full-recompute, so the
-        // maps match; the test exists so S3's incremental cascade is exercised
-        // against interactive selectors (the hardest correctness case) at once.
+        // Same steady-state reuse check, but against a doc with
+        // :hover/:focus-dependent rules — the hardest correctness case for the
+        // cascade itself (though this test doesn't change any interactive
+        // state; see `incr_cascade_hover_transition_*` below for that).
         let html = r#"<ul id="menu">
             <li class="item">a</li>
             <li class="item">b</li>
@@ -923,5 +946,143 @@ mod tests {
         let full = full_cascade(html, css);
         let incr = incremental_cascade(html, css);
         assert_cascades_eq(&full, &incr);
+    }
+
+    #[test]
+    fn incr_cascade_hover_transition_matches_full_and_recomputes_subset() {
+        // BUG-341 S3: a real interactive-state change — hover moves from one
+        // `<li>` to its sibling — must produce a cascade bit-identical to a
+        // fresh full recompute of the post-transition state, while recomputing
+        // strictly fewer nodes than a full cascade (proving
+        // `restyle_root_set_for_state_change` is doing real, not degenerate,
+        // work: the unrelated `#unrelated` subtree must be untouched).
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use lumen_dom::build_flat_tree;
+        use crate::counters::{
+            incremental_precompute_counters, precompute_counters, recompute_count,
+            reset_recompute_count, set_incremental_restyle, RestyleDelta,
+        };
+        use crate::style::{clear_interactive_state, restyle_root_set_for_state_change, set_interactive_state};
+
+        let html = r#"<ul id="menu">
+            <li id="a" class="item">a</li>
+            <li id="b" class="item">b</li>
+            <li id="c" class="item">c</li>
+        </ul>
+        <div id="unrelated"><p>x</p><p>y</p><p>z</p></div>"#;
+        let css = r#"
+            .item { color: black; padding: 4px; }
+            .item:hover { color: blue; }
+            .item:hover + .item { color: green; }
+        "#;
+        let doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+        let flat = build_flat_tree(&doc);
+
+        let a = doc.find_by_id("a").expect("#a must exist");
+        let b = doc.find_by_id("b").expect("#b must exist");
+
+        // Baseline: #a hovered.
+        set_interactive_state(Some(a), None, None);
+        crate::style::invalidate_rule_idx_cache();
+        let baseline = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let total_nodes = baseline.styles().len();
+
+        // Reference: full recompute with hover moved to #b.
+        set_interactive_state(Some(b), None, None);
+        crate::style::invalidate_rule_idx_cache();
+        let full_after = precompute_counters(&doc, &sheet, vp, &flat, false);
+
+        // Incremental: same transition, conservative root-set derived from it.
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b));
+        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots };
+        set_incremental_restyle(true);
+        reset_recompute_count();
+        crate::style::invalidate_rule_idx_cache();
+        let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        let recomputed = recompute_count() as usize;
+        set_incremental_restyle(false);
+        clear_interactive_state();
+
+        assert_eq!(
+            incr_after.styles(), full_after.styles(),
+            "incremental hover transition must reproduce the full cascade exactly",
+        );
+        assert!(
+            recomputed < total_nodes,
+            "incremental cascade recomputed {recomputed}/{total_nodes} nodes — a \
+             hover move between #a/#b siblings should not force-recompute the \
+             unrelated #unrelated subtree",
+        );
+    }
+
+    #[test]
+    fn incr_cascade_class_change_matches_full_and_recomputes_subset() {
+        // BUG-341 S3: a DOM class mutation on a single node must match a full
+        // recompute of the new state while only recomputing that node's parent
+        // subtree (brief §4 — no `:has()` in this engine, so unlike interactive
+        // state, no ancestor invalidation is needed for attribute/class changes).
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use lumen_dom::{build_flat_tree, NodeData};
+        use crate::counters::{
+            incremental_precompute_counters, precompute_counters, recompute_count,
+            reset_recompute_count, set_incremental_restyle, RestyleDelta,
+        };
+        use crate::style::restyle_root_set_for_node_change;
+
+        let css = r#"
+            .item { color: black; }
+            .item.active { color: blue; }
+            .item.active + .item { color: green; }
+        "#;
+        let html = r#"<ul id="menu">
+            <li id="a" class="item">a</li>
+            <li id="b" class="item">b</li>
+            <li id="c" class="item">c</li>
+        </ul>
+        <div id="unrelated"><p>x</p><p>y</p><p>z</p></div>"#;
+        let mut doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+        let flat = build_flat_tree(&doc);
+
+        crate::style::invalidate_rule_idx_cache();
+        let baseline = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let total_nodes = baseline.styles().len();
+
+        let a = doc.find_by_id("a").expect("#a must exist");
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(a).data {
+            for attr in attrs.iter_mut() {
+                if attr.name.local == "class" {
+                    attr.value = "item active".to_string();
+                }
+            }
+        }
+
+        crate::style::invalidate_rule_idx_cache();
+        let full_after = precompute_counters(&doc, &sheet, vp, &flat, false);
+
+        let dirty_roots = restyle_root_set_for_node_change(&doc, [a]);
+        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots };
+        set_incremental_restyle(true);
+        reset_recompute_count();
+        crate::style::invalidate_rule_idx_cache();
+        let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        let recomputed = recompute_count() as usize;
+        set_incremental_restyle(false);
+
+        assert_eq!(
+            incr_after.styles(), full_after.styles(),
+            "incremental class-change cascade must reproduce the full cascade exactly",
+        );
+        assert!(
+            recomputed < total_nodes,
+            "incremental cascade recomputed {recomputed}/{total_nodes} nodes — a \
+             class change on #a should not force-recompute the unrelated \
+             #unrelated subtree",
+        );
     }
 }

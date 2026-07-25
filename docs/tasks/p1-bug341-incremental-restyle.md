@@ -153,11 +153,21 @@ Each slice is independently mergeable, guarded, and check-in-gated.
 - **S2 — persist `styles` + differential-test harness.** Return `CounterMap`
   (incl. `styles`) from `layout_measured_hyp` alongside the tree; add an
   `incr_cascade == full_cascade` differential test scaffold (initially trivially
-  equal — full recompute — to lock the harness in). No behaviour change.
-- **S3 — incremental cascade, v1 conservative invalidation.** Recompute only the
-  root-set; reuse cached `ComputedStyle` elsewhere. Gate behind a flag
-  (`INCREMENTAL_RESTYLE`), off by default. Differential test must pass on the
-  chrome doc + a page-corpus sample. Measure `precompute_counters` share drop.
+  equal — full recompute — to lock the harness in). No behaviour change. ✅
+- **S3 — incremental cascade, v1 conservative invalidation.** ✅ Done.
+  `lumen_layout::counters::incremental_precompute_counters` + `RestyleDelta`
+  reuse cached `ComputedStyle` outside the dirty root-set; root-set derived by
+  `style::restyle_root_set_for_state_change` (interactive-state, ancestor-
+  chain-toggle-aware) / `style::restyle_root_set_for_node_change` (DOM
+  attribute/class). Gated behind `INCREMENTAL_RESTYLE` (off by default, falls
+  back to full recompute). 4 differential tests in `incremental.rs`, two of
+  them asserting a real root-set recomputes strictly fewer nodes than a full
+  cascade. Measured `precompute_counters` p50 drop: **~54%** for a
+  representative sibling-tab hover move, **~1%** for CC-12's own SIDEBAR/None
+  toggle fixture (a documented worst case, not a regression — see BUG-341 "S3"
+  section for the full numbers and why). Not yet wired into any pipeline
+  (`layout_measured_hyp`/`layout_mutation_incremental` still full-recompute
+  unconditionally) — that's S5.
 - **S4 — incremental box-build.** Skip `build_box` for undamaged subtrees.
   Measure `build_box` share drop.
 - **S5 — wire chrome + page pipelines onto the incremental path**, flag on.

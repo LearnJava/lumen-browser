@@ -24,11 +24,17 @@ CC-14/CC-15). Ветка-резервация уже существует: `p1-b
       `incremental.rs` (`full_cascade`/`incremental_cascade`/`assert_cascades_eq`
       + тесты `incr_cascade_matches_full_trivial`/`_interactive_rules`, пока
       тривиально равные). S3 меняет только тело `incremental_cascade`.
-- [ ] **S3 — инкрементальный каскад, v1 (консервативная инвалидация).**
-      Пересчитывать только restyle root-set, переиспользовать кэш `ComputedStyle`.
-      За флагом `INCREMENTAL_RESTYLE`, по умолчанию выкл. Дифф-тест обязан
-      проходить на chrome-доке + сэмпле корпуса. Замерить падение доли
-      `precompute_counters`.
+- [x] **S3 — инкрементальный каскад, v1 (консервативная инвалидация).**
+      Готово. `counters::incremental_precompute_counters` + `RestyleDelta`
+      переиспользуют `ComputedStyle` вне dirty root-set; root-set —
+      `style::restyle_root_set_for_state_change` (hover/focus/active,
+      ancestor-chain-aware) / `style::restyle_root_set_for_node_change` (DOM
+      attribute/class). За флагом `INCREMENTAL_RESTYLE` (выкл по умолчанию,
+      без него — полный пересчёт). 4 дифф-теста в `incremental.rs`. Замер:
+      `precompute_counters` p50 падает ~54% на реалистичном hover-переходе
+      между соседними вкладками, ~1% на фикстуре CC-12 (SIDEBAR/None-тумблер
+      — задокументированный худший случай, см. BUG-341 «S3»). В пайплайн ещё
+      не встроено (это S5).
 - [ ] **S4 — инкрементальный box-build.** Пропускать `build_box` для
       неповреждённых поддеревьев. Замерить падение доли `build_box`.
 - [ ] **S5 — включить инкрементальный путь в chrome + page pipeline** (флаг вкл).
