@@ -200,6 +200,56 @@ CC-13's ARIA roles are set inside these same rebuild functions), so
 diff-based rewrites need their own scoped review against all of them rather
 than a bolt-on for this investigation.
 
+## Partial fix (P1, 2026-07-25): skip the Step-1 preliminary layout when nothing reads it
+
+`lay_out_flex`'s Step 1 loop (`box_tree.rs:8333`) unconditionally called the
+full recursive `lay_out()` for every flex item, purely to populate `item.rect`
+for the `all_hyp` computation right after it. Auditing every branch of that
+computation shows most of them never actually read `item.rect`:
+
+- Row direction, `FlexBasis::Length` — resolves the base size directly from
+  the style length, `item.rect` unused.
+- Row direction, `FlexBasis::Auto`/`Content` with no explicit `width` — uses
+  the existing cheap `flex_auto_base_main_width` probe (`max_content_outer_width`
+  bounded by resolved min/max-width), not `item.rect`.
+- Column direction, `FlexBasis::Length` when `min-height` is set or
+  `overflow-y` isn't `visible` — the `auto_min` floor is forced to `0.0`
+  regardless of `item.rect.height`.
+
+Only these still need the real preliminary layout: column direction with
+`FlexBasis::Auto`/`Content` (always needs content height), and row direction
+`FlexBasis::Auto`/`Content` with an explicit `width` set (still reads
+`item.rect.width`). The Step-1 loop now computes a per-item `needs_prelayout`
+bool from the item's own style (no layout needed to decide) and only calls
+`lay_out()` when true; the final placement pass a few lines down already
+calls `lay_out()` unconditionally for every item regardless, so no item loses
+a layout pass — this only removes the ones nothing read.
+
+Measured effect on the same `cc12_chrome_perf_gate_hover_and_keystroke_cycles`
+bench (dev-release):
+
+```
+CC12_HOVER count=60 min=70.16ms p50=85.56ms  p95=138.47ms p99=150.95ms max=150.95ms
+CC12_KEY   count=60 min=69.04ms p50=80.86ms  p95=85.50ms  p99=89.27ms  max=89.27ms
+```
+
+vs. the original baseline (`p50=587/575ms`, `p95=744/637ms`) — roughly a
+**6-7× reduction**, consistent with chrome's UI eliminating most of the
+Step-1 passes at every level of its flex nesting. `cargo test -p lumen-layout`
+unaffected (3252/3254 passing — the 2 failures are the pre-existing
+`FONT_CH_EX` flaky pair, unrelated).
+
+**CC-12's gate is still red** (p95 138ms vs the 2ms budget) — this fix only
+resolves the `lay_out_flex` half of the double cost documented above; the
+independent `bind_model` list-rebuild node-churn problem (also documented
+above, "Attempted mitigation" section) still forces effectively-full relayout
+on every chrome interaction and has not been touched by this fix. **Both
+still need fixing together to get CC-12/CC-14 green** — this change reduces
+the size of that remaining gap by ~6-7× but does not close it. Root cause
+(the general architectural fix — a layout-result cache) also remains
+unimplemented; this is a scoped, low-risk removal of provably dead work
+within `lay_out_flex` itself, not that broader memoization layer.
+
 ## Impact
 
 CC-track chrome rendering is currently opt-in (`LUMEN_CSS_CHROME=1`), not
