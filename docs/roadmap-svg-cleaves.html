@@ -1860,9 +1860,9 @@
       {
        "id": "WPT-VENDOR-connection-allowlist",
        "title": "WPT: вендорить + прогнать категорию `connection-allowlist`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). нишевый корпоративный API"
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/connection-allowlist/`, 183 файла, вся категория живёт под `tentative/`, без category-level `META.yml`/`WEB_FEATURES.yml`), включена несмотря на скоуп 🚫 (нишевый корпоративный API) по той же постоянной пользовательской договорённости, что `accelerometer`/`acid`/`ai`/…/`compute-pressure`. Внекатегорийные хелперы не довендорены: `/common/get-host-info.sub.js`, `/common/utils.js`, `/common/blank.html`. `run_report.py --all --root connection-allowlist --recursive` прошёл полностью (~11мин, 73 отобранных id): 46 TIMEOUT (HTTPS-порт-гэп, тот же класс, что `WebCryptoAPI`/`ai`), 10 ERROR (session/crash-restart артефакты, тот же класс, что `accelerometer`/`beacon`/`payment`-подобные), 17 harness OK: 14 (`early_hints_*`+`link_header_*`) — 0/1 сабтест FAIL каждый (`early-hints-helpers.sub.js` HTTP 500 — тот же https-порт-шаблон-гэп, что `test_utils.sub.js` в `clear-site-data`, плюс невендоренный `/common/utils.js`); 3 `webrtc-*` — Connection-Allowlist не реализован (WebRTC не блокируется, `webrtc-block*` ожидают `NotAllowedError`), плюс относительный `fetch(\"/common/blank.html\")` падает тем же гэпом, что `browsing-topics`/`client-hints`. 1/20 сабтестов passed. Не заводился отдельный BUG-NNN — первый проход категории"
       },
       {
        "id": "WPT-VENDOR-console",
