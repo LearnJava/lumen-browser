@@ -183,10 +183,23 @@ pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
     }
 
     if all_clean {
-        // Entire subtree (this node + all descendants) is unchanged: clone the
-        // previous laid-out box wholesale so paint-side fragments (InlineRun
-        // `lines`, etc.) and rects are reused verbatim, then mark clean.
-        *new = prev.clone();
+        // Entire subtree (this node + all descendants) is unchanged. Children
+        // were already grafted in place by the recursive calls above, so only
+        // this node's own scalar fields need to come from `prev` — `new.children`
+        // must NOT be replaced wholesale here. (BUG-341: an earlier version did
+        // `*new = prev.clone()`, deep-cloning the whole subtree again at *every*
+        // ancestor level on the way back up, i.e. O(depth) redundant clones of
+        // the same already-grafted descendants for a linear chain of clean
+        // ancestors.) `kind` still needs cloning (not just `==` — carries
+        // post-layout payload e.g. InlineRun's laid-out `lines`, absent on the
+        // freshly-built `new` side).
+        new.rect = prev.rect;
+        new.kind = prev.kind.clone();
+        new.scroll_x = prev.scroll_x;
+        new.scroll_y = prev.scroll_y;
+        new.col_span = prev.col_span;
+        new.row_span = prev.row_span;
+        new.svg_group_transform = prev.svg_group_transform.clone();
         new.dirty = DirtyBits::CLEAN;
         return true;
     }

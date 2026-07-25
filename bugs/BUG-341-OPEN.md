@@ -318,6 +318,57 @@ the original layout-result-cache fix for `lay_out_flex`'s remaining
 non-doubled cost (both still needed to reach the 2ms budget — the
 `bind_model` fix alone was necessary but is not sufficient).
 
+## Follow-up (P1, 2026-07-25, third session): `graft_geometry` quadratic clone fixed — real ~20% win, gate still red
+
+Fixed the `graft_geometry` root cause identified above (`crates/engine/layout/src/incremental.rs`):
+the `if all_clean { *new = prev.clone(); }` branch now only copies this node's
+own scalar fields (`rect`, `kind`, `scroll_x`/`scroll_y`, `col_span`/`row_span`,
+`svg_group_transform`) from `prev` instead of deep-cloning the whole subtree —
+`new.children` is left untouched, since each clean child already replaced
+itself in place one recursion level down. `kind` still needs an explicit
+clone (not just the `==`-style `kind_layout_eq` check that gated entry into
+this branch) because it can carry post-layout payload the freshly-built `new`
+side doesn't have yet (e.g. `InlineRun`'s laid-out `lines`). This removes the
+O(depth) redundant clone entirely — every node now does O(1) work in this
+branch regardless of subtree size. All 23 existing `lumen-layout::incremental`
+tests pass unchanged (the fix only changes performance, not the grafted
+values — verified: the `graft_identical_tree_is_all_clean` test's "mutating
+`prev` afterwards must not affect `fresh`" assertion still holds, since the
+copied fields are by-value/independently-cloned, not shared references).
+
+Re-measured `relayout_chrome_host` on `layout_mutation_incremental` (same
+harness as the two prior attempts above, dev-release,
+`cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate --
+--ignored --nocapture`):
+
+```
+CC12_HOVER count=60 min=65.66ms p50=68.89ms p95=72.79ms p99=76.39ms max=76.39ms
+CC12_KEY   count=60 min=65.95ms p50=68.27ms p95=73.90ms p99=86.11ms max=86.11ms
+```
+
+vs. the current `layout_measured_hyp` production baseline (`p50≈85/72ms`,
+`p95≈116/82ms`) and the pre-fix `layout_mutation_incremental` attempt
+(`p50=106/81ms`, worse than full layout) — this is now a genuine, real
+**~20% improvement over full layout** (p50 85→69ms), confirming the diagnosed
+root cause was correct and the fix works as intended.
+
+**CC-12's gate is still red** (p95 ≈73-74ms vs the 2ms budget, ~35× over) —
+20% off an already-2-order-of-magnitude-over-budget number doesn't close the
+gap. The remaining cost is the full style cascade (`build_box`, unconditional
+per `layout_mutation_incremental`'s own doc comment) plus whatever residual
+`lay_out_flex` cost the CC-12 partial fix above didn't remove (column
+Auto/Content items, row Auto/Content with explicit width — still genuinely
+need Step-1). Only the general layout-result cache (see "Fix scope note"
+above) can plausibly close the remaining ~35× gap; **not attempted here**.
+
+Given `layout_mutation_incremental` is a real (if partial) win with no
+observed regression risk in the existing test suite, but CC-12's gate stays
+red either way, `relayout_chrome_host`/the CC-12 bench were **not** switched
+over to it in this session — adopting it is a legitimate follow-up on its
+own merits (worth doing once someone is touching that code path anyway) but
+is a separate decision from unblocking CC-14, which needs the cache fix
+regardless. **CC-14 remains blocked** on the layout-result cache.
+
 ## Impact
 
 CC-track chrome rendering is currently opt-in (`LUMEN_CSS_CHROME=1`), not
