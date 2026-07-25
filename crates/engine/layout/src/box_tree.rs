@@ -8331,9 +8331,40 @@ fn lay_out_flex(
     };
 
     // Step 1 — preliminary layout for intrinsic sizes.
+    //
+    // Only run for items whose `all_hyp` computation below actually reads
+    // `item.rect` back: column-direction items always need the item's real
+    // content height, and row-direction `auto`/`content` items with no
+    // explicit width need `item.rect.width`. Every other combination
+    // resolves its main size from the style directly (`FlexBasis::Length`)
+    // or from the existing cheap `flex_auto_base_main_width` probe (row,
+    // `auto`/`content`, no explicit width) — for those, `item.rect` is never
+    // read before the final placement pass below re-lays the item out anyway
+    // with its resolved main size. Skipping the unneeded call avoids a full
+    // recursive re-layout of the item's whole subtree that nothing reads
+    // (BUG-341: every flex item paid for two full recursive layouts instead
+    // of one, compounding multiplicatively with flex-nesting depth).
     let cb = content_width;
     for &i in &item_idxs {
-        lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
+        let needs_prelayout = {
+            let is = &children[i].style;
+            if is_column {
+                match &is.flex_basis {
+                    FlexBasis::Auto | FlexBasis::Content => true,
+                    FlexBasis::Length(_) => {
+                        is.min_height.is_none() && is.overflow_y == Overflow::Visible
+                    }
+                }
+            } else {
+                match &is.flex_basis {
+                    FlexBasis::Auto | FlexBasis::Content => is.width.is_some(),
+                    FlexBasis::Length(_) => false,
+                }
+            }
+        };
+        if needs_prelayout {
+            lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
+        }
     }
 
     // Compute hypothetical main sizes for all items (outer = including margins).
