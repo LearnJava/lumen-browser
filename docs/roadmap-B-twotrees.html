@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-25",
  "counts": {
-  "open": 42,
+  "open": 44,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 314,
+ "total_bugs": 316,
  "phases": [
   {
    "id": "P0",
@@ -1934,9 +1934,9 @@
       {
        "id": "WPT-VENDOR-cookies",
        "title": "WPT: вендорить + прогнать категорию `cookies`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/cookies/`, 171 файл: `attributes/`, `domain/`, `encoding/`, `name/`, `ordering/`, `origin-bound-cookies/`, `partitioned-cookies/`, `path/`, `prefix/`, `resources/`, `samesite/`, `samesite-none-secure/`, `schemeful-same-site/`, `secure/`, `size/`, `third-party-cookies/`, `value/`), скоуп ⬜. Внекатегорийный хелпер `/common/get-host-info.sub.js` не довендорен (та же методология, что `FileAPI`/`ai`). `run_report.py --all --root cookies --recursive` (82 отобранных id, ~26:30): 25 SKIP (testdriver.js), 40 TIMEOUT + 8 ERROR на `.https.`-only id (HTTPS-порт-гэп, тот же класс, что `WebCryptoAPI`/`ai`/`background-fetch`), часть не-https тестов TIMEOUT из-за multi-window/iframe-навигации вне однооконной модели исполнителя. 3/82 harness OK, 1/7 сабтестов passed — `meta-blocked.html` PASS; `navigated-away.html`/`document-cookie.non-secure.html`/`domain-attribute-missing.sub.html` FAIL, все трассируются к уже задокументированным гэпам (невендоренный `/common/blank.html`, wptserve 500 на `.sub.js`-подстановку без https-порта). Не заводился отдельный BUG-NNN"
       },
       {
        "id": "WPT-VENDOR-cookiestore",
@@ -6018,6 +6018,13 @@
    "date": "2026-07-20",
    "debtor": false
   },
+  "BUG-328": {
+   "status": "open",
+   "title": "`dom/nodes/Element-children.html` снова unexpected (2 сабтеста) против `.ini`, флипнутого в `expected: PASS` при закрытии BUG-322/BUG-323 2026-07-21: `.item(\"fo…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
   "BUG-329": {
    "status": "fixed",
    "title": "`finds_bundled_inter` жёстко ожидал `family_count() == 1` в `assets/fonts/` — DS-4 добавила туда Golos Text + JetBrains Mono, стало 3 семейства, assertion устар…",
@@ -6031,6 +6038,13 @@
    "component": "paint/test-harness (`background-repeat: space`)",
    "date": null,
    "debtor": true
+  },
+  "BUG-331": {
+   "status": "open",
+   "title": "Cloudflare-защищённые сайты стабильно отдают Lumen `HTTP 503` (4/4 повторов на httpbin.org), хотя `curl` с идентичной строкой User-Agent (`Lumen/0.5.0`) получае…",
+   "component": "network (`crates/network/src/tls/fingerprint.rs`, `http/headers.rs`)",
+   "date": null,
+   "debtor": false
   },
   "BUG-332": {
    "status": "fixed",
@@ -6227,7 +6241,8 @@
    "BUG-323",
    "BUG-324",
    "BUG-325",
-   "BUG-327"
+   "BUG-327",
+   "BUG-328"
   ],
   "js (WEB_API_SHIM, dom.rs) + native `v8_runtime.rs`/`dom.rs` (оба движка)": [
    "BUG-326"
@@ -6399,6 +6414,9 @@
   ],
   "network (HTTP client)": [
    "BUG-278"
+  ],
+  "network (`crates/network/src/tls/fingerprint.rs`, `http/headers.rs`)": [
+   "BUG-331"
   ],
   "network (`filter/easylist.rs` + filter context в `lib.rs`)": [
    "BUG-292"
