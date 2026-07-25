@@ -24318,6 +24318,125 @@ mod tests {
         );
     }
 
+    /// BUG-341 S3: standalone measurement of the incremental cascade's
+    /// `precompute_counters` wall-time saving on the real chrome document, for
+    /// a *representative* hover interaction — the pointer moving between two
+    /// sibling tab rows (`sbTabs`' first two children after `bind_model`
+    /// populates 6 tabs, same fixture CC-12 uses). Not wired into
+    /// `layout_measured_hyp`/`layout_mutation_incremental` yet (that pipeline
+    /// wiring is S5), so this calls
+    /// `lumen_layout::counters::{precompute_counters, incremental_precompute_counters}`
+    /// directly rather than going through CC-12's full `relayout_chrome_host`
+    /// cycle.
+    ///
+    /// Deliberately does **not** mirror CC-12's own hover fixture
+    /// (`SIDEBAR`/`None` toggle each cycle): `restyle_root_set_for_state_change`
+    /// treats a transition where nothing was previously hovered as "every
+    /// ancestor of the new target flipped its `:hover` boolean" (correct per
+    /// CSS Selectors L4 §4.3 — `:hover` matches ancestors too), which forces a
+    /// conservative full-subtree invalidation from close to the document root.
+    /// That is real, correct behaviour of the v1 model (brief §4 explicitly
+    /// allows v1 to over-approximate), but it means CC-12's specific
+    /// on/off-toggle interaction shape is close to a worst case for this
+    /// model, not the common case — sibling-to-sibling hover motion (this
+    /// test) is what most real mouse movement over already-hovered chrome
+    /// looks like, and is where the model is supposed to pay off. Recorded
+    /// here as the honest, representative number; see BUG-341 for the
+    /// SIDEBAR/None-toggle number as a documented worst case instead of a
+    /// silently-omitted one.
+    ///
+    /// `#[ignore]`d like CC-12 itself — a wall-clock number isn't a pass/fail
+    /// gate here (no pipeline consumes the incremental path yet), it is a
+    /// recorded measurement (brief §5 S3: "measure `precompute_counters` share
+    /// drop"). Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s3_incremental_cascade_precompute_share -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual perf measurement (BUG-341 S3) — see doc comment for run command"]
+    fn bug341_s3_incremental_cascade_precompute_share() {
+        use lumen_layout::counters::{
+            incremental_precompute_counters, precompute_counters, set_incremental_restyle, RestyleDelta,
+        };
+        use lumen_layout::style::restyle_root_set_for_state_change;
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let viewport = Size::new(1280.0, 800.0);
+        let flat = lumen_dom::build_flat_tree(&doc);
+
+        let tabs_container = doc
+            .find_by_id(lumen_chrome::ids::SB_TABS)
+            .expect("chrome preview must have #sbTabs");
+        let tab_rows = doc.get(tabs_container).children.clone();
+        assert!(tab_rows.len() >= 2, "bind_model must have populated at least 2 tab rows");
+        let tab_a = tab_rows[0];
+        let tab_b = tab_rows[1];
+
+        const WARMUP: usize = 10;
+        const SAMPLES: usize = 60;
+
+        // Baseline snapshot: tab_a hovered (steady state before the move).
+        lumen_layout::set_interactive_state(Some(tab_a), None, None);
+        let baseline = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        let total_nodes = baseline.styles().len();
+
+        let mut full_stats = lumen_paint::FrameStats::new();
+        for i in 0..WARMUP + SAMPLES {
+            lumen_layout::set_interactive_state(Some(tab_b), None, None);
+            let t0 = std::time::Instant::now();
+            let map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if i >= WARMUP {
+                full_stats.record(ms as f32);
+            }
+            std::hint::black_box(&map);
+        }
+        let full_summary = full_stats.summary().expect("samples collected");
+        eprintln!("{}", full_summary.display_with("BUG341_S3_FULL_PRECOMPUTE"));
+
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b));
+        let dirty_count = dirty_roots.len();
+        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots };
+        set_incremental_restyle(true);
+        let mut incr_stats = lumen_paint::FrameStats::new();
+        let mut last_incr_map = None;
+        for i in 0..WARMUP + SAMPLES {
+            lumen_layout::set_interactive_state(Some(tab_b), None, None);
+            let t0 = std::time::Instant::now();
+            let map = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, &delta);
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if i >= WARMUP {
+                incr_stats.record(ms as f32);
+            }
+            last_incr_map = Some(map);
+        }
+        set_incremental_restyle(false);
+        lumen_layout::clear_interactive_state();
+        let incr_summary = incr_stats.summary().expect("samples collected");
+        eprintln!("{}", incr_summary.display_with("BUG341_S3_INCREMENTAL_PRECOMPUTE"));
+
+        // Correctness: same hover target, must match the full cascade exactly
+        // regardless of the wall-time saving (brief §4 correctness gate).
+        lumen_layout::set_interactive_state(Some(tab_b), None, None);
+        let full_after = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        lumen_layout::clear_interactive_state();
+        assert_eq!(
+            last_incr_map.expect("at least one sample").styles(),
+            full_after.styles(),
+            "incremental cascade must reproduce the full cascade exactly on the chrome doc",
+        );
+
+        eprintln!(
+            "BUG341_S3: {total_nodes} nodes, dirty_roots={dirty_count}; full_precompute \
+             p50={:.4}ms p95={:.4}ms; incremental_precompute p50={:.4}ms p95={:.4}ms; drop={:.1}%",
+            full_summary.p50_ms,
+            full_summary.p95_ms,
+            incr_summary.p50_ms,
+            incr_summary.p95_ms,
+            (1.0 - incr_summary.p50_ms as f64 / full_summary.p50_ms as f64) * 100.0,
+        );
+    }
+
     #[test]
     fn take_content_area_with_no_salvage_ids_behaves_like_a_plain_prune() {
         let html = concat!(

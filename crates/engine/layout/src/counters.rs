@@ -27,7 +27,8 @@
 //! descriptors from `@counter-style` at-rules. Use `build_counter_style_registry`
 //! to build from a `Stylesheet`, then pass to `format_counter_with_registry`.
 
-use std::collections::HashMap;
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 
 use lumen_dom::{Document, FlatTree, NodeData, NodeId};
 
@@ -184,8 +185,101 @@ pub fn precompute_counters(
     let root_style = ComputedStyle::root();
     let mut ctx = CounterCtx::default();
     let mut map = CounterMap::default();
-    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode);
+    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false);
     map
+}
+
+/// BUG-341 S3 — incremental-cascade root-set + reuse cache (brief §3/§4).
+///
+/// Passed to [`incremental_precompute_counters`]. Every node in `dirty_roots`,
+/// and every descendant reached from it via [`FlatTree::children_of`] (i.e.
+/// its whole subtree), gets a fresh `compute_style` call; every other node
+/// reuses its entry from `prev_styles` verbatim. A node absent from
+/// `prev_styles` (freshly inserted since the snapshot was taken) always
+/// recomputes even when not in `dirty_roots`, since there is nothing to reuse.
+///
+/// Callers derive `dirty_roots` conservatively via
+/// [`crate::style::restyle_root_set_for_state_change`] (interactive-state
+/// transitions) or [`crate::style::restyle_root_set_for_node_change`] (DOM
+/// attribute/class/structural changes) — see brief §4 for the invalidation
+/// model these implement.
+pub struct RestyleDelta<'a> {
+    /// The previous cascade's per-node style cache — [`CounterMap::styles`]
+    /// from an earlier full or incremental pass over the same document.
+    pub prev_styles: &'a HashMap<NodeId, ComputedStyle>,
+    /// Root nodes whose entire subtree must be re-cascaded.
+    pub dirty_roots: HashSet<NodeId>,
+}
+
+/// BUG-341 S3 — incremental cascade: like [`precompute_counters`], but reuses
+/// `delta.prev_styles` for every node outside `delta.dirty_roots` (and their
+/// subtrees) instead of recomputing `compute_style`.
+///
+/// Must reproduce [`precompute_counters`]'s output bit-for-bit for the same
+/// final document state (brief §4 "Correctness gate") — the
+/// `incr_cascade_matches_full_*` differential tests in `incremental.rs` guard
+/// this. Any divergence means `dirty_roots` under-approximated the change,
+/// not an acceptable trade-off.
+pub fn incremental_precompute_counters(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    flat: &FlatTree,
+    dark_mode: bool,
+    delta: &RestyleDelta<'_>,
+) -> CounterMap {
+    if !incremental_restyle_enabled() {
+        // Flag off (the default): behave exactly like a full cascade so a
+        // caller can wire this entry point in ahead of the flag ever being
+        // flipped on (S5) without changing behaviour.
+        return precompute_counters(doc, sheet, viewport, flat, dark_mode);
+    }
+    let root_style = ComputedStyle::root();
+    let mut ctx = CounterCtx::default();
+    let mut map = CounterMap::default();
+    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(delta), false);
+    map
+}
+
+thread_local! {
+    /// BUG-341 S3 — master on/off switch for the incremental cascade
+    /// (`incremental_precompute_counters`), mirroring
+    /// `box_tree::INCREMENTAL_LAYOUT_MODE`'s pattern. Off by default: no
+    /// current pipeline entry point (`layout_measured_hyp`,
+    /// `layout_mutation_incremental`) consults it yet — that wiring is S5.
+    /// Exists now so `RestyleDelta`-based callers (differential tests today,
+    /// pipeline code in S5) have a single well-known kill switch.
+    static INCREMENTAL_RESTYLE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Enables/disables the incremental cascade for subsequent
+/// [`incremental_precompute_counters`] calls on the current thread.
+pub fn set_incremental_restyle(enabled: bool) {
+    INCREMENTAL_RESTYLE.with(|c| c.set(enabled));
+}
+
+/// Whether the incremental cascade is currently enabled on this thread.
+pub fn incremental_restyle_enabled() -> bool {
+    INCREMENTAL_RESTYLE.with(|c| c.get())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// BUG-341 S3 test instrumentation — counts `compute_style` calls made by
+    /// `walk` (i.e. `must_recompute == true`). Lets the differential tests
+    /// assert the incremental path recomputes strictly fewer nodes than a
+    /// full cascade, not just that the two agree.
+    static RECOMPUTE_COUNT: Cell<u32> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_recompute_count() {
+    RECOMPUTE_COUNT.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn recompute_count() -> u32 {
+    RECOMPUTE_COUNT.with(|c| c.get())
 }
 
 /// CSS Generated Content L3 §3.2 — record the quote-nesting depth for each
@@ -227,6 +321,15 @@ fn walk(
     ctx: &mut CounterCtx,
     map: &mut CounterMap,
     dark_mode: bool,
+    // BUG-341 S3: `None` = full cascade (every node recomputes, today's
+    // behaviour, byte-for-byte unchanged). `Some` = incremental cascade —
+    // nodes outside `force`/`dirty_roots` reuse `prev_styles` instead of
+    // calling `compute_style`. See `RestyleDelta`.
+    incr: Option<&RestyleDelta<'_>>,
+    // Set once an ancestor (or this node itself, via `dirty_roots`) forced a
+    // recompute — propagates down the rest of the subtree unconditionally
+    // (brief §4: "root-set and their style-descendants").
+    force: bool,
 ) {
     match &doc.get(id).data {
         // Text / comment / doctype / fragment — no counter properties, no children.
@@ -236,7 +339,7 @@ fn walk(
         // Document node: has no style of its own; just recurse into children.
         NodeData::Document => {
             for &child_id in flat.children_of(doc, id) {
-                walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode);
+                walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force);
             }
             return;
         }
@@ -244,7 +347,21 @@ fn walk(
         NodeData::Element { .. } => {} // handled below
     }
 
-    let style = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
+    let must_recompute = match incr {
+        None => true,
+        Some(delta) => {
+            force || delta.dirty_roots.contains(&id) || !delta.prev_styles.contains_key(&id)
+        }
+    };
+    let style = if must_recompute {
+        #[cfg(test)]
+        RECOMPUTE_COUNT.with(|c| c.set(c.get() + 1));
+        compute_style(doc, id, sheet, inherited, viewport, dark_mode)
+    } else {
+        // Safe: `must_recompute` is false only when `incr` is `Some` and
+        // `prev_styles` contains `id` (checked in the match arm above).
+        incr.unwrap().prev_styles[&id].clone()
+    };
     // BUG-284: cache so `build_box`'s own `compute_style(id, ...)` call (same
     // doc/sheet/viewport/dark_mode, same `inherited` chain) can reuse this
     // result instead of recomputing an identical cascade.
@@ -259,6 +376,9 @@ fn walk(
 
     // CSS Generated Content L3 §3.2 — ::before quotes are in document order
     // before the element's children; advance and snapshot the quote depth.
+    // Always run (even when `style` was reused) — `quote_depth` is a running
+    // document-order counter that must stay continuous regardless of which
+    // nodes recomputed their style.
     if let Some(bps) =
         compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode)
     {
@@ -268,8 +388,9 @@ fn walk(
         }
     }
 
+    let child_force = force || must_recompute;
     for &child_id in flat.children_of(doc, id) {
-        walk(doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode);
+        walk(doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode, incr, child_force);
     }
 
     // ::after quotes come after all children in document order.
