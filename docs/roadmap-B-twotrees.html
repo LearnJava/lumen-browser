@@ -1962,9 +1962,9 @@
       {
        "id": "WPT-VENDOR-cpu-performance",
        "title": "WPT: вендорить + прогнать категорию `cpu-performance`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/cpu-performance/`, 2 файла: `META.yml`, `cpu-performance.tentative.https.window.js`), скоуп ⬜ (`navigator.cpuPerformance`, предложение WICG, в Lumen не реализовано). Внекатегорийных хелперов нет. Самая маленькая вендоренная категория по числу файлов (2, против 3 у `audio-session`). `run_report.py --all --root cpu-performance --recursive` отобрал 1 id (`.https.`-only) и прошёл за ~30с: TIMEOUT (`invalid url: invalid port: \"None\"`, тот же HTTPS-порт-гэп, что `WebCryptoAPI`/`ai`/`cookiestore`/`core-aam`). 0/1 harness OK, 0/0 сабтестов. Не заводился отдельный BUG-NNN — первый проход категории"
       },
       {
        "id": "WPT-VENDOR-credential-management",
