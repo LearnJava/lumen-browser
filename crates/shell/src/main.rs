@@ -5803,6 +5803,15 @@ fn salvage_layout_boxes(
     }
 }
 
+/// CC-10: which modal `Lumen::chrome_modal_ancestor` resolved a `CloseModal`
+/// click to — `#certOverlay` and `#printOverlay` share the same
+/// `data-action="close-modal"` value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChromeModalKind {
+    Cert,
+    Print,
+}
+
 /// Строит display list с правильным painting order (CSS 2.1 Appendix E, z-index stacking).
 fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
     let tree = StackingTree::build(layout);
@@ -8521,10 +8530,24 @@ impl Lumen {
         lumen_layout::clear_interactive_state();
         // CC-9: `#findBar`/`#downloadsPanel` are salvaged out of
         // `#contentArea` before the rest of it is discarded — see
-        // `take_content_area`'s doc comment.
-        self.chrome_page_host_rect = doc
-            .find_by_id(lumen_chrome::ids::CONTENT_AREA)
-            .and_then(|id| take_content_area(&mut layout, id, &[lumen_chrome::ids::FIND_BAR, lumen_chrome::ids::DOWNLOADS_PANEL], doc));
+        // `take_content_area`'s doc comment. CC-10 adds the command palette
+        // and cert/print modals — all three are `position:absolute` direct
+        // children of `#contentArea` too, same reasoning as `#findBar`/
+        // `#downloadsPanel`.
+        self.chrome_page_host_rect = doc.find_by_id(lumen_chrome::ids::CONTENT_AREA).and_then(|id| {
+            take_content_area(
+                &mut layout,
+                id,
+                &[
+                    lumen_chrome::ids::FIND_BAR,
+                    lumen_chrome::ids::DOWNLOADS_PANEL,
+                    lumen_chrome::ids::CP_OVERLAY,
+                    lumen_chrome::ids::CERT_OVERLAY,
+                    lumen_chrome::ids::PRINT_OVERLAY,
+                ],
+                doc,
+            )
+        });
         // CC-7/CC-9: captured non-destructively (unlike `#contentArea`
         // above) — these nodes stay in the tree and paint normally.
         self.chrome_omni_input_rect = omni_input
@@ -8661,6 +8684,68 @@ impl Lumen {
             panels::permission_panel::PermissionState::Deny => lumen_chrome::ChromePermState::Deny,
             panels::permission_panel::PermissionState::Ask => lumen_chrome::ChromePermState::Ask,
         });
+        // CC-10: same `MAX_VISIBLE_ROWS`-windowed slice
+        // `command_palette::build_panel` shows, mapped down to what `.cp-row`
+        // can render — a command's keyboard shortcut, or a bookmark/history
+        // item's URL, as the sub-label.
+        let filtered = self.command_palette.filtered();
+        let palette_results: Vec<lumen_chrome::ChromePaletteResultModel> = filtered
+            .iter()
+            .enumerate()
+            .skip(self.command_palette.scroll_row)
+            .take(panels::command_palette::MAX_VISIBLE_ROWS)
+            .filter_map(|(rank, &item_idx)| {
+                self.command_palette.items.get(item_idx).map(|item| {
+                    let sub_label = match &item.kind {
+                        panels::command_palette::PaletteKind::Command(action) => {
+                            action.shortcut().to_owned()
+                        }
+                        panels::command_palette::PaletteKind::Bookmark
+                        | panels::command_palette::PaletteKind::History => item.url.clone(),
+                    };
+                    lumen_chrome::ChromePaletteResultModel {
+                        label: item.title.clone(),
+                        sub_label,
+                        selected: rank == self.command_palette.selected,
+                    }
+                })
+            })
+            .collect();
+        let palette = lumen_chrome::ChromePaletteModel {
+            open: self.command_palette.visible,
+            query: self.command_palette.query.clone(),
+            results: palette_results,
+        };
+        // CC-10: the design's 6 `.cert-row`s + `.cert-fp` cover a subset of
+        // `PanelCertData`'s 9 fields (no TLS-version slot) — missing/empty
+        // individual fields render as `"—"`, mirroring
+        // `cert_panel::build_rows`'s own em-dash fallback.
+        let dash = |s: &str| if s.is_empty() { "\u{2014}".to_owned() } else { s.to_owned() };
+        let cert = match &self.cert_panel.cert {
+            Some(c) if c.has_data() => {
+                let san = if c.san_list.is_empty() { "\u{2014}".to_owned() } else { c.san_list.join(", ") };
+                let issuer = if !c.issuer_org.is_empty() { c.issuer_org.clone() } else { dash(&c.issuer_cn) };
+                lumen_chrome::ChromeCertModel {
+                    open: self.cert_panel.visible,
+                    title: format!("Сертификат — {}", dash(&c.subject_cn)),
+                    rows: [
+                        dash(&c.subject_cn),
+                        dash(&c.subject_org),
+                        san,
+                        issuer,
+                        dash(&c.not_before),
+                        dash(&c.not_after),
+                    ],
+                    fingerprint: dash(&c.fingerprint_sha256),
+                }
+            }
+            _ => lumen_chrome::ChromeCertModel {
+                open: self.cert_panel.visible,
+                title: "Сертификат недоступен".to_owned(),
+                rows: std::array::from_fn(|_| "\u{2014}".to_owned()),
+                fingerprint: "\u{2014}".to_owned(),
+            },
+        };
         lumen_chrome::ChromeModel {
             dark_theme: self.dark_mode,
             layout_vertical: self.vertical_tabs.visible,
@@ -8679,6 +8764,9 @@ impl Lumen {
             popover_open,
             blocked_total: self.shields.blocked_total_count(),
             permissions,
+            palette,
+            cert,
+            print_open: self.print_panel.visible,
         }
     }
 
@@ -8782,11 +8870,12 @@ impl Lumen {
     /// stamped on it (CC-6, `crates/chrome/src/model.rs`) — `nid` is the
     /// `data-action`-carrying node itself for these four. Actions whose only
     /// visible effect would still need a `chrome_doc` DOM mutation this slice
-    /// doesn't cover (`SetProfile`, popover-local toggles, …) remain no-ops:
-    /// the popovers themselves are still legacy overlays pending CC-9/CC-10
-    /// migration, and `data-profile` already updates automatically on any
-    /// profile switch made through the legacy profile-menu popover (it is
-    /// read fresh from `self.profile_menu` by every [`Self::chrome_model_snapshot`]).
+    /// doesn't cover (`SetProfile`, settings/history/bookmarks section
+    /// switches, …) remain no-ops: those panels are still legacy overlays
+    /// pending CC-10b, and `data-profile` already updates automatically on
+    /// any profile switch made through the legacy profile-menu popover (it
+    /// is read fresh from `self.profile_menu` by every
+    /// [`Self::chrome_model_snapshot`]).
     fn dispatch_chrome_action(
         &mut self,
         nid: NodeId,
@@ -8809,6 +8898,8 @@ impl Lumen {
             ChromeAction::OpenCertViewer => {
                 let cert = self.cert_info.clone();
                 self.cert_panel.toggle(cert);
+                // CC-10: see the matching comment on `ToggleShieldPopover`.
+                self.relayout_chrome_host();
             }
             ChromeAction::ToggleShieldPopover => {
                 self.shields.toggle();
@@ -8836,7 +8927,11 @@ impl Lumen {
                 self.downloads.toggle_visible();
                 self.relayout_chrome_host();
             }
-            ChromeAction::OpenPrintDialog => self.print_panel.toggle(),
+            ChromeAction::OpenPrintDialog => {
+                self.print_panel.toggle();
+                // CC-10: see the matching comment on `ToggleShieldPopover`.
+                self.relayout_chrome_host();
+            }
             ChromeAction::ToggleDevtools => self.devtools_console.toggle(),
             ChromeAction::ToggleProfileMenu => {
                 self.profile_menu.toggle();
@@ -8941,12 +9036,36 @@ impl Lumen {
                     }
                 }
             }
+            // CC-10: `#cpOverlay` itself carries this action (scrim click
+            // closes the palette, mirroring the legacy modal's own
+            // click-outside behavior) — `nid` doesn't need resolving further.
+            ChromeAction::ClosePalette => {
+                self.command_palette.close();
+                self.relayout_chrome_host();
+            }
+            // CC-10: shared by `#certOverlay` and `#printOverlay` (root
+            // scrim, `.modal-close`, and both footer buttons all carry this
+            // same action) — which one to close is resolved by walking up
+            // from `nid` to whichever modal ancestor it's inside.
+            ChromeAction::CloseModal => match self.chrome_modal_ancestor(nid) {
+                Some(ChromeModalKind::Cert) => {
+                    self.cert_panel.close();
+                    self.relayout_chrome_host();
+                }
+                Some(ChromeModalKind::Print) => {
+                    self.print_panel.close();
+                    self.relayout_chrome_host();
+                }
+                None => {}
+            },
             // Demo-only actions on the static preview markup: no shell state
-            // backs them yet (CC-10 panel migration). Recognised (so the
-            // click doesn't fall through to legacy geometry) but otherwise a
-            // no-op for now. `SetProfile` specifically: the profile-menu
-            // popover is still a legacy overlay (its click handling — and
-            // the actual `profiles.set_active` call — lives in the
+            // backs them yet (CC-10 panel migration remainder — history/
+            // bookmarks/settings/palette-of-panels, AI-Web sidebar).
+            // Recognised (so the click doesn't fall through to legacy
+            // geometry) but otherwise a no-op for now. `SetProfile`
+            // specifically: the profile-menu popover is still a legacy
+            // overlay (its click handling — and the actual
+            // `profiles.set_active` call — lives in the
             // `WindowEvent::MouseInput` legacy-popover branch, not here),
             // and `ChromeModel` already reflects whatever profile that path
             // activates on the very next relayout.
@@ -8954,14 +9073,33 @@ impl Lumen {
             | ChromeAction::ArchiveCard
             | ChromeAction::SetSettingsSection
             | ChromeAction::ToggleSwitch
-            | ChromeAction::CloseModal
-            | ChromeAction::ClosePalette
             | ChromeAction::ToggleFocusTimer
             | ChromeAction::ToggleFocus
             | ChromeAction::SetSidebarTab
             | ChromeAction::CloseRightSidebar
             | ChromeAction::SetDevtoolsTab => {}
         }
+    }
+
+    /// CC-10: which modal `nid` (a `close-modal`-carrying node, or one of its
+    /// descendants) belongs to — `#certOverlay` and `#printOverlay` share the
+    /// same `data-action` value, so this walks up the tree to disambiguate,
+    /// mirroring [`Self::chrome_permission_kind_for_node`].
+    fn chrome_modal_ancestor(&self, nid: NodeId) -> Option<ChromeModalKind> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        let cert_overlay = doc.find_by_id(lumen_chrome::ids::CERT_OVERLAY);
+        let print_overlay = doc.find_by_id(lumen_chrome::ids::PRINT_OVERLAY);
+        let mut cur = Some(nid);
+        while let Some(id) = cur {
+            if Some(id) == cert_overlay {
+                return Some(ChromeModalKind::Cert);
+            }
+            if Some(id) == print_overlay {
+                return Some(ChromeModalKind::Print);
+            }
+            cur = doc.get(id).parent;
+        }
+        None
     }
 
     /// CC-9: walks up from `nid` (a `.perm-btn` inside `#permPopover`) to its
@@ -15453,7 +15591,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 // Download panel: viewport-locked bottom-right panel.
                 // Rendered before the tab bar so it appears below the tab strip.
-                if self.downloads.visible {
+                // CC-10: gated off the flag — under `LUMEN_CSS_CHROME=1` this
+                // is `#downloadsPanel`, rendered by the engine chrome since
+                // CC-9 (`bind_downloads`). This gate was missed in CC-9
+                // itself (both renderers painted simultaneously under the
+                // flag until now).
+                if self.downloads.visible && !self.css_chrome_enabled {
                     let win_size = (
                         self.viewport_width_css() as u32,
                         self.window_height_css() as u32,
@@ -15583,22 +15726,33 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 // Shields floating panel (7C.4): top-right overlay anchored below
-                // the tab bar.  Refresh blocked counts before rendering.
+                // the tab bar. Refresh blocked counts before rendering — kept
+                // unconditional (CC-10) since `chrome_model_snapshot`'s
+                // `#statTrackers` binding (CC-9) reads `blocked_total_count()`
+                // and this is the only call site that refreshes it; only the
+                // legacy *paint* below is gated.
                 if self.shields.visible {
                     self.shields.refresh();
-                    let tab_h = toolbar::CHROME_H;
-                    let win_w = self.viewport_width_css();
-                    let mut sh_cmds = panels::shields_panel::build_panel(
-                        &self.shields,
-                        win_w,
-                        tab_h,
-                        &pal,
-                    );
-                    overlay_buf.append(&mut sh_cmds);
+                    // CC-10: gated off the flag — under `LUMEN_CSS_CHROME=1`
+                    // this is `#permPopover`, rendered by the engine chrome
+                    // since CC-9 (`bind_popover`). Missed in CC-9 itself.
+                    if !self.css_chrome_enabled {
+                        let tab_h = toolbar::CHROME_H;
+                        let win_w = self.viewport_width_css();
+                        let mut sh_cmds = panels::shields_panel::build_panel(
+                            &self.shields,
+                            win_w,
+                            tab_h,
+                            &pal,
+                        );
+                        overlay_buf.append(&mut sh_cmds);
+                    }
                 }
 
-                // Permission popover (7C.2): top-left overlay anchored below the tab bar.
-                if self.permission.visible {
+                // Permission popover (7C.2): top-left overlay anchored below the
+                // tab bar. CC-10: gated off the flag — same `#permPopover`
+                // engine renderer as shields above, missed in CC-9.
+                if self.permission.visible && !self.css_chrome_enabled {
                     let tab_h = toolbar::CHROME_H;
                     let mut perm_cmds = panels::permission_panel::build_panel(
                         &self.permission,
@@ -15695,8 +15849,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut a11y_cmds);
                 }
 
-                // Print dialog (E-1): centred overlay, Ctrl+P.
-                if self.print_panel.visible {
+                // Print dialog (E-1): centred overlay, Ctrl+P. CC-10: gated
+                // off the flag — under `LUMEN_CSS_CHROME=1` this is
+                // `#printOverlay`, open/close-only rendered by the engine
+                // chrome (the design's plain `<select>`/checkbox form fields
+                // carry no `data-action`/id hooks to bind real `PrintPanel`
+                // field data to — out of this slice's DoD, same class of gap
+                // as CC-9's per-download-card buttons).
+                if self.print_panel.visible && !self.css_chrome_enabled {
                     let win_w = self.viewport_width_css();
                     let win_h = self.viewport_height_css();
                     let pp_x = (win_w - panels::print_panel::PANEL_W) * 0.5;
@@ -15741,7 +15901,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 // Certificate viewer panel (§D-1): centred floating overlay.
-                if self.cert_panel.visible {
+                // CC-10: gated off the flag — under `LUMEN_CSS_CHROME=1` this
+                // is `#certOverlay`, rendered by the engine chrome
+                // (`bind_cert`).
+                if self.cert_panel.visible && !self.css_chrome_enabled {
                     let win_w = self.viewport_width_css();
                     let win_h = self.viewport_height_css();
                     let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
@@ -15930,7 +16093,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 // Command palette (task #23): modal — drawn above everything,
                 // including the tab bar, with a full-window dimming scrim.
-                if self.command_palette.visible {
+                // CC-10: gated off the flag — under `LUMEN_CSS_CHROME=1` this
+                // is `#cpOverlay`, rendered by the engine chrome
+                // (`bind_palette`).
+                if self.command_palette.visible && !self.css_chrome_enabled {
                     let win_w = self.viewport_width_css();
                     let win_h =
                         self.viewport_height_css() + toolbar::CHROME_H;
@@ -17791,6 +17957,12 @@ impl Lumen {
                     self.refresh_palette_items();
                 }
                 self.request_redraw();
+                // CC-10: `#cpOverlay`'s engine-rendered open state/results
+                // (`Self::chrome_model_snapshot`) is baked into
+                // `self.chrome_layout` at `relayout_chrome_host` time, not
+                // recomputed every `RedrawRequested` — same class of gap
+                // CC-7/CC-9 found for the omnibox/find-bar. No-op off the flag.
+                self.relayout_chrome_host();
             }
             KeyCommand::ToggleFocusMode => {
                 // Enter with a default-length Pomodoro; re-baseline the timer so
@@ -17850,11 +18022,15 @@ impl Lumen {
             KeyCommand::TogglePrint => {
                 self.print_panel.toggle();
                 self.request_redraw();
+                // CC-10: see the matching comment on `ToggleCommandPalette`.
+                self.relayout_chrome_host();
             }
             KeyCommand::ToggleCert => {
                 let cert = self.cert_info.clone();
                 self.cert_panel.toggle(cert);
                 self.request_redraw();
+                // CC-10: see the matching comment on `ToggleCommandPalette`.
+                self.relayout_chrome_host();
             }
             KeyCommand::ZoomIn => {
                 self.zoom_factor = zoom::zoom_in(self.zoom_factor);

@@ -65,6 +65,16 @@ pub struct ChromeModel {
     /// asset order (`Камера`, `Микрофон`) — `PermissionKind::ALL`'s first two
     /// entries. The design has no rows for `Notifications`/`Clipboard`.
     pub permissions: [ChromePermState; 2],
+    /// `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`.
+    pub palette: ChromePaletteModel,
+    /// `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`.
+    pub cert: ChromeCertModel,
+    /// `true` shows `#printOverlay` (CC-10) — mirrors `PrintPanel::visible`.
+    /// The design's print form (plain `<select>`/`<input type=checkbox>`, no
+    /// `data-action`/id hooks) carries no real `PrintPanel` field data —
+    /// only open/close state is bound, same class of scope cut as CC-9's
+    /// per-download-card buttons (frozen markup has nothing to bind to).
+    pub print_open: bool,
 }
 
 /// `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
@@ -130,6 +140,62 @@ pub struct ChromeDownloadModel {
     /// at this fill (in-flight downloads only); `None` omits the bar
     /// (matches the asset's own "done" cards, which carry no progress track).
     pub progress_fraction: Option<f32>,
+}
+
+/// `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`.
+#[derive(Debug, Clone, Default)]
+pub struct ChromePaletteModel {
+    /// `true` shows the overlay — mirrors `CommandPalette::visible`.
+    pub open: bool,
+    /// Written into `#cpInput`'s `value` attribute.
+    pub query: String,
+    /// Result rows, in ranked order (already capped to the same
+    /// `MAX_VISIBLE_ROWS`/scroll-window slice the legacy `build_panel` shows).
+    pub results: Vec<ChromePaletteResultModel>,
+}
+
+/// One `.cp-row` in `#cpList` (CC-10).
+///
+/// The frozen design has no example `.cp-row` markup to pattern-match (unlike
+/// the omnibox dropdown/download cards) — this reuses the `.dd-icon`/
+/// `.dd-text`/`.dd-title`/`.dd-sub` shape `.cp-row .dd-icon{...}`'s own CSS
+/// implies (`assets/chrome/chrome.html`), mirroring [`build_dd_row`].
+/// Row-click activation is out of this slice's DoD — the design carries no
+/// `data-action` for individual result rows (only `#cpOverlay` itself has
+/// one, to close on scrim click); keyboard navigation (`select_next`/`prev`
+/// + Enter) already works independently of rendering.
+#[derive(Debug, Clone)]
+pub struct ChromePaletteResultModel {
+    /// Main text (`.dd-title`) — command name or bookmark/history title.
+    pub label: String,
+    /// Secondary text (`.dd-sub`) — keyboard shortcut for commands, URL for
+    /// bookmarks/history.
+    pub sub_label: String,
+    /// `true` for the keyboard-highlighted row — since the design has no
+    /// `.cp-row.selected` CSS class, this is rendered as an inline
+    /// `background:var(--surface-2)` style (the same shade `.cp-row:hover`
+    /// uses), not a class.
+    pub selected: bool,
+}
+
+/// `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`.
+///
+/// The design's 6 static `.cert-row`s + 1 `.cert-fp` cover a *subset* of
+/// `PanelCertData`'s 9 fields (no TLS version row exists) — this binds only
+/// what the markup has a slot for, same honesty-over-fabrication call CC-9
+/// made for `#statAds`/`#statFp`. All-`None`/absent fields render as `"—"`,
+/// matching `cert_panel::build_rows`'s own em-dash fallback for missing data.
+#[derive(Debug, Clone, Default)]
+pub struct ChromeCertModel {
+    /// `true` shows the overlay — mirrors `CertPanel::visible`.
+    pub open: bool,
+    /// `<h3>` title text, e.g. `"Сертификат — example.com"`.
+    pub title: String,
+    /// The 6 `.cert-row` values, in the design's fixed document order:
+    /// `[subject_cn, subject_org, san, issuer, not_before, not_after]`.
+    pub rows: [String; 6],
+    /// `.cert-fp` text.
+    pub fingerprint: String,
 }
 
 /// Grant state for one permission row (CC-9) — mirrors the shell's
@@ -252,6 +318,81 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_find_bar(doc, &model.find);
     bind_downloads(doc, model.downloads_open, &model.downloads);
     bind_popover(doc, model.popover_open, model.blocked_total, &model.permissions);
+    bind_palette(doc, &model.palette);
+    bind_cert(doc, &model.cert);
+    if let Some(overlay) = doc.find_by_id(crate::ids::PRINT_OVERLAY) {
+        set_class_token(doc, overlay, "open", model.print_open);
+    }
+}
+
+/// Toggles `#cpOverlay`'s `.open` class, writes `#cpInput`'s value, and
+/// rebuilds `#cpList`'s `.cp-row` list from [`ChromePaletteModel::results`]
+/// (CC-10).
+fn bind_palette(doc: &mut Document, palette: &ChromePaletteModel) {
+    let Some(overlay) = doc.find_by_id(crate::ids::CP_OVERLAY) else { return };
+    set_class_token(doc, overlay, "open", palette.open);
+    if let Some(input) = doc.find_by_id(crate::ids::CP_INPUT) {
+        set_attr(doc, input, "value", &palette.query);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::CP_LIST) else { return };
+    remove_children_with_class(doc, list, "cp-row");
+    if palette.results.is_empty() {
+        let empty = doc.create_element(QualName::html("div"));
+        set_attr(doc, empty, "class", "cp-empty cp-row");
+        append_text(doc, empty, "Ничего не найдено");
+        doc.append_child(list, empty);
+        return;
+    }
+    for r in &palette.results {
+        let row = build_cp_row(doc, r);
+        doc.append_child(list, row);
+    }
+}
+
+fn build_cp_row(doc: &mut Document, r: &ChromePaletteResultModel) -> NodeId {
+    let row = doc.create_element(QualName::html("div"));
+    set_attr(doc, row, "class", "cp-row");
+    if r.selected {
+        set_attr(doc, row, "style", "background:var(--surface-2)");
+    }
+
+    let icon = doc.create_element(QualName::html("span"));
+    set_attr(doc, icon, "class", "dd-icon");
+    doc.append_child(row, icon);
+
+    let text = doc.create_element(QualName::html("div"));
+    set_attr(doc, text, "class", "dd-text");
+    let title = doc.create_element(QualName::html("div"));
+    set_attr(doc, title, "class", "dd-title");
+    append_text(doc, title, &r.label);
+    doc.append_child(text, title);
+    let sub = doc.create_element(QualName::html("div"));
+    set_attr(doc, sub, "class", "dd-sub");
+    append_text(doc, sub, &r.sub_label);
+    doc.append_child(text, sub);
+    doc.append_child(row, text);
+
+    row
+}
+
+/// Toggles `#certOverlay`'s `.open` class, writes the `<h3>` title, and
+/// writes [`ChromeCertModel::rows`]/`fingerprint` into the 6 static
+/// `.cert-row .v` cells (in document order) + `.cert-fp` (CC-10).
+fn bind_cert(doc: &mut Document, cert: &ChromeCertModel) {
+    let Some(overlay) = doc.find_by_id(crate::ids::CERT_OVERLAY) else { return };
+    set_class_token(doc, overlay, "open", cert.open);
+    if let Some(h3) = find_descendant_by_tag(doc, overlay, "h3") {
+        set_text(doc, h3, &cert.title);
+    }
+    let rows = find_descendants_by_class(doc, overlay, "cert-row");
+    for (row, value) in rows.iter().zip(cert.rows.iter()) {
+        if let Some(v) = doc.get(*row).children.iter().copied().find(|&c| has_class(doc, c, "v")) {
+            set_text(doc, v, value);
+        }
+    }
+    if let Some(fp) = find_descendant_by_class(doc, overlay, "cert-fp") {
+        set_text(doc, fp, &cert.fingerprint);
+    }
 }
 
 /// Rebuilds `#omniDropdown`'s `.dd-row` list from
@@ -663,6 +804,63 @@ fn find_by_class(doc: &Document, class: &str) -> Option<NodeId> {
     None
 }
 
+/// Replaces `id`'s text-node children with a single text node containing
+/// `text` — the same "detach old children, append one text node" pattern
+/// [`bind_omnibox`]/[`bind_find_bar`] already use inline, factored out for
+/// [`bind_cert`]'s several title/value cells (CC-10).
+fn set_text(doc: &mut Document, id: NodeId, text: &str) {
+    let children: Vec<NodeId> = doc.get(id).children.clone();
+    for child in children {
+        doc.detach(child);
+    }
+    append_text(doc, id, text);
+}
+
+/// Depth-first search scoped to `root`'s subtree (inclusive of `root`
+/// itself is never matched — mirrors [`crate::main`]'s `take_content_area`
+/// convention of never matching the search root) for the first element
+/// carrying `class`. Used by [`bind_cert`] to find `.cert-row`/`.cert-fp`
+/// only within `#certOverlay`, not anywhere else in the document (CC-10).
+fn find_descendant_by_class(doc: &Document, root: NodeId, class: &str) -> Option<NodeId> {
+    find_descendants_by_class(doc, root, class).into_iter().next()
+}
+
+/// Like [`find_descendant_by_class`] but collects every match, in document
+/// order — used by [`bind_cert`] to enumerate all 6 `.cert-row`s (CC-10).
+fn find_descendants_by_class(doc: &Document, root: NodeId, class: &str) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    let mut stack: Vec<NodeId> = doc.get(root).children.iter().rev().copied().collect();
+    while let Some(id) = stack.pop() {
+        let node = doc.get(id);
+        if matches!(node.data, NodeData::Element { .. }) && has_class(doc, id, class) {
+            out.push(id);
+        }
+        for &child in node.children.iter().rev() {
+            stack.push(child);
+        }
+    }
+    out
+}
+
+/// Depth-first search scoped to `root`'s subtree for the first element with
+/// tag name `tag` (case-insensitive) — used by [`bind_cert`] to find the
+/// modal's `<h3>` title (CC-10).
+fn find_descendant_by_tag(doc: &Document, root: NodeId, tag: &str) -> Option<NodeId> {
+    let mut stack: Vec<NodeId> = doc.get(root).children.iter().rev().copied().collect();
+    while let Some(id) = stack.pop() {
+        let node = doc.get(id);
+        if let NodeData::Element { name, .. } = &node.data
+            && name.local.eq_ignore_ascii_case(tag)
+        {
+            return Some(id);
+        }
+        for &child in node.children.iter().rev() {
+            stack.push(child);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1050,5 +1248,131 @@ mod tests {
             assert!(!has_class(&doc, btn, "selected-allow"));
             assert!(!has_class(&doc, btn, "selected-deny"));
         }
+    }
+
+    #[test]
+    fn palette_binds_query_and_rebuilds_results_and_toggles_open() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            palette: ChromePaletteModel {
+                open: true,
+                query: "new t".to_owned(),
+                results: vec![
+                    ChromePaletteResultModel {
+                        label: "New Tab".to_owned(),
+                        sub_label: "Ctrl+T".to_owned(),
+                        selected: true,
+                    },
+                    ChromePaletteResultModel {
+                        label: "New Window".to_owned(),
+                        sub_label: "".to_owned(),
+                        selected: false,
+                    },
+                ],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let overlay = doc.find_by_id(crate::ids::CP_OVERLAY).expect("asset has #cpOverlay");
+        assert!(has_class(&doc, overlay, "open"));
+        let input = doc.find_by_id(crate::ids::CP_INPUT).expect("asset has #cpInput");
+        assert_eq!(doc.get(input).get_attr("value"), Some("new t"));
+        let list = doc.find_by_id(crate::ids::CP_LIST).expect("asset has #cpList");
+        let rows: Vec<NodeId> =
+            doc.get(list).children.iter().copied().filter(|&c| has_class(&doc, c, "cp-row")).collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(doc.get(rows[0]).get_attr("style"), Some("background:var(--surface-2)"));
+        assert_eq!(doc.get(rows[1]).get_attr("style"), None);
+    }
+
+    #[test]
+    fn palette_closed_hides_open_class_and_empty_results_show_empty_state() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel::default());
+        let overlay = doc.find_by_id(crate::ids::CP_OVERLAY).expect("asset has #cpOverlay");
+        assert!(!has_class(&doc, overlay, "open"));
+        let list = doc.find_by_id(crate::ids::CP_LIST).expect("asset has #cpList");
+        let empty = doc.get(list).children.iter().copied().find(|&c| has_class(&doc, c, "cp-empty"));
+        assert!(empty.is_some(), "no results must render the .cp-empty state");
+    }
+
+    #[test]
+    fn cert_binds_title_rows_and_fingerprint_and_toggles_open() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            cert: ChromeCertModel {
+                open: true,
+                title: "Сертификат — example.com".to_owned(),
+                rows: [
+                    "example.com".to_owned(),
+                    "Example Inc.".to_owned(),
+                    "example.com, *.example.com".to_owned(),
+                    "Example CA".to_owned(),
+                    "2026-01-01".to_owned(),
+                    "2027-01-01".to_owned(),
+                ],
+                fingerprint: "AA:BB:CC".to_owned(),
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let overlay = doc.find_by_id(crate::ids::CERT_OVERLAY).expect("asset has #certOverlay");
+        assert!(has_class(&doc, overlay, "open"));
+        let h3 = find_descendant_by_tag(&doc, overlay, "h3").expect("#certOverlay has an <h3> title");
+        let title_text: String = doc
+            .get(h3)
+            .children
+            .iter()
+            .filter_map(|&c| match &doc.get(c).data {
+                NodeData::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(title_text, "Сертификат — example.com");
+
+        let rows = find_descendants_by_class(&doc, overlay, "cert-row");
+        assert_eq!(rows.len(), 6, "asset must have exactly 6 static .cert-row elements");
+        let first_v = doc.get(rows[0]).children.iter().copied().find(|&c| has_class(&doc, c, "v")).unwrap();
+        let first_v_text: String = doc
+            .get(first_v)
+            .children
+            .iter()
+            .filter_map(|&c| match &doc.get(c).data {
+                NodeData::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(first_v_text, "example.com");
+
+        let fp = find_descendant_by_class(&doc, overlay, "cert-fp").expect("#certOverlay has .cert-fp");
+        let fp_text: String = doc
+            .get(fp)
+            .children
+            .iter()
+            .filter_map(|&c| match &doc.get(c).data {
+                NodeData::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fp_text, "AA:BB:CC");
+    }
+
+    #[test]
+    fn cert_closed_hides_open_class() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel::default());
+        let overlay = doc.find_by_id(crate::ids::CERT_OVERLAY).expect("asset has #certOverlay");
+        assert!(!has_class(&doc, overlay, "open"));
+    }
+
+    #[test]
+    fn print_open_toggles_the_open_class() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel { print_open: true, ..ChromeModel::default() });
+        let overlay = doc.find_by_id(crate::ids::PRINT_OVERLAY).expect("asset has #printOverlay");
+        assert!(has_class(&doc, overlay, "open"));
+
+        bind_model(&mut doc, &ChromeModel { print_open: false, ..ChromeModel::default() });
+        assert!(!has_class(&doc, overlay, "open"));
     }
 }

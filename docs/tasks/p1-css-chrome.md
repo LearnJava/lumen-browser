@@ -272,8 +272,29 @@ Dropdown омнибокса (клоны шаблона саджеста), поп
 
 14 новых unit-тестов (`cargo test -p lumen-chrome`: 35/35) + 2 новых (`cargo test -p lumen-shell`: 1703/1703) + `cargo clippy -p lumen-chrome -p lumen-shell --all-targets -D warnings` зелёные. Живой смоук-запуск/интерактивная OS-инжекция не гонялись — тот же пробел, что CC-5..CC-8 документировали (инструмента в репо нет).
 
-### CC-10 (M): Панели, батч 2
-Внутренние страницы-виды (history, bookmarks, settings — 6 секций c тумблерами/radio-cards/perm-table), командная палитра (Ctrl+K), модалы сертификата и печати, правый сайдбар (AI/Web). Возможна разбивка на 2 среза по факту. **DoD:** соответствующие legacy-билдеры не вызываются при флаге.
+### CC-10a (S): Панели, батч 2 — палитра + модалы сертификата/печати
+Командная палитра (Ctrl+K), модалы сертификата и печати. **DoD:** соответствующие legacy-билдеры не вызываются при флаге.
+
+**Закрыто (2026-07-25, P1).** Разбивка CC-10 на 2 среза по факту (бриф это явно допускал) — эта половина: меньшая, самодостаточная часть (палитра + два модала), history/bookmarks/settings/AI-Web-сайдбар вынесены в CC-10b.
+
+Попутно найден и исправлен пробел, оставленный CC-9: легаси-рендереры `#downloadsPanel`/`#permPopover` (`download::build_download_bar` в `main.rs`, `panels::shields_panel::build_panel`, `panels::permission_panel::build_panel`) не были гейтированы `css_chrome_enabled` — под флагом оба рендерера (движковый и легаси) рисовались одновременно. `shields.refresh()` вынесен из-под нового гейта отдельной веткой (иначе `#statTrackers`, который CC-9 привязала к `blocked_total_count()`, никогда не обновлялся бы под флагом — `refresh()` вызывался только из этого одного, теперь гейтируемого, места).
+
+Структурная часть: `#cpOverlay`/`#certOverlay`/`#printOverlay` добавлены в список `take_content_area` (`main.rs`) — все три `position:absolute` прямые дети `#contentArea`, та же логика спасения, что CC-9 ввела для `#findBar`/`#downloadsPanel`.
+
+Палитра: `ChromePaletteModel`/`bind_palette` (`crates/chrome/src/model.rs`) перестраивает `.cp-row` из `CommandPalette::filtered()`, окно `MAX_VISIBLE_ROWS`(=9)/`scroll_row` то же, что легаси `build_panel` показывает. Design не имел статичного примера строки (в отличие от omnibox dropdown/download-карточек) — форма `.dd-icon`+`.dd-text`/`.dd-title`/`.dd-sub` изобретена по CSS-селектору `.cp-row .dd-icon{...}`, который подразумевает переиспользование того же визуального языка. Выделенная клавиатурой строка — инлайновый `style="background:var(--surface-2)"` (в CSS эталона нет класса `.cp-row.selected`). Клик по строке — вне DoD: в разметке нет `data-action` на отдельных результатах (только на `#cpOverlay` целиком — закрытие по клику на скрим), а клавиатурная навигация (`select_next`/`select_prev`+Enter) уже работает независимо от рендера.
+
+Сертификат: `ChromeCertModel`/`bind_cert` пишет реальные поля `PanelCertData` в 6 статичных `.cert-row .v` (в document-порядке: CN, Организация, SAN, CA, «Действителен с», «Действителен по») + `.cert-fp` + `<h3>`-заголовок. Design покрывает подмножество легаси `build_rows`' 9 полей (нет слота для TLS-версии) — недостающее/пустое рендерится как «—» (тот же em-dash fallback, что и у `cert_panel::build_rows`), не выдумывается — тот же принцип честности, что CC-9 применила к `#statAds`/`#statFp`.
+
+Печать: только open/close-состояние `#printOverlay` — `#printOverlay` содержит голые `<select>`/`<input type=checkbox>` без единого `data-action`/`id` (подтверждено и в замороженном `docs/design/lumen-v3_3.html`), поэтому привязка реальных полей `PrintPanel` (paper/orientation/margins/scale/…) вне DoD этого среза — тот же класс пробела, что per-download-card кнопки Open/Reveal/Cancel у CC-9 (в макете нет обработчиков вообще, не просто гэп в коде).
+
+`ChromeAction::ClosePalette`/`CloseModal` расковычены из no-op-блока. `CloseModal` шарится между `#certOverlay` и `#printOverlay` (общий `data-action` на корне-скриме, `.modal-close` и обеих кнопках подвала) — резолвится обходом предков от `nid` вверх (`Lumen::chrome_modal_ancestor`, новый локальный enum `ChromeModalKind`), зеркалит `chrome_permission_kind_for_node` из CC-9. Новый `PermissionPanel`-подобный паттерн не понадобился — просто прямой `close()`.
+
+Найдены и исправлены ещё 5 недостающих `relayout_chrome_host()` вызовов (тот же класс бага, что CC-7/CC-9 находили раньше — движковый DOM не обновляется без явного триггера): `KeyCommand::ToggleCommandPalette`/`TogglePrint`/`ToggleCert`, и `ChromeAction::OpenCertViewer`/`OpenPrintDialog` (клик по кнопкам тулбара).
+
+5 новых unit-тестов (`cargo test -p lumen-chrome`: 40/40) + `cargo test -p lumen-shell` без регрессий + `cargo clippy -p lumen-chrome -p lumen-shell --all-targets -D warnings` зелёные. Живой смоук-запуск/интерактивная OS-инжекция не гонялись — тот же пробел, что CC-5..CC-9 документировали (инструмента в репо нет).
+
+### CC-10b (M): Панели, батч 2 — history/bookmarks/settings + AI-Web-сайдбар
+Внутренние страницы-виды (history, bookmarks, settings — 6 секций c тумблерами/radio-cards/perm-table), правый сайдбар (AI/Web). **DoD:** соответствующие legacy-билдеры не вызываются при флаге.
 
 ### CC-11 (S): Анимации и transitions хрома
 Прогнать `TransitionScheduler`/`AnimationScheduler` по chrome-документу (отдельные экземпляры от страничных), подключить к кадровому циклу. **DoD:** hover-transitions, спиннер, прогресс загрузки анимируются движком.

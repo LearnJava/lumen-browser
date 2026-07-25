@@ -48,8 +48,10 @@ const INPUT_H: f32 = 40.0;
 /// Height of a single result row in CSS px.
 const ROW_H: f32 = 34.0;
 
-/// Maximum number of result rows shown at once (the list scrolls beyond this).
-const MAX_VISIBLE_ROWS: usize = 9;
+/// Maximum number of result rows shown at once (the list scrolls beyond
+/// this). Also the window `Lumen::chrome_model_snapshot` slices when
+/// rendering `#cpList` via the engine (CC-10).
+pub(crate) const MAX_VISIBLE_ROWS: usize = 9;
 
 /// Distance from the top of the window to the palette box, in CSS px.
 const TOP_MARGIN: f32 = 90.0;
