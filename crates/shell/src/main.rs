@@ -913,6 +913,10 @@ fn run_window_mode(
         chrome_omni_input_rect: None,
         chrome_sidebar_collapsed: false,
         chrome_settings_section: "general".to_owned(),
+        chrome_animation_scheduler: animation_scheduler::AnimationScheduler::new(),
+        chrome_transition_scheduler: TransitionScheduler::new(),
+        chrome_prev_styles: HashMap::new(),
+        chrome_anim_frame: None,
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         transition_scheduler: TransitionScheduler::new(),
@@ -7223,6 +7227,38 @@ struct Lumen {
     /// separate field rather than a projection of the legacy enum. Set by
     /// `ChromeAction::SetSettingsSection`.
     chrome_settings_section: String,
+    /// CC-11 (docs/tasks/p1-css-chrome.md): CSS Animations scheduler for the
+    /// chrome document — a separate instance from [`Self::animation_scheduler`]
+    /// because `chrome_doc` and the page `Document` number `NodeId`s
+    /// independently (both start at 0), so a shared scheduler would collide
+    /// entries between the two trees. Ticked on every `RedrawRequested`
+    /// alongside the page scheduler, gated on [`Self::css_chrome_enabled`].
+    /// Unlike the page scheduler, never `.clear()`-ed: `chrome_doc`'s nodes
+    /// persist for the process lifetime (no reload/navigation equivalent for
+    /// chrome), so clearing on every [`Self::relayout_chrome_host`] call —
+    /// which happens far more often than page relayouts (any hover/click) —
+    /// would restart `infinite` animations (the spinner) on every interaction.
+    chrome_animation_scheduler: animation_scheduler::AnimationScheduler,
+    /// CC-11: CSS Transitions scheduler for the chrome document — mirrors
+    /// [`Self::transition_scheduler`] but keyed against `chrome_doc`'s own
+    /// `NodeId` space (see [`Self::chrome_animation_scheduler`] doc comment).
+    /// `sync()` runs at the end of [`Self::relayout_chrome_host`] (chrome's
+    /// post-layout point, mirroring `apply_relayout_result`'s page-side
+    /// sync); `tick()` runs on every `RedrawRequested`.
+    chrome_transition_scheduler: TransitionScheduler,
+    /// CC-11: computed styles from the previous [`Self::relayout_chrome_host`]
+    /// pass — needed by [`Self::chrome_transition_scheduler`]'s `sync()` to
+    /// detect which properties changed. Mirrors [`Self::prev_styles`] for the
+    /// chrome tree.
+    chrome_prev_styles: HashMap<NodeId, ComputedStyle>,
+    /// CC-11: last computed animation/transition frame for the chrome
+    /// document. `None` when the chrome flag is off or nothing is currently
+    /// animating. Only the compositor-offloadable properties (opacity,
+    /// transform, color, background-color) are applied — same limitation as
+    /// [`Self::anim_frame`] for the page, since `width` transitions
+    /// (`#sidebar`, `.dl-progress-fill`) aren't in the Phase-0 animatable
+    /// property table (`TransitionScheduler::sync`) and stay unanimated.
+    chrome_anim_frame: Option<lumen_layout::AnimationFrame>,
     /// HTML event loop runtime. На каждой итерации winit-loop (AboutToWait)
     /// выполняется одна task, на RedrawRequested — run_rendering_step
     /// (вызывает rAF-callback-и), на WindowEvent::Resized —
@@ -8562,6 +8598,21 @@ impl Lumen {
         self.chrome_omni_input_rect = omni_input
             .and_then(|id| lumen_layout::find_box_by_node(&layout, id))
             .map(|b| b.rect);
+        // CC-11: sync transitions — compare chrome_prev_styles with the fresh
+        // layout before replacing it, mirroring apply_relayout_result's
+        // page-side sync (main.rs's collect_box_styles + sync loop). No
+        // @starting-style handling here: bind_model mutates existing
+        // chrome_doc nodes in place rather than inserting/removing them, so
+        // there are no "entering" nodes the way JS page mutation can produce.
+        let now_s = self.epoch.elapsed().as_secs_f32();
+        let mut new_styles = HashMap::new();
+        collect_box_styles(&layout, &mut new_styles);
+        for (node, new_style) in &new_styles {
+            if let Some(old_style) = self.chrome_prev_styles.get(node) {
+                self.chrome_transition_scheduler.sync(*node, old_style, new_style, now_s);
+            }
+        }
+        self.chrome_prev_styles = new_styles;
         let dl = paint_ordered(&layout);
         self.chrome_layout = Some((layout, dl));
     }
@@ -15355,6 +15406,39 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.anim_frame = if frame.overrides.is_empty() { None } else { Some(frame) };
                 }
 
+                // Step 2b (CC-11, docs/tasks/p1-css-chrome.md): the chrome
+                // document's own Animations + Transitions tick — separate
+                // schedulers from the page's (see
+                // Self::chrome_animation_scheduler doc comment for why),
+                // same merge-and-request-redraw pattern. Not gated on
+                // freeze_content_ticks: chrome isn't affected by page
+                // fast-scroll degradation (its own document doesn't scroll
+                // with the page).
+                if self.css_chrome_enabled
+                    && let (Some((c_lb, _)), Some((_, c_sheet))) = (&self.chrome_layout, &self.chrome_doc)
+                {
+                    let vp = lumen_layout::Viewport {
+                        width: self.viewport_width_css(),
+                        height: self.viewport_height_css(),
+                    };
+                    let mut c_frame = self.chrome_animation_scheduler.tick(
+                        timestamp_ms,
+                        c_lb,
+                        c_sheet,
+                        0.0,
+                        0.0,
+                        vp,
+                    );
+                    let now_s = (timestamp_ms / 1000.0) as f32;
+                    let c_trans_frame = self.chrome_transition_scheduler.tick(now_s);
+                    c_frame.merge_from(c_trans_frame);
+                    if c_frame.has_active {
+                        self.request_redraw();
+                    }
+                    self.chrome_anim_frame =
+                        if c_frame.overrides.is_empty() { None } else { Some(c_frame) };
+                }
+
                 // Step 2.5: GIF animation — update GPU textures for frames that changed.
                 // Uses the same `epoch` as rAF timestamps so GIF timing is consistent
                 // with CSS animations and JS. Runs before rAF so JS can read correct img.
@@ -15590,9 +15674,35 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // that rect) through unchanged while guaranteeing nothing paints
                 // inside the live page's own rect. No-op off the flag
                 // (`chrome_layout` stays `None`).
+                // CC-11: patch chrome_dl with compositor-offloadable overrides
+                // (opacity/transform/color/background-color) from the tick
+                // above — same to_compositor_frame() mechanism the page uses
+                // for anim_dl (Step 6 below), rebuilt here since chrome_dl
+                // itself is a cached snapshot from the last
+                // relayout_chrome_host pass and isn't otherwise touched by
+                // ticks. `width` transitions (#sidebar, .dl-progress-fill)
+                // aren't offloadable and stay unanimated (see
+                // Self::chrome_anim_frame doc comment).
+                let chrome_dl_anim: Option<lumen_paint::DisplayList> =
+                    self.chrome_anim_frame.as_ref().and_then(|frame| {
+                        let comp = frame.to_compositor_frame();
+                        if comp.is_empty() {
+                            None
+                        } else {
+                            self.chrome_layout.as_ref().map(|(lb, _)| {
+                                let tree = StackingTree::build(lb);
+                                let order = PaintOrder::from_tree(&tree);
+                                build_display_list_ordered_with_anim_split(
+                                    lb, &tree, &order, Some(&comp),
+                                )
+                                .0
+                            })
+                        }
+                    });
                 if let (Some((_layout, chrome_dl)), Some(host)) =
                     (self.chrome_layout.as_ref(), self.chrome_page_host_rect)
                 {
+                    let chrome_dl = chrome_dl_anim.as_ref().unwrap_or(chrome_dl);
                     let win_w = self.viewport_width_css();
                     let win_h = self.window_height_css();
                     let strips = [
@@ -23993,6 +24103,46 @@ mod tests {
         let after = doc.find_by_id("after").expect("fixture has #after");
         let order: Vec<NodeId> = body_box.children.iter().map(|b| b.node).collect();
         assert_eq!(order, vec![before, find_bar, downloads_panel, after]);
+    }
+
+    // ── CC-11: chrome document gets its own Animation/Transition scheduler ──
+
+    #[test]
+    fn chrome_transition_scheduler_stays_independent_of_page_scheduler_for_same_node_id() {
+        // chrome_doc and the page Document each number NodeIds from 0
+        // independently (see Lumen::chrome_animation_scheduler's doc
+        // comment) — this proves two separate TransitionScheduler instances
+        // don't let one tree's transition state leak into the other's frame
+        // when driven with a colliding NodeId. A single shared scheduler
+        // would fail this test (the page's transition would also appear in
+        // the chrome frame).
+        let node = lumen_dom::NodeId::from_index(3usize);
+
+        let mut page_sched = TransitionScheduler::new();
+        let mut chrome_sched = TransitionScheduler::new();
+
+        let mut old = lumen_layout::ComputedStyle::root();
+        old.opacity = 0.0;
+        old.transition_properties = vec!["opacity".to_string()];
+        old.transition_durations = vec![1.0];
+        old.transition_timing_functions = vec![lumen_layout::TimingFunction::Linear];
+        let mut new = old.clone();
+        new.opacity = 1.0;
+
+        // Only the page's #box transitions opacity 0 → 1 at t=0; chrome's own
+        // node with the same NodeId is never synced (nothing changed there).
+        page_sched.sync(node, &old, &new, 0.0);
+        let chrome_frame = chrome_sched.tick(0.5);
+        assert!(
+            !chrome_frame.overrides.contains_key(&node),
+            "chrome scheduler must not see the page's transition for the same NodeId"
+        );
+
+        let page_frame = page_sched.tick(0.5);
+        let op = page_frame.overrides[&node]
+            .opacity
+            .expect("page transition must be active at t=0.5");
+        assert!((op - 0.5).abs() < 0.01, "expected ~0.5 midpoint, got {op}");
     }
 
     #[test]
