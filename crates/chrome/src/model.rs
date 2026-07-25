@@ -889,16 +889,76 @@ fn bind_omnibox(doc: &mut Document, omnibox: &OmniboxModel) {
     }
 }
 
-fn rebuild_tab_list(doc: &mut Document, container: NodeId, tabs: &[ChromeTabModel]) {
-    remove_children_with_class(doc, container, "tab-row");
-    for tab in tabs {
-        let row = build_tab_row(doc, tab);
-        doc.append_child(container, row);
+/// Reconciles `container`'s `class`-carrying children against `items` by
+/// position, preserving each surviving row's `NodeId` via `update` instead
+/// of detaching and rebuilding every row on every [`bind_model`] call.
+///
+/// The previous "clear all, build fresh" approach gave every row (and every
+/// one of its descendants) a brand-new `NodeId` on every relayout even when
+/// `items` hadn't changed at all — this broke
+/// [`lumen_layout::layout_mutation_incremental`]'s `graft_geometry` subtree
+/// matching (it compares by node id) and was a hard blocker for CC-14 (see
+/// BUG-341: `bind_model` is called on every chrome relayout, so a
+/// mouse-hover or keystroke that touches neither tabs nor workspaces still
+/// tore down and rebuilt both lists). Rows beyond `items.len()` are
+/// `build`-created and inserted before `anchor` (or appended if `anchor` is
+/// `None` — the tab-list containers have no trailing sibling); existing
+/// rows beyond `items.len()` are detached.
+fn reconcile_row_list<T>(
+    doc: &mut Document,
+    container: NodeId,
+    class: &str,
+    items: &[T],
+    build: impl Fn(&mut Document, &T) -> NodeId,
+    update: impl Fn(&mut Document, NodeId, &T),
+    anchor: Option<NodeId>,
+) {
+    let existing: Vec<NodeId> = doc
+        .get(container)
+        .children
+        .iter()
+        .copied()
+        .filter(|&c| has_class(doc, c, class))
+        .collect();
+
+    for (i, item) in items.iter().enumerate() {
+        match existing.get(i) {
+            Some(&row) => update(doc, row, item),
+            None => {
+                let row = build(doc, item);
+                match anchor {
+                    Some(a) => doc.insert_before(row, a),
+                    None => doc.append_child(container, row),
+                }
+            }
+        }
     }
+    for &row in existing.iter().skip(items.len()) {
+        doc.detach(row);
+    }
+}
+
+fn rebuild_tab_list(doc: &mut Document, container: NodeId, tabs: &[ChromeTabModel]) {
+    reconcile_row_list(doc, container, "tab-row", tabs, build_tab_row, update_tab_row, None);
 }
 
 fn build_tab_row(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
     let row = doc.create_element(QualName::html("div"));
+    set_attr(doc, row, "data-action", "select-tab");
+    // CC-13: mirrors the `role="tab"`/`aria-selected` `scripts/gen_chrome_assets.py`
+    // bakes into the static asset — this row replaces that static markup
+    // wholesale, so the generator's injection never reaches it and has to
+    // be set here instead.
+    set_attr(doc, row, "role", "tab");
+    apply_tab_row_attrs(doc, row, tab);
+    populate_tab_row_children(doc, row, tab);
+    row
+}
+
+/// Sets [`build_tab_row`]'s attributes that never change the row's child
+/// shape — shared with [`update_tab_row`], which calls this unconditionally
+/// (cheap, idempotent `set_attr`s) even on its fast path.
+fn apply_tab_row_attrs(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
     let mut class = match (tab.active, tab.sleeping) {
         (true, _) => "tab-row active".to_owned(),
         (false, true) => "tab-row sleeping".to_owned(),
@@ -908,15 +968,14 @@ fn build_tab_row(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
         class.push_str(" child");
     }
     set_attr(doc, row, "class", &class);
-    set_attr(doc, row, "data-action", "select-tab");
     set_attr(doc, row, "data-tab-id", &tab.id.to_string());
-    // CC-13: mirrors the `role="tab"`/`aria-selected` `scripts/gen_chrome_assets.py`
-    // bakes into the static asset — this row replaces that static markup
-    // wholesale (`rebuild_tab_list`), so the generator's injection never
-    // reaches it and has to be set here instead.
-    set_attr(doc, row, "role", "tab");
     set_attr(doc, row, "aria-selected", if tab.active { "true" } else { "false" });
+}
 
+/// Builds `row`'s children fresh (tree-line? / stripe? / fav / title /
+/// badge-or-close) — assumes `row` currently has none. Shared by
+/// [`build_tab_row`] and [`update_tab_row`]'s shape-mismatch fallback.
+fn populate_tab_row_children(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
     if tab.is_child {
         let tree_line = doc.create_element(QualName::html("span"));
         set_attr(doc, tree_line, "class", "tree-line");
@@ -959,36 +1018,95 @@ fn build_tab_row(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
         set_attr(doc, close, "data-tab-id", &tab.id.to_string());
         doc.append_child(row, close);
     }
-    row
+}
+
+/// Updates an existing `.tab-row` (built by [`build_tab_row`] on an earlier
+/// [`bind_model`] call) in place instead of discarding it, so an unchanged
+/// row keeps its `NodeId` and every descendant's (BUG-341/CC-14 — see
+/// [`reconcile_row_list`]). The child slots are matched against the row's
+/// *current* shape and updated in place — text via [`set_text_in_place`],
+/// stripe colour via `set_attr` — as long as the shape still matches `tab`.
+/// A shape change (`is_child`/`container_color`-presence/`sleeping`
+/// flipped — rare: only real tab-state changes cause this, never a bare
+/// hover/keystroke relayout) falls back to clearing and rebuilding the
+/// row's children fresh; the row itself still keeps its `NodeId`.
+fn update_tab_row(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
+    apply_tab_row_attrs(doc, row, tab);
+
+    let children: Vec<NodeId> = doc.get(row).children.clone();
+    let mut idx = 0;
+    let has_tree_line = children.first().is_some_and(|&c| has_class(doc, c, "tree-line"));
+    if has_tree_line != tab.is_child {
+        rebuild_tab_row_children(doc, row, tab);
+        return;
+    }
+    if has_tree_line {
+        idx += 1;
+    }
+    let has_stripe = children.get(idx).is_some_and(|&c| has_class(doc, c, "container-stripe"));
+    if has_stripe != tab.container_color.is_some() {
+        rebuild_tab_row_children(doc, row, tab);
+        return;
+    }
+    if let Some(color) = &tab.container_color {
+        set_attr(doc, children[idx], "style", &format!("background:{color}"));
+        idx += 1;
+    }
+    let (Some(&fav), Some(&title)) = (children.get(idx), children.get(idx + 1)) else {
+        rebuild_tab_row_children(doc, row, tab);
+        return;
+    };
+    set_text_in_place(doc, fav, &first_letter(&tab.title));
+    set_text_in_place(doc, title, &tab.title);
+    idx += 2;
+
+    match children.get(idx) {
+        Some(&trailing) if tab.sleeping && has_class(doc, trailing, "tab-badge") => {}
+        Some(&trailing) if !tab.sleeping && has_class(doc, trailing, "tab-close") => {
+            set_attr(doc, trailing, "data-tab-id", &tab.id.to_string());
+        }
+        _ => rebuild_tab_row_children(doc, row, tab),
+    }
+}
+
+fn rebuild_tab_row_children(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
+    let children: Vec<NodeId> = doc.get(row).children.clone();
+    for child in children {
+        doc.detach(child);
+    }
+    populate_tab_row_children(doc, row, tab);
 }
 
 fn rebuild_workspace_list(doc: &mut Document, container: NodeId, workspaces: &[ChromeWorkspaceModel]) {
-    remove_children_with_class(doc, container, "ws-item");
     // The "+" add-workspace button (`.ws-add`) is not a `.ws-item` and is
-    // therefore untouched by the removal above — new items are inserted
-    // before it so it stays last, matching the asset's own order.
+    // therefore untouched by reconciliation — new items are inserted before
+    // it so it stays last, matching the asset's own order.
     let add_btn = doc
         .get(container)
         .children
         .iter()
         .copied()
         .find(|&c| doc.get(c).get_attr("data-action") == Some("add-workspace"));
-    for ws in workspaces {
-        let item = build_workspace_item(doc, ws);
-        match add_btn {
-            Some(btn) => doc.insert_before(item, btn),
-            None => doc.append_child(container, item),
-        }
-    }
+    reconcile_row_list(doc, container, "ws-item", workspaces, build_workspace_item, update_workspace_item, add_btn);
 }
 
 fn build_workspace_item(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId {
     let item = doc.create_element(QualName::html("button"));
-    set_attr(doc, item, "class", if ws.active { "ws-item active" } else { "ws-item" });
     set_attr(doc, item, "data-action", "select-workspace");
+    apply_workspace_item_attrs(doc, item, ws);
+    populate_workspace_item_children(doc, item, ws);
+    item
+}
+
+/// Shared by [`build_workspace_item`] and [`update_workspace_item`] — see
+/// [`apply_tab_row_attrs`] for why this is split from child construction.
+fn apply_workspace_item_attrs(doc: &mut Document, item: NodeId, ws: &ChromeWorkspaceModel) {
+    set_attr(doc, item, "class", if ws.active { "ws-item active" } else { "ws-item" });
     set_attr(doc, item, "data-ws-id", &ws.id.to_string());
     set_attr(doc, item, "style", &format!("--ws-color:{}", ws.color));
+}
 
+fn populate_workspace_item_children(doc: &mut Document, item: NodeId, ws: &ChromeWorkspaceModel) {
     let icon = doc.create_element(QualName::html("span"));
     set_attr(doc, icon, "class", "ws-icon");
     set_attr(doc, icon, "style", &format!("background:{}", ws.color));
@@ -999,8 +1117,27 @@ fn build_workspace_item(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId
     set_attr(doc, lbl, "class", "lbl");
     append_text(doc, lbl, &ws.name);
     doc.append_child(item, lbl);
+}
 
-    item
+/// Updates an existing `.ws-item` in place (BUG-341/CC-14 — see
+/// [`update_tab_row`]'s doc comment, same rationale). The asset's item
+/// shape (icon + label, always both present) never varies by `ws`, so
+/// unlike [`update_tab_row`] there is no shape-mismatch fallback needed —
+/// only the defensive "children missing entirely" case falls back to
+/// [`populate_workspace_item_children`].
+fn update_workspace_item(doc: &mut Document, item: NodeId, ws: &ChromeWorkspaceModel) {
+    apply_workspace_item_attrs(doc, item, ws);
+    let children: Vec<NodeId> = doc.get(item).children.clone();
+    let (Some(&icon), Some(&lbl)) = (children.first(), children.get(1)) else {
+        for child in children {
+            doc.detach(child);
+        }
+        populate_workspace_item_children(doc, item, ws);
+        return;
+    };
+    set_attr(doc, icon, "style", &format!("background:{}", ws.color));
+    set_text_in_place(doc, icon, &first_letter(&ws.name));
+    set_text_in_place(doc, lbl, &ws.name);
 }
 
 /// Mirrors [`rebuild_tab_list`] into `#hbarTabs` (`.hbar-tab` rows, CC-8's
@@ -1010,23 +1147,27 @@ fn build_workspace_item(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId
 /// intentionally omits [`ChromeTabModel::is_child`]/`container_color`
 /// unlike [`build_tab_row`].
 fn rebuild_hbar_tab_list(doc: &mut Document, container: NodeId, tabs: &[ChromeTabModel]) {
-    remove_children_with_class(doc, container, "hbar-tab");
-    for tab in tabs {
-        let row = build_hbar_tab(doc, tab);
-        doc.append_child(container, row);
-    }
+    reconcile_row_list(doc, container, "hbar-tab", tabs, build_hbar_tab, update_hbar_tab, None);
 }
 
 fn build_hbar_tab(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
     let row = doc.create_element(QualName::html("div"));
-    set_attr(doc, row, "class", if tab.active { "hbar-tab active" } else { "hbar-tab" });
     set_attr(doc, row, "data-action", "select-tab");
-    set_attr(doc, row, "data-tab-id", &tab.id.to_string());
     // CC-13: see the matching comment in `build_tab_row` — this row also
     // replaces static markup wholesale, so ARIA has to be set here too.
     set_attr(doc, row, "role", "tab");
-    set_attr(doc, row, "aria-selected", if tab.active { "true" } else { "false" });
+    apply_hbar_tab_attrs(doc, row, tab);
+    populate_hbar_tab_children(doc, row, tab);
+    row
+}
 
+fn apply_hbar_tab_attrs(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
+    set_attr(doc, row, "class", if tab.active { "hbar-tab active" } else { "hbar-tab" });
+    set_attr(doc, row, "data-tab-id", &tab.id.to_string());
+    set_attr(doc, row, "aria-selected", if tab.active { "true" } else { "false" });
+}
+
+fn populate_hbar_tab_children(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
     let fav = doc.create_element(QualName::html("span"));
     set_attr(doc, fav, "class", "tab-fav");
     append_text(doc, fav, &first_letter(&tab.title));
@@ -1036,28 +1177,51 @@ fn build_hbar_tab(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
     set_attr(doc, title, "class", "tab-title");
     append_text(doc, title, &tab.title);
     doc.append_child(row, title);
+}
 
-    row
+/// Updates an existing `.hbar-tab` in place (BUG-341/CC-14 — see
+/// [`update_tab_row`]). Fixed fav+title shape, no fallback branches needed
+/// beyond the defensive missing-children case.
+fn update_hbar_tab(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
+    apply_hbar_tab_attrs(doc, row, tab);
+    let children: Vec<NodeId> = doc.get(row).children.clone();
+    let (Some(&fav), Some(&title)) = (children.first(), children.get(1)) else {
+        for child in children {
+            doc.detach(child);
+        }
+        populate_hbar_tab_children(doc, row, tab);
+        return;
+    };
+    set_text_in_place(doc, fav, &first_letter(&tab.title));
+    set_text_in_place(doc, title, &tab.title);
 }
 
 /// Mirrors [`rebuild_workspace_list`] into `.hbar-ws` (`.hbar-ws-pill`
 /// buttons, CC-8's horizontal-layout workspace switcher).
 fn rebuild_hbar_ws_list(doc: &mut Document, container: NodeId, workspaces: &[ChromeWorkspaceModel]) {
-    remove_children_with_class(doc, container, "hbar-ws-pill");
-    for ws in workspaces {
-        let pill = build_hbar_ws_pill(doc, ws);
-        doc.append_child(container, pill);
-    }
+    reconcile_row_list(doc, container, "hbar-ws-pill", workspaces, build_hbar_ws_pill, update_hbar_ws_pill, None);
 }
 
-fn build_hbar_ws_pill(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId {
-    let pill = doc.create_element(QualName::html("button"));
+fn apply_hbar_ws_pill_attrs(doc: &mut Document, pill: NodeId, ws: &ChromeWorkspaceModel) {
     set_attr(doc, pill, "class", if ws.active { "hbar-ws-pill active" } else { "hbar-ws-pill" });
     set_attr(doc, pill, "data-action", "select-workspace");
     set_attr(doc, pill, "data-ws-id", &ws.id.to_string());
     set_attr(doc, pill, "style", &format!("--ws-color:{}", ws.color));
+}
+
+fn build_hbar_ws_pill(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId {
+    let pill = doc.create_element(QualName::html("button"));
+    apply_hbar_ws_pill_attrs(doc, pill, ws);
     append_text(doc, pill, &ws.name);
     pill
+}
+
+/// Updates an existing `.hbar-ws-pill` in place (BUG-341/CC-14 — see
+/// [`update_tab_row`]); the pill's name is its own single text-node child,
+/// updated via [`set_text_in_place`].
+fn update_hbar_ws_pill(doc: &mut Document, pill: NodeId, ws: &ChromeWorkspaceModel) {
+    apply_hbar_ws_pill_attrs(doc, pill, ws);
+    set_text_in_place(doc, pill, &ws.name);
 }
 
 fn first_letter(s: &str) -> String {
@@ -1154,6 +1318,25 @@ fn set_text(doc: &mut Document, id: NodeId, text: &str) {
         doc.detach(child);
     }
     append_text(doc, id, text);
+}
+
+/// Updates `id`'s existing single text-node child's content in place
+/// (mutating the [`NodeData::Text`] payload) instead of detaching and
+/// creating a new text node — preserves the text node's `NodeId` so
+/// [`lumen_layout::layout_mutation_incremental`]'s `graft_geometry` (which
+/// matches subtrees by node id) can reuse the box when the text hasn't
+/// changed (BUG-341/CC-14). Falls back to [`set_text`]'s detach+recreate
+/// when `id` doesn't have exactly one text-node child (defensive —
+/// chrome-built rows always do).
+fn set_text_in_place(doc: &mut Document, id: NodeId, text: &str) {
+    let children = doc.get(id).children.clone();
+    if let [only] = children.as_slice()
+        && let NodeData::Text(s) = &mut doc.get_mut(*only).data
+    {
+        *s = text.to_string();
+        return;
+    }
+    set_text(doc, id, text);
 }
 
 /// Depth-first search scoped to `root`'s subtree (inclusive of `root`
@@ -1276,6 +1459,135 @@ mod tests {
         let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
         let rows = doc.get(container).children.iter().filter(|&&c| has_class(&doc, c, "tab-row")).count();
         assert_eq!(rows, 0);
+    }
+
+    /// BUG-341/CC-14: rebinding an unchanged tab list must not tear down and
+    /// recreate the rows — `layout_mutation_incremental`'s `graft_geometry`
+    /// matches subtrees by `NodeId`, so a fresh id on every relayout (even
+    /// when nothing changed) defeated it. Checks identity is preserved not
+    /// just for the row itself but every descendant graft matches into
+    /// (fav/title/close), since `graft_geometry` recurses.
+    #[test]
+    fn rebinding_unchanged_tabs_preserves_row_and_descendant_node_ids() {
+        let mut doc = parse_asset();
+        let model = model_with_tabs(vec![
+            ChromeTabModel { id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, is_child: false, container_color: None },
+            ChromeTabModel { id: 9, title: "Beta".to_owned(), active: false, sleeping: true, is_child: false, container_color: None },
+        ]);
+        bind_model(&mut doc, &model);
+        let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
+        let rows_before: Vec<NodeId> =
+            doc.get(container).children.iter().copied().filter(|&c| has_class(&doc, c, "tab-row")).collect();
+        let descendants_before: Vec<Vec<NodeId>> =
+            rows_before.iter().map(|&r| doc.get(r).children.clone()).collect();
+
+        bind_model(&mut doc, &model);
+        let rows_after: Vec<NodeId> =
+            doc.get(container).children.iter().copied().filter(|&c| has_class(&doc, c, "tab-row")).collect();
+        let descendants_after: Vec<Vec<NodeId>> =
+            rows_after.iter().map(|&r| doc.get(r).children.clone()).collect();
+
+        assert_eq!(rows_before, rows_after, "unchanged rows must keep their NodeId across bind_model calls");
+        assert_eq!(
+            descendants_before, descendants_after,
+            "unchanged rows' children (fav/title/close) must keep their NodeId too"
+        );
+    }
+
+    /// A title change is the common case (only content differs, shape
+    /// doesn't) — must hit `update_tab_row`'s fast path: same row id, text
+    /// updated in place.
+    #[test]
+    fn rebinding_a_changed_title_keeps_the_row_id_and_updates_text_in_place() {
+        let mut doc = parse_asset();
+        let mut model = model_with_tabs(vec![
+            ChromeTabModel { id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, is_child: false, container_color: None },
+        ]);
+        bind_model(&mut doc, &model);
+        let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
+        let row_before = doc.get(container).children.iter().copied().find(|&c| has_class(&doc, c, "tab-row")).unwrap();
+
+        model.tabs[0].title = "Alpha Renamed".to_owned();
+        bind_model(&mut doc, &model);
+        let row_after = doc.get(container).children.iter().copied().find(|&c| has_class(&doc, c, "tab-row")).unwrap();
+        assert_eq!(row_before, row_after, "a title-only change must not recreate the row");
+
+        let title_node = doc
+            .get(row_after)
+            .children
+            .iter()
+            .copied()
+            .find(|&c| has_class(&doc, c, "tab-title"))
+            .expect("row has a .tab-title span");
+        let text: Vec<NodeId> = doc.get(title_node).children.clone();
+        let NodeData::Text(s) = &doc.get(text[0]).data else { panic!(".tab-title has a text child") };
+        assert_eq!(s, "Alpha Renamed");
+    }
+
+    /// Removing a tab must detach only the trailing surplus row and keep the
+    /// surviving row's id (position-based reconciliation, matching
+    /// `graft_geometry`'s own by-index matching).
+    #[test]
+    fn shrinking_the_tab_list_detaches_the_trailing_row_and_keeps_the_survivor_id() {
+        let mut doc = parse_asset();
+        let model = model_with_tabs(vec![
+            ChromeTabModel { id: 1, title: "One".to_owned(), active: true, sleeping: false, is_child: false, container_color: None },
+            ChromeTabModel { id: 2, title: "Two".to_owned(), active: false, sleeping: false, is_child: false, container_color: None },
+        ]);
+        bind_model(&mut doc, &model);
+        let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
+        let rows_before: Vec<NodeId> =
+            doc.get(container).children.iter().copied().filter(|&c| has_class(&doc, c, "tab-row")).collect();
+
+        bind_model(&mut doc, &model_with_tabs(vec![model.tabs[0].clone()]));
+        let rows_after: Vec<NodeId> =
+            doc.get(container).children.iter().copied().filter(|&c| has_class(&doc, c, "tab-row")).collect();
+        assert_eq!(rows_after, vec![rows_before[0]], "surviving row must keep its id; the extra row is detached");
+    }
+
+    /// A `sleeping` flip changes the row's trailing slot shape (badge vs
+    /// close button) — must fall back to rebuilding the row's children, but
+    /// the row itself keeps its id and the final DOM state is correct.
+    #[test]
+    fn toggling_sleeping_keeps_the_row_id_and_swaps_badge_for_close_button() {
+        let mut doc = parse_asset();
+        let mut model = model_with_tabs(vec![
+            ChromeTabModel { id: 1, title: "One".to_owned(), active: false, sleeping: false, is_child: false, container_color: None },
+        ]);
+        bind_model(&mut doc, &model);
+        let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
+        let row_before = doc.get(container).children.iter().copied().find(|&c| has_class(&doc, c, "tab-row")).unwrap();
+
+        model.tabs[0].sleeping = true;
+        bind_model(&mut doc, &model);
+        let row_after = doc.get(container).children.iter().copied().find(|&c| has_class(&doc, c, "tab-row")).unwrap();
+        assert_eq!(row_before, row_after, "a shape change must still keep the row's own id");
+        assert!(has_class(&doc, row_after, "sleeping"));
+        let children = doc.get(row_after).children.clone();
+        assert!(children.iter().any(|&c| has_class(&doc, c, "tab-badge")));
+        assert!(!children.iter().any(|&c| has_class(&doc, c, "tab-close")));
+    }
+
+    /// Same identity-preservation guarantee for the workspace switcher.
+    #[test]
+    fn rebinding_unchanged_workspaces_preserves_item_and_descendant_node_ids() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            workspaces: vec![
+                ChromeWorkspaceModel { id: 1, name: "Личное".to_owned(), active: true, color: "#0066FF".to_owned() },
+                ChromeWorkspaceModel { id: 2, name: "Проект Х".to_owned(), active: false, color: "#8B5CF6".to_owned() },
+            ],
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let container = find_by_attr(&doc, "data-testid", "workspace-switcher").expect("asset has the switcher");
+        let items_before: Vec<NodeId> =
+            doc.get(container).children.iter().copied().filter(|&c| has_class(&doc, c, "ws-item")).collect();
+
+        bind_model(&mut doc, &model);
+        let items_after: Vec<NodeId> =
+            doc.get(container).children.iter().copied().filter(|&c| has_class(&doc, c, "ws-item")).collect();
+        assert_eq!(items_before, items_after, "unchanged workspace items must keep their NodeId");
     }
 
     #[test]

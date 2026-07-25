@@ -8564,6 +8564,18 @@ impl Lumen {
         let omni_input = doc.find_by_id(lumen_chrome::ids::OMNI_INPUT);
         let chrome_focus = if self.address_bar.is_open() { omni_input } else { None };
         lumen_layout::set_interactive_state(self.chrome_hovered_nid, chrome_focus, self.chrome_active_nid);
+        // BUG-341/CC-14: `layout_mutation_incremental` was tried here (with
+        // `bind_model`'s list rebuilds now preserving unchanged rows'
+        // NodeIds, see `lumen_chrome::model`'s `reconcile_row_list`) and
+        // measured *worse* than the plain full layout below — CC12_HOVER
+        // p50 106ms vs 86ms. Root cause: `graft_geometry`
+        // (`lumen_layout::incremental`) clones the matched subtree once per
+        // *ancestor level* inside a clean region, not once at the outermost
+        // clean boundary (each level's `if all_clean { *new = prev.clone(); }`
+        // re-clones what the level below it just cloned) — O(depth) redundant
+        // deep-clones of `ComputedStyle`-heavy `LayoutBox`es outweigh the
+        // layout work it skips. That's a `lumen-layout`-crate fix, out of
+        // scope here; see BUG-341 for the follow-up. Kept on the plain path.
         let mut layout = lumen_layout::layout_measured_hyp(
             doc,
             sheet,
@@ -24196,11 +24208,17 @@ mod tests {
     }
 
     /// One `relayout_chrome_host`-equivalent pass, timed exactly like the
-    /// mutate (`bind_model`) → restyle+relayout (`layout_measured_hyp`) →
-    /// paint (`paint_ordered`, display-list build — CC-12's "paint" stops
-    /// here, same as the rest of the engine's layout→paint terminology; GPU
-    /// submit/present is a separate stage this cycle never reaches) sequence
+    /// mutate (`bind_model`) → restyle+relayout → paint (`paint_ordered`,
+    /// display-list build — CC-12's "paint" stops here, same as the rest of
+    /// the engine's layout→paint terminology; GPU submit/present is a
+    /// separate stage this cycle never reaches) sequence
     /// `Lumen::relayout_chrome_host` runs on every chrome interaction.
+    ///
+    /// BUG-341/CC-14: `layout_mutation_incremental` was tried here too and
+    /// measured worse than the plain full layout — see the matching doc
+    /// comment on `relayout_chrome_host` for the root cause
+    /// (`graft_geometry`'s redundant per-ancestor-level clone). Stays on
+    /// `layout_measured_hyp` so this bench keeps mirroring production.
     fn cc12_bench_cycle(
         doc: &mut lumen_dom::Document,
         sheet: &lumen_css_parser::Stylesheet,
@@ -24236,17 +24254,16 @@ mod tests {
     /// (shared-runner contention would make it flaky there); run explicitly:
     /// `cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate -- --ignored --nocapture`.
     ///
-    /// Currently red: measured p50 ≈ 580-630ms, ~300× over the 2ms budget —
-    /// see [BUG-341](../../../bugs/BUG-341-OPEN.md). Split timing (spot check,
-    /// not asserted here) showed `bind_model` and `paint_ordered` are cheap
-    /// (< 1ms each); essentially all of it is inside `layout_measured_hyp`,
-    /// and the cost does not scale with `Document::node_count()` growth
-    /// across repeated `bind_model` calls — a large, roughly per-call-fixed
-    /// full-layout cost, not a bench artifact. Left failing intentionally:
-    /// the assert is the regression check for whichever future slice (the
-    /// brief's `layout_mutation_incremental` or a narrower fix) closes it.
+    /// Was red (measured p50 ≈ 580-630ms, ~300× over the 2ms budget) before
+    /// BUG-341's fixes — see [BUG-341](../../../bugs/BUG-341-OPEN.md) for the
+    /// full history: `lay_out_flex`'s double layout pass (fixed, ~86ms),
+    /// `bind_model`'s list rebuilds churning NodeIds every call (fixed), and
+    /// `layout_mutation_incremental` itself (tried, measured *worse* —
+    /// `graft_geometry`'s redundant per-ancestor-level clone, a
+    /// `lumen-layout`-crate follow-up, not adopted here). Still red at
+    /// ~86-106ms vs the 2ms budget.
     #[test]
-    #[ignore = "manual perf gate (CC-12) — currently red, see BUG-341; doc comment has the run command"]
+    #[ignore = "manual perf gate (CC-12) — see BUG-341; doc comment has the run command"]
     fn cc12_chrome_perf_gate_hover_and_keystroke_cycles() {
         let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
         let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
@@ -24289,14 +24306,14 @@ mod tests {
 
         assert!(
             hover_summary.p95_ms < BUDGET_MS,
-            "hover-flip p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see CC-12 notes \
-             (docs/tasks/p1-css-chrome.md) for the layout_mutation_incremental follow-up",
+            "hover-flip p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 for the \
+             graft_geometry follow-up needed to close this",
             hover_summary.p95_ms,
         );
         assert!(
             key_summary.p95_ms < BUDGET_MS,
-            "keystroke p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see CC-12 notes \
-             (docs/tasks/p1-css-chrome.md) for the layout_mutation_incremental follow-up",
+            "keystroke p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 for the \
+             graft_geometry follow-up needed to close this",
             key_summary.p95_ms,
         );
     }

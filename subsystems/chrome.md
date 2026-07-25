@@ -235,6 +235,22 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   `cargo clippy -p lumen-shell --all-targets -D warnings` green. Live smoke
   (`LUMEN_CSS_CHROME=1 LUMEN_FRAME_LOG=1`, ~45s) painted multiple frames with no panics.
 
+- **BUG-341/CC-14 follow-up: `bind_model` list rebuilds preserve NodeId** (`src/model.rs`'s
+  `reconcile_row_list` + `update_tab_row`/`update_hbar_tab`/`update_workspace_item`/
+  `update_hbar_ws_pill`/`set_text_in_place`): `rebuild_tab_list`/`rebuild_hbar_tab_list`/
+  `rebuild_workspace_list`/`rebuild_hbar_ws_list` used to `remove_children_with_class` + rebuild every
+  row from scratch on every single `bind_model` call, regardless of whether `tabs`/`workspaces`
+  actually changed — every row (and every descendant: fav/title/close-or-badge) got a fresh `NodeId`
+  every relayout. `reconcile_row_list` now matches existing rows by position and updates them in
+  place (`set_text_in_place` mutates the existing text node's content instead of detach+recreate) —
+  only a genuine shape change (`is_child`/`container_color` presence/`sleeping` flip) falls back to
+  rebuilding that one row's children (the row itself keeps its id either way). This was necessary
+  (not sufficient) for `layout_mutation_incremental`'s `graft_geometry`, which matches subtrees by
+  node id — see BUG-341 for why the incremental switch still doesn't help (a separate
+  `lumen-layout`-crate inefficiency in `graft_geometry` itself). 6 new tests in `model.rs`
+  (`cargo test -p lumen-chrome`: 55/55) assert identity survives an unchanged rebind, a title-only
+  change, a shrinking list, and a shape-changing (`sleeping`) flip.
+
 ## Deferred
 
 - **`<template>` markup + `templates::IDS` population**: the frozen design reference has none —
