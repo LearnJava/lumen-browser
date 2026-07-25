@@ -11288,15 +11288,32 @@ impl Lumen {
         ChromeSnapshot { tabs, buttons, omnibox_value }
     }
 
+    /// Chrome AX siblings for [`Self::update_platform_ax_tree`]/
+    /// `automation_a11y_tree` — CC-13: under `LUMEN_CSS_CHROME=1` (`chrome_doc`
+    /// is `Some`) these come from the engine-rendered chrome `Document` via
+    /// `lumen_a11y::chrome::chrome_root_from_document` (real ARIA roles off
+    /// `assets/chrome/chrome.html`, injected at generation time). Off the
+    /// flag this falls back to the DS-17 synthetic snapshot. Never both —
+    /// same "one or the other" gating CC-10a's invisible-legacy-panel bug
+    /// taught (see CLAUDE.md known gotchas).
+    fn chrome_ax_nodes(&self) -> Vec<lumen_a11y::AXNode> {
+        if let Some((doc, _)) = &self.chrome_doc {
+            let flat_tree = lumen_dom::build_flat_tree(doc);
+            vec![lumen_a11y::chrome::chrome_root_from_document(doc, doc.root(), &flat_tree)]
+        } else {
+            lumen_a11y::chrome::chrome_nodes(&self.chrome_snapshot())
+        }
+    }
+
     /// Rebuild the platform accessibility tree from the current DOM and push it to
     /// the OS bridge. Called after every full page load and tab switch — the
-    /// chrome nodes (DS-17) are attached as siblings so they stay live too.
+    /// chrome nodes (DS-17, CC-13) are attached as siblings so they stay live too.
     fn update_platform_ax_tree(&mut self) {
         let Some(src) = &self.layout_source else { return };
         let Ok(doc) = src.document.lock() else { return };
         let flat_tree = lumen_dom::build_flat_tree(&doc);
         let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &flat_tree);
-        let chrome = lumen_a11y::chrome::chrome_nodes(&self.chrome_snapshot());
+        let chrome = self.chrome_ax_nodes();
         let ax_tree = lumen_a11y::chrome::attach_chrome(ax_tree, chrome);
         self.platform_bridge.update(&ax_tree);
     }
@@ -23413,7 +23430,7 @@ impl Lumen {
             let doc = source.document.lock().ok()?;
             let flat_tree = lumen_dom::build_flat_tree(&doc);
             let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &flat_tree);
-            let chrome = lumen_a11y::chrome::chrome_nodes(&self.chrome_snapshot());
+            let chrome = self.chrome_ax_nodes();
             let ax_tree = lumen_a11y::chrome::attach_chrome(ax_tree, chrome);
             Some(automation_ax_node(&ax_tree.root))
         }

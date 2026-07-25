@@ -622,77 +622,77 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
       </div>
       <div class="sb-divider"></div>
 
-      <div class="sb-tabs" id="sbTabs" data-testid="tab-list">
+      <div class="sb-tabs" id="sbTabs" data-testid="tab-list" role="tablist">
         <div class="sb-section-label" id="sbSectionLabel">Вкладки · Личное</div>
 
-        <div class="tab-row active" data-ws="personal" data-title="Дизайн-система Lumen — Figma" data-url="figma.com/file/lumen-ds" data-action="select-tab">
+        <div class="tab-row active" data-ws="personal" data-title="Дизайн-система Lumen — Figma" data-url="figma.com/file/lumen-ds" data-action="select-tab" role="tab" aria-selected="true">
           <span class="container-stripe" style="background:#0066FF"></span>
           <span class="tab-fav">L</span>
           <span class="tab-title">Дизайн-система Lumen — Figma</span>
-          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="personal" data-title="Почта — Входящие (12)" data-url="mail.example.com/inbox" data-action="select-tab">
+        <div class="tab-row" data-ws="personal" data-title="Почта — Входящие (12)" data-url="mail.example.com/inbox" data-action="select-tab" role="tab" aria-selected="false">
           <span class="tab-fav">M</span>
           <span class="tab-title">Почта — Входящие (12)</span>
-          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row child" data-ws="personal" data-title="Re: правки по релизу" data-url="mail.example.com/thread/482" data-action="select-tab">
+        <div class="tab-row child" data-ws="personal" data-title="Re: правки по релизу" data-url="mail.example.com/thread/482" data-action="select-tab" role="tab" aria-selected="false">
           <span class="tree-line"></span>
           <span class="tab-fav">✎</span>
           <span class="tab-title">Re: правки по релизу</span>
-          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="personal" data-title="Т-Банк — Счета" data-url="tbank.example/accounts" style="margin-top:2px" data-action="select-tab">
+        <div class="tab-row" data-ws="personal" data-title="Т-Банк — Счета" data-url="tbank.example/accounts" style="margin-top:2px" data-action="select-tab" role="tab" aria-selected="false">
           <span class="container-stripe" style="background:#1F9D55"></span>
           <span class="tab-fav">Б</span>
           <span class="tab-title">Т-Банк — Счета</span>
-          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
-        <div class="tab-row child" data-ws="personal" data-title="Выписка за июль" data-url="tbank.example/accounts/statement" data-action="select-tab">
+        <div class="tab-row child" data-ws="personal" data-title="Выписка за июль" data-url="tbank.example/accounts/statement" data-action="select-tab" role="tab" aria-selected="false">
           <span class="tree-line"></span>
           <span class="container-stripe" style="background:#1F9D55"></span>
           <span class="tab-fav">Б</span>
           <span class="tab-title">Выписка за июль</span>
-          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="work" data-title="lumen/core — PR #482" data-url="github.com/lumen/core/pull/482" data-action="select-tab">
+        <div class="tab-row" data-ws="work" data-title="lumen/core — PR #482" data-url="github.com/lumen/core/pull/482" data-action="select-tab" role="tab" aria-selected="false">
           <span class="tab-fav">G</span>
           <span class="tab-title">lumen/core — PR #482: wgpu surface</span>
-          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row sleeping" data-ws="work" data-title="Аналитика — Dashboard Q3" data-url="analytics.example/q3" data-action="select-tab">
+        <div class="tab-row sleeping" data-ws="work" data-title="Аналитика — Dashboard Q3" data-url="analytics.example/q3" data-action="select-tab" role="tab" aria-selected="false">
           <span class="tab-fav">A</span>
           <span class="tab-title">Аналитика — Dashboard Q3</span>
           <span class="tab-badge" title="Гибернирована">✦</span>
-          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="work" data-title="Восстановление вкладки" data-url="" data-action="select-tab">
+        <div class="tab-row" data-ws="work" data-title="Восстановление вкладки" data-url="" data-action="select-tab" role="tab" aria-selected="false">
           <span class="spinner"></span>
           <span class="tab-title">Восстановление…</span>
         </div>
 
-        <div class="tab-row" data-ws="work" data-title="Notion — Roadmap Lumen" data-url="notion.so/lumen-roadmap" data-action="select-tab">
+        <div class="tab-row" data-ws="work" data-title="Notion — Roadmap Lumen" data-url="notion.so/lumen-roadmap" data-action="select-tab" role="tab" aria-selected="false">
           <span class="tab-fav">N</span>
           <span class="tab-title">Notion — Roadmap Lumen</span>
-          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="reading" data-title="Почему borders дешевле теней" data-url="blog.example/borders-vs-shadows" data-action="select-tab">
+        <div class="tab-row" data-ws="reading" data-title="Почему borders дешевле теней" data-url="blog.example/borders-vs-shadows" data-action="select-tab" role="tab" aria-selected="false">
           <span class="tab-fav"><svg class="icon" style="width:9px;height:9px"><use href="#i-book"/></svg></span>
           <span class="tab-title">Почему borders дешевле теней</span>
-          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 
-        <div class="tab-row" data-ws="reading" data-title="Anti-aliasing в кастомных рендерах" data-url="gfx.example/aa-notes" data-action="select-tab">
+        <div class="tab-row" data-ws="reading" data-title="Anti-aliasing в кастомных рендерах" data-url="gfx.example/aa-notes" data-action="select-tab" role="tab" aria-selected="false">
           <span class="tab-fav"><svg class="icon" style="width:9px;height:9px"><use href="#i-book"/></svg></span>
           <span class="tab-title">Anti-aliasing в кастомных рендерах</span>
-          <button class="tab-close" data-action="close-tab"><svg class="icon"><use href="#i-x"/></svg></button>
+          <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
       </div>
 
@@ -714,32 +714,32 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           <button class="hbar-ws-pill" data-ws="reading" style="--ws-color:#1F9D55" data-action="select-workspace">Чтение</button>
         </div>
         <div class="hbar-divider"></div>
-        <div class="hbar-tabs" id="hbarTabs">
-          <div class="hbar-tab active" data-ws="personal" data-title="Дизайн-система Lumen — Figma" data-url="figma.com/file/lumen-ds" data-action="select-tab"><span class="tab-fav">L</span><span class="tab-title">Дизайн-система Lumen</span></div>
-          <div class="hbar-tab" data-ws="personal" data-title="Почта — Входящие (12)" data-url="mail.example.com/inbox" data-action="select-tab"><span class="tab-fav">M</span><span class="tab-title">Почта — Входящие</span></div>
-          <div class="hbar-tab" data-ws="personal" data-title="Т-Банк — Счета" data-url="tbank.example/accounts" data-action="select-tab"><span class="tab-fav">Б</span><span class="tab-title">Т-Банк — Счета</span></div>
-          <div class="hbar-tab" data-ws="work" data-title="lumen/core — PR #482" data-url="github.com/lumen/core/pull/482" data-action="select-tab"><span class="tab-fav">G</span><span class="tab-title">lumen/core — PR #482</span></div>
-          <div class="hbar-tab" data-ws="work" data-title="Аналитика — Dashboard Q3" data-url="analytics.example/q3" data-action="select-tab"><span class="tab-fav">A</span><span class="tab-title">Аналитика Q3</span></div>
-          <div class="hbar-tab" data-ws="reading" data-title="Почему borders дешевле теней" data-url="blog.example/borders-vs-shadows" data-action="select-tab"><span class="tab-fav">✎</span><span class="tab-title">Почему borders дешевле теней</span></div>
+        <div class="hbar-tabs" id="hbarTabs" role="tablist">
+          <div class="hbar-tab active" data-ws="personal" data-title="Дизайн-система Lumen — Figma" data-url="figma.com/file/lumen-ds" data-action="select-tab" role="tab" aria-selected="true"><span class="tab-fav">L</span><span class="tab-title">Дизайн-система Lumen</span></div>
+          <div class="hbar-tab" data-ws="personal" data-title="Почта — Входящие (12)" data-url="mail.example.com/inbox" data-action="select-tab" role="tab" aria-selected="false"><span class="tab-fav">M</span><span class="tab-title">Почта — Входящие</span></div>
+          <div class="hbar-tab" data-ws="personal" data-title="Т-Банк — Счета" data-url="tbank.example/accounts" data-action="select-tab" role="tab" aria-selected="false"><span class="tab-fav">Б</span><span class="tab-title">Т-Банк — Счета</span></div>
+          <div class="hbar-tab" data-ws="work" data-title="lumen/core — PR #482" data-url="github.com/lumen/core/pull/482" data-action="select-tab" role="tab" aria-selected="false"><span class="tab-fav">G</span><span class="tab-title">lumen/core — PR #482</span></div>
+          <div class="hbar-tab" data-ws="work" data-title="Аналитика — Dashboard Q3" data-url="analytics.example/q3" data-action="select-tab" role="tab" aria-selected="false"><span class="tab-fav">A</span><span class="tab-title">Аналитика Q3</span></div>
+          <div class="hbar-tab" data-ws="reading" data-title="Почему borders дешевле теней" data-url="blog.example/borders-vs-shadows" data-action="select-tab" role="tab" aria-selected="false"><span class="tab-fav">✎</span><span class="tab-title">Почему borders дешевле теней</span></div>
         </div>
         <button class="hbar-add" data-action="new-tab"><svg class="icon"><use href="#i-plus"/></svg></button>
       </div>
 
       <!-- ============ TOOLBAR ============ -->
-      <div class="toolbar" data-testid="toolbar">
+      <div class="toolbar" data-testid="toolbar" role="toolbar">
         <div class="tb-nav">
           <button class="tb-btn"><svg class="icon"><use href="#i-back"/></svg></button>
           <button class="tb-btn"><svg class="icon"><use href="#i-fwd"/></svg></button>
-          <button class="tb-btn" data-action="reload"><svg class="icon"><use href="#i-reload"/></svg></button>
+          <button class="tb-btn" data-action="reload" aria-label="Обновить"><svg class="icon"><use href="#i-reload"/></svg></button>
         </div>
 
         <div class="omnibox-wrap">
           <div class="omnibox" data-testid="omnibox">
-            <button class="lock-btn" id="lockBtn" data-action="open-cert-viewer"><svg class="icon"><use href="#i-lock"/></svg></button>
-            <input id="omniInput" type="text" placeholder="Поиск или адрес сайта… (попробуйте: аpple.com)">
+            <button class="lock-btn" id="lockBtn" data-action="open-cert-viewer" aria-label="Просмотр сертификата"><svg class="icon"><use href="#i-lock"/></svg></button>
+            <input id="omniInput" type="text" placeholder="Поиск или адрес сайта… (попробуйте: аpple.com)" role="combobox" aria-autocomplete="list">
             <div class="omnibox-actions">
               <button class="tb-btn" title="В закладки"><svg class="icon"><use href="#i-star"/></svg></button>
-              <button class="tb-btn" id="shieldBtn" data-testid="shield-btn" data-action="toggle-shield-popover"><svg class="icon"><use href="#i-shield"/></svg></button>
+              <button class="tb-btn" id="shieldBtn" data-testid="shield-btn" data-action="toggle-shield-popover" aria-label="Экран приватности"><svg class="icon"><use href="#i-shield"/></svg></button>
             </div>
           </div>
           <div class="omnibox-warn" id="omniWarn">⚠ <span>Похоже на омоглиф-домен — отображается как <b>xn--pple-43d.com</b></span></div>
@@ -795,13 +795,13 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
         </div>
 
         <div class="tb-right">
-          <button class="tb-btn" data-action="toggle-find"><svg class="icon"><use href="#i-search"/></svg></button>
-          <button class="tb-btn" data-action="open-web-sidebar"><svg class="icon"><use href="#i-panel"/></svg></button>
-          <button class="tb-btn" data-action="open-ai-sidebar"><svg class="icon"><use href="#i-spark"/></svg></button>
-          <button class="tb-btn" id="dlToggleBtn" data-action="toggle-downloads"><svg class="icon"><use href="#i-download"/></svg><span class="tb-dot"></span></button>
+          <button class="tb-btn" data-action="toggle-find" aria-label="Найти на странице"><svg class="icon"><use href="#i-search"/></svg></button>
+          <button class="tb-btn" data-action="open-web-sidebar" aria-label="Веб-сайдбар"><svg class="icon"><use href="#i-panel"/></svg></button>
+          <button class="tb-btn" data-action="open-ai-sidebar" aria-label="ИИ-сайдбар"><svg class="icon"><use href="#i-spark"/></svg></button>
+          <button class="tb-btn" id="dlToggleBtn" data-action="toggle-downloads" aria-label="Загрузки"><svg class="icon"><use href="#i-download"/></svg><span class="tb-dot"></span></button>
           <button class="tb-btn" data-action="open-print-dialog"><svg class="icon"><use href="#i-printer"/></svg></button>
-          <button class="tb-btn" id="devtoolsBtn" data-action="toggle-devtools"><svg class="icon"><use href="#i-code"/></svg></button>
-          <button class="tb-btn" data-action="show-view" data-view="settings"><svg class="icon"><use href="#i-gear"/></svg></button>
+          <button class="tb-btn" id="devtoolsBtn" data-action="toggle-devtools" aria-label="DevTools"><svg class="icon"><use href="#i-code"/></svg></button>
+          <button class="tb-btn" data-action="show-view" data-view="settings" aria-label="Настройки"><svg class="icon"><use href="#i-gear"/></svg></button>
         </div>
       </div>
 
@@ -1032,7 +1032,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <span class="find-count" id="findCount">0/0</span>
             <button title="Вверх">↑</button>
             <button title="Вниз">↓</button>
-            <button data-action="toggle-find"><svg class="icon"><use href="#i-x"/></svg></button>
+            <button data-action="toggle-find" aria-label="Найти на странице"><svg class="icon"><use href="#i-x"/></svg></button>
           </div>
 
           <!-- DevTools -->
@@ -1042,7 +1042,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="console">Console</div>
               <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="network">Network</div>
               <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="sources">Sources</div>
-              <button class="dt-close" data-action="toggle-devtools"><svg class="icon"><use href="#i-x"/></svg></button>
+              <button class="dt-close" data-action="toggle-devtools" aria-label="DevTools"><svg class="icon"><use href="#i-x"/></svg></button>
             </div>
             <div class="dt-panel active" id="dt-elements">
               <div class="elements-tree"><span class="tag">&lt;div</span> <span class="attr">class</span>=<span class="val">"tab-row active"</span><span class="tag">&gt;</span>
@@ -1080,7 +1080,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 
           <!-- Downloads panel -->
           <div class="downloads-panel" id="downloadsPanel">
-            <div class="dl-header">Загрузки<button class="dl-close" data-action="toggle-downloads"><svg class="icon"><use href="#i-x"/></svg></button></div>
+            <div class="dl-header">Загрузки<button class="dl-close" data-action="toggle-downloads" aria-label="Загрузки"><svg class="icon"><use href="#i-x"/></svg></button></div>
             <div class="dl-list">
               <div class="dl-card" id="dlActive">
                 <div class="dl-row"><div class="dl-icon">PDF</div><div><div class="dl-name">lumen-design-system.pdf</div><div class="dl-meta" id="dlMeta">2.1 MB — идёт загрузка…</div></div></div>
