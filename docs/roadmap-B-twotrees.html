@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-25",
  "counts": {
-  "open": 40,
+  "open": 42,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 312,
+ "total_bugs": 314,
  "phases": [
   {
    "id": "P0",
@@ -1920,16 +1920,16 @@
       {
        "id": "WPT-VENDOR-content-security-policy",
        "title": "WPT: вендорить + прогнать категорию `content-security-policy`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/content-security-policy/`, 1356 файлов, 44 категории-поддиректории), скоуп ⬜ (Content Security Policy, частично уже реализована в Lumen — парсинг директив `crates/network/src/csp.rs`, персист report-only политик `crates/storage/src/csp_policies.rs`). Крупнейшая вендоренная категория (865 отобранных id) — `run_report.py --all --root content-security-policy --recursive` не завершился (тот же класс ограничения, что `bluetooth`/`client-hints`); ограниченный ~10:25 пробный прогон (остановлен вручную) обработал 67 id: 13 harness OK, 18 \"Test TIMEOUT\" (частичные сабтесты), 32 голых TIMEOUT (harness не отчитался), 3 ERROR (session/URL-reuse артефакт), 1 SKIP. 2/185 сабтестов passed. Замечен реальный гэп в частичной реализации (директива `base-uri` не влияет на итоговый URL навигации) и нереализованный динамический `import()` под CSP — оба не заведены отдельным BUG-NNN, первый проход"
       },
       {
        "id": "WPT-VENDOR-contenteditable",
        "title": "WPT: вендорить + прогнать категорию `contenteditable`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/contenteditable/`, 6 файлов: `META.yml`, `WEB_FEATURES.yml`, `designmode-iscontenteditable.html`, `plaintext-only.html`, `select-text-change-crash.html`, reftest-пара `synthetic-height.html`+`synthetic-height-ref.html`), скоуп ⬜ (`contenteditable`/`isContentEditable`/`document.designMode`, уже частично реализовано в Lumen, `crates/js/src/dom.rs`). Внекатегорийных хелперов не обнаружено. Из 5 реальных тестов манифест признаёт автопрогоняемыми только 2 — `select-text-change-crash.html` тип `crashtest`, `synthetic-height.html` тип `reftest`, оба не поддержаны минимальным исполнителем (тот же класс гэпа, что `acid`/`accessibility`). `run_report.py --all --root contenteditable --recursive` прошёл за ~1:08: `designmode-iscontenteditable.html` (декларативный Shadow DOM + `document.designMode` + 4 `test()`, читающих `isContentEditable` через shadow-границу) — сама BiDi-команда `browsingContext.navigate` таймаутится, харнесс не успел выполнить ни одного `test()`; изолированные `--dump-layout`-репро половинок зависания не воспроизводят — похоже на баг живого/интерактивного пути. Заведён BUG-345 (навигационное зависание серьёзнее рядового executor-гэпа, той же видимой категории, что BUG-307). `plaintext-only.html` — harness OK, 0/2 сабтестов FAIL: `contentEditable`-геттер/сеттер не распознают третье спековое значение `plaintext-only` (сворачивают в `inherit`). Заведён BUG-344. 1/2 harness OK, 0/2 сабтестов. Оба заведены явно (в отличие от большинства первопроходных записей) — оба функциональные дефекты уже реализованных частей движка, а не отсутствующие API"
       },
       {
        "id": "WPT-VENDOR-cookies",
@@ -6115,6 +6115,20 @@
    "component": "layout (`box_tree.rs`, `lay_out_flex`) — **general engine bug, not chrome-specific**",
    "date": null,
    "debtor": false
+  },
+  "BUG-344": {
+   "status": "open",
+   "title": "`contentEditable`-сеттер распознаёт только `\"true\"`/`\"false\"`, любое другое значение (в т.ч. спековое `\"plaintext-only\"`) сворачивает в удаление атрибута → `inh…",
+   "component": "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-345": {
+   "status": "open",
+   "title": "Навигация на страницу, сочетающую декларативный Shadow DOM (`<template shadowrootmode=\"open\">`) с `document.designMode` + 4 `test()`, читающими `isContentEditab…",
+   "component": "shell/js (не локализовано)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6223,6 +6237,9 @@
   ],
   "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)": [
    "BUG-340"
+  ],
+  "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
+   "BUG-344"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
@@ -6552,6 +6569,9 @@
   ],
   "shell/js": [
    "BUG-164"
+  ],
+  "shell/js (не локализовано)": [
+   "BUG-345"
   ],
   "shell/network": [
    "BUG-234"
