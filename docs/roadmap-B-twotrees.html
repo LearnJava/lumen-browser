@@ -1969,9 +1969,9 @@
       {
        "id": "WPT-VENDOR-credential-management",
        "title": "WPT: вендорить + прогнать категорию `credential-management`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Credential Management API"
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/credential-management/`, 21 файл: `META.yml`, `WEB_FEATURES.yml`, 13 корневых тестовых файлов, `support/` — 5 хелперов + `README.md`), скоуп 🚫 (Credential Management API), включена несмотря на скоуп по постоянному решению пользователя, как `accelerometer`/`acid`/`ai`/…/`contacts`. Внекатегорийные хелперы не довендорены: `/common/get-host-info.sub.js`, `/resources/testdriver.js`+`testdriver-vendor.js`, `/resources/WebIDLParser.js`+`/resources/idlharness.js`, та же методология, что `FileAPI`/`ai`. `run_report.py --all --root credential-management --recursive` отобрал 13 id (12 `.https.`-only), прошёл полностью (~3:52): `non-fully-active.https.html` SKIP (testdriver.js не поддержан), 11 `.https.`-тестов TIMEOUT (тот же HTTPS-порт-гэп, что `WebCryptoAPI`/`ai`/`cpu-performance`); единственный не-`.https.` тест `require_securecontext.html` — harness OK, 0/1 сабтест FAIL (`assert_false: expected false got true` — тест ожидает, что `http://127.0.0.1` не secure context, но по спеке 127.0.0.1 доверенный по исключению \"localhost\", `isSecureContext` корректно возвращает `true`, как в настоящих браузерах, тот же паттерн, что `audio-output`). 1/13 harness OK, 0/1 сабтестов. Не заводился отдельный BUG-NNN — первый проход категории"
       },
       {
        "id": "WPT-VENDOR-css",
