@@ -495,9 +495,109 @@ fixture a "something is always hovered" steady state (closer to real usage),
 or treat the first mouse-enter transition as a one-time cost outside the
 per-interaction budget. Flagging now so S5/S6 don't have to rediscover it.
 
+## S4 — incremental box-build v1: mechanism correct, does NOT pay for itself yet
+
+Landed the mechanism the brief §5 S4 asked for: skip `build_box` for subtrees
+proven unchanged, and measure the `build_box` share drop. Both are done; the
+measurement's answer is **negative** on the representative scenario — reported
+honestly per the brief's "no silently relaxing the gate" rule, not hidden.
+
+**Mechanism:**
+- `CounterMap::clean_subtrees` (new field, `counters.rs`) — `walk` now returns
+  whether a node's own style **and its whole descendant subtree** are
+  byte-identical to `prev_styles` (bottom-up aggregation of `must_recompute`),
+  populated only when `RestyleDelta::dom_content_stable` is `true` (new field).
+- `dom_content_stable` is the S4 correctness precondition: style equality alone
+  does not imply `build_box`'s *content* inputs (attributes, text, DOM
+  structure — e.g. `<input value>`, `<select>`'s selected option, `<details
+  open>`) are unchanged. It is only safe to assert for a pure interactive-state
+  transition (`restyle_root_set_for_state_change`) — a hover/focus/active flip
+  never touches the DOM. DOM/attribute-change deltas
+  (`restyle_root_set_for_node_change`) must set it `false`; S4 then rebuilds
+  every box, exactly like today (conservative-first, same precedent as S3).
+- `build_box_or_reuse` (`box_tree.rs`) — the per-child reuse decision, wired
+  into all 4 of `build_box`'s recursive call sites (rayon-parallel item-
+  container, sequential item-container, inline-block-in-run, plain block-flow
+  child). When enabled and a child id is in `clean_subtrees` with a matching
+  entry in `prev_index`, clones the whole previous `LayoutBox` subtree instead
+  of recursing. `prev_index` is `crate::incremental::index_by_node(prev)` — an
+  id→box map built once per `incremental_build_box` call, keep-first in
+  pre-order (anonymous boxes reuse their owning element's id, so the first,
+  outermost occurrence in DFS order is always the real per-element box).
+- Public entry point: `lumen_layout::box_tree::incremental_build_box`, gated
+  behind `set_incremental_box_build`/`incremental_box_build_enabled` (off by
+  default, same thread-local-flag pattern as S3's `INCREMENTAL_RESTYLE`).
+- **Known residual gap, accepted for v1** (documented on `RestyleDelta::dom_content_stable`):
+  a rule conditioning `counter-reset`/`counter-increment`/`counter-set` on a
+  dynamic pseudo-class could change a later sibling's rendered counter text
+  without changing that sibling's own `ComputedStyle`. Not exercised anywhere
+  in this codebase's CSS; accepted as an unhandled exotic edge case rather than
+  adding a full counter-snapshot equality check to the reuse guard.
+
+**Not wired into any pipeline yet** — same S5 dependency as S3.
+
+**Correctness:** `cargo test -p lumen-layout` — 2 new differential tests in
+`box_tree.rs` (`box_build_hover_transition_matches_full_and_reuses_subset`,
+`box_build_node_change_disables_reuse_conservatively`), comparing **laid-out
+geometry** (`lay_out` + per-node rect, 0.5px epsilon) against a full rebuild —
+not `Debug`-string equality, which false-positives here: `ComputedStyle`
+carries `custom_props: HashMap<String, String>` (CSS custom properties), and
+two independently-computed but content-equal cascades can produce different
+`HashMap` iteration order, hence different `Debug` text, for the exact same
+data (`HashMap`'s real `PartialEq` is order-independent; its `Debug` impl is
+not). Full crate suite: 3258 passed, 2 failed — the same pre-existing BUG-339
+`FONT_CH_EX` pair. A third differential test on the real CC-12 chrome doc
+(`bug341_s4_incremental_box_build_share` in `lumen-shell`) also passes,
+comparing node-id/`BoxKind`-discriminant/child-count shape (the geometry
+comparison there would need the crate-private `lay_out`, not reachable from
+`lumen-shell`; the two in-crate tests already cover bit-for-bit geometry).
+
+**Measured `build_box` wall-time** (same CC-12 chrome doc + hover-between-
+sibling-tabs transition as the S3 measurement, dev-release,
+`cargo test -p lumen-shell --profile dev-release
+bug341_s4_incremental_box_build_share -- --ignored --nocapture`):
+
+```
+BUG341_S4_FULL_BUILD_BOX        count=60 min=5.09ms p50=6.09ms p95=7.76ms
+BUG341_S4_INCREMENTAL_BUILD_BOX count=60 min=5.38ms p50=7.32ms p95=10.40ms
+BUG341_S4: full_build_box p50=6.09ms p95=7.76ms; incremental_build_box p50=7.32ms p95=10.40ms; drop=-20.3%
+```
+
+**Honest verdict: negative on this benchmark, not a win in isolation.**
+`incremental_build_box` is *slower* than a full rebuild here. Root cause:
+`index_by_node` walks and hashes the *entire* previous tree (~thousands of
+nodes for the chrome doc) on every call to build the id→box map, and this
+fixed O(n) cost is paid regardless of how small the actually-reused region is.
+Since S1 measured `build_box` at only 8% of the full cycle to begin with, the
+savings from skipping a modest fraction of that 8% do not cover the index-
+build overhead. This is a real property of the "index by `NodeId`, rebuild
+every call" design, not a benchmark artifact — the alternative (`graft_geometry`-
+style positional/lockstep matching, avoiding any index) was considered and
+rejected for this slice: `build_box`'s children lists are not 1:1 positionally
+with DOM children in general (inline-run text merging, injected `::before`/
+`::after`/`::marker` items interleave with per-child boxes in a way that only
+resolves post-construction, which is exactly why `graft_geometry` itself
+operates on two *already-built* trees rather than guiding construction).
+Getting positional matching right during construction would need deeper,
+riskier changes to all 4 `build_box` recursion sites than this slice's budget
+allows.
+
+**Recommendation for S5/S6:** land S3 (cascade) and S4 (this) both gated off by
+default as done; do **not** flip `set_incremental_box_build` on by default when
+S5 wires the pipeline together. Re-measure the *combined* cascade+box-build+
+layout cycle at S5 — S3's ~54%-cascade-drop scenario plus S4's negative
+contribution might still net positive or might not; that is an end-to-end
+question S5 must answer with real numbers, not assume from this stage-isolated
+measurement. If S4 nets negative even combined, the honest fix is S6: replace
+`index_by_node`'s whole-tree hash index with an amortized or positional
+alternative — or drop the box-build-skip idea and rely on S3 (cascade) +
+`graft_geometry` (existing geometry reuse) alone, which the CC-12 gate math
+(§ "S1" above) suggests may already be sufficient once wired in.
+
 ## Repro
 
 ```bash
 cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s3_incremental_cascade_precompute_share -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s4_incremental_box_build_share -- --ignored --nocapture
 ```

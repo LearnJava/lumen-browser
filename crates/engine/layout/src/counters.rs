@@ -74,6 +74,16 @@ pub struct CounterMap {
     /// so its own `compute_style(id, ...)` call would recompute an identical
     /// result — reusing this cache skips a second full cascade pass per node.
     styles: HashMap<NodeId, ComputedStyle>,
+    /// BUG-341 S4: `NodeId`s whose own `ComputedStyle` AND entire descendant
+    /// subtree are byte-identical to the previous pass (`walk`'s
+    /// `must_recompute` was `false` for every node in the subtree), populated
+    /// only when the incremental cascade ran with
+    /// [`RestyleDelta::dom_content_stable`] `true`. `build_box_or_reuse` (in
+    /// `box_tree.rs`) treats membership as a licence to clone the whole
+    /// `LayoutBox` subtree from the previous pass instead of rebuilding it —
+    /// see that function's doc comment for why `dom_content_stable` (not style
+    /// equality alone) is the correctness precondition.
+    clean_subtrees: HashSet<NodeId>,
 }
 
 impl CounterMap {
@@ -101,6 +111,13 @@ impl CounterMap {
     /// `incr == full` differential tests compare two such maps directly.
     pub fn styles(&self) -> &HashMap<NodeId, ComputedStyle> {
         &self.styles
+    }
+
+    /// Returns the whole-subtree-unchanged node set (BUG-341 S4) — see the
+    /// `clean_subtrees` field doc for the correctness precondition
+    /// (`RestyleDelta::dom_content_stable`) that gates population.
+    pub fn clean_subtrees(&self) -> &HashSet<NodeId> {
+        &self.clean_subtrees
     }
 }
 
@@ -209,6 +226,35 @@ pub struct RestyleDelta<'a> {
     pub prev_styles: &'a HashMap<NodeId, ComputedStyle>,
     /// Root nodes whose entire subtree must be re-cascaded.
     pub dirty_roots: HashSet<NodeId>,
+    /// BUG-341 S4: `true` when this delta is known to reflect *only* an
+    /// interactive-state transition (`:hover`/`:focus`/`:active`, produced via
+    /// [`crate::style::restyle_root_set_for_state_change`]) with no DOM
+    /// attribute/text/structure change in the same cycle.
+    ///
+    /// Style-unchanged nodes are then also *content*-unchanged for
+    /// `build_box` purposes — nothing else `build_box` reads (attributes,
+    /// text, DOM structure) could have moved, since a pure pointer/keyboard
+    /// state change never touches the DOM. That is the precondition
+    /// `build_box_or_reuse` needs to safely clone a whole `LayoutBox` subtree
+    /// instead of rebuilding it (BUG-341 S4).
+    ///
+    /// Callers deriving `dirty_roots` from
+    /// [`crate::style::restyle_root_set_for_node_change`] (DOM mutation) MUST
+    /// set this `false` — style equality alone does not imply the DOM content
+    /// `build_box` reads (e.g. a `<input value>` attribute, or text-node data)
+    /// is unchanged, so S4 conservatively rebuilds every box on that path
+    /// (`clean_subtrees` stays empty). Tightening this is future work,
+    /// mirroring S3's "conservative first" precedent.
+    ///
+    /// One known residual gap even when `true`: a CSS rule that conditions
+    /// `counter-reset`/`counter-increment`/`counter-set` on a dynamic pseudo-
+    /// class (e.g. `li:hover { counter-increment: item 2; }`) could change a
+    /// *later, otherwise-clean* sibling's rendered counter text without
+    /// changing that sibling's own `ComputedStyle`. This is not exercised
+    /// anywhere in this codebase's CSS and is accepted as an unhandled exotic
+    /// edge case for v1 (see BUG-341 "S4" notes) rather than blocking the
+    /// common case on a full counter-snapshot equality check.
+    pub dom_content_stable: bool,
 }
 
 /// BUG-341 S3 — incremental cascade: like [`precompute_counters`], but reuses
@@ -330,18 +376,27 @@ fn walk(
     // recompute — propagates down the rest of the subtree unconditionally
     // (brief §4: "root-set and their style-descendants").
     force: bool,
-) {
+    // BUG-341 S4: returns `true` when this node's own style AND its entire
+    // descendant subtree are unchanged from `prev_styles` (vacuously `true`
+    // for non-element nodes, which carry no style of their own). Aggregated
+    // bottom-up into `map.clean_subtrees` — see that field's doc comment.
+) -> bool {
     match &doc.get(id).data {
         // Text / comment / doctype / fragment — no counter properties, no children.
+        // BUG-341 S4: a text node's own *content* can still change (a DOM text
+        // mutation) without this cascade walk noticing — callers must only
+        // treat the `true` returned here as "content-safe" when the whole
+        // delta is `dom_content_stable` (see `RestyleDelta` doc).
         NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. }
-        | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => return,
+        | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => return true,
 
         // Document node: has no style of its own; just recurse into children.
         NodeData::Document => {
+            let mut all_clean = true;
             for &child_id in flat.children_of(doc, id) {
-                walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force);
+                all_clean &= walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force);
             }
-            return;
+            return all_clean;
         }
 
         NodeData::Element { .. } => {} // handled below
@@ -389,8 +444,10 @@ fn walk(
     }
 
     let child_force = force || must_recompute;
+    let mut children_clean = true;
     for &child_id in flat.children_of(doc, id) {
-        walk(doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode, incr, child_force);
+        let child_clean = walk(doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode, incr, child_force);
+        children_clean &= child_clean;
     }
 
     // ::after quotes come after all children in document order.
@@ -404,6 +461,15 @@ fn walk(
     }
 
     ctx.pop_reset(&style.counter_reset);
+
+    // BUG-341 S4: this node's own style was reused (not recomputed) AND every
+    // descendant is itself clean. Only worth recording when the delta already
+    // guarantees DOM content stability — see `RestyleDelta::dom_content_stable`.
+    let subtree_clean = !must_recompute && children_clean;
+    if subtree_clean && incr.is_some_and(|d| d.dom_content_stable) {
+        map.clean_subtrees.insert(id);
+    }
+    subtree_clean
 }
 
 // ─── Counter value formatting ────────────────────────────────────────────────

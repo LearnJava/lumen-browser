@@ -42,6 +42,48 @@ thread_local! {
     static INCREMENTAL_LAYOUT_MODE: Cell<bool> = const { Cell::new(false) };
 }
 
+thread_local! {
+    /// BUG-341 S4 — master on/off switch for incremental box-build
+    /// (`build_box_or_reuse`'s whole-subtree clone path), mirroring
+    /// `counters::INCREMENTAL_RESTYLE`'s pattern. Off by default: no current
+    /// pipeline entry point (`layout_measured_hyp`, `layout_mutation_incremental`)
+    /// passes a `prev_index` yet — that wiring is S5.
+    static INCREMENTAL_BOX_BUILD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Enables/disables incremental box-build reuse for subsequent
+/// [`incremental_build_box`] calls on the current thread.
+pub fn set_incremental_box_build(enabled: bool) {
+    INCREMENTAL_BOX_BUILD.with(|c| c.set(enabled));
+}
+
+/// Whether incremental box-build reuse is currently enabled on this thread.
+pub fn incremental_box_build_enabled() -> bool {
+    INCREMENTAL_BOX_BUILD.with(|c| c.get())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// BUG-341 S4 test instrumentation: counts real `build_box` calls vs
+    /// whole-subtree reuses via `build_box_or_reuse`, so differential tests can
+    /// assert the incremental path actually skips work (not just that it
+    /// matches a full build's output).
+    static BOX_BUILD_COUNT: Cell<u32> = const { Cell::new(0) };
+    static BOX_BUILD_REUSE_COUNT: Cell<u32> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_box_build_counts() {
+    BOX_BUILD_COUNT.with(|c| c.set(0));
+    BOX_BUILD_REUSE_COUNT.with(|c| c.set(0));
+}
+
+/// Returns `(built, reused)` since the last [`reset_box_build_counts`].
+#[cfg(test)]
+pub(crate) fn box_build_counts() -> (u32, u32) {
+    (BOX_BUILD_COUNT.with(|c| c.get()), BOX_BUILD_REUSE_COUNT.with(|c| c.get()))
+}
+
 /// Layout-side gutter width for `scrollbar-width: auto` in CSS px.
 ///
 /// Must match `SCROLLBAR_WIDTH` constant in `lumen_paint::display_list` so that
@@ -2574,7 +2616,7 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
     let counters = precompute_counters(doc, sheet, viewport, &flat, false);
     let registry = build_counter_style_registry(sheet);
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false, None);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
@@ -2652,7 +2694,7 @@ pub fn layout_measured_hyp_with_counters(
     let mut root = {
         let _prof = lumen_core::profile::scope("build_box");
         lumen_core::tracy_zone!("build_box");
-        build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode)
+        build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
     };
     propagate_canvas_background(doc, &mut root);
     // CSS Fonts L5 §4 — resolve `font-size-adjust` against the real font x-height
@@ -2745,7 +2787,7 @@ pub fn layout_streaming_incremental(
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
     let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
     let registry = build_counter_style_registry(sheet);
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
     propagate_canvas_background(doc, &mut root);
     apply_font_size_adjust(&mut root, measurer);
     // Every freshly-built box needs layout; graft clears the bit on reusable
@@ -3892,6 +3934,74 @@ fn build_base_select_box(
     }
 }
 
+/// BUG-341 S4 — per-node reuse decision point for incremental box-build.
+///
+/// Called wherever `build_box` recurses into a DOM child. When incremental
+/// box-build is enabled and `id`'s whole style-subtree is known clean (see
+/// [`CounterMap::clean_subtrees`], gated by
+/// [`crate::counters::RestyleDelta::dom_content_stable`]) and `prev_index` has
+/// a matching entry, clones that previous [`LayoutBox`] subtree wholesale
+/// instead of rebuilding it. Otherwise falls through to a normal `build_box`
+/// call (which itself threads `prev_index` down, so a dirty ancestor's clean
+/// descendants still get reused at their own level).
+#[allow(clippy::too_many_arguments)]
+fn build_box_or_reuse(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    prev_index: Option<&std::collections::HashMap<NodeId, &LayoutBox>>,
+) -> LayoutBox {
+    if incremental_box_build_enabled()
+        && let Some(idx) = prev_index
+        && counters.clean_subtrees().contains(&id)
+        && let Some(prev_box) = idx.get(&id)
+    {
+        #[cfg(test)]
+        BOX_BUILD_REUSE_COUNT.with(|c| c.set(c.get() + 1));
+        return (*prev_box).clone();
+    }
+    build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev_index)
+}
+
+/// BUG-341 S4 — incremental box-build entry point.
+///
+/// Builds the `LayoutBox` tree rooted at `id`, cloning whole subtrees from
+/// `prev` wherever [`CounterMap::clean_subtrees`] says it is safe to (see
+/// [`build_box_or_reuse`]) instead of calling `build_box` for them. Must
+/// reproduce a full `build_box` pass bit-for-bit for the same final state —
+/// the `incr == full` differential tests in `incremental.rs` guard this.
+///
+/// Gated behind [`set_incremental_box_build`]: flag off (the default) makes
+/// this behave exactly like `build_box(..., None)`, so callers can wire this
+/// entry point in ahead of the flag ever being flipped on (S5) with no
+/// behaviour change.
+///
+/// Not yet wired into any pipeline entry point (`layout_measured_hyp_with_counters`,
+/// `layout_streaming_incremental` still call `build_box` directly, always
+/// rebuilding in full) — that's S5.
+#[allow(clippy::too_many_arguments)]
+pub fn incremental_build_box(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    prev: &LayoutBox,
+) -> LayoutBox {
+    let prev_index = crate::incremental::index_by_node(prev);
+    build_box_or_reuse(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, Some(&prev_index))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_box(
     doc: &Document,
@@ -3903,7 +4013,14 @@ fn build_box(
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
     dark_mode: bool,
+    // BUG-341 S4: `Some` when an incremental box-build pass is in progress —
+    // an id→box index over the previous pass's tree, consulted by
+    // `build_box_or_reuse` at every recursive call site below. `None` for the
+    // full/legacy build path (all current pipeline entry points).
+    prev_index: Option<&std::collections::HashMap<NodeId, &LayoutBox>>,
 ) -> LayoutBox {
+    #[cfg(test)]
+    BOX_BUILD_COUNT.with(|c| c.set(c.get() + 1));
     // BUG-284: `precompute_counters` already ran a full document-order cascade
     // pass over this exact tree (same `inherited` chain, same sheet/viewport/
     // dark_mode) to resolve counter-reset/increment/set — reuse its cached
@@ -4230,8 +4347,8 @@ fn build_box(
                             doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
                         );
                     }
-                    let b = build_box(
-                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
+                    let b = build_box_or_reuse(
+                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode, prev_index,
                     );
                     if matches!(b.kind, BoxKind::Skip) { None } else { Some(b) }
                 }).collect();
@@ -4247,8 +4364,8 @@ fn build_box(
                         }
                         continue;
                     }
-                    let child_box = build_box(
-                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
+                    let child_box = build_box_or_reuse(
+                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode, prev_index,
                     );
                     if !matches!(child_box.kind, BoxKind::Skip) {
                         children.push(child_box);
@@ -4363,7 +4480,7 @@ fn build_box(
                                 row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                             });
                         }
-                        row_items.push(build_box(doc, sheet, cid, &style, viewport, flat, counters, registry, dark_mode));
+                        row_items.push(build_box_or_reuse(doc, sheet, cid, &style, viewport, flat, counters, registry, dark_mode, prev_index));
                         had_ws = false;
                         i += 1;
                     } else if matches!(doc.get(cid).data, NodeData::Element { .. })
@@ -4445,7 +4562,7 @@ fn build_box(
                     }
                 }
             } else {
-                children.push(build_box(doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode));
+                children.push(build_box_or_reuse(doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode, prev_index));
                 i += 1;
             }
         }
@@ -16869,6 +16986,227 @@ mod tests {
             let c = child_block(".p { width: 400px; height: 300px; } .c { height: 50%; }");
             assert!((c.rect.height - 150.0).abs() < 0.5, "height={}", c.rect.height);
         }
+    }
+
+    // ── BUG-341 S4: incremental box-build differential tests ───────────────────
+    //
+    // `incremental_build_box` must reproduce a full `build_box` pass bit-for-bit
+    // for the same final state (mirroring the S3 cascade differential tests in
+    // `incremental.rs`), while actually skipping work — cloning untouched
+    // subtrees from `prev` instead of rebuilding them.
+
+    #[test]
+    fn box_build_hover_transition_matches_full_and_reuses_subset() {
+        // A real interactive-state transition (hover moves between siblings)
+        // must produce a box tree bit-identical to a full rebuild of the
+        // post-transition state, while cloning the untouched `#unrelated`
+        // subtree wholesale instead of rebuilding it.
+        use lumen_dom::build_flat_tree;
+        use crate::counters::{
+            build_counter_style_registry, incremental_precompute_counters, precompute_counters,
+            set_incremental_restyle, RestyleDelta,
+        };
+        use crate::style::{
+            clear_interactive_state, restyle_root_set_for_state_change, set_interactive_state,
+            ComputedStyle,
+        };
+
+        let html = r#"<ul id="menu">
+            <li id="a" class="item">a</li>
+            <li id="b" class="item">b</li>
+            <li id="c" class="item">c</li>
+        </ul>
+        <div id="unrelated"><p>x</p><p>y</p><p>z</p></div>"#;
+        let css = r#"
+            .item { color: black; padding: 4px; }
+            .item:hover { color: blue; }
+            .item:hover + .item { color: green; }
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = Size::new(800.0, 600.0);
+        let flat = build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let registry = build_counter_style_registry(&sheet);
+
+        let a = doc.find_by_id("a").expect("#a must exist");
+        let b = doc.find_by_id("b").expect("#b must exist");
+
+        // Baseline (state a hovered) — the "prev" tree for reuse, built in full.
+        set_interactive_state(Some(a), None, None);
+        crate::style::invalidate_rule_idx_cache();
+        let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let prev_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
+        );
+
+        // Reference: full rebuild after the transition (no reuse at all).
+        set_interactive_state(Some(b), None, None);
+        crate::style::invalidate_rule_idx_cache();
+        let full_after_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let full_after_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &full_after_counters, &registry, false, None,
+        );
+
+        // Incremental: real transition, conservative root-set, box-build reuse on.
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b));
+        let delta = RestyleDelta {
+            prev_styles: baseline_counters.styles(),
+            dirty_roots,
+            dom_content_stable: true,
+        };
+        set_incremental_restyle(true);
+        crate::style::invalidate_rule_idx_cache();
+        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        set_incremental_restyle(false);
+
+        super::set_incremental_box_build(true);
+        super::reset_box_build_counts();
+        let mut incr_tree = super::incremental_build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &prev_tree,
+        );
+        let (built, reused) = super::box_build_counts();
+        super::set_incremental_box_build(false);
+        clear_interactive_state();
+
+        // Compare via laid-out geometry, not `Debug` string equality: `ComputedStyle`
+        // carries a `custom_props: HashMap<String, String>` (CSS custom properties),
+        // and `HashMap`'s `Debug` prints entries in iteration order, which two
+        // independently-computed (but content-equal) cascades need not share —
+        // `collect_rects` sidesteps that non-determinism entirely (BUG-341 S4).
+        let mut full_after_tree = full_after_tree;
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        let init_pcb = super::Rect::new(0.0, 0.0, vp.width, vp.height);
+        super::lay_out(&mut incr_tree, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
+        super::lay_out(&mut full_after_tree, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
+
+        fn collect_rects(b: &super::LayoutBox, out: &mut Vec<(lumen_dom::NodeId, super::Rect)>) {
+            out.push((b.node, b.rect));
+            for c in &b.children {
+                collect_rects(c, out);
+            }
+        }
+        let mut ra = Vec::new();
+        let mut rb = Vec::new();
+        collect_rects(&incr_tree, &mut ra);
+        collect_rects(&full_after_tree, &mut rb);
+        assert_eq!(ra.len(), rb.len(), "box count must match a full rebuild");
+        for ((na, xa), (nb, xb)) in ra.iter().zip(rb.iter()) {
+            assert_eq!(na, nb, "node order must match a full rebuild");
+            assert!(
+                (xa.x - xb.x).abs() < 0.5 && (xa.y - xb.y).abs() < 0.5
+                    && (xa.width - xb.width).abs() < 0.5 && (xa.height - xb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incremental {xa:?} vs full {xb:?}",
+            );
+        }
+        assert!(
+            reused > 0,
+            "incremental box-build reused 0 subtrees — the untouched #unrelated \
+             subtree should have been cloned wholesale, not rebuilt (built={built})",
+        );
+    }
+
+    #[test]
+    fn box_build_node_change_disables_reuse_conservatively() {
+        // A DOM class mutation is NOT `dom_content_stable` (BUG-341 S4):
+        // box-build must fall back to a full rebuild everywhere (reused == 0),
+        // never trusting style-equality alone for a content-affecting change.
+        use lumen_dom::{build_flat_tree, NodeData};
+        use crate::counters::{
+            build_counter_style_registry, incremental_precompute_counters, precompute_counters,
+            set_incremental_restyle, RestyleDelta,
+        };
+        use crate::style::{restyle_root_set_for_node_change, ComputedStyle};
+
+        let css = r#"
+            .item { color: black; }
+            .item.active { color: blue; }
+        "#;
+        let html = r#"<ul id="menu">
+            <li id="a" class="item">a</li>
+            <li id="b" class="item">b</li>
+        </ul>
+        <div id="unrelated"><p>x</p></div>"#;
+        let mut doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = Size::new(800.0, 600.0);
+        let flat = build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let registry = build_counter_style_registry(&sheet);
+
+        crate::style::invalidate_rule_idx_cache();
+        let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let prev_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
+        );
+
+        let a = doc.find_by_id("a").expect("#a must exist");
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(a).data {
+            for attr in attrs.iter_mut() {
+                if attr.name.local == "class" {
+                    attr.value = "item active".to_string();
+                }
+            }
+        }
+
+        crate::style::invalidate_rule_idx_cache();
+        let full_after_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let full_after_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &full_after_counters, &registry, false, None,
+        );
+
+        let dirty_roots = restyle_root_set_for_node_change(&doc, [a]);
+        let delta = RestyleDelta {
+            prev_styles: baseline_counters.styles(),
+            dirty_roots,
+            dom_content_stable: false,
+        };
+        set_incremental_restyle(true);
+        crate::style::invalidate_rule_idx_cache();
+        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        set_incremental_restyle(false);
+
+        super::set_incremental_box_build(true);
+        super::reset_box_build_counts();
+        let mut incr_tree = super::incremental_build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &prev_tree,
+        );
+        let (_built, reused) = super::box_build_counts();
+        super::set_incremental_box_build(false);
+
+        // See the hover-transition test above for why geometry (not `Debug`
+        // string equality) is the correct comparison — `custom_props` HashMap
+        // iteration order isn't guaranteed equal across independent cascades.
+        let mut full_after_tree = full_after_tree;
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        let init_pcb = super::Rect::new(0.0, 0.0, vp.width, vp.height);
+        super::lay_out(&mut incr_tree, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
+        super::lay_out(&mut full_after_tree, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
+
+        fn collect_rects(b: &super::LayoutBox, out: &mut Vec<(lumen_dom::NodeId, super::Rect)>) {
+            out.push((b.node, b.rect));
+            for c in &b.children {
+                collect_rects(c, out);
+            }
+        }
+        let mut ra = Vec::new();
+        let mut rb = Vec::new();
+        collect_rects(&incr_tree, &mut ra);
+        collect_rects(&full_after_tree, &mut rb);
+        assert_eq!(ra.len(), rb.len(), "box count must match a full rebuild");
+        for ((na, xa), (nb, xb)) in ra.iter().zip(rb.iter()) {
+            assert_eq!(na, nb, "node order must match a full rebuild");
+            assert!(
+                (xa.x - xb.x).abs() < 0.5 && (xa.y - xb.y).abs() < 0.5
+                    && (xa.width - xb.width).abs() < 0.5 && (xa.height - xb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incremental {xa:?} vs full {xb:?}",
+            );
+        }
+        assert_eq!(
+            reused, 0,
+            "a DOM class mutation (dom_content_stable=false) must never reuse a \
+             box subtree — got {reused} reuses",
+        );
     }
 }
 

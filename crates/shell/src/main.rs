@@ -24396,7 +24396,7 @@ mod tests {
 
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b));
         let dirty_count = dirty_roots.len();
-        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots };
+        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, dom_content_stable: true };
         set_incremental_restyle(true);
         let mut incr_stats = lumen_paint::FrameStats::new();
         let mut last_incr_map = None;
@@ -24429,6 +24429,163 @@ mod tests {
         eprintln!(
             "BUG341_S3: {total_nodes} nodes, dirty_roots={dirty_count}; full_precompute \
              p50={:.4}ms p95={:.4}ms; incremental_precompute p50={:.4}ms p95={:.4}ms; drop={:.1}%",
+            full_summary.p50_ms,
+            full_summary.p95_ms,
+            incr_summary.p50_ms,
+            incr_summary.p95_ms,
+            (1.0 - incr_summary.p50_ms as f64 / full_summary.p50_ms as f64) * 100.0,
+        );
+    }
+
+    /// BUG-341 S4 — real-machine measurement companion to the S3 test above:
+    /// wall-clock `build_box` (full rebuild every call) vs
+    /// `incremental_build_box` (whole-subtree reuse for the untouched region)
+    /// on the same CC-12 chrome-preview hover transition. Feeds the S4
+    /// recorded measurement (brief §5 S4: "measure `build_box` share drop").
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s4_incremental_box_build_share -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual perf measurement (BUG-341 S4) — see doc comment for run command"]
+    fn bug341_s4_incremental_box_build_share() {
+        use lumen_layout::box_tree::{incremental_build_box, set_incremental_box_build};
+        use lumen_layout::counters::{
+            build_counter_style_registry, incremental_precompute_counters, precompute_counters,
+            set_incremental_restyle, RestyleDelta,
+        };
+        use lumen_layout::style::{restyle_root_set_for_state_change, ComputedStyle};
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let viewport = Size::new(1280.0, 800.0);
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let registry = build_counter_style_registry(&sheet);
+
+        let tabs_container = doc
+            .find_by_id(lumen_chrome::ids::SB_TABS)
+            .expect("chrome preview must have #sbTabs");
+        let tab_rows = doc.get(tabs_container).children.clone();
+        assert!(tab_rows.len() >= 2, "bind_model must have populated at least 2 tab rows");
+        let tab_a = tab_rows[0];
+        let tab_b = tab_rows[1];
+
+        const WARMUP: usize = 10;
+        const SAMPLES: usize = 60;
+
+        // Baseline snapshot + box tree: tab_a hovered (the "prev" for reuse).
+        // `incremental_build_box` with the flag off degrades to a plain full
+        // `build_box` (private to `lumen_layout`, not reachable from here) —
+        // used here as the full-rebuild reference/timing throughout. The very
+        // first call has no real "prev" yet, so pass an unused placeholder
+        // (never consulted while the flag is off).
+        set_incremental_box_build(false);
+        let unused_placeholder = lumen_layout::LayoutBox {
+            node: doc.root(),
+            rect: Rect::ZERO,
+            style: root_style.clone(),
+            kind: lumen_layout::BoxKind::Skip,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: Default::default(),
+        };
+        lumen_layout::set_interactive_state(Some(tab_a), None, None);
+        let baseline = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        let prev_tree = incremental_build_box(
+            &doc, &sheet, doc.root(), &root_style, viewport, &flat, &baseline, &registry, false, &unused_placeholder,
+        );
+
+        let mut full_stats = lumen_paint::FrameStats::new();
+        for i in 0..WARMUP + SAMPLES {
+            lumen_layout::set_interactive_state(Some(tab_b), None, None);
+            let map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+            let t0 = std::time::Instant::now();
+            let tree = incremental_build_box(
+                &doc, &sheet, doc.root(), &root_style, viewport, &flat, &map, &registry, false, &prev_tree,
+            );
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if i >= WARMUP {
+                full_stats.record(ms as f32);
+            }
+            std::hint::black_box(&tree);
+        }
+        let full_summary = full_stats.summary().expect("samples collected");
+        eprintln!("{}", full_summary.display_with("BUG341_S4_FULL_BUILD_BOX"));
+
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b));
+        let delta = RestyleDelta {
+            prev_styles: baseline.styles(),
+            dirty_roots,
+            dom_content_stable: true,
+        };
+        set_incremental_restyle(true);
+        set_incremental_box_build(true);
+        let mut incr_stats = lumen_paint::FrameStats::new();
+        let mut last_incr_tree = None;
+        for i in 0..WARMUP + SAMPLES {
+            lumen_layout::set_interactive_state(Some(tab_b), None, None);
+            let map = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, &delta);
+            let t0 = std::time::Instant::now();
+            let tree = incremental_build_box(
+                &doc, &sheet, doc.root(), &root_style, viewport, &flat, &map, &registry, false, &prev_tree,
+            );
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if i >= WARMUP {
+                incr_stats.record(ms as f32);
+            }
+            last_incr_tree = Some(tree);
+        }
+        set_incremental_restyle(false);
+        set_incremental_box_build(false);
+        lumen_layout::clear_interactive_state();
+        let incr_summary = incr_stats.summary().expect("samples collected");
+        eprintln!("{}", incr_summary.display_with("BUG341_S4_INCREMENTAL_BUILD_BOX"));
+
+        // Correctness: same hover target, must match a full rebuild exactly
+        // regardless of the wall-time saving (brief §4 correctness gate).
+        lumen_layout::set_interactive_state(Some(tab_b), None, None);
+        let full_after_map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        let full_after_tree = incremental_build_box(
+            &doc, &sheet, doc.root(), &root_style, viewport, &flat, &full_after_map, &registry, false, &prev_tree,
+        );
+        lumen_layout::clear_interactive_state();
+        let incr_tree = last_incr_tree.expect("at least one sample");
+
+        // Structural sanity check only (node id + `BoxKind` discriminant +
+        // child count) — NOT full field/`Debug` equality: `ComputedStyle`
+        // carries a `custom_props: HashMap<String, String>` (CSS custom
+        // properties, heavily used by this design-system chrome doc), and
+        // `HashMap`'s `Debug` prints entries in iteration order, which two
+        // independently-computed (but content-equal) cascades need not share.
+        // `lay_out`/`collect_rects`-based bit-for-bit verification (the real
+        // BUG-341 S4 correctness gate) lives in `lumen_layout`'s own
+        // differential tests (`box_build_*` in `box_tree.rs`), which have
+        // access to the crate-private `lay_out` this test does not.
+        fn assert_same_shape(a: &lumen_layout::LayoutBox, b: &lumen_layout::LayoutBox, path: &mut Vec<String>) {
+            assert_eq!(a.node, b.node, "{}: node id mismatch", path.join(">"));
+            assert_eq!(
+                std::mem::discriminant(&a.kind), std::mem::discriminant(&b.kind),
+                "{}: BoxKind discriminant mismatch a={:?} b={:?}", path.join(">"), a.kind, b.kind,
+            );
+            assert_eq!(
+                a.children.len(), b.children.len(),
+                "{}: children.len() mismatch", path.join(">"),
+            );
+            for (i, (ca, cb)) in a.children.iter().zip(b.children.iter()).enumerate() {
+                path.push(format!("child[{i}] node={:?}", ca.node));
+                assert_same_shape(ca, cb, path);
+                path.pop();
+            }
+        }
+        assert_same_shape(&incr_tree, &full_after_tree, &mut vec!["root".to_string()]);
+
+        eprintln!(
+            "BUG341_S4: full_build_box p50={:.4}ms p95={:.4}ms; incremental_build_box \
+             p50={:.4}ms p95={:.4}ms; drop={:.1}%",
             full_summary.p50_ms,
             full_summary.p95_ms,
             incr_summary.p50_ms,
