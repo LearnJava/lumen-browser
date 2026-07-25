@@ -1930,9 +1930,9 @@
       {
        "id": "WPT-VENDOR-core-aam",
        "title": "WPT: вендорить + прогнать категорию `core-aam`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/core-aam/`, 289 файлов: `META.yml`, `aamtests/` — 104 Python-файла платформенных accessibility-API тестов (AT-SPI/IAccessible2/AXAPI, pytest, отдельный от wptrunner фреймворк, манифестом не видны), `manual/` — 169 файлов (168 `*-manual.html`, требуют человека за AT), `arianotify/` — 14 файлов (10 manual + 1 iframe-хелпер), `role/roles-contextual.html` — единственный автопрогоняемый тест), скоуп ⬜ (Core Accessibility API Mappings, в Lumen уже частично реализовано accessibility-дерево). Внекатегорийные хелперы не довендорены: `/wai-aria/scripts/aria-utils.js`+`ATTAcomm.js`, та же методология, что `FileAPI`/`ai`. `run_report.py --all --root core-aam --recursive` отобрал 1 id: `role/roles-contextual.html` — SKIP (`Executor does not support testdriver.js`, тот же гэп, что `accname`). 0/1 harness OK, 0/0 сабтестов. Не заводился отдельный BUG-NNN — единственный кандидат заблокирован testdriver.js-гэпом и невендоренным хелпером"
       },
       {
        "id": "WPT-VENDOR-cors",
