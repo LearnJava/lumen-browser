@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-339)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-340)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -349,6 +349,7 @@
 | [BUG-337](bugs/BUG-337-OPEN.md) | OPEN | paint (femtovg `backends/femtovg_backend.rs`, `BeginStickyLayer`) | Тот же баг, что BUG-336, но в femtovg-фолбэке (не дефолтный живой бэкенд — им является wgpu): `BeginStickyLayer` кламписит только против page-level `self.scroll_x/y` и глобального viewport, не зная о вложенном `PushScrollLayer`'е. Не пофикшено вместе с BUG-336 — у femtovg нет прямого аналога `clip_stack: Vec<Rect>`/`transform_stack: Vec<Mat4>` (нужны `canvas.transform()`+`Transform2D::inversed()`, плюс отдельный stack для клип-баунда с учётом FBO-слоёв `PushClipRoundedRect`/`PushClipPath`, BUG-272 срез 11/12). Найдено CC-CSS-3 (P1) 2026-07-24 |
 | [BUG-338](bugs/BUG-338-OPEN.md) | OPEN | driver/shell (`WinitSession::scroll`, `navigate_fragment`) | Ни один сурфейс автоматизации не умеет прокручивать ВЛОЖЕННЫЙ `overflow:auto`-контейнер — только страницу целиком. MCP `scroll`-тул принимает `target`, но `WinitSession::scroll()` его игнорирует (`_target`) и всегда двигает только корневой scroll-узел; fragment-навигация (`#anchor`) тоже кламписит только page-level scroll, не проходя по цепочке scrollable-предков (нет `scrollIntoView`-подобного обхода). Блокирует авто-тестирование сценариев вложенного скролла (нашёл при попытке написать graphic-тест на BUG-336). Найдено CC-CSS-3 (P1) 2026-07-24 |
 | [BUG-339](bugs/BUG-339-OPEN.md) | OPEN | layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local) | `ch_approximated_as_half_em`/`ex_approximated_as_half_em` проходят изолированно, но падают в полном прогоне `cargo test -p lumen-layout --lib` — тест-харнесс переиспользует OS-потоки, и какой-то другой тест оставляет `FONT_CH_EX` (raw `Cell`, без RAII-гварда) непустым на переиспользованном потоке. Подтверждено пред-существующим на чистом `main` (beb49e41), не регрессия CC-CSS-4. Флейки-провал гейта `scoped-test.sh` для любой задачи, затрагивающей `lumen-layout`. Найдено гейтом CC-CSS-4 (P1) 2026-07-24 |
+| [BUG-340](bugs/BUG-340-OPEN.md) | OPEN | js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`) | `CloseWatcher.requestClose()` рекурсирует без ограничения, если вызвана повторно изнутри собственного `cancel`-обработчика — `this._closed` выставляется только внутри `_fireClose()`, т.е. уже после диспатча `cancel`, так что реентрантный вызов проходит ту же проверку `if (this._closed) return;` и диспатчит ЕЩЁ один `cancel`, рекурсивно. Вскрыто вендоренным WPT `close-watcher/inside-event-listeners.html` (subtest "requestClose() inside oncancel"): вместо 2 событий харнесс насчитал массив длиной 9497. Найдено P2, WPT-VENDOR-close-watcher 2026-07-25 |
 
 ---
 

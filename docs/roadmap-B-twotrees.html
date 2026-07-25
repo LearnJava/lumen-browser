@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-25",
  "counts": {
-  "open": 36,
+  "open": 37,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 308,
+ "total_bugs": 309,
  "phases": [
   {
    "id": "P0",
@@ -1847,9 +1847,9 @@
       {
        "id": "WPT-VENDOR-close-watcher",
        "title": "WPT: вендорить + прогнать категорию `close-watcher`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/close-watcher/`, 54 файла: `META.yml`, `WEB_FEATURES.yml`, корневые тесты, `esc-key/`+`iframes/`+`user-activation/` подкатегории, `resources/helpers.js`), скоуп ⬜ (CloseWatcher API, спека WICG, уже реализована в Lumen как движко-независимый JS-шим, `crates/js/src/close_watcher.rs`). Внекатегорийные хелперы не довендорены: `/common/top-layer.js`, `/resources/testdriver.js`+`testdriver-vendor.js`+`testdriver-actions.js`, та же методология, что `FileAPI`/`clipboard-apis`. Манифест отбирает 65 id (49 файлов, часть с `?dialog`/`?CloseWatcher` вариантами) — `run_report.py --all --root close-watcher --recursive` прошёл полностью (~19с): 63 SKIP (`Executor does not support testdriver.js`, весь `user-activation/`+`esc-key/`); `frame-removal.html` TIMEOUT (detach iframe во время `cancel` вешает харнесс, 0/6 unexpected); `inside-event-listeners.html` — harness OK, 8/12 сабтестов, 4 FAIL — вскрыл реальный движковый баг, а не отсутствие API: `CloseWatcher.requestClose()`, вызванный повторно изнутри своего же `oncancel`, рекурсирует без ограничения (`this._closed` выставляется только внутри `_fireClose()`, уже после диспатча `cancel`, так что реентрантный вызов проходит ту же проверку и диспатчит ещё один `cancel`) — массив событий длиной 9497/5520 вместо 2. Заведён BUG-340 (в отличие от большинства первопроходных вендор-записей — это функциональный дефект реализованной фичи, а не отсутствующий API). 1/65 harness OK, 8/18 сабтестов"
       },
       {
        "id": "WPT-VENDOR-compat",
@@ -6077,6 +6077,13 @@
    "component": "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)",
    "date": null,
    "debtor": false
+  },
+  "BUG-340": {
+   "status": "open",
+   "title": "`CloseWatcher.requestClose()` рекурсирует без ограничения, если вызвана повторно изнутри собственного `cancel`-обработчика — `this._closed` выставляется только…",
+   "component": "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6182,6 +6189,9 @@
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"
+  ],
+  "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)": [
+   "BUG-340"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
