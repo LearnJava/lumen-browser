@@ -2611,6 +2611,29 @@ pub fn layout_measured_hyp(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
 ) -> LayoutBox {
+    layout_measured_hyp_with_counters(doc, sheet, viewport, measurer, hp, dark_mode).0
+}
+
+/// Like [`layout_measured_hyp`], but also returns the [`CounterMap`] the cascade
+/// pass produced (BUG-341 S2).
+///
+/// The `CounterMap` carries the full per-node `ComputedStyle` cascade cache (its
+/// `styles` field — see [`CounterMap::styles`]) that `build_box` reused. Persisting
+/// it across interaction cycles is the foundation of the incremental cascade
+/// (BUG-341 S3+): the incremental path must reproduce this exact map for the same
+/// final state, and the `incr == full` differential tests assert that.
+///
+/// [`layout_measured_hyp`] is a thin wrapper that discards the map, so this
+/// function carries the real body and there is no behavioural difference between
+/// them.
+pub fn layout_measured_hyp_with_counters(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+) -> (LayoutBox, CounterMap) {
     let _prof = lumen_core::profile::scope("layout_measured_hyp");
     lumen_core::tracy_zone!("layout_measured_hyp");
     // Invalidate the rule-index cache before each layout pass to prevent
@@ -2651,7 +2674,7 @@ pub fn layout_measured_hyp(
         // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
         split_first_line_boxes(&mut root);
     }
-    root
+    (root, counters)
 }
 
 /// Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones.

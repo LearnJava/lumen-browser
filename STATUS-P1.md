@@ -17,10 +17,13 @@ CC-14/CC-15). Ветка-резервация уже существует: `p1-b
 - [x] **S1 — дизайн + профиль.** Готово (коммит `ae098fd9`). Профиль доказал:
       каскад 53%, lay_out 35%, build_box 8% → layout-кэш недостаточен, нужен
       инкрементальный каскад. Бриф + BUG-341 обновлены.
-- [ ] **S2 — persist `CounterMap` + дифф-тест-каркас `incremental == full`.**
-      Вернуть `CounterMap` (со `styles`) наружу из `layout_measured_hyp`; завести
-      differential-тест (пока тривиально равный — полный пересчёт). Без изменения
-      поведения. Фундамент для S3.
+- [x] **S2 — persist `CounterMap` + дифф-тест-каркас `incremental == full`.**
+      Готово. `layout_measured_hyp_with_counters` возвращает `(LayoutBox,
+      CounterMap)`, старая `layout_measured_hyp` делегирует ей (без изменения
+      поведения). `CounterMap::styles()` открывает каскад-кэш. Дифф-каркас в
+      `incremental.rs` (`full_cascade`/`incremental_cascade`/`assert_cascades_eq`
+      + тесты `incr_cascade_matches_full_trivial`/`_interactive_rules`, пока
+      тривиально равные). S3 меняет только тело `incremental_cascade`.
 - [ ] **S3 — инкрементальный каскад, v1 (консервативная инвалидация).**
       Пересчитывать только restyle root-set, переиспользовать кэш `ComputedStyle`.
       За флагом `INCREMENTAL_RESTYLE`, по умолчанию выкл. Дифф-тест обязан

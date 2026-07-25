@@ -848,4 +848,80 @@ mod tests {
             );
         }
     }
+
+    // ── BUG-341 S2: incremental-cascade differential-test scaffold ────────────
+    //
+    // The incremental cascade (BUG-341 S3+) must reproduce the full cascade's
+    // per-node `ComputedStyle` map bit-for-bit for the same final state (brief
+    // §4 "Correctness gate"). These helpers lock that harness in now, while the
+    // "incremental" path is still a trivial full recompute — so S3 only has to
+    // swap `incremental_cascade`'s body for the real incremental entry point and
+    // the `assert_cascades_eq` assertion already guards its correctness.
+
+    /// Full-cascade reference: the `styles` map a complete `layout_measured_hyp`
+    /// pass produces for `html` under the `css` stylesheet.
+    fn full_cascade(html: &str, css: &str) -> crate::counters::CounterMap {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_measured_hyp_with_counters;
+        use lumen_core::ext::NullHyphenationProvider;
+        let doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+        layout_measured_hyp_with_counters(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false).1
+    }
+
+    /// Incremental-cascade result. S2: identical to [`full_cascade`] — the
+    /// incremental path does not exist yet, so this is a trivial full recompute
+    /// that is equal by construction. S3 swaps this body for the real incremental
+    /// cascade entry point; the differential assertion in the tests below then
+    /// guards that it still matches the full cascade exactly.
+    fn incremental_cascade(html: &str, css: &str) -> crate::counters::CounterMap {
+        full_cascade(html, css)
+    }
+
+    /// Assert two cascade maps are identical: same node set, same `ComputedStyle`
+    /// per node. Any divergence is a too-narrow invalidation set (brief §4), not
+    /// an acceptable trade-off.
+    fn assert_cascades_eq(full: &crate::counters::CounterMap, incr: &crate::counters::CounterMap) {
+        assert_eq!(
+            incr.styles(),
+            full.styles(),
+            "incremental cascade must reproduce the full cascade exactly",
+        );
+    }
+
+    #[test]
+    fn incr_cascade_matches_full_trivial() {
+        // Scaffold sanity: with the S2 trivial incremental == full recompute, the
+        // two cascade maps must be identical. Locks the differential harness so
+        // S3's real incremental cascade has an assertion to satisfy from day one.
+        let html = r#"<div class="a"><p>one</p><p>two</p></div><span>three</span>"#;
+        let css = ".a { color: red; } p { font-weight: bold; }";
+        let full = full_cascade(html, css);
+        let incr = incremental_cascade(html, css);
+        assert_cascades_eq(&full, &incr);
+    }
+
+    #[test]
+    fn incr_cascade_matches_full_interactive_rules() {
+        // A doc with :hover/:focus-dependent rules — exactly the class S3's
+        // invalidation model must handle. In S2 both paths full-recompute, so the
+        // maps match; the test exists so S3's incremental cascade is exercised
+        // against interactive selectors (the hardest correctness case) at once.
+        let html = r#"<ul id="menu">
+            <li class="item">a</li>
+            <li class="item">b</li>
+            <li class="item">c</li>
+        </ul>"#;
+        let css = r#"
+            .item { color: black; padding: 4px; }
+            .item:hover { color: blue; }
+            #menu:hover .item { background: gray; }
+            .item:focus + .item { color: green; }
+        "#;
+        let full = full_cascade(html, css);
+        let incr = incremental_cascade(html, css);
+        assert_cascades_eq(&full, &incr);
+    }
 }
