@@ -2838,6 +2838,75 @@ pub fn layout_mutation_incremental(
     root
 }
 
+/// BUG-341 S5: incremental re-layout for a pure interactive-state transition
+/// (`:hover`/`:focus`/`:active`), combining the S3 incremental cascade with
+/// [`layout_mutation_incremental`]'s existing geometry-graft reuse.
+///
+/// Like [`layout_mutation_incremental`], but the cascade itself only
+/// re-derives `delta.dirty_roots` and their subtrees
+/// ([`crate::counters::incremental_precompute_counters`]) instead of every
+/// node — the dominant cost S1's profiling found (brief §1,
+/// `precompute_counters` at 53% of the cycle). Box-build is deliberately
+/// *not* skipped here (`incremental_build_box`, BUG-341 S4, measured a net
+/// loss standalone — its `index_by_node` whole-tree index outweighs the
+/// savings; see BUG-341 "S4" recommendation) — this builds fresh boxes with
+/// the plain `build_box`, exactly like [`layout_streaming_incremental`]
+/// itself does, then relies on [`crate::incremental::graft_geometry`] for
+/// layout-geometry reuse the same way that function already does.
+///
+/// `delta.prev_styles` must be the [`CounterMap::styles`] this same document
+/// produced on the previous cycle (this function's own returned `CounterMap`,
+/// or [`layout_measured_hyp_with_counters`] for the first cycle). The caller
+/// is responsible for only using this entry point when nothing besides
+/// interactive state changed since `prev` — `delta.dom_content_stable` must be
+/// `true` (a DOM/attribute mutation can change content `build_box` reads,
+/// e.g. text or attribute values, in ways a style-only comparison does not
+/// catch) and `delta.dirty_roots` should come from
+/// [`crate::style::restyle_root_set_for_state_change`]. See
+/// [`crate::counters::RestyleDelta`]'s own doc comment for the full
+/// correctness precondition.
+///
+/// Returns the fresh `CounterMap` alongside the tree so the caller can carry
+/// its `styles()` forward as the next cycle's `prev_styles`.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_mutation_incremental_restyle(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    prev: &LayoutBox,
+    delta: &crate::counters::RestyleDelta<'_>,
+) -> (LayoutBox, CounterMap) {
+    crate::style::invalidate_rule_idx_cache();
+    crate::content_visibility::reset_cv_skipped();
+    let root_style = ComputedStyle::root();
+    let flat = build_flat_tree(doc);
+    crate::style::set_shadow_sheets(build_shadow_sheets(doc));
+    let counters =
+        crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta);
+    let registry = build_counter_style_registry(sheet);
+    let mut root =
+        build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
+    propagate_canvas_background(doc, &mut root);
+    apply_font_size_adjust(&mut root, measurer);
+    // Every freshly-built box needs layout; graft clears the bit on reusable
+    // subtrees so the incremental pass only re-lays-out new/changed content.
+    crate::incremental::mark_subtree_dirty(&mut root);
+    crate::incremental::graft_geometry(&mut root, prev);
+    let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+    lay_out_incremental(
+        &mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp,
+    );
+    // Post-layout passes — same set as layout_measured_hyp/layout_mutation_incremental, same order.
+    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
+    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
+    apply_anchor_positions(&mut root, viewport);
+    split_first_line_boxes(&mut root);
+    (root, counters)
+}
+
 /// CSS Fonts L5 §4 — used `font-size` after applying `font-size-adjust`.
 ///
 /// The aspect value of the rendered font is `x_height_px(size) / size`. To make

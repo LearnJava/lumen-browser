@@ -594,10 +594,97 @@ alternative — or drop the box-build-skip idea and rely on S3 (cascade) +
 `graft_geometry` (existing geometry reuse) alone, which the CC-12 gate math
 (§ "S1" above) suggests may already be sufficient once wired in.
 
+## S5 — pipeline wiring: real, measurable win on the representative case; CC-12's own worst-case fixture still red
+
+Wired the S3 incremental cascade into a real pipeline entry point,
+`lumen_layout::box_tree::layout_mutation_incremental_restyle` (new function,
+`crates/engine/layout/src/box_tree.rs`) — same structure as
+`layout_streaming_incremental`/`layout_mutation_incremental` (plain `build_box`,
+`graft_geometry`, `lay_out_incremental`; S4's box-build skip deliberately left
+off per that section's own recommendation), except the cascade call is
+`counters::incremental_precompute_counters(..., &delta)` instead of a full
+`precompute_counters`. 2 new differential tests in `incremental.rs`
+(`mutation_incremental_restyle_hover_transition_matches_full`,
+`mutation_incremental_restyle_unchanged_state_matches_full`) — geometry
+comparison against a full `layout_measured_hyp`, same pattern as the existing
+M4 tests, both passing. Full `lumen-layout` suite: 3260 passed, 2 failed (the
+same pre-existing `FONT_CH_EX` pair).
+
+`Lumen::relayout_chrome_host` (`crates/shell/src/main.rs`) now takes this path
+when eligible: a new `chrome_prev_model: Option<ChromeModel>` field (comparing
+by `PartialEq`, added to `ChromeModel` and all ~20 of its nested types in
+`crates/chrome/src/model.rs`) stands in for a `bind_model` mutation-diff — an
+identical model means this pass's `bind_model` call was a no-op, so nothing but
+interactive state (hover/focus/active) could have changed the cascade. Also
+guarded on viewport (`chrome_prev_viewport`) and Forced Colors Mode
+(`chrome_prev_forced_colors`, a thread-local not reflected in `ChromeModel`) —
+either changing forces the full-layout fallback, same as a model mismatch. The
+dirty root-set is the union of `restyle_root_set_for_state_change` for each of
+the three interactive-state axes (hover/focus/active) independently, since
+chrome tracks them as three separate fields, not one combined transition.
+`chrome_prev_pristine_layout` persists the *pre*-`take_content_area` tree
+(cloned before that function prunes `#contentArea`) as next cycle's `prev` —
+repeats the "attempted mitigation" section's own finding that grafting needs
+the untrimmed tree to keep by-index matching aligned.
+
+**Measured** (`cc12_bench_cycle` now mirrors `relayout_chrome_host`'s own
+eligibility logic exactly — a `Cc12IncrementalState` struct threaded across
+iterations, real per-cycle clone cost included in the timed region — so this
+is what ships, not an isolated-mechanism number):
+
+```
+# CC-12's own fixture (SIDEBAR/`None` toggle every cycle — S3's documented
+# conservative-invalidation worst case: transitioning from "nothing hovered"
+# flips :hover on every ancestor of both old and new target):
+CC12_HOVER count=60 min=78.80ms p50=84.35ms p95=90.12ms p99=93.97ms max=93.97ms
+# CC12_KEY's own model changes every cycle (omnibox text grows) — always
+# ineligible for the incremental path (no DOM-mutation-diff mechanism exists
+# yet, only interactive-state), so this measures the plain full-layout cost,
+# unchanged by S5 as expected:
+CC12_KEY   count=60 min=78.84ms p50=82.46ms p95=88.45ms p99=92.34ms max=92.34ms
+
+# Representative case (bug341_s5_incremental_pipeline_share): hover moving
+# between two sibling tab rows, the shape real mouse movement over
+# already-hovered chrome actually looks like:
+BUG341_S5_SIBLING_HOVER count=60 min=58.94ms p50=63.82ms p95=76.34ms p99=92.75ms max=92.75ms
+```
+
+vs. the pre-S5 full-layout baseline (~85ms p50, S4's own measurement) —
+**CC12_HOVER is flat (no win)**, exactly matching S3's own prediction that its
+SIDEBAR/`None` toggle is a documented worst case for the v1 invalidation
+model, not representative of real usage. **The representative sibling-hover
+case gets a real ~25% p50 win** (85→64ms), consistent with S1's math: S3
+measured a 54% cut to `precompute_counters`, which S1 found was 53% of the
+full cycle, i.e. a ~28-29% cut of the whole cycle before other stages' own
+cost (`build_box`, the still-standing residual `lay_out_flex` cost, the
+per-cycle tree-clone this design requires) eats into that gain — the ~25%
+measured here lines up with that math, not a coincidence.
+
+**CC-12's gate is still red** on every fixture (p95 ≈76-90ms vs the 2ms
+budget, ~40-45× over) — a real, honest win on the representative case does not
+close a ~2-orders-of-magnitude gap. This is the outcome brief §5 S5 flagged as
+possible ("if the p95 floor is set by irreducible per-node cascade cost...
+report the number and re-open the budget question") — reported here rather
+than silently relaxed. **CC-14 remains blocked.**
+
+**Not attempted in S5** (would need their own scoped design):
+- A `bind_model` mutation-diff so DOM-content changes (not just interactive
+  state) could also use the incremental cascade — this is what keeps
+  `CC12_KEY` (and any real chrome interaction that mutates tab titles, the
+  omnibox value, etc.) on the full-layout path today. Likely the single
+  biggest remaining lever, since typing/tab-list changes are common
+  interactions this session's wiring does nothing for.
+- S4's box-build skip — left off per that section's own recommendation;
+  worth re-testing combined now that S5's harness exists, but not done here.
+- The residual, non-doubled `lay_out_flex` cost (brief's original "Fix scope
+  note" layout-result-cache idea) — still unimplemented, still the largest
+  single remaining stage by S1's split once cascade is no longer dominant.
+
 ## Repro
 
 ```bash
 cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s3_incremental_cascade_precompute_share -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s4_incremental_box_build_share -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s5_incremental_pipeline_share -- --ignored --nocapture
 ```

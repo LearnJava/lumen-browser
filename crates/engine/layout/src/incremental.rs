@@ -770,6 +770,126 @@ mod tests {
         }
     }
 
+    // ── BUG-341 S5: layout_mutation_incremental_restyle ───────────────────
+
+    #[test]
+    fn mutation_incremental_restyle_hover_transition_matches_full() {
+        // S5 wires the S3 incremental cascade into a real pipeline entry
+        // point, combined with the existing graft-geometry reuse
+        // (`layout_mutation_incremental`'s own mechanism) — this must
+        // reproduce a full `layout_measured_hyp` bit-for-bit for the same
+        // final state (brief §4 correctness gate), for a real hover
+        // transition that also changes box geometry (`:hover { height }`),
+        // not just a cascade-only style change.
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::{
+            layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental_restyle,
+        };
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use crate::style::{clear_interactive_state, restyle_root_set_for_state_change, set_interactive_state};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = r#"<ul id="menu">
+            <li id="a" class="item">a</li>
+            <li id="b" class="item">b</li>
+            <li id="c" class="item">c</li>
+        </ul>
+        <div id="unrelated"><p>x</p><p>y</p><p>z</p></div>"#;
+        let css = r#"
+            .item { color: black; padding: 4px; height: 20px; }
+            .item:hover { color: blue; height: 30px; }
+            .item:hover + .item { color: green; }
+        "#;
+        let doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+
+        let a = doc.find_by_id("a").expect("#a must exist");
+        let b = doc.find_by_id("b").expect("#b must exist");
+
+        // Baseline pass (`prev` for the incremental call): #a hovered.
+        set_interactive_state(Some(a), None, None);
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+
+        // Incremental: hover moves from #a to #b.
+        set_interactive_state(Some(b), None, None);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b));
+        let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, dom_content_stable: true };
+        set_incremental_restyle(true);
+        let (incr, _incr_counters) = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+        );
+        set_incremental_restyle(false);
+
+        // Reference: full layout of the post-transition state.
+        set_interactive_state(Some(b), None, None);
+        let full = layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+        clear_interactive_state();
+
+        let mut ia = Vec::new();
+        let mut fb = Vec::new();
+        collect_rects(&incr, &mut ia);
+        collect_rects(&full, &mut fb);
+        assert_eq!(ia.len(), fb.len(), "box count must match full layout");
+        for ((na, ra), (nb, rb)) in ia.iter().zip(fb.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+    }
+
+    #[test]
+    fn mutation_incremental_restyle_unchanged_state_matches_full() {
+        // A no-op transition (`dirty_roots` empty) must still produce
+        // geometry equal to a full layout — the all-clean fast path through
+        // both the incremental cascade and graft_geometry.
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::{
+            layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental_restyle,
+        };
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use crate::style::{clear_interactive_state, restyle_root_set_for_state_change};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = r#"<div style="height:50px"></div><div style="height:30px"></div>"#;
+        let doc = parse_html(html);
+        let sheet = parse_css("");
+        let vp = Size::new(800.0, 600.0);
+
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, None);
+        assert!(dirty_roots.is_empty(), "no-op transition must yield an empty root-set");
+        let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, dom_content_stable: true };
+        set_incremental_restyle(true);
+        let (incr, _incr_counters) = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+        );
+        set_incremental_restyle(false);
+        clear_interactive_state();
+
+        let full = layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+
+        let mut ia = Vec::new();
+        let mut fb = Vec::new();
+        collect_rects(&incr, &mut ia);
+        collect_rects(&full, &mut fb);
+        assert_eq!(ia.len(), fb.len(), "box count must match");
+        for ((na, ra), (nb, rb)) in ia.iter().zip(fb.iter()) {
+            assert_eq!(na, nb);
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+    }
+
     // ── ADR-016 M4.1: parallel selector matching ──────────────────────────────
 
     #[test]

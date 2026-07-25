@@ -251,6 +251,18 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   (`cargo test -p lumen-chrome`: 55/55) assert identity survives an unchanged rebind, a title-only
   change, a shrinking list, and a shape-changing (`sleeping`) flip.
 
+- **BUG-341 S5: `ChromeModel` (+ all ~20 nested model types) now derives `PartialEq`** (`src/model.rs`)
+  — `Lumen::relayout_chrome_host` compares each fresh snapshot against the previous one to decide
+  whether it's safe to take `lumen_layout::box_tree::layout_mutation_incremental_restyle`'s
+  incremental-cascade path instead of a full relayout: an identical model means this pass's
+  `bind_model` call was a no-op, so the only thing that could have changed the cascade is
+  interactive state (hover/focus/active). No field needed excluding — all fields are
+  `String`/`bool`/numeric/`Vec`/`Option`/enum, no `HashMap` (whose `Debug`/iteration order isn't
+  deterministic) or float `NaN` risk. See `crates/engine/layout/subsystems/layout.md`'s
+  `layout_mutation_incremental_restyle` gotcha and BUG-341 "S5" for the measured numbers (real ~25%
+  win on a representative hover transition; CC-12's own SIDEBAR/`None`-toggle fixture — a documented
+  worst case — unchanged).
+
 ## Deferred
 
 - **`<template>` markup + `templates::IDS` population**: the frozen design reference has none —
