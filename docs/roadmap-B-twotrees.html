@@ -1955,9 +1955,9 @@
       {
        "id": "WPT-VENDOR-cors",
        "title": "WPT: вендорить + прогнать категорию `cors`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/cors/`, 45 файлов), скоуп ⬜ (CORS, частично реализовано в Lumen, `crates/network`). Попутно найден и исправлен гэп в `run_report.py` (фильтр не видел `.htm`, легитимное WPT-расширение — категория `cors` почти целиком на нём). После фикса `--all --root cors --recursive` отобрал 26 id, прошёл полностью (~1:44): 9 TIMEOUT без сабтестов (невендоренные `/common/*`-хелперы вешают гарнес), 1 TIMEOUT на кросс-origin-iframe, 17 harness OK (16 полностью FAIL на `CROSSDOMAIN`/`token is not defined`, 1 на относительный fetch). 1/168 сабтестов passed (`request-headers.htm`). Не заводился отдельный BUG-NNN — все причины уже задокументированы (см. `docs/wpt-status.md`)"
       },
       {
        "id": "WPT-VENDOR-cpu-performance",

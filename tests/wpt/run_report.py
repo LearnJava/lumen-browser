@@ -69,8 +69,15 @@ def all_vendored_test_ids(root: str = "dom/nodes", recursive: bool = False) -> l
     runnable ids too even though only the `.js` source is vendored — plain
     `.worker.js`/`.sub.js` helper scripts are not (nothing serves them as a
     standalone top-level test). `support/`/`resources/` hold fixtures, not
-    tests, and `-manual.html` tests need human interaction this automated
-    executor can't drive — both are skipped.
+    tests, and `-manual.html`/`-manual.htm` tests need human interaction this
+    automated executor can't drive — both are skipped. The recursive branch
+    also accepts `.htm` (not just `.html`) — a legitimate WPT test extension
+    the upstream manifest treats identically to `.html`, needed because some
+    legacy categories (e.g. `cors/`) are almost entirely `.htm`. The flat
+    (non-recursive) branch deliberately stays `.html`-only: `dom/nodes` (its
+    only caller) also has 30 top-level `.htm` files never part of its
+    documented 168-file scope (see above) — widening the extension there
+    would silently inflate that pinned number instead of adding a new one.
     """
     subdir = os.path.join(run_smoke.TESTS_ROOT, *root.split("/"))
     if not recursive:
@@ -84,7 +91,7 @@ def all_vendored_test_ids(root: str = "dom/nodes", recursive: bool = False) -> l
         for fn in sorted(filenames):
             if fn.endswith((".any.js", ".window.js")):
                 out = fn[: -len(".js")] + ".html"
-            elif fn.endswith(".html") and "-manual" not in fn:
+            elif fn.endswith((".html", ".htm")) and "-manual" not in fn:
                 out = fn
             else:
                 continue
