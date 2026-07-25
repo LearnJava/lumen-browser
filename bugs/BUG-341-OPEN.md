@@ -1,8 +1,8 @@
-# BUG-341: chrome-document relayout costs ~600ms per call — ~300× over CC-12's 2ms perf-gate budget
+# BUG-341: `lay_out_flex` double-lays-out every item — general engine bug, ~300× over CC-12's 2ms chrome perf-gate budget
 
 **Статус:** OPEN
-**Компонент:** layout (`crates/engine/layout/src/box_tree.rs`, `layout_measured_hyp`) — chrome document specifically (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`)
-**Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`
+**Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
+**Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
 
 ## Симптом
 
@@ -70,18 +70,98 @@ or something else inside `layout_measured_hyp`'s per-node style/layout work.
 Needs profiling (e.g. `lumen_core::tracy_zone!` spans already present in
 `layout_measured_hyp`, or a manual sub-stage timing pass) to isolate.
 
+## Root cause (confirmed 2026-07-25, P1)
+
+Using the already-present `LUMEN_PROFILE_TREE=1` call-tree profiler
+(`lumen_core::profile`) on `cc12_chrome_perf_gate` isolated the cost inside
+`layout_measured_hyp` to a single sub-stage:
+
+```
+[profile]     37-45ms    precompute_counters
+[profile]      5-7ms     build_box
+[profile]    505-660ms   lay_out       <-- 95%+ of the cost
+[profile]     0.6-0.9ms  post_layout_passes
+```
+
+`build_box` (box-tree construction + style cascade — one `compute_style` call
+per node) is cheap, ruling out the CC-12 brief's original suspicion ("каскад
+всегда полный") as the dominant cost. The cost is entirely inside the actual
+box-placement algorithm, `lay_out`/`lay_out_inner`.
+
+A temporary call counter (thread-local `Cell<u64>` incremented at the top of
+`lay_out_inner`, reset per `layout_measured_hyp` call, printed under
+`LUMEN_PROFILE_TREE=1`, removed after this diagnosis) showed
+**`lay_out_inner` called 71,428 times per cycle** against a document with
+~2,300-2,700 reachable nodes — roughly **31× more layout calls than nodes**,
+where a single clean layout pass should call it ≈1× per node.
+
+Root cause: `lay_out_flex` (`crates/engine/layout/src/box_tree.rs`, function
+starting ~line 8288) lays out every flex item with the **full** recursive
+`lay_out()` **twice**:
+
+1. "Step 1 — preliminary layout for intrinsic sizes" (`box_tree.rs:8354`) —
+   an unconditional full recursive `lay_out()` per flex item, used to read
+   back `item.rect.width`/`item.rect.height` as the hypothetical main/cross
+   size going into the flex-basis/line-breaking/grow-shrink algorithm.
+2. The final placement pass (`box_tree.rs:~8682`) lays every item out again
+   with its resolved main/cross size.
+
+Both passes are genuinely full, recursive `lay_out()` calls — not a cheap
+intrinsic-size-only probe (Lumen already has cheap probes for this,
+`max_content_outer_width`/`min_content_outer_width`/`preferred_inline_block_width`,
+used elsewhere for inline-block shrink-to-fit — flex does not use them because
+column-direction items additionally need a real content *height*, which those
+helpers don't compute).
+
+Because each flex container fully re-lays-out its entire descendant subtree
+**twice**, and Lumen's chrome UI (a flexbox-heavy design system: toolbar →
+button-group → button → icon-wrap, sidebar → tab-row → tab → label, etc.)
+nests flex containers several levels deep, the redundancy compounds
+multiplicatively with nesting depth — a subtree at flex-nesting depth *k*
+gets laid out roughly proportional to 2^k times instead of once. The observed
+≈31× average call inflation over ~2,300 nodes is consistent with the chrome
+design's actual flex-nesting depth (not every level is flex, so it is not a
+clean power of two, but the shape of the blowup matches).
+
+**This is not chrome-specific** — `lay_out_flex` is the one and only flex
+algorithm in the engine, shared by chrome and web-page layout alike. Any real
+page using nested flexbox (the overwhelming majority of modern sites) pays
+the same redundant-relayout tax; it was simply never isolated with a hard
+perf budget + a bench with real-world flex nesting depth before CC-12's gate
+existed. `docs/perf/journal.md`'s corpus runs may already contain this cost
+folded into "style+layout" phase numbers for flex-heavy sites without anyone
+having attributed it to this specific mechanism.
+
+**Fix scope note:** the correct general fix is a layout-result cache/memoization
+keyed by (node, incoming constraints — available width/height, measurer
+identity, dark_mode) so that a flex container's "Step 1" probe and a later
+identical-constraint final pass reuse one result instead of computing it
+twice, and so nested flex containers don't re-derive their whole subtree at
+every ancestor level. This is a real architectural addition (a full
+layout-memoization layer touching the hottest path in the engine), not a
+local patch — it needs its own scoped design + risk assessment against the
+whole layout test suite (graphic tests, WPT flex coverage, scoped-test) rather
+than a same-session fix bolted onto this investigation. Filed as a dedicated
+follow-up rather than attempted here.
+
 ## Impact
 
 CC-track chrome rendering is currently opt-in (`LUMEN_CSS_CHROME=1`), not
 shipped as the default chrome (CC-14 "Флип дефолта" has not happened) — so
-there is no live-user impact yet. But if this cost is representative of
-what a real interactive session would pay (the bench mirrors
-`relayout_chrome_host`'s real call shape closely: same `bind_model` +
-`layout_measured_hyp` + `paint_ordered` sequence, same document), every
-hover and keystroke on movement-driven engine-rendered chrome would
-currently freeze the UI thread for 500ms+ — this is a **hard blocker for
-CC-14** until resolved, and should be treated as high priority before that
-slice is attempted.
+there is no live-user impact from the *chrome* side yet. But per the root
+cause above, this is a **general flexbox layout engine performance bug**,
+not a chrome-only issue: any nested-flexbox page already pays the redundant
+double-relayout cost today, scaled by its own flex-nesting depth and node
+count (smaller than chrome's ~2,300-node document for most pages, so less
+dramatic in absolute ms, but the same multiplicative mechanism). For the
+chrome document specifically, if this cost is representative of what a real
+interactive session would pay (the bench mirrors `relayout_chrome_host`'s
+real call shape closely), every hover and keystroke on movement-driven
+engine-rendered chrome would currently freeze the UI thread for 500ms+ —
+this remains a **hard blocker for CC-14** until resolved, and should be
+treated as high priority before that slice is attempted. Given the
+general-engine scope, the fix likely belongs to whichever developer/slice
+owns layout-engine performance work broadly, not narrowly to the CC track.
 
 ## Repro
 
