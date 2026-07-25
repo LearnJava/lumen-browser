@@ -1888,9 +1888,9 @@
       {
        "id": "WPT-VENDOR-content-dpr",
        "title": "WPT: вендорить + прогнать категорию `content-dpr`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/content-dpr/`, 14 файлов: 7 тестов + 7 ресурсов, без `META.yml`/`WEB_FEATURES.yml`), скоуп ⬜ (легаси WebKit-специфичный HTTP-заголовок `Content-DPR`, применяемый к `<img>`). Без вневендоренных хелперов. `run_report.py --all --root content-dpr --recursive` прошёл полностью (~14с, 6 отобранных id): 5 — WPT-manifest тип `reftest`, не поддерживается минимальным исполнителем (тот же класс гэпа, что `acid`/`apng`/`animation-worklet`/`avif`), не запускались; единственный `testharness`-тест `image-with-dpr-header.html` — harness OK, 0/1 FAIL: `naturalWidth` у всех `<img>` возвращает `undefined` — `HTMLImageElement.naturalWidth`/`naturalHeight` вовсе не реализованы в JS-шиме (`crates/js/`), гэп шире самой категории `content-dpr`. Не заводился отдельный BUG-NNN — первый проход, отсутствие геттеров, а не функциональный дефект. 1/6 harness OK, 0/1 сабтестов"
       },
       {
        "id": "WPT-VENDOR-content-index",
