@@ -1836,9 +1836,9 @@
       {
        "id": "WPT-VENDOR-compat",
        "title": "WPT: вендорить + прогнать категорию `compat`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (коммит ed90cf49, tests/wpt/compat/, 56 файлов) и прогнана через run_report.py --all --root compat --recursive. 13 отобранных id (reftest-пары не подхватываются раннером), 10/13 harness OK, 9/71 сабтестов passed. Крупнейший кластер — legacy webkit-CSSOM-алиасы (webkitAlignContent и т.п.) вовсе не реализованы (57 сабтестов), плюс webkit-box вертикальное центрирование, -webkit-radial-gradient()/-webkit-gradient() парсер слишком нестрогий, insertRule ::-webkit-scrollbar падает (см. заметку в docs/wpt-status.md). Не заводился отдельный BUG-NNN — по методологии docs/wpt-status.md первый проход категории только вендорит+прогоняет"
       },
       {
        "id": "WPT-VENDOR-compression",
