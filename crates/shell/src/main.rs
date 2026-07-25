@@ -916,6 +916,12 @@ fn run_window_mode(
         chrome_animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         chrome_transition_scheduler: TransitionScheduler::new(),
         chrome_prev_styles: HashMap::new(),
+        chrome_prev_model: None,
+        chrome_prev_pristine_layout: None,
+        chrome_prev_cascade_styles: HashMap::new(),
+        chrome_prev_interactive: (None, None, None),
+        chrome_prev_viewport: None,
+        chrome_prev_forced_colors: false,
         chrome_anim_frame: None,
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
@@ -7251,6 +7257,53 @@ struct Lumen {
     /// detect which properties changed. Mirrors [`Self::prev_styles`] for the
     /// chrome tree.
     chrome_prev_styles: HashMap<NodeId, ComputedStyle>,
+    /// BUG-341 S5: `ChromeModel` snapshot from the previous
+    /// [`Self::relayout_chrome_host`] pass. `bind_model` has no mutation-diff
+    /// mechanism yet, so equality with the fresh snapshot stands in for one:
+    /// an identical model means this pass's `bind_model` call was a no-op
+    /// (same attributes/text/structure as last time), so the only thing that
+    /// could have changed the cascade is interactive state
+    /// ([`Self::chrome_prev_interactive`]) — the precondition
+    /// `layout_mutation_incremental_restyle`'s `RestyleDelta::dom_content_stable`
+    /// requires. `None` before the first pass (always takes the full-layout
+    /// path then).
+    chrome_prev_model: Option<lumen_chrome::ChromeModel>,
+    /// BUG-341 S5: the pristine (pre-[`take_content_area`]) box tree from the
+    /// previous pass — the `prev` basis for
+    /// `lumen_layout::box_tree::layout_mutation_incremental_restyle`'s graft.
+    /// Must reflect the *whole* `chrome_doc` (including `#contentArea`), not
+    /// the pruned [`Self::chrome_layout`] — `take_content_area` removes
+    /// `#contentArea` and shifts sibling indices, which would misalign
+    /// `graft_geometry`'s by-index matching for everything after it (see
+    /// BUG-341's "attempted mitigation" note, which hit the same issue).
+    chrome_prev_pristine_layout: Option<lumen_layout::LayoutBox>,
+    /// BUG-341 S5: the per-node `ComputedStyle` cascade cache
+    /// ([`lumen_layout::CounterMap::styles`]) from the previous pass —
+    /// `RestyleDelta::prev_styles` for the next incremental cascade. Distinct
+    /// from [`Self::chrome_prev_styles`] (CC-11's transition-sync snapshot,
+    /// collected from post-layout `LayoutBox`es *after* `font-size-adjust` has
+    /// mutated them in place) — the cascade cache must be the pre-layout,
+    /// pre-adjust styles the cascade itself produced, or the incremental
+    /// cascade's `incr == full` correctness gate (BUG-341 brief §4) would
+    /// compare against the wrong reference.
+    chrome_prev_cascade_styles: HashMap<NodeId, ComputedStyle>,
+    /// BUG-341 S5: `(hover, focus, active)` node ids from the previous pass —
+    /// `restyle_root_set_for_state_change`'s `prev` argument for each axis, so
+    /// a hover/focus/active transition can compute its conservative dirty
+    /// root-set (brief §4).
+    chrome_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
+    /// BUG-341 S5: viewport size the previous pass laid out at — a resize
+    /// invalidates [`Self::chrome_prev_pristine_layout`]'s geometry for
+    /// `graft_geometry` purposes, so a viewport change forces the full-layout
+    /// path same as a `chrome_prev_model` mismatch.
+    chrome_prev_viewport: Option<Size>,
+    /// BUG-341 S5: Forced Colors Mode state ([`lumen_layout::forced_colors_active`])
+    /// the previous pass ran under. Not part of `ChromeModel` (it's a
+    /// thread-local accessibility preference, not shell UI state), but it does
+    /// feed the cascade — a change here must force a full recompute the same
+    /// as a `chrome_prev_model` mismatch, or the incremental path would reuse
+    /// `chrome_prev_cascade_styles` computed under the wrong Forced-Colors state.
+    chrome_prev_forced_colors: bool,
     /// CC-11: last computed animation/transition frame for the chrome
     /// document. `None` when the chrome flag is off or nothing is currently
     /// animating. Only the compositor-offloadable properties (opacity,
@@ -8564,27 +8617,86 @@ impl Lumen {
         let omni_input = doc.find_by_id(lumen_chrome::ids::OMNI_INPUT);
         let chrome_focus = if self.address_bar.is_open() { omni_input } else { None };
         lumen_layout::set_interactive_state(self.chrome_hovered_nid, chrome_focus, self.chrome_active_nid);
-        // BUG-341/CC-14: `layout_mutation_incremental` was tried here (with
-        // `bind_model`'s list rebuilds now preserving unchanged rows'
-        // NodeIds, see `lumen_chrome::model`'s `reconcile_row_list`) and
-        // measured *worse* than the plain full layout below — CC12_HOVER
-        // p50 106ms vs 86ms. Root cause: `graft_geometry`
-        // (`lumen_layout::incremental`) clones the matched subtree once per
-        // *ancestor level* inside a clean region, not once at the outermost
-        // clean boundary (each level's `if all_clean { *new = prev.clone(); }`
-        // re-clones what the level below it just cloned) — O(depth) redundant
-        // deep-clones of `ComputedStyle`-heavy `LayoutBox`es outweigh the
-        // layout work it skips. That's a `lumen-layout`-crate fix, out of
-        // scope here; see BUG-341 for the follow-up. Kept on the plain path.
-        let mut layout = lumen_layout::layout_measured_hyp(
-            doc,
-            sheet,
-            viewport,
-            &measurer,
-            &*self.hyp_provider,
-            self.dark_mode,
-        );
+        // BUG-341 S5: `layout_mutation_incremental` (plain graft_geometry, no
+        // incremental cascade) was tried here early on and measured *worse*
+        // than a plain full layout (`graft_geometry`'s then-O(depth) redundant
+        // clone bug) — fixed since (BUG-341 "third session"), and now combined
+        // with the S3 incremental cascade via `layout_mutation_incremental_restyle`.
+        // Only safe for a transition where nothing but interactive state
+        // (hover/focus/active) changed since the last pass — `chrome_model`
+        // equality stands in for a real DOM-mutation diff (`bind_model` has
+        // none), and viewport/Forced-Colors must also match, or the previous
+        // cascade cache (`chrome_prev_cascade_styles`) would not be a valid
+        // reference for the delta. Any other case (first pass, DOM content
+        // change, resize, Forced-Colors flip) falls back to the full,
+        // known-correct `layout_measured_hyp_with_counters`.
+        let new_interactive = (self.chrome_hovered_nid, chrome_focus, self.chrome_active_nid);
+        let forced_colors = lumen_layout::forced_colors_active();
+        let dom_stable = self.chrome_prev_model.as_ref() == Some(&model);
+        let viewport_stable = self.chrome_prev_viewport == Some(viewport);
+        let forced_colors_stable = self.chrome_prev_forced_colors == forced_colors;
+        let (mut layout, cascade_styles) = match (
+            dom_stable && viewport_stable && forced_colors_stable,
+            self.chrome_prev_pristine_layout.as_ref(),
+        ) {
+            (true, Some(prev)) => {
+                let (prev_hover, prev_focus, prev_active) = self.chrome_prev_interactive;
+                let mut dirty_roots = std::collections::HashSet::new();
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc,
+                    prev_hover,
+                    new_interactive.0,
+                ));
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc,
+                    prev_focus,
+                    new_interactive.1,
+                ));
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc,
+                    prev_active,
+                    new_interactive.2,
+                ));
+                let delta = lumen_layout::counters::RestyleDelta {
+                    prev_styles: &self.chrome_prev_cascade_styles,
+                    dirty_roots,
+                    dom_content_stable: true,
+                };
+                lumen_layout::counters::set_incremental_restyle(true);
+                let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                    doc,
+                    sheet,
+                    viewport,
+                    &measurer,
+                    &*self.hyp_provider,
+                    self.dark_mode,
+                    prev,
+                    &delta,
+                );
+                lumen_layout::counters::set_incremental_restyle(false);
+                result
+            }
+            _ => lumen_layout::layout_measured_hyp_with_counters(
+                doc,
+                sheet,
+                viewport,
+                &measurer,
+                &*self.hyp_provider,
+                self.dark_mode,
+            ),
+        };
         lumen_layout::clear_interactive_state();
+        // Persist this pass's pristine (pre-`take_content_area`) tree +
+        // cascade cache as the `prev` basis for the next call's incremental
+        // path (BUG-341 S5) — must be captured before `take_content_area`
+        // below mutates `layout` (removes `#contentArea`, shifting sibling
+        // indices `graft_geometry`'s by-index matching relies on).
+        self.chrome_prev_pristine_layout = Some(layout.clone());
+        self.chrome_prev_cascade_styles = cascade_styles.styles().clone();
+        self.chrome_prev_model = Some(model);
+        self.chrome_prev_viewport = Some(viewport);
+        self.chrome_prev_interactive = new_interactive;
+        self.chrome_prev_forced_colors = forced_colors;
         // CC-9: `#findBar`/`#downloadsPanel` are salvaged out of
         // `#contentArea` before the rest of it is discarded — see
         // `take_content_area`'s doc comment. CC-10 adds the command palette
@@ -24207,18 +24319,35 @@ mod tests {
         }
     }
 
+    /// BUG-341 S5: persisted state `cc12_bench_cycle` carries across
+    /// iterations, mirroring exactly what `Lumen::relayout_chrome_host`
+    /// itself now persists (`chrome_prev_*` fields) — a standalone struct
+    /// here since this bench has no `Lumen` instance to hang them on.
+    #[derive(Default)]
+    struct Cc12IncrementalState {
+        prev_model: Option<lumen_chrome::ChromeModel>,
+        prev_pristine_layout: Option<lumen_layout::LayoutBox>,
+        prev_cascade_styles: HashMap<lumen_dom::NodeId, lumen_layout::style::ComputedStyle>,
+        prev_interactive: (Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>),
+    }
+
     /// One `relayout_chrome_host`-equivalent pass, timed exactly like the
-    /// mutate (`bind_model`) → restyle+relayout → paint (`paint_ordered`,
-    /// display-list build — CC-12's "paint" stops here, same as the rest of
-    /// the engine's layout→paint terminology; GPU submit/present is a
-    /// separate stage this cycle never reaches) sequence
+    /// mutate (`bind_model`) → restyle+relayout → persist-for-next-cycle →
+    /// paint (`paint_ordered`, display-list build — CC-12's "paint" stops
+    /// here, same as the rest of the engine's layout→paint terminology; GPU
+    /// submit/present is a separate stage this cycle never reaches) sequence
     /// `Lumen::relayout_chrome_host` runs on every chrome interaction.
     ///
-    /// BUG-341/CC-14: `layout_mutation_incremental` was tried here too and
-    /// measured worse than the plain full layout — see the matching doc
-    /// comment on `relayout_chrome_host` for the root cause
-    /// (`graft_geometry`'s redundant per-ancestor-level clone). Stays on
-    /// `layout_measured_hyp` so this bench keeps mirroring production.
+    /// BUG-341 S5: mirrors `relayout_chrome_host`'s own eligibility check
+    /// (`chrome model` unchanged since last cycle ⇒ nothing but interactive
+    /// state could have changed) and takes the same
+    /// `layout_mutation_incremental_restyle` path when eligible, falling back
+    /// to `layout_measured_hyp_with_counters` otherwise (first cycle, or a
+    /// model change — e.g. `CC12_KEY`'s omnibox text differing every call).
+    /// `state`'s clone of the fresh tree/cascade cache is deliberately inside
+    /// the timed region — that per-cycle persist cost is real production
+    /// overhead, not a benchmark artifact.
+    #[allow(clippy::too_many_arguments)]
     fn cc12_bench_cycle(
         doc: &mut lumen_dom::Document,
         sheet: &lumen_css_parser::Stylesheet,
@@ -24227,14 +24356,48 @@ mod tests {
         measurer: &lumen_paint::FontMeasurer,
         hyp: &KnuthLiangHyphenation,
         hover: Option<lumen_dom::NodeId>,
+        state: &mut Cc12IncrementalState,
     ) -> f64 {
         lumen_chrome::bind_model(doc, model);
         lumen_layout::set_interactive_state(hover, None, None);
+        let new_interactive = (hover, None, None);
+        let dom_stable = state.prev_model.as_ref() == Some(model);
+
         let t0 = std::time::Instant::now();
-        let layout = lumen_layout::layout_measured_hyp(doc, sheet, viewport, measurer, hyp, false);
+        let (layout, counters) = match (dom_stable, state.prev_pristine_layout.as_ref()) {
+            (true, Some(prev)) => {
+                let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
+                let mut dirty_roots = std::collections::HashSet::new();
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc, prev_hover, new_interactive.0,
+                ));
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc, prev_focus, new_interactive.1,
+                ));
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc, prev_active, new_interactive.2,
+                ));
+                let delta = lumen_layout::counters::RestyleDelta {
+                    prev_styles: &state.prev_cascade_styles,
+                    dirty_roots,
+                    dom_content_stable: true,
+                };
+                lumen_layout::counters::set_incremental_restyle(true);
+                let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                    doc, sheet, viewport, measurer, hyp, false, prev, &delta,
+                );
+                lumen_layout::counters::set_incremental_restyle(false);
+                result
+            }
+            _ => lumen_layout::layout_measured_hyp_with_counters(doc, sheet, viewport, measurer, hyp, false),
+        };
+        state.prev_pristine_layout = Some(layout.clone());
+        state.prev_cascade_styles = counters.styles().clone();
         let _dl = paint_ordered(&layout);
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         lumen_layout::clear_interactive_state();
+        state.prev_model = Some(model.clone());
+        state.prev_interactive = new_interactive;
         ms
     }
 
@@ -24257,11 +24420,16 @@ mod tests {
     /// Was red (measured p50 ≈ 580-630ms, ~300× over the 2ms budget) before
     /// BUG-341's fixes — see [BUG-341](../../../bugs/BUG-341-OPEN.md) for the
     /// full history: `lay_out_flex`'s double layout pass (fixed, ~86ms),
-    /// `bind_model`'s list rebuilds churning NodeIds every call (fixed), and
-    /// `layout_mutation_incremental` itself (tried, measured *worse* —
-    /// `graft_geometry`'s redundant per-ancestor-level clone, a
-    /// `lumen-layout`-crate follow-up, not adopted here). Still red at
-    /// ~86-106ms vs the 2ms budget.
+    /// `bind_model`'s list rebuilds churning NodeIds every call (fixed), the
+    /// S3 incremental cascade + S5 pipeline wiring below (this bench now
+    /// takes the same `layout_mutation_incremental_restyle` path
+    /// `relayout_chrome_host` does). CC12_HOVER's own SIDEBAR/`None` toggle
+    /// is a documented S3 worst case (`:hover` invalidates every ancestor of
+    /// both the old and new target on a "nothing hovered" transition, which
+    /// this fixture hits every other cycle) — see BUG-341 "S3" for why a
+    /// representative sibling-to-sibling hover move fares much better, and
+    /// `bug341_s5_incremental_pipeline_share` below for that number. Still
+    /// red at S5 — see BUG-341 "S5" for the re-measured numbers.
     #[test]
     #[ignore = "manual perf gate (CC-12) — see BUG-341; doc comment has the run command"]
     fn cc12_chrome_perf_gate_hover_and_keystroke_cycles() {
@@ -24277,10 +24445,12 @@ mod tests {
         const BUDGET_MS: f32 = 2.0;
 
         let mut hover_stats = lumen_paint::FrameStats::new();
+        let mut hover_state = Cc12IncrementalState::default();
         for i in 0..WARMUP + SAMPLES {
             let hover = if i % 2 == 0 { hover_target } else { None };
             let model = cc12_bench_model("");
-            let ms = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover);
+            let ms =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut hover_state);
             if i >= WARMUP {
                 hover_stats.record(ms as f32);
             }
@@ -24289,6 +24459,7 @@ mod tests {
         eprintln!("{}", hover_summary.display_with("CC12_HOVER"));
 
         let mut key_stats = lumen_paint::FrameStats::new();
+        let mut key_state = Cc12IncrementalState::default();
         let mut typed = String::new();
         for i in 0..WARMUP + SAMPLES {
             typed.push('a');
@@ -24296,7 +24467,8 @@ mod tests {
                 typed.clear();
             }
             let model = cc12_bench_model(&typed);
-            let ms = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None);
+            let ms =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut key_state);
             if i >= WARMUP {
                 key_stats.record(ms as f32);
             }
@@ -24306,16 +24478,62 @@ mod tests {
 
         assert!(
             hover_summary.p95_ms < BUDGET_MS,
-            "hover-flip p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 for the \
-             graft_geometry follow-up needed to close this",
+            "hover-flip p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 \"S5\" for \
+             the current numbers and the open follow-up (S6) needed to close this",
             hover_summary.p95_ms,
         );
         assert!(
             key_summary.p95_ms < BUDGET_MS,
-            "keystroke p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 for the \
-             graft_geometry follow-up needed to close this",
+            "keystroke p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 \"S5\" for \
+             the current numbers and the open follow-up (S6) needed to close this",
             key_summary.p95_ms,
         );
+    }
+
+    /// BUG-341 S5: like `cc12_chrome_perf_gate_hover_and_keystroke_cycles`'s
+    /// `CC12_HOVER` scenario, but hover moves between two sibling tab rows
+    /// (`#sbTabs`' first two children) instead of toggling `SIDEBAR`/`None`.
+    /// S3 documented the toggle as a conservative-invalidation worst case
+    /// (`:hover` invalidates every ancestor of both the old and new target
+    /// when transitioning from "nothing hovered" — see BUG-341 "S3"); this is
+    /// the representative case real mouse movement over already-hovered
+    /// chrome looks like, and where the incremental cascade is expected to
+    /// pay off the most. Not a pass/fail gate (no separate budget exists for
+    /// this shape yet) — a recorded measurement, run alongside CC-12's own
+    /// number for comparison. Run: `cargo test -p lumen-shell --profile
+    /// dev-release bug341_s5_incremental_pipeline_share -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual perf measurement (BUG-341 S5) — see doc comment for run command"]
+    fn bug341_s5_incremental_pipeline_share() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let tabs_container = doc
+            .find_by_id(lumen_chrome::ids::SB_TABS)
+            .expect("chrome preview must have #sbTabs");
+        let tab_rows = doc.get(tabs_container).children.clone();
+        assert!(tab_rows.len() >= 2, "bind_model must have populated at least 2 tab rows");
+        let tab_a = tab_rows[0];
+        let tab_b = tab_rows[1];
+
+        const WARMUP: usize = 10;
+        const SAMPLES: usize = 60;
+
+        let mut stats = lumen_paint::FrameStats::new();
+        let mut state = Cc12IncrementalState::default();
+        for i in 0..WARMUP + SAMPLES {
+            let hover = if i % 2 == 0 { Some(tab_a) } else { Some(tab_b) };
+            let ms = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            if i >= WARMUP {
+                stats.record(ms as f32);
+            }
+        }
+        let summary = stats.summary().expect("samples collected");
+        eprintln!("{}", summary.display_with("BUG341_S5_SIBLING_HOVER"));
     }
 
     /// BUG-341 S3: standalone measurement of the incremental cascade's

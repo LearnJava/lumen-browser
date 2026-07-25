@@ -182,10 +182,28 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   savings from skipping ~8%-baseline-share `build_box` work — see BUG-341 "S4"
   section for the full numbers and the honest recommendation to re-measure
   combined with S3 at S5 before deciding whether to keep it enabled.
-- **S5 — wire chrome + page pipelines onto the incremental path**, flag on.
-  Re-measure CC-12. If green → CC-14 unblocks. Full verification (§6).
-- **S6 — tighten invalidation** if S5 misses budget (narrow the hover fan-out,
-  cache selector-dependency indices).
+- **S5 — wire the chrome pipeline onto the incremental path.** ✅ Done. New
+  `lumen_layout::box_tree::layout_mutation_incremental_restyle` combines S3's
+  incremental cascade with the existing `graft_geometry` reuse (S4's
+  box-build skip left off per its own recommendation).
+  `Lumen::relayout_chrome_host` takes this path only when nothing but
+  interactive state changed since the last pass — `ChromeModel` equality
+  (new `PartialEq` derive) stands in for a `bind_model` mutation-diff (none
+  exists yet), guarded further by viewport and Forced Colors Mode stability.
+  Measured: CC-12's own SIDEBAR/`None`-toggle fixture shows no improvement
+  (expected — S3's documented worst case), a representative sibling-tab
+  hover transition shows a real **~25% p50 win** (85→64ms). **CC-12's gate
+  stays red** (~40-45× the 2ms budget) — see BUG-341 "S5" for full numbers.
+  The page pipeline was *not* wired (no DOM-mutation-diff mechanism exists to
+  derive a safe `dirty_roots` for arbitrary JS mutations — same gap as
+  `CC12_KEY`, chrome's own keystroke case).
+- **S6 — DOM-mutation diff, then tighten invalidation if still over budget.**
+  The biggest lever S5 left unaddressed: `bind_model` (and page-side JS
+  mutations) need to report which nodes they actually touched so
+  `restyle_root_set_for_node_change` can drive the incremental cascade for
+  content changes too, not just interactive state — this unblocks `CC12_KEY`
+  and real text input. After that, narrow the hover fan-out / cache
+  selector-dependency indices if still short of budget.
 
 **Stop conditions / honesty:** if after S5 the p95 floor is set by irreducible
 per-node cascade cost on the hover root-set and stays > 2 ms, report the number

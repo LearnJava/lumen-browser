@@ -20,7 +20,7 @@ use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
 /// Built fresh by the shell on every [`bind_model`] call (see
 /// `Lumen::chrome_model_snapshot` in `crates/shell/src/main.rs`) — there is
 /// no retained/diffed state here, matching the brief's "простейший" diff.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeModel {
     /// `true` for the dark palette — bound to `body[data-theme]`.
     pub dark_theme: bool,
@@ -103,7 +103,7 @@ pub enum ChromeContentView {
 }
 
 /// `#view-history` snapshot (CC-10b) — mirrors `HistoryPanel::rows`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeHistoryModel {
     /// `true` shows `#histBanner` (mirrors the legacy DS-16 "Anonymous,
     /// history not saved" banner — the design always carries the banner
@@ -116,7 +116,7 @@ pub struct ChromeHistoryModel {
 }
 
 /// One row of [`ChromeHistoryModel::rows`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ChromeHistoryRow {
     /// A `.hist-day` date-group label (e.g. `"Сегодня"`).
     Group(String),
@@ -135,7 +135,7 @@ pub enum ChromeHistoryRow {
 }
 
 /// `#view-bookmarks` snapshot (CC-10b) — mirrors `BookmarkPanel`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeBookmarksModel {
     /// `.bm-tree` folder rows, in display order — `"Все закладки"` (the
     /// `None`-filter entry) followed by `BookmarkPanel::folders`. Clicking a
@@ -150,7 +150,7 @@ pub struct ChromeBookmarksModel {
 }
 
 /// One `.bm-folder` row.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChromeBookmarkFolderModel {
     /// Folder label (`"Все закладки"` for the root/no-filter entry).
     pub label: String,
@@ -161,7 +161,7 @@ pub struct ChromeBookmarkFolderModel {
 /// One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Per-card
 /// actions are out of this slice's DoD — same gap as
 /// [`ChromeHistoryRow::Entry`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChromeBookmarkCardModel {
     /// `.bm-fav` single-letter fallback (first letter of `title`/`url`).
     pub fav_letter: String,
@@ -187,7 +187,7 @@ pub struct ChromeBookmarkCardModel {
 /// is no force-HTTPS setting; there is no cross-site permission list) — same
 /// honesty-over-fabrication call CC-9/CC-10a made for `#statAds`/`#statFp`
 /// and the cert panel's missing TLS-version row.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeSettingsModel {
     /// `data-section`/`data-set` slug of the active `.set-nav` tab /
     /// `.set-section`.
@@ -204,7 +204,7 @@ pub struct ChromeSettingsModel {
 /// `SidebarPanel` (independently dockable) into the design's single tabbed
 /// panel. The shell keeps them mutually exclusive under the flag
 /// (`Lumen::dispatch_chrome_action`) so `tab` is unambiguous.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeRightSidebarModel {
     /// `true` shows `#rightSidebar` — mirrors `AiPanel::visible ||
     /// SidebarPanel::visible`.
@@ -227,7 +227,7 @@ pub enum ChromeSidebarTab {
 
 /// `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
 /// rows, rebuilt the same way [`ChromeTabModel`] rebuilds `#sbTabs`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeDropdownModel {
     /// `true` shows the dropdown — mirrors the legacy gate
     /// (`AddressBarState::is_open()` with a non-empty suggestion list).
@@ -243,7 +243,7 @@ pub struct ChromeDropdownModel {
 /// color for the `.dd-icon` swatch. Like [`ChromeTabModel`]'s favicon
 /// fallback, this deliberately skips cloning the asset's inline SVG icon
 /// sprite (visual finish, not part of this slice's DoD).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChromeSuggestionModel {
     /// Round-trips through `data-sugg-idx` so a click on the rebuilt row can
     /// be resolved back to `AddressBarState::suggestions()[idx]`.
@@ -258,7 +258,7 @@ pub struct ChromeSuggestionModel {
 
 /// `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
 /// legacy `FindState` still owns editing" split (CC-7).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeFindModel {
     /// `true` shows the bar — mirrors `FindState::is_open()`.
     pub open: bool,
@@ -274,7 +274,7 @@ pub struct ChromeFindModel {
 /// `download::extension_label`/`human_bytes`) so this crate stays free of
 /// download-domain formatting logic, matching how [`ChromeTabModel`] already
 /// receives a pre-derived `container_color` rather than a `ContainerKind`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChromeDownloadModel {
     /// Round-trips through `data-dl-id` (`DownloadId`, opaque here).
     pub id: u32,
@@ -291,7 +291,7 @@ pub struct ChromeDownloadModel {
 }
 
 /// `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromePaletteModel {
     /// `true` shows the overlay — mirrors `CommandPalette::visible`.
     pub open: bool,
@@ -312,7 +312,7 @@ pub struct ChromePaletteModel {
 /// `data-action` for individual result rows (only `#cpOverlay` itself has
 /// one, to close on scrim click); keyboard navigation (`select_next`/`prev`
 /// + Enter) already works independently of rendering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChromePaletteResultModel {
     /// Main text (`.dd-title`) — command name or bookmark/history title.
     pub label: String,
@@ -333,7 +333,7 @@ pub struct ChromePaletteResultModel {
 /// what the markup has a slot for, same honesty-over-fabrication call CC-9
 /// made for `#statAds`/`#statFp`. All-`None`/absent fields render as `"—"`,
 /// matching `cert_panel::build_rows`'s own em-dash fallback for missing data.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeCertModel {
     /// `true` shows the overlay — mirrors `CertPanel::visible`.
     pub open: bool,
@@ -367,7 +367,7 @@ pub enum ChromePermState {
 /// `address_bar::AddressBarState` — this is only the text/warning it writes
 /// into the chrome document each `bind_model` call, mirroring how CC-6 binds
 /// tabs/workspaces without owning their state either.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct OmniboxModel {
     /// Text written into `#omniInput`'s `value` attribute: the current
     /// display URL while not editing, or the live `address_bar` input while
@@ -380,7 +380,7 @@ pub struct OmniboxModel {
 }
 
 /// One tab row for the sidebar tab list (`#sbTabs`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChromeTabModel {
     /// Stable id (`TabEntry::id`) — round-tripped through `data-tab-id` so a
     /// click on the rebuilt row can be resolved back to a strip index.
@@ -409,7 +409,7 @@ pub struct ChromeTabModel {
 }
 
 /// One workspace button for the sidebar switcher (`.sb-workspaces`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChromeWorkspaceModel {
     /// Stable id (`WsEntry::id`) — round-tripped through `data-ws-id`.
     pub id: i64,
