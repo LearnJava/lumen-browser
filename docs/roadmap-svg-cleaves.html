@@ -1881,9 +1881,9 @@
       {
        "id": "WPT-VENDOR-container-timing",
        "title": "WPT: вендорить + прогнать категорию `container-timing`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-25: вендорена (`tests/wpt/container-timing/`, 22 файла: `META.yml`, `resources/` — `container-timing-helpers.js`+`square100.png`, `tentative/` — 19 тестовых файлов), скоуп ⬜ (экспериментальное расширение Performance Timeline). Внекатегорийный хелпер не довендорен: `/element-timing/resources/element-timing-helpers.js`. `run_report.py --all --root container-timing --recursive` прошёл полностью (~17с, 19 отобранных id): все 19 harness OK, 0/19 сабтестов, все FAIL на `assert_implements: PerformanceContainerTiming is not implemented` — Container Timing API вовсе не реализован в Lumen. Не заводился отдельный BUG-NNN — единый root cause, первый проход категории"
       },
       {
        "id": "WPT-VENDOR-content-dpr",
