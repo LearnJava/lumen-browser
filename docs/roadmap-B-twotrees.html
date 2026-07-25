@@ -3791,9 +3791,9 @@
       {
        "id": "CC-10b",
        "title": "CC-10b: History/bookmarks/settings + AI-Web-сайдбар",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "History/bookmarks/settings (6 секций c тумблерами/radio-cards/perm-table), правый AI/Web-сайдбар. **DoD:** соответствующие legacy-билдеры не вызываются при флаге. После CC-10a"
+       "note": "Закрыто (2026-07-25, P1). `#view-page/history/bookmarks/settings` — взаимоисключающие `.view.active`, `ShowView` расковычен для всех четырёх (раньше только settings), история/закладки рендерятся из настоящих `HistoryPanel`/`BookmarkPanel` данных, settings — 2 реальных тумблера + section-nav (остальное вне DoD, нет 1:1 backing-полей). `#rightSidebar` мержит legacy `ai_panel`/`sidebar` в один таб-компонент, взаимоисключающие под флагом; первый флекс-сосед `#contentArea` в CC-треке — найден и исправлен риск двойного вычитания ширины в `dockable_sidebars()`. Найден и исправлен баг класса CC-5 (невидимая legacy-панель ест клики по странице под ней) для всех 5 панелей этого среза + ретроактивно для `print_panel`/`cert_panel` (пробел CC-10a). 12 новых тестов `cargo test -p lumen-chrome` (49/49) + `cargo test -p lumen-shell` (1703/1703) без регрессий + workspace clippy зелёные. После CC-10a"
       },
       {
        "id": "CC-11",

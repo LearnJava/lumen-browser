@@ -912,6 +912,7 @@ fn run_window_mode(
         chrome_active_nid: None,
         chrome_omni_input_rect: None,
         chrome_sidebar_collapsed: false,
+        chrome_settings_section: "general".to_owned(),
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         transition_scheduler: TransitionScheduler::new(),
@@ -7214,6 +7215,14 @@ struct Lumen {
     /// `visible` flag — that one picks vertical vs. horizontal layout,
     /// this one narrows the vertical sidebar without hiding it.
     chrome_sidebar_collapsed: bool,
+    /// CC-10b (docs/tasks/p1-css-chrome.md): `data-section` slug of the
+    /// active `#view-settings` tab (`"general"`/`"privacy"`/`"appearance"`/
+    /// `"sync"`/`"ext"`/`"qa"`). Engine-chrome-only UI state — the design's 6
+    /// sections don't line up with `SettingsPanel::SettingsSection`'s 7 (see
+    /// `lumen_chrome::ChromeSettingsModel` doc comment), so this is a
+    /// separate field rather than a projection of the legacy enum. Set by
+    /// `ChromeAction::SetSettingsSection`.
+    chrome_settings_section: String,
     /// HTML event loop runtime. На каждой итерации winit-loop (AboutToWait)
     /// выполняется одна task, на RedrawRequested — run_rendering_step
     /// (вызывает rAF-callback-и), на WindowEvent::Resized —
@@ -8746,6 +8755,96 @@ impl Lumen {
                 fingerprint: "\u{2014}".to_owned(),
             },
         };
+        // CC-10b: which `#contentArea` view is shown — mirrors whichever of
+        // the three legacy panel `visible` flags is set (kept mutually
+        // exclusive by `dispatch_chrome_action`'s `ShowView` handler), same
+        // "reuse the legacy flag as source of truth" approach CC-9/CC-10
+        // already use for print/cert/palette `open` state.
+        let content_view = if self.settings_panel.visible {
+            lumen_chrome::ChromeContentView::Settings
+        } else if self.history_panel.visible {
+            lumen_chrome::ChromeContentView::History
+        } else if self.bookmark_panel.visible {
+            lumen_chrome::ChromeContentView::Bookmarks
+        } else {
+            lumen_chrome::ChromeContentView::Page
+        };
+        // CC-10b: DS-16's "history not saved" banner — same anonymous-profile
+        // check the legacy `history_panel::build_panel` call site makes.
+        let is_anon = self
+            .profile_menu
+            .active_entry()
+            .is_some_and(|e| panels::profile_menu::is_anonymous(&e.name));
+        let history = lumen_chrome::ChromeHistoryModel {
+            banner: is_anon,
+            rows: self
+                .history_panel
+                .rows
+                .iter()
+                .map(|r| match r {
+                    panels::history_panel::HistoryRow::Group(label) => {
+                        lumen_chrome::ChromeHistoryRow::Group(label.clone())
+                    }
+                    panels::history_panel::HistoryRow::Entry(item) => lumen_chrome::ChromeHistoryRow::Entry {
+                        title: if item.title.is_empty() { item.url.clone() } else { item.title.clone() },
+                        url: item.url.clone(),
+                        time_label: panels::history_panel::format_time_hhmm(item.visit_date),
+                    },
+                })
+                .collect(),
+        };
+        // CC-10b: `"Все закладки"` (the `None`-filter entry) followed by the
+        // real folder set — mirrors `bookmark_panel::hit_test`'s own "All"
+        // row convention.
+        let mut bookmark_folders = vec![lumen_chrome::ChromeBookmarkFolderModel {
+            label: "Все закладки".to_owned(),
+            active: self.bookmark_panel.selected_folder.is_none(),
+        }];
+        bookmark_folders.extend(self.bookmark_panel.folders.iter().map(|f| {
+            lumen_chrome::ChromeBookmarkFolderModel {
+                label: f.clone(),
+                active: self.bookmark_panel.selected_folder.as_deref() == Some(f.as_str()),
+            }
+        }));
+        let bookmarks = lumen_chrome::ChromeBookmarksModel {
+            folders: bookmark_folders,
+            title: self.bookmark_panel.selected_folder.clone().unwrap_or_else(|| "Все закладки".to_owned()),
+            cards: self
+                .bookmark_panel
+                .visible_entries()
+                .iter()
+                .map(|e| {
+                    let title = if e.title.is_empty() { e.url.clone() } else { e.title.clone() };
+                    lumen_chrome::ChromeBookmarkCardModel {
+                        fav_letter: title
+                            .chars()
+                            .next()
+                            .map(|c| c.to_uppercase().to_string())
+                            .unwrap_or_else(|| "\u{2022}".to_owned()),
+                        title,
+                        url: e.url.clone(),
+                    }
+                })
+                .collect(),
+        };
+        let settings = lumen_chrome::ChromeSettingsModel {
+            active_section: self.chrome_settings_section.clone(),
+            ad_block_on: self.settings_panel.draft.shields_enabled,
+            fingerprint_on: self.settings_panel.draft.fingerprint_mode != "off",
+        };
+        // CC-10b: the design's single tabbed `#rightSidebar` merges the
+        // legacy independently-dockable `ai_panel`/`sidebar` — kept mutually
+        // exclusive by `dispatch_chrome_action`'s `OpenAiSidebar`/
+        // `OpenWebSidebar`/`SetSidebarTab` handlers, so `sidebar.visible`
+        // alone picks the tab.
+        let right_sidebar = lumen_chrome::ChromeRightSidebarModel {
+            open: self.ai_panel.visible || self.sidebar.visible,
+            tab: if self.sidebar.visible {
+                lumen_chrome::ChromeSidebarTab::Web
+            } else {
+                lumen_chrome::ChromeSidebarTab::Ai
+            },
+        };
         lumen_chrome::ChromeModel {
             dark_theme: self.dark_mode,
             layout_vertical: self.vertical_tabs.visible,
@@ -8767,6 +8866,11 @@ impl Lumen {
             palette,
             cert,
             print_open: self.print_panel.visible,
+            content_view,
+            history,
+            bookmarks,
+            settings,
+            right_sidebar,
         }
     }
 
@@ -8918,10 +9022,27 @@ impl Lumen {
                 }
                 self.relayout_chrome_host();
             }
-            ChromeAction::OpenWebSidebar => self.sidebar.toggle(),
+            // CC-10b: `#rightSidebar` is a single tabbed panel in the design
+            // (`.right-sidebar`/`.content-area` are flex siblings — opening
+            // it really does push `#contentArea`, unlike the modal overlays
+            // CC-9/CC-10 gated) — mutually exclusive with the AI tab so
+            // `chrome_model_snapshot`'s `right_sidebar.tab` stays unambiguous.
+            // `relayout_chrome()` keeps the legacy (flag-off) page-reflow
+            // behavior; `relayout_chrome_host()` is the CC-7/9/10-class fix
+            // this action was missing — `#rightSidebar`'s `.open` class is
+            // baked into `chrome_layout` at relayout time, so without it the
+            // panel wouldn't show until some other trigger relayouts chrome.
+            ChromeAction::OpenWebSidebar => {
+                self.ai_panel.visible = false;
+                self.sidebar.toggle();
+                self.relayout_chrome();
+                self.relayout_chrome_host();
+            }
             ChromeAction::OpenAiSidebar => {
+                self.sidebar.visible = false;
                 self.ai_panel.toggle();
                 self.relayout_chrome();
+                self.relayout_chrome_host();
             }
             ChromeAction::ToggleDownloads => {
                 self.downloads.toggle_visible();
@@ -8939,21 +9060,64 @@ impl Lumen {
                     self.refresh_profile_menu_entries();
                 }
             }
+            // CC-10b: `data-view` picks the target. `#view-page`/`#view-history`/
+            // `#view-bookmarks`/`#view-settings` are mutually exclusive
+            // (`.view.active`, one at a time — `chrome_model_snapshot`'s
+            // `content_view` derives from whichever legacy panel's `visible`
+            // flag is set), so opening one closes the other two. Reuses the
+            // exact legacy open/refresh calls the `Ctrl+H`/`Ctrl+Shift+O`/
+            // `Ctrl+,` keyboard shortcuts already make, so behavior (data
+            // load, draft flush on settings close) matches exactly.
             ChromeAction::ShowView => {
-                // `data-view` picks the target — only `settings` has a real
-                // engine-independent panel today; the rest (history,
-                // bookmarks, page) are chrome-only views awaiting CC-10.
                 let view = self
                     .chrome_doc
                     .as_ref()
-                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-view"));
-                if view == Some("settings") {
-                    if self.settings_panel.visible {
-                        self.close_settings_panel();
-                    } else {
-                        self.open_settings_panel();
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-view"))
+                    .map(str::to_owned);
+                match view.as_deref() {
+                    Some("settings") => {
+                        if self.settings_panel.visible {
+                            self.close_settings_panel();
+                        } else {
+                            self.history_panel.visible = false;
+                            self.bookmark_panel.visible = false;
+                            self.open_settings_panel();
+                        }
+                    }
+                    Some("history") => {
+                        if !self.history_panel.visible {
+                            if self.settings_panel.visible {
+                                self.close_settings_panel();
+                            }
+                            self.bookmark_panel.visible = false;
+                        }
+                        self.history_panel.toggle();
+                        if self.history_panel.visible {
+                            self.refresh_history();
+                        }
+                    }
+                    Some("bookmarks") => {
+                        if !self.bookmark_panel.visible {
+                            if self.settings_panel.visible {
+                                self.close_settings_panel();
+                            }
+                            self.history_panel.visible = false;
+                        }
+                        self.bookmark_panel.toggle();
+                        if self.bookmark_panel.visible {
+                            self.refresh_bookmarks();
+                        }
+                    }
+                    _ => {
+                        // "page" or unrecognised: back to the active tab's page.
+                        if self.settings_panel.visible {
+                            self.close_settings_panel();
+                        }
+                        self.history_panel.visible = false;
+                        self.bookmark_panel.visible = false;
                     }
                 }
+                self.relayout_chrome_host();
             }
             ChromeAction::SelectTab => {
                 if let Some(id) = self.chrome_data_id(nid, "data-tab-id")
@@ -9058,25 +9222,68 @@ impl Lumen {
                 }
                 None => {}
             },
+            // CC-10b: `.set-nav .item`/`.set-section` both carry the same
+            // slug on `data-section`/`data-set` — `bind_settings` matches
+            // `ChromeSettingsModel::active_section` against either
+            // attribute, so this only needs to store the clicked slug.
+            ChromeAction::SetSettingsSection => {
+                if let Some(section) =
+                    self.chrome_doc.as_ref().and_then(|(doc, _)| doc.get(nid).get_attr("data-section"))
+                {
+                    self.chrome_settings_section = section.to_owned();
+                    self.relayout_chrome_host();
+                }
+            }
+            // CC-10b: switches the active tab without closing the panel
+            // (unlike `OpenAiSidebar`/`OpenWebSidebar`, which toggle
+            // open/closed) — mirrors clicking a tab in an already-open
+            // `#rightSidebar`.
+            ChromeAction::SetSidebarTab => {
+                if let Some(tab) =
+                    self.chrome_doc.as_ref().and_then(|(doc, _)| doc.get(nid).get_attr("data-rs-tab"))
+                {
+                    match tab {
+                        "ai" => {
+                            self.ai_panel.visible = true;
+                            self.sidebar.visible = false;
+                        }
+                        "web" => {
+                            self.sidebar.visible = true;
+                            self.ai_panel.visible = false;
+                        }
+                        _ => {}
+                    }
+                    self.relayout_chrome();
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::CloseRightSidebar => {
+                self.ai_panel.visible = false;
+                self.sidebar.visible = false;
+                self.relayout_chrome();
+                self.relayout_chrome_host();
+            }
             // Demo-only actions on the static preview markup: no shell state
-            // backs them yet (CC-10 panel migration remainder — history/
-            // bookmarks/settings/palette-of-panels, AI-Web sidebar).
-            // Recognised (so the click doesn't fall through to legacy
-            // geometry) but otherwise a no-op for now. `SetProfile`
+            // backs them yet. Recognised (so the click doesn't fall through
+            // to legacy geometry) but otherwise a no-op for now. `SetProfile`
             // specifically: the profile-menu popover is still a legacy
             // overlay (its click handling — and the actual
             // `profiles.set_active` call — lives in the
             // `WindowEvent::MouseInput` legacy-popover branch, not here),
             // and `ChromeModel` already reflects whatever profile that path
-            // activates on the very next relayout.
+            // activates on the very next relayout. `ToggleSwitch`: the
+            // clicked toggle can't be resolved to a specific setting from
+            // `data-action` alone (all 6 `.toggle`s in the design share the
+            // same action, no distinguishing attribute) — `bind_settings`
+            // still reflects the two settings with real backing state
+            // read-only; wiring a click-to-flip requires a structural
+            // resolver (à la `chrome_permission_kind_for_node`), out of this
+            // slice's DoD.
             ChromeAction::SetProfile
             | ChromeAction::ArchiveCard
-            | ChromeAction::SetSettingsSection
             | ChromeAction::ToggleSwitch
             | ChromeAction::ToggleFocusTimer
             | ChromeAction::ToggleFocus
-            | ChromeAction::SetSidebarTab
-            | ChromeAction::CloseRightSidebar
             | ChromeAction::SetDevtoolsTab => {}
         }
     }
@@ -13961,7 +14168,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
 
                     // Bookmark manager panel (task #22): floating overlay.
-                    if self.bookmark_panel.visible {
+                    // CC-10b: gated off the flag — its paint is (`#view-bookmarks`
+                    // is the engine equivalent), and without this a click here
+                    // would silently swallow a click meant for the real page
+                    // content now visible underneath (same click-eating class
+                    // CC-5 fixed for the legacy tab-strip/toolbar).
+                    if self.bookmark_panel.visible && !self.css_chrome_enabled {
                         let (ax, ay) = self.bookmark_anchor();
                         if let Some(hit) = panels::bookmark_panel::hit_test(
                             &self.bookmark_panel,
@@ -14063,7 +14275,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
 
                     // Print dialog (E-1): centred overlay, Ctrl+P.
-                    if self.print_panel.visible {
+                    // CC-10b: gated off the flag — found alongside the
+                    // history/bookmarks/settings gap this slice fixes, same
+                    // click-eating class CC-5 fixed for the legacy tab-strip/
+                    // toolbar (CC-10a gated this panel's *paint* but missed
+                    // its click hit-test).
+                    if self.print_panel.visible && !self.css_chrome_enabled {
                         let win_w = self.viewport_width_css();
                         let win_h = self.viewport_height_css();
                         use panels::print_panel::PrintHit;
@@ -14138,8 +14355,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Settings panel (task D-7): centred overlay.
-                    if self.settings_panel.visible {
+                    // Settings panel (task D-7): centred overlay. CC-10b:
+                    // gated off the flag — same click-eating class as the
+                    // print/cert modals above (`#view-settings` is the
+                    // engine equivalent).
+                    if self.settings_panel.visible && !self.css_chrome_enabled {
                         let win_w = self.viewport_width_css();
                         let win_h = self.viewport_height_css();
                         let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
@@ -14291,7 +14511,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
 
                     // Certificate viewer panel (§D-1): centred overlay.
-                    if self.cert_panel.visible {
+                    // CC-10b: gated off the flag — same click-eating gap as
+                    // the print dialog above.
+                    if self.cert_panel.visible && !self.css_chrome_enabled {
                         let win_w = self.viewport_width_css();
                         let win_h = self.viewport_height_css();
                         let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
@@ -14316,7 +14538,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
 
                     // History panel (task D-5): centred floating overlay.
-                    if self.history_panel.visible {
+                    // CC-10b: gated off the flag — same click-eating class as
+                    // the print/cert/settings modals above (`#view-history`
+                    // is the engine equivalent).
+                    if self.history_panel.visible && !self.css_chrome_enabled {
                         let (px, py) = self.history_panel_anchor();
                         use panels::history_panel::HistoryHit;
                         let hit = panels::history_panel::hit_test(
@@ -14390,7 +14615,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
 
                     // AI sidebar panel (§12.8): cross-dockable AI assistant.
-                    if self.ai_panel.visible {
+                    // CC-10b: gated off the flag — same click-eating class as
+                    // above (`#rsBodyAi` inside `#rightSidebar` is the engine
+                    // equivalent; editing/scrolling it isn't wired yet, see
+                    // `dispatch_chrome_action`'s `ToggleSwitch` doc comment
+                    // for the same class of scope cut).
+                    if self.ai_panel.visible && !self.css_chrome_enabled {
                         let tab_h = toolbar::CHROME_H;
                         let win_h = self.viewport_height_css() + tab_h;
                         let ai_w = self
@@ -14426,7 +14656,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
 
                     // Sidebar web panel (7D.3): cross-dockable panel.
-                    if self.sidebar.visible {
+                    // CC-10b: gated off the flag — same click-eating class as
+                    // the AI sidebar above (`#rsBodyWeb` is the engine
+                    // equivalent; its real embedded webview content isn't
+                    // representable there, see `ChromeSidebarTab::Web`'s doc
+                    // comment).
+                    if self.sidebar.visible && !self.css_chrome_enabled {
                         let tab_h = toolbar::CHROME_H;
                         let win_h = self.viewport_height_css() + tab_h;
                         let sb_w = self
@@ -15773,7 +16008,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 // AI sidebar panel (§12.8, GG-1): cross-dockable AI assistant.
-                if self.ai_panel.visible {
+                // CC-10b: gated off the flag — under `LUMEN_CSS_CHROME=1`
+                // this is `#rsBodyAi` inside `#rightSidebar`, rendered by the
+                // engine chrome (`bind_right_sidebar`).
+                if self.ai_panel.visible && !self.css_chrome_enabled {
                     let tab_h = toolbar::CHROME_H;
                     let win_h = self.viewport_height_css() + tab_h;
                     let ai_w = self
@@ -15793,7 +16031,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 // Sidebar web panel (7D.3): cross-dockable secondary viewport.
-                if self.sidebar.visible {
+                // CC-10b: gated off the flag — under `LUMEN_CSS_CHROME=1`
+                // this is `#rsBodyWeb` inside `#rightSidebar`, rendered by
+                // the engine chrome (`bind_right_sidebar`).
+                if self.sidebar.visible && !self.css_chrome_enabled {
                     let tab_h = toolbar::CHROME_H;
                     let win_h = self.viewport_height_css() + tab_h;
                     let sb_w = self
@@ -15831,8 +16072,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 // Bookmark manager panel (task #22): floating overlay anchored
                 // under the toolbar. Drawn above page/other overlays, below the
-                // tab bar.
-                if self.bookmark_panel.visible {
+                // tab bar. CC-10b: gated off the flag — under
+                // `LUMEN_CSS_CHROME=1` this is `#view-bookmarks`, rendered by
+                // the engine chrome (`bind_bookmarks`).
+                if self.bookmark_panel.visible && !self.css_chrome_enabled {
                     let (ax, ay) = self.bookmark_anchor();
                     let mut bm_cmds =
                         panels::bookmark_panel::build_panel(&self.bookmark_panel, ax, ay, &pal);
@@ -15872,7 +16115,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 // Settings panel (task D-7): centred overlay, Ctrl+, gear button, or about:settings.
-                if self.settings_panel.visible {
+                // CC-10b: gated off the flag — under `LUMEN_CSS_CHROME=1`
+                // this is `#view-settings`, rendered by the engine chrome
+                // (`bind_settings`).
+                if self.settings_panel.visible && !self.css_chrome_enabled {
                     let win_w = self.viewport_width_css();
                     let win_h = self.viewport_height_css();
                     let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
@@ -15913,7 +16159,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 // History panel (task D-5): centred floating overlay.
-                if self.history_panel.visible {
+                // CC-10b: gated off the flag — under `LUMEN_CSS_CHROME=1`
+                // this is `#view-history`, rendered by the engine chrome
+                // (`bind_history`).
+                if self.history_panel.visible && !self.css_chrome_enabled {
                     let win_w = self.viewport_width_css();
                     let tab_h = toolbar::CHROME_H;
                     // DS-16: banner + shrunk body while Anonymous is active.
@@ -20462,6 +20711,14 @@ impl Lumen {
     /// width)`, in side-resolution priority order (outermost first). Each can be
     /// flipped to either window edge; [`Self::left_dock`] / [`Self::right_dock`]
     /// pick the first visible one whose effective side matches.
+    ///
+    /// CC-10b: `ID_AI`/`ID_SIDEBAR` report `visible: false` under
+    /// `LUMEN_CSS_CHROME=1` even when `self.ai_panel`/`self.sidebar` are
+    /// visible — under the flag they paint as `#rightSidebar`, a real flex
+    /// sibling of `#contentArea` in the engine chrome layout, so
+    /// `chrome_page_host_rect` (`Self::page_offset`) already reflects its
+    /// width. Without this, `Self::page_content_width_css`'s horizontal
+    /// scroll-clamp bound would subtract the same width twice.
     fn dockable_sidebars(&self) -> [(&'static str, bool, f32); 4] {
         [
             (
@@ -20476,12 +20733,12 @@ impl Lumen {
             ),
             (
                 panel_layout::ID_AI,
-                self.ai_panel.visible,
+                self.ai_panel.visible && !self.css_chrome_enabled,
                 panels::ai_panel::PANEL_WIDTH,
             ),
             (
                 panel_layout::ID_SIDEBAR,
-                self.sidebar.visible,
+                self.sidebar.visible && !self.css_chrome_enabled,
                 panels::sidebar_panel::PANEL_WIDTH,
             ),
         ]

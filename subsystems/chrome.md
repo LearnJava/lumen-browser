@@ -189,6 +189,24 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   `chrome_model_snapshot` field additions) + `cargo clippy -p lumen-chrome -p lumen-shell
   --all-targets -D warnings` green.
 
+- **Content views + right sidebar** (CC-10b): `#view-page/history/bookmarks/settings` — 4
+  mutually-exclusive `.view.active` (`ChromeContentView`, `bind_content_view`), derived from whichever
+  legacy panel (`history_panel`/`bookmark_panel`/`settings_panel`) is `visible`. History/bookmarks
+  render real data (`HistoryPanel::rows`/`BookmarkPanel::folders`/`visible_entries()`) via
+  `bind_history`/`bind_bookmarks`; per-row actions (star/copy/delete, folder click) stay unbound — the
+  frozen markup carries no `data-action` hooks on them. Settings section-nav switches for real
+  (`Lumen::chrome_settings_section`, independent of the legacy `SettingsSection` enum — the design's 6
+  tabs and the legacy 7 don't line up); only the 2 Adblock & Fingerprinting toggles with clean 1:1
+  backing fields are bound read-only (`bind_settings`). `#rightSidebar` merges the legacy
+  independently-dockable `ai_panel`/`sidebar` into the design's single tabbed panel, kept mutually
+  exclusive under the flag; it's the CC track's first engine-chrome panel that's a real flex sibling
+  of `#contentArea` (not an overlay) — `Self::dockable_sidebars()` now excludes `ID_AI`/`ID_SIDEBAR`
+  under the flag to avoid double-subtracting their width from the legacy scroll-clamp calculation.
+  Also fixed: 5 legacy panels' `MouseInput` hit-tests (plus, found by the same audit,
+  `print_panel`/`cert_panel`'s — a CC-10a gap) were gating paint but not the click hit-test, so an
+  invisible legacy panel could still swallow clicks meant for the page underneath — same bug class
+  CC-5 fixed for the tab-strip/toolbar.
+
 ## Deferred
 
 - **`<template>` markup + `templates::IDS` population**: the frozen design reference has none —
@@ -201,10 +219,12 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   description but not required by its DoD sentence; same rebuild pattern as tabs/workspaces once
   picked up.
 - `SetProfile` dispatched from the *new* chrome (profile-menu popover click) — still routed through
-  the legacy popover (CC-9/10); the ~12 remaining demo-only `ChromeAction`s dispatched as no-ops by
-  CC-5 (`SetPermission`, `ArchiveCard`, `SetSettingsSection`, `ToggleSwitch`, `CloseModal`,
-  `ClosePalette`, `ToggleFocusTimer`, `ToggleFocus`, `SetSidebarTab`, `CloseRightSidebar`,
-  `SetDevtoolsTab`, `OmniGo`) await CC-9/CC-10 popover migration. `ToggleSidebar` is wired (CC-8).
+  the legacy popover; `SetPermission`/`ClosePalette`/`CloseModal`/`OmniGo` were wired by CC-9/CC-10,
+  and `SetSettingsSection`/`SetSidebarTab`/`CloseRightSidebar` by CC-10b (see below) — the remaining
+  demo-only `ChromeAction`s dispatched as no-ops (`ArchiveCard`, `ToggleSwitch`,
+  `ToggleFocusTimer`, `ToggleFocus`, `SetDevtoolsTab`) have no clean 1:1 backing state or (for
+  `ToggleSwitch`) no way to resolve which of 6 identical `.toggle` elements was clicked from
+  `data-action` alone. `ToggleSidebar` is wired (CC-8).
 - Omnibox suggestion **dropdown** rendering (CC-9): keyboard `ArrowUp`/`ArrowDown` selection already
   updates `address_bar`'s own state (and `chrome_omnibox_value` already reflects a selected
   suggestion in `#omniInput`'s value), but the dropdown list itself is not painted under the flag —
