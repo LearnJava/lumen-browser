@@ -250,6 +250,74 @@ the size of that remaining gap by ~6-7× but does not close it. Root cause
 unimplemented; this is a scoped, low-risk removal of provably dead work
 within `lay_out_flex` itself, not that broader memoization layer.
 
+## Follow-up (P1, 2026-07-25, second session): `bind_model` NodeId churn fixed — `layout_mutation_incremental` retried, still no gain (new root cause found)
+
+Fixed the "Attempted mitigation" section's independent node-churn problem:
+`lumen_chrome::model`'s `rebuild_tab_list`/`rebuild_hbar_tab_list`/
+`rebuild_workspace_list`/`rebuild_hbar_ws_list` now reconcile against the
+existing DOM by position (`reconcile_row_list`) instead of detaching and
+recreating every row on every `bind_model` call — an unchanged row (and
+every one of its descendants: fav/title/close-or-badge) keeps its `NodeId`
+across calls; only a genuine shape change (`is_child`/`container_color`
+presence/`sleeping` flip) falls back to rebuilding that one row's children
+(the row itself still keeps its id). Text updates go through a new
+`set_text_in_place` that mutates the existing `NodeData::Text` payload
+instead of detach+recreate, since `graft_geometry` recurses into every
+descendant — a single stray fresh text-node id anywhere in the subtree
+would have defeated the whole point. 6 new `cargo test -p lumen-chrome`
+cases assert identity is preserved end-to-end (55/55 passing).
+
+With that fixed, re-tried switching `relayout_chrome_host` (and the CC-12
+bench's `cc12_bench_cycle`) to `layout_mutation_incremental` again, this
+time with `bind_model`'s node-churn genuinely gone:
+
+```
+CC12_HOVER count=60 min=71.04ms p50=106.42ms p95=138.44ms p99=191.33ms max=191.33ms
+CC12_KEY   count=60 min=68.83ms p50=81.11ms  p95=97.88ms  p99=101.94ms max=101.94ms
+```
+
+**Still no gain — hover even got measurably worse** (p50 106ms vs the
+`layout_measured_hyp` baseline's 85ms below). Reverted back to
+`layout_measured_hyp` in both places to confirm the bind_model fix itself
+isn't the regression source:
+
+```
+CC12_HOVER count=60 min=68.24ms p50=84.93ms p95=115.91ms p99=120.14ms max=120.14ms
+CC12_KEY   count=60 min=68.64ms p50=72.38ms p95=81.53ms  p99=84.30ms  max=84.30ms
+```
+
+Matches the partial-fix baseline (p50 ≈85/81ms) within run-to-run noise —
+confirms the `bind_model` fix is perf-neutral (as expected: it only removes
+*incidental* NodeId churn, and `layout_measured_hyp` never looked at node
+identity to begin with) and correctness-only under the plain full-layout
+path, while `layout_mutation_incremental` is the one that regresses.
+
+**New root cause for the non-improvement:** `lumen_layout::incremental::graft_geometry`
+clones the matched subtree **once per ancestor level** inside a clean
+region, not once at the outermost clean boundary. Its recursion clones a
+clean child in place (`*new.children[i] = prev.children[i].clone()`, via
+the child's own `if all_clean { *new = prev.clone(); }` branch) *before*
+the parent decides it too is `all_clean` and does **its own**
+`*new = prev.clone()` — a full deep clone of the whole subtree, including
+the child that was just individually cloned one recursion level down. For
+a clean region of depth *d*, this redundantly re-clones the same
+`ComputedStyle`-and-`Vec<LayoutBox>`-heavy data up to *d* times instead of
+once. Chrome's sidebar/tab-list subtree (now fully clean thanks to the
+`bind_model` fix) is nested several flex levels deep, so the redundant
+clone cost apparently outweighs the layout work actually skipped — net
+negative, not neutral. This is a `lumen-layout`-crate bug (affects any
+`layout_mutation_incremental` caller with a deep clean subtree, not
+chrome-specific), separate from both the `lay_out_flex` double-layout bug
+above and the now-fixed `bind_model` node-churn bug. Not fixed here — needs
+its own scoped change to `graft_geometry` (e.g. skip the redundant
+wholesale clone when every child already reports clean, since each clean
+child has already replaced itself with its own cloned subtree in place)
+verified against the existing `lumen-layout` incremental test suite. Filed
+as the next concrete follow-up; **CC-14 remains blocked** on either this or
+the original layout-result-cache fix for `lay_out_flex`'s remaining
+non-doubled cost (both still needed to reach the 2ms budget — the
+`bind_model` fix alone was necessary but is not sufficient).
+
 ## Impact
 
 CC-track chrome rendering is currently opt-in (`LUMEN_CSS_CHROME=1`), not
