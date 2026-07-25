@@ -1,4 +1,8 @@
-# BUG-342: flex final-positioning permanently overwrites relative `width`/`height` with a resolved px value — corrupts descendants across repeated layout passes
+# BUG-343: flex final-positioning permanently overwrites relative `width`/`height` with a resolved px value — corrupts descendants across repeated layout passes
+
+**Renumbered 2026-07-25** from BUG-342 — collided with another session's
+`origin/main` merge (V8 native-function trampoline bug) that landed under the
+same number while this branch was in progress.
 
 **Статус:** OPEN
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general engine bug, not chrome-specific**
