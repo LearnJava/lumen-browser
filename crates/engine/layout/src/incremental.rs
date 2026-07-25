@@ -132,6 +132,35 @@ pub fn clear_dirty(b: &mut LayoutBox) {
     }
 }
 
+// ─── Incremental box-build index (BUG-341 S4) ───────────────────────────────
+
+/// Index a previous [`LayoutBox`] tree by `NodeId` for `build_box_or_reuse`'s
+/// whole-subtree lookup.
+///
+/// A single `NodeId` can appear on more than one box in the tree: anonymous
+/// boxes (`InlineRun`, `InlineBlockRow`, `Marker`, `InlineSpace`, pseudo-
+/// element boxes) are tagged with their *owning* element's id, not a unique id
+/// of their own, and are always descendants of that owning element's own
+/// top-level box. Pre-order `insert`-keep-first therefore always keeps the
+/// outermost (real) box for a given id — the correct "whole subtree for this
+/// node" — even though later, deeper traversal steps revisit the same id on
+/// that element's own synthetic children.
+pub(crate) fn index_by_node(root: &LayoutBox) -> std::collections::HashMap<NodeId, &LayoutBox> {
+    let mut map = std::collections::HashMap::new();
+    index_by_node_inner(root, &mut map);
+    map
+}
+
+fn index_by_node_inner<'a>(
+    b: &'a LayoutBox,
+    map: &mut std::collections::HashMap<NodeId, &'a LayoutBox>,
+) {
+    map.entry(b.node).or_insert(b);
+    for child in &b.children {
+        index_by_node_inner(child, map);
+    }
+}
+
 // ─── Streaming graft (PH1-2b) ──────────────────────────────────────────────────
 
 /// Mark every box in `b`'s subtree as [`DirtyBits::SELF_SIZE`].
@@ -897,7 +926,11 @@ mod tests {
 
         set_incremental_restyle(true);
         crate::style::invalidate_rule_idx_cache();
-        let delta = RestyleDelta { prev_styles: prev.styles(), dirty_roots: Default::default() };
+        let delta = RestyleDelta {
+            prev_styles: prev.styles(),
+            dirty_roots: Default::default(),
+            dom_content_stable: true,
+        };
         let result = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
         set_incremental_restyle(false);
         result
@@ -997,7 +1030,7 @@ mod tests {
 
         // Incremental: same transition, conservative root-set derived from it.
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b));
-        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots };
+        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, dom_content_stable: true };
         set_incremental_restyle(true);
         reset_recompute_count();
         crate::style::invalidate_rule_idx_cache();
@@ -1066,7 +1099,9 @@ mod tests {
         let full_after = precompute_counters(&doc, &sheet, vp, &flat, false);
 
         let dirty_roots = restyle_root_set_for_node_change(&doc, [a]);
-        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots };
+        // BUG-341 S4: a DOM class mutation is NOT `dom_content_stable` — box-build
+        // reuse must not trust style-equality alone here (see `RestyleDelta` doc).
+        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, dom_content_stable: false };
         set_incremental_restyle(true);
         reset_recompute_count();
         crate::style::invalidate_rule_idx_cache();

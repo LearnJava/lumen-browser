@@ -168,8 +168,20 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   section for the full numbers and why). Not yet wired into any pipeline
   (`layout_measured_hyp`/`layout_mutation_incremental` still full-recompute
   unconditionally) — that's S5.
-- **S4 — incremental box-build.** Skip `build_box` for undamaged subtrees.
-  Measure `build_box` share drop.
+- **S4 — incremental box-build.** ✅ Done. `build_box_or_reuse` (wired into
+  all 4 `build_box` recursion sites) clones a whole `LayoutBox` subtree from
+  `prev` instead of rebuilding it, gated by `CounterMap::clean_subtrees` +
+  `RestyleDelta::dom_content_stable` (only safe for pure interactive-state
+  deltas — DOM-mutation deltas conservatively rebuild everything, same
+  precedent as S3). Public entry: `box_tree::incremental_build_box`, off by
+  default via `set_incremental_box_build`. 2 differential tests (laid-out
+  geometry comparison, not `Debug` string — `custom_props: HashMap` iteration
+  order isn't guaranteed stable across independent cascades) + 1 real-chrome-
+  doc test, all passing (bit-identical to a full rebuild). **Measured result is
+  negative**: `index_by_node`'s whole-prev-tree hash-index cost outweighs the
+  savings from skipping ~8%-baseline-share `build_box` work — see BUG-341 "S4"
+  section for the full numbers and the honest recommendation to re-measure
+  combined with S3 at S5 before deciding whether to keep it enabled.
 - **S5 — wire chrome + page pipelines onto the incremental path**, flag on.
   Re-measure CC-12. If green → CC-14 unblocks. Full verification (§6).
 - **S6 — tighten invalidation** if S5 misses budget (narrow the hover fan-out,
