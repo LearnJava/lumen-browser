@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-26",
  "counts": {
-  "open": 44,
+  "open": 49,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 316,
+ "total_bugs": 321,
  "phases": [
   {
    "id": "P0",
@@ -2008,30 +2008,36 @@
       {
        "id": "WPT-VENDOR-density-size-correction",
        "title": "WPT: вендорить + прогнать категорию `density-size-correction`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/density-size-correction/`, 44 файла), скоуп ⬜. `run_report.py --all --root density-size-correction --recursive` отобрал 22 id: 20 reftest (неподдержаны исполнителем), 2 testharness прогнались — 1 TIMEOUT, 1 FAIL (harness OK, 0/1 сабтест). Root-caused и заведён BUG-348: `canvas.getContext('2d')` возвращает `null` безусловно в дефолтном V8-билде (WebGL-шим перезаписывает рабочий getContext, регрессия с P3-v8-s8 2026-07-14), подтверждено вне wptrunner и визуально на graphic_tests/57-canvas-2d.html. 1/2 harness OK, 0/6 сабтестов",
+       "bugs": [
+        "BUG-348"
+       ]
       },
       {
        "id": "WPT-VENDOR-deprecation-reporting",
        "title": "WPT: вендорить + прогнать категорию `deprecation-reporting`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/deprecation-reporting/`, 3 файла), скоуп ⬜. Апстримный `__dir__.ini`: `implementation-status: not-implementing` — предложение WICG нигде не реализовано. `run_report.py --all --root deprecation-reporting --recursive` отобрал 1 id (`idlharness.any.html`): TIMEOUT — 404 на невендоренные `/resources/WebIDLParser.js`+`idlharness.js`, гарнес не отчитался. 0/1 harness OK, 0/0 сабтестов. Не заводился отдельный BUG-NNN — известный survey-гэп"
       },
       {
        "id": "WPT-VENDOR-device-bound-session-credentials",
        "title": "WPT: вендорить + прогнать категорию `device-bound-session-credentials`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). нишевый auth API"
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/device-bound-session-credentials/`, 49 файлов), скоуп 🚫 (нишевый auth API), включена по постоянному решению пользователя. `run_report.py --all --root device-bound-session-credentials --recursive` отобрал 27 id, прошёл полностью (~7:29): 25 TIMEOUT на уже известный HTTPS-порт-гэп (`invalid url: invalid port: \"None\"`), 1 ERROR (session-reuse-артефакт), 1 TIMEOUT на новый широкий движковый баг — заведён BUG-350 (`<script type=\"module\">` не имеет реальной семантики на дефолтном V8, падает на классик-eval с `Unexpected token 'export'`). 0/27 harness OK, 0/0 сабтестов",
+       "bugs": [
+        "BUG-350"
+       ]
       },
       {
        "id": "WPT-VENDOR-device-memory",
        "title": "WPT: вендорить + прогнать категорию `device-memory`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/device-memory/`, 4 файла), скоуп 🚫 (датчик устройства), включена по постоянному решению пользователя. `run_report.py --all --root device-memory --recursive` отобрал 2 id, прошёл полностью (~1:57): оба TIMEOUT на известный HTTPS-порт-гэп. 0/2 harness OK, 0/0 сабтестов. Не заводился отдельный BUG-NNN — известный survey-гэп, не движковый дефект"
       },
       {
        "id": "WPT-VENDOR-device-posture",
@@ -6022,6 +6028,13 @@
    "date": "2026-07-20",
    "debtor": false
   },
+  "BUG-328": {
+   "status": "open",
+   "title": "`dom/nodes/Element-children.html` снова unexpected (2 сабтеста) против `.ini`, флипнутого в `expected: PASS` при закрытии BUG-322/BUG-323 2026-07-21: `.item(\"fo…",
+   "component": "js (WEB_API_SHIM, dom.rs)",
+   "date": null,
+   "debtor": false
+  },
   "BUG-329": {
    "status": "fixed",
    "title": "`finds_bundled_inter` жёстко ожидал `family_count() == 1` в `assets/fonts/` — DS-4 добавила туда Golos Text + JetBrains Mono, стало 3 семейства, assertion устар…",
@@ -6035,6 +6048,13 @@
    "component": "paint/test-harness (`background-repeat: space`)",
    "date": null,
    "debtor": true
+  },
+  "BUG-331": {
+   "status": "open",
+   "title": "Cloudflare-защищённые сайты стабильно отдают Lumen `HTTP 503` (4/4 повторов на httpbin.org), хотя `curl` с идентичной строкой User-Agent (`Lumen/0.5.0`) получае…",
+   "component": "network (`crates/network/src/tls/fingerprint.rs`, `http/headers.rs`)",
+   "date": null,
+   "debtor": false
   },
   "BUG-332": {
    "status": "fixed",
@@ -6147,6 +6167,27 @@
    "component": "js (`crates/js/src/dom.rs` fetch shim), network (`crates/network/src/lib.rs::HttpClient::fetch_sync`+3 sibling fns)",
    "date": null,
    "debtor": false
+  },
+  "BUG-348": {
+   "status": "open",
+   "title": "`canvas.getContext('2d')` возвращает `null` безусловно для ЛЮБОГО canvas в текущем дефолтном V8-билде — `WEBGL_SHIM`'s `document.createElement`-monkeypatch (`in…",
+   "component": "js (`crates/js/src/webgl_canvas.rs`, `crates/js/src/v8_runtime.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-349": {
+   "status": "open",
+   "title": "Функция инвалидирует только поддерево родителя мутировавшего узла, обосновывая это тем, что «у движка нет `:has()`» — на деле `:has()` реализован (`matches_pseu…",
+   "component": "layout (`crates/engine/layout/src/style.rs::restyle_root_set_for_node_change`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-350": {
+   "status": "open",
+   "title": "`<script type=\"module\">` не имеет реальной семантики модуля на дефолтном V8-билде вовсе — `V8JsRuntime` не переопределяет `eval_module`/`register_module_source`…",
+   "component": "js (`crates/js/src/v8_runtime.rs`, `crates/core/src/ext.rs::JsRuntime::eval_module`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6245,7 +6286,8 @@
    "BUG-323",
    "BUG-324",
    "BUG-325",
-   "BUG-327"
+   "BUG-327",
+   "BUG-328"
   ],
   "js (WEB_API_SHIM, dom.rs) + native `v8_runtime.rs`/`dom.rs` (оба движка)": [
    "BUG-326"
@@ -6360,6 +6402,9 @@
    "BUG-341",
    "BUG-343"
   ],
+  "layout (`crates/engine/layout/src/style.rs::restyle_root_set_for_node_change`)": [
+   "BUG-349"
+  ],
   "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)": [
    "BUG-339"
   ],
@@ -6417,6 +6462,9 @@
   ],
   "network (HTTP client)": [
    "BUG-278"
+  ],
+  "network (`crates/network/src/tls/fingerprint.rs`, `http/headers.rs`)": [
+   "BUG-331"
   ],
   "network (`filter/easylist.rs` + filter context в `lib.rs`)": [
    "BUG-292"
