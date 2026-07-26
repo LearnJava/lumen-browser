@@ -1122,6 +1122,23 @@ CC12_KEY   p50   78.7ms -> 69.7ms
 `cargo test -p lumen-layout`: 3281 passed, 2 failed (the pre-existing
 `FONT_CH_EX` pair, BUG-339). `clippy` clean on `lumen-layout` + `lumen-shell`.
 
+**Full §6 verification, run before the merge (2026-07-27):** `clippy` clean on
+`lumen-layout` + `lumen-shell` + `lumen-chrome`; `cargo test -p lumen-chrome`
+58 passed / 0 failed; `cargo test -p lumen-shell` 1705 passed / 0 failed;
+CPU snapshot references (`lumen-driver --features cpu-render
+cases::snapshot_cpu`) **unchanged** — the deterministic pixel gate confirms
+geometry is bit-identical, which is the exact contract a geometry-reuse change
+has to keep. `python graphic_tests/run.py --continue-on-fail` (149 tests,
+`LUMEN_PROFILE=dev-release`): 77 known debtors all within tolerance, **no new
+regressions**; the two non-debtor lines are unrelated to this slice —
+TEST-147 27.45% is the pre-existing, still-OPEN BUG-330 (identical number to
+the one BUG-330 already records from the DS-9 branch), and TEST-71's "FAIL" is
+a *ratchet* verdict, i.e. an improvement (BUG-199 debtor 4.53% → 2.11%) that
+the harness reports so its baseline gets lowered. The TEST-71 baseline was
+deliberately left untouched: BUG-199's own diagnosis is that the residual diff
+is an Edge capture-timing artifact, so ratcheting on a single observation
+risks a spurious REGRESS later, and it is not this slice's finding.
+
 **CC-12's gate stays red** (2ms budget, ~35-47× over). Honest accounting: this
 is a real, structural fix — the incremental-layout machinery now actually
 works, which also benefits page load and every real page, not just chrome —
