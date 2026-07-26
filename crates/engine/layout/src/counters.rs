@@ -29,6 +29,7 @@
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use lumen_dom::{Document, FlatTree, NodeData, NodeId};
 
@@ -73,7 +74,14 @@ pub struct CounterMap {
     /// same `inherited` chain (pure function of doc/sheet/viewport/dark_mode),
     /// so its own `compute_style(id, ...)` call would recompute an identical
     /// result — reusing this cache skips a second full cascade pass per node.
-    styles: HashMap<NodeId, ComputedStyle>,
+    ///
+    /// BUG-341 S9: behind an [`Arc`] because this map has three consumers that
+    /// each used to deep-copy a whole `ComputedStyle` per node — the incremental
+    /// cascade's reuse path (`walk` below), the per-cycle snapshot the pipeline
+    /// keeps for the next delta (`CounterMap::styles().clone()`), and this map's
+    /// own insert. All three are now refcount bumps. Nothing mutates a cached
+    /// style in place, so the sharing is unobservable.
+    styles: HashMap<NodeId, Arc<ComputedStyle>>,
     /// BUG-341 S4: `NodeId`s whose own `ComputedStyle` AND entire descendant
     /// subtree are byte-identical to the previous pass (`walk`'s
     /// `must_recompute` was `false` for every node in the subtree), populated
@@ -101,7 +109,7 @@ impl CounterMap {
     /// Returns the `ComputedStyle` this map's traversal computed for `id`, if
     /// any (BUG-284 cascade-reuse cache — see the `styles` field).
     pub fn style_for(&self, id: NodeId) -> Option<&ComputedStyle> {
-        self.styles.get(&id)
+        self.styles.get(&id).map(|s| &**s)
     }
 
     /// Returns the full per-node `ComputedStyle` cascade cache (BUG-341 S2).
@@ -109,7 +117,7 @@ impl CounterMap {
     /// The map the full cascade produced, keyed by `NodeId`. It is the reference
     /// the incremental cascade (BUG-341 S3+) must reproduce bit-for-bit; the
     /// `incr == full` differential tests compare two such maps directly.
-    pub fn styles(&self) -> &HashMap<NodeId, ComputedStyle> {
+    pub fn styles(&self) -> &HashMap<NodeId, Arc<ComputedStyle>> {
         &self.styles
     }
 
@@ -223,7 +231,7 @@ pub fn precompute_counters(
 pub struct RestyleDelta<'a> {
     /// The previous cascade's per-node style cache — [`CounterMap::styles`]
     /// from an earlier full or incremental pass over the same document.
-    pub prev_styles: &'a HashMap<NodeId, ComputedStyle>,
+    pub prev_styles: &'a HashMap<NodeId, Arc<ComputedStyle>>,
     /// Root nodes whose entire subtree must be re-cascaded.
     pub dirty_roots: HashSet<NodeId>,
     /// BUG-341 S4: `true` when this delta is known to reflect *only* an
@@ -408,19 +416,21 @@ fn walk(
             force || delta.dirty_roots.contains(&id) || !delta.prev_styles.contains_key(&id)
         }
     };
-    let style = if must_recompute {
+    let style: Arc<ComputedStyle> = if must_recompute {
         #[cfg(test)]
         RECOMPUTE_COUNT.with(|c| c.set(c.get() + 1));
-        compute_style(doc, id, sheet, inherited, viewport, dark_mode)
+        Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode))
     } else {
         // Safe: `must_recompute` is false only when `incr` is `Some` and
         // `prev_styles` contains `id` (checked in the match arm above).
-        incr.unwrap().prev_styles[&id].clone()
+        // BUG-341 S9: a refcount bump, not a `ComputedStyle` deep copy — this
+        // is the reuse path, taken for every node outside the dirty root set.
+        Arc::clone(&incr.unwrap().prev_styles[&id])
     };
     // BUG-284: cache so `build_box`'s own `compute_style(id, ...)` call (same
     // doc/sheet/viewport/dark_mode, same `inherited` chain) can reuse this
     // result instead of recomputing an identical cascade.
-    map.styles.insert(id, style.clone());
+    map.styles.insert(id, Arc::clone(&style));
 
     // CSS Lists L3 §4: counter-reset first, then counter-increment, then counter-set.
     ctx.apply_reset(&style.counter_reset);
