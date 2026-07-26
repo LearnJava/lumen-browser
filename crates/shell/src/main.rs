@@ -916,7 +916,6 @@ fn run_window_mode(
         chrome_animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         chrome_transition_scheduler: TransitionScheduler::new(),
         chrome_prev_styles: HashMap::new(),
-        chrome_prev_model: None,
         chrome_prev_pristine_layout: None,
         chrome_prev_cascade_styles: HashMap::new(),
         chrome_prev_interactive: (None, None, None),
@@ -7257,17 +7256,6 @@ struct Lumen {
     /// detect which properties changed. Mirrors [`Self::prev_styles`] for the
     /// chrome tree.
     chrome_prev_styles: HashMap<NodeId, ComputedStyle>,
-    /// BUG-341 S5: `ChromeModel` snapshot from the previous
-    /// [`Self::relayout_chrome_host`] pass. `bind_model` has no mutation-diff
-    /// mechanism yet, so equality with the fresh snapshot stands in for one:
-    /// an identical model means this pass's `bind_model` call was a no-op
-    /// (same attributes/text/structure as last time), so the only thing that
-    /// could have changed the cascade is interactive state
-    /// ([`Self::chrome_prev_interactive`]) — the precondition
-    /// `layout_mutation_incremental_restyle`'s `RestyleDelta::dom_content_stable`
-    /// requires. `None` before the first pass (always takes the full-layout
-    /// path then).
-    chrome_prev_model: Option<lumen_chrome::ChromeModel>,
     /// BUG-341 S5: the pristine (pre-[`take_content_area`]) box tree from the
     /// previous pass — the `prev` basis for
     /// `lumen_layout::box_tree::layout_mutation_incremental_restyle`'s graft.
@@ -7295,14 +7283,15 @@ struct Lumen {
     /// BUG-341 S5: viewport size the previous pass laid out at — a resize
     /// invalidates [`Self::chrome_prev_pristine_layout`]'s geometry for
     /// `graft_geometry` purposes, so a viewport change forces the full-layout
-    /// path same as a `chrome_prev_model` mismatch.
+    /// path regardless of what `bind_model_tracked` reports touched.
     chrome_prev_viewport: Option<Size>,
     /// BUG-341 S5: Forced Colors Mode state ([`lumen_layout::forced_colors_active`])
     /// the previous pass ran under. Not part of `ChromeModel` (it's a
     /// thread-local accessibility preference, not shell UI state), but it does
-    /// feed the cascade — a change here must force a full recompute the same
-    /// as a `chrome_prev_model` mismatch, or the incremental path would reuse
-    /// `chrome_prev_cascade_styles` computed under the wrong Forced-Colors state.
+    /// feed the cascade — a change here must force a full recompute (the
+    /// `bind_model_tracked` diff cannot see it, since it never touches `doc`),
+    /// or the incremental path would reuse `chrome_prev_cascade_styles`
+    /// computed under the wrong Forced-Colors state.
     chrome_prev_forced_colors: bool,
     /// CC-11: last computed animation/transition frame for the chrome
     /// document. `None` when the chrome flag is off or nothing is currently
@@ -8607,7 +8596,14 @@ impl Lumen {
         // handful of attribute/text mutations + two small list rebuilds).
         let model = self.chrome_model_snapshot();
         let Some((doc, sheet)) = self.chrome_doc.as_mut() else { return };
-        lumen_chrome::bind_model(doc, &model);
+        // BUG-341 S6: `bind_model_tracked` (not plain `bind_model`) — reports
+        // every node whose selector-relevant attribute/class actually changed
+        // value, or whose row-list container gained/lost a member, so a
+        // content-mutating pass (typed omnibox text, a tab title, …) can also
+        // take the incremental path below instead of only a pure
+        // interactive-state transition (S5's limit — see BUG-341 "S5" §"Not
+        // attempted").
+        let touched = lumen_chrome::bind_model_tracked(doc, &model);
         let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
         let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
         // CC-7: `#omniInput` is focused (`:focus`/`:focus-within`, e.g. the
@@ -8617,26 +8613,23 @@ impl Lumen {
         let omni_input = doc.find_by_id(lumen_chrome::ids::OMNI_INPUT);
         let chrome_focus = if self.address_bar.is_open() { omni_input } else { None };
         lumen_layout::set_interactive_state(self.chrome_hovered_nid, chrome_focus, self.chrome_active_nid);
-        // BUG-341 S5: `layout_mutation_incremental` (plain graft_geometry, no
-        // incremental cascade) was tried here early on and measured *worse*
-        // than a plain full layout (`graft_geometry`'s then-O(depth) redundant
-        // clone bug) — fixed since (BUG-341 "third session"), and now combined
-        // with the S3 incremental cascade via `layout_mutation_incremental_restyle`.
-        // Only safe for a transition where nothing but interactive state
-        // (hover/focus/active) changed since the last pass — `chrome_model`
-        // equality stands in for a real DOM-mutation diff (`bind_model` has
-        // none), and viewport/Forced-Colors must also match, or the previous
-        // cascade cache (`chrome_prev_cascade_styles`) would not be a valid
-        // reference for the delta. Any other case (first pass, DOM content
-        // change, resize, Forced-Colors flip) falls back to the full,
-        // known-correct `layout_measured_hyp_with_counters`.
+        // BUG-341 S5/S6: `layout_mutation_incremental` (plain graft_geometry,
+        // no incremental cascade) was tried here early on and measured
+        // *worse* than a plain full layout (`graft_geometry`'s then-O(depth)
+        // redundant clone bug) — fixed since (BUG-341 "third session"), and
+        // now combined with the S3 incremental cascade via
+        // `layout_mutation_incremental_restyle`. Safe whenever a previous
+        // pristine tree/cascade cache exists to graft/diff against and
+        // viewport/Forced-Colors still match — a resize or Forced-Colors flip
+        // invalidates geometry `bind_model_tracked` cannot see, so those still
+        // force the full, known-correct `layout_measured_hyp_with_counters`
+        // fallback (as does the very first pass).
         let new_interactive = (self.chrome_hovered_nid, chrome_focus, self.chrome_active_nid);
         let forced_colors = lumen_layout::forced_colors_active();
-        let dom_stable = self.chrome_prev_model.as_ref() == Some(&model);
         let viewport_stable = self.chrome_prev_viewport == Some(viewport);
         let forced_colors_stable = self.chrome_prev_forced_colors == forced_colors;
         let (mut layout, cascade_styles) = match (
-            dom_stable && viewport_stable && forced_colors_stable,
+            viewport_stable && forced_colors_stable,
             self.chrome_prev_pristine_layout.as_ref(),
         ) {
             (true, Some(prev)) => {
@@ -8657,10 +8650,23 @@ impl Lumen {
                     prev_active,
                     new_interactive.2,
                 ));
+                // BUG-341 S6: DOM-mutation root-set, unioned with the
+                // interactive-state one above — `touched` is empty on a pure
+                // hover/focus/active-only pass (S5's original case), non-empty
+                // whenever `bind_model` actually changed content this cycle.
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                    doc,
+                    touched.iter().copied(),
+                ));
                 let delta = lumen_layout::counters::RestyleDelta {
                     prev_styles: &self.chrome_prev_cascade_styles,
                     dirty_roots,
-                    dom_content_stable: true,
+                    // `false` unless this cycle is provably a pure
+                    // interactive-state transition (brief §4/`RestyleDelta`
+                    // doc: DOM content changes must not let `build_box`'s
+                    // caller believe unrelated attribute/text state is safe
+                    // to skip).
+                    dom_content_stable: touched.is_empty(),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
                 let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
@@ -8693,7 +8699,6 @@ impl Lumen {
         // indices `graft_geometry`'s by-index matching relies on).
         self.chrome_prev_pristine_layout = Some(layout.clone());
         self.chrome_prev_cascade_styles = cascade_styles.styles().clone();
-        self.chrome_prev_model = Some(model);
         self.chrome_prev_viewport = Some(viewport);
         self.chrome_prev_interactive = new_interactive;
         self.chrome_prev_forced_colors = forced_colors;
@@ -24325,7 +24330,6 @@ mod tests {
     /// here since this bench has no `Lumen` instance to hang them on.
     #[derive(Default)]
     struct Cc12IncrementalState {
-        prev_model: Option<lumen_chrome::ChromeModel>,
         prev_pristine_layout: Option<lumen_layout::LayoutBox>,
         prev_cascade_styles: HashMap<lumen_dom::NodeId, lumen_layout::style::ComputedStyle>,
         prev_interactive: (Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>),
@@ -24338,15 +24342,17 @@ mod tests {
     /// submit/present is a separate stage this cycle never reaches) sequence
     /// `Lumen::relayout_chrome_host` runs on every chrome interaction.
     ///
-    /// BUG-341 S5: mirrors `relayout_chrome_host`'s own eligibility check
-    /// (`chrome model` unchanged since last cycle ⇒ nothing but interactive
-    /// state could have changed) and takes the same
-    /// `layout_mutation_incremental_restyle` path when eligible, falling back
-    /// to `layout_measured_hyp_with_counters` otherwise (first cycle, or a
-    /// model change — e.g. `CC12_KEY`'s omnibox text differing every call).
-    /// `state`'s clone of the fresh tree/cascade cache is deliberately inside
-    /// the timed region — that per-cycle persist cost is real production
-    /// overhead, not a benchmark artifact.
+    /// BUG-341 S6: mirrors `relayout_chrome_host`'s own eligibility check —
+    /// the incremental path is taken whenever a previous pristine tree/
+    /// cascade cache exists, deriving its cascade dirty-root-set from
+    /// `bind_model_tracked`'s real diff (unioned with the interactive-state
+    /// root-set) instead of requiring the whole `ChromeModel` to be
+    /// bit-identical (S5's limit — that's what kept `CC12_KEY`'s per-cycle
+    /// omnibox-text change on the full-layout path). Falls back to
+    /// `layout_measured_hyp_with_counters` only on the first cycle. `state`'s
+    /// clone of the fresh tree/cascade cache is deliberately inside the timed
+    /// region — that per-cycle persist cost is real production overhead, not
+    /// a benchmark artifact.
     #[allow(clippy::too_many_arguments)]
     fn cc12_bench_cycle(
         doc: &mut lumen_dom::Document,
@@ -24358,14 +24364,13 @@ mod tests {
         hover: Option<lumen_dom::NodeId>,
         state: &mut Cc12IncrementalState,
     ) -> f64 {
-        lumen_chrome::bind_model(doc, model);
+        let touched = lumen_chrome::bind_model_tracked(doc, model);
         lumen_layout::set_interactive_state(hover, None, None);
         let new_interactive = (hover, None, None);
-        let dom_stable = state.prev_model.as_ref() == Some(model);
 
         let t0 = std::time::Instant::now();
-        let (layout, counters) = match (dom_stable, state.prev_pristine_layout.as_ref()) {
-            (true, Some(prev)) => {
+        let (layout, counters) = match state.prev_pristine_layout.as_ref() {
+            Some(prev) => {
                 let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
                 let mut dirty_roots = std::collections::HashSet::new();
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
@@ -24377,10 +24382,14 @@ mod tests {
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc, prev_active, new_interactive.2,
                 ));
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                    doc,
+                    touched.iter().copied(),
+                ));
                 let delta = lumen_layout::counters::RestyleDelta {
                     prev_styles: &state.prev_cascade_styles,
                     dirty_roots,
-                    dom_content_stable: true,
+                    dom_content_stable: touched.is_empty(),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
                 let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
@@ -24389,14 +24398,13 @@ mod tests {
                 lumen_layout::counters::set_incremental_restyle(false);
                 result
             }
-            _ => lumen_layout::layout_measured_hyp_with_counters(doc, sheet, viewport, measurer, hyp, false),
+            None => lumen_layout::layout_measured_hyp_with_counters(doc, sheet, viewport, measurer, hyp, false),
         };
         state.prev_pristine_layout = Some(layout.clone());
         state.prev_cascade_styles = counters.styles().clone();
         let _dl = paint_ordered(&layout);
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         lumen_layout::clear_interactive_state();
-        state.prev_model = Some(model.clone());
         state.prev_interactive = new_interactive;
         ms
     }

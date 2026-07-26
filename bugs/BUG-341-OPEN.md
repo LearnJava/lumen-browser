@@ -680,6 +680,119 @@ than silently relaxed. **CC-14 remains blocked.**
   note" layout-result-cache idea) — still unimplemented, still the largest
   single remaining stage by S1's split once cascade is no longer dominant.
 
+## S6 — `bind_model` mutation-diff: real win for content changes (`CC12_KEY`), `CC12_HOVER` unaffected as expected
+
+Closed the single lever S5 flagged as its biggest remaining gap: `bind_model`
+(`crates/chrome/src/model.rs`) had no way to report which nodes it actually
+touched, so any DOM-content-changing chrome interaction (typed omnibox text, a
+tab title, a new tab) fell back to the full-layout path regardless of S5's
+wiring.
+
+**`bind_model_tracked`** (new, alongside the unchanged `bind_model`) threads a
+thread-local `HashSet<NodeId>` through the handful of shared low-level
+mutation primitives already funneling every `bind_*` helper in that file —
+`set_attr`/`remove_attr` (record the node when the attribute's value actually
+changes, not on every call — `bind_model` writes idempotently every cycle
+regardless of whether the value changed), `remove_children_with_class`
+(record the container when it actually detaches a child), and
+`reconcile_row_list` (record the container when `items.len() != existing.len()`,
+i.e. a row was actually added/removed — a same-count reorder/update is already
+caught by the per-row `set_attr` calls `update_tab_row`/`apply_tab_row_attrs`
+make). Newly-*created* nodes need no explicit tracking:
+`incremental_precompute_counters` (crates/engine/layout/src/counters.rs)
+already force-recomputes any node absent from `prev_styles`, and
+`build_box`/`graft_geometry` always read live DOM content regardless of the
+cascade's dirty-root-set in this path (`dom_content_stable: false`) — verified
+by two new full-pipeline differential tests in `incremental.rs`
+(`mutation_incremental_restyle_dom_class_change_matches_full`,
+`_structural_change_matches_full`), on top of the existing cascade-only S3 test
+covering `restyle_root_set_for_node_change` (`incr_cascade_class_change_
+matches_full_and_recomputes_subset`) that already validated the underlying
+mechanism before any pipeline/chrome wiring existed.
+
+`Lumen::relayout_chrome_host` and the `cc12_bench_cycle` test harness both
+call `bind_model_tracked` instead of `bind_model`, union
+`restyle_root_set_for_node_change(doc, touched)` into `dirty_roots` alongside
+the existing per-axis interactive-state root-sets, and set
+`dom_content_stable: touched.is_empty()`. The gate dropped is `chrome_prev_
+model == model` (whole-`ChromeModel`-equality, S5's coarse stand-in for a real
+diff) — the incremental path is now taken whenever a previous pristine tree
+exists and viewport/Forced-Colors are stable, regardless of whether `bind_model`
+changed content this cycle. `chrome_prev_model` (the field) is removed —
+nothing reads model-equality anymore.
+
+**A real bug surfaced by the first version of this tracker**: `bind_palette`
+unconditionally removed+recreated its `.cp-empty` "nothing found" placeholder
+on *every* `bind_model` call whenever `results` was empty (the overwhelmingly
+common case — the palette is normally closed), even when the placeholder was
+already showing. That made `#cpList` permanently "touched" every cycle,
+needlessly widening `dirty_roots` on every pass including pure hover/focus/
+active transitions. Fixed by skipping the remove+recreate when the placeholder
+is already in place (`bind_palette`, `crates/chrome/src/model.rs`). Checked the
+other five `remove_children_with_class` call sites (`bind_history` ×2,
+`bind_bookmarks` ×2, `bind_dropdown`, `bind_downloads`) — none has an
+unconditional-placeholder branch like `bind_palette`'s; an empty model list
+there already produces a genuine no-op (0 removed, 0 created), so no similar
+fix was needed for them. New tests:
+`bind_model_tracked_reports_nothing_touched_for_an_unchanged_model`,
+`bind_model_tracked_reports_the_body_on_a_theme_change`,
+`bind_model_tracked_reports_the_container_when_a_tab_is_added`
+(`crates/chrome/src/model.rs`) — the first one is what caught the palette bug.
+
+**Measured** (same machine, same `cc12_bench_cycle`/`cc12_chrome_perf_gate_
+hover_and_keystroke_cycles` harness as S5, 3 back-to-back runs after the fix to
+separate signal from this machine's run-to-run noise floor — observed ±10-15%
+between consecutive runs of *identical* code, see the numbers below):
+
+```
+# Baseline (this session, same machine, pre-S6 code, 2 runs):
+CC12_HOVER p50=93.47ms / 89.68ms
+CC12_KEY   p50=89.25ms / 90.58ms
+
+# Post-S6 (3 runs):
+CC12_HOVER p50=85.94ms / 85.87ms / 85.61ms   (~85.8ms average)
+CC12_KEY   p50=63.23ms / 62.32ms / 62.85ms   (~62.8ms average)
+```
+
+`CC12_KEY` (typed omnibox text, changes every cycle — the case this slice
+targets): **~30% p50 win** (~90ms → ~63ms), the first real improvement on this
+fixture since BUG-341 opened (S3/S4/S5 measured it as flat, always ineligible
+for any incremental path). `CC12_HOVER` (SIDEBAR/`None` toggle — S3's own
+documented conservative-invalidation worst case): **flat**, within this
+machine's noise floor of the pre-S6 baseline, exactly as expected — S6 does
+not touch interactive-state root-set derivation, and `bind_model_tracked`
+confirmed empty for this fixture (see the unit test above), so this fixture's
+`RestyleDelta` is bit-identical to what S5 already computed for it.
+`bug341_s5_incremental_pipeline_share`'s representative sibling-tab-hover
+scenario is likewise unaffected (p50 ≈67ms, matching S5's own ~64-68ms).
+
+**CC-12's gate is still red** (p95 ≈85-105ms vs the 2ms budget, still
+40-50× over) — a real win on `CC12_KEY` does not close a ~2-orders-of-
+magnitude gap on its own. Reported honestly per the brief's stop condition,
+not silently relaxed. **CC-14 remains blocked.**
+
+**Not attempted in S6** (left for a further slice if the budget question isn't
+reopened first):
+- `bind_history`/`bind_bookmarks`/`bind_downloads`/`bind_dropdown` still use
+  the "remove all, rebuild all" pattern rather than `reconcile_row_list`'s
+  per-row reconciliation — harmless for `dirty_roots` today (an empty model
+  list is already a genuine no-op there, unlike the `bind_palette` bug this
+  slice fixed), but a *non-empty* history/downloads/bookmarks list would touch
+  its whole container on every cycle even when unchanged, the same shape of
+  gap `bind_palette` had. Not exercised by any current perf fixture (`CC12_
+  HOVER`/`CC12_KEY` both use the model's default-empty history/bookmarks/
+  downloads), so left as a documented gap rather than spec-implemented ahead
+  of a fixture that would prove it matters.
+- S4's box-build skip — still off; `layout_mutation_incremental_restyle`
+  always calls plain `build_box`, never `build_box_or_reuse`. Unaffected by
+  this slice.
+- The residual, non-doubled `lay_out_flex` cost and the cascade's own
+  irreducible per-node cost on a real hover/content root-set — still the
+  standing gap between "real, measured wins" and "closes a 2ms budget";
+  brief §5's stop condition (re-open the budget question with data) is
+  looking more relevant with each slice that narrows the invalidation set
+  without closing the two-orders-of-magnitude gap.
+
 ## Repro
 
 ```bash
