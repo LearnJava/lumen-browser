@@ -1052,6 +1052,145 @@ S5/S6/S7 for the standing remaining levers (box-build skip re-evaluation,
 the residual `lay_out_flex` cost / layout-result cache, DOM-mutation-change
 narrowing).
 
+## S8 — `graft_geometry` was reusing nothing at all: two defects, both fixed
+
+**This slice changed the diagnosis of the whole track.** S1's profile — the one
+every slice from S3 onwards reasoned from — describes the **full** layout pass.
+Nobody had ever profiled the *incremental* path itself. Adding the same stage
+scopes to `layout_mutation_incremental_restyle` (committed, so this stays
+visible) produced this, on today's code, post S1-S7:
+
+```
+# cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate -- --ignored --nocapture
+# with LUMEN_PROFILE_TREE=1; averages over the 60 recorded cycles of each fixture
+HOVER  total=111.4  cascade=59.9  lay_out=42.0  build_box=9.0  graft=0.04  post=1.2
+KEY    total= 64.8  cascade=23.8  lay_out=33.0  build_box=6.7  graft=0.04  post=1.0
+# outside `lumen-layout`, inside the timed region (new `[cc12-split]` line):
+KEY    clone_tree=4.2  clone_styles=8.0  paint=0.5
+```
+
+`graft=0.04ms` over a whole document is the finding: **the incremental-layout
+half — the one this task's brief §2 called "mature" and built everything else
+on top of — was inert.** It reused zero boxes, on every interaction, for the
+entire history of this bug. Two independent defects, either of which alone
+drives reuse to zero:
+
+**1. `kind_layout_eq` was missing 6 of `BoxKind`'s 20 variants.** `Contents`,
+`Table`, `TableRowGroup`, `SvgRoot`, `SvgShape`, `SvgText` fell into its
+`_ => false` arm. That is not a local loss: `graft_geometry` propagates a
+failure up to every ancestor, so a single unlisted kind anywhere disables
+incremental layout for the whole tree — and `assets/chrome/chrome.html` is
+built out of SVG icons. Fixed by handling all six, with `PartialEq` derived on
+`ViewBox`/`SvgTransform`/`SvgShapeKind`. `svg_paint_matrix` is deliberately
+**excluded** from the comparison: it is a layout *output* (identity on a
+freshly-built box, written during `lay_out`, see `box_tree.rs` "Stored in the
+dedicated `svg_paint_matrix` output field"), so comparing it would make every
+SVG shape unequal to its own laid-out predecessor — the same trap that makes
+`InlineRun` compare `segments` and not its laid-out `lines`. Without that
+exclusion the fix would have been a silent no-op.
+
+**2. `graft_geometry` returned *before* recursing into children on any style
+mismatch.** `lay_out` writes the used viewport `height` back into the root
+box's `ComputedStyle`, so a freshly-built root can never equal its own
+laid-out predecessor — every cycle, guaranteed, on any document. One node at
+the root therefore threw away geometry reuse for the entire document. Fixed:
+a style mismatch now marks only that node dirty and still recurses; each child
+is judged on its own `style`, which already carries the new cascade's result.
+Node-identity and box-kind mismatches still abandon the subtree (positional
+child matching is no longer meaningful there).
+
+**Why S2-S7's differential tests never caught this.** They assert
+`incremental == full` on the *output*. A graft that reuses nothing satisfies
+that perfectly — it just recomputes everything. The regression was invisible in
+geometry and only observable as wall-clock, where this machine's ±10-15%
+noise floor hides it. Added a direct gate on the *count* instead:
+`graft_geometry_reuses_whole_chrome_tree_when_nothing_changed`
+(`crates/shell/src/main.rs`) lays out an unchanged chrome document twice and
+asserts **100%** of boxes graft clean. Before the fixes: 217/318 boxes, and
+`false` at the root. After: 318/318. Two unit tests in `incremental.rs` cover
+the newly-handled kinds, the `svg_paint_matrix` exclusion, and the
+style-mismatch-still-grafts-children contract.
+
+**Measured** (same harness/machine as S5-S7):
+
+```
+lay_out         31ms -> 16ms
+CC12_HOVER p50  117.6ms -> 94.5ms
+CC12_KEY   p50   78.7ms -> 69.7ms
+```
+
+`cargo test -p lumen-layout`: 3281 passed, 2 failed (the pre-existing
+`FONT_CH_EX` pair, BUG-339). `clippy` clean on `lumen-layout` + `lumen-shell`.
+
+**Full §6 verification, run before the merge (2026-07-27):** `clippy` clean on
+`lumen-layout` + `lumen-shell` + `lumen-chrome`; `cargo test -p lumen-chrome`
+58 passed / 0 failed; `cargo test -p lumen-shell` 1705 passed / 0 failed;
+CPU snapshot references (`lumen-driver --features cpu-render
+cases::snapshot_cpu`) **unchanged** — the deterministic pixel gate confirms
+geometry is bit-identical, which is the exact contract a geometry-reuse change
+has to keep. `python graphic_tests/run.py --continue-on-fail` (149 tests,
+`LUMEN_PROFILE=dev-release`): 77 known debtors all within tolerance, **no new
+regressions**; the two non-debtor lines are unrelated to this slice —
+TEST-147 27.45% is the pre-existing, still-OPEN BUG-330 (identical number to
+the one BUG-330 already records from the DS-9 branch), and TEST-71's "FAIL" is
+a *ratchet* verdict, i.e. an improvement (BUG-199 debtor 4.53% → 2.11%) that
+the harness reports so its baseline gets lowered. The TEST-71 baseline was
+deliberately left untouched: BUG-199's own diagnosis is that the residual diff
+is an Edge capture-timing artifact, so ratcheting on a single observation
+risks a spurious REGRESS later, and it is not this slice's finding.
+
+**CC-12's gate stays red** (2ms budget, ~35-47× over). Honest accounting: this
+is a real, structural fix — the incremental-layout machinery now actually
+works, which also benefits page load and every real page, not just chrome —
+but it does not close a two-orders-of-magnitude gap on its own.
+
+### What S8 exposed next (start here)
+
+The post-fix split moves the bottleneck, and the new top item is the same root
+cause in two places:
+
+```
+HOVER  total=85.5  cascade=49.1  lay_out=16.8  graft=14.1  build_box=6.8
+KEY    total=59.4  cascade=22.0  lay_out=15.6  graft=13.6  build_box=6.2
+```
+
+`graft` went 0.04ms -> ~14ms because it is now doing real work: comparing a
+**3216-byte, 302-field `ComputedStyle` — including a `HashMap<String, String>`
+of 30 inherited custom properties — once per box.** The same fat struct is what
+makes `clone_tree` + `clone_styles` cost ~12-13ms per cycle (the incremental
+design's own bookkeeping: `state.prev_pristine_layout = layout.clone()` and
+`state.prev_cascade_styles = counters.styles().clone()`, both O(whole
+document), both inside the timed region), and it is a large part of `cascade`
+too — `compute_style` clones the parent's `custom_props` map per node
+(`style.rs:6198`, `style.rs:7678`).
+
+Micro-benchmark of `compute_style`'s per-node cost by how much heap-owning
+inherited state the parent carries (dev-release, 3 runs, 2300 calls each; the
+first cold-machine run read ~5x higher and was discarded):
+
+| inherited state | per node |
+|---|---:|
+| 0 custom props, 0 font families | 0.31-0.46 µs |
+| 0 props, 5 font families | 0.70-0.87 µs |
+| **30 props (what chrome.html declares), 5 families** | **3.7-4.7 µs** |
+| 120 props, 5 families | 20.2-21.8 µs |
+
+So the recommended next slice (**S9**) is representation, not invalidation:
+
+1. `custom_props: Arc<HashMap<...>>` with copy-on-write (`Arc::make_mut`) —
+   only the handful of nodes that actually declare a custom property pay a
+   real copy. This gives `graft`'s style comparison an `Arc::ptr_eq` fast path
+   (should collapse most of the ~14ms), cuts the per-node cascade cost, and
+   shrinks both bookkeeping clones. Blast radius is small: 8 `custom_props`
+   sites outside `style.rs`.
+2. Then re-measure and consider `LayoutBox.style: Arc<ComputedStyle>` and
+   `prev_cascade_styles: HashMap<NodeId, Arc<ComputedStyle>>`, which turns both
+   O(document) bookkeeping clones into refcount bumps.
+
+Unlike every slice from S3 to S7, this is a pure data-representation change:
+output must stay bit-identical, so the existing differential tests are the
+gate, and there is no invalidation-correctness risk to trade off.
+
 ## Repro
 
 ```bash

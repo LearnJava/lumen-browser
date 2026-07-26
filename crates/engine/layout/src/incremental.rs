@@ -195,17 +195,28 @@ pub fn mark_subtree_dirty(b: &mut LayoutBox) {
 /// prefix of each child list matches and the changed/new tail is re-laid-out.
 /// Returns `true` when `new`'s whole subtree was reused clean from `prev`.
 pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
-    if new.node != prev.node
-        || !kind_layout_eq(&new.kind, &prev.kind)
-        || new.style != prev.style
-    {
-        // Node identity, box kind payload or style differ → cannot reuse this
-        // box. Leave the whole subtree dirty (marked by `mark_subtree_dirty`).
+    if new.node != prev.node || !kind_layout_eq(&new.kind, &prev.kind) {
+        // Node identity or box-kind payload differ → this position no longer
+        // describes the same box, so the children below it cannot be matched
+        // positionally either. Leave the whole subtree dirty (marked by
+        // `mark_subtree_dirty`).
         return false;
     }
 
+    // A style difference means *this* box must be re-laid-out, but it says
+    // nothing about its descendants — each child is compared against its own
+    // predecessor below, and the fresh tree was built with the new cascade, so
+    // any inherited change is already visible in the child's own `style`.
+    // Returning early here (BUG-341 "S8") threw away geometry reuse for the
+    // entire document whenever a single node's style differed: the chrome
+    // document hits exactly that every cycle, because `lay_out` writes the used
+    // viewport `height` back into the root box's `style`, so a freshly-built
+    // root never equals its own laid-out predecessor. One such node at the root
+    // meant `graft_geometry` reused nothing at all, on every interaction.
+    let self_reusable = new.style == prev.style;
+
     let common = new.children.len().min(prev.children.len());
-    let mut all_clean = new.children.len() == prev.children.len();
+    let mut all_clean = self_reusable && new.children.len() == prev.children.len();
     for i in 0..common {
         let child_clean = graft_geometry(&mut new.children[i], &prev.children[i]);
         all_clean &= child_clean;
@@ -249,18 +260,80 @@ pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
 /// compared field-by-field. `InlineRun` compares its `segments` (the pre-layout
 /// inline content) so that text accumulating into an open element during
 /// streaming is detected as changed. Differing discriminants are never equal.
+///
+/// **Every [`crate::box_tree::BoxKind`] variant must be listed here.** A missing
+/// one falls into the `_ => false` arm, which does not merely lose that box's own
+/// geometry: [`graft_geometry`] propagates the failure up, so every ancestor is
+/// re-laid-out too, and a single unlisted kind anywhere in the document defeats
+/// incremental layout for the whole tree. That is exactly what BUG-341 "S8"
+/// found — `Contents`/`Table`/`TableRowGroup`/`SvgRoot`/`SvgShape`/`SvgText`
+/// were absent, and the chrome document's SVG icons alone kept `graft_geometry`
+/// returning `false` at the root on every single cycle.
 fn kind_layout_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::BoxKind) -> bool {
     use crate::box_tree::BoxKind::{
-        Audio, Block, Canvas, FlowRoot, FormControl, Iframe, Image, InlineBlockRow, InlineRun,
-        InlineSpace, Marker, Skip, TableRow, Video,
+        Audio, Block, Canvas, Contents, FlowRoot, FormControl, Iframe, Image, InlineBlockRow,
+        InlineRun, InlineSpace, Marker, Skip, SvgRoot, SvgShape, SvgText, Table, TableRow,
+        TableRowGroup, Video,
     };
     match (a, b) {
         (Block, Block)
         | (InlineBlockRow, InlineBlockRow)
         | (TableRow, TableRow)
+        | (TableRowGroup, TableRowGroup)
+        | (Table, Table)
+        | (Contents, Contents)
         | (InlineSpace, InlineSpace)
         | (Skip, Skip)
         | (FlowRoot, FlowRoot) => true,
+        (
+            SvgRoot { view_box: v1, preserve_aspect_ratio: p1 },
+            SvgRoot { view_box: v2, preserve_aspect_ratio: p2 },
+        ) => v1 == v2 && p1 == p2,
+        // `svg_paint_matrix` is deliberately excluded: it is a layout *output*
+        // (`box_tree.rs`, "Stored in the dedicated `svg_paint_matrix` output
+        // field"), identity on a freshly-built box and only filled in during
+        // `lay_out`. Comparing it would make every SVG shape unequal to its own
+        // laid-out predecessor — the same reason `InlineRun` compares `segments`
+        // (pre-layout) and not its laid-out `lines`. A clean graft copies `kind`
+        // wholesale from `prev`, so the computed matrix carries forward.
+        (
+            SvgShape { shape: s1, svg_transform: t1, .. },
+            SvgShape { shape: s2, svg_transform: t2, .. },
+        ) => s1 == s2 && t1 == t2,
+        (
+            SvgText {
+                text: t1,
+                x: x1,
+                y: y1,
+                dx: dx1,
+                dy: dy1,
+                text_anchor: a1,
+                dominant_baseline: b1,
+                baseline_shift: sh1,
+                svg_transform: tr1,
+            },
+            SvgText {
+                text: t2,
+                x: x2,
+                y: y2,
+                dx: dx2,
+                dy: dy2,
+                text_anchor: a2,
+                dominant_baseline: b2,
+                baseline_shift: sh2,
+                svg_transform: tr2,
+            },
+        ) => {
+            t1 == t2
+                && x1 == x2
+                && y1 == y2
+                && dx1 == dx2
+                && dy1 == dy2
+                && a1 == a2
+                && b1 == b2
+                && sh1 == sh2
+                && tr1 == tr2
+        }
         (InlineRun { segments: sa, .. }, InlineRun { segments: sb, .. }) => segments_eq(sa, sb),
         (
             Image { src: s1, alt: a1, is_lazy: l1 },
@@ -630,6 +703,125 @@ mod tests {
             assert!((ra.height - rb.height).abs() < 0.5,
                 "reflowed height must match: incr {} vs full {}", ra.height, rb.height);
         }
+    }
+
+    // ── BUG-341 S8: every BoxKind must be graftable; a style break must not
+    //    cost the subtree its geometry ─────────────────────────────────────
+
+    /// Each of the six variants `kind_layout_eq` used to omit (falling into its
+    /// `_ => false` arm) must now compare equal to itself. A variant missing
+    /// here does not just lose its own box: `graft_geometry` propagates the
+    /// failure to every ancestor, so one unlisted kind anywhere disables
+    /// incremental layout for the whole document — which is precisely how
+    /// chrome's SVG icons kept reuse at zero for slices S1-S7.
+    #[test]
+    fn kind_layout_eq_covers_every_box_kind_variant() {
+        use crate::box_tree::{
+            PreserveAspectRatio, SvgAlignX, SvgAlignY, SvgBaselineShift, SvgDominantBaseline,
+            SvgMeetOrSlice, SvgShapeKind, SvgTextAnchor, SvgTransform, ViewBox,
+        };
+
+        let kinds = vec![
+            BoxKind::Contents,
+            BoxKind::Table,
+            BoxKind::TableRowGroup,
+            BoxKind::SvgRoot {
+                view_box: Some(ViewBox { min_x: 0.0, min_y: 0.0, width: 24.0, height: 24.0 }),
+                preserve_aspect_ratio: PreserveAspectRatio {
+                    align_x: SvgAlignX::Mid,
+                    align_y: SvgAlignY::Mid,
+                    meet_or_slice: SvgMeetOrSlice::Meet,
+                },
+            },
+            BoxKind::SvgShape {
+                shape: SvgShapeKind::Path { d: "M0 0 L10 10".to_owned() },
+                svg_transform: SvgTransform::translate(3.0, 4.0),
+                svg_paint_matrix: SvgTransform::identity(),
+            },
+            BoxKind::SvgText {
+                text: "hi".to_owned(),
+                x: 1.0,
+                y: 2.0,
+                dx: 0.0,
+                dy: 0.0,
+                text_anchor: SvgTextAnchor::default(),
+                dominant_baseline: SvgDominantBaseline::default(),
+                baseline_shift: SvgBaselineShift::default(),
+                svg_transform: SvgTransform::identity(),
+            },
+        ];
+        for k in &kinds {
+            assert!(kind_layout_eq(k, &k.clone()), "kind {k:?} must be equal to itself");
+        }
+        // Differing payload must still be unequal — the fix must not degrade
+        // into "all SVG boxes are interchangeable".
+        assert!(!kind_layout_eq(
+            &BoxKind::SvgShape {
+                shape: SvgShapeKind::Circle { cx: 0.0, cy: 0.0, r: 1.0 },
+                svg_transform: SvgTransform::identity(),
+                svg_paint_matrix: SvgTransform::identity(),
+            },
+            &BoxKind::SvgShape {
+                shape: SvgShapeKind::Circle { cx: 0.0, cy: 0.0, r: 2.0 },
+                svg_transform: SvgTransform::identity(),
+                svg_paint_matrix: SvgTransform::identity(),
+            },
+        ));
+    }
+
+    /// `svg_paint_matrix` is a layout *output*: identity on a freshly-built box,
+    /// filled in during `lay_out`. Comparing it would make every SVG shape
+    /// unequal to its own laid-out predecessor, silently reproducing the very
+    /// bug this slice fixed.
+    #[test]
+    fn kind_layout_eq_ignores_the_layout_written_svg_paint_matrix() {
+        use crate::box_tree::{SvgShapeKind, SvgTransform};
+
+        let fresh = BoxKind::SvgShape {
+            shape: SvgShapeKind::Circle { cx: 1.0, cy: 1.0, r: 5.0 },
+            svg_transform: SvgTransform::identity(),
+            svg_paint_matrix: SvgTransform::identity(),
+        };
+        let laid_out = BoxKind::SvgShape {
+            shape: SvgShapeKind::Circle { cx: 1.0, cy: 1.0, r: 5.0 },
+            svg_transform: SvgTransform::identity(),
+            svg_paint_matrix: SvgTransform { matrix: [2.0, 0.0, 0.0, 2.0, 40.0, 12.0] },
+        };
+        assert!(kind_layout_eq(&fresh, &laid_out));
+    }
+
+    /// A node whose style changed must be re-laid-out, but its descendants keep
+    /// their geometry. Before BUG-341 S8 `graft_geometry` returned before
+    /// recursing, so a single differing node — the root box, on every cycle,
+    /// because `lay_out` writes the used viewport `height` back into its style —
+    /// threw away geometry reuse for the entire document.
+    #[test]
+    fn graft_style_change_still_reuses_child_geometry() {
+        let prev = block_with_children(
+            1,
+            Rect::new(0.0, 0.0, 800.0, 60.0),
+            vec![leaf(2, Rect::new(0.0, 10.0, 100.0, 50.0))],
+        );
+
+        let mut fresh =
+            block_with_children(1, Rect::ZERO, vec![leaf(2, Rect::ZERO)]);
+        // Only the parent's style differs — exactly the used-value write-back shape.
+        fresh.style.height = Some(crate::style::Length::Px(600.0));
+        mark_subtree_dirty(&mut fresh);
+
+        let all_clean = graft_geometry(&mut fresh, &prev);
+
+        assert!(!all_clean, "the node whose style changed must not report itself clean");
+        assert!(fresh.dirty.is_dirty(), "the changed node must be re-laid-out");
+        assert!(
+            fresh.children[0].dirty.is_clean(),
+            "the unchanged child must keep its geometry — losing it here is the S8 regression",
+        );
+        assert_eq!(
+            fresh.children[0].rect,
+            Rect::new(0.0, 10.0, 100.0, 50.0),
+            "the child's geometry must be grafted from prev",
+        );
     }
 
     #[test]

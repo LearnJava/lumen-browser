@@ -210,7 +210,7 @@ fn is_picture_element(doc: &Document, id: NodeId) -> bool {
 
 /// SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
 /// to the CSS pixel rect of the `<svg>` element. All four values are in SVG user units.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ViewBox {
     /// Left edge of the SVG viewport in user units.
     pub min_x: f32,
@@ -322,7 +322,7 @@ pub enum SvgBaselineShift {
 
 /// SVG transformation data from the `transform` presentation attribute.
 /// Stores parsed transform functions in order of application.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SvgTransform {
     /// Transform matrix components: [a, b, c, d, e, f] representing the 2D transformation matrix.
     /// Default is identity matrix [1, 0, 0, 1, 0, 0].
@@ -364,7 +364,7 @@ impl SvgTransform {
 
 /// Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling).
 /// Coordinate origin: top-left of the SVG viewport.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SvgShapeKind {
     /// `<rect x y width height rx ry>`. Corner radii `rx`/`ry` default to 0 (sharp corners).
     Rect { x: f32, y: f32, width: f32, height: f32, rx: f32, ry: f32 },
@@ -2879,31 +2879,52 @@ pub fn layout_mutation_incremental_restyle(
     prev: &LayoutBox,
     delta: &crate::counters::RestyleDelta<'_>,
 ) -> (LayoutBox, CounterMap) {
+    // Stage scopes deliberately reuse `layout_measured_hyp_with_counters`'
+    // names so `LUMEN_PROFILE_TREE=1` yields a directly comparable split of
+    // the *incremental* path — BUG-341 §1's profile only ever described the
+    // full pass, and every slice since S3 has been reasoning from it.
+    let _prof = lumen_core::profile::scope("layout_mutation_incremental_restyle");
     crate::style::invalidate_rule_idx_cache();
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
-    let flat = build_flat_tree(doc);
+    let flat = {
+        let _prof = lumen_core::profile::scope("build_flat_tree");
+        build_flat_tree(doc)
+    };
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
-    let counters =
-        crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta);
+    let counters = {
+        let _prof = lumen_core::profile::scope("precompute_counters");
+        crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta)
+    };
     let registry = build_counter_style_registry(sheet);
-    let mut root =
-        build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
+    let mut root = {
+        let _prof = lumen_core::profile::scope("build_box");
+        build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
+    };
     propagate_canvas_background(doc, &mut root);
     apply_font_size_adjust(&mut root, measurer);
-    // Every freshly-built box needs layout; graft clears the bit on reusable
-    // subtrees so the incremental pass only re-lays-out new/changed content.
-    crate::incremental::mark_subtree_dirty(&mut root);
-    crate::incremental::graft_geometry(&mut root, prev);
+    {
+        let _prof = lumen_core::profile::scope("graft_geometry");
+        // Every freshly-built box needs layout; graft clears the bit on reusable
+        // subtrees so the incremental pass only re-lays-out new/changed content.
+        crate::incremental::mark_subtree_dirty(&mut root);
+        crate::incremental::graft_geometry(&mut root, prev);
+    }
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    lay_out_incremental(
-        &mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp,
-    );
-    // Post-layout passes — same set as layout_measured_hyp/layout_mutation_incremental, same order.
-    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
-    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
-    apply_anchor_positions(&mut root, viewport);
-    split_first_line_boxes(&mut root);
+    {
+        let _prof = lumen_core::profile::scope("lay_out");
+        lay_out_incremental(
+            &mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp,
+        );
+    }
+    {
+        let _prof = lumen_core::profile::scope("post_layout_passes");
+        // Post-layout passes — same set as layout_measured_hyp/layout_mutation_incremental, same order.
+        apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
+        apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
+        apply_anchor_positions(&mut root, viewport);
+        split_first_line_boxes(&mut root);
+    }
     (root, counters)
 }
 
