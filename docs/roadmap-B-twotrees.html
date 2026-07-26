@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-26",
  "counts": {
-  "open": 49,
+  "open": 50,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 321,
+ "total_bugs": 322,
  "phases": [
   {
    "id": "P0",
@@ -2077,9 +2077,9 @@
       {
        "id": "WPT-VENDOR-domparsing",
        "title": "WPT: вендорить + прогнать категорию `domparsing`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/domparsing/`, 71 файл), скоуп ⬜ (DOMParser/XMLSerializer/innerHTML/outerHTML/insertAdjacentHTML — реализовано в ядре). `run_report.py --all --root domparsing --recursive` отобрал 55 id, прошёл полностью (~3:21): 38/52 harness OK, 59/1124 сабтестов passed, 9 TIMEOUT, 3 ERROR (известный session-reuse артефакт). Найдены и заведены два широких бага в один тикет BUG-351: `insertAdjacentHTML` отсутствует целиком на живом Element (сосед `insertAdjacentText` чинился под BUG-299), `outerHTML` определён только на параллельном VElement (дерево DOMParser), у живого DOM его нет вовсе. Отдельно задокументирован (без BUG-NNN) архитектурный гэп DOMParser-документов — compatMode/location/styleSheets/.style undefined"
       },
       {
        "id": "WPT-VENDOR-domxpath",
@@ -6188,6 +6188,13 @@
    "component": "js (`crates/js/src/v8_runtime.rs`, `crates/core/src/ext.rs::JsRuntime::eval_module`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-351": {
+   "status": "open",
+   "title": "`outerHTML` и `insertAdjacentHTML` отсутствуют целиком на живом (не-DOMParser) `Element` — обе части DOM Parsing spec «Extensions to the Element interface». `in…",
+   "component": "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6297,6 +6304,9 @@
   ],
   "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)": [
    "BUG-340"
+  ],
+  "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
+   "BUG-351"
   ],
   "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
    "BUG-344"
