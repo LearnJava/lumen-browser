@@ -2045,9 +2045,9 @@
       {
        "id": "WPT-VENDOR-document-picture-in-picture",
        "title": "WPT: вендорить + прогнать категорию `document-picture-in-picture`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). PiP — нет медиа-конвейера видео"
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/document-picture-in-picture/`, 27 файлов: `META.yml`, `WEB_FEATURES.yml`, 24 `.https.html`/`.html` тестов, `support/focus-opener.js`, `support/popup-opens-pip.html`), скоуп 🚫 (PiP — нет медиа-конвейера видео), включена по постоянному решению пользователя, как остальные WPT-VENDOR-категории. `run_report.py --all --root document-picture-in-picture --recursive` отобрал 22 id, прошёл полностью (~36с): 20 SKIP (`Executor does not support testdriver.js`, тот же гэп, что `accname`/`device-posture`), `requires-secure-context.html` harness OK но 0/1 сабтест FAIL (`documentPictureInPicture` API не реализована вовсе — `window.documentPictureInPicture` undefined, тест ожидает объект-интерфейс даже в небезопасном контексте, известный паттерн отсутствующего API у 🚫-категорий), `requires-user-gesture.https.html` ERROR на известный HTTPS-порт-гэп (`invalid url: invalid port: \"None\"`). 1/22 harness OK, 0/1 сабтестов passed. Новых движковых багов не найдено — отдельный BUG-NNN не заводился"
       },
       {
        "id": "WPT-VENDOR-document-policy",
