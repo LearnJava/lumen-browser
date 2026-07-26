@@ -226,19 +226,34 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   `set_style_property`/`delete_style_property`) and marking the other 13
   DOM-mutating natives (Shadow DOM attach, Selection/Range, contenteditable,
   `execCommand`) `unattributed` (forces a conservative full-cascade fallback).
-  12 new unit tests, all green; `PersistentJs::take_dom_touched` +
-  `DomTouchedSummary` added to `shell/src/main.rs` as the engine-agnostic
-  consumer-side shape, currently unused (`#[allow(dead_code)]`). See BUG-341
-  "S7 (part 1)" for the full writeup. **Not done yet — the actual pipeline
-  wiring**: a page-side `prev_cascade_styles` cache
-  (`RestyleDelta::prev_styles`) threaded through every page-layout production
-  site (full `relayout()`, the engine-thread job,
-  `try_relayout_raf_incremental` itself), switching
-  `try_relayout_raf_incremental` from `layout_mutation_incremental` to
-  `layout_mutation_incremental_restyle`, plus a differential "incr == full"
-  test driving real V8 JS mutations (none exists yet — S3/S6's differential
-  tests all use synthetic Rust-built deltas, not JS-driven ones). Hover
-  fan-out narrowing — not started.
+  12 new unit tests, all green. See BUG-341 "S7 (part 1)" for the full
+  writeup.
+  ✅ **Part 2 done**: `Lumen::try_relayout_raf_incremental` (`shell/src/main.rs`)
+  now takes the restyle-aware `layout_mutation_incremental_restyle` path when
+  `take_dom_touched()` reports an attributed summary and a matching cascade
+  cache exists, falling back to the existing graft-only
+  `layout_mutation_incremental` otherwise — same correctness contract as
+  chrome's S6. The cache (`Lumen::page_prev_cascade_styles`, an
+  `Option<HashMap<NodeId, ComputedStyle>>`) is only ever trusted immediately
+  after the one call site that produces a matching one; `apply_relayout_result`
+  invalidates it (`None`) unconditionally on every entry, and every other
+  page-layout producer that bypasses `apply_relayout_result` (bfcache thaw,
+  full page load, streaming layout, hibernate restore) invalidates it
+  explicitly too — a stale-cache-vs-fresh-tree mismatch was the exact
+  correctness risk part 1 stopped short of. The engine-thread job
+  (`make_relayout_job`/`submit_relayout_job`/`readback_relayout_job`/
+  `poll_engine_commit`) is deliberately **not** wired yet — it always
+  invalidates the cache via the same `apply_relayout_result` sink, so behavior
+  there is unchanged (still full cascade), left as a follow-up since crossing
+  the thread boundary with `CounterMap`/dirty-roots is its own scoped problem.
+  New JS-driven differential test (`lumen-js`,
+  `dom_touched_drives_incremental_restyle_matching_full_cascade`): a real V8
+  `classList.add` mutation → `take_dom_touched()` → `RestyleDelta` →
+  `layout_mutation_incremental_restyle` must match a fresh
+  `layout_measured_hyp_with_counters` recompute exactly — passing.
+  `cargo test -p lumen-js --features v8-backend` (2523 passed) and
+  `cargo test -p lumen-shell` (1704 passed) both green; both crates' clippy
+  clean. Hover fan-out narrowing — not started.
 
 **Stop conditions / honesty:** if after S5 the p95 floor is set by irreducible
 per-node cascade cost on the hover root-set and stays > 2 ms, report the number

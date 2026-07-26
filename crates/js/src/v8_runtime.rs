@@ -5028,6 +5028,105 @@ mod tests {
         assert!(!second.unattributed);
     }
 
+    /// BUG-341 S7 part 2: end-to-end differential test for the page-pipeline
+    /// wiring (`Lumen::try_relayout_raf_incremental`) — `take_dom_touched()`'s
+    /// node set, fed through `restyle_root_set_for_node_change` into a
+    /// `RestyleDelta`, must be a *sufficient* dirty-root-set for
+    /// `layout_mutation_incremental_restyle` to reproduce a full
+    /// `layout_measured_hyp_with_counters` recompute exactly — driven by a real
+    /// V8 `classList.add` mutation, not a synthetic dirty-root set like the
+    /// `lumen-layout`-crate differential tests use. Any divergence here would
+    /// mean the shell's actual wiring (not just the underlying primitives) is
+    /// unsound.
+    #[test]
+    fn dom_touched_drives_incremental_restyle_matching_full_cascade() {
+        use lumen_core::ext::NullHyphenationProvider;
+        use lumen_core::geom::{Rect, Size};
+        use lumen_layout::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle, LayoutBox};
+        use lumen_layout::counters::{set_incremental_restyle, RestyleDelta};
+        use lumen_layout::style::restyle_root_set_for_node_change;
+
+        struct FixedMeasurer;
+        impl lumen_layout::TextMeasurer for FixedMeasurer {
+            fn char_width(&self, _: char, size: f32) -> f32 {
+                size * 0.5
+            }
+        }
+
+        fn collect_rects(b: &LayoutBox, out: &mut Vec<(lumen_dom::NodeId, Rect)>) {
+            out.push((b.node, b.rect));
+            for c in &b.children {
+                collect_rects(c, out);
+            }
+        }
+
+        let doc = make_doc();
+        let sheet = lumen_css_parser::parse("#main { color: black; } #main.active { padding: 20px; color: red; }");
+        let vp = Size::new(800.0, 600.0);
+        let hp = NullHyphenationProvider;
+
+        // Baseline: full cascade over the pre-mutation document.
+        let (prev, baseline_counters) = {
+            let d = doc.lock().unwrap();
+            layout_measured_hyp_with_counters(&d, &sheet, vp, &FixedMeasurer, &hp, false)
+        };
+
+        let rt = runtime_with_dom(Arc::clone(&doc), "");
+        rt.eval("document.getElementById('main').classList.add('active')").unwrap();
+        let touched = rt.take_dom_touched();
+        assert!(!touched.unattributed, "classList.add must be attributed");
+        assert!(!touched.nodes.is_empty(), "classList.add must report the touched node");
+
+        let dirty_roots = {
+            let d = doc.lock().unwrap();
+            restyle_root_set_for_node_change(&d, touched.nodes.iter().copied())
+        };
+        let delta = RestyleDelta { prev_styles: baseline_counters.styles(), dirty_roots, dom_content_stable: false };
+
+        set_incremental_restyle(true);
+        let (incr, _incr_counters) = {
+            let d = doc.lock().unwrap();
+            layout_mutation_incremental_restyle(&d, &sheet, vp, &FixedMeasurer, &hp, false, &prev, &delta)
+        };
+        set_incremental_restyle(false);
+
+        let full = {
+            let d = doc.lock().unwrap();
+            layout_measured_hyp_with_counters(&d, &sheet, vp, &FixedMeasurer, &hp, false).0
+        };
+
+        let mut ia = Vec::new();
+        let mut fb = Vec::new();
+        collect_rects(&incr, &mut ia);
+        collect_rects(&full, &mut fb);
+        assert_eq!(ia.len(), fb.len(), "box count must match full layout");
+        for ((na, ra), (nb, rb)) in ia.iter().zip(fb.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!(
+                (ra.x - rb.x).abs() < 0.5
+                    && (ra.y - rb.y).abs() < 0.5
+                    && (ra.width - rb.width).abs() < 0.5
+                    && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}",
+            );
+        }
+
+        // Sanity: the fixture must actually move geometry, or a broken/empty
+        // delta would pass this test vacuously. `#main` is a block with
+        // `width:auto` (stretches to the containing block regardless of
+        // padding — content-box shrinks instead, so *width* is unaffected),
+        // but `height:auto` grows by `padding-top + padding-bottom`.
+        let main = doc.lock().unwrap().find_by_id("main").unwrap();
+        let mut prev_rects = Vec::new();
+        collect_rects(&prev, &mut prev_rects);
+        let prev_main = prev_rects.iter().find(|(n, _)| *n == main).unwrap().1;
+        let full_main = fb.iter().find(|(n, _)| *n == main).unwrap().1;
+        assert!(
+            (full_main.height - prev_main.height).abs() > 1.0,
+            "fixture must actually change geometry, or this test is vacuous",
+        );
+    }
+
     // BUG-327: `Node.prototype.hasChildNodes()` was missing entirely, and the
     // ordinary live element/text/comment wrapper (`_lumen_build_element`) had no
     // `.childNodes` at all (only `document`/`DocumentFragment`/detached

@@ -866,6 +866,79 @@ green. `cargo clippy -p lumen-js --features v8-backend` and
   base instead of a from-scratch native-binding audit.
 - Hover fan-out narrowing (the other half of S7's brief bullet) — not started.
 
+## S7 (part 2) — page-pipeline wiring: `try_relayout_raf_incremental` takes the restyle path; new JS-driven differential test
+
+Closes part 1's gap: `Lumen::try_relayout_raf_incremental` (`shell/src/main.rs`)
+now actually calls `layout_mutation_incremental_restyle` instead of always
+calling the plain graft-only `layout_mutation_incremental`.
+
+**The cache-consistency problem part 1 flagged, and how this closes it.** The
+page has far more layout-production sites than chrome's single
+`relayout_chrome_host` — full `relayout()`, `try_relayout_raf_incremental`
+itself, the engine-thread job (`submit_relayout_job`/`readback_relayout_job`/
+`poll_engine_commit`), bfcache thaw, full page load (`apply_loaded_page`),
+streaming (progressive-parse) layout, and hibernate restore. A cascade cache
+(`RestyleDelta::prev_styles`) that goes stale relative to whichever
+`layout_box` it is diffed against would silently produce wrong rendering —
+this bug's own correctness gate. Rather than thread a `CounterMap` through
+every one of those sites (large blast radius, several of which have no
+`CounterMap` at all today — streaming layout uses a wholly different
+incremental mechanism), the new `Lumen::page_prev_cascade_styles` field is
+`Option<HashMap<NodeId, ComputedStyle>>`, trusted (`Some`) only in the one
+cycle right after it was produced. `apply_relayout_result` — the sink every
+"live relayout" producer funnels through (`relayout()`,
+`try_relayout_raf_incremental`, `readback_relayout_job`, `poll_engine_commit`)
+— invalidates it (`None`) unconditionally on *every* call; the restyle
+sub-path of `try_relayout_raf_incremental` re-validates it immediately
+afterward, only when it actually produced a matching `CounterMap` this cycle.
+The remaining producers that bypass `apply_relayout_result` entirely (bfcache
+thaw, `apply_loaded_page`, streaming layout, hibernate restore) each
+invalidate it explicitly at their own `self.layout_box = …` site. `PageSnapshot`
+carries the field (plus `page_prev_interactive`) across tab switches in
+lockstep with `layout_box` itself, so a switch-back cannot resurrect a cache
+that no longer matches the restored tree.
+
+**The restyle decision** in `try_relayout_raf_incremental`: takes the
+`layout_mutation_incremental_restyle` path only when `page_prev_cascade_styles`
+is `Some` *and* `take_dom_touched()` reports `unattributed: false` — either
+condition failing falls back to the existing `layout_mutation_incremental`
+(full cascade + `graft_geometry`, always correct, just without the
+cascade-skip win). `dirty_roots` unions the interactive-state delta
+(hover/focus/active vs. `page_prev_interactive`, via
+`restyle_root_set_for_state_change`) with the DOM-mutation delta
+(`touched.nodes`, via `restyle_root_set_for_node_change`);
+`dom_content_stable` is `true` only when `touched.nodes` is empty — identical
+shape to `relayout_chrome_host`'s S6 wiring.
+
+**Deliberately not wired**: the engine-thread job path
+(`make_relayout_job`/`submit_relayout_job`/`readback_relayout_job`/
+`poll_engine_commit`) always calls the full `compute_layout` — its closure
+would need `prev`/`dirty_roots`/`CounterMap` sent across the thread boundary,
+a genuinely separate design question (is `CounterMap` cheaply `Send`-movable
+through the channel? does the dirty-root computation, which needs a `Document`
+lock, belong on the UI thread before dispatch or the engine thread after?) —
+left for a further slice if `LUMEN_ENGINE_THREAD=1` load-bearing perf ever
+needs it. Since `apply_relayout_result` invalidates the cache on *every* call
+including this path's, behavior there is byte-identical to before this
+sub-slice (full cascade) — no correctness risk, just no speedup on that path.
+Hover fan-out narrowing (S7's other brief bullet) also not started.
+
+**New differential test** (`lumen-js`,
+`v8_runtime::tests::dom_touched_drives_incremental_restyle_matching_full_cascade`):
+unlike S3/S6's differential tests (synthetic Rust-built `RestyleDelta`s), this
+one drives a real V8 `classList.add('active')` call, drains the actual
+`take_dom_touched()` tracker, and asserts `layout_mutation_incremental_restyle`
+reproduces a fresh full-cascade recompute's geometry exactly (plus a sanity
+assertion that the fixture's CSS rule actually moves geometry, so the test
+cannot pass vacuously on an empty delta).
+
+**Verification**: `cargo test -p lumen-js --features v8-backend` — 2523
+passed, 0 failed. `cargo test -p lumen-shell` — 1704 passed, 0 failed.
+`cargo clippy -p lumen-js --features v8-backend --all-targets -- -D warnings`
+and `cargo clippy -p lumen-shell --all-targets -- -D warnings` — both clean.
+`python graphic_tests/run.py --continue-on-fail` — see this file's own log for
+the result recorded alongside the merge commit.
+
 ## Repro
 
 ```bash

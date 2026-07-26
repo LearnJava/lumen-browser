@@ -603,11 +603,17 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   contenteditable key-handler bindings, `execCommand`'s mutating branches — set
   `unattributed: true` (their effect isn't attributable to a simple node set; the caller must
   fall back to a full cascade for the cycle). 12 unit tests (`v8_runtime.rs`,
-  `take_dom_touched_*`), all green. **Not wired into the page pipeline yet** — see BUG-341
-  "S7 (part 1)" for the remaining work (a page-side `prev_cascade_styles` cache threaded through
-  every page-layout production site). `PersistentJs::take_dom_touched`/`DomTouchedSummary`
-  (`crates/shell/src/main.rs`) are the engine-agnostic consumer shape, currently
-  `#[allow(dead_code)]`.
+  `take_dom_touched_*`), all green.
+  **BUG-341 S7 (part 2): wired into the page pipeline.** `Lumen::try_relayout_raf_incremental`
+  (`crates/shell/src/main.rs`) drains `take_dom_touched()` and, when attributed and a matching
+  cascade cache (`Lumen::page_prev_cascade_styles`) exists, takes the restyle-aware
+  `layout_mutation_incremental_restyle` path — same shape as chrome's S6 wiring — falling back to
+  the plain graft-only `layout_mutation_incremental` otherwise (still correct, just without the
+  cascade-skip win). New differential test
+  (`v8_runtime::tests::dom_touched_drives_incremental_restyle_matching_full_cascade`) drives a real
+  V8 `classList.add` mutation end-to-end and asserts the result matches a fresh full-cascade
+  recompute. The engine-thread relayout job is not wired (see BUG-341 "S7 (part 2)" for why —
+  crossing the thread boundary with a `CounterMap`/dirty-roots is a separate design question).
 
 ## Deferred
 
