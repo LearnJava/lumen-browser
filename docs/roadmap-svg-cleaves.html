@@ -2052,9 +2052,9 @@
       {
        "id": "WPT-VENDOR-document-policy",
        "title": "WPT: вендорить + прогнать категорию `document-policy`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/document-policy/`, 27 файлов), скоуп ⬜ (Document-Policy HTTP-заголовок + `iframe.policy`/`document.policy` API, не реализовано в Lumen вовсе). `run_report.py --all --root document-policy --recursive` отобрал 11 id, прошёл полностью (~1:47): `echo-policy-nested.html` — не-тест фикстура, исключена манифестом, 10 тестов в очереди. 3/10 harness OK, 0/19 сабтестов passed, 7 TIMEOUT. `network-efficiency-guardrails-json.tentative.html` FAIL на известном гэпе относительного `fetch()` (BUG-347); остальные — единый нереализованный Document-Policy. Не заводился отдельный BUG-NNN"
       },
       {
        "id": "WPT-VENDOR-domparsing",
