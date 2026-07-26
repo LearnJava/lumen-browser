@@ -17118,7 +17118,8 @@ mod tests {
         );
 
         // Incremental: real transition, conservative root-set, box-build reuse on.
-        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b));
+        let needs_fanout = crate::style::restyle_state_needs_fanout(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), needs_fanout);
         let delta = RestyleDelta {
             prev_styles: baseline_counters.styles(),
             dirty_roots,

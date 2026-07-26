@@ -8761,21 +8761,28 @@ impl Lumen {
         ) {
             (true, Some(prev)) => {
                 let (prev_hover, prev_focus, prev_active) = self.chrome_prev_interactive;
+                // BUG-341 S7: computed once per pass, not once per axis — the
+                // stylesheet/shadow-DOM shape doesn't change between the three
+                // hover/focus/active calls below.
+                let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(doc, sheet);
                 let mut dirty_roots = std::collections::HashSet::new();
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_hover,
                     new_interactive.0,
+                    needs_fanout,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_focus,
                     new_interactive.1,
+                    needs_fanout,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_active,
                     new_interactive.2,
+                    needs_fanout,
                 ));
                 // BUG-341 S6: DOM-mutation root-set, unioned with the
                 // interactive-state one above — `touched` is empty on a pure
@@ -9739,15 +9746,17 @@ impl Lumen {
         {
             let (prev_hover, prev_focus, prev_active) = self.page_prev_interactive;
             let doc = src.document.lock().unwrap();
+            // BUG-341 S7: computed once per pass, reused across all three axes.
+            let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(&doc, &src.stylesheet);
             let mut dirty_roots = std::collections::HashSet::new();
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                &doc, prev_hover, new_interactive.0,
+                &doc, prev_hover, new_interactive.0, needs_fanout,
             ));
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                &doc, prev_focus, new_interactive.1,
+                &doc, prev_focus, new_interactive.1, needs_fanout,
             ));
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                &doc, prev_active, new_interactive.2,
+                &doc, prev_active, new_interactive.2, needs_fanout,
             ));
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                 &doc,
@@ -24586,15 +24595,16 @@ mod tests {
         let (layout, counters) = match state.prev_pristine_layout.as_ref() {
             Some(prev) => {
                 let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
+                let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(doc, sheet);
                 let mut dirty_roots = std::collections::HashSet::new();
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                    doc, prev_hover, new_interactive.0,
+                    doc, prev_hover, new_interactive.0, needs_fanout,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                    doc, prev_focus, new_interactive.1,
+                    doc, prev_focus, new_interactive.1, needs_fanout,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                    doc, prev_active, new_interactive.2,
+                    doc, prev_active, new_interactive.2, needs_fanout,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                     doc,
@@ -24834,7 +24844,8 @@ mod tests {
         let full_summary = full_stats.summary().expect("samples collected");
         eprintln!("{}", full_summary.display_with("BUG341_S3_FULL_PRECOMPUTE"));
 
-        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b));
+        let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), needs_fanout);
         let dirty_count = dirty_roots.len();
         let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, dom_content_stable: true };
         set_incremental_restyle(true);
@@ -24956,7 +24967,8 @@ mod tests {
         let full_summary = full_stats.summary().expect("samples collected");
         eprintln!("{}", full_summary.display_with("BUG341_S4_FULL_BUILD_BOX"));
 
-        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b));
+        let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), needs_fanout);
         let delta = RestyleDelta {
             prev_styles: baseline.styles(),
             dirty_roots,
