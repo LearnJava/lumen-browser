@@ -217,7 +217,7 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   scoped design (JS mutations go through different call sites entirely).
   Hover fan-out narrowing / selector-dependency caching, and the JS-mutation
   side of this diff, remain open if a further slice is taken.
-- **S7 — diff for page-side JS mutations + narrowing hover fan-out.**
+- **S7 — diff for page-side JS mutations + narrowing hover fan-out.** ✅ Done.
   🟡 **Part 1 done**: `lumen_js::v8_runtime::DomTouched` /
   `V8JsRuntime::take_dom_touched()` — a page-side, V8-only mutation tracker
   mirroring `bind_model_tracked`, instrumenting the 9 attributable native
@@ -253,7 +253,35 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   `layout_measured_hyp_with_counters` recompute exactly — passing.
   `cargo test -p lumen-js --features v8-backend` (2523 passed) and
   `cargo test -p lumen-shell` (1704 passed) both green; both crates' clippy
-  clean. Hover fan-out narrowing — not started.
+  clean.
+  ✅ **Part 3 done**: hover fan-out narrowing.
+  `lumen_layout::style::restyle_state_needs_fanout(doc, sheet)` scans every
+  selector in `sheet` (top-level rules plus every `@media`/`@layer`/
+  `@supports`/`@scope`/`@starting-style`/`@container` block) for a compound
+  depending on dynamic interactive state that is followed anywhere on the
+  path to the subject by a sibling combinator (`+`/`~`) — the only shape
+  reaching outside the flipped node's own subtree. `restyle_root_set_for_
+  state_change` takes the result as a new `needs_fanout: bool` parameter:
+  `true` keeps S3's widen-to-parent behaviour, `false` narrows each flipped
+  node's invalidation to just that node. `:has()` containing a dynamic-state
+  pseudo, or any shadow root present, always forces `true` (both directions
+  this v1 doesn't model). `assets/chrome/chrome.html` has zero selectors
+  needing the wider fanout, so real chrome restyles narrow for real. 16 new
+  unit tests (`style::state_fanout_tests`) cover every combinator/pseudo-class
+  shape. **Honest measurement**: an A/B on the CC-12 sibling-tab-hover
+  fixture (`#sbTabs`, 6 tabs) showed no statistically significant wall-clock
+  difference between the old (dirty_roots=1, the shared container) and new
+  (dirty_roots=2, just the changed tabs) behaviour — within this machine's
+  documented noise floor. `CC12_HOVER`'s own SIDEBAR/`None`-toggle fixture is
+  also flat, for the same reason S3 already documented (its ancestor chain's
+  cascade cost was already near zero). CC-12's gate stays red. The narrowing
+  is correctness-verified and structurally sound (a real page with a wide
+  `:hover`-styled sibling list would show a bigger win — no such fixture
+  exists to measure), but is not, by itself, what closes CC-12's gate — see
+  BUG-341 "S7 (part 3)" for the full numbers. Found and documented (not
+  fixed — separate scope) BUG-348 while re-verifying this area: `restyle_
+  root_set_for_node_change`'s doc comment incorrectly claimed this engine has
+  no `:has()`.
 
 **Stop conditions / honesty:** if after S5 the p95 floor is set by irreducible
 per-node cascade cost on the hover root-set and stays > 2 ms, report the number
