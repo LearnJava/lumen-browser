@@ -217,6 +217,28 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   scoped design (JS mutations go through different call sites entirely).
   Hover fan-out narrowing / selector-dependency caching, and the JS-mutation
   side of this diff, remain open if a further slice is taken.
+- **S7 — diff for page-side JS mutations + narrowing hover fan-out.**
+  🟡 **Part 1 done**: `lumen_js::v8_runtime::DomTouched` /
+  `V8JsRuntime::take_dom_touched()` — a page-side, V8-only mutation tracker
+  mirroring `bind_model_tracked`, instrumenting the 9 attributable native
+  primitives (`set_attr`/`remove_attr`, `append_child`/`remove_child`/
+  `insert_before`, `set_text_content`/`set_inner_html`,
+  `set_style_property`/`delete_style_property`) and marking the other 13
+  DOM-mutating natives (Shadow DOM attach, Selection/Range, contenteditable,
+  `execCommand`) `unattributed` (forces a conservative full-cascade fallback).
+  12 new unit tests, all green; `PersistentJs::take_dom_touched` +
+  `DomTouchedSummary` added to `shell/src/main.rs` as the engine-agnostic
+  consumer-side shape, currently unused (`#[allow(dead_code)]`). See BUG-341
+  "S7 (part 1)" for the full writeup. **Not done yet — the actual pipeline
+  wiring**: a page-side `prev_cascade_styles` cache
+  (`RestyleDelta::prev_styles`) threaded through every page-layout production
+  site (full `relayout()`, the engine-thread job,
+  `try_relayout_raf_incremental` itself), switching
+  `try_relayout_raf_incremental` from `layout_mutation_incremental` to
+  `layout_mutation_incremental_restyle`, plus a differential "incr == full"
+  test driving real V8 JS mutations (none exists yet — S3/S6's differential
+  tests all use synthetic Rust-built deltas, not JS-driven ones). Hover
+  fan-out narrowing — not started.
 
 **Stop conditions / honesty:** if after S5 the p95 floor is set by irreducible
 per-node cascade cost on the hover root-set and stays > 2 ms, report the number

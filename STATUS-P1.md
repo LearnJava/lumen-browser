@@ -79,14 +79,25 @@ CC-14/CC-15). Ветка-резервация уже существует: `p1-b
       (~40-50× бюджет) — см. BUG-341 «S6». JS-мутации на странице
       (`v8_runtime.rs`) НЕ подключены — нет фикстуры, которая их проверяет,
       и это отдельный, самостоятельный дизайн (другие точки входа).
-- [ ] **S7 — diff для page-side JS-мутаций + сужение hover fan-out.**
-      Следующий шаг (не обязателен, если бюджет CC-12 пересматривается вместо
-      этого): подключить `v8_runtime.rs`'s `set_attribute`/`remove_attribute`/
-      `set_text_content` к тому же механизму diff'а для страничного пайплайна
-      (ADR-016 M4), затем сузить hover fan-out / закэшировать
-      selector-dependency индексы, если бюджет всё ещё не достигнут. Если пол
-      всё ещё упирается в неустранимую стоимость — вернуться с числами и
-      пересмотреть бюджет CC-12 (НЕ ослаблять гейт молча).
+- [~] **S7 — diff для page-side JS-мутаций + сужение hover fan-out (в работе).**
+      🟡 **Часть 1 готова**: `lumen_js::v8_runtime::DomTouched` /
+      `V8JsRuntime::take_dom_touched()` — трекер по образцу `bind_model_tracked`,
+      инструментированы 9 атрибутируемых нативов (`set_attr`/`remove_attr`,
+      `append_child`/`remove_child`/`insert_before`, `set_text_content`/
+      `set_inner_html`, `set_style_property`/`delete_style_property`); ещё 13
+      мутирующих нативов (Shadow DOM attach, Selection/Range, contenteditable,
+      `execCommand`) помечены `unattributed` — консервативный откат к полному
+      каскаду. 12 новых тестов, все зелёные; `PersistentJs::take_dom_touched`/
+      `DomTouchedSummary` в shell — пока не используются (`#[allow(dead_code)]`).
+      Детали — BUG-341 «S7 (part 1)».
+      **Не сделано — сама интеграция в пайплайн**: page-side кэш
+      `prev_cascade_styles` (`RestyleDelta::prev_styles`) для ВСЕХ точек
+      производства page-layout (`relayout()`, engine-thread job,
+      `try_relayout_raf_incremental`), переключение
+      `try_relayout_raf_incremental` на `layout_mutation_incremental_restyle`,
+      дифф-тест с реальными V8-мутациями. Сужение hover fan-out не начато.
+      Если бюджет CC-12 пересматривается вместо продолжения — вернуться с
+      числами (НЕ ослаблять гейт молча).
 
 ## Заблокировано до завершения BUG-341 (брать только после зелёного гейта CC-12)
 

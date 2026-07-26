@@ -793,6 +793,79 @@ reopened first):
   looking more relevant with each slice that narrows the invalidation set
   without closing the two-orders-of-magnitude gap.
 
+## S7 (part 1) — page-side DOM-mutation tracker (`lumen_js::DomTouched`), not yet wired into the pipeline
+
+S6 closed the chrome-side gap (`bind_model_tracked`); S7's brief item is the
+same gap on the *page* side — JS DOM mutations via `v8_runtime.rs`. This
+sub-slice built and tested the tracker only; **pipeline wiring is not done
+yet** (see "Not attempted" below) — `Lumen::try_relayout_raf_incremental`
+still always calls `lumen_layout::layout_mutation_incremental` (full cascade),
+unchanged from S6.
+
+**`lumen_js::v8_runtime::DomTouched`** (new, V8-only per this file's own
+mandate to never target new functionality at the rquickjs path): a
+`{ nodes: HashSet<NodeId>, unattributed: bool }` pair, drained by
+`V8JsRuntime::take_dom_touched()`. Instruments the 9 native mutation
+primitives whose effect on selector-relevant node state is precisely
+attributable — `_lumen_set_attr`/`_lumen_remove_attr` (record only when the
+value actually changed, mirroring `bind_model_tracked`'s `set_attr`/
+`remove_attr`), `_lumen_append_child`/`_lumen_remove_child`/`_lumen_insert_before`
+(record the parent — the container's `:empty`/nth-child state plus everything
+`restyle_root_set_for_node_change`'s parent-subtree invalidation already
+covers), `_lumen_set_text_content`/`_lumen_set_inner_html` (record the node
+itself — text/childList changes can flip `:empty`), and the CSS Typed OM
+`_lumen_set_style_property`/`_lumen_delete_style_property` (both funnel into
+`set_attribute`/`remove_attribute` on `style` directly, bypassing the
+`_lumen_set_attr` native, so needed their own change-detection). Verified:
+`classList.add`/`className`/inline `style.color =` all route through
+`_lumen_set_attr` already (checked against `dom.rs`'s JS shim), so the 9
+tracked primitives cover the overwhelming majority of real JS mutation
+patterns without touching the shim.
+
+The remaining 13 `dom_dirty`-setting call sites — Shadow DOM attach,
+`Selection`/Range get-set-clear, all 4 contenteditable key-handler bindings
+(`insert_text`/`delete_backward`/`delete_forward`/`insert_paragraph`), and
+`execCommand`'s 3 mutating branches (`selectAll`/`insertText`/`delete`) —
+set `unattributed: true` instead: their effect on which nodes' cascade input
+changed cannot be attributed to a simple node set (arbitrary-range
+deletion/insertion, cross-shadow-boundary style scoping), so the *caller*
+must fall back to a full cascade whenever `unattributed` is `true` for the
+cycle — conservative-but-correct, same philosophy as brief §4. `Selection`
+get/set/clear specifically is marked unattributed **out of caution, not proof**:
+`compute_selection_style`'s `::selection` resolution is a per-node cascade
+match unconditional on live selection state (verified in `style.rs`), which
+suggests pure selection changes might not need any cascade invalidation at
+all — but no differential test proves that yet, so this sub-slice took the
+safe default rather than bet correctness on an unverified reading. A future
+slice could special-case it if `CC12`-equivalent page fixtures show selection-
+heavy interaction (click-to-place-caret, drag-select) matters.
+
+12 new unit tests in `v8_runtime.rs` (`take_dom_touched_*`) exercise each
+tracked primitive individually plus the no-op (same-value `setAttribute`,
+removing an absent attribute) and unattributed cases, and that the tracker
+clears between calls. `cargo test -p lumen-js --features v8-backend`: all
+green. `cargo clippy -p lumen-js --features v8-backend` and
+`cargo clippy -p lumen-shell`: clean.
+
+**Not attempted in this sub-slice** — the actual pipeline wiring:
+- No page-side equivalent of `chrome_prev_cascade_styles`
+  (`HashMap<NodeId, ComputedStyle>`, `RestyleDelta::prev_styles`) exists yet.
+  Unlike chrome (one entry point, `relayout_chrome_host`), the page has
+  *multiple* layout-production sites that would all need to keep it in sync —
+  `compute_layout`/`relayout()` (full), the engine-thread job
+  (`submit_relayout_job`/`readback_relayout_job`/`poll_engine_commit`), and
+  `try_relayout_raf_incremental` itself — or the cache goes stale and
+  `layout_mutation_incremental_restyle` silently produces wrong output (the
+  brief's own correctness gate: "any divergence is a bug in the invalidation
+  set, not an acceptable trade-off"). Threading this through the engine-thread
+  job additionally needs checking `ComputedStyle`/`CounterMap` are cheaply
+  `Send`-movable across that channel — not yet investigated.
+- `PersistentJs::take_dom_touched` and `DomTouchedSummary` are therefore
+  currently dead code (`#[allow(dead_code)]`, documented pointer to this
+  section) — added so the next sub-slice starts from a compiling, tested
+  base instead of a from-scratch native-binding audit.
+- Hover fan-out narrowing (the other half of S7's brief bullet) — not started.
+
 ## Repro
 
 ```bash

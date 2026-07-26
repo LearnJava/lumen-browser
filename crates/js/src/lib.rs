@@ -156,6 +156,12 @@ pub use text_track_store::{set_text_track_store, CueData, TextTrackData, TextTra
 pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
 pub use paint_worklet::{install_paint_worklet_api, PaintWorkletDef, PaintWorkletRegistry, get_paint_worklet_registry};
 pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest, PrintRequest};
+/// BUG-341 S7: page-side DOM-mutation tracker outcome, feeding
+/// `lumen_layout::style::restyle_root_set_for_node_change`. V8-only (see
+/// `v8_runtime::DomTouched`'s doc comment) — the `quickjs` runtime keeps its
+/// existing full-cascade-every-cycle behaviour.
+#[cfg(feature = "v8-backend")]
+pub use v8_runtime::DomTouched;
 pub use view_transitions::ViewTransitionEvent;
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
 pub use lumen_core::WebStorage;

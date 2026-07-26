@@ -2462,6 +2462,29 @@ enum JsNavigateRequest {
     Reload,
 }
 
+/// BUG-341 S7: engine-agnostic mirror of `lumen_js::DomTouched`, kept
+/// independent of the `v8` feature so [`PersistentJs::take_dom_touched`]'s
+/// default (used by `quickjs`/no-engine builds, which have no tracker) compiles
+/// unconditionally.
+///
+/// Not yet consumed — the page pipeline (`Lumen::try_relayout_raf_incremental`)
+/// still always calls `lumen_layout::layout_mutation_incremental` (full
+/// cascade). Wiring this into `layout_mutation_incremental_restyle` needs a
+/// page-side `CounterMap`/`prev_cascade_styles` cache threaded through every
+/// page-layout production site (`relayout`, the engine-thread job,
+/// `try_relayout_raf_incremental` itself) — left for the next S7 sub-slice.
+#[allow(dead_code)]
+#[derive(Debug, Default, Clone)]
+struct DomTouchedSummary {
+    /// Nodes whose selector-relevant state actually changed via a tracked
+    /// mutation primitive. See `lumen_js::DomTouched::nodes`.
+    nodes: std::collections::HashSet<lumen_dom::NodeId>,
+    /// `true` when `nodes` alone is not a safe restyle root-set this cycle —
+    /// the caller must fall back to a full cascade. See
+    /// `lumen_js::DomTouched::unattributed`.
+    unattributed: bool,
+}
+
 /// Shell-local abstraction over a persistent JS context that survives between
 /// renders. The JS DOM closures hold a reference to the same
 /// `Arc<Mutex<Document>>` as `LayoutSource::document`, so event-driven DOM
@@ -2507,6 +2530,20 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Called after each rAF pass in `RedrawRequested`; when `true`, a relayout
     /// must happen before the next paint to reflect DOM changes.
     fn take_dom_dirty(&self) -> bool;
+    /// BUG-341 S7: drain the page-side DOM-mutation tracker since the last
+    /// call — feeds `lumen_layout::style::restyle_root_set_for_node_change`
+    /// so `Lumen::try_relayout_raf_incremental` can take the incremental-
+    /// cascade path (`layout_mutation_incremental_restyle`) instead of a full
+    /// cascade for JS DOM mutations.
+    ///
+    /// Default (used by engines without a tracker — `quickjs`, `NullPersistentJs`):
+    /// no touched nodes but `unattributed: true`, forcing the caller to fall
+    /// back to a full cascade — preserves those engines' existing behaviour
+    /// exactly.
+    #[allow(dead_code)] // not yet called — pipeline wiring is the next S7 sub-slice
+    fn take_dom_touched(&self) -> DomTouchedSummary {
+        DomTouchedSummary { nodes: std::collections::HashSet::new(), unattributed: true }
+    }
     /// TEMP BUG-272 diagnostics: QuickJS heap (malloc_size, memory_used_size);
     /// `(-1, -1)` when the runtime does not expose it.
     fn debug_js_heap(&self) -> (i64, i64) {
@@ -3262,6 +3299,10 @@ impl PersistentJs for V8PersistentJs {
     }
     fn take_dom_dirty(&self) -> bool {
         self.rt.take_dom_dirty()
+    }
+    fn take_dom_touched(&self) -> DomTouchedSummary {
+        let t = self.rt.take_dom_touched();
+        DomTouchedSummary { nodes: t.nodes, unattributed: t.unattributed }
     }
     fn run_animation_frame(&self, timestamp_ms: f64) {
         self.eval_js(&format!("_lumen_run_raf_callbacks({timestamp_ms})"));
