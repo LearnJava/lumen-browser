@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-26",
  "counts": {
-  "open": 42,
+  "open": 44,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 314,
+ "total_bugs": 316,
  "phases": [
   {
    "id": "P0",
@@ -1990,9 +1990,13 @@
       {
        "id": "WPT-VENDOR-custom-elements",
        "title": "WPT: вендорить + прогнать категорию `custom-elements`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/custom-elements/`, 208 файлов), скоуп ⬜. `run_report.py --all --root custom-elements --recursive` отобрал 176 id, прошёл полностью: 95/176 harness OK, 366/3447 сабтестов. Найдены и заведены 2 движковых бага широкого охвата: BUG-346 (`Url::resolve()` не схлопывает `.`/`..`), BUG-347 (`fetch()` не резолвит относительные URL против document base). Весь `registries/` (scoped custom element registries) не реализован, ожидаемо",
+       "bugs": [
+        "BUG-346",
+        "BUG-347"
+       ]
       },
       {
        "id": "WPT-VENDOR-delegated-ink",
@@ -6127,6 +6131,20 @@
    "status": "open",
    "title": "Навигация на страницу, сочетающую декларативный Shadow DOM (`<template shadowrootmode=\"open\">`) с `document.designMode` + 4 `test()`, читающими `isContentEditab…",
    "component": "shell/js (не локализовано)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-346": {
+   "status": "open",
+   "title": "`Url::resolve()` не схлопывает `.`/`..` dot-segments (документированный, намеренный гэп — модульный doc-комментарий прямо говорит «добавим, когда упрёмся»): отн…",
+   "component": "core (`crates/core/src/url.rs::Url::resolve`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-347": {
+   "status": "open",
+   "title": "`fetch()` не резолвит относительные URL относительно document base вовсе (`Url::parse(url)` на буквальном JS-аргументе, без base) — любой `fetch()` с относитель…",
+   "component": "js (`crates/js/src/dom.rs` fetch shim), network (`crates/network/src/lib.rs::HttpClient::fetch_sync`+3 sibling fns)",
    "date": null,
    "debtor": false
   }
