@@ -2066,9 +2066,9 @@
       {
        "id": "WPT-VENDOR-domxpath",
        "title": "WPT: вендорить + прогнать категорию `domxpath`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/domxpath/`, 39 файлов), скоуп ⬜ (DOM XPath — document.evaluate/XPathEvaluator/XPathExpression/XPathResult/XPathNSResolver, не реализовано в Lumen вовсе). `run_report.py --all --root domxpath --recursive` отобрал 34 id, 2 исключены wptrunner'ом как crashtest, из 32 в очереди: 28/32 harness OK, 2/126 сабтестов passed, 4 TIMEOUT. Не заводился отдельный BUG-NNN — целиком нереализованный API. Побочно замечен гэп декларативного Shadow DOM в `xpath-shadow-dom.html`, покрывается существующим BUG-341/custom-elements треком"
       },
       {
        "id": "WPT-VENDOR-dpub-aam",
