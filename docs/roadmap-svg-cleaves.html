@@ -1965,9 +1965,9 @@
       {
        "id": "WPT-VENDOR-cssom",
        "title": "WPT: вендорить + прогнать категорию `cssom`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/cssom/`, 2 файла: `crashtests/csstext-with-all.html`, `crashtests/delete-rule.html`), скоуп ⬜ (CSSOM — верхнеуровневая категория `cssom/` отдельна от уже вендоренной `css/cssom/`, 279 файлов, довендоренной ранее вместе со всей `css/`). Внекатегорийных хелперов нет. Оба файла — WPT-манифест тип `crashtest`, для которого у минимального исполнителя `browsers/lumen.py` нет реализации (`Unsupported test type crashtest for product lumen`), тот же класс гэпа, что `accessibility`/`acid`. `run_report.py --all --root cssom --recursive` отобрал 2 id, оба не попали в очередь прогона: 0 автопрогоняемых тестов, самая маленькая по числу файлов категория из вендоренных (2, наравне с `cpu-performance`), но с нулём исполнимых — как `annotation-model`. Не заводился отдельный BUG-NNN — известный инфра-гэп, не движковый дефект"
       },
       {
        "id": "WPT-VENDOR-custom-elements",
