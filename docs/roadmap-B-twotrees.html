@@ -1976,9 +1976,9 @@
       {
        "id": "WPT-VENDOR-css",
        "title": "WPT: вендорить + прогнать категорию `css`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/css/`, 54350 файлов, ~209 МБ — весь верхнеуровневый каталог `css/` апстрима: CSS1/CSS2, WOFF2, compositing, все модули css-*), скоуп ⬜, самая большая вендоренная категория из всех (в 40 раз больше предыдущего рекорда `content-security-policy`). Манифест отбирает 34607 id — тоже рекорд. `run_report.py --all --root css --recursive` не завершился (полный прогон занял бы порядка суток), ограниченная проба ~11:30 обработала 382 id (~1.1%): 267 SKIP (testdriver.js-гэп), 62 TIMEOUT, 53 harness OK, 1294/2594 сабтестов passed; кластеры: background-blend-mode не реализован, elementFromPoint отсутствует, min-height:stretch/calc() margin-collapse-through не проходит, webkit-box-item-shrink 404 на невендоренных check-layout-th.js/ahem.css. Не заводился отдельный BUG-NNN — первый проход, только проба"
       },
       {
        "id": "WPT-VENDOR-cssom",
