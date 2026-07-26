@@ -5157,7 +5157,7 @@ struct PageSnapshot {
     /// with `layout_box` (same producer, same invalidation rule) so a tab
     /// switch back to this snapshot cannot resurrect a cache that no longer
     /// matches the restored tree.
-    page_prev_cascade_styles: Option<HashMap<NodeId, ComputedStyle>>,
+    page_prev_cascade_styles: Option<HashMap<NodeId, std::sync::Arc<ComputedStyle>>>,
     page_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
     anim_frame: Option<lumen_layout::AnimationFrame>,
     layout_box: Option<lumen_layout::LayoutBox>,
@@ -7385,7 +7385,7 @@ struct Lumen {
     /// pre-adjust styles the cascade itself produced, or the incremental
     /// cascade's `incr == full` correctness gate (BUG-341 brief §4) would
     /// compare against the wrong reference.
-    chrome_prev_cascade_styles: HashMap<NodeId, ComputedStyle>,
+    chrome_prev_cascade_styles: HashMap<NodeId, std::sync::Arc<ComputedStyle>>,
     /// BUG-341 S5: `(hover, focus, active)` node ids from the previous pass —
     /// `restyle_root_set_for_state_change`'s `prev` argument for each axis, so
     /// a hover/focus/active transition can compute its conservative dirty
@@ -7443,7 +7443,7 @@ struct Lumen {
     /// `try_relayout_raf_incremental` falls back to the existing
     /// full-cascade-plus-graft path (`layout_mutation_incremental`) whenever
     /// this is `None`.
-    page_prev_cascade_styles: Option<HashMap<NodeId, ComputedStyle>>,
+    page_prev_cascade_styles: Option<HashMap<NodeId, std::sync::Arc<ComputedStyle>>>,
     /// Interactive state (`hovered_nid`/`focused_node`/`active_nid`) at the
     /// moment `page_prev_cascade_styles` was captured — the `prev` side of the
     /// next call's `restyle_root_set_for_state_change`. Only meaningful when
@@ -24554,7 +24554,8 @@ mod tests {
     #[derive(Default)]
     struct Cc12IncrementalState {
         prev_pristine_layout: Option<lumen_layout::LayoutBox>,
-        prev_cascade_styles: HashMap<lumen_dom::NodeId, lumen_layout::style::ComputedStyle>,
+        prev_cascade_styles:
+            HashMap<lumen_dom::NodeId, std::sync::Arc<lumen_layout::style::ComputedStyle>>,
         prev_interactive: (Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>),
     }
 

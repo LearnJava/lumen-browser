@@ -1191,6 +1191,110 @@ Unlike every slice from S3 to S7, this is a pure data-representation change:
 output must stay bit-identical, so the existing differential tests are the
 gate, and there is no invalidation-correctness risk to trade off.
 
+## S9 — `ComputedStyle` made cheap to clone and to compare
+
+Both steps S8 recommended, implemented and measured. Pure data-representation
+change; no invalidation set was touched, and no output changed.
+
+### 1. `custom_props` behind an `Arc` with copy-on-write
+
+New type `lumen_layout::style::CustomProps` (`Arc<HashMap<String, String>>`,
+`Deref` for reads, `make_mut` for writes) replaces the bare `HashMap` in
+`ComputedStyle::custom_props` and in `ContainerContext::custom_props`.
+
+CSS Variables L1 makes every custom property inherited, so `compute_style`
+copied the parent's whole map into every node — the cost S8 measured at
+3.7–4.7 µs/node with chrome's 30 properties vs 0.31–0.46 µs with none.
+Inheritance is now a refcount bump; only the nodes that actually declare a
+`--name` fork the map. Three write sites take the CoW path
+(`style.rs`: the custom-property pass, `apply_property_initial_values`, and the
+`inherits: false` `retain`); the `retain` is additionally guarded by a
+"would this actually drop a key?" scan, so a page that registers `@property`
+rules it does not use still shares.
+
+Two extra wins fell out of the representation:
+
+* `CustomProps::default()` is a process-wide singleton, so every node in a
+  document that declares no custom property at all shares one allocation.
+* `PartialEq` short-circuits on `Arc::ptr_eq` before comparing contents. That
+  is spelled out in `CustomProps::eq` rather than left to `Arc`'s own
+  (unspecified) pointer specialisation, so `graft_geometry`'s per-box
+  `ComputedStyle` comparison has a guaranteed fast path.
+
+### 2. Cascade cache holds `Arc<ComputedStyle>`
+
+`CounterMap::styles` is now `HashMap<NodeId, Arc<ComputedStyle>>` (and so is
+`RestyleDelta::prev_styles`, `Lumen::chrome_prev_cascade_styles`,
+`Lumen::page_prev_cascade_styles`, `PageSnapshot::page_prev_cascade_styles`).
+Three consumers that each deep-copied a whole `ComputedStyle` per node became
+refcount bumps: the incremental cascade's reuse path in `counters::walk` (taken
+for *every* node outside the dirty root-set), the map's own insert, and the
+pipeline's per-cycle `counters.styles().clone()` snapshot.
+
+`LayoutBox.style` was deliberately **not** converted. `lay_out` writes used
+values back into a box's own style (S8 found the viewport-height write on the
+root), so it needs owned, mutable styles; sharing them is a separate design,
+not a mechanical change. With bookkeeping now at ~1.5 ms it is also no longer
+where the money is.
+
+### Gates: by identity, not by output
+
+S8's lesson applied directly. Every existing differential test compares cascade
+*output*, and a mechanism that deep-copies instead of sharing satisfies all of
+them — it is merely slow, which is exactly how `graft_geometry` stayed inert
+for five slices. So the sharing itself is asserted by pointer:
+
+| Test | Asserts |
+|---|---|
+| `style::tests::custom_props_shared_with_parent_when_child_declares_none` | child shares the parent's map allocation |
+| `style::tests::custom_props_copy_on_write_when_child_declares_one` | child forks, and the fork is not visible upwards |
+| `style::tests::custom_props_empty_map_is_a_shared_singleton` | no per-node allocation for property-free documents |
+| `style::tests::custom_props_eq_compares_contents_when_not_shared` | the pointer check is a fast path, not the semantics |
+| `incremental::tests::incr_cascade_reuse_hands_back_the_same_style_allocation` | nodes outside the dirty root-set come back as the *same* `Arc`; nodes inside it do not, and their recompute lands on the same value |
+
+### Measurement
+
+Wall-clock had to be taken as an interleaved A/B — a parallel session was
+loading the machine, and non-interleaved runs of *unmodified main* varied
+between p50 71 ms and p50 109 ms on `CC12_HOVER`, i.e. the noise alone was
+larger than the effect S3–S7 were chasing. Three alternating rounds
+(main, S9, main, S9, main, S9), dev-release:
+
+| | main min | S9 min | main p50 | S9 p50 |
+|---|---:|---:|---:|---:|
+| `CC12_HOVER` | 66.4 / 81.1 / 69.1 | **26.4 / 29.6 / 26.3** | 71.5 / 109.2 / 100.0 | **36.8 / 33.5 / 28.8** |
+| `CC12_KEY` | 48.9 / 51.7 / 55.9 | **11.3 / 14.6 / 11.2** | 54.5 / 60.0 / 84.6 | **16.8 / 18.1 / 12.5** |
+
+≈2.6× on `CC12_HOVER`, ≈4.2× on `CC12_KEY` (comparing mins, the quantity least
+contaminated by contention).
+
+Per-stage, from a quiet-machine pair of runs (`[cc12-split]` medians, and
+`LUMEN_PROFILE_TREE=1` stage medians — the tree numbers carry their own
+instrumentation overhead and are only comparable to each other):
+
+| | main | after step 1 | after step 2 |
+|---|---:|---:|---:|
+| `clone_styles` (HOVER / KEY) | 9.30 / 9.97 | 3.76 / 3.13 | **0.95 / 0.04** |
+| `clone_tree` (HOVER / KEY) | 5.03 / 5.21 | 2.16 / 1.75 | **1.71 / 1.40** |
+| `precompute_counters` (tree) | 45.73 | 20.23 | — |
+| `lay_out` (tree) | 22.80 | 4.00 | — |
+| `graft_geometry` (tree) | 2.52 | 0.95 | — |
+
+Note `lay_out` dropping 22.8 → 4.0 ms: it was not "layout" cost at all, it was
+`ComputedStyle` copying inside layout.
+
+### Where this leaves CC-12
+
+Still red. Budget is 2 ms; `CC12_KEY` is now ~11–17 ms and `CC12_HOVER`
+~26–37 ms — the gap is ~8–20×, down from ~300× when BUG-341 was filed and
+~35–50× before this slice. The remaining top item is the cascade itself
+(`precompute_counters`), i.e. the `compute_style` calls for whatever *is*
+dirty, and beneath it the per-node `ComputedStyle` construction cost: the
+struct is still 302 fields with ~30 heap-owning ones (`Vec<String>` font
+families, transform lists, background layers, shadows), each cloned from the
+parent on every inherit. That — not another invalidation-narrowing slice — is
+the next thing to profile.
+
 ## Repro
 
 ```bash

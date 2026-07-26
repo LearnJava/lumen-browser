@@ -1418,6 +1418,64 @@ mod tests {
         assert_cascades_eq(&full, &incr);
     }
 
+    /// BUG-341 S9 gate — by *identity*, not by output.
+    ///
+    /// `assert_cascades_eq` cannot tell a reused `ComputedStyle` from a fresh
+    /// deep copy of one: both compare equal. That is precisely how S8's
+    /// `graft_geometry` stayed inert for five slices while passing every
+    /// differential test. So assert what the reuse path is actually for —
+    /// nodes outside the dirty root-set must come back as the *same*
+    /// allocation the previous pass produced, and nodes inside it must not.
+    #[test]
+    fn incr_cascade_reuse_hands_back_the_same_style_allocation() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use lumen_dom::build_flat_tree;
+        use crate::counters::{incremental_precompute_counters, precompute_counters, set_incremental_restyle, RestyleDelta};
+
+        let doc = parse_html(r#"<div id="a"><p>one</p></div><div id="b"><p>two</p></div>"#);
+        let sheet = parse_css("div { color: red; } p { font-weight: bold; }");
+        let vp = Size::new(800.0, 600.0);
+        let flat = build_flat_tree(&doc);
+
+        crate::style::invalidate_rule_idx_cache();
+        let prev = precompute_counters(&doc, &sheet, vp, &flat, false);
+
+        // Dirty exactly one subtree root; everything else must be reused.
+        let dirty_root = doc.find_by_id("a").expect("#a exists");
+        let mut dirty_roots = std::collections::HashSet::new();
+        dirty_roots.insert(dirty_root);
+
+        set_incremental_restyle(true);
+        crate::style::invalidate_rule_idx_cache();
+        let delta = RestyleDelta {
+            prev_styles: prev.styles(),
+            dirty_roots,
+            dom_content_stable: true,
+        };
+        let incr = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        set_incremental_restyle(false);
+
+        let clean = doc.find_by_id("b").expect("#b exists");
+        assert!(
+            std::sync::Arc::ptr_eq(&prev.styles()[&clean], &incr.styles()[&clean]),
+            "a node outside the dirty root-set must be handed back as the same \
+             allocation, not re-cascaded or deep-copied"
+        );
+        // Its descendants ride the same reuse.
+        let clean_child = doc.get(clean).children[0];
+        assert!(std::sync::Arc::ptr_eq(&prev.styles()[&clean_child], &incr.styles()[&clean_child]));
+
+        assert!(
+            !std::sync::Arc::ptr_eq(&prev.styles()[&dirty_root], &incr.styles()[&dirty_root]),
+            "a node in the dirty root-set must have been re-cascaded"
+        );
+        assert_eq!(
+            prev.styles()[&dirty_root], incr.styles()[&dirty_root],
+            "…and the recompute must land on the same value",
+        );
+    }
+
     #[test]
     fn incr_cascade_matches_full_interactive_rules() {
         // Same steady-state reuse check, but against a doc with

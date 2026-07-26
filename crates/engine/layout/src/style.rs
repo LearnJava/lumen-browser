@@ -16,6 +16,8 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
+use std::sync::{Arc, OnceLock};
 
 use crate::color_mix::{HueInterpolationMethod, MixColorSpace, mix_colors_hue};
 use crate::font_palette::{resolve_font_palette_overrides, ResolvedFontPalette};
@@ -2486,6 +2488,89 @@ pub fn parse_css_wide_keyword(value: &str) -> Option<CssWideKeyword> {
     }
 }
 
+/// Copy-on-write map of a node's CSS custom properties (`--name` → raw source
+/// text), as carried by [`ComputedStyle::custom_props`].
+///
+/// **Why a dedicated type instead of a plain `HashMap`** (BUG-341 S9): CSS
+/// Variables L1 makes *every* custom property inherited, so `compute_style`
+/// copies the parent's whole map into each child. With the 30 custom properties
+/// `assets/chrome/chrome.html` declares, that copy alone measured 3.7–4.7 µs per
+/// node against 0.31–0.46 µs for a node with an empty map — i.e. the map, not
+/// the 302 other `ComputedStyle` fields, dominated the cascade. Behind an
+/// [`Arc`] the inherit step is a refcount bump, and only the handful of nodes
+/// that actually declare a `--name` pay a real copy, through
+/// [`make_mut`](Self::make_mut).
+///
+/// The same sharing makes [`PartialEq`] cheap: two styles that inherited their
+/// properties from a common ancestor compare in one pointer comparison, which is
+/// what `graft_geometry`'s per-box style comparison relies on. The fast path is
+/// spelled out here rather than left to `Arc`'s own (unspecified) pointer
+/// short-circuit, so the cost is a property of this type and not of a standard
+/// library implementation detail.
+///
+/// Reads go through [`Deref`] to `HashMap`, so `.get`/`.contains_key`/`.values`
+/// and `&props` where a `&HashMap` is expected all work unchanged.
+#[derive(Debug, Clone)]
+pub struct CustomProps(Arc<HashMap<String, String>>);
+
+impl CustomProps {
+    /// Returns a mutable reference to the underlying map, cloning it first if
+    /// (and only if) another `ComputedStyle` still shares it — the copy-on-write
+    /// half of this type. Call sites that only read must not use this: an
+    /// unconditional `make_mut` on every node would reintroduce exactly the
+    /// per-node clone this type exists to remove.
+    pub fn make_mut(&mut self) -> &mut HashMap<String, String> {
+        Arc::make_mut(&mut self.0)
+    }
+
+    /// True when both sides are the very same allocation, i.e. one was cloned
+    /// from the other with no intervening write. Equal-but-unshared maps return
+    /// `false` — this is an identity check, not equality.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Default for CustomProps {
+    /// The empty map is a process-wide singleton, so every node in a document
+    /// that declares no custom property at all shares one allocation and
+    /// compares by pointer.
+    fn default() -> Self {
+        static EMPTY: OnceLock<Arc<HashMap<String, String>>> = OnceLock::new();
+        Self(Arc::clone(EMPTY.get_or_init(|| Arc::new(HashMap::new()))))
+    }
+}
+
+impl Deref for CustomProps {
+    type Target = HashMap<String, String>;
+
+    fn deref(&self) -> &HashMap<String, String> {
+        &self.0
+    }
+}
+
+impl PartialEq for CustomProps {
+    /// Pointer identity first (the overwhelmingly common case for inherited
+    /// maps), full map comparison only for independently built maps.
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || self.0 == other.0
+    }
+}
+
+impl Eq for CustomProps {}
+
+impl From<HashMap<String, String>> for CustomProps {
+    fn from(map: HashMap<String, String>) -> Self {
+        Self(Arc::new(map))
+    }
+}
+
+impl FromIterator<(String, String)> for CustomProps {
+    fn from_iter<I: IntoIterator<Item = (String, String)>>(iter: I) -> Self {
+        Self(Arc::new(iter.into_iter().collect()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
@@ -2756,7 +2841,9 @@ pub struct ComputedStyle {
     /// Ключ — полное имя с ведущими `--`, значение — сырой текст из source.
     /// Substitution `var(--name [, fallback])` делается lazy при применении
     /// обычных деклараций (см. `apply_declaration`).
-    pub custom_props: HashMap<String, String>,
+    ///
+    /// Shared copy-on-write (BUG-341 S9) — see [`CustomProps`] for why.
+    pub custom_props: CustomProps,
     /// CSS Lists L3 §3 — `counter-reset: name [N]?`. Каждый element задаёт
     /// (имя-счётчика, начальное-значение). Не наследуется. Пустой `Vec`
     /// при отсутствии декларации или `counter-reset: none`. Реальное
@@ -3820,7 +3907,9 @@ pub struct ContainerContext {
     /// The container's `container-name` values (for named queries).
     pub names: Vec<String>,
     /// Custom properties (`--*`) контейнера — для style() queries (CSS Containment L3 §4).
-    pub custom_props: HashMap<String, String>,
+    /// Shares the container's own [`CustomProps`] allocation, so building a
+    /// `ContainerContext` costs no map copy.
+    pub custom_props: CustomProps,
     /// Container's own computed style, serialized the same way as
     /// `window.getComputedStyle()` (`selector_query::computed_style_to_map`) —
     /// used to resolve `style()` queries against standard (non-custom) properties.
@@ -5931,7 +6020,7 @@ impl ComputedStyle {
             accent_color: None,
             color_scheme: ColorScheme::Normal,
             forced_color_adjust: ForcedColorAdjust::Auto,
-            custom_props: HashMap::new(),
+            custom_props: CustomProps::default(),
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
             counter_set: Vec::new(),
@@ -6522,8 +6611,18 @@ pub fn compute_style(
     // custom-properties, у которых `inherits: false` — для них потомок
     // должен видеть либо локальную декларацию, либо initial-value, а не
     // родительское значение.
-    if !registry.is_empty() {
-        style.custom_props.retain(|key, _| {
+    //
+    // BUG-341 S9: `retain` needs a `make_mut`, which copies the inherited map —
+    // so first check whether any key would actually be dropped. Pages that
+    // register no `inherits: false` property (or declare none of the ones they
+    // do register) keep sharing the parent's allocation.
+    if !registry.is_empty()
+        && style
+            .custom_props
+            .keys()
+            .any(|key| registry.get(key.as_str()).is_some_and(|p| !p.inherits))
+    {
+        style.custom_props.make_mut().retain(|key, _| {
             registry.get(key.as_str()).is_none_or(|p| p.inherits)
         });
     }
@@ -7076,7 +7175,7 @@ pub fn compute_style(
                 // Invalid at computed value time — skip declaration.
                 continue;
             }
-            style.custom_props.insert(key, decl.value.clone());
+            style.custom_props.make_mut().insert(key, decl.value.clone());
         }
     }
 
@@ -7914,8 +8013,12 @@ pub fn compute_selection_style(
 /// с унаследованным значением — потому что `contains_key` уже возвращает
 /// true. Для `inherits: false` имени родительское значение было выпилено
 /// в `compute_style` через `retain`.
+/// BUG-341 S9: takes [`CustomProps`] rather than the bare map so the
+/// copy-on-write copy happens only if a value is really substituted — the common
+/// case (no `@property` rules at all, or all of them already resolved) leaves the
+/// node sharing its parent's allocation.
 fn apply_property_initial_values(
-    custom_props: &mut HashMap<String, String>,
+    custom_props: &mut CustomProps,
     registry: &HashMap<&str, &PropertyRule>,
 ) {
     for (name, p) in registry {
@@ -7929,7 +8032,7 @@ fn apply_property_initial_values(
             // не подставляет неподходящий initial (потомок без декларации
             // получит inherited или ничего).
             if validate_against_syntax(iv, &p.syntax) {
-                custom_props.insert((*name).to_string(), iv.clone());
+                custom_props.make_mut().insert((*name).to_string(), iv.clone());
             }
         }
     }
@@ -23585,6 +23688,77 @@ mod tests {
     }
 
     // ──────────────── CSS Variables L1: custom properties + var() ────────────────
+
+    // BUG-341 S9 — gates by *identity*, not by output.
+    //
+    // Every assertion elsewhere in this file checks what `custom_props`
+    // contains, and a per-node deep copy satisfies all of them; it is just
+    // slow. That is the exact failure mode S8 uncovered in `graft_geometry`
+    // (a reuse mechanism that reused nothing passed every differential test).
+    // So the sharing itself has to be asserted, by pointer.
+
+    #[test]
+    fn custom_props_shared_with_parent_when_child_declares_none() {
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { --gap: 8px; }");
+        let vp = Size::new(800.0, 600.0);
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, vp, false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, vp, false);
+
+        assert_eq!(p_style.custom_props.get("--gap").map(String::as_str), Some("8px"));
+        assert!(
+            div_style.custom_props.ptr_eq(&p_style.custom_props),
+            "a child that declares no custom property must share its parent's map, \
+             not copy it — see CustomProps"
+        );
+    }
+
+    #[test]
+    fn custom_props_copy_on_write_when_child_declares_one() {
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { --gap: 8px; } p { --pad: 2px; }");
+        let vp = Size::new(800.0, 600.0);
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, vp, false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, vp, false);
+
+        assert!(
+            !div_style.custom_props.ptr_eq(&p_style.custom_props),
+            "a child that declares its own property must have forked the map"
+        );
+        // The fork must not have been visible upwards.
+        assert_eq!(p_style.custom_props.get("--gap").map(String::as_str), Some("8px"));
+        assert_eq!(p_style.custom_props.get("--pad").map(String::as_str), Some("2px"));
+        assert!(div_style.custom_props.get("--pad").is_none());
+    }
+
+    #[test]
+    fn custom_props_empty_map_is_a_shared_singleton() {
+        // Documents that declare no custom property at all must not allocate
+        // one map per node — every empty `CustomProps` is the same allocation,
+        // so `ComputedStyle`'s own `PartialEq` short-circuits on it too.
+        let a = ComputedStyle::root();
+        let b = ComputedStyle::root();
+        assert!(a.custom_props.is_empty());
+        assert!(a.custom_props.ptr_eq(&b.custom_props));
+    }
+
+    #[test]
+    fn custom_props_eq_compares_contents_when_not_shared() {
+        // The pointer check is a fast path, not the semantics: two maps built
+        // independently must still compare equal by content.
+        let a: CustomProps = [("--x".to_string(), "1".to_string())].into_iter().collect();
+        let b: CustomProps = [("--x".to_string(), "1".to_string())].into_iter().collect();
+        assert!(!a.ptr_eq(&b));
+        assert_eq!(a, b);
+        let c: CustomProps = [("--x".to_string(), "2".to_string())].into_iter().collect();
+        assert_ne!(a, c);
+    }
 
     #[test]
     fn custom_prop_stored_in_computed_style() {
