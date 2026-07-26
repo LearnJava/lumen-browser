@@ -2087,9 +2087,9 @@
       {
        "id": "WPT-VENDOR-ecmascript",
        "title": "WPT: вендорить + прогнать категорию `ecmascript`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-26: вендорена (`tests/wpt/ecmascript/`, 3 файла), скоуп ⬜ (Web Platform Tests coverage поверх ECMA-262/402 для implementation-defined поведения — не Test262). Оба тестовых файла (`locale-compat.html`, `regexp-lookbehind.html`) ссылаются только на уже вендоренные `/resources/testharness.js`+`testharnessreport.js`, вне-категорийных хелперов нет. `run_report.py --all --root ecmascript --recursive` отобрал 2 теста: оба прошли полностью — 2/2 harness OK, 21/21 сабтестов (locale toLocaleString/Intl.DateTimeFormat + RegExp lookbehind alternations/back-references/captures/nested-lookaround/sticky и т.д.), 0 unexpected. Не заводился отдельный BUG-NNN — все прошло"
       },
       {
        "id": "WPT-VENDOR-editing",
