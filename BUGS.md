@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-348)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-350)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -360,6 +360,7 @@
 | [BUG-346](bugs/BUG-346-OPEN.md) | OPEN | core (`crates/core/src/url.rs::Url::resolve`) | `Url::resolve()` не схлопывает `.`/`..` dot-segments (документированный, намеренный гэп — модульный doc-комментарий прямо говорит «добавим, когда упрёмся»): относительный `<script src="../resources/x.js">` резолвится в буквальный `.../reactions/../resources/x.js` вместо `.../resources/x.js`, сервер 404-ит. Широкий охват — общий `ResourceBase::resolve` (`crates/shell/src/main.rs`) для `<script>`/`<link>`/`<img>`, не только WPT. Вскрыто вендоренным WPT `custom-elements/reactions/`+`reactions/customized-builtins/` (~95 из результатов прогона). Найдено P2, WPT-VENDOR-custom-elements 2026-07-26 |
 | [BUG-347](bugs/BUG-347-OPEN.md) | OPEN | js (`crates/js/src/dom.rs` fetch shim), network (`crates/network/src/lib.rs::HttpClient::fetch_sync`+3 sibling fns) | `fetch()` не резолвит относительные URL относительно document base вовсе (`Url::parse(url)` на буквальном JS-аргументе, без base) — любой `fetch()` с относительным URL падает `invalid url: missing scheme`. Симптом уже независимо всплывал (без root-cause) в `browsing-topics`/`client-hints`/`connection-allowlist`/`cors`. Найдено и root-caused P2, WPT-VENDOR-custom-elements 2026-07-26 (`custom-elements/upgrading.html`) |
 | [BUG-348](bugs/BUG-348-OPEN.md) | OPEN | js (`crates/js/src/webgl_canvas.rs`, `crates/js/src/v8_runtime.rs`) | `canvas.getContext('2d')` возвращает `null` безусловно для ЛЮБОГО canvas в текущем дефолтном V8-билде — `WEBGL_SHIM`'s `document.createElement`-monkeypatch (`install_webgl_canvas_v8`, установлен ДО `canvas2d`) перезаписывает рабочий `el.getContext` из `dom.rs` версией, которая знает только `webgl`/`webgl2`, для всего остального возвращает `null`. Визуально подтверждено `--screenshot graphic_tests/57-canvas-2d.html` — все 6 канвасов рендерятся пустыми UA-плейсхолдерами, ни одна fillRect/arc/path/strokeRect фигура не рисуется. Регрессия с `P3-v8-s8` (26309f646, 2026-07-14, день V8-катовера). Найдено P2, WPT-VENDOR-density-size-correction 2026-07-26 |
+| [BUG-349](bugs/BUG-349-OPEN.md) | OPEN | layout (`crates/engine/layout/src/style.rs::restyle_root_set_for_node_change`) | Функция инвалидирует только поддерево родителя мутировавшего узла, обосновывая это тем, что «у движка нет `:has()`» — на деле `:has()` реализован (`matches_pseudo_class`/`matches_relative`). DOM-мутация, переключающая `:has()`-результат более далёкого предка, под `INCREMENTAL_RESTYLE` оставит его `ComputedStyle` устаревшим. Пока не воспроизведено ни одной фикстурой (`:has()` не используется ни в chrome.html, ни в graphic_tests) — задокументировано как известный гэп, не блокирует остальные срезы BUG-341. Найдено P1, при работе над BUG-341 S7 (сужение hover fan-out) 2026-07-26 |
 
 ---
 

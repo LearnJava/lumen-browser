@@ -939,6 +939,119 @@ and `cargo clippy -p lumen-shell --all-targets -- -D warnings` — both clean.
 `python graphic_tests/run.py --continue-on-fail` — see this file's own log for
 the result recorded alongside the merge commit.
 
+## S7 (part 3) — hover fan-out narrowing
+
+Closes the other half of S7's brief bullet (part 1/2 above did the page-side
+diff mechanism). `restyle_root_set_for_state_change`'s v1 model (S3)
+unconditionally widened every flipped ancestor node `N` to `N`'s *parent's*
+whole subtree, to cover selectors like `N:hover + X`/`N:hover ~ X` without a
+selector-dependency index. That index now exists:
+`lumen_layout::style::restyle_state_needs_fanout(doc, sheet)` scans every
+selector in `sheet` (including every `@media`/`@layer`/`@supports`/`@scope`/
+`@starting-style`/`@container` block) for a compound depending on dynamic
+interactive state (`:hover`/`:focus`/`:active`/`:focus-within`/
+`:focus-visible`, including inside `:not()`/`:is()`/`:where()`/`:host()`/the
+`of <selector-list>` clause of `:nth-child()`) that is followed *anywhere* on
+the path to the selector's subject by a sibling combinator (`+`/`~`) — the
+only shape that can reach outside the flipped node's own subtree. A
+descendant combinator after such a compound (`N:hover .icon`) stays inside
+`N`'s own subtree and needs no widening; a compound in subject position
+(`N:hover` itself, nothing after it) likewise needs none. `:has()` containing
+a dynamic-state pseudo anywhere always forces widening (its search direction
+isn't modelled here — see the new [BUG-349](BUG-349-OPEN.md), a pre-existing,
+unrelated gap this work surfaced in the *DOM-mutation* sibling function,
+`restyle_root_set_for_node_change`, not this one). A document with any shadow
+root also always forces widening (shadow-tree stylesheets aren't scanned —
+deferred, no fixture needs it yet). When none of that applies,
+`restyle_root_set_for_state_change`'s new `needs_fanout: bool` parameter
+narrows each flipped node's own invalidation to just that node, not its
+parent's whole subtree.
+
+Computed once per interactive-state transition (not once per hover/focus/
+active axis) and threaded through every production call site:
+`Lumen::relayout_chrome_host`, `Lumen::try_relayout_raf_incremental`, and the
+CC-12 bench harness's `cc12_bench_cycle`.
+
+**Correctness**: 16 new unit tests (`style::state_fanout_tests`) cover every
+combinator/pseudo-class shape from the brief's model — subject-position and
+descendant-position dynamic-state compounds (no fanout), `+`/`~` immediately
+or transitively after one (fanout), `:is()`/`:not()` wrapping a dynamic-state
+compound, `:has()` with/without a nested dynamic-state pseudo, an `@media`
+block, shadow-root presence, and two end-to-end assertions against
+`restyle_root_set_for_state_change` itself: real chrome-shaped CSS
+(`.tab-row:hover` + `.tab-row:hover .tab-close`, matching
+`assets/chrome/chrome.html`'s actual pattern) narrows to exactly the flipped
+nodes, while `.item:hover + .item` still widens to their shared parent. Ran
+the full existing differential-test suite unchanged
+(`cargo test -p lumen-layout` — 3278 passed, only the pre-existing
+BUG-339 `FONT_CH_EX` flakes fail, same as before this slice) and
+`cargo test -p lumen-shell` — 1704 passed, 0 failed. Confirmed
+`assets/chrome/chrome.html` (the real chrome stylesheet) has zero `:hover`/
+`:focus`/`:active` selectors followed by a sibling combinator — every one of
+its ~35 dynamic-state rules is either subject-position or descendant-only —
+so `restyle_state_needs_fanout` returns `false` for it and every chrome
+restyle now narrows for real, not just in the synthetic test fixtures.
+
+**Measured — honest result, no clear win on CC-12's own fixtures**: an A/B
+comparison on the same machine, same code, differing only in the
+`needs_fanout` boolean passed to `bug341_s3_incremental_cascade_precompute_
+share`'s sibling-tab-hover fixture (`#sbTabs` has 6 tab rows; hover moves
+between the first two):
+
+```
+# needs_fanout=true (pre-S7 behaviour, dirty_roots=1 — the shared #sbTabs
+# container, whose "dirty root" subtree covers all 6 tab rows):
+BUG341_S3: incremental_precompute p50=20.84ms / p50=17.86ms (drop=47.6% / 54.1%)
+
+# needs_fanout=false (S7 narrowing, dirty_roots=2 — just the two tabs that
+# actually flipped):
+BUG341_S3: incremental_precompute p50=19.33ms / p50=18.70ms (drop=54.5% / 51.9%)
+```
+
+Statistically indistinguishable given this machine's documented ±10-15%
+run-to-run noise floor (S6's own finding) — narrowing dirty_roots from "the
+6-tab container's subtree" to "the 2 changed tabs" doesn't move this
+fixture's wall-clock at all. `CC12_HOVER` (the SIDEBAR/`None`-toggle gate
+fixture) is unaffected for the same reason S3 already documented it as a
+conservative-invalidation worst case: transitioning from "nothing hovered"
+flips `:hover` on *every* ancestor of the target, and none of those ancestors
+carry a `:hover`-triggering rule in `chrome.html`, so their cascade cost was
+already near zero before this change — narrowing an already-cheap operation
+has nothing to save. Re-ran `cc12_chrome_perf_gate_hover_and_keystroke_cycles`
+post-narrowing: `CC12_HOVER p50=91.61ms p95=103.14ms` — flat vs. S6's
+`~85.8ms` average, within noise; **gate stays red** (~45-50× budget), no
+regression, no closure.
+
+**Why this still matters despite the flat CC-12 numbers**: the win this
+narrowing targets — an old sibling's *entire subtree* getting swept into
+"dirty" purely because it shares a parent with the node that actually
+changed — doesn't materialize on `chrome.html`'s small, shallow tab bar (6
+siblings, thin per-tab subtrees), but scales with how much irrelevant content
+hangs off the shared parent. A real page with a long `:hover`-styled list
+(hundreds of rows under one container, each with non-trivial markup) is
+exactly the shape where "widen to parent" used to force a full-list
+recascade on every mouse move and this narrowing now doesn't. No such
+fixture exists in this codebase yet to measure directly — recorded here as
+the honest theoretical case, not a silently-assumed win (brief §5's own
+stop-condition: report the number, don't relax the gate).
+
+**Also not attempted here**: the DOM-mutation-change counterpart
+(`restyle_root_set_for_node_change`) has no equivalent narrowing — every
+class/attribute mutation still widens to the mutated node's parent
+unconditionally. That function's over-approximation is cheaper to begin
+with (one widen per mutated node, not one per ancestor in a state-change
+chain) and no fixture has flagged it as a bottleneck; left as a further
+slice if one does. BUG-349 (found while re-verifying this function's own
+doc comment) is a separate, unrelated correctness gap in the same function,
+not a performance one.
+
+S7 (parts 1-3) is now complete — the diff mechanism for page-side JS
+mutations and the hover fan-out narrowing brief bullet are both done. CC-12's
+gate remains red on every fixture; see the "Also not attempted" lists across
+S5/S6/S7 for the standing remaining levers (box-build skip re-evaluation,
+the residual `lay_out_flex` cost / layout-result cache, DOM-mutation-change
+narrowing).
+
 ## Repro
 
 ```bash

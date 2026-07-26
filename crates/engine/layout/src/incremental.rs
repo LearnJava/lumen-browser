@@ -816,7 +816,8 @@ mod tests {
 
         // Incremental: hover moves from #a to #b.
         set_interactive_state(Some(b), None, None);
-        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b));
+        let needs_fanout = crate::style::restyle_state_needs_fanout(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), needs_fanout);
         let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, dom_content_stable: true };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
@@ -865,7 +866,8 @@ mod tests {
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
         );
 
-        let dirty_roots = restyle_root_set_for_state_change(&doc, None, None);
+        let needs_fanout = crate::style::restyle_state_needs_fanout(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, None, needs_fanout);
         assert!(dirty_roots.is_empty(), "no-op transition must yield an empty root-set");
         let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, dom_content_stable: true };
         set_incremental_restyle(true);
@@ -1294,7 +1296,8 @@ mod tests {
         let full_after = precompute_counters(&doc, &sheet, vp, &flat, false);
 
         // Incremental: same transition, conservative root-set derived from it.
-        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b));
+        let needs_fanout = crate::style::restyle_state_needs_fanout(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), needs_fanout);
         let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, dom_content_stable: true };
         set_incremental_restyle(true);
         reset_recompute_count();
