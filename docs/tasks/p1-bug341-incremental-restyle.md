@@ -197,13 +197,26 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   The page pipeline was *not* wired (no DOM-mutation-diff mechanism exists to
   derive a safe `dirty_roots` for arbitrary JS mutations — same gap as
   `CC12_KEY`, chrome's own keystroke case).
-- **S6 — DOM-mutation diff, then tighten invalidation if still over budget.**
-  The biggest lever S5 left unaddressed: `bind_model` (and page-side JS
-  mutations) need to report which nodes they actually touched so
-  `restyle_root_set_for_node_change` can drive the incremental cascade for
-  content changes too, not just interactive state — this unblocks `CC12_KEY`
-  and real text input. After that, narrow the hover fan-out / cache
-  selector-dependency indices if still short of budget.
+- **S6 — DOM-mutation diff (chrome side).** ✅ Done. `bind_model_tracked`
+  (`crates/chrome/src/model.rs`) reports every node whose selector-relevant
+  attribute/class actually changed, or whose row-list container gained/lost a
+  member, by instrumenting the shared low-level mutation primitives
+  (`set_attr`/`remove_attr`/`remove_children_with_class`/`reconcile_row_list`)
+  every `bind_*` helper funnels through — no per-function threading needed.
+  `relayout_chrome_host` unions `restyle_root_set_for_node_change(doc,
+  touched)` into `dirty_roots` and drops the old whole-`ChromeModel`-equality
+  gate, so the incremental path now covers content changes (typed omnibox
+  text, tab titles), not just interactive state. Fixed a real bug the tracker
+  surfaced: `bind_palette` unconditionally rebuilt its empty-state placeholder
+  every cycle, permanently widening `dirty_roots`. **Measured**: `CC12_KEY`
+  ~30% p50 win (~90ms→~63ms, the first real improvement on this fixture);
+  `CC12_HOVER` flat as expected (S6 doesn't touch interactive-state
+  derivation). CC-12's gate stays red (~40-50× over budget) — see BUG-341 "S6"
+  for full numbers. Page-side JS DOM mutations (`v8_runtime.rs`) were *not*
+  wired — no fixture currently exercises that path, and it needs its own
+  scoped design (JS mutations go through different call sites entirely).
+  Hover fan-out narrowing / selector-dependency caching, and the JS-mutation
+  side of this diff, remain open if a further slice is taken.
 
 **Stop conditions / honesty:** if after S5 the p95 floor is set by irreducible
 per-node cascade cost on the hover root-set and stays > 2 ms, report the number

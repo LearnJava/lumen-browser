@@ -13,6 +13,9 @@
 //! the asset's inline SVG sprite — visual finish is a follow-up, not part of
 //! this slice's DoD (tab/theme/profile/workspace switches reflect in chrome).
 
+use std::cell::RefCell;
+use std::collections::HashSet;
+
 use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
 
 /// Snapshot of shell state [`bind_model`] reflects into the chrome document.
@@ -425,6 +428,26 @@ pub struct ChromeWorkspaceModel {
     pub color: String,
 }
 
+thread_local! {
+    /// BUG-341 S6 — collects the [`NodeId`]s [`bind_model`] actually mutated
+    /// (a selector-relevant attribute/class changed value, or a row list
+    /// gained/lost a member) during the call currently in progress. `None`
+    /// when no [`bind_model_tracked`] call is active, so plain [`bind_model`]
+    /// (still used for the very first bind, before any previous cascade cache
+    /// exists to diff against) pays no tracking cost.
+    static MUTATION_TRACKER: RefCell<Option<HashSet<NodeId>>> = const { RefCell::new(None) };
+}
+
+/// Records `id` as touched by the [`bind_model_tracked`] call currently in
+/// progress, if any. A no-op outside of [`bind_model_tracked`].
+fn record_touched(id: NodeId) {
+    MUTATION_TRACKER.with(|t| {
+        if let Some(set) = t.borrow_mut().as_mut() {
+            set.insert(id);
+        }
+    });
+}
+
 /// Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
 /// `<body>`, and a full rebuild of the tab list and workspace switcher.
 ///
@@ -476,6 +499,33 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_bookmarks(doc, &model.bookmarks);
     bind_settings(doc, &model.settings);
     bind_right_sidebar(doc, &model.right_sidebar);
+}
+
+/// Like [`bind_model`], but also returns every [`NodeId`] whose
+/// selector-relevant state actually changed during the call — an existing
+/// element's attribute/class value differed from what it held before, or a
+/// [`reconcile_row_list`]-driven container gained/lost a row (structural
+/// change, relevant to sibling/`:nth-child` selectors).
+///
+/// BUG-341 S6: this is the raw material
+/// [`lumen_layout::style::restyle_root_set_for_node_change`] needs to derive
+/// a correct cascade dirty-root-set for a `bind_model` call that changed real
+/// DOM content (tab title, omnibox text, …), not just interactive state — the
+/// gap S5 left `CC12_KEY` and any content-mutating chrome interaction stuck
+/// on the full-layout path.
+///
+/// An empty result does **not** mean nothing in `doc` changed — text-node
+/// content changes (e.g. a tab's title text) are deliberately not tracked
+/// here: `layout_mutation_incremental_restyle`'s `build_box` step always
+/// rebuilds from live `doc` content regardless of the cascade's dirty-root
+/// set, so a text-only change needs no cascade invalidation to render
+/// correctly (see the brief §4/§6 "incr == full" correctness gate — covered
+/// by a differential test, not by this tracker). Only nodes whose
+/// *`ComputedStyle`* could actually differ need to be reported.
+pub fn bind_model_tracked(doc: &mut Document, model: &ChromeModel) -> HashSet<NodeId> {
+    MUTATION_TRACKER.with(|t| *t.borrow_mut() = Some(HashSet::new()));
+    bind_model(doc, model);
+    MUTATION_TRACKER.with(|t| t.borrow_mut().take()).unwrap_or_default()
 }
 
 /// Toggles `.active` on exactly one of `#view-page`/`#view-history`/
@@ -664,14 +714,26 @@ fn bind_palette(doc: &mut Document, palette: &ChromePaletteModel) {
         set_attr(doc, input, "value", &palette.query);
     }
     let Some(list) = doc.find_by_id(crate::ids::CP_LIST) else { return };
-    remove_children_with_class(doc, list, "cp-row");
     if palette.results.is_empty() {
+        // BUG-341 S6: skip the remove+recreate entirely when the empty
+        // placeholder is already showing — otherwise `#cpList` gets reported
+        // touched (`bind_model_tracked`) on every single `bind_model` call
+        // even while the palette stays closed, the overwhelmingly common
+        // case, needlessly widening the incremental cascade's dirty-root-set
+        // every cycle for a state that never actually changes.
+        let already_empty = doc.get(list).children.len() == 1
+            && has_class(doc, doc.get(list).children[0], "cp-empty");
+        if already_empty {
+            return;
+        }
+        remove_children_with_class(doc, list, "cp-row");
         let empty = doc.create_element(QualName::html("div"));
         set_attr(doc, empty, "class", "cp-empty cp-row");
         append_text(doc, empty, "Ничего не найдено");
         doc.append_child(list, empty);
         return;
     }
+    remove_children_with_class(doc, list, "cp-row");
     for r in &palette.results {
         let row = build_cp_row(doc, r);
         doc.append_child(list, row);
@@ -920,6 +982,14 @@ fn reconcile_row_list<T>(
         .copied()
         .filter(|&c| has_class(doc, c, class))
         .collect();
+
+    if items.len() != existing.len() {
+        // BUG-341 S6: row count changed — a structural change, relevant to
+        // any `:nth-child`/`:last-child`/sibling-combinator rule over this
+        // list. Per-row content changes (a row updated in place) are caught
+        // by `update`'s own `set_attr` calls instead.
+        record_touched(container);
+    }
 
     for (i, item) in items.iter().enumerate() {
         match existing.get(i) {
@@ -1230,10 +1300,17 @@ fn first_letter(s: &str) -> String {
 
 fn remove_children_with_class(doc: &mut Document, container: NodeId, class: &str) {
     let children: Vec<NodeId> = doc.get(container).children.clone();
+    let mut removed_any = false;
     for child in children {
         if has_class(doc, child, class) {
             doc.detach(child);
+            removed_any = true;
         }
+    }
+    if removed_any {
+        // BUG-341 S6: a structural change (row(s) gone) — the container's
+        // remaining/future children can depend on it via `:nth-child` etc.
+        record_touched(container);
     }
 }
 
@@ -1261,16 +1338,27 @@ fn append_text(doc: &mut Document, parent: NodeId, text: &str) {
 fn set_attr(doc: &mut Document, id: NodeId, name: &str, value: &str) {
     if let NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data {
         if let Some(attr) = attrs.iter_mut().find(|a| a.name.local.eq_ignore_ascii_case(name)) {
-            attr.value = value.to_string();
+            if attr.value != value {
+                attr.value = value.to_string();
+                // BUG-341 S6: value actually changed — a selector keyed on
+                // this attribute (most commonly `class`) could now match
+                // differently.
+                record_touched(id);
+            }
         } else {
             attrs.push(Attribute { name: QualName::html(name.to_ascii_lowercase()), value: value.to_string() });
+            record_touched(id);
         }
     }
 }
 
 fn remove_attr(doc: &mut Document, id: NodeId, name: &str) {
     if let NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data {
+        let before = attrs.len();
         attrs.retain(|a| !a.name.local.eq_ignore_ascii_case(name));
+        if attrs.len() != before {
+            record_touched(id);
+        }
     }
 }
 
@@ -1397,6 +1485,66 @@ mod tests {
 
     fn model_with_tabs(tabs: Vec<ChromeTabModel>) -> ChromeModel {
         ChromeModel { tabs, ..ChromeModel::default() }
+    }
+
+    /// BUG-341 S6: two `bind_model_tracked` calls with a bit-identical model
+    /// must report nothing touched — this is the precondition
+    /// `relayout_chrome_host`'s incremental path relies on for a pure
+    /// interactive-state (hover/focus/active) cycle to still take the
+    /// `dom_content_stable: true` fast path exactly like before S6.
+    #[test]
+    fn bind_model_tracked_reports_nothing_touched_for_an_unchanged_model() {
+        let mut doc = parse_asset();
+        let model = model_with_tabs(vec![ChromeTabModel {
+            id: 1, title: "Alpha".to_owned(), active: true, sleeping: false,
+            is_child: false, container_color: None,
+        }]);
+        let first = bind_model_tracked(&mut doc, &model);
+        assert!(!first.is_empty(), "the very first bind populates the tab list — must report touched nodes");
+        let second = bind_model_tracked(&mut doc, &model);
+        assert!(
+            second.is_empty(),
+            "rebinding the identical model must touch nothing: {second:?}",
+        );
+    }
+
+    /// A theme flip changes `body[data-theme]` — `bind_model_tracked` must
+    /// report exactly `<body>`, not the whole document.
+    #[test]
+    fn bind_model_tracked_reports_the_body_on_a_theme_change() {
+        let mut doc = parse_asset();
+        bind_model_tracked(&mut doc, &ChromeModel { dark_theme: false, ..ChromeModel::default() });
+        let touched = bind_model_tracked(&mut doc, &ChromeModel { dark_theme: true, ..ChromeModel::default() });
+        let body = doc.body().expect("asset has <body>");
+        assert_eq!(touched, HashSet::from([body]), "only <body> should be reported touched");
+    }
+
+    /// Adding a tab is a structural change on `#sbTabs`/`#hbarTabs` (the
+    /// `reconcile_row_list`-driven containers) — `bind_model_tracked` must
+    /// report the containers, not silently miss the row-count change.
+    #[test]
+    fn bind_model_tracked_reports_the_container_when_a_tab_is_added() {
+        let mut doc = parse_asset();
+        let one_tab = model_with_tabs(vec![ChromeTabModel {
+            id: 1, title: "Alpha".to_owned(), active: true, sleeping: false,
+            is_child: false, container_color: None,
+        }]);
+        bind_model_tracked(&mut doc, &one_tab);
+        let two_tabs = model_with_tabs(vec![
+            ChromeTabModel {
+                id: 1, title: "Alpha".to_owned(), active: true, sleeping: false,
+                is_child: false, container_color: None,
+            },
+            ChromeTabModel {
+                id: 2, title: "Beta".to_owned(), active: false, sleeping: false,
+                is_child: false, container_color: None,
+            },
+        ]);
+        let touched = bind_model_tracked(&mut doc, &two_tabs);
+        let sb_tabs = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
+        let hbar_tabs = doc.find_by_id(crate::ids::HBAR_TABS).expect("asset has #hbarTabs");
+        assert!(touched.contains(&sb_tabs), "touched must include #sbTabs: {touched:?}");
+        assert!(touched.contains(&hbar_tabs), "touched must include #hbarTabs: {touched:?}");
     }
 
     #[test]

@@ -890,6 +890,151 @@ mod tests {
         }
     }
 
+    #[test]
+    fn mutation_incremental_restyle_dom_class_change_matches_full() {
+        // BUG-341 S6: the full pipeline (`layout_mutation_incremental_restyle`,
+        // not just the cascade alone — `incr_cascade_class_change_matches_full_
+        // and_recomputes_subset` in this same file already covers the cascade
+        // in isolation) for a DOM class mutation that also changes geometry
+        // (`.active { height }`), the class of content change `bind_model`
+        // produces (`set_class_token`/`set_attr`) and `bind_model_tracked`
+        // (crates/chrome) reports via `restyle_root_set_for_node_change`. Must
+        // reproduce a full `layout_measured_hyp` bit-for-bit, `dom_content_stable`
+        // correctly `false` (RestyleDelta doc: DOM mutation, not just
+        // interactive state).
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use lumen_dom::NodeData;
+        use crate::box_tree::{
+            layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental_restyle,
+        };
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use crate::style::restyle_root_set_for_node_change;
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = r#"<ul id="menu">
+            <li id="a" class="item">a</li>
+            <li id="b" class="item">b</li>
+            <li id="c" class="item">c</li>
+        </ul>
+        <div id="unrelated"><p>x</p><p>y</p><p>z</p></div>"#;
+        let css = r#"
+            .item { color: black; padding: 4px; height: 20px; }
+            .item.active { color: blue; height: 30px; }
+            .item.active + .item { color: green; }
+        "#;
+        let mut doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+
+        // Mutate #a's class in place, mirroring what `set_attr`/`set_class_token`
+        // do in `crates/chrome/src/model.rs`.
+        let a = doc.find_by_id("a").expect("#a must exist");
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(a).data {
+            for attr in attrs.iter_mut() {
+                if attr.name.local == "class" {
+                    attr.value = "item active".to_string();
+                }
+            }
+        }
+
+        let dirty_roots = restyle_root_set_for_node_change(&doc, [a]);
+        let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, dom_content_stable: false };
+        set_incremental_restyle(true);
+        let (incr, _incr_counters) = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+        );
+        set_incremental_restyle(false);
+
+        let full = layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+
+        let mut ia = Vec::new();
+        let mut fb = Vec::new();
+        collect_rects(&incr, &mut ia);
+        collect_rects(&full, &mut fb);
+        assert_eq!(ia.len(), fb.len(), "box count must match full layout");
+        for ((na, ra), (nb, rb)) in ia.iter().zip(fb.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+    }
+
+    #[test]
+    fn mutation_incremental_restyle_structural_change_matches_full() {
+        // BUG-341 S6: a structural DOM change (a new sibling `<li>` appended,
+        // the shape `bind_model`'s `reconcile_row_list` produces for a new
+        // tab/workspace) — the freshly-inserted node has no `prev_styles`
+        // entry, so `incremental_precompute_counters`'s own "absent from
+        // prev_styles always recomputes" rule (crates/engine/layout/src/
+        // counters.rs) must cover it even though it is outside `dirty_roots`;
+        // `graft_geometry` must independently decline to reuse the container's
+        // geometry once child counts differ. Must reproduce a full
+        // `layout_measured_hyp` bit-for-bit.
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use lumen_dom::{NodeData, QualName};
+        use crate::box_tree::{
+            layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental_restyle,
+        };
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use crate::style::restyle_root_set_for_node_change;
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = r#"<ul id="menu">
+            <li id="a" class="item">a</li>
+            <li id="b" class="item">b</li>
+        </ul>"#;
+        let css = ".item { color: black; padding: 4px; height: 20px; }";
+        let mut doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+
+        // Append a brand-new <li>, mirroring `reconcile_row_list`'s `build()`
+        // path for a newly-added row — no prior `prev_styles` entry for it.
+        let menu = doc.find_by_id("menu").expect("#menu must exist");
+        let new_li = doc.create_element(QualName::html("li"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(new_li).data {
+            attrs.push(lumen_dom::Attribute { name: QualName::html("class"), value: "item".to_string() });
+        }
+        let text = doc.create_text("c".to_string());
+        doc.append_child(new_li, text);
+        doc.append_child(menu, new_li);
+
+        // Structural change: `reconcile_row_list` reports the container
+        // (`#menu`) touched, not the newly-created node itself.
+        let dirty_roots = restyle_root_set_for_node_change(&doc, [menu]);
+        let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, dom_content_stable: false };
+        set_incremental_restyle(true);
+        let (incr, _incr_counters) = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+        );
+        set_incremental_restyle(false);
+
+        let full = layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+
+        let mut ia = Vec::new();
+        let mut fb = Vec::new();
+        collect_rects(&incr, &mut ia);
+        collect_rects(&full, &mut fb);
+        assert_eq!(ia.len(), fb.len(), "box count must match full layout (incl. the new <li>)");
+        for ((na, ra), (nb, rb)) in ia.iter().zip(fb.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+    }
+
     // ── ADR-016 M4.1: parallel selector matching ──────────────────────────────
 
     #[test]

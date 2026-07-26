@@ -251,17 +251,40 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   (`cargo test -p lumen-chrome`: 55/55) assert identity survives an unchanged rebind, a title-only
   change, a shrinking list, and a shape-changing (`sleeping`) flip.
 
-- **BUG-341 S5: `ChromeModel` (+ all ~20 nested model types) now derives `PartialEq`** (`src/model.rs`)
-  — `Lumen::relayout_chrome_host` compares each fresh snapshot against the previous one to decide
-  whether it's safe to take `lumen_layout::box_tree::layout_mutation_incremental_restyle`'s
-  incremental-cascade path instead of a full relayout: an identical model means this pass's
-  `bind_model` call was a no-op, so the only thing that could have changed the cascade is
-  interactive state (hover/focus/active). No field needed excluding — all fields are
-  `String`/`bool`/numeric/`Vec`/`Option`/enum, no `HashMap` (whose `Debug`/iteration order isn't
-  deterministic) or float `NaN` risk. See `crates/engine/layout/subsystems/layout.md`'s
-  `layout_mutation_incremental_restyle` gotcha and BUG-341 "S5" for the measured numbers (real ~25%
-  win on a representative hover transition; CC-12's own SIDEBAR/`None`-toggle fixture — a documented
-  worst case — unchanged).
+- **BUG-341 S5 (superseded by S6 below): `ChromeModel` (+ all ~20 nested model types) derives
+  `PartialEq`** (`src/model.rs`) — used by S5's `Lumen::relayout_chrome_host` to gate the incremental
+  path on whole-model equality (a coarse stand-in for a real diff). The derive is still present (no
+  other code currently reads it) but `relayout_chrome_host` no longer compares by it — see the S6 bullet
+  below for what replaced it.
+
+- **BUG-341 S6: `bind_model_tracked`** (`src/model.rs`) — like `bind_model`, but also returns the
+  `HashSet<NodeId>` of nodes it actually touched (a selector-relevant attribute/class value changed, or
+  a `reconcile_row_list`-driven container gained/lost a row), so `Lumen::relayout_chrome_host` can feed
+  `lumen_layout::style::restyle_root_set_for_node_change` a real per-cycle diff instead of S5's
+  whole-`ChromeModel`-equality gate. Implemented by instrumenting the handful of shared low-level
+  mutation primitives every `bind_*` helper already funnels through — `set_attr`/`remove_attr` (record
+  only when the value actually differs — `bind_model` writes every field unconditionally every cycle),
+  `remove_children_with_class` (record the container only when it actually detaches a child), and
+  `reconcile_row_list` (record the container only when `items.len() != existing.len()`, i.e. a genuine
+  add/remove — a same-count reorder/update is already caught by the per-row `set_attr` calls) — not by
+  threading a parameter through every individual `bind_*` function. A thread-local `RefCell<Option<
+  HashSet<NodeId>>>` collects the touched set only while `bind_model_tracked` is on the call stack;
+  plain `bind_model` (e.g. the very first bind, before any previous cascade cache exists) pays no
+  tracking cost. Newly-created nodes need no explicit reporting: `incremental_precompute_counters`
+  already force-recomputes any node absent from `prev_styles`, and this pipeline's `build_box` always
+  reads live DOM content regardless of the cascade's dirty-root-set (`dom_content_stable: false` on any
+  DOM-mutation delta) — see `crates/engine/layout/subsystems/layout.md` and BUG-341 "S6".
+  **Gotcha this surfaced**: `bind_palette` used to unconditionally remove+recreate its `.cp-empty`
+  "nothing found" placeholder on *every* call whenever `results` was empty (the common case — palette
+  normally closed), which made `#cpList` permanently "touched" and needlessly widened `dirty_roots`
+  every single cycle, including pure hover/focus/active transitions that never touch the palette at
+  all. Fixed by skipping the remove+recreate when the placeholder is already showing. The other five
+  `remove_children_with_class` call sites (`bind_history` ×2, `bind_bookmarks` ×2, `bind_dropdown`,
+  `bind_downloads`) don't have this pattern — an empty model list there is already a genuine no-op (0
+  removed, 0 created) — but a *future* dumb-rebuild helper added to this file should check for the same
+  trap before assuming "empty results" is a no-op. Measured: `CC12_KEY` (typed omnibox text, changes
+  every cycle) ~30% p50 win, the first real improvement on that fixture since BUG-341 opened; `CC12_
+  HOVER` (S3's own worst-case fixture) unaffected, as expected — see BUG-341 "S6" for full numbers.
 
 ## Deferred
 
