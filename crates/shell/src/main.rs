@@ -927,6 +927,8 @@ fn run_window_mode(
         transition_scheduler: TransitionScheduler::new(),
         starting_style_tracker: StartingStyleTracker::new(),
         prev_styles: HashMap::new(),
+        page_prev_cascade_styles: None,
+        page_prev_interactive: (None, None, None),
         anim_frame: None,
         layout_box: None,
         last_frame_scroll_y: 0.0,
@@ -2462,6 +2464,25 @@ enum JsNavigateRequest {
     Reload,
 }
 
+/// BUG-341 S7: engine-agnostic mirror of `lumen_js::DomTouched`, kept
+/// independent of the `v8` feature so [`PersistentJs::take_dom_touched`]'s
+/// default (used by `quickjs`/no-engine builds, which have no tracker) compiles
+/// unconditionally.
+///
+/// Consumed by [`Lumen::try_relayout_raf_incremental`] (BUG-341 S7 part 2) to
+/// derive the DOM-mutation half of `RestyleDelta::dirty_roots` for the
+/// incremental-cascade path (`layout_mutation_incremental_restyle`).
+#[derive(Debug, Default, Clone)]
+struct DomTouchedSummary {
+    /// Nodes whose selector-relevant state actually changed via a tracked
+    /// mutation primitive. See `lumen_js::DomTouched::nodes`.
+    nodes: std::collections::HashSet<lumen_dom::NodeId>,
+    /// `true` when `nodes` alone is not a safe restyle root-set this cycle —
+    /// the caller must fall back to a full cascade. See
+    /// `lumen_js::DomTouched::unattributed`.
+    unattributed: bool,
+}
+
 /// Shell-local abstraction over a persistent JS context that survives between
 /// renders. The JS DOM closures hold a reference to the same
 /// `Arc<Mutex<Document>>` as `LayoutSource::document`, so event-driven DOM
@@ -2507,6 +2528,19 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Called after each rAF pass in `RedrawRequested`; when `true`, a relayout
     /// must happen before the next paint to reflect DOM changes.
     fn take_dom_dirty(&self) -> bool;
+    /// BUG-341 S7: drain the page-side DOM-mutation tracker since the last
+    /// call — feeds `lumen_layout::style::restyle_root_set_for_node_change`
+    /// so `Lumen::try_relayout_raf_incremental` can take the incremental-
+    /// cascade path (`layout_mutation_incremental_restyle`) instead of a full
+    /// cascade for JS DOM mutations.
+    ///
+    /// Default (used by engines without a tracker — `quickjs`, `NullPersistentJs`):
+    /// no touched nodes but `unattributed: true`, forcing the caller to fall
+    /// back to a full cascade — preserves those engines' existing behaviour
+    /// exactly.
+    fn take_dom_touched(&self) -> DomTouchedSummary {
+        DomTouchedSummary { nodes: std::collections::HashSet::new(), unattributed: true }
+    }
     /// TEMP BUG-272 diagnostics: QuickJS heap (malloc_size, memory_used_size);
     /// `(-1, -1)` when the runtime does not expose it.
     fn debug_js_heap(&self) -> (i64, i64) {
@@ -3262,6 +3296,10 @@ impl PersistentJs for V8PersistentJs {
     }
     fn take_dom_dirty(&self) -> bool {
         self.rt.take_dom_dirty()
+    }
+    fn take_dom_touched(&self) -> DomTouchedSummary {
+        let t = self.rt.take_dom_touched();
+        DomTouchedSummary { nodes: t.nodes, unattributed: t.unattributed }
     }
     fn run_animation_frame(&self, timestamp_ms: f64) {
         self.eval_js(&format!("_lumen_run_raf_callbacks({timestamp_ms})"));
@@ -5115,6 +5153,12 @@ struct PageSnapshot {
     transition_scheduler: TransitionScheduler,
     starting_style_tracker: StartingStyleTracker,
     prev_styles: HashMap<NodeId, ComputedStyle>,
+    /// BUG-341 S7: mirrors `Lumen::page_prev_cascade_styles` — must travel
+    /// with `layout_box` (same producer, same invalidation rule) so a tab
+    /// switch back to this snapshot cannot resurrect a cache that no longer
+    /// matches the restored tree.
+    page_prev_cascade_styles: Option<HashMap<NodeId, ComputedStyle>>,
+    page_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
     anim_frame: Option<lumen_layout::AnimationFrame>,
     layout_box: Option<lumen_layout::LayoutBox>,
     /// P3-webvtt срез 3: cues страницы — переезжают вместе с вкладкой.
@@ -6150,6 +6194,73 @@ fn compute_layout_incremental(
     drop(doc);
     let dl = paint_ordered(&layout);
     (dl, layout)
+}
+
+/// BUG-341 S7: restyle-aware variant of [`relayout_page_incremental`] — uses
+/// [`lumen_layout::box_tree::layout_mutation_incremental_restyle`] instead of
+/// [`lumen_layout::layout_mutation_incremental`], skipping cascade work (not
+/// just geometry) for subtrees `delta.dirty_roots` proves untouched. Only
+/// safe when `delta.prev_styles` is the exact `CounterMap::styles()` the
+/// previous cycle over this same document produced — see
+/// `layout_mutation_incremental_restyle`'s own doc comment for the full
+/// precondition; [`Lumen::page_prev_cascade_styles`] being `Some` is the
+/// caller-side half of that contract. Returns the fresh `CounterMap` so the
+/// caller can persist its `styles()` as the next cycle's `delta.prev_styles`.
+#[allow(clippy::too_many_arguments)]
+fn relayout_page_incremental_restyle(
+    src: &LayoutSource,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+    prev: &lumen_layout::LayoutBox,
+    delta: &lumen_layout::counters::RestyleDelta<'_>,
+) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
+    compute_layout_incremental_restyle(
+        &src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts, prev, delta,
+    )
+}
+
+/// BUG-341 S7: restyle-aware variant of [`compute_layout_incremental`] — see
+/// [`relayout_page_incremental_restyle`].
+#[allow(clippy::too_many_arguments)]
+fn compute_layout_incremental_restyle(
+    document: &Mutex<Document>,
+    stylesheet: &lumen_css_parser::Stylesheet,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+    prev: &lumen_layout::LayoutBox,
+    delta: &lumen_layout::counters::RestyleDelta<'_>,
+) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    if web_fonts.is_empty() {
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let doc = document.lock().unwrap();
+        let (layout, counters) = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+            &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev, delta,
+        );
+        drop(doc);
+        let dl = paint_ordered(&layout);
+        return (dl, layout, counters);
+    }
+    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
+        .expect("MultiFontMeasurer из bundled Inter");
+    for wf in web_fonts {
+        measurer.register_family_with_ranges(
+            &wf.family,
+            wf.bytes.clone(),
+            wf.unicode_range.clone(),
+        );
+    }
+    let doc = document.lock().unwrap();
+    let (layout, counters) = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+        &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev, delta,
+    );
+    drop(doc);
+    let dl = paint_ordered(&layout);
+    (dl, layout, counters)
 }
 
 /// CSS Containment L3 §4.4 (BB-4) — shell-событие: элемент с
@@ -7322,6 +7433,22 @@ struct Lumen {
     /// Computed styles предыдущего layout-дерева — нужны `transition_scheduler.sync()`
     /// для определения изменившихся свойств. Обновляется после каждого layout.
     prev_styles: HashMap<NodeId, ComputedStyle>,
+    /// BUG-341 S7: `CounterMap::styles()` cascade cache from the last
+    /// [`Self::try_relayout_raf_incremental`] call that took the restyle-aware
+    /// path (`layout_mutation_incremental_restyle`) — the `RestyleDelta::prev_styles`
+    /// basis for the *next* such call. `None` whenever `layout_box` was set by
+    /// any other producer (`relayout()`, tab switch, page load, hibernate
+    /// restore, streaming layout, …), since a stale cache would silently derive
+    /// the wrong dirty-root set against a `layout_box` it does not match —
+    /// `try_relayout_raf_incremental` falls back to the existing
+    /// full-cascade-plus-graft path (`layout_mutation_incremental`) whenever
+    /// this is `None`.
+    page_prev_cascade_styles: Option<HashMap<NodeId, ComputedStyle>>,
+    /// Interactive state (`hovered_nid`/`focused_node`/`active_nid`) at the
+    /// moment `page_prev_cascade_styles` was captured — the `prev` side of the
+    /// next call's `restyle_root_set_for_state_change`. Only meaningful when
+    /// `page_prev_cascade_styles` is `Some`.
+    page_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
     /// Последний вычисленный кадр анимаций. `None` — страница не загружена
     /// или нет активных анимаций.
     anim_frame: Option<lumen_layout::AnimationFrame>,
@@ -9569,6 +9696,22 @@ impl Lumen {
     /// layout is available (first load) or when `layout_source` / viewport are
     /// not ready — the caller falls back to [`Self::relayout`].
     ///
+    /// BUG-341 S7: when [`Self::page_prev_cascade_styles`] is `Some` (the last
+    /// cycle to touch `self.layout_box` was this same restyle path) *and* the
+    /// page-side JS DOM-mutation tracker ([`PersistentJs::take_dom_touched`])
+    /// reports an attributed summary, this takes the incremental-cascade path
+    /// ([`lumen_layout::box_tree::layout_mutation_incremental_restyle`])
+    /// instead of the plain graft-only one — mirroring
+    /// `Lumen::relayout_chrome_host`'s BUG-341 S6 wiring. `dirty_roots` unions
+    /// the interactive-state delta (hover/focus/active, vs.
+    /// `self.page_prev_interactive`) with the DOM-mutation delta
+    /// (`touched.nodes`); `dom_content_stable` is `true` only when `touched.nodes`
+    /// is empty (a pure interactive-state cycle), same precondition
+    /// `RestyleDelta::dom_content_stable` documents. An `unattributed` summary
+    /// (untracked mutation primitive — Shadow DOM attach, `execCommand`, …) or a
+    /// missing/invalidated cache falls back to today's `layout_mutation_incremental`
+    /// (full cascade, still correct, just without the cascade-skip win).
+    ///
     /// `self.layout_box` is **moved out** (not cloned) to avoid copying the
     /// potentially large tree; `apply_relayout_result` moves the fresh tree
     /// back in, so field is always `Some` after a successful call.
@@ -9589,12 +9732,59 @@ impl Lumen {
         lumen_layout::set_forced_colors(self.a11y_store.forced_colors());
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
-        let (new_dl, new_lb) =
-            relayout_page_incremental(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb);
+        let new_interactive = (self.hovered_nid, self.focused_node, self.active_nid);
+        let touched = self.js_ctx.as_ref().map(|js| js.take_dom_touched()).unwrap_or_default();
+        let restyle_attempt = if !touched.unattributed
+            && let Some(prev_styles) = self.page_prev_cascade_styles.as_ref()
+        {
+            let (prev_hover, prev_focus, prev_active) = self.page_prev_interactive;
+            let doc = src.document.lock().unwrap();
+            let mut dirty_roots = std::collections::HashSet::new();
+            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                &doc, prev_hover, new_interactive.0,
+            ));
+            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                &doc, prev_focus, new_interactive.1,
+            ));
+            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                &doc, prev_active, new_interactive.2,
+            ));
+            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                &doc,
+                touched.nodes.iter().copied(),
+            ));
+            drop(doc);
+            let dom_content_stable = touched.nodes.is_empty();
+            let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, dom_content_stable };
+            lumen_layout::counters::set_incremental_restyle(true);
+            let result = relayout_page_incremental_restyle(
+                src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb, &delta,
+            );
+            lumen_layout::counters::set_incremental_restyle(false);
+            Some(result)
+        } else {
+            None
+        };
+        let (new_dl, new_lb, fresh_cascade_styles) = match restyle_attempt {
+            Some((dl, lb, counters)) => (dl, lb, Some(counters.styles().clone())),
+            None => {
+                let (dl, lb) = relayout_page_incremental(
+                    src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb,
+                );
+                (dl, lb, None)
+            }
+        };
         lumen_layout::clear_interactive_state();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
         self.apply_relayout_result(new_dl, new_lb, viewport);
+        // `apply_relayout_result` unconditionally clears the cache — restore it
+        // here, after `lb` has already landed in `self.layout_box`, only when
+        // this cycle actually produced a matching one.
+        if let Some(styles) = fresh_cascade_styles {
+            self.page_prev_cascade_styles = Some(styles);
+            self.page_prev_interactive = new_interactive;
+        }
         true
     }
 
@@ -9864,6 +10054,14 @@ impl Lumen {
             }
         }
         self.prev_styles = new_styles;
+        // BUG-341 S7: invalidate the restyle-cascade cache by default — every
+        // producer routes through here, but only `try_relayout_raf_incremental`'s
+        // restyle sub-path knows how to recompute a cache that actually matches
+        // `lb`, and re-validates it right after this call returns. Every other
+        // producer (full `relayout()`, `readback_relayout_job`,
+        // `poll_engine_commit`) leaves it `None`, forcing the next incremental
+        // attempt onto the safe full-cascade-plus-graft fallback for one cycle.
+        self.page_prev_cascade_styles = None;
         self.layout_box = Some(lb);
         self.refresh_cv_state();
         // Promote nodes with will-change: transform/opacity/filter to GPU layers so
@@ -10626,6 +10824,10 @@ impl Lumen {
                 self.starting_style_tracker = StartingStyleTracker::new();
                 self.prev_styles.clear();
                 collect_box_styles(&page.layout_box, &mut self.prev_styles);
+                // BUG-341 S7: this producer bypasses the restyle-aware path
+                // entirely — invalidate so the next `try_relayout_raf_incremental`
+                // doesn't diff a stale cache against this fresh tree.
+                self.page_prev_cascade_styles = None;
                 self.layout_box = Some(page.layout_box);
                 // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
                 self.cv_relevant.clear();
@@ -10969,6 +11171,10 @@ impl Lumen {
         self.content_height = content_height_of(&dl);
         self.content_width = content_width_of(&dl);
         self.display_list = dl;
+        // BUG-341 S7: streaming layout is a separate incremental mechanism
+        // (`layout_streaming_incremental`, no `CounterMap`) — invalidate the
+        // restyle cache so it isn't diffed against this tree by mistake.
+        self.page_prev_cascade_styles = None;
         self.layout_box = Some(layout);
         self.stream_layout_seeded = true;
         self.update_snap_containers();
@@ -22872,6 +23078,8 @@ impl Lumen {
         self.display_list = display_list;
         self.title = Some(data.title);
         self.layout_source = Some(layout_source);
+        // BUG-341 S7: hibernate restore bypasses the restyle-aware path.
+        self.page_prev_cascade_styles = None;
         self.layout_box = Some(lb);
         self.cv_relevant.clear();
         self.cv_events.clear();
@@ -23047,6 +23255,8 @@ impl Lumen {
             transition_scheduler: std::mem::take(&mut self.transition_scheduler),
             starting_style_tracker: std::mem::take(&mut self.starting_style_tracker),
             prev_styles: std::mem::take(&mut self.prev_styles),
+            page_prev_cascade_styles: self.page_prev_cascade_styles.take(),
+            page_prev_interactive: std::mem::take(&mut self.page_prev_interactive),
             anim_frame: self.anim_frame.take(),
             layout_box: self.layout_box.take(),
             page_tracks: std::mem::take(&mut self.page_tracks),
@@ -23130,6 +23340,8 @@ impl Lumen {
         self.transition_scheduler = snap.transition_scheduler;
         self.starting_style_tracker = snap.starting_style_tracker;
         self.prev_styles = snap.prev_styles;
+        self.page_prev_cascade_styles = snap.page_prev_cascade_styles;
+        self.page_prev_interactive = snap.page_prev_interactive;
         self.anim_frame = snap.anim_frame;
         self.layout_box = snap.layout_box;
         self.page_tracks = snap.page_tracks;
@@ -23220,6 +23432,8 @@ impl Lumen {
         self.transition_scheduler = TransitionScheduler::new();
         self.starting_style_tracker = StartingStyleTracker::new();
         self.prev_styles = HashMap::new();
+        self.page_prev_cascade_styles = None;
+        self.page_prev_interactive = (None, None, None);
         self.anim_frame = None;
         self.layout_box = None;
         self.find = find::FindState::default();

@@ -32,7 +32,7 @@ use lumen_dom::{
     ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
 use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -230,6 +230,30 @@ fn v8_thread_main(
 
 // ── Public handle ─────────────────────────────────────────────────────────────
 
+/// BUG-341 S7 — outcome of draining the page-side DOM-mutation tracker since
+/// the last [`V8JsRuntime::take_dom_touched`] call.
+///
+/// Feeds [`lumen_layout::style::restyle_root_set_for_node_change`] so the
+/// ADR-016 M4 page pipeline (`Lumen::try_relayout_raf_incremental`) can take
+/// the incremental-cascade path (`layout_mutation_incremental_restyle`)
+/// instead of a full cascade for JS DOM mutations, mirroring
+/// `lumen_chrome::bind_model_tracked` (BUG-341 S6) on the chrome side.
+#[derive(Debug, Default, Clone)]
+pub struct DomTouched {
+    /// Nodes whose selector-relevant attribute/class/style value or child
+    /// list actually changed via a tracked primitive (`setAttribute`,
+    /// `removeAttribute`, `className`/`classList`, inline `style`,
+    /// `appendChild`/`removeChild`/`insertBefore`, `textContent`/`innerHTML`).
+    pub nodes: HashSet<NodeId>,
+    /// `true` when a mutation happened this cycle through a primitive whose
+    /// effect on which nodes' selector-relevant state changed cannot be
+    /// attributed precisely (`execCommand`, contenteditable text editing,
+    /// Selection-driven range deletes, Shadow DOM attachment). When `true`,
+    /// `nodes` alone is **not** a safe restyle root-set — the caller must
+    /// fall back to a full cascade for this cycle.
+    pub unattributed: bool,
+}
+
 /// V8-backed JS runtime implementing [`JsRuntime`].
 ///
 /// The isolate lives on a dedicated thread; methods block until the dispatched
@@ -248,6 +272,10 @@ pub struct V8JsRuntime {
     timer_wakeup: Arc<Mutex<Option<f64>>>,
     /// Set to `true` by any DOM-mutating JS binding. Cleared by `take_dom_dirty`.
     dom_dirty: Arc<AtomicBool>,
+    /// BUG-341 S7: nodes touched by a tracked DOM-mutation primitive since the
+    /// last [`Self::take_dom_touched`] call, plus the `unattributed` fallback
+    /// flag. See [`DomTouched`].
+    dom_touched: Arc<Mutex<DomTouched>>,
     /// Set to `true` when JS calls `requestAnimationFrame(fn)`.
     raf_pending: Arc<AtomicBool>,
     /// Layout bounding rects updated after each relayout by the shell.
@@ -340,6 +368,7 @@ impl V8JsRuntime {
             nav_out: Arc::new(Mutex::new(None)),
             timer_wakeup: Arc::new(Mutex::new(None)),
             dom_dirty: Arc::new(AtomicBool::new(false)),
+            dom_touched: Arc::new(Mutex::new(DomTouched::default())),
             raf_pending: Arc::new(AtomicBool::new(false)),
             layout_rects: Arc::new(Mutex::new(HashMap::new())),
             viewport_size: Arc::new(Mutex::new([0.0, 0.0])),
@@ -487,6 +516,13 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::take_dom_dirty`].
     pub fn take_dom_dirty(&self) -> bool {
         self.dom_dirty.swap(false, Ordering::Relaxed)
+    }
+
+    /// BUG-341 S7: drain the set of nodes touched by tracked DOM-mutation
+    /// primitives since the last call, clearing it (and the `unattributed`
+    /// flag) for the next cycle. See [`DomTouched`].
+    pub fn take_dom_touched(&self) -> DomTouched {
+        std::mem::take(&mut *self.dom_touched.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Returns `true` if `requestAnimationFrame` was called since the last call,
@@ -925,6 +961,7 @@ impl V8JsRuntime {
             let nav_out = Arc::clone(&self.nav_out);
             let timer_wakeup = Arc::clone(&self.timer_wakeup);
             let dom_dirty = Arc::clone(&self.dom_dirty);
+            let dom_touched = Arc::clone(&self.dom_touched);
             let raf_pending = Arc::clone(&self.raf_pending);
             let layout_rects = Arc::clone(&self.layout_rects);
             let viewport_size = Arc::clone(&self.viewport_size);
@@ -1275,21 +1312,35 @@ impl V8JsRuntime {
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!(
             "_lumen_set_attr",
             move |node_id: u32, name: String, value: String| {
                 let mut doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
+                let old = doc.get(nid).get_attr(&name).map(|s| s.to_string());
                 set_attribute(&mut doc, nid, &name, &value);
+                // BUG-341 S7: only record when the value actually changed —
+                // mirrors `lumen_chrome::model::set_attr`'s change-detection
+                // (bind_model writes idempotently every cycle regardless of
+                // whether the value changed).
+                if old.as_deref() != Some(value.as_str()) {
+                    record_dom_touch(&touched, nid);
+                }
                 dirty.store(true, Ordering::Relaxed);
             }
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!("_lumen_remove_attr", move |node_id: u32, name: String| {
             let mut doc = d.lock().unwrap();
             let nid = NodeId::from_index(node_id as usize);
+            let had = doc.get(nid).get_attr(&name).is_some();
             remove_attribute(&mut doc, nid, &name);
+            if had {
+                record_dom_touch(&touched, nid);
+            }
             dirty.store(true, Ordering::Relaxed);
         });
         let d = Arc::clone(&doc);
@@ -1317,12 +1368,16 @@ impl V8JsRuntime {
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!(
             "_lumen_set_text_content",
             move |node_id: u32, text: String| {
                 let mut doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 set_text_content(&mut doc, nid, &text);
+                // BUG-341 S7: record `nid` itself (not just its parent) —
+                // a text/childList change here can flip `:empty` for `nid`.
+                record_dom_touch(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
             }
         );
@@ -1338,6 +1393,7 @@ impl V8JsRuntime {
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!(
             "_lumen_set_inner_html",
             move |node_id: u32, html: String| {
@@ -1345,6 +1401,7 @@ impl V8JsRuntime {
                 let mut doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 set_text_content(&mut doc, nid, &html);
+                record_dom_touch(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
             }
         );
@@ -1440,6 +1497,7 @@ impl V8JsRuntime {
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!(
             "_lumen_append_child",
             move |parent_id: u32, child_id: u32| {
@@ -1447,17 +1505,29 @@ impl V8JsRuntime {
                 let parent = NodeId::from_index(parent_id as usize);
                 let child = NodeId::from_index(child_id as usize);
                 doc.append_child(parent, child);
+                // BUG-341 S7: record the container — covers `parent`'s own
+                // `:empty`/nth-child-of-its-parent state plus the reconciled
+                // children (all within `restyle_root_set_for_node_change`'s
+                // parent-subtree invalidation).
+                record_dom_touch(&touched, parent);
                 dirty.store(true, Ordering::Relaxed);
             }
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!(
             "_lumen_remove_child",
             move |_parent_id: u32, child_id: u32| {
                 let mut doc = d.lock().unwrap();
                 let child = NodeId::from_index(child_id as usize);
+                // Read the authoritative parent from the DOM (not the
+                // JS-supplied `_parent_id`) before detaching.
+                let parent = doc.get(child).parent;
                 doc.detach(child);
+                if let Some(parent) = parent {
+                    record_dom_touch(&touched, parent);
+                }
                 dirty.store(true, Ordering::Relaxed);
             }
         );
@@ -2968,6 +3038,7 @@ impl V8JsRuntime {
     {
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!("_lumen_attach_shadow", move |nid: u32, mode: String| -> u32 {
             let mut doc = d.lock().unwrap();
             let host = NodeId::from_index(nid as usize);
@@ -2977,6 +3048,10 @@ impl V8JsRuntime {
                 ShadowRootMode::Open
             };
             let shadow = doc.attach_shadow(host, m);
+            // BUG-341 S7: Shadow DOM attachment changes shadow-tree style
+            // scoping in ways not attributable to a simple node set —
+            // conservative fallback.
+            record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
             shadow.index() as u32
         });
@@ -3050,13 +3125,18 @@ impl V8JsRuntime {
     {
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!(
             "_lumen_insert_before",
             move |_parent_id: u32, child_id: u32, reference_id: u32| {
                 let mut doc = d.lock().unwrap();
                 let child = NodeId::from_index(child_id as usize);
                 let reference = NodeId::from_index(reference_id as usize);
+                let parent = doc.get(reference).parent;
                 doc.insert_before(child, reference);
+                if let Some(parent) = parent {
+                    record_dom_touch(&touched, parent);
+                }
                 dirty.store(true, Ordering::Relaxed);
             }
         );
@@ -3105,6 +3185,7 @@ impl V8JsRuntime {
         // Sets selection to [anchor_nid, anchor_offset, focus_nid, focus_offset].
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!(
             "_lumen_set_selection",
             move |anchor_nid: u32, anchor_off: u32, focus_nid: u32, focus_off: u32| {
@@ -3119,6 +3200,11 @@ impl V8JsRuntime {
                         offset: focus_off,
                     }),
                 });
+                // BUG-341 S7: conservative — no differential test yet proves
+                // `::selection` styling is independent of live selection state
+                // in this cascade, so a selection change forces a full cascade
+                // rather than risk an under-approximated restyle root-set.
+                record_dom_touch_unattributed(&touched);
                 dirty.store(true, Ordering::Relaxed);
             }
         );
@@ -3127,9 +3213,11 @@ impl V8JsRuntime {
         // Clears the current selection.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!("_lumen_clear_selection", move || {
             let mut doc = d.lock().unwrap();
             doc.set_selection(Selection { anchor: None, focus: None });
+            record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
         });
     }
@@ -3193,6 +3281,7 @@ impl V8JsRuntime {
         // Deletes the contents of range; returns [new_pos_nid, new_pos_offset].
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!(
             "_lumen_range_delete_contents",
             move |start_nid: u32, start_off: u32, end_nid: u32, end_off: u32| -> Vec<u32> {
@@ -3208,6 +3297,9 @@ impl V8JsRuntime {
                     },
                 };
                 let pos = lumen_dom::delete_range(&mut doc, &r);
+                // BUG-341 S7: arbitrary-range content deletion can remove
+                // whole elements — not attributable to a simple node set.
+                record_dom_touch_unattributed(&touched);
                 dirty.store(true, Ordering::Relaxed);
                 vec![pos.container.index() as u32, pos.offset]
             }
@@ -3230,6 +3322,7 @@ impl V8JsRuntime {
         // Returns true on success.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!("_lumen_contenteditable_insert_text", move |text: String| -> bool {
             if text.is_empty() { return false; }
             let mut doc = d.lock().unwrap();
@@ -3242,6 +3335,9 @@ impl V8JsRuntime {
             };
             let new_pos = lumen_dom::insert_text_at(&mut doc, insert_pos, &text);
             doc.set_selection(Selection { anchor: Some(new_pos), focus: Some(new_pos) });
+            // BUG-341 S7: text insertion at an arbitrary caret position — not
+            // attributable to a simple node set.
+            record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
             true
         });
@@ -3251,6 +3347,7 @@ impl V8JsRuntime {
         // If the selection is non-collapsed, deletes the selection instead.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!("_lumen_contenteditable_delete_backward", move || -> bool {
             let mut doc = d.lock().unwrap();
             let sel = doc.get_selection().clone();
@@ -3258,6 +3355,7 @@ impl V8JsRuntime {
             if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
                 let pos = lumen_dom::delete_range(&mut doc, &r);
                 doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
+                record_dom_touch_unattributed(&touched);
                 dirty.store(true, Ordering::Relaxed);
                 return true;
             }
@@ -3279,6 +3377,7 @@ impl V8JsRuntime {
             };
             let pos = lumen_dom::delete_range(&mut doc, &r);
             doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
+            record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
             true
         });
@@ -3288,12 +3387,14 @@ impl V8JsRuntime {
         // If the selection is non-collapsed, deletes the selection instead.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!("_lumen_contenteditable_delete_forward", move || -> bool {
             let mut doc = d.lock().unwrap();
             let sel = doc.get_selection().clone();
             if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
                 let pos = lumen_dom::delete_range(&mut doc, &r);
                 doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
+                record_dom_touch_unattributed(&touched);
                 dirty.store(true, Ordering::Relaxed);
                 return true;
             }
@@ -3315,6 +3416,7 @@ impl V8JsRuntime {
             };
             let pos = lumen_dom::delete_range(&mut doc, &r);
             doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
+            record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
             true
         });
@@ -3324,6 +3426,7 @@ impl V8JsRuntime {
         // Finds the editing host, then calls insert_paragraph_break.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!("_lumen_contenteditable_insert_paragraph", move || -> bool {
             let mut doc = d.lock().unwrap();
             let sel = doc.get_selection().clone();
@@ -3339,6 +3442,7 @@ impl V8JsRuntime {
             };
             let new_pos = lumen_dom::insert_paragraph_break(&mut doc, pos, host);
             doc.set_selection(Selection { anchor: Some(new_pos), focus: Some(new_pos) });
+            record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
             true
         });
@@ -3348,6 +3452,7 @@ impl V8JsRuntime {
         // Returns true if the command was handled.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!(
             "_lumen_exec_command",
             move |cmd: String, value: String| -> bool {
@@ -3369,6 +3474,7 @@ impl V8JsRuntime {
                                         offset: last_len as u32,
                                     }),
                                 });
+                                record_dom_touch_unattributed(&touched);
                                 dirty.store(true, Ordering::Relaxed);
                             }
                         }
@@ -3387,6 +3493,7 @@ impl V8JsRuntime {
                                 anchor: Some(new_pos),
                                 focus: Some(new_pos),
                             });
+                            record_dom_touch_unattributed(&touched);
                             dirty.store(true, Ordering::Relaxed);
                         }
                         true
@@ -3398,6 +3505,7 @@ impl V8JsRuntime {
                                 anchor: Some(pos),
                                 focus: Some(pos),
                             });
+                            record_dom_touch_unattributed(&touched);
                             dirty.store(true, Ordering::Relaxed);
                         }
                         true
@@ -3560,10 +3668,12 @@ impl V8JsRuntime {
         });
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!("_lumen_set_style_property", move |nid: u32, prop: String, val: String| {
             if let Ok(mut doc) = d.lock() {
                 let node_id = NodeId::from_index(nid as usize);
-                let mut parsed = if let Some(style) = doc.get(node_id).get_attr("style") {
+                let old_style = doc.get(node_id).get_attr("style").map(|s| s.to_string());
+                let mut parsed = if let Some(style) = old_style.as_deref() {
                     _parse_style_string(style)
                 } else {
                     std::collections::HashMap::new()
@@ -3572,15 +3682,20 @@ impl V8JsRuntime {
                 parsed.insert(kebab_prop, val);
                 let css_text = _serialize_style_map(&parsed);
                 set_attribute(&mut doc, node_id, "style", &css_text);
+                if old_style.as_deref() != Some(css_text.as_str()) {
+                    record_dom_touch(&touched, node_id);
+                }
                 dirty.store(true, Ordering::Relaxed);
             }
         });
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
         reg!("_lumen_delete_style_property", move |nid: u32, prop: String| {
             if let Ok(mut doc) = d.lock() {
                 let node_id = NodeId::from_index(nid as usize);
-                let mut parsed = if let Some(style) = doc.get(node_id).get_attr("style") {
+                let old_style = doc.get(node_id).get_attr("style").map(|s| s.to_string());
+                let mut parsed = if let Some(style) = old_style.as_deref() {
                     _parse_style_string(style)
                 } else {
                     std::collections::HashMap::new()
@@ -3592,6 +3707,10 @@ impl V8JsRuntime {
                     remove_attribute(&mut doc, node_id, "style");
                 } else {
                     set_attribute(&mut doc, node_id, "style", &css_text);
+                }
+                let new_style = if css_text.is_empty() { None } else { Some(css_text.as_str()) };
+                if old_style.as_deref() != new_style {
+                    record_dom_touch(&touched, node_id);
                 }
                 dirty.store(true, Ordering::Relaxed);
             }
@@ -4063,6 +4182,20 @@ fn collect_text_inner(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mu
     for &child in &node.children.clone() {
         collect_text_inner(doc, child, out);
     }
+}
+
+/// BUG-341 S7: record `nid` as touched by a tracked DOM-mutation primitive.
+fn record_dom_touch(tracker: &Mutex<DomTouched>, nid: NodeId) {
+    tracker.lock().unwrap_or_else(|e| e.into_inner()).nodes.insert(nid);
+}
+
+/// BUG-341 S7: mark this cycle's DOM mutations as unattributable — a mutation
+/// happened through a primitive (`execCommand`, contenteditable editing,
+/// Selection-driven range edits, Shadow DOM attachment) whose effect on which
+/// nodes' selector-relevant state changed cannot be precisely determined.
+/// Forces the page pipeline to fall back to a full cascade this cycle.
+fn record_dom_touch_unattributed(tracker: &Mutex<DomTouched>) {
+    tracker.lock().unwrap_or_else(|e| e.into_inner()).unattributed = true;
 }
 
 /// Mirrors `dom::set_text_content`.
@@ -4747,6 +4880,251 @@ mod tests {
             .eval("document.querySelector('#main').tagName === 'DIV'")
             .unwrap();
         assert_eq!(ok, JsValue::Bool(true));
+    }
+
+    // ── BUG-341 S7: `take_dom_touched` (page-side DOM-mutation tracker) ────────
+
+    #[test]
+    fn take_dom_touched_is_empty_before_any_mutation() {
+        let rt = runtime_with_dom(make_doc(), "");
+        let t = rt.take_dom_touched();
+        assert!(t.nodes.is_empty());
+        assert!(!t.unattributed);
+    }
+
+    #[test]
+    fn take_dom_touched_reports_set_attribute() {
+        let doc = make_doc();
+        let main = doc.lock().unwrap().find_by_id("main").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval("document.getElementById('main').setAttribute('data-x', '1')")
+            .unwrap();
+        let t = rt.take_dom_touched();
+        assert!(t.nodes.contains(&main));
+        assert!(!t.unattributed);
+    }
+
+    #[test]
+    fn take_dom_touched_ignores_a_no_op_set_attribute() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(doc, "");
+        // 'id' is already "main" — writing the same value is a no-op change.
+        rt.eval("document.getElementById('main').setAttribute('id', 'main')")
+            .unwrap();
+        let t = rt.take_dom_touched();
+        assert!(t.nodes.is_empty());
+        assert!(!t.unattributed);
+    }
+
+    #[test]
+    fn take_dom_touched_reports_class_list_add() {
+        let doc = make_doc();
+        let main = doc.lock().unwrap().find_by_id("main").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval("document.getElementById('main').classList.add('active')")
+            .unwrap();
+        let t = rt.take_dom_touched();
+        assert!(t.nodes.contains(&main));
+        assert!(!t.unattributed);
+    }
+
+    #[test]
+    fn take_dom_touched_reports_remove_attribute() {
+        let doc = make_doc();
+        let main = doc.lock().unwrap().find_by_id("main").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval("document.getElementById('main').setAttribute('data-x', '1')")
+            .unwrap();
+        rt.take_dom_touched(); // drain the setAttribute above
+        rt.eval("document.getElementById('main').removeAttribute('data-x')")
+            .unwrap();
+        let t = rt.take_dom_touched();
+        assert!(t.nodes.contains(&main));
+        assert!(!t.unattributed);
+    }
+
+    #[test]
+    fn take_dom_touched_ignores_a_no_op_remove_attribute() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval("document.getElementById('main').removeAttribute('data-never-set')")
+            .unwrap();
+        let t = rt.take_dom_touched();
+        assert!(t.nodes.is_empty());
+        assert!(!t.unattributed);
+    }
+
+    #[test]
+    fn take_dom_touched_reports_append_child_on_the_parent() {
+        let doc = make_doc();
+        let body = doc.lock().unwrap().find_by_id("main").unwrap();
+        let body = doc.lock().unwrap().get(body).parent.unwrap(); // <body>
+        let rt = runtime_with_dom(doc, "");
+        rt.eval(
+            "document.body.appendChild(document.createElement('p'))",
+        )
+        .unwrap();
+        let t = rt.take_dom_touched();
+        assert!(t.nodes.contains(&body));
+        assert!(!t.unattributed);
+    }
+
+    #[test]
+    fn take_dom_touched_reports_remove_child_on_the_parent() {
+        let doc = make_doc();
+        let main = doc.lock().unwrap().find_by_id("main").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval("document.getElementById('main').removeChild(document.getElementById('main').firstChild)")
+            .unwrap();
+        let t = rt.take_dom_touched();
+        assert!(t.nodes.contains(&main));
+        assert!(!t.unattributed);
+    }
+
+    #[test]
+    fn take_dom_touched_reports_text_content_change() {
+        let doc = make_doc();
+        let main = doc.lock().unwrap().find_by_id("main").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval("document.getElementById('main').textContent = 'replaced'")
+            .unwrap();
+        let t = rt.take_dom_touched();
+        assert!(t.nodes.contains(&main));
+        assert!(!t.unattributed);
+    }
+
+    #[test]
+    fn take_dom_touched_reports_inline_style_change() {
+        let doc = make_doc();
+        let main = doc.lock().unwrap().find_by_id("main").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval("document.getElementById('main').style.color = 'red'")
+            .unwrap();
+        let t = rt.take_dom_touched();
+        assert!(t.nodes.contains(&main));
+        assert!(!t.unattributed);
+    }
+
+    #[test]
+    fn take_dom_touched_marks_exec_command_unattributed() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval("document.execCommand('selectAll', false, null)")
+            .unwrap();
+        let t = rt.take_dom_touched();
+        assert!(t.unattributed);
+    }
+
+    #[test]
+    fn take_dom_touched_clears_between_calls() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval("document.getElementById('main').setAttribute('data-x', '1')")
+            .unwrap();
+        let first = rt.take_dom_touched();
+        assert!(!first.nodes.is_empty());
+        let second = rt.take_dom_touched();
+        assert!(second.nodes.is_empty());
+        assert!(!second.unattributed);
+    }
+
+    /// BUG-341 S7 part 2: end-to-end differential test for the page-pipeline
+    /// wiring (`Lumen::try_relayout_raf_incremental`) — `take_dom_touched()`'s
+    /// node set, fed through `restyle_root_set_for_node_change` into a
+    /// `RestyleDelta`, must be a *sufficient* dirty-root-set for
+    /// `layout_mutation_incremental_restyle` to reproduce a full
+    /// `layout_measured_hyp_with_counters` recompute exactly — driven by a real
+    /// V8 `classList.add` mutation, not a synthetic dirty-root set like the
+    /// `lumen-layout`-crate differential tests use. Any divergence here would
+    /// mean the shell's actual wiring (not just the underlying primitives) is
+    /// unsound.
+    #[test]
+    fn dom_touched_drives_incremental_restyle_matching_full_cascade() {
+        use lumen_core::ext::NullHyphenationProvider;
+        use lumen_core::geom::{Rect, Size};
+        use lumen_layout::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle, LayoutBox};
+        use lumen_layout::counters::{set_incremental_restyle, RestyleDelta};
+        use lumen_layout::style::restyle_root_set_for_node_change;
+
+        struct FixedMeasurer;
+        impl lumen_layout::TextMeasurer for FixedMeasurer {
+            fn char_width(&self, _: char, size: f32) -> f32 {
+                size * 0.5
+            }
+        }
+
+        fn collect_rects(b: &LayoutBox, out: &mut Vec<(lumen_dom::NodeId, Rect)>) {
+            out.push((b.node, b.rect));
+            for c in &b.children {
+                collect_rects(c, out);
+            }
+        }
+
+        let doc = make_doc();
+        let sheet = lumen_css_parser::parse("#main { color: black; } #main.active { padding: 20px; color: red; }");
+        let vp = Size::new(800.0, 600.0);
+        let hp = NullHyphenationProvider;
+
+        // Baseline: full cascade over the pre-mutation document.
+        let (prev, baseline_counters) = {
+            let d = doc.lock().unwrap();
+            layout_measured_hyp_with_counters(&d, &sheet, vp, &FixedMeasurer, &hp, false)
+        };
+
+        let rt = runtime_with_dom(Arc::clone(&doc), "");
+        rt.eval("document.getElementById('main').classList.add('active')").unwrap();
+        let touched = rt.take_dom_touched();
+        assert!(!touched.unattributed, "classList.add must be attributed");
+        assert!(!touched.nodes.is_empty(), "classList.add must report the touched node");
+
+        let dirty_roots = {
+            let d = doc.lock().unwrap();
+            restyle_root_set_for_node_change(&d, touched.nodes.iter().copied())
+        };
+        let delta = RestyleDelta { prev_styles: baseline_counters.styles(), dirty_roots, dom_content_stable: false };
+
+        set_incremental_restyle(true);
+        let (incr, _incr_counters) = {
+            let d = doc.lock().unwrap();
+            layout_mutation_incremental_restyle(&d, &sheet, vp, &FixedMeasurer, &hp, false, &prev, &delta)
+        };
+        set_incremental_restyle(false);
+
+        let full = {
+            let d = doc.lock().unwrap();
+            layout_measured_hyp_with_counters(&d, &sheet, vp, &FixedMeasurer, &hp, false).0
+        };
+
+        let mut ia = Vec::new();
+        let mut fb = Vec::new();
+        collect_rects(&incr, &mut ia);
+        collect_rects(&full, &mut fb);
+        assert_eq!(ia.len(), fb.len(), "box count must match full layout");
+        for ((na, ra), (nb, rb)) in ia.iter().zip(fb.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!(
+                (ra.x - rb.x).abs() < 0.5
+                    && (ra.y - rb.y).abs() < 0.5
+                    && (ra.width - rb.width).abs() < 0.5
+                    && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}",
+            );
+        }
+
+        // Sanity: the fixture must actually move geometry, or a broken/empty
+        // delta would pass this test vacuously. `#main` is a block with
+        // `width:auto` (stretches to the containing block regardless of
+        // padding — content-box shrinks instead, so *width* is unaffected),
+        // but `height:auto` grows by `padding-top + padding-bottom`.
+        let main = doc.lock().unwrap().find_by_id("main").unwrap();
+        let mut prev_rects = Vec::new();
+        collect_rects(&prev, &mut prev_rects);
+        let prev_main = prev_rects.iter().find(|(n, _)| *n == main).unwrap().1;
+        let full_main = fb.iter().find(|(n, _)| *n == main).unwrap().1;
+        assert!(
+            (full_main.height - prev_main.height).abs() > 1.0,
+            "fixture must actually change geometry, or this test is vacuous",
+        );
     }
 
     // BUG-327: `Node.prototype.hasChildNodes()` was missing entirely, and the

@@ -588,6 +588,33 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
     rejects, does not resolve) and `decompression_stream_multi_chunk_matches_single_chunk`
     (split-write body decodes identically to a single chunk).
 
+- **BUG-341 S7 (part 1): `v8_runtime::DomTouched`** — page-side DOM-mutation tracker, V8-only,
+  mirroring `lumen_chrome::bind_model_tracked` (BUG-341 S6). `V8JsRuntime::take_dom_touched()`
+  drains `{ nodes: HashSet<NodeId>, unattributed: bool }` since the last call. Instruments the 9
+  native mutation primitives whose selector-relevant effect is precisely attributable —
+  `_lumen_set_attr`/`_lumen_remove_attr` (only when the value actually changed),
+  `_lumen_append_child`/`_lumen_remove_child`/`_lumen_insert_before` (record the parent),
+  `_lumen_set_text_content`/`_lumen_set_inner_html` (record the node itself — a text/childList
+  change can flip `:empty`), and the CSS Typed OM `_lumen_set_style_property`/
+  `_lumen_delete_style_property` (bypass `_lumen_set_attr`, needed their own change-detection).
+  `classList`/`className`/inline `style.color = …` in the JS shim all route through
+  `_lumen_set_attr` already, so no shim changes were needed for those. The other 13
+  `dom_dirty`-setting natives — Shadow DOM attach, Selection/Range get-set-clear,
+  contenteditable key-handler bindings, `execCommand`'s mutating branches — set
+  `unattributed: true` (their effect isn't attributable to a simple node set; the caller must
+  fall back to a full cascade for the cycle). 12 unit tests (`v8_runtime.rs`,
+  `take_dom_touched_*`), all green.
+  **BUG-341 S7 (part 2): wired into the page pipeline.** `Lumen::try_relayout_raf_incremental`
+  (`crates/shell/src/main.rs`) drains `take_dom_touched()` and, when attributed and a matching
+  cascade cache (`Lumen::page_prev_cascade_styles`) exists, takes the restyle-aware
+  `layout_mutation_incremental_restyle` path — same shape as chrome's S6 wiring — falling back to
+  the plain graft-only `layout_mutation_incremental` otherwise (still correct, just without the
+  cascade-skip win). New differential test
+  (`v8_runtime::tests::dom_touched_drives_incremental_restyle_matching_full_cascade`) drives a real
+  V8 `classList.add` mutation end-to-end and asserts the result matches a fresh full-cascade
+  recompute. The engine-thread relayout job is not wired (see BUG-341 "S7 (part 2)" for why —
+  crossing the thread boundary with a `CounterMap`/dirty-roots is a separate design question).
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
