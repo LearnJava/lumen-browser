@@ -318,6 +318,39 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   differential tests are the gate and there is no invalidation-correctness
   trade-off. Numbers and the per-node micro-benchmark — BUG-341 "S8".
 
+- **S10 — the per-node pseudo-element cascades.** ✅ Done. Premise ("building a
+  `ComputedStyle` is expensive") was wrong and the profile said so before the
+  first edit: construction is 3 % of `compute_style`. Over half went to
+  pseudo-element cascades run on every element — `::-webkit-scrollbar*` (55 %)
+  and the `::before`/`::after` quote-depth probe (79 % of the cascade stage on
+  `CC12_KEY`). Fixed by matching before building, per-sheet node-independent
+  facts in `CascadeIndex`, and gating the `revert-layer` pre-pass. The profiler
+  itself was fixed too (thread-local trees on rayon workers reported `build_box`
+  at 288 ms against ~5 ms). ≈20 % off both scenarios. BUG-341 "S10".
+- **S11 — `::-webkit-scrollbar*` only where a scrollbar can appear.** ✅ Done,
+  [ADR-022](../decisions/ADR-022-webkit-scrollbar-scroll-containers-only.md)
+  (user decision 2026-07-27). Also a fidelity fix: the translation writes to the
+  *inherited* `scrollbar-width`/`scrollbar-color`, so a rule on a non-scrollable
+  element used to leak to every descendant. ≈25 % off `CC12_HOVER`, ≈9 % off
+  `CC12_KEY`. BUG-341 "S11".
+- **S12 — `LayoutBox::style` behind an `Arc`, copy-on-write.** ✅ Done. First
+  measurement below stage level inside `lay_out`: a third of it is
+  `let s = b.style.clone()` in `lay_out_inner`, a 3.2 KB / 302-field / ~30-heap-
+  field copy taken per box purely to dodge the borrow checker (1.2 ms of
+  3.7 ms), and the same struct is copied twice more per frame — `build_box`
+  out of the cascade cache, and the whole-tree `clone()` that persists `prev`.
+  All three became refcount bumps; the passes that write a *used* value back
+  (flex stretch, `font-size-adjust`, container queries, canvas background,
+  `::first-line`, table cell width) take their copy via `Arc::make_mut`.
+  `graft_geometry` gained an `Arc::ptr_eq` short-circuit. Gates are by
+  *identity* (`built_boxes_share_the_cascade_cache_style_allocation`,
+  `used_value_writeback_does_not_leak_into_the_cascade_cache`). Interleaved A/B
+  ×3: `CC12_HOVER` ≈15 % faster, `CC12_KEY` ≈28 %, no overlap between groups;
+  `lay_out` 3.7 → 2.4 ms, `clone_tree` 1.5 → 0.7 ms. Gate still red (~3-8×).
+  New permanent `scope_detail` scopes in `lay_out_inner` produced the counter no
+  slice had: **1696 of 3121 boxes are rebuilt and re-laid-out on a hover flip**,
+  1425 reused. That, not any single stage, is the next lever. BUG-341 "S12".
+
 **Stop conditions / honesty:** if after S5 the p95 floor is set by irreducible
 per-node cascade cost on the hover root-set and stays > 2 ms, report the number
 and re-open the CC-12 budget question with data (2 ms may be the wrong target;

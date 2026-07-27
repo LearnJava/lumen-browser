@@ -144,7 +144,7 @@ mod tests {
         LayoutBox {
             node: NodeId::from_index(1),
             rect,
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::InlineRun { segments: vec![], lines, first_line_style: None },
             children: vec![],
             col_span: 1,
@@ -156,7 +156,7 @@ mod tests {
         LayoutBox {
             node: NodeId::from_index(1),
             rect,
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children,
             col_span: 1,
@@ -312,7 +312,7 @@ mod tests {
         let b = LayoutBox {
             node: NodeId::from_index(1),
             rect: Rect { x: 0.0, y: 0.0, width: 100.0, height: 20.0 },
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Skip,
             children: vec![],
             col_span: 1,

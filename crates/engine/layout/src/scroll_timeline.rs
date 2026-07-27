@@ -329,7 +329,7 @@ mod tests {
         LayoutBox {
             node: node(id),
             rect: Rect { x, y, width: w, height: h },
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: Vec::new(),
             col_span: 1,
@@ -532,8 +532,8 @@ mod tests {
     fn collect_scroll_timelines_walks_tree() {
         // Root has a scroll-timeline-name; child does not.
         let mut root = make_box(1, 0.0, 0.0, 1024.0, 2000.0);
-        root.style.scroll_timeline_name = Some("--parent".to_string());
-        root.style.scroll_timeline_axis = ScrollAxis::Inline;
+        std::sync::Arc::make_mut(&mut root.style).scroll_timeline_name = Some("--parent".to_string());
+        std::sync::Arc::make_mut(&mut root.style).scroll_timeline_axis = ScrollAxis::Inline;
         let child = make_box(2, 0.0, 0.0, 800.0, 600.0);
         root.children.push(child);
 
@@ -548,11 +548,11 @@ mod tests {
     fn collect_scroll_timelines_nested() {
         // Both root and a nested child have scroll-timeline-names.
         let mut root = make_box(1, 0.0, 0.0, 1024.0, 2000.0);
-        root.style.scroll_timeline_name = Some("--outer".to_string());
-        root.style.scroll_timeline_axis = ScrollAxis::Block;
+        std::sync::Arc::make_mut(&mut root.style).scroll_timeline_name = Some("--outer".to_string());
+        std::sync::Arc::make_mut(&mut root.style).scroll_timeline_axis = ScrollAxis::Block;
         let mut child = make_box(2, 0.0, 0.0, 400.0, 800.0);
-        child.style.scroll_timeline_name = Some("--inner".to_string());
-        child.style.scroll_timeline_axis = ScrollAxis::Y;
+        std::sync::Arc::make_mut(&mut child.style).scroll_timeline_name = Some("--inner".to_string());
+        std::sync::Arc::make_mut(&mut child.style).scroll_timeline_axis = ScrollAxis::Y;
         root.children.push(child);
 
         let collected = collect_named_scroll_timelines(&root);
@@ -566,8 +566,8 @@ mod tests {
     fn collect_view_timelines_walks_tree() {
         let mut root = make_box(1, 0.0, 0.0, 1024.0, 720.0);
         let mut target = make_box(2, 0.0, 300.0, 400.0, 200.0);
-        target.style.view_timeline_name = Some("--fade".to_string());
-        target.style.view_timeline_axis = ScrollAxis::Block;
+        std::sync::Arc::make_mut(&mut target.style).view_timeline_name = Some("--fade".to_string());
+        std::sync::Arc::make_mut(&mut target.style).view_timeline_axis = ScrollAxis::Block;
         root.children.push(target);
 
         let collected = collect_named_view_timelines(&root);

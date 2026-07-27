@@ -304,7 +304,7 @@ fn stack_boxes_horizontal(boxes: &[LayoutBox]) -> LayoutBox {
 }
 
 /// Create an anonymous box (no DOM node) with the given style for stacking.
-fn make_anonymous_box_with_style(style: crate::style::ComputedStyle) -> LayoutBox {
+fn make_anonymous_box_with_style(style: std::sync::Arc<crate::style::ComputedStyle>) -> LayoutBox {
     LayoutBox {
         node: NodeId::from_index(0),
         rect: Rect::ZERO,
@@ -362,7 +362,7 @@ mod tests {
 
     /// Build a plain box with the given rect for composition tests.
     fn make_box(x: f32, y: f32, w: f32, h: f32) -> LayoutBox {
-        let mut b = make_anonymous_box_with_style(ComputedStyle::root());
+        let mut b = make_anonymous_box_with_style(std::sync::Arc::new(ComputedStyle::root()));
         b.rect = Rect { x, y, width: w, height: h };
         b
     }

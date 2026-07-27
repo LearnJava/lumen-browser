@@ -633,7 +633,7 @@ mod tests {
         LayoutBox {
             node: node(id),
             rect: Rect { x, y, width: w, height: h },
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: Vec::new(),
             col_span: 1,
@@ -684,8 +684,8 @@ mod tests {
     fn progress_for_named_scroll_container() {
         let mut root = make_box(1, 0.0, 0.0, 1024.0, 720.0);
         let mut container = make_box(2, 0.0, 0.0, 400.0, 160.0);
-        container.style.scroll_timeline_name = Some("--page".to_string());
-        container.style.scroll_timeline_axis = ScrollAxis::Block;
+        std::sync::Arc::make_mut(&mut container.style).scroll_timeline_name = Some("--page".to_string());
+        std::sync::Arc::make_mut(&mut container.style).scroll_timeline_axis = ScrollAxis::Block;
         container.scroll_y = 60.0;
         // content 400 tall inside 160 container → max_scroll 240; 60/240 = 0.25.
         container.children.push(make_box(3, 0.0, 0.0, 400.0, 400.0));

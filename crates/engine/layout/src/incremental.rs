@@ -213,7 +213,16 @@ pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
     // viewport `height` back into the root box's `style`, so a freshly-built
     // root never equals its own laid-out predecessor. One such node at the root
     // meant `graft_geometry` reused nothing at all, on every interaction.
-    let self_reusable = new.style == prev.style;
+    //
+    // BUG-341 S12: the pointer test short-circuits the 302-field comparison for
+    // every box whose style came unchanged out of the incremental cascade —
+    // both trees then hold the *same* `Arc` from `CounterMap::styles`. The
+    // structural `==` still runs when the pointers differ, so a box whose style
+    // was re-cascaded to an equal value is still recognised as reusable (that
+    // matters: the incremental cascade legitimately re-computes nodes whose
+    // result is unchanged).
+    let self_reusable =
+        std::sync::Arc::ptr_eq(&new.style, &prev.style) || new.style == prev.style;
 
     let common = new.children.len().min(prev.children.len());
     let mut all_clean = self_reusable && new.children.len() == prev.children.len();
@@ -393,7 +402,7 @@ mod tests {
         LayoutBox {
             node: NodeId::from_index(id as usize),
             rect,
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],
             col_span: 1,
@@ -409,7 +418,7 @@ mod tests {
         LayoutBox {
             node: NodeId::from_index(id as usize),
             rect,
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children,
             col_span: 1,
@@ -806,7 +815,7 @@ mod tests {
         let mut fresh =
             block_with_children(1, Rect::ZERO, vec![leaf(2, Rect::ZERO)]);
         // Only the parent's style differs — exactly the used-value write-back shape.
-        fresh.style.height = Some(crate::style::Length::Px(600.0));
+        std::sync::Arc::make_mut(&mut fresh.style).height = Some(crate::style::Length::Px(600.0));
         mark_subtree_dirty(&mut fresh);
 
         let all_clean = graft_geometry(&mut fresh, &prev);
@@ -866,10 +875,10 @@ mod tests {
     #[test]
     fn graft_changed_style_marks_dirty() {
         let mut prev_root = leaf(1, Rect::new(0.0, 0.0, 100.0, 50.0));
-        prev_root.style.font_size = 16.0;
+        std::sync::Arc::make_mut(&mut prev_root.style).font_size = 16.0;
 
         let mut fresh = leaf(1, Rect::ZERO);
-        fresh.style.font_size = 24.0; // style changed
+        std::sync::Arc::make_mut(&mut fresh.style).font_size = 24.0; // style changed
         mark_subtree_dirty(&mut fresh);
 
         let clean = graft_geometry(&mut fresh, &prev_root);
@@ -1474,6 +1483,114 @@ mod tests {
             prev.styles()[&dirty_root], incr.styles()[&dirty_root],
             "…and the recompute must land on the same value",
         );
+    }
+
+    /// BUG-341 S12 gate — by identity, not by output.
+    ///
+    /// `build_box` must hand the cascade cache's `Arc<ComputedStyle>` straight
+    /// into `LayoutBox::style` rather than deep-copying it, and cloning a laid
+    /// out tree (the incremental pipeline does exactly that once per frame to
+    /// persist `prev`) must share those allocations too. Both were 3.2 KB,
+    /// ~30-heap-field copies per box before S12: measured at 1.2 ms of
+    /// `lay_out`'s 3.7 ms plus 1.5 ms of per-cycle bookkeeping on `CC12_HOVER`.
+    ///
+    /// A regression here is invisible in geometry — the output is identical
+    /// either way, only slower — which is why this asserts pointers. Same
+    /// reasoning as `incr_cascade_reuse_hands_back_the_same_style_allocation`
+    /// above and the S8 count gate.
+    #[test]
+    fn built_boxes_share_the_cascade_cache_style_allocation() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_measured_hyp_with_counters;
+
+        let doc = parse_html(r#"<div id="a"><p id="p">one</p></div>"#);
+        let sheet = parse_css("div { color: red; } p { font-weight: bold; }");
+        let vp = Size::new(800.0, 600.0);
+
+        crate::style::invalidate_rule_idx_cache();
+        let (tree, counters) = layout_measured_hyp_with_counters(
+            &doc,
+            &sheet,
+            vp,
+            &FixedMeasurer,
+            &lumen_core::ext::NullHyphenationProvider,
+            false,
+        );
+
+        fn find(b: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
+            if b.node == id && !matches!(b.kind, BoxKind::Skip) {
+                return Some(b);
+            }
+            b.children.iter().find_map(|c| find(c, id))
+        }
+
+        let p = doc.find_by_id("p").expect("#p exists");
+        let p_box = find(&tree, p).expect("#p has a box");
+        assert!(
+            std::sync::Arc::ptr_eq(&p_box.style, &counters.styles()[&p]),
+            "build_box must share the cascade cache's allocation, not clone it"
+        );
+
+        // Persisting the tree for the next frame must not resurrect the copy.
+        let persisted = tree.clone();
+        let persisted_p = find(&persisted, p).expect("#p has a box in the clone");
+        assert!(
+            std::sync::Arc::ptr_eq(&persisted_p.style, &p_box.style),
+            "cloning a layout tree must share styles, not deep-copy them"
+        );
+    }
+
+    /// BUG-341 S12: the copy-on-write half of the contract above.
+    ///
+    /// The passes that rewrite a used value into a box's style (flex item
+    /// stretch, `font-size-adjust`, container queries) reach it through
+    /// `Arc::make_mut`, so they must get a private copy and leave the cascade
+    /// cache — shared with the *previous* frame's tree — untouched. Without
+    /// this, a stretched flex item would corrupt the cascade result every other
+    /// pipeline stage compares against.
+    #[test]
+    fn used_value_writeback_does_not_leak_into_the_cascade_cache() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_measured_hyp_with_counters;
+
+        let doc = parse_html(r#"<div id="row"><span id="item">x</span></div>"#);
+        let sheet = parse_css(
+            "#row { display: flex; align-items: stretch; height: 200px; } \
+             #item { display: block; }",
+        );
+        let vp = Size::new(800.0, 600.0);
+
+        crate::style::invalidate_rule_idx_cache();
+        let (tree, counters) = layout_measured_hyp_with_counters(
+            &doc,
+            &sheet,
+            vp,
+            &FixedMeasurer,
+            &lumen_core::ext::NullHyphenationProvider,
+            false,
+        );
+
+        fn find(b: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
+            if b.node == id && !matches!(b.kind, BoxKind::Skip) {
+                return Some(b);
+            }
+            b.children.iter().find_map(|c| find(c, id))
+        }
+
+        let item = doc.find_by_id("item").expect("#item exists");
+        let item_box = find(&tree, item).expect("#item has a box");
+        let cached = &counters.styles()[&item];
+        // Either the box still shares the cache entry (nothing was written
+        // back), or it took a private copy — never a mutated shared one.
+        if !std::sync::Arc::ptr_eq(&item_box.style, cached) {
+            assert_eq!(
+                cached.height, None,
+                "the cascade cache must keep the *computed* height, not the used \
+                 value a stretch pass wrote into the box"
+            );
+        }
     }
 
     #[test]

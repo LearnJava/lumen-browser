@@ -3937,7 +3937,7 @@ impl LoadedPage {
             layout_box: lumen_layout::LayoutBox {
                 node: NodeId::from_index(0),
                 rect: Rect::ZERO,
-                style: lumen_layout::style::ComputedStyle::root(),
+                style: std::sync::Arc::new(lumen_layout::style::ComputedStyle::root()),
                 kind: lumen_layout::BoxKind::Block,
                 children: Vec::new(),
                 col_span: 1,
@@ -5735,7 +5735,11 @@ fn parse_font_weight(s: Option<&str>) -> u16 {
 /// Результат используется `transition_scheduler.sync()` для сравнения
 /// предыдущего и нового стиля после каждого relayout-а.
 fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) {
-    map.insert(lb.node, lb.style.clone());
+    // BUG-341 S12: `LayoutBox::style` is now an `Arc`, but the transition
+    // scheduler owns its snapshot (it diffs it against the next frame), so this
+    // stays a deep copy. Sharing it here would need `prev_styles` to hold `Arc`s
+    // too — a page-pipeline follow-up, not part of this slice's measured path.
+    map.insert(lb.node, (*lb.style).clone());
     for child in &lb.children {
         collect_box_styles(child, map);
     }
@@ -25008,7 +25012,7 @@ mod tests {
         let unused_placeholder = lumen_layout::LayoutBox {
             node: doc.root(),
             rect: Rect::ZERO,
-            style: root_style.clone(),
+            style: std::sync::Arc::new(root_style.clone()),
             kind: lumen_layout::BoxKind::Skip,
             children: vec![],
             col_span: 1,
