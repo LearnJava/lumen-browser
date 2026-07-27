@@ -184,7 +184,8 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   `prev` instead of rebuilding it, gated by `CounterMap::clean_subtrees` +
   `RestyleDelta::dom_content_stable` (only safe for pure interactive-state
   deltas — DOM-mutation deltas conservatively rebuild everything, same
-  precedent as S3). Public entry: `box_tree::incremental_build_box`, off by
+  precedent as S3; S16 replaced that boolean with `ContentDirty`). Public entry:
+  `box_tree::incremental_build_box`, off by
   default via `set_incremental_box_build`. 2 differential tests (laid-out
   geometry comparison, not `Debug` string — `custom_props: HashMap` iteration
   order isn't guaranteed stable across independent cascades) + 1 real-chrome-
@@ -388,13 +389,21 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   1.39-1.47 ms by min (≈2.8×), `build_box` 2.2-2.5 → 0.25-0.38 ms; `CC12_KEY`
   flat (`dom_content_stable` is `false` there, so the mechanism is inert).
   BUG-341 "S15".
-- **S16 — `dom_content_stable` is one boolean for the whole document.** ⬜ Open.
-  One changed omnibox text node disables box reuse for all 318 boxes. Needs a
-  per-node content-dirty set, which needs the chrome tracker to be *complete for
-  content* — `set_text`/`set_text_in_place`/`append_text` deliberately report
-  nothing today, because text cannot affect selector matching. That completeness
-  is the risky half: a missed mutation path yields a stale box (visible
-  corruption), not a slow frame. BUG-341 "S15" § "Where this leaves CC-12".
+- **S16 — `dom_content_stable` was one boolean for the whole document.** ✅ Done.
+  Replaced by `counters::ContentDirty` (`Untracked` / `Nothing` /
+  `Nodes(&HashSet<NodeId>)`), so a subtree is reusable iff it contains no
+  content-mutated node. `bind_model_tracked` now returns `ChromeMutations
+  { selector, content }`; the page-side path keeps S4 semantics (`Untracked`
+  unless nothing was touched) because `DomTouched` cannot claim a complete
+  content record. Completeness — the risky half — is **structural**, not by
+  inspection: every raw `Document` mutator in `crates/chrome/src/model.rs` is
+  wrapped (`attach_child`/`insert_child_before`/`detach_node` + `set_attr`/
+  `remove_attr`/`set_text`), and a source-level test refuses any un-marked raw
+  call. Tracking content also exposed a defect it had been hiding: twelve cells
+  rewrote their text node unconditionally on every bind (`set_text` detached and
+  recreated it), which would have cancelled S15's hover reuse the moment content
+  was tracked — `set_text` absorbed `set_text_in_place`'s compare-then-write.
+  `CC12_KEY` `build_box` 240 → 38 boxes; measurement in BUG-341 "S16".
 
 **Stop conditions / honesty:** if after S5 the p95 floor is set by irreducible
 per-node cascade cost on the hover root-set and stays > 2 ms, report the number

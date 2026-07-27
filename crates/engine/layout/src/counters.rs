@@ -84,12 +84,13 @@ pub struct CounterMap {
     styles: HashMap<NodeId, Arc<ComputedStyle>>,
     /// BUG-341 S4: `NodeId`s whose own `ComputedStyle` AND entire descendant
     /// subtree are byte-identical to the previous pass (`walk`'s
-    /// `must_recompute` was `false` for every node in the subtree), populated
-    /// only when the incremental cascade ran with
-    /// [`RestyleDelta::dom_content_stable`] `true`. `build_box_or_reuse` (in
+    /// `must_recompute` was `false` for every node in the subtree), and
+    /// (BUG-341 S16) which contain no content-mutated node per
+    /// [`RestyleDelta::content_dirty`]. Populated only when that record is
+    /// complete ([`ContentDirty::tracked`]). `build_box_or_reuse` (in
     /// `box_tree.rs`) treats membership as a licence to clone the whole
     /// `LayoutBox` subtree from the previous pass instead of rebuilding it —
-    /// see that function's doc comment for why `dom_content_stable` (not style
+    /// see that function's doc comment for why content dirtiness (not style
     /// equality alone) is the correctness precondition.
     clean_subtrees: HashSet<NodeId>,
 }
@@ -135,7 +136,7 @@ impl CounterMap {
 
     /// Returns the whole-subtree-unchanged node set (BUG-341 S4) — see the
     /// `clean_subtrees` field doc for the correctness precondition
-    /// (`RestyleDelta::dom_content_stable`) that gates population.
+    /// (`RestyleDelta::content_dirty`) that gates population.
     pub fn clean_subtrees(&self) -> &HashSet<NodeId> {
         &self.clean_subtrees
     }
@@ -256,27 +257,17 @@ pub struct RestyleDelta<'a> {
     pub prev_styles: &'a HashMap<NodeId, Arc<ComputedStyle>>,
     /// Root nodes whose entire subtree must be re-cascaded.
     pub dirty_roots: HashSet<NodeId>,
-    /// BUG-341 S4: `true` when this delta is known to reflect *only* an
-    /// interactive-state transition (`:hover`/`:focus`/`:active`, produced via
-    /// [`crate::style::restyle_root_set_for_state_change`]) with no DOM
-    /// attribute/text/structure change in the same cycle.
+    /// BUG-341 S16: which nodes had their *content* — the things `build_box`
+    /// reads that the cascade cannot see (text-node data, child lists,
+    /// attributes) — mutated since `prev_styles` was taken. See
+    /// [`ContentDirty`] for the three states and their contracts.
     ///
-    /// Style-unchanged nodes are then also *content*-unchanged for
-    /// `build_box` purposes — nothing else `build_box` reads (attributes,
-    /// text, DOM structure) could have moved, since a pure pointer/keyboard
-    /// state change never touches the DOM. That is the precondition
-    /// `build_box_or_reuse` needs to safely clone a whole `LayoutBox` subtree
-    /// instead of rebuilding it (BUG-341 S4).
+    /// Replaces S4's document-wide `dom_content_stable: bool`. That flag was
+    /// all-or-nothing: one changed omnibox text node disabled box reuse for
+    /// every one of chrome's 318 boxes, including the ~300 the mutation came
+    /// nowhere near.
     ///
-    /// Callers deriving `dirty_roots` from
-    /// [`crate::style::restyle_root_set_for_node_change`] (DOM mutation) MUST
-    /// set this `false` — style equality alone does not imply the DOM content
-    /// `build_box` reads (e.g. a `<input value>` attribute, or text-node data)
-    /// is unchanged, so S4 conservatively rebuilds every box on that path
-    /// (`clean_subtrees` stays empty). Tightening this is future work,
-    /// mirroring S3's "conservative first" precedent.
-    ///
-    /// One known residual gap even when `true`: a CSS rule that conditions
+    /// One known residual gap, unchanged from S4: a CSS rule that conditions
     /// `counter-reset`/`counter-increment`/`counter-set` on a dynamic pseudo-
     /// class (e.g. `li:hover { counter-increment: item 2; }`) could change a
     /// *later, otherwise-clean* sibling's rendered counter text without
@@ -284,7 +275,66 @@ pub struct RestyleDelta<'a> {
     /// anywhere in this codebase's CSS and is accepted as an unhandled exotic
     /// edge case for v1 (see BUG-341 "S4" notes) rather than blocking the
     /// common case on a full counter-snapshot equality check.
-    pub dom_content_stable: bool,
+    pub content_dirty: ContentDirty<'a>,
+}
+
+/// BUG-341 S16 — per-node DOM-content dirtiness for one incremental cycle.
+///
+/// The cascade decides whether a node's *style* is unchanged. It cannot decide
+/// whether the node's *content* is unchanged: a text node's data, an element's
+/// child list and its attributes are all invisible to `compute_style` reuse,
+/// yet `build_box` reads all three. This enum is how a mutation source tells
+/// [`incremental_precompute_counters`] what it knows about that second half,
+/// and it is the sole licence for [`CounterMap::clean_subtrees`] — hence for
+/// `build_box_or_reuse` cloning a whole `LayoutBox` subtree.
+///
+/// A missed mutation here is *visible corruption* (a stale box), not a slow
+/// frame, so a source that cannot enumerate its own content mutations must say
+/// [`ContentDirty::Untracked`] rather than guess.
+#[derive(Debug, Clone, Copy)]
+pub enum ContentDirty<'a> {
+    /// No per-node content tracking for this cycle: any node's text, children
+    /// or attributes may have changed. No subtree may be reused
+    /// (`clean_subtrees` stays empty). This is S4's `dom_content_stable: false`
+    /// and remains the correct answer for every mutation source that does not
+    /// enumerate content mutations — today, page-side JS (`DomTouched` reports
+    /// selector-relevant nodes only, plus an `unattributed` escape hatch).
+    Untracked,
+    /// Tracking is complete and nothing changed: a pure interactive-state
+    /// (`:hover`/`:focus`/`:active`) transition, which by construction never
+    /// touches the DOM. This is S4's `dom_content_stable: true`.
+    Nothing,
+    /// Tracking is complete and exactly these nodes were content-mutated. A
+    /// subtree is reusable iff it contains none of them (and its styles were
+    /// all reused). The set is *inclusive of the mutated node itself*: for a
+    /// changed text node that is the text node's own id, for a container that
+    /// gained or lost a child that is the container's id.
+    ///
+    /// Producing this variant obliges the caller to have instrumented **every**
+    /// path by which it mutates the document — see
+    /// `lumen_chrome::model`'s tracked-primitive wrappers and the
+    /// `every_dom_mutation_in_model_rs_goes_through_a_tracked_primitive`
+    /// source-level gate that enforces it.
+    Nodes(&'a HashSet<NodeId>),
+}
+
+impl ContentDirty<'_> {
+    /// Whether this cycle has a complete per-node content-mutation record, and
+    /// therefore may populate [`CounterMap::clean_subtrees`] at all.
+    pub fn tracked(&self) -> bool {
+        !matches!(self, ContentDirty::Untracked)
+    }
+
+    /// Whether `id`'s own content may have changed this cycle. `true` for
+    /// every node under [`ContentDirty::Untracked`] — "unknown" must read as
+    /// "dirty" everywhere the answer is used.
+    pub fn contains(&self, id: NodeId) -> bool {
+        match self {
+            ContentDirty::Untracked => true,
+            ContentDirty::Nothing => false,
+            ContentDirty::Nodes(set) => set.contains(&id),
+        }
+    }
 }
 
 /// BUG-341 S3 — incremental cascade: like [`precompute_counters`], but reuses
@@ -416,12 +466,16 @@ fn walk(
 ) -> bool {
     match &doc.get(id).data {
         // Text / comment / doctype / fragment — no counter properties, no children.
-        // BUG-341 S4: a text node's own *content* can still change (a DOM text
-        // mutation) without this cascade walk noticing — callers must only
-        // treat the `true` returned here as "content-safe" when the whole
-        // delta is `dom_content_stable` (see `RestyleDelta` doc).
+        // BUG-341 S4/S16: a text node carries no style, so the cascade has
+        // nothing to compare; its *content* can still change under a stable
+        // style. Before S16 that was covered document-wide by
+        // `dom_content_stable`; now the delta names the individual mutated text
+        // nodes, and a named one reports itself dirty so its parent element
+        // (whose box embeds this text) drops out of `clean_subtrees`.
         NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. }
-        | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => return true,
+        | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => {
+            return !incr.is_some_and(|d| d.content_dirty.contains(id));
+        }
 
         // Document node: has no style of its own; just recurse into children.
         NodeData::Document => {
@@ -508,11 +562,13 @@ fn walk(
 
     ctx.pop_reset(&style.counter_reset);
 
-    // BUG-341 S4: this node's own style was reused (not recomputed) AND every
-    // descendant is itself clean. Only worth recording when the delta already
-    // guarantees DOM content stability — see `RestyleDelta::dom_content_stable`.
-    let subtree_clean = !must_recompute && children_clean;
-    if subtree_clean && incr.is_some_and(|d| d.dom_content_stable) {
+    // BUG-341 S4/S16: this node's own style was reused (not recomputed), its
+    // own content was not mutated, AND every descendant is itself clean. Only
+    // recorded when the delta has a complete content record at all — see
+    // `ContentDirty`.
+    let content_dirty = incr.is_some_and(|d| d.content_dirty.contains(id));
+    let subtree_clean = !must_recompute && !content_dirty && children_clean;
+    if subtree_clean && incr.is_some_and(|d| d.content_dirty.tracked()) {
         map.clean_subtrees.insert(id);
     }
     subtree_clean

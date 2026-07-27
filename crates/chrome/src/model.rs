@@ -428,24 +428,110 @@ pub struct ChromeWorkspaceModel {
     pub color: String,
 }
 
-thread_local! {
-    /// BUG-341 S6 — collects the [`NodeId`]s [`bind_model`] actually mutated
-    /// (a selector-relevant attribute/class changed value, or a row list
-    /// gained/lost a member) during the call currently in progress. `None`
-    /// when no [`bind_model_tracked`] call is active, so plain [`bind_model`]
-    /// (still used for the very first bind, before any previous cascade cache
-    /// exists to diff against) pays no tracking cost.
-    static MUTATION_TRACKER: RefCell<Option<HashSet<NodeId>>> = const { RefCell::new(None) };
+/// What one [`bind_model_tracked`] call changed in the document, split by what
+/// each kind of consumer needs (BUG-341 S6 for `selector`, S16 for `content`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChromeMutations {
+    /// Nodes whose *selector-relevant* state changed — an attribute value (most
+    /// commonly `class`) or a row-list container's child count. Feeds
+    /// `lumen_layout::style::restyle_root_set_for_node_change`, i.e. decides
+    /// which nodes must re-run the cascade.
+    pub selector: HashSet<NodeId>,
+    /// Nodes whose *content* changed — text-node data, an element's child list,
+    /// or any attribute (`build_box` reads `src`/`value`/`width`/… directly, so
+    /// every attribute write counts here too). Feeds
+    /// `lumen_layout::counters::ContentDirty::Nodes`, i.e. decides which box
+    /// subtrees may be cloned from the previous pass instead of rebuilt.
+    ///
+    /// This set must be **complete**: a content mutation that goes unreported
+    /// yields a stale `LayoutBox` — visible corruption, not a slow frame. The
+    /// completeness argument is structural, not by inspection: every write into
+    /// the document from this module goes through one of the tracked primitives
+    /// below, and
+    /// `every_dom_mutation_in_model_rs_goes_through_a_tracked_primitive`
+    /// re-checks that at test time against this file's own source.
+    pub content: HashSet<NodeId>,
 }
 
-/// Records `id` as touched by the [`bind_model_tracked`] call currently in
-/// progress, if any. A no-op outside of [`bind_model_tracked`].
+impl ChromeMutations {
+    /// `true` when this bind changed nothing at all.
+    pub fn is_empty(&self) -> bool {
+        self.selector.is_empty() && self.content.is_empty()
+    }
+}
+
+thread_local! {
+    /// BUG-341 S6/S16 — collects what [`bind_model`] actually mutated during
+    /// the call currently in progress. `None` when no [`bind_model_tracked`]
+    /// call is active, so plain [`bind_model`] (still used for the very first
+    /// bind, before any previous cascade cache exists to diff against) pays no
+    /// tracking cost.
+    static MUTATION_TRACKER: RefCell<Option<ChromeMutations>> = const { RefCell::new(None) };
+}
+
+/// Records `id` as *selector-relevantly* touched by the [`bind_model_tracked`]
+/// call currently in progress, if any. Also records it as content-dirty: every
+/// caller of this function writes an attribute or restructures a child list,
+/// both of which `build_box` reads. A no-op outside [`bind_model_tracked`].
 fn record_touched(id: NodeId) {
     MUTATION_TRACKER.with(|t| {
-        if let Some(set) = t.borrow_mut().as_mut() {
-            set.insert(id);
+        if let Some(m) = t.borrow_mut().as_mut() {
+            m.selector.insert(id);
+            m.content.insert(id);
         }
     });
+}
+
+/// Records `id` as content-dirty only (BUG-341 S16) — its text data or child
+/// list moved, but nothing a selector can match on. A no-op outside
+/// [`bind_model_tracked`].
+fn record_content(id: NodeId) {
+    MUTATION_TRACKER.with(|t| {
+        if let Some(m) = t.borrow_mut().as_mut() {
+            m.content.insert(id);
+        }
+    });
+}
+
+// ─── Tracked DOM primitives (BUG-341 S16) ────────────────────────────────────
+//
+// Every mutation of `doc` made by this module goes through one of the four
+// functions below (plus `set_attr`/`remove_attr`, which own the only other
+// `doc.get_mut`). Nothing else in this file may call `Document::append_child`,
+// `insert_before`, `detach` or `get_mut` directly — the
+// `S16-tracked-primitive` marker comments are what the source-level gate test
+// keys on, so keep them on the exact lines making those calls.
+
+/// [`Document::append_child`] + content-dirty bookkeeping for `parent`.
+///
+/// Recording is unconditional, including while a detached subtree is being
+/// assembled (`parent` not yet in the document). That over-reports by exactly
+/// the freshly-created nodes, which have no entry in `prev_styles` and so can
+/// never be reused anyway — the conservative direction costs nothing here.
+fn attach_child(doc: &mut Document, parent: NodeId, child: NodeId) {
+    doc.append_child(parent, child); // S16-tracked-primitive
+    record_content(parent);
+}
+
+/// [`Document::insert_before`] + content-dirty bookkeeping for the parent
+/// `new_node` lands in (read off `reference` *before* the insertion, so it is
+/// the parent as the DOM saw it).
+fn insert_child_before(doc: &mut Document, new_node: NodeId, reference: NodeId) {
+    let parent = doc.get(reference).parent;
+    doc.insert_before(new_node, reference); // S16-tracked-primitive
+    if let Some(parent) = parent {
+        record_content(parent);
+    }
+}
+
+/// [`Document::detach`] + content-dirty bookkeeping for the parent losing the
+/// child. The parent is read before the detach, since `detach` clears the link.
+fn detach_node(doc: &mut Document, id: NodeId) {
+    let parent = doc.get(id).parent;
+    doc.detach(id); // S16-tracked-primitive
+    if let Some(parent) = parent {
+        record_content(parent);
+    }
 }
 
 /// Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
@@ -501,29 +587,25 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_right_sidebar(doc, &model.right_sidebar);
 }
 
-/// Like [`bind_model`], but also returns every [`NodeId`] whose
-/// selector-relevant state actually changed during the call — an existing
-/// element's attribute/class value differed from what it held before, or a
-/// [`reconcile_row_list`]-driven container gained/lost a row (structural
-/// change, relevant to sibling/`:nth-child` selectors).
+/// Like [`bind_model`], but also reports what the call actually changed, split
+/// into the two questions the incremental pipeline asks separately (see
+/// [`ChromeMutations`]).
 ///
-/// BUG-341 S6: this is the raw material
+/// BUG-341 S6: `selector` is the raw material
 /// [`lumen_layout::style::restyle_root_set_for_node_change`] needs to derive
 /// a correct cascade dirty-root-set for a `bind_model` call that changed real
 /// DOM content (tab title, omnibox text, …), not just interactive state — the
 /// gap S5 left `CC12_KEY` and any content-mutating chrome interaction stuck
 /// on the full-layout path.
 ///
-/// An empty result does **not** mean nothing in `doc` changed — text-node
-/// content changes (e.g. a tab's title text) are deliberately not tracked
-/// here: `layout_mutation_incremental_restyle`'s `build_box` step always
-/// rebuilds from live `doc` content regardless of the cascade's dirty-root
-/// set, so a text-only change needs no cascade invalidation to render
-/// correctly (see the brief §4/§6 "incr == full" correctness gate — covered
-/// by a differential test, not by this tracker). Only nodes whose
-/// *`ComputedStyle`* could actually differ need to be reported.
-pub fn bind_model_tracked(doc: &mut Document, model: &ChromeModel) -> HashSet<NodeId> {
-    MUTATION_TRACKER.with(|t| *t.borrow_mut() = Some(HashSet::new()));
+/// BUG-341 S16: `content` is the same for box reuse. Before S16 a text-only
+/// change was reported nowhere — correct for the cascade (text cannot change
+/// selector matching) but it forced the caller to declare the *whole document*
+/// content-unstable, which disabled box reuse for all 318 chrome boxes over one
+/// changed omnibox character. `content` names the mutated nodes instead, so
+/// only the subtrees actually containing one lose their reuse.
+pub fn bind_model_tracked(doc: &mut Document, model: &ChromeModel) -> ChromeMutations {
+    MUTATION_TRACKER.with(|t| *t.borrow_mut() = Some(ChromeMutations::default()));
     bind_model(doc, model);
     MUTATION_TRACKER.with(|t| t.borrow_mut().take()).unwrap_or_default()
 }
@@ -567,7 +649,7 @@ fn bind_history(doc: &mut Document, history: &ChromeHistoryModel) {
                 build_hist_item(doc, title, url, time_label)
             }
         };
-        doc.append_child(wrap, node);
+        attach_child(doc, wrap, node);
     }
 }
 
@@ -578,23 +660,23 @@ fn build_hist_item(doc: &mut Document, title: &str, url: &str, time_label: &str)
     let fav = doc.create_element(QualName::html("div"));
     set_attr(doc, fav, "class", "hist-fav");
     append_text(doc, fav, &first_letter(title));
-    doc.append_child(item, fav);
+    attach_child(doc, item, fav);
 
     let text = doc.create_element(QualName::html("div"));
     let title_el = doc.create_element(QualName::html("div"));
     set_attr(doc, title_el, "class", "hist-title");
     append_text(doc, title_el, title);
-    doc.append_child(text, title_el);
+    attach_child(doc, text, title_el);
     let url_el = doc.create_element(QualName::html("div"));
     set_attr(doc, url_el, "class", "hist-url");
     append_text(doc, url_el, url);
-    doc.append_child(text, url_el);
-    doc.append_child(item, text);
+    attach_child(doc, text, url_el);
+    attach_child(doc, item, text);
 
     let time = doc.create_element(QualName::html("div"));
     set_attr(doc, time, "class", "hist-time");
     append_text(doc, time, time_label);
-    doc.append_child(item, time);
+    attach_child(doc, item, time);
 
     item
 }
@@ -615,7 +697,7 @@ fn bind_bookmarks(doc: &mut Document, bookmarks: &ChromeBookmarksModel) {
             }
             set_attr(doc, node, "class", &class);
             append_text(doc, node, &folder.label);
-            doc.append_child(tree, node);
+            attach_child(doc, tree, node);
         }
     }
     if let Some(toolbar) = find_by_class(doc, "bm-toolbar")
@@ -627,7 +709,7 @@ fn bind_bookmarks(doc: &mut Document, bookmarks: &ChromeBookmarksModel) {
     remove_children_with_class(doc, grid, "bm-card");
     for card in &bookmarks.cards {
         let node = build_bm_card(doc, card);
-        doc.append_child(grid, node);
+        attach_child(doc, grid, node);
     }
 }
 
@@ -638,17 +720,17 @@ fn build_bm_card(doc: &mut Document, card: &ChromeBookmarkCardModel) -> NodeId {
     let fav = doc.create_element(QualName::html("div"));
     set_attr(doc, fav, "class", "bm-fav");
     append_text(doc, fav, &card.fav_letter);
-    doc.append_child(node, fav);
+    attach_child(doc, node, fav);
 
     let title = doc.create_element(QualName::html("div"));
     set_attr(doc, title, "class", "bm-title");
     append_text(doc, title, &card.title);
-    doc.append_child(node, title);
+    attach_child(doc, node, title);
 
     let url = doc.create_element(QualName::html("div"));
     set_attr(doc, url, "class", "bm-url");
     append_text(doc, url, &card.url);
-    doc.append_child(node, url);
+    attach_child(doc, node, url);
 
     node
 }
@@ -730,13 +812,13 @@ fn bind_palette(doc: &mut Document, palette: &ChromePaletteModel) {
         let empty = doc.create_element(QualName::html("div"));
         set_attr(doc, empty, "class", "cp-empty cp-row");
         append_text(doc, empty, "Ничего не найдено");
-        doc.append_child(list, empty);
+        attach_child(doc, list, empty);
         return;
     }
     remove_children_with_class(doc, list, "cp-row");
     for r in &palette.results {
         let row = build_cp_row(doc, r);
-        doc.append_child(list, row);
+        attach_child(doc, list, row);
     }
 }
 
@@ -749,19 +831,19 @@ fn build_cp_row(doc: &mut Document, r: &ChromePaletteResultModel) -> NodeId {
 
     let icon = doc.create_element(QualName::html("span"));
     set_attr(doc, icon, "class", "dd-icon");
-    doc.append_child(row, icon);
+    attach_child(doc, row, icon);
 
     let text = doc.create_element(QualName::html("div"));
     set_attr(doc, text, "class", "dd-text");
     let title = doc.create_element(QualName::html("div"));
     set_attr(doc, title, "class", "dd-title");
     append_text(doc, title, &r.label);
-    doc.append_child(text, title);
+    attach_child(doc, text, title);
     let sub = doc.create_element(QualName::html("div"));
     set_attr(doc, sub, "class", "dd-sub");
     append_text(doc, sub, &r.sub_label);
-    doc.append_child(text, sub);
-    doc.append_child(row, text);
+    attach_child(doc, text, sub);
+    attach_child(doc, row, text);
 
     row
 }
@@ -794,7 +876,7 @@ fn bind_dropdown(doc: &mut Document, dropdown: &ChromeDropdownModel) {
     remove_children_with_class(doc, container, "dd-row");
     for s in &dropdown.suggestions {
         let row = build_dd_row(doc, s);
-        doc.append_child(container, row);
+        attach_child(doc, container, row);
     }
 }
 
@@ -807,19 +889,19 @@ fn build_dd_row(doc: &mut Document, s: &ChromeSuggestionModel) -> NodeId {
     let icon = doc.create_element(QualName::html("span"));
     set_attr(doc, icon, "class", "dd-icon");
     set_attr(doc, icon, "style", &format!("background:{}", s.color));
-    doc.append_child(row, icon);
+    attach_child(doc, row, icon);
 
     let text = doc.create_element(QualName::html("div"));
     set_attr(doc, text, "class", "dd-text");
     let title = doc.create_element(QualName::html("div"));
     set_attr(doc, title, "class", "dd-title");
     append_text(doc, title, &s.label);
-    doc.append_child(text, title);
+    attach_child(doc, text, title);
     let sub = doc.create_element(QualName::html("div"));
     set_attr(doc, sub, "class", "dd-sub");
     append_text(doc, sub, &s.sub_label);
-    doc.append_child(text, sub);
-    doc.append_child(row, text);
+    attach_child(doc, text, sub);
+    attach_child(doc, row, text);
 
     row
 }
@@ -835,11 +917,7 @@ fn bind_find_bar(doc: &mut Document, find: &ChromeFindModel) {
         set_attr(doc, input, "value", &find.value);
     }
     if let Some(count) = doc.find_by_id(crate::ids::FIND_COUNT) {
-        let children: Vec<NodeId> = doc.get(count).children.clone();
-        for child in children {
-            doc.detach(child);
-        }
-        append_text(doc, count, &find.count_label);
+        set_text(doc, count, &find.count_label);
     }
 }
 
@@ -852,7 +930,7 @@ fn bind_downloads(doc: &mut Document, open: bool, downloads: &[ChromeDownloadMod
     remove_children_with_class(doc, list, "dl-card");
     for d in downloads {
         let card = build_dl_card(doc, d);
-        doc.append_child(list, card);
+        attach_child(doc, list, card);
     }
 }
 
@@ -866,19 +944,19 @@ fn build_dl_card(doc: &mut Document, d: &ChromeDownloadModel) -> NodeId {
     let icon = doc.create_element(QualName::html("div"));
     set_attr(doc, icon, "class", "dl-icon");
     append_text(doc, icon, &d.ext_label);
-    doc.append_child(row, icon);
+    attach_child(doc, row, icon);
 
     let text_wrap = doc.create_element(QualName::html("div"));
     let name = doc.create_element(QualName::html("div"));
     set_attr(doc, name, "class", "dl-name");
     append_text(doc, name, &d.name);
-    doc.append_child(text_wrap, name);
+    attach_child(doc, text_wrap, name);
     let meta = doc.create_element(QualName::html("div"));
     set_attr(doc, meta, "class", "dl-meta");
     append_text(doc, meta, &d.meta);
-    doc.append_child(text_wrap, meta);
-    doc.append_child(row, text_wrap);
-    doc.append_child(card, row);
+    attach_child(doc, text_wrap, meta);
+    attach_child(doc, row, text_wrap);
+    attach_child(doc, card, row);
 
     if let Some(fraction) = d.progress_fraction {
         let track = doc.create_element(QualName::html("div"));
@@ -886,8 +964,8 @@ fn build_dl_card(doc: &mut Document, d: &ChromeDownloadModel) -> NodeId {
         let fill = doc.create_element(QualName::html("div"));
         set_attr(doc, fill, "class", "dl-progress-fill");
         set_attr(doc, fill, "style", &format!("width:{}%", (fraction.clamp(0.0, 1.0) * 100.0)));
-        doc.append_child(track, fill);
-        doc.append_child(card, track);
+        attach_child(doc, track, fill);
+        attach_child(doc, card, track);
     }
 
     card
@@ -900,11 +978,7 @@ fn bind_popover(doc: &mut Document, open: bool, blocked_total: u32, permissions:
     let Some(popover) = doc.find_by_id(crate::ids::PERM_POPOVER) else { return };
     set_class_token(doc, popover, "open", open);
     if let Some(stat) = doc.find_by_id(crate::ids::STAT_TRACKERS) {
-        let children: Vec<NodeId> = doc.get(stat).children.clone();
-        for child in children {
-            doc.detach(child);
-        }
-        append_text(doc, stat, &blocked_total.to_string());
+        set_text(doc, stat, &blocked_total.to_string());
     }
     let rows: Vec<NodeId> =
         doc.get(popover).children.iter().copied().filter(|&c| has_class(doc, c, "perm-row")).collect();
@@ -940,14 +1014,25 @@ fn bind_omnibox(doc: &mut Document, omnibox: &OmniboxModel) {
     let Some(warn) = doc.find_by_id(crate::ids::OMNI_WARN) else { return };
     set_class_token(doc, warn, "show", omnibox.warning.is_some());
     if let Some(message) = &omnibox.warning {
+        // BUG-341 S16: update the existing `⚠ <span>` shape in place when it is
+        // already there. Rebuilding it unconditionally made a *displayed*
+        // warning report two content-dirty nodes on every bind, which would
+        // cost the whole document's box reuse for as long as the warning stays
+        // up — the same defect `set_text` carried before this slice.
         let children: Vec<NodeId> = doc.get(warn).children.clone();
+        if let [_lead, span] = children.as_slice()
+            && matches!(doc.get(*span).data, NodeData::Element { .. })
+        {
+            set_text(doc, *span, message);
+            return;
+        }
         for child in children {
-            doc.detach(child);
+            detach_node(doc, child);
         }
         append_text(doc, warn, "\u{26A0} ");
         let span = doc.create_element(QualName::html("span"));
         append_text(doc, span, message);
-        doc.append_child(warn, span);
+        attach_child(doc, warn, span);
     }
 }
 
@@ -997,14 +1082,14 @@ fn reconcile_row_list<T>(
             None => {
                 let row = build(doc, item);
                 match anchor {
-                    Some(a) => doc.insert_before(row, a),
-                    None => doc.append_child(container, row),
+                    Some(a) => insert_child_before(doc, row, a),
+                    None => attach_child(doc, container, row),
                 }
             }
         }
     }
     for &row in existing.iter().skip(items.len()) {
-        doc.detach(row);
+        detach_node(doc, row);
     }
 }
 
@@ -1049,32 +1134,32 @@ fn populate_tab_row_children(doc: &mut Document, row: NodeId, tab: &ChromeTabMod
     if tab.is_child {
         let tree_line = doc.create_element(QualName::html("span"));
         set_attr(doc, tree_line, "class", "tree-line");
-        doc.append_child(row, tree_line);
+        attach_child(doc, row, tree_line);
     }
 
     if let Some(color) = &tab.container_color {
         let stripe = doc.create_element(QualName::html("span"));
         set_attr(doc, stripe, "class", "container-stripe");
         set_attr(doc, stripe, "style", &format!("background:{color}"));
-        doc.append_child(row, stripe);
+        attach_child(doc, row, stripe);
     }
 
     let fav = doc.create_element(QualName::html("span"));
     set_attr(doc, fav, "class", "tab-fav");
     append_text(doc, fav, &first_letter(&tab.title));
-    doc.append_child(row, fav);
+    attach_child(doc, row, fav);
 
     let title = doc.create_element(QualName::html("span"));
     set_attr(doc, title, "class", "tab-title");
     append_text(doc, title, &tab.title);
-    doc.append_child(row, title);
+    attach_child(doc, row, title);
 
     if tab.sleeping {
         let badge = doc.create_element(QualName::html("span"));
         set_attr(doc, badge, "class", "tab-badge");
         set_attr(doc, badge, "title", "Гибернирована");
         append_text(doc, badge, "\u{2726}");
-        doc.append_child(row, badge);
+        attach_child(doc, row, badge);
     } else {
         let close = doc.create_element(QualName::html("button"));
         set_attr(doc, close, "class", "tab-close");
@@ -1086,7 +1171,7 @@ fn populate_tab_row_children(doc: &mut Document, row: NodeId, tab: &ChromeTabMod
         // can resolve a close click straight to a tab id without walking up
         // to the row.
         set_attr(doc, close, "data-tab-id", &tab.id.to_string());
-        doc.append_child(row, close);
+        attach_child(doc, row, close);
     }
 }
 
@@ -1094,7 +1179,7 @@ fn populate_tab_row_children(doc: &mut Document, row: NodeId, tab: &ChromeTabMod
 /// [`bind_model`] call) in place instead of discarding it, so an unchanged
 /// row keeps its `NodeId` and every descendant's (BUG-341/CC-14 — see
 /// [`reconcile_row_list`]). The child slots are matched against the row's
-/// *current* shape and updated in place — text via [`set_text_in_place`],
+/// *current* shape and updated in place — text via [`set_text`],
 /// stripe colour via `set_attr` — as long as the shape still matches `tab`.
 /// A shape change (`is_child`/`container_color`-presence/`sleeping`
 /// flipped — rare: only real tab-state changes cause this, never a bare
@@ -1126,8 +1211,8 @@ fn update_tab_row(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
         rebuild_tab_row_children(doc, row, tab);
         return;
     };
-    set_text_in_place(doc, fav, &first_letter(&tab.title));
-    set_text_in_place(doc, title, &tab.title);
+    set_text(doc, fav, &first_letter(&tab.title));
+    set_text(doc, title, &tab.title);
     idx += 2;
 
     match children.get(idx) {
@@ -1142,7 +1227,7 @@ fn update_tab_row(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
 fn rebuild_tab_row_children(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
     let children: Vec<NodeId> = doc.get(row).children.clone();
     for child in children {
-        doc.detach(child);
+        detach_node(doc, child);
     }
     populate_tab_row_children(doc, row, tab);
 }
@@ -1181,12 +1266,12 @@ fn populate_workspace_item_children(doc: &mut Document, item: NodeId, ws: &Chrom
     set_attr(doc, icon, "class", "ws-icon");
     set_attr(doc, icon, "style", &format!("background:{}", ws.color));
     append_text(doc, icon, &first_letter(&ws.name));
-    doc.append_child(item, icon);
+    attach_child(doc, item, icon);
 
     let lbl = doc.create_element(QualName::html("span"));
     set_attr(doc, lbl, "class", "lbl");
     append_text(doc, lbl, &ws.name);
-    doc.append_child(item, lbl);
+    attach_child(doc, item, lbl);
 }
 
 /// Updates an existing `.ws-item` in place (BUG-341/CC-14 — see
@@ -1200,14 +1285,14 @@ fn update_workspace_item(doc: &mut Document, item: NodeId, ws: &ChromeWorkspaceM
     let children: Vec<NodeId> = doc.get(item).children.clone();
     let (Some(&icon), Some(&lbl)) = (children.first(), children.get(1)) else {
         for child in children {
-            doc.detach(child);
+            detach_node(doc, child);
         }
         populate_workspace_item_children(doc, item, ws);
         return;
     };
     set_attr(doc, icon, "style", &format!("background:{}", ws.color));
-    set_text_in_place(doc, icon, &first_letter(&ws.name));
-    set_text_in_place(doc, lbl, &ws.name);
+    set_text(doc, icon, &first_letter(&ws.name));
+    set_text(doc, lbl, &ws.name);
 }
 
 /// Mirrors [`rebuild_tab_list`] into `#hbarTabs` (`.hbar-tab` rows, CC-8's
@@ -1241,12 +1326,12 @@ fn populate_hbar_tab_children(doc: &mut Document, row: NodeId, tab: &ChromeTabMo
     let fav = doc.create_element(QualName::html("span"));
     set_attr(doc, fav, "class", "tab-fav");
     append_text(doc, fav, &first_letter(&tab.title));
-    doc.append_child(row, fav);
+    attach_child(doc, row, fav);
 
     let title = doc.create_element(QualName::html("span"));
     set_attr(doc, title, "class", "tab-title");
     append_text(doc, title, &tab.title);
-    doc.append_child(row, title);
+    attach_child(doc, row, title);
 }
 
 /// Updates an existing `.hbar-tab` in place (BUG-341/CC-14 — see
@@ -1257,13 +1342,13 @@ fn update_hbar_tab(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
     let children: Vec<NodeId> = doc.get(row).children.clone();
     let (Some(&fav), Some(&title)) = (children.first(), children.get(1)) else {
         for child in children {
-            doc.detach(child);
+            detach_node(doc, child);
         }
         populate_hbar_tab_children(doc, row, tab);
         return;
     };
-    set_text_in_place(doc, fav, &first_letter(&tab.title));
-    set_text_in_place(doc, title, &tab.title);
+    set_text(doc, fav, &first_letter(&tab.title));
+    set_text(doc, title, &tab.title);
 }
 
 /// Mirrors [`rebuild_workspace_list`] into `.hbar-ws` (`.hbar-ws-pill`
@@ -1288,10 +1373,10 @@ fn build_hbar_ws_pill(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId {
 
 /// Updates an existing `.hbar-ws-pill` in place (BUG-341/CC-14 — see
 /// [`update_tab_row`]); the pill's name is its own single text-node child,
-/// updated via [`set_text_in_place`].
+/// updated via [`set_text`].
 fn update_hbar_ws_pill(doc: &mut Document, pill: NodeId, ws: &ChromeWorkspaceModel) {
     apply_hbar_ws_pill_attrs(doc, pill, ws);
-    set_text_in_place(doc, pill, &ws.name);
+    set_text(doc, pill, &ws.name);
 }
 
 fn first_letter(s: &str) -> String {
@@ -1303,7 +1388,7 @@ fn remove_children_with_class(doc: &mut Document, container: NodeId, class: &str
     let mut removed_any = false;
     for child in children {
         if has_class(doc, child, class) {
-            doc.detach(child);
+            detach_node(doc, child);
             removed_any = true;
         }
     }
@@ -1332,11 +1417,11 @@ fn set_class_token(doc: &mut Document, id: NodeId, token: &str, present: bool) {
 
 fn append_text(doc: &mut Document, parent: NodeId, text: &str) {
     let node = doc.create_text(text.to_string());
-    doc.append_child(parent, node);
+    attach_child(doc, parent, node);
 }
 
 fn set_attr(doc: &mut Document, id: NodeId, name: &str, value: &str) {
-    if let NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data {
+    if let NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data { // S16-tracked-primitive
         if let Some(attr) = attrs.iter_mut().find(|a| a.name.local.eq_ignore_ascii_case(name)) {
             if attr.value != value {
                 attr.value = value.to_string();
@@ -1353,7 +1438,7 @@ fn set_attr(doc: &mut Document, id: NodeId, name: &str, value: &str) {
 }
 
 fn remove_attr(doc: &mut Document, id: NodeId, name: &str) {
-    if let NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data {
+    if let NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data { // S16-tracked-primitive
         let before = attrs.len();
         attrs.retain(|a| !a.name.local.eq_ignore_ascii_case(name));
         if attrs.len() != before {
@@ -1396,35 +1481,42 @@ fn find_by_class(doc: &Document, class: &str) -> Option<NodeId> {
     None
 }
 
-/// Replaces `id`'s text-node children with a single text node containing
-/// `text` — the same "detach old children, append one text node" pattern
-/// [`bind_omnibox`]/[`bind_find_bar`] already use inline, factored out for
-/// [`bind_cert`]'s several title/value cells (CC-10).
+/// Makes `id`'s content exactly the single text node `text`.
+///
+/// Updates the existing text node's payload in place when `id` already has
+/// exactly one text-node child, which is the overwhelmingly common case for
+/// chrome-built cells — that preserves the text node's `NodeId` so
+/// [`lumen_layout::layout_mutation_incremental`]'s `graft_geometry` (which
+/// matches subtrees by node id) can reuse its box, and makes an unchanged
+/// rebind a genuine no-op. Otherwise falls back to detach-all + append one
+/// fresh text node.
+///
+/// BUG-341 S16: the in-place path used to live in a separate
+/// `set_text_in_place`, and the seven [`bind_cert`]/[`bind_bookmarks`]/… cells
+/// that called plain `set_text` detached and recreated their text node on
+/// *every* bind, changed or not. That was invisible while nothing tracked
+/// content; with S16 it reported twelve content-dirty nodes on a rebind of a
+/// bit-identical model, which would have cancelled S15's whole-document box
+/// reuse on every hover frame. One function, one behaviour.
 fn set_text(doc: &mut Document, id: NodeId, text: &str) {
     let children: Vec<NodeId> = doc.get(id).children.clone();
-    for child in children {
-        doc.detach(child);
-    }
-    append_text(doc, id, text);
-}
-
-/// Updates `id`'s existing single text-node child's content in place
-/// (mutating the [`NodeData::Text`] payload) instead of detaching and
-/// creating a new text node — preserves the text node's `NodeId` so
-/// [`lumen_layout::layout_mutation_incremental`]'s `graft_geometry` (which
-/// matches subtrees by node id) can reuse the box when the text hasn't
-/// changed (BUG-341/CC-14). Falls back to [`set_text`]'s detach+recreate
-/// when `id` doesn't have exactly one text-node child (defensive —
-/// chrome-built rows always do).
-fn set_text_in_place(doc: &mut Document, id: NodeId, text: &str) {
-    let children = doc.get(id).children.clone();
     if let [only] = children.as_slice()
-        && let NodeData::Text(s) = &mut doc.get_mut(*only).data
+        && let NodeData::Text(s) = &mut doc.get_mut(*only).data // S16-tracked-primitive
     {
-        *s = text.to_string();
+        if *s != text {
+            *s = text.to_string();
+            // BUG-341 S16: the text node keeps its `NodeId` and carries no
+            // style, so neither the cascade nor `graft_geometry`'s id matching
+            // can notice this. Reporting the text node itself is what drops
+            // `id` (whose box embeds this text) out of `clean_subtrees`.
+            record_content(*only);
+        }
         return;
     }
-    set_text(doc, id, text);
+    for child in children {
+        detach_node(doc, child);
+    }
+    append_text(doc, id, text);
 }
 
 /// Depth-first search scoped to `root`'s subtree (inclusive of `root`
@@ -1487,11 +1579,119 @@ mod tests {
         ChromeModel { tabs, ..ChromeModel::default() }
     }
 
+    /// BUG-341 S16 completeness gate — the structural half of the slice.
+    ///
+    /// `ChromeMutations::content` is only sound if **every** write this module
+    /// makes into the document is bookkept. That cannot be established by
+    /// reading the file once: a future `bind_*` helper that calls
+    /// `doc.append_child` directly would silently produce stale boxes, and no
+    /// behavioural test covers a binding nobody has written yet. So the
+    /// invariant is enforced against this file's own source: the four raw
+    /// `Document` mutators may appear only on lines carrying the
+    /// `S16-tracked-primitive` marker, i.e. inside the wrappers that do the
+    /// bookkeeping.
+    ///
+    /// If this fails on code you just added: don't add the marker — route the
+    /// call through `attach_child` / `insert_child_before` / `detach_node`, or
+    /// (for a new kind of in-place write) add a wrapper next to them that calls
+    /// `record_content`.
+    #[test]
+    fn every_dom_mutation_in_model_rs_goes_through_a_tracked_primitive() {
+        const SRC: &str = include_str!("model.rs");
+        // Assembled at runtime rather than written out: a literal
+        // `"doc.append_child("` in this file would match itself.
+        let raw: Vec<String> = ["append_child", "insert_before", "detach", "get_mut"]
+            .iter()
+            .map(|m| format!("doc.{m}("))
+            .collect();
+
+        let mut offenders = Vec::new();
+        for (i, line) in SRC.lines().enumerate() {
+            if line.trim_start().starts_with("//") || line.contains("S16-tracked-primitive") {
+                continue;
+            }
+            if raw.iter().any(|needle| line.contains(needle.as_str())) {
+                offenders.push(format!("model.rs:{}: {}", i + 1, line.trim()));
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these lines mutate the document without content bookkeeping, so\n\
+             `ChromeMutations::content` would under-report and\n\
+             `ContentDirty::Nodes` would hand `build_box` a stale subtree:\n{}",
+            offenders.join("\n"),
+        );
+    }
+
+    /// BUG-341 S16: a text-only model change (a renamed tab) must be reported
+    /// as content, and only as content.
+    ///
+    /// Both halves matter. Reporting it as content is what stops the reused box
+    /// from keeping the old string — the corruption this slice risks. *Not*
+    /// reporting it as selector-relevant is what keeps S6's cascade root-set
+    /// empty, so a rename costs a box rebuild on one chain instead of a
+    /// document re-cascade.
+    ///
+    /// Contrast with the omnibox, whose value lives in a `value` **attribute**:
+    /// that is a selector-relevant write (`[value]`, `:placeholder-shown`, …)
+    /// and correctly lands in both sets.
+    #[test]
+    fn bind_model_tracked_reports_a_renamed_tab_as_content_only() {
+        let mut doc = parse_asset();
+        let tab = |title: &str| {
+            model_with_tabs(vec![ChromeTabModel {
+                id: 1, title: title.to_owned(), active: true, sleeping: false,
+                is_child: false, container_color: None,
+            }])
+        };
+        bind_model_tracked(&mut doc, &tab("Alpha"));
+        let touched = bind_model_tracked(&mut doc, &tab("Alphabet"));
+        assert!(
+            touched.selector.is_empty(),
+            "a text-only change matches no selector differently — reporting it as \
+             selector-relevant would re-cascade the subtree for nothing: {:?}",
+            touched.selector,
+        );
+        assert!(
+            !touched.content.is_empty(),
+            "a text-only change MUST be reported as content — otherwise `ContentDirty::Nodes` \
+             lets `build_box` reuse the tab row's box with the previous title in it",
+        );
+    }
+
+    /// BUG-341 S16: rebinding a bit-identical model must report **nothing**,
+    /// content included.
+    ///
+    /// This is the load-bearing precondition for S15's whole-document box reuse
+    /// on a pure hover frame: `relayout_chrome_host` calls `bind_model_tracked`
+    /// before *every* chrome layout, so any binding that rewrites the DOM
+    /// unconditionally shows up here as a content-dirty node and cancels the
+    /// reuse of its whole ancestor chain. Twelve cells did exactly that before
+    /// S16 (`set_text` detached and recreated its text node every call), which
+    /// only became visible once content was tracked at all — the sibling
+    /// `..._reports_nothing_touched_...` test above passes either way, because
+    /// none of those rewrites is selector-relevant.
+    #[test]
+    fn bind_model_tracked_reports_no_content_for_an_unchanged_model() {
+        let mut doc = parse_asset();
+        let model = ChromeModel::default();
+        bind_model_tracked(&mut doc, &model);
+        let second = bind_model_tracked(&mut doc, &model);
+        assert!(
+            second.content.is_empty(),
+            "rebinding an identical model rewrote {} node(s) anyway: {:?}. Every binding must \
+             compare before it writes — an unconditional rewrite here costs box reuse on every \
+             single chrome frame, hover included.",
+            second.content.len(),
+            second.content,
+        );
+    }
+
     /// BUG-341 S6: two `bind_model_tracked` calls with a bit-identical model
     /// must report nothing touched — this is the precondition
     /// `relayout_chrome_host`'s incremental path relies on for a pure
     /// interactive-state (hover/focus/active) cycle to still take the
-    /// `dom_content_stable: true` fast path exactly like before S6.
+    /// `ContentDirty::Nothing` fast path exactly like before S6.
     #[test]
     fn bind_model_tracked_reports_nothing_touched_for_an_unchanged_model() {
         let mut doc = parse_asset();
@@ -1516,7 +1716,7 @@ mod tests {
         bind_model_tracked(&mut doc, &ChromeModel { dark_theme: false, ..ChromeModel::default() });
         let touched = bind_model_tracked(&mut doc, &ChromeModel { dark_theme: true, ..ChromeModel::default() });
         let body = doc.body().expect("asset has <body>");
-        assert_eq!(touched, HashSet::from([body]), "only <body> should be reported touched");
+        assert_eq!(touched.selector, HashSet::from([body]), "only <body> should be reported touched");
     }
 
     /// Adding a tab is a structural change on `#sbTabs`/`#hbarTabs` (the
@@ -1543,8 +1743,8 @@ mod tests {
         let touched = bind_model_tracked(&mut doc, &two_tabs);
         let sb_tabs = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
         let hbar_tabs = doc.find_by_id(crate::ids::HBAR_TABS).expect("asset has #hbarTabs");
-        assert!(touched.contains(&sb_tabs), "touched must include #sbTabs: {touched:?}");
-        assert!(touched.contains(&hbar_tabs), "touched must include #hbarTabs: {touched:?}");
+        assert!(touched.selector.contains(&sb_tabs), "touched must include #sbTabs: {touched:?}");
+        assert!(touched.selector.contains(&hbar_tabs), "touched must include #hbarTabs: {touched:?}");
     }
 
     #[test]

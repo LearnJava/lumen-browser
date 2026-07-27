@@ -8794,23 +8794,24 @@ impl Lumen {
                 // whenever `bind_model` actually changed content this cycle.
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                     doc,
-                    touched.iter().copied(),
+                    touched.selector.iter().copied(),
                 ));
                 let delta = lumen_layout::counters::RestyleDelta {
                     prev_styles: &self.chrome_prev_cascade_styles,
                     dirty_roots,
-                    // `false` unless this cycle is provably a pure
-                    // interactive-state transition (brief §4/`RestyleDelta`
-                    // doc: DOM content changes must not let `build_box`'s
-                    // caller believe unrelated attribute/text state is safe
-                    // to skip).
-                    dom_content_stable: touched.is_empty(),
+                    // BUG-341 S16: `bind_model_tracked` enumerates every node
+                    // whose content it mutated (see `ChromeMutations::content`
+                    // and the source-level completeness gate behind it), so
+                    // this cycle can name them instead of declaring the whole
+                    // document unstable the way S4-S15 had to — one changed
+                    // omnibox character no longer costs all 318 boxes.
+                    content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
                 // BUG-341 S15: reuse whole box subtrees from `prev` too, not
-                // just their geometry. Licensed by the same `dom_content_stable`
-                // precondition this call site already establishes above — with
-                // it `false`, `clean_subtrees` stays empty and the flag is inert.
+                // just their geometry. Licensed by the `content_dirty` record
+                // this call site establishes above — a subtree containing a
+                // mutated node stays out of `clean_subtrees`.
                 lumen_layout::box_tree::set_incremental_box_build(true);
                 let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
                     doc,
@@ -9722,9 +9723,9 @@ impl Lumen {
     /// `Lumen::relayout_chrome_host`'s BUG-341 S6 wiring. `dirty_roots` unions
     /// the interactive-state delta (hover/focus/active, vs.
     /// `self.page_prev_interactive`) with the DOM-mutation delta
-    /// (`touched.nodes`); `dom_content_stable` is `true` only when `touched.nodes`
-    /// is empty (a pure interactive-state cycle), same precondition
-    /// `RestyleDelta::dom_content_stable` documents. An `unattributed` summary
+    /// (`touched.nodes`); `content_dirty` is `Nothing` only when `touched.nodes`
+    /// is empty (a pure interactive-state cycle) and `Untracked` otherwise, the
+    /// same precondition `RestyleDelta::content_dirty` documents. An `unattributed` summary
     /// (untracked mutation primitive — Shadow DOM attach, `execCommand`, …) or a
     /// missing/invalidated cache falls back to today's `layout_mutation_incremental`
     /// (full cascade, still correct, just without the cascade-skip win).
@@ -9773,12 +9774,24 @@ impl Lumen {
                 touched.nodes.iter().copied(),
             ));
             drop(doc);
-            let dom_content_stable = touched.nodes.is_empty();
-            let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, dom_content_stable };
+            // BUG-341 S16: the page-side tracker reports *selector-relevant*
+            // nodes only (`DomTouched` deliberately says nothing about text
+            // writes) and has an `unattributed` escape hatch, so it cannot
+            // claim a complete per-node content record the way
+            // `bind_model_tracked` can. Anything but "nothing touched at all"
+            // must therefore stay `Untracked` — this is exactly S4's
+            // `dom_content_stable` semantics, unchanged. Giving the page path a
+            // real content set means completing `DomTouched` for content first.
+            let content_dirty = if touched.nodes.is_empty() {
+                lumen_layout::counters::ContentDirty::Nothing
+            } else {
+                lumen_layout::counters::ContentDirty::Untracked
+            };
+            let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, content_dirty };
             lumen_layout::counters::set_incremental_restyle(true);
             // BUG-341 S15 — see the twin call in `relayout_chrome_host`: the
-            // box-build reuse rides on the same `dom_content_stable` precondition
-            // computed just above.
+            // box-build reuse rides on the same content precondition computed
+            // just above.
             lumen_layout::box_tree::set_incremental_box_build(true);
             let result = relayout_page_incremental_restyle(
                 src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb, &delta,
@@ -24624,12 +24637,14 @@ mod tests {
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                     doc,
-                    touched.iter().copied(),
+                    touched.selector.iter().copied(),
                 ));
                 let delta = lumen_layout::counters::RestyleDelta {
                     prev_styles: &state.prev_cascade_styles,
                     dirty_roots,
-                    dom_content_stable: touched.is_empty(),
+                    // BUG-341 S16 — mirrors `relayout_chrome_host` exactly, so
+                    // the bench measures the production reuse decision.
+                    content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
                 lumen_layout::box_tree::set_incremental_box_build(true);
@@ -24935,6 +24950,71 @@ mod tests {
         );
     }
 
+    /// BUG-341 S16 regression gate: a keystroke must cost the omnibox's own
+    /// chain, not the whole document's box tree.
+    ///
+    /// This is `CC12_KEY`: one typed character changes the `#omniInput`
+    /// `value` attribute and nothing else. S15 made hover frames reuse all 318
+    /// boxes, but reuse was licensed by a single document-wide
+    /// `dom_content_stable` boolean, so this cycle — the one real content
+    /// change in the fixture — still rebuilt every box, `build_box` being
+    /// 1.9-2.3 ms of a ~3.1-3.8 ms cycle. The boolean is now a per-node
+    /// `ContentDirty::Nodes` set fed by `bind_model_tracked`.
+    ///
+    /// The gate is the **count**: rebuilding and cloning produce identical
+    /// trees, so nothing but a counter distinguishes them (S8's lesson), and
+    /// the fixture's machine noise is wider than the whole effect. The
+    /// correctness side of this mechanism is gated separately and closer to the
+    /// code, in `lumen-layout`'s
+    /// `box_build_text_mutation_reuses_everything_but_the_mutated_chain` (stale
+    /// text is what an under-reporting tracker produces) and in
+    /// `lumen-chrome`'s `every_dom_mutation_in_model_rs_goes_through_a_tracked_primitive`
+    /// (which is what keeps the tracker from under-reporting in the first
+    /// place).
+    #[test]
+    fn bug341_s16_keystroke_rebuilds_only_the_omnibox_chain() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        let mut first_full_built = 0;
+        let mut last = lumen_layout::box_tree::BoxBuildStats::default();
+        for i in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let (_, bb) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut state);
+            if i == 0 {
+                first_full_built = bb.built;
+            }
+            last = bb;
+        }
+
+        assert!(
+            first_full_built > 100,
+            "the first (full) cycle should build a non-trivial chrome tree, got {first_full_built}",
+        );
+        assert!(
+            last.reused > 0,
+            "a keystroke must let the ~99% of the document it never came near be cloned from the \
+             previous cycle, got {last:?} — this is exactly what the document-wide \
+             `dom_content_stable` boolean prevented up to S15",
+        );
+        assert!(
+            last.built * 4 < first_full_built,
+            "{} of {first_full_built} boxes were rebuilt for a one-character omnibox change — \
+             the per-node content-dirty set is not narrowing anything. Census: {last:?}. If \
+             chrome.html gains a rule that genuinely restyles a large region on `#omniInput`, \
+             raise this to the count that rule accounts for; do not turn it into a percentage \
+             of whatever the code currently does.",
+            last.built,
+        );
+    }
+
     /// BUG-341 S14 regression gate: a hover flip no rule in the sheet can
     /// react to must re-cascade nothing at all.
     ///
@@ -25013,7 +25093,7 @@ mod tests {
         let delta = RestyleDelta {
             prev_styles: none_map.styles(),
             dirty_roots,
-            dom_content_stable: true,
+            content_dirty: lumen_layout::counters::ContentDirty::Nothing,
         };
         set_incremental_restyle(true);
         let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, &delta);
@@ -25219,7 +25299,7 @@ mod tests {
         let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), &state_index);
         let dirty_count = dirty_roots.len();
-        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, dom_content_stable: true };
+        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         let mut incr_stats = lumen_paint::FrameStats::new();
         let mut last_incr_map = None;
@@ -25344,7 +25424,7 @@ mod tests {
         let delta = RestyleDelta {
             prev_styles: baseline.styles(),
             dirty_roots,
-            dom_content_stable: true,
+            content_dirty: lumen_layout::counters::ContentDirty::Nothing,
         };
         set_incremental_restyle(true);
         set_incremental_box_build(true);

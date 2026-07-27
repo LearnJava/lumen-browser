@@ -2090,6 +2090,142 @@ uninstrumented mutation path yields a stale box, i.e. visible corruption, not a
 slow frame. Audit `crates/chrome/src/model.rs` for every direct
 `append_child`/`detach`/`create_*` call, not just the primitives.
 
+## S16 — one boolean was answering a per-node question
+
+**Branch `p1-bug341-s16`.** Took the queue's own instruction: replace
+`RestyleDelta::dom_content_stable` with a per-node content-dirty set.
+
+### What was wrong
+
+`build_box` reads three things a `ComputedStyle` comparison cannot see —
+attribute values, text-node data, and child lists. S4 covered that gap with one
+document-wide boolean: reuse a box subtree only if *nothing anywhere* had
+content-changed this cycle. Correct, and hopeless for `CC12_KEY`, where one
+typed omnibox character sets `dom_content_stable = false` and rebuilds all 318
+boxes — including the ~300 the mutation came nowhere near. That was 1.88-2.31 ms
+of the 3.13-3.82 ms cycle after S15.
+
+### The mechanism
+
+`ContentDirty` (in `counters.rs`) replaces the boolean with three states:
+
+| variant | meaning | who says it |
+|---|---|---|
+| `Untracked` | no content record — reuse nothing | page-side JS (`DomTouched` has an `unattributed` escape hatch and never reports text writes) |
+| `Nothing` | complete record, nothing changed | a pure `:hover`/`:focus`/`:active` cycle |
+| `Nodes(&set)` | complete record, exactly these changed | `bind_model_tracked` |
+
+`counters::walk` folds it into the same bottom-up `subtree_clean` it already
+computed: a node is clean when its style was reused, its own id is not in the
+set, and every descendant is clean. A text node — which has no style, so the
+cascade has nothing to compare — now returns `false` when named, which is what
+drops its parent element (whose box embeds the text) out of `clean_subtrees`.
+
+`bind_model_tracked` returns `ChromeMutations { selector, content }` instead of
+one set. `selector` is S6's, unchanged, and still drives the cascade root-set;
+`content` additionally covers text writes and child-list changes, which are
+invisible to selectors and were therefore deliberately unreported before.
+
+### Completeness is structural, not editorial
+
+`Nodes` is a promise: a mutation that goes unreported yields a **stale box on
+screen**, not a slow frame. So it is not maintained by having read the file
+once. Every raw `Document` mutator in `crates/chrome/src/model.rs` is wrapped
+(`attach_child` / `insert_child_before` / `detach_node`, alongside the existing
+`set_attr` / `remove_attr` / `set_text`), and
+`every_dom_mutation_in_model_rs_goes_through_a_tracked_primitive` scans the
+file's own source via `include_str!`, rejecting any `doc.append_child(` /
+`doc.insert_before(` / `doc.detach(` / `doc.get_mut(` not on a line marked
+`S16-tracked-primitive`. A future `bind_*` helper that mutates directly fails
+the build, which is the only form of this invariant that survives the next
+person.
+
+### Tracking content exposed what it was hiding
+
+The first run of "rebind a bit-identical model" reported **twelve**
+content-dirty nodes. `bind_cert`'s title/value/fingerprint cells, `#findCount`,
+`#statTrackers` and the bookmarks/history titles all called `set_text`, which
+detached and recreated its text node unconditionally, changed or not — the
+`set_text_in_place` variant that compares first existed but had only been
+applied to the tab/workspace rows. Nothing noticed while only selector-relevance
+was tracked (none of those rewrites is selector-relevant), but the moment
+content is tracked, twelve unconditional rewrites would have cancelled S15's
+whole-document reuse on **every hover frame** — S16 would have made `CC12_HOVER`
+worse while improving `CC12_KEY`.
+
+`set_text` absorbed `set_text_in_place`'s body: one text setter, compare then
+write in place, a genuine no-op when unchanged. `bind_omnibox`'s warning banner
+got the same treatment (it rebuilt its `⚠ <span>` every bind, which would have
+cost the whole document for as long as a warning was displayed). This is the
+`bind_palette` gotcha of S6 in a new place, and the standing rule it implies:
+**any chrome binding must compare before it writes.**
+
+### Gates
+
+- `every_dom_mutation_in_model_rs_goes_through_a_tracked_primitive`
+  (lumen-chrome) — the completeness invariant, enforced against source.
+- `bind_model_tracked_reports_no_content_for_an_unchanged_model` (lumen-chrome)
+  — the twelve-rewrites regression; this is what protects `CC12_HOVER`.
+- `bind_model_tracked_reports_a_renamed_tab_as_content_only` (lumen-chrome) — a
+  text change must land in `content` and *not* in `selector`.
+- `box_build_text_mutation_reuses_everything_but_the_mutated_chain`
+  (lumen-layout) — **correctness first**: every `InlineSegment`'s text must
+  match a full rebuild (verified to fail with exactly the stale-text symptom
+  when the mutation is under-reported), **then** the count: the untouched
+  sibling subtree is cloned and the mutated chain is not.
+- `bug341_s16_keystroke_rebuilds_only_the_omnibox_chain` (lumen-shell, runs by
+  default) — on the real chrome document, a keystroke cycle must build under a
+  quarter of the full tree.
+
+### Measurement
+
+Box-build census on the shell fixture, `CC12_KEY` cycle: **240 → 38 boxes
+built** (8 subtrees cloned). `CC12_HOVER` unchanged at 3 built / 1 reused —
+which is the point of the `..._no_content_for_an_unchanged_model` gate.
+
+Interleaved A/B ×3 (main, S16, main, S16, …), by min — the machine's noise is
+still wider than the effect on `CC12_HOVER`, so p50 is not usable here:
+
+| | main | S16 |
+|---|---|---|
+| `CC12_KEY` min | 4.24 / 3.91 / 3.80 ms | **2.73 / 2.83 / 2.84 ms** (≈1.4×) |
+| `CC12_KEY` p95 | 9.19 / 10.88 / 8.66 ms | **6.76 / 6.90 / 6.94 ms** |
+| `CC12_HOVER` min | 1.37 / 1.37 / 1.43 ms | 1.36 / 1.67 / 1.33 ms (flat) |
+
+Both `CC12_KEY` rows separate cleanly — no overlap between the groups on any
+round. `CC12_HOVER` overlaps, i.e. is unchanged, which is the intended result:
+S15 already reused everything there, and S16's job on that scenario was to not
+regress it (see the twelve unconditional rewrites above, which would have).
+
+Stage split, `LUMEN_PROFILE_TREE=1`, min / p50 over 60 `CC12_KEY` cycles:
+
+| Stage | S15 | S16 |
+|---|---|---|
+| `precompute_counters` | 0.43 / 0.56 ms | 0.47 / 0.59 ms |
+| `build_box` | 1.88 / 2.31 ms | **0.82 / 1.30 ms** |
+| `graft_geometry` | 0.50 / 0.66 ms | 0.32 / 0.44 ms |
+| `lay_out` | 0.08 / 0.10 ms | 0.07 / 0.09 ms |
+| **total** | 3.13 / 3.82 ms | **2.05 / 2.63 ms** |
+
+### Where this leaves CC-12
+
+Still red, but much closer, and the two scenarios have converged in character.
+`CC12_HOVER` is in budget by min (1.3-1.7 ms) with p95 ≈5.2-6.1 ms (≈3×).
+`CC12_KEY` is now ≈1.4× by min (2.7-2.8 ms vs the 2 ms budget) and ≈3.5× by p95.
+
+`build_box` is still the largest stage on `CC12_KEY`, and the census says why: a
+one-character omnibox change rebuilds **38** boxes, not the 3 that a hover
+frame does. The omnibox `value` write is a genuine attribute change, so
+`restyle_root_set_for_node_change` puts `#omniInput` and a conservative
+neighbourhood into `dirty_roots`; every re-cascaded node then re-enters
+`must_recompute` and loses its box. **S17 is the S14 argument applied to DOM
+mutations**: S14 asked "which selectors could possibly react to this `:hover`
+flip" and dropped the rest of the root-set; nobody has yet asked which
+selectors could react to a `[value]` write. Get the census first (which of the
+38 are re-cascaded because a rule really keys on the mutated attribute, and
+which are collateral), because the last two slices both found the planned
+premise was not where the time was.
+
 ## Repro
 
 ```bash

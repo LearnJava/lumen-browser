@@ -5081,7 +5081,7 @@ mod tests {
             let d = doc.lock().unwrap();
             restyle_root_set_for_node_change(&d, touched.nodes.iter().copied())
         };
-        let delta = RestyleDelta { prev_styles: baseline_counters.styles(), dirty_roots, dom_content_stable: false };
+        let delta = RestyleDelta { prev_styles: baseline_counters.styles(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Untracked };
 
         set_incremental_restyle(true);
         let (incr, _incr_counters) = {
