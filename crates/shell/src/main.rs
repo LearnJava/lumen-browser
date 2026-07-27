@@ -24614,6 +24614,13 @@ mod tests {
         prev_cascade_styles:
             HashMap<lumen_dom::NodeId, std::sync::Arc<lumen_layout::style::ComputedStyle>>,
         prev_interactive: (Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>),
+        /// BUG-341 S18: run the cycle with whole-subtree box reuse (S15) off,
+        /// so the box tree is rebuilt and `graft_geometry` really compares it
+        /// against its predecessor box by box. The S13 gate needs that: with
+        /// reuse on, the graft is now handed a subtree it knows is a copy of
+        /// `prev` and honours it in O(1), which is the right production
+        /// behaviour but leaves nothing for a per-box reject census to measure.
+        box_reuse_off: bool,
     }
 
     /// One `relayout_chrome_host`-equivalent pass, timed exactly like the
@@ -24678,7 +24685,7 @@ mod tests {
                     content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
-                lumen_layout::box_tree::set_incremental_box_build(true);
+                lumen_layout::box_tree::set_incremental_box_build(!state.box_reuse_off);
                 let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
                     doc, sheet, viewport, measurer, hyp, false, prev, &delta,
                 );
@@ -24892,7 +24899,14 @@ mod tests {
         let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
 
         lumen_layout::incremental::set_graft_diagnostics(true);
-        let mut state = Cc12IncrementalState::default();
+        // BUG-341 S18: with whole-subtree box reuse on, the graft is handed the
+        // document as one `REUSED_SUBTREE` claim and honours it without
+        // comparing a single box — correct, and exactly what S18 is for, but it
+        // would turn this census into "1 box visited, 1 reused". Turning reuse
+        // off keeps this gate measuring what it was written to measure: whether
+        // the *comparison*, when it does run, is fooled by the used values the
+        // previous layout pass wrote back into the styles.
+        let mut state = Cc12IncrementalState { box_reuse_off: true, ..Default::default() };
         let mut last = lumen_layout::incremental::GraftStats::default();
         for i in 0..4 {
             let hover = if i % 2 == 0 { sidebar } else { None };
@@ -25277,7 +25291,10 @@ mod tests {
             ("CC12_HOVER(sidebar/none)", [sidebar, None]),
             ("SIBLING_HOVER(tabA/tabB)", [tab_a, tab_b]),
         ] {
-            let mut state = Cc12IncrementalState::default();
+            // Reuse off for the same reason as the S13 gate above: this census
+            // is about the per-box comparison, which S18's O(1) reuse claim
+            // (rightly) skips in production.
+            let mut state = Cc12IncrementalState { box_reuse_off: true, ..Default::default() };
             for i in 0..6 {
                 let _ = cc12_bench_cycle(
                     &mut doc,
@@ -25474,6 +25491,288 @@ mod tests {
                 bb.built,
                 bb.reused,
             );
+
+            state.prev_pristine_layout = Some(layout.clone());
+            state.prev_cascade_styles = counters.styles().clone();
+            lumen_layout::clear_interactive_state();
+        }
+    }
+
+    /// BUG-341 S18 regression gate: a subtree the box-build stage cloned out of
+    /// the previous tree must not be walked again by the two stages that follow.
+    ///
+    /// S15 made a hover frame clone the whole chrome document in one
+    /// `build_box_or_reuse` call, and S16 made a keystroke clone all of it but
+    /// the omnibox chain. Both then handed the copy to `mark_subtree_dirty`,
+    /// which marked all 318 boxes dirty, and to `graft_geometry`, which compared
+    /// each of them against the very box it had just been copied from and
+    /// cleared the bit again — two full walks per frame to re-derive a fact the
+    /// box-build stage already knew (`graft_geometry` was 0.4-1.0 ms of a ~2.6 ms
+    /// keystroke cycle).
+    ///
+    /// The gate is the **count**: honouring the claim in O(1) and re-deriving it
+    /// in O(n) produce the identical tree, so only a counter can tell them apart
+    /// (S8's lesson), and this fixture's machine noise is wider than the whole
+    /// effect. `visited` is the number of boxes the graft really compared; it
+    /// must collapse to the chain the keystroke rebuilt, not the document.
+    /// Correctness — that the skipped subtrees really are identical, and that a
+    /// skipped claim never reaches `lay_out` looking clean when it should not —
+    /// is gated separately in `lumen-layout`'s
+    /// `mutation_incremental_restyle_*_matches_full` differential tests, which
+    /// compare geometry against a full pass.
+    #[test]
+    fn bug341_s18_reused_subtrees_are_not_re_walked_by_the_graft() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut last = lumen_layout::incremental::GraftStats::default();
+        for i in 0..4 {
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let model = cc12_bench_model("");
+            let _ = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            last = lumen_layout::incremental::take_graft_stats();
+        }
+        assert_eq!(
+            last.reused_wholesale, 1,
+            "a hover flip nothing can react to must reach the graft as a single whole-document \
+             reuse claim, got {last:?}",
+        );
+        // Four: the three boxes S15's gate records as still built on this flip,
+        // plus the one claim that stands for the other 314.
+        assert!(
+            last.visited <= 5,
+            "{} boxes were compared against their own copies on a hover flip whose box tree came \
+             wholesale out of the previous cycle — before S18 this was the whole 318-box \
+             document, and it must now be only the handful the box-build stage really rebuilt. \
+             Census: {last:?}",
+            last.visited,
+        );
+
+        // The keystroke shape: the omnibox chain is rebuilt, everything else is
+        // claimed. The graft must visit the chain only.
+        let mut key_state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        let mut key_last = lumen_layout::incremental::GraftStats::default();
+        for _ in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let _ =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut key_state);
+            key_last = lumen_layout::incremental::take_graft_stats();
+        }
+        assert!(
+            key_last.reused_wholesale >= 5,
+            "the boxes a keystroke never came near must reach the graft as reuse claims, got \
+             {key_last:?}",
+        );
+        assert!(
+            key_last.visited < 100,
+            "{} boxes were compared on a keystroke cycle that rebuilds ~28 of 318 — the graft is \
+             still walking subtrees the box-build stage copied verbatim. Census: {key_last:?}. If \
+             chrome.html gains structure that genuinely rebuilds a large region on every \
+             keystroke, record the count that structure accounts for; do not turn this into a \
+             percentage of whatever the code currently does.",
+            key_last.visited,
+        );
+    }
+
+    /// BUG-341 S18 diagnostic: census of *what* the 28 boxes a keystroke
+    /// rebuilds actually are.
+    ///
+    /// S17 drove the cascade down to a single recomputed element, yet the box
+    /// tree still rebuilds ~28 boxes — so the residual is no longer about which
+    /// nodes are invalidated but about the **unit of reuse**. `clean_subtrees`
+    /// licenses cloning a whole element subtree, and a subtree containing one
+    /// content-dirty node is not clonable, so every ancestor of `#omniInput`
+    /// rebuilds — and each rebuild re-walks all of its own children.
+    ///
+    /// This prints the built list itself (per-node, classified) plus the
+    /// per-ancestor breakdown: how many child slots each rebuilt ancestor has,
+    /// how many of them came across as whole-subtree clones, and how many were
+    /// rebuilt for want of a finer-grained unit. Run: `cargo test -p lumen-shell
+    /// --profile dev-release bug341_s18_keystroke_box_build_census --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S18) — see doc comment for run command"]
+    fn bug341_s18_keystroke_box_build_census() {
+        use std::collections::HashSet;
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        for i in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+            lumen_layout::set_interactive_state(None, None, None);
+            let last = i == 3;
+
+            lumen_layout::box_tree::set_box_build_diagnostics(last);
+            let _ = lumen_layout::counters::take_cascade_stats();
+            let _ = lumen_layout::style::take_compute_style_calls();
+            let (layout, counters) = match state.prev_pristine_layout.as_ref() {
+                Some(prev) => {
+                    let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                    let dirty_roots = lumen_layout::style::restyle_root_set_for_node_change(
+                        &doc,
+                        chrome_node_changes(&touched),
+                        &node_index,
+                    );
+                    let delta = lumen_layout::counters::RestyleDelta {
+                        prev_styles: &state.prev_cascade_styles,
+                        dirty_roots,
+                        content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                    };
+                    lumen_layout::counters::set_incremental_restyle(true);
+                    lumen_layout::box_tree::set_incremental_box_build(true);
+                    let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                    );
+                    lumen_layout::box_tree::set_incremental_box_build(false);
+                    lumen_layout::counters::set_incremental_restyle(false);
+                    result
+                }
+                None => lumen_layout::layout_measured_hyp_with_counters(
+                    &doc, &sheet, viewport, &measurer, &hyp, false,
+                ),
+            };
+            let built = lumen_layout::box_tree::take_box_build_log();
+            lumen_layout::box_tree::set_box_build_diagnostics(false);
+            let bb = lumen_layout::box_tree::take_box_build_stats();
+            let cs = lumen_layout::counters::take_cascade_stats();
+            let full_cascades = lumen_layout::style::take_compute_style_calls();
+            let (clone_ns, clone_boxes) = lumen_layout::box_tree::take_box_clone_stats();
+            eprintln!(
+                "[s18-census] cycle={i} cascade_recomputed={} cascade_reused={} \
+                 boxes_built={} boxes_reused={} compute_style_calls={full_cascades} \
+                 subtree_clone={:.3}ms over {clone_boxes} boxes",
+                cs.recomputed,
+                cs.reused,
+                bb.built,
+                bb.reused,
+                clone_ns as f64 / 1e6,
+            );
+
+            if last {
+                // The chain that cannot be cloned: every ancestor of a
+                // content-dirty node, plus the dirty node itself.
+                let mut chain: HashSet<lumen_dom::NodeId> = HashSet::new();
+                for &n in &touched.content {
+                    let mut cur = Some(n);
+                    while let Some(c) = cur {
+                        chain.insert(c);
+                        cur = doc.get(c).parent;
+                    }
+                }
+                let clean = counters.clean_subtrees();
+                let built_set: HashSet<lumen_dom::NodeId> = built.iter().copied().collect();
+
+                eprintln!("[s18-census] content-dirty nodes: {}", touched.content.len());
+                for &n in &touched.content {
+                    eprintln!("[s18-census]   {}", census_describe(&doc, n));
+                }
+                eprintln!(
+                    "[s18-census] built={} (distinct nodes {}) reused={} chain_len={}",
+                    bb.built,
+                    built_set.len(),
+                    bb.reused,
+                    chain.len(),
+                );
+
+                // Partition the built list: which of them are on the
+                // un-clonable chain, which are non-elements (never eligible —
+                // `clean_subtrees` records elements only), which are elements
+                // the cascade re-ran, and which are left unexplained.
+                let (mut on_chain, mut non_elem, mut recascaded, mut other) =
+                    (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                for &n in &built {
+                    let is_elem = matches!(doc.get(n).data, lumen_dom::NodeData::Element { .. });
+                    if chain.contains(&n) {
+                        on_chain.push(n);
+                    } else if !is_elem {
+                        non_elem.push(n);
+                    } else if !clean.contains(&n) {
+                        recascaded.push(n);
+                    } else {
+                        other.push(n);
+                    }
+                }
+                for (label, list) in [
+                    ("on-chain", &on_chain),
+                    ("non-element", &non_elem),
+                    ("elem-not-clean", &recascaded),
+                    ("clean-but-built", &other),
+                ] {
+                    eprintln!(
+                        "[s18-census] {label}: {} — {}",
+                        list.len(),
+                        list.iter()
+                            .map(|&n| census_describe(&doc, n))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
+                }
+
+                // Per-ancestor breakdown: the child slots each rebuilt ancestor
+                // re-walked, split by what happened to each child.
+                let mut chain_ordered: Vec<lumen_dom::NodeId> = chain.iter().copied().collect();
+                chain_ordered.sort_by_key(|&n| {
+                    let mut d = 0usize;
+                    let mut cur = doc.get(n).parent;
+                    while let Some(c) = cur {
+                        d += 1;
+                        cur = doc.get(c).parent;
+                    }
+                    d
+                });
+                let (mut slots, mut slots_reused, mut slots_built) = (0usize, 0usize, 0usize);
+                for &anc in &chain_ordered {
+                    let kids = doc.get(anc).children.clone();
+                    let reused_kids = kids
+                        .iter()
+                        .filter(|&&k| clean.contains(&k) && !built_set.contains(&k))
+                        .count();
+                    let built_kids = kids.iter().filter(|&&k| built_set.contains(&k)).count();
+                    slots += kids.len();
+                    slots_reused += reused_kids;
+                    slots_built += built_kids;
+                    eprintln!(
+                        "[s18-census] ancestor {} children={} reused={} built={} \
+                         (elem children {}, text/comment {})",
+                        census_describe(&doc, anc),
+                        kids.len(),
+                        reused_kids,
+                        built_kids,
+                        kids.iter()
+                            .filter(|&&k| matches!(
+                                doc.get(k).data,
+                                lumen_dom::NodeData::Element { .. }
+                            ))
+                            .count(),
+                        kids.iter()
+                            .filter(|&&k| !matches!(
+                                doc.get(k).data,
+                                lumen_dom::NodeData::Element { .. }
+                            ))
+                            .count(),
+                    );
+                }
+                eprintln!(
+                    "[s18-census] chain child slots total={slots} reused={slots_reused} \
+                     built={slots_built} neither={}",
+                    slots - slots_reused - slots_built,
+                );
+            }
 
             state.prev_pristine_layout = Some(layout.clone());
             state.prev_cascade_styles = counters.styles().clone();

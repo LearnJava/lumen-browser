@@ -46,6 +46,18 @@ impl DirtyBits {
     pub const HAS_DIRTY_DESCENDANT: Self = DirtyBits(0b010);
     /// Entire subtree is dirty (e.g. viewport resize, font change).
     pub const SUBTREE: Self = DirtyBits(0b100);
+    /// BUG-341 S18 — this box is the root of a subtree
+    /// `box_tree::build_box_or_reuse` cloned wholesale out of the previous
+    /// tree, so it is byte-identical to it and needs neither dirty-marking nor
+    /// grafting. Set by the box-build stage and consumed (cleared to
+    /// [`Self::CLEAN`]) by [`graft_geometry_with_cascade`]; it is a claim about
+    /// provenance, not a layout state, and never survives a completed pass.
+    ///
+    /// It rides in this field rather than in a side table because `build_box`
+    /// fans out over rayon workers — a shared set would need a lock on the hot
+    /// path, and a thread-local one would silently lose everything built on a
+    /// worker (the S15 trap).
+    pub const REUSED_SUBTREE: Self = DirtyBits(0b1000);
 
     /// Returns `true` when no bits are set (layout is up-to-date).
     #[inline]
@@ -208,6 +220,12 @@ pub struct GraftStats {
     /// style genuinely differs from — the honest "this style changed" bucket.
     /// Diagnostics only.
     pub reject_style_cascade_differs: usize,
+    /// BUG-341 S18: subset of `reused_clean` honoured in O(1) because the
+    /// box-build stage had already cloned the subtree out of the predecessor
+    /// ([`DirtyBits::REUSED_SUBTREE`]) — each of these stands for a whole
+    /// subtree the graft did not walk, which is why `visited` no longer counts
+    /// every box in the tree.
+    pub reused_wholesale: usize,
 }
 
 thread_local! {
@@ -222,6 +240,7 @@ thread_local! {
         reject_style_used_value_only: 0,
         reject_style_no_cascade_entry: 0,
         reject_style_cascade_differs: 0,
+        reused_wholesale: 0,
     }) };
     /// Whether to attribute style rejects to used-value writeback (costly).
     static GRAFT_DIAGNOSTICS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -258,8 +277,20 @@ fn bump_graft(f: impl FnOnce(&mut GraftStats)) {
 /// ([`graft_geometry`]) then clears the bits on subtrees it can reuse. Without
 /// this, a fresh box defaults to [`DirtyBits::CLEAN`] and `lay_out` would skip it
 /// (translating its zero-sized rect) instead of laying it out.
+///
+/// BUG-341 S18: a [`DirtyBits::REUSED_SUBTREE`] claim is carried through rather
+/// than overwritten, so [`graft_geometry_with_cascade`] can still see it. The
+/// claim is deliberately *not* used to skip this walk: leaving it dirty like
+/// everything else is what makes every path out of the graft that does not
+/// explicitly clean a box (a structural mismatch, an unmatched trailing child)
+/// keep its pre-S18 meaning — the box stays dirty and is laid out fresh. This
+/// pass costs one byte write per box; the walk worth removing is the graft's.
 pub fn mark_subtree_dirty(b: &mut LayoutBox) {
-    b.dirty = DirtyBits::SELF_SIZE;
+    b.dirty = if b.dirty.contains(DirtyBits::REUSED_SUBTREE) {
+        DirtyBits::SELF_SIZE | DirtyBits::REUSED_SUBTREE
+    } else {
+        DirtyBits::SELF_SIZE
+    };
     for child in &mut b.children {
         mark_subtree_dirty(child);
     }
@@ -318,12 +349,26 @@ pub fn graft_geometry_with_cascade(
     prev_cascade: Option<&std::collections::HashMap<NodeId, std::sync::Arc<crate::style::ComputedStyle>>>,
 ) -> bool {
     bump_graft(|s| s.visited += 1);
+    // BUG-341 S18: this subtree was cloned wholesale out of `prev` by
+    // `build_box_or_reuse`, so every comparison below is a comparison of a value
+    // with its own copy, and every field the clean branch copies over is already
+    // that copy. The claim is honoured in O(1) instead of re-walking the
+    // subtree: on a chrome hover flip that is one box examined instead of 318.
+    if new.dirty.contains(DirtyBits::REUSED_SUBTREE) {
+        new.dirty = DirtyBits::CLEAN;
+        bump_graft(|s| {
+            s.reused_clean += 1;
+            s.reused_wholesale += 1;
+        });
+        return true;
+    }
     if new.node != prev.node || !kind_layout_eq(&new.kind, &prev.kind) {
         bump_graft(|s| s.reject_identity += 1);
         // Node identity or box-kind payload differ → this position no longer
         // describes the same box, so the children below it cannot be matched
         // positionally either. Leave the whole subtree dirty (marked by
-        // `mark_subtree_dirty`).
+        // `mark_subtree_dirty`, which keeps marking through S18 reuse claims
+        // for exactly this case).
         return false;
     }
 

@@ -6372,6 +6372,28 @@ impl ComputedStyle {
     }
 }
 
+/// BUG-341 S18 — process-wide tally of full [`compute_style`] runs.
+///
+/// The cascade stage's own [`crate::counters::CascadeStats`] counts only the
+/// calls `counters::walk` makes. It cannot see the ones the box-build stage
+/// makes behind its back: `is_inline_content` / `is_inline_block` probe every
+/// child of every rebuilt container with a fresh `compute_style` instead of the
+/// `CounterMap` cache `build_box` itself uses, and non-element nodes have no
+/// cache entry at all. Process-wide (an atomic, not a thread-local) because
+/// `build_box` fans out over rayon workers — the S15 trap.
+static COMPUTE_STYLE_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Returns the number of [`compute_style`] runs since the last drain, and
+/// resets the tally (see [`COMPUTE_STYLE_CALLS`]).
+pub fn take_compute_style_calls() -> u64 {
+    COMPUTE_STYLE_CALLS.swap(0, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Bumps the [`COMPUTE_STYLE_CALLS`] tally.
+fn note_compute_style() {
+    COMPUTE_STYLE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Computes the `ComputedStyle` for `node` by running the CSS cascade.
 ///
 /// `dark_mode` is forwarded to `@media (prefers-color-scheme: dark)` matching.
@@ -6388,6 +6410,7 @@ pub fn compute_style(
     // run prints one aggregated line per phase with a `×N` call count instead
     // of one line per node. Costs a cached bool check per phase when disabled.
     let _prof = lumen_core::profile::scope_detail("compute_style");
+    note_compute_style();
     let prof_init = lumen_core::profile::scope_detail("cs_init");
     let mut style = ComputedStyle {
         display: default_display(doc, node),
