@@ -46,9 +46,9 @@ thread_local! {
 thread_local! {
     /// BUG-341 S4 — master on/off switch for incremental box-build
     /// (`build_box_or_reuse`'s whole-subtree clone path), mirroring
-    /// `counters::INCREMENTAL_RESTYLE`'s pattern. Off by default: no current
-    /// pipeline entry point (`layout_measured_hyp`, `layout_mutation_incremental`)
-    /// passes a `prev_index` yet — that wiring is S5.
+    /// `counters::INCREMENTAL_RESTYLE`'s pattern. Off by default; S15 turns it
+    /// on around `layout_mutation_incremental_restyle` at the pipeline call
+    /// sites, alongside `counters::set_incremental_restyle`.
     static INCREMENTAL_BOX_BUILD: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -63,26 +63,51 @@ pub fn incremental_box_build_enabled() -> bool {
     INCREMENTAL_BOX_BUILD.with(|c| c.get())
 }
 
-#[cfg(test)]
+/// BUG-341 S4/S15 — per-pass tally of what the box-build stage rebuilt versus
+/// reused wholesale from the previous tree.
+///
+/// The reuse mechanism is invisible in output (a build that reuses nothing
+/// produces exactly the same tree, just slowly — the S8 lesson), and wall-clock
+/// hides a total regression inside machine noise. These counters are what the
+/// S15 gates assert on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BoxBuildStats {
+    /// `build_box` calls that really constructed a box.
+    pub built: u32,
+    /// Whole `LayoutBox` subtrees cloned from the previous pass instead
+    /// (`build_box_or_reuse`'s fast path).
+    pub reused: u32,
+}
+
 thread_local! {
-    /// BUG-341 S4 test instrumentation: counts real `build_box` calls vs
-    /// whole-subtree reuses via `build_box_or_reuse`, so differential tests can
-    /// assert the incremental path actually skips work (not just that it
-    /// matches a full build's output).
-    static BOX_BUILD_COUNT: Cell<u32> = const { Cell::new(0) };
-    static BOX_BUILD_REUSE_COUNT: Cell<u32> = const { Cell::new(0) };
+    /// BUG-341 S4/S15 instrumentation: counts real `build_box` calls vs
+    /// whole-subtree reuses via `build_box_or_reuse`, so gates can assert the
+    /// incremental path actually skips work (not just that it matches a full
+    /// build's output). Always compiled — two `Cell` bumps against a stage that
+    /// costs microseconds per box — so a gate outside this crate can read it.
+    static BOX_BUILD_STATS: Cell<BoxBuildStats> =
+        const { Cell::new(BoxBuildStats { built: 0, reused: 0 }) };
 }
 
-#[cfg(test)]
-pub(crate) fn reset_box_build_counts() {
-    BOX_BUILD_COUNT.with(|c| c.set(0));
-    BOX_BUILD_REUSE_COUNT.with(|c| c.set(0));
+/// Returns the accumulated [`BoxBuildStats`] and resets the tally.
+///
+/// Thread-local, like the profiler's own tree — `build_box` fans large
+/// flex/grid containers out over rayon workers, and each of those drains its
+/// own tally back into the thread running the parent container (see the
+/// `RAYON_MIN_FLEX_CHILDREN` branch), so the count read on the layout thread is
+/// the whole tree's.
+pub fn take_box_build_stats() -> BoxBuildStats {
+    BOX_BUILD_STATS.with(|s| s.replace(BoxBuildStats::default()))
 }
 
-/// Returns `(built, reused)` since the last [`reset_box_build_counts`].
-#[cfg(test)]
-pub(crate) fn box_build_counts() -> (u32, u32) {
-    (BOX_BUILD_COUNT.with(|c| c.get()), BOX_BUILD_REUSE_COUNT.with(|c| c.get()))
+/// Folds `d` into the current thread's [`BoxBuildStats`] tally.
+fn add_box_build_stats(d: BoxBuildStats) {
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.built += d.built;
+        v.reused += d.reused;
+        s.set(v);
+    });
 }
 
 /// Layout-side gutter width for `scrollbar-width: auto` in CSS px.
@@ -2865,13 +2890,13 @@ pub fn layout_mutation_incremental(
 /// re-derives `delta.dirty_roots` and their subtrees
 /// ([`crate::counters::incremental_precompute_counters`]) instead of every
 /// node — the dominant cost S1's profiling found (brief §1,
-/// `precompute_counters` at 53% of the cycle). Box-build is deliberately
-/// *not* skipped here (`incremental_build_box`, BUG-341 S4, measured a net
-/// loss standalone — its `index_by_node` whole-tree index outweighs the
-/// savings; see BUG-341 "S4" recommendation) — this builds fresh boxes with
-/// the plain `build_box`, exactly like [`layout_streaming_incremental`]
-/// itself does, then relies on [`crate::incremental::graft_geometry`] for
-/// layout-geometry reuse the same way that function already does.
+/// `precompute_counters` at 53% of the cycle). BUG-341 S15: box-build is
+/// skipped too when [`set_incremental_box_build`] is on — whole `LayoutBox`
+/// subtrees are cloned from `prev` wherever [`CounterMap::clean_subtrees`]
+/// licenses it ([`incremental_build_box`]) — and [`crate::incremental::
+/// graft_geometry`] then reuses the layout geometry the same way it already
+/// did. With the flag off this builds fresh boxes with the plain `build_box`,
+/// exactly like [`layout_streaming_incremental`] does.
 ///
 /// `delta.prev_styles` must be the [`CounterMap::styles`] this same document
 /// produced on the previous cycle (this function's own returned `CounterMap`,
@@ -2918,7 +2943,22 @@ pub fn layout_mutation_incremental_restyle(
     let registry = build_counter_style_registry(sheet);
     let mut root = {
         let _prof = lumen_core::profile::scope("build_box");
-        build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
+        // BUG-341 S15: reuse whole `LayoutBox` subtrees from `prev` wherever
+        // `CounterMap::clean_subtrees` licenses it (the S4 mechanism), instead
+        // of rebuilding a tree that `graft_geometry` is about to graft straight
+        // back onto the previous geometry. S4's own measurement rejected this
+        // because `index_by_node`'s whole-prev-tree hash outweighed the ~8%
+        // `build_box` share it saved; both halves of that trade have since
+        // moved — `build_box` is now ~60% of the incremental cycle (S14's
+        // profile) and, after S13/S14, the dirty set on a chrome interaction is
+        // empty, so `clean_subtrees` licenses nearly the whole tree.
+        if incremental_box_build_enabled() {
+            incremental_build_box(
+                doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, prev,
+            )
+        } else {
+            build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
+        }
     };
     propagate_canvas_background(doc, &mut root);
     apply_font_size_adjust(&mut root, measurer);
@@ -4082,13 +4122,23 @@ fn build_box_or_reuse(
     dark_mode: bool,
     prev_index: Option<&std::collections::HashMap<NodeId, &LayoutBox>>,
 ) -> LayoutBox {
-    if incremental_box_build_enabled()
-        && let Some(idx) = prev_index
+    // BUG-341 S15: the gate is `prev_index.is_some()`, NOT the
+    // `INCREMENTAL_BOX_BUILD` thread-local — `build_box` fans flex/grid
+    // containers out over rayon workers, whose thread-locals start at their
+    // defaults (the same trap `StyleEnvSnapshot` exists for), so a thread-local
+    // check here silently disabled reuse for every child of a container with 8+
+    // items. Chrome is built out of exactly such containers. The flag is
+    // consulted once, at `incremental_build_box`, which is what decides whether
+    // an index exists at all.
+    if let Some(idx) = prev_index
         && counters.clean_subtrees().contains(&id)
         && let Some(prev_box) = idx.get(&id)
     {
-        #[cfg(test)]
-        BOX_BUILD_REUSE_COUNT.with(|c| c.set(c.get() + 1));
+        BOX_BUILD_STATS.with(|s| {
+            let mut v = s.get();
+            v.reused += 1;
+            s.set(v);
+        });
         return (*prev_box).clone();
     }
     build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev_index)
@@ -4103,13 +4153,13 @@ fn build_box_or_reuse(
 /// the `incr == full` differential tests in `incremental.rs` guard this.
 ///
 /// Gated behind [`set_incremental_box_build`]: flag off (the default) makes
-/// this behave exactly like `build_box(..., None)`, so callers can wire this
-/// entry point in ahead of the flag ever being flipped on (S5) with no
-/// behaviour change.
+/// this behave exactly like `build_box(..., None)`.
 ///
-/// Not yet wired into any pipeline entry point (`layout_measured_hyp_with_counters`,
-/// `layout_streaming_incremental` still call `build_box` directly, always
-/// rebuilding in full) — that's S5.
+/// BUG-341 S15 wired this into [`layout_mutation_incremental_restyle`], the
+/// chrome and page incremental pipelines' entry point. The full-layout entry
+/// points (`layout_measured_hyp_with_counters`, `layout_streaming_incremental`)
+/// still call `build_box` directly — they have no `RestyleDelta`, hence no
+/// `clean_subtrees`, hence nothing to reuse.
 #[allow(clippy::too_many_arguments)]
 pub fn incremental_build_box(
     doc: &Document,
@@ -4123,6 +4173,9 @@ pub fn incremental_build_box(
     dark_mode: bool,
     prev: &LayoutBox,
 ) -> LayoutBox {
+    if !incremental_box_build_enabled() {
+        return build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, None);
+    }
     let prev_index = crate::incremental::index_by_node(prev);
     build_box_or_reuse(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, Some(&prev_index))
 }
@@ -4144,8 +4197,11 @@ fn build_box(
     // full/legacy build path (all current pipeline entry points).
     prev_index: Option<&std::collections::HashMap<NodeId, &LayoutBox>>,
 ) -> LayoutBox {
-    #[cfg(test)]
-    BOX_BUILD_COUNT.with(|c| c.set(c.get() + 1));
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.built += 1;
+        s.set(v);
+    });
     // BUG-284: `precompute_counters` already ran a full document-order cascade
     // pass over this exact tree (same `inherited` chain, same sheet/viewport/
     // dark_mode) to resolve counter-reset/increment/set — reuse its cached
@@ -4464,18 +4520,40 @@ fn build_box(
             if dom_children.len() >= RAYON_MIN_FLEX_CHILDREN {
                 use rayon::prelude::*;
                 let snap = crate::style::StyleEnvSnapshot::capture();
+                // BUG-341 S15: each closure drains the tally of whatever thread
+                // ran it into this shared counter, which is folded back into the
+                // parent's thread below. Draining is exact even when rayon
+                // work-steals a closure onto the calling thread — whatever it
+                // takes from that thread's tally comes straight back in the
+                // fold. Without it every box built under a container with 8+
+                // items was invisible to the reuse gates.
+                let par_built = std::sync::atomic::AtomicU32::new(0);
+                let par_reused = std::sync::atomic::AtomicU32::new(0);
                 children = dom_children.par_iter().filter_map(|&child_id| {
                     snap.install();
-                    if wrap_text_items && matches!(doc.get(child_id).data, NodeData::Text(_)) {
-                        return build_anon_text_item(
+                    let out = if wrap_text_items && matches!(doc.get(child_id).data, NodeData::Text(_)) {
+                        build_anon_text_item(
                             doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
+                        )
+                    } else {
+                        let b = build_box_or_reuse(
+                            doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode, prev_index,
                         );
-                    }
-                    let b = build_box_or_reuse(
-                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode, prev_index,
-                    );
-                    if matches!(b.kind, BoxKind::Skip) { None } else { Some(b) }
+                        if matches!(b.kind, BoxKind::Skip) { None } else { Some(b) }
+                    };
+                    let d = take_box_build_stats();
+                    use std::sync::atomic::Ordering::Relaxed;
+                    par_built.fetch_add(d.built, Relaxed);
+                    par_reused.fetch_add(d.reused, Relaxed);
+                    out
                 }).collect();
+                {
+                    use std::sync::atomic::Ordering::Relaxed;
+                    add_box_build_stats(BoxBuildStats {
+                        built: par_built.load(Relaxed),
+                        reused: par_reused.load(Relaxed),
+                    });
+                }
             } else {
                 for child_id in dom_children {
                     if wrap_text_items
@@ -17201,11 +17279,12 @@ mod tests {
         set_incremental_restyle(false);
 
         super::set_incremental_box_build(true);
-        super::reset_box_build_counts();
+        let _ = super::take_box_build_stats();
         let mut incr_tree = super::incremental_build_box(
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &prev_tree,
         );
-        let (built, reused) = super::box_build_counts();
+        let bb = super::take_box_build_stats();
+        let (built, reused) = (bb.built, bb.reused);
         super::set_incremental_box_build(false);
         clear_interactive_state();
 
@@ -17307,11 +17386,11 @@ mod tests {
         set_incremental_restyle(false);
 
         super::set_incremental_box_build(true);
-        super::reset_box_build_counts();
+        let _ = super::take_box_build_stats();
         let mut incr_tree = super::incremental_build_box(
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &prev_tree,
         );
-        let (_built, reused) = super::box_build_counts();
+        let reused = super::take_box_build_stats().reused;
         super::set_incremental_box_build(false);
 
         // See the hover-transition test above for why geometry (not `Debug`

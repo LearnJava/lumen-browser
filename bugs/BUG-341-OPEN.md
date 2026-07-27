@@ -1968,6 +1968,128 @@ cycle rather than 8 %, styles are `Arc`s, and the dirty set is empty on both
 fixtures, so `clean_subtrees` should license reusing nearly the whole tree.
 Re-measure it before designing anything new.
 
+## S15 — the box tree was rebuilt every cycle only to be grafted back
+
+**Branch `p1-bug341-s15`.** Took the option S14's queue left: re-measure S4's
+`incremental_build_box` before designing anything new. It won, decisively, and
+the reason it had lost in S4 turned out to be only half the story.
+
+### What was wrong
+
+After S13/S14 a `#sidebar`/`None` hover flip on the chrome document re-cascades
+**nothing** and `graft_geometry` reuses **all 318 boxes**. Yet `build_box` still
+constructed all of them from scratch every cycle — 2.2-2.5 ms of a ~3.7 ms
+cycle, the largest remaining stage — purely so the graft could immediately throw
+the fresh geometry away and copy the previous one back in.
+
+S4 had already written the mechanism for exactly this (`build_box_or_reuse` +
+`CounterMap::clean_subtrees`: clone a whole `LayoutBox` subtree from `prev`
+instead of rebuilding it) and left it switched off, because S4's own honest
+measurement showed a net loss — `index_by_node`'s whole-prev-tree hash cost more
+than the ~8 % of `build_box` it saved. Both halves of that trade had moved:
+`build_box` is now ~60 % of the incremental cycle, `ComputedStyle` and
+`LayoutBox::style` are behind `Arc` (S9/S12), and the dirty set is empty.
+
+### Two defects, each of which alone drove reuse to zero
+
+1. **The reuse gate was a thread-local the workers never saw.**
+   `build_box_or_reuse` consulted `INCREMENTAL_BOX_BUILD`, but `build_box` fans
+   flex/grid containers with 8 or more children out over rayon workers
+   (ADR-016 M4.1), and a rayon worker's thread-locals start at their defaults —
+   the very trap `StyleEnvSnapshot` exists to work around for style state.
+   Chrome is built out of exactly such containers, so reuse was disabled for
+   almost every node that mattered. The gate is now `prev_index.is_some()`, a
+   parameter threaded down by reference; the flag is read once, in
+   `incremental_build_box`, which is what decides whether an index is built.
+
+2. **The counters were blind to the same threads.** `BOX_BUILD_COUNT` /
+   `BOX_BUILD_REUSE_COUNT` were `#[cfg(test)]` thread-locals, so everything
+   built on a worker was invisible: the first instrumented run of the real
+   chrome document reported "7 boxes built" for a tree of 318. Replaced by a
+   public `box_tree::BoxBuildStats` / `take_box_build_stats()`, with the
+   parallel branch draining each worker's tally into the thread running the
+   parent container. The drain stays exact when rayon work-steals a closure onto
+   the calling thread — whatever it takes from that thread comes straight back
+   in the fold.
+
+Note the shape of defect 2: it is the S10 profiler bug again, in a different
+costume. Instrumentation that is thread-local while the code it measures is not
+does not report a small error — it reports a number from a different program.
+
+### Wiring
+
+`layout_mutation_incremental_restyle` now calls `incremental_build_box` when
+`set_incremental_box_build` is on; both production call sites
+(`relayout_chrome_host` and the page-side `try_relayout_raf_incremental`) turn
+it on next to their existing `set_incremental_restyle(true)`. No new
+correctness precondition: the reuse is licensed by `CounterMap::clean_subtrees`,
+which is only populated when `RestyleDelta::dom_content_stable` is `true` —
+exactly the contract those call sites already establish.
+
+### Gates — by count
+
+Output cannot distinguish "cloned the subtree" from "rebuilt an identical
+subtree", so every gate here asserts the tally (S8's lesson, third slice
+running):
+
+- `bug341_s15_hover_flip_reuses_the_box_tree_instead_of_rebuilding_it`
+  (lumen-shell, runs by default) — on the real `chrome.html`: the first cycle
+  builds 100+ boxes, every later cycle must build fewer than 10 and reuse at
+  least one subtree. This is the test that would have caught defect 1.
+- `bug341_s15_hover_flip_reuses_the_clean_sibling_subtrees` (lumen-layout) — a
+  10-sibling flex container, deliberately over `RAYON_MIN_FLEX_CHILDREN`, so the
+  gate runs through the parallel path.
+- `bug341_s15_reused_boxes_match_a_full_rebuild` — the usual `incr == full`
+  differential half, on the same fixture.
+- `bug341_s15_dom_content_change_disables_box_reuse` — `dom_content_stable:
+  false` must reuse nothing. This is the entire correctness contract, and
+  nothing else in the mechanism checks it.
+
+### Measurement (interleaved A/B ×3, by min)
+
+| | main | S15 |
+|---|---|---|
+| `CC12_HOVER` | 3.94 / 4.19 / 4.06 ms | **1.39 / 1.45 / 1.47 ms** (≈2.8×) |
+| `CC12_KEY` | 3.89 / 3.67 / 4.02 ms | 3.95 / 4.03 / 3.93 ms (flat) |
+
+The two groups do not overlap on any row of `CC12_HOVER`. Stage split
+(`LUMEN_PROFILE_TREE=1`, min/p50 over 69 cycles):
+
+| Stage | HOVER | KEY |
+|---|---|---|
+| `precompute_counters` | 0.27 / 0.42 ms | 0.43 / 0.56 ms |
+| `build_box` | **0.25 / 0.38 ms** (was 2.2-2.5) | **1.88 / 2.31 ms** |
+| `graft_geometry` | 0.19 / 0.25 ms | 0.50 / 0.66 ms |
+| `lay_out` | 0.00 ms | 0.08 / 0.10 ms |
+| `post_layout_passes` | 0.07 / 0.10 ms | 0.08 / 0.10 ms |
+| **total** | **0.85 / 1.15 ms** | **3.13 / 3.82 ms** |
+
+`CC12_KEY` is flat *by design*: `bind_model` rewrites the omnibox text every
+keystroke, so `touched` is non-empty, `dom_content_stable` is `false`,
+`clean_subtrees` stays empty and the mechanism is inert. Display-list
+neutrality checked with `graphic_tests/dump_golden.py` (12/12 identical).
+
+### Where this leaves CC-12
+
+Still red, but the two scenarios have separated again. `CC12_HOVER` is **under
+the 2 ms budget by min for the first time** (1.4-1.5 ms); its p95 on this loaded
+machine is 5.2-6.0 ms, ≈3×. `CC12_KEY` is unchanged at 3.9-4.0 ms by min, ≈2×,
+p95 8.3 ms.
+
+**S16 is `CC12_KEY`, and the blocker is named:** `dom_content_stable` is a single
+document-wide boolean. One changed text node in the omnibox disables box reuse
+for all 318 boxes, including the ~300 that no mutation went anywhere near. The
+generalisation is a per-node content-dirty set — a subtree is content-clean when
+no touched node lies inside it — but it needs the chrome tracker to be
+*complete* for content, which it currently is not: `record_touched` is called
+from `set_attr`/`remove_attr`/`remove_children_with_class`/`reconcile_row_list`
+(all selector-relevant), while `set_text`/`set_text_in_place`/`append_text`
+report nothing, since a text change cannot affect selector matching. Making the
+tracker content-complete is the load-bearing, and the risky, part: an
+uninstrumented mutation path yields a stale box, i.e. visible corruption, not a
+slow frame. Audit `crates/chrome/src/model.rs` for every direct
+`append_child`/`detach`/`create_*` call, not just the primitives.
+
 ## Repro
 
 ```bash
