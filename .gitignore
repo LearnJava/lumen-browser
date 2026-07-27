@@ -64,3 +64,16 @@ last_session.db-wal
 
 # A/B baseline binaries built by scripts/perf-baseline.sh (кэш по SHA, ~79 МБ на запись)
 /.claude/perf-baseline/
+
+# Мусор от прогонов в корне: логи с префиксом `.tmp_` (правило /.tmp/ ловит
+# только папку) и стек-дампы упавших утилит. Файлы не удаляем — просто не
+# версионируем.
+/.tmp_*.log
+/*.stackdump
+
+# Экспорты логов сессий (кладутся в корень для разбора, в репозитории не нужны).
+/Lumen browser_*.md
+
+# Рабочая папка вариантов дизайна: уникальные варианты лежат в
+# docs/design/variants/, lumen-v3_3.html совпадает с docs/design/lumen-v3_3.html.
+/Design_all_variants/
