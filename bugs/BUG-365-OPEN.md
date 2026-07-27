@@ -1,0 +1,128 @@
+# BUG-365 — `EyeDropper.open()` всегда падает с `ReferenceError: _lumen_eye_dropper_open is not defined`: нативная привязка не установлена, `?.` не защищает необъявленный идентификатор, а 6 юнит-тестов при этом зелёные
+
+**Статус:** OPEN
+**Компонент:** js (`crates/js/src/eye_dropper.rs:58` — тело шима; установка шима — `crates/js/src/lib.rs:1187` для rquickjs и `crates/js/src/v8_runtime.rs:3893` для V8)
+**Найден:** P2, WPT-VENDOR-eyedropper (2026-07-28), проба `--dump-layout` вне WPT (сам WPT-тест категории — SKIP по testdriver)
+
+## Симптом
+
+`EyeDropper` в Lumen существует и конструируется, но **ни один вызов `open()`
+не может завершиться успешно** — промис всегда отклоняется `ReferenceError`.
+Проба `--dump-layout` (все строки — фактический вывод):
+
+```
+typeof EyeDropper                       = function
+'EyeDropper' in window                  = true
+new EyeDropper()                        = OK
+open() no gesture                       = rejected name=ReferenceError
+open() then abort                       = rejected name=ReferenceError
+e.message                               = _lumen_eye_dropper_open is not defined
+typeof _lumen_eye_dropper_open          = undefined
+'_lumen_eye_dropper_open' in globalThis = false
+open(aborted signal)                    = rejected name=AbortError ctor=DOMException
+```
+
+Единственный путь, который работает, — ранний выход по уже прерванному
+`AbortSignal` (он стоит до обращения к привязке). Всё остальное — и штатный
+вызов, и документированный в коде фолбэк «вернуть белый цвет, если нативной
+привязки нет» — недостижимо.
+
+## Причина
+
+Шим (`eye_dropper.rs:58`) обращается к привязке так:
+
+```js
+const result = _lumen_eye_dropper_open?.call?.(null);
+```
+
+Два независимых дефекта в одной строке:
+
+1. **Привязки нет.** `_lumen_eye_dropper_open` не регистрируется как глобал ни
+   на V8-, ни на rquickjs-пути. В Rust есть `pub extern "C" fn
+   _lumen_eye_dropper_open` (`eye_dropper.rs:24`), но это C-ABI-функция,
+   возвращающая `*const u8`; она не связана с JS ничем, кроме совпадения имени,
+   и во всём репозитории на неё нет ни одной ссылки, кроме собственного
+   определения. Комментарий на месте установки шима
+   (`lib.rs:1186`) прямо это подтверждает: «Platform integration (P3)
+   implements `_lumen_eye_dropper_open` for each OS» — интеграция не написана.
+2. **`?.` не защищает от необъявленного идентификатора.** Опциональная
+   цепочка коротит только на значениях `null`/`undefined`; разрешение самого
+   имени `_lumen_eye_dropper_open` происходит до неё и на несуществующем
+   биндинге даёт `ReferenceError`. Автор шима явно рассчитывал на обратное —
+   иначе фолбэк `if (!result) resolve({ sRGBHex: '#ffffff' })` (строки 66-71)
+   не имел бы смысла. Правильная защита — `typeof _lumen_eye_dropper_open ===
+   'function'` или чтение через `globalThis._lumen_eye_dropper_open`.
+
+Итог: `#ffffff`-фолбэк, разбор JSON-ответа и поздний `abort` (строки 49-82) —
+мёртвый код целиком.
+
+## Почему это не поймали тесты
+
+`cargo test -p lumen-js eye_dropper` — 6/6 зелёных (прогнано в этой сессии,
+`dev-release`), при полностью нерабочем `open()`. Ни один тест не может упасть
+по построению:
+
+- `test_eye_dropper_open_returns_promise` и `test_eye_dropper_open_accepts_options`
+  проверяют только `result instanceof Promise` — `async`-функция возвращает
+  промис и при отклонении, так что утверждение выполняется всегда;
+- `test_eye_dropper_resolve_value` — единственный тест про результат — вешает
+  проверки внутрь `.then(...)`, который на отклонённом промисе не вызывается
+  вовсе, и ничего не ждёт: обработчик отказа отсутствует, необработанное
+  отклонение из `ctx.eval` не всплывает, тест зелёный;
+- остальные три проверяют только конструктор и экспорт в глобалы.
+
+То есть набор проверяет форму API, но ни одного его наблюдаемого результата.
+Верификация фикса должна идти через `await`/`assert` на разрешённом значении
+(`sRGBHex`), а не через `instanceof Promise`.
+
+## Масштаб
+
+Категория `eyedropper` — 4 файла-кандидата, 2 отобранных id, оба недоступны
+исполнителю: `eye-dropper-abort-signal.tentative.https.html` — SKIP (тест
+синтезирует клик через `test_driver.Actions`, потому что `open()` по спеке
+требует пользовательской активации), `idlharness.https.window.html` — TIMEOUT
+по HTTPS-порт-гэпу. Поэтому баг найден пробой вне WPT, а не прогоном; WPT
+подтвердит фикс только после появления testdriver-исполнителя.
+
+Практический масштаб за пределами WPT — весь публичный API: любой сайт,
+вызвавший `new EyeDropper().open()`, получает `ReferenceError` вместо цвета или
+внятного отказа (`NotAllowedError`/`AbortError`). Никакой платформенный
+диалог выбора цвета (PowerShell ColorDialog / zenity / osascript), обещанный
+в шапке модуля, не вызывается — этой части нет вовсе.
+
+## Сопутствующие отклонения от WebIDL (тот же файл, чинить заодно)
+
+Проверено той же пробой:
+
+- `EyeDropper.length` === 1, по спеке конструктор без аргументов → 0;
+- `EyeDropper.prototype[Symbol.toStringTag]` === `undefined`, отсюда
+  `Object.prototype.toString.call(new EyeDropper())` === `[object Object]`
+  вместо `[object EyeDropper]`;
+- у инстанса есть собственное свойство `options` (`this.options = options || {}`),
+  которого в спеке нет;
+- требование пользовательской активации не реализовано: по спеке WICG
+  `open()` без transient activation обязан отклоняться `NotAllowedError`, а
+  здесь активация не проверяется вовсе (сейчас это маскируется `ReferenceError`,
+  но всплывёт сразу после починки п.1).
+
+Что уже соответствует спеке и ломать при фиксе не надо: вызов без `new`
+бросает `TypeError`, `open` лежит на прототипе, ранний отказ по прерванному
+сигналу — `DOMException` с `name === "AbortError"`.
+
+## Возможный фикс (не реализован в этой сессии)
+
+1. Читать привязку безопасно: `const fn = globalThis._lumen_eye_dropper_open;
+   const result = typeof fn === 'function' ? fn() : null;` — этого одного
+   достаточно, чтобы оживить документированный `#ffffff`-фолбэк и превратить
+   отказ в предсказуемый результат вместо `ReferenceError`.
+2. Решить судьбу нативной части: либо зарегистрировать реальный глобал
+   `_lumen_eye_dropper_open` (V8: рядом с прочими `_lumen_*` в
+   `v8_runtime.rs`), либо снять мёртвую `extern "C"`-заглушку
+   (`eye_dropper.rs:24`) и честно оставить API стабом.
+3. Добавить проверку пользовательской активации с отказом `NotAllowedError`.
+4. Переписать `test_eye_dropper_resolve_value` так, чтобы он ждал разрешения
+   промиса и падал на отклонении, — иначе фикс невозможно верифицировать
+   существующим набором.
+
+Не чинится в этой сессии — P2-wpt вендорит и обследует, фиксы кода — дорожка P3
+(`CLAUDE.md`, назначения разработчиков).

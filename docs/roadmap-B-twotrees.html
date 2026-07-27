@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 60,
+  "open": 65,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 332,
+ "total_bugs": 337,
  "phases": [
   {
    "id": "P0",
@@ -2173,23 +2173,34 @@
       {
        "id": "WPT-VENDOR-eventsource",
        "title": "WPT: вендорить + прогнать категорию `eventsource`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/eventsource/`, 95 файлов: 33 корневых `.any.js`, 12 корневых `.window.js`, 2 корневых `.htm`, `dedicated-worker/` — 7 `.htm` + 9 скриптов воркеров + `.any.js` + `.worker.js`, `shared-worker/` — 7 `.htm` + 7 скриптов воркеров, `resources/` — 9 `wptserve`-обработчиков + 2 `.event_stream`- и 2 `.htm`-фикстуры, `META.yml`/`WEB_FEATURES.yml`/`README.md`, `LICENSE-WPT.md`), скоуп ⬜ (Server-Sent Events — `EventSource`, формат `text/event-stream`, переподключение и `Last-Event-ID`). **Внекатегорийных зависимостей нет вовсе** — только уже вендоренные `/resources/testharness.js`+`testharnessreport.js`; `<meta name=variant>` не используется, `.https.`-тестов нет, `testdriver.js` не упоминается ни в одном файле — 61 файл дал ровно 61 id без раскрытия. `run_report.py --all --root eventsource --recursive` — **8 мин 1 с**, **16/61 harness OK, 2/100 сабтестов**. **Первая категория бэклога, чьи отказы — дефекты движка, а не гэпы исполнителя**: `EventSource` в Lumen действительно реализован (SSE-стек `crates/network/src/sse.rs`, шим `dom.rs:8193`, насос в тике шелла `main.rs:12241`), поэтому прогон дал три новых бага вместо шума `assert_implements`. (а) BUG-362 — доминирующая причина, **44 из 61 id TIMEOUT** (~7 из 8 минут): конструктор не резолвит относительный URL относительно базы документа (`dom.rs:8194` хранит аргумент дословно, с фолбэком на пустую строку вместо честной стрингификации, `_lumen_sse_connect` `v8_runtime.rs:2646` парсит как абсолютный) → каждый `new EventSource(\"resources/message.py\")` падает `missing scheme`, соединение не открывается; вторая половина — `url` отдаёт переданную строку вместо абсолютного URL. Четвёртый независимый сайт семейства BUG-346/BUG-347/BUG-359. (б) BUG-363 — интерфейс не соответствует WebIDL по семи пунктам (константы не на прототипе → `source.CONNECTING === undefined`; вызов без `new` не бросает; не `EventTarget`; `url`/`readyState` записываемые; обработчики — свойства инстанса; нет `SyntaxError` на невалидный URL; `readyState` синхронно `CLOSED` вместо `CONNECTING`); сюда приходится большинство из 34 выполнившихся FAIL-сабтестов. (в) BUG-364 — все 14 id `dedicated-worker/`/`shared-worker/` TIMEOUT: `new Worker(\"script.js\")` с внешним URL молча подставляет комментарий вместо скрипта (`worker.rs:688`, поддержаны только `data:`/`blob:`) — ни загрузки по сети, ни события `error`. Прошли 2 сабтеста, и один из двух зелёных тестов **ложноположительный**: `eventsource-url.any.html` проверяет лишь суффикс `url`, что нерезолвленная строка удовлетворяет тривиально — фикс BUG-362 верифицировать на `eventsource-constructor-empty-url.any.html`. Замечено, но не заведено: кросс-ориджин-тесты требуют альтернативных хостов WPT (`{{domains[…]}}` → `xn--lve-6lad.127.0.0.1`), не резолвящихся без записей в hosts-файле — гэп окружения",
+       "bugs": [
+        "BUG-362",
+        "BUG-363",
+        "BUG-364"
+       ]
       },
       {
        "id": "WPT-VENDOR-eyedropper",
        "title": "WPT: вендорить + прогнать категорию `eyedropper`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). нишевый EyeDropper API"
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/eyedropper/`, 7 файлов: 2 корневых теста — `eye-dropper-abort-signal.tentative.https.html` и `idlharness.https.window.js`, `manual/` — 2 ручных демо `.tentative.html` + иконка `resources/eye_dropper_icon.svg`, `WEB_FEATURES.yml`, `LICENSE-WPT.md`; `META.yml` у категории нет), скоуп 🚫 (нишевый EyeDropper API, W3C Color WG). Самая маленькая категория бэклога: `run_report.py --all --root eyedropper --recursive` — **1 мин 36 с**, **0/2 harness OK, 0/0 сабтестов**, и оба id недоступны исполнителю: `eye-dropper-abort-signal` — SKIP (`Executor does not support testdriver.js`; тест обязан синтезировать клик через `test_driver.Actions`, потому что `open()` по спеке требует пользовательской активации), `idlharness.https.window.html` — TIMEOUT по тому же HTTPS-порт-гэпу (`invalid url: invalid port: \"None\"`), что WebCryptoAPI/ai/ambient-light/encrypted-media, до 404 на невендоренные WebIDLParser.js+idlharness.js дело даже не доходит. **Зафиксирован дефект собственного тулинга:** `run_report.py` напечатал «running 4 all vendored» против 2 реально отобранных манифестом — его `all_vendored_test_ids()` отсеивает ручные тесты только по подстроке `-manual` в имени файла, поэтому тесты, лежащие в каталоге `manual/` без суффикса, попадают в счётчик id (апстримовый манифест классифицирует оба как `support`). Тем же завышением затронуты уже вендоренные accname/core-aam/dpub-aam/editing — счётчики не переписывались задним числом, кандидат в DEVX. Прогон новых багов дать не мог, но проба `--dump-layout` вне WPT дала один: в отличие от остальных 🚫-категорий, EyeDropper в Lumen **реализован** (`crates/js/src/eye_dropper.rs`, шим ставится и на V8, и на rquickjs) — и сломан на 100%. BUG-365: `open()` всегда отклоняется `ReferenceError: _lumen_eye_dropper_open is not defined`, потому что нативная привязка не зарегистрирована как глобал, а `?.call?.()` от необъявленного идентификатора не защищает — опциональная цепочка коротит на `null`/`undefined`, но разрешение имени происходит раньше; документированный фолбэк «`#ffffff`, если привязки нет» и весь разбор ответа — мёртвый код. 6 юнит-тестов `eye_dropper::tests` при этом зелёные (прогнаны в сессии): проверяют `instanceof Promise` и вешают утверждения в `.then(...)`, который на отклонённом промисе не вызывается — набор проверяет форму API и ни одного его результата",
+       "bugs": [
+        "BUG-365"
+       ]
       },
       {
        "id": "WPT-VENDOR-fedcm",
        "title": "WPT: вендорить + прогнать категорию `fedcm`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Federated Credential Management"
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/fedcm/`, 192 файла: `META.yml`/`WEB_FEATURES.yml`, 39 корневых `.https.`-тестов, 12 подкатегорий, `support/` — 60+ Python-эндпоинтов IdP и JSON-манифестов), скоуп 🚫 (Federated Credential Management), включена по постоянному решению пользователя. `run_report.py --all --root fedcm --recursive` — 44 с, 0/81 harness OK, 0/0 сабтестов: первая категория бэклога с полностью однородным исходом — все 81 id SKIP по `Executor does not support testdriver.js`, ни одного TIMEOUT/ERROR/FAIL. Это структурно: FedCM по спеке идёт через браузерный диалог выбора аккаунта, поэтому каждый тест синтезирует выбор через `test_driver`, а HTTPS-порт-гэп (84 из 103 файлов `.https.`) до срабатывания не доходит. Обследование — пробой `--dump-layout`: сам FedCM-стаб исправен и соответствует своей документации (Phase 0, `NotSupportedError`), но общий объект `CredentialsContainer` — нет. BUG-366: `navigator.credentials` расходится с WebIDL по 5 пунктам, главный — внутренний guard монки-патча `_get_original` торчит наружу перечислимым записываемым свойством (`digital_credentials.rs:44`); задевает и в-скоупный WebAuthn",
+       "bugs": [
+        "BUG-366"
+       ]
       },
       {
        "id": "WPT-VENDOR-fenced-frame",
@@ -6339,6 +6350,41 @@
    "status": "open",
    "title": "`document.permissionsPolicy.features()` отдаёт `Object.keys(_ppStore)` — ключи политики, объявленной HTTP-заголовком `Permissions-Policy`, — вместо требуемого с…",
    "component": "js (`crates/js/src/permissions_policy.rs:47-49` `FeaturePolicy.prototype.features`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-362": {
+   "status": "open",
+   "title": "`EventSource` не резолвит относительный URL относительно базы документа: `new EventSource(\"resources/message.py\")` даёт `[JS SSE] connect error: … missing schem…",
+   "component": "js (`crates/js/src/dom.rs:8194` — конструктор `EventSource`; `crates/js/src/v8_runtime.rs:2646` — биндинг `_lumen_sse_connect`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-363": {
+   "status": "open",
+   "title": "`EventSource` не соответствует WebIDL-биндингу по семи пунктам: константы `CONNECTING`/`OPEN`/`CLOSED` определены только на объекте интерфейса и отсутствуют на…",
+   "component": "js (`crates/js/src/dom.rs:8193-8253` — конструктор `EventSource` и его прототип)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-364": {
+   "status": "open",
+   "title": "`new Worker(\"script.js\")` с внешним URL молча подставляет комментарий вместо тела скрипта (поддержаны только `data:`/`blob:lumen/`): скрипт не запрашивается по…",
+   "component": "js (`crates/js/src/worker.rs:657-695` — конструктор `Worker`; тот же путь у `SharedWorker`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-365": {
+   "status": "open",
+   "title": "`EyeDropper.open()` всегда отклоняется с `ReferenceError: _lumen_eye_dropper_open is not defined` — нативная привязка не зарегистрирована как глобал ни на V8-,…",
+   "component": "js (`crates/js/src/eye_dropper.rs:58` — тело шима EyeDropper; установка — `crates/js/src/lib.rs:1187` и `crates/js/src/v8_runtime.rs:3893`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-366": {
+   "status": "open",
+   "title": "`navigator.credentials` нарушает WebIDL по пяти пунктам сразу. (1) Методы `create`/`get`/`preventSilentAccess`/`store` присвоены самому инстансу (`credentials.r…",
+   "component": "js (`crates/js/src/credentials.rs:358-418` — тело шима `CredentialsContainer`; `crates/js/src/digital_credentials.rs:42-44` — утечка `_get_original`; установка — `crates/js/src/v8_runtime.rs:3881`/`3886`, `crates/js/src/lib.rs:1053`)",
    "date": null,
    "debtor": false
   }
