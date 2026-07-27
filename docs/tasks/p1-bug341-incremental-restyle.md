@@ -404,6 +404,29 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   recreated it), which would have cancelled S15's hover reuse the moment content
   was tracked — `set_text` absorbed `set_text_in_place`'s compare-then-write.
   `CC12_KEY` `build_box` 240 → 38 boxes; measurement in BUG-341 "S16".
+- **S17 — the widen-to-parent nobody's selectors could react to.** ✅ Done. The
+  S14 argument applied to DOM mutations. Census first (the queue's own
+  instruction): one typed character writes one attribute on one node and
+  re-cascaded **12** elements, all 12 byte-identical, each losing its box.
+  `restyle_root_set_for_node_change` mapped every changed node to its *parent*
+  because a sibling combinator (`node + X`) is the one shape reaching outside the
+  node's own subtree — S3 wrote that as an unconditional widen and nobody had
+  asked, per node and per attribute, whether such a selector exists. It now takes
+  `NodeChange::Attr(name)` / `Unattributed` plus a `NodeRestyleIndex`
+  (`restyle_node_index`, one sheet scan, S14's shape) collecting every compound
+  from which a sibling combinator is reachable, and narrows to the node itself
+  when none of them could match it. `bind_model_tracked` reports attribute
+  *names* (`SelectorTouch { attrs, structural }`) — what makes the check
+  per-node instead of per-sheet, so one unrelated `.a + .b` rule doesn't switch
+  the narrowing off document-wide. `:has()`, `:nth-child(… of …)`, shadow roots
+  and every page-side JS mutation keep the pre-S17 behaviour verbatim. Not done,
+  deliberately: dropping the node itself when no selector keys on the attribute
+  at all — worth one `compute_style` call here, and it would need a complete
+  "every attribute the cascade reads" table where one omission is a silently
+  wrong style. `CascadeStats`/`take_cascade_stats()` made public for the gates.
+  Cascade 12 → **1** node, boxes 38 → **28**; interleaved A/B ×3 by min
+  `CC12_KEY` 2.75-3.18 → 2.60-2.69 ms (≈5 %, groups just separate), `CC12_HOVER`
+  flat. BUG-341 "S17".
 
 **Stop conditions / honesty:** if after S5 the p95 floor is set by irreducible
 per-node cascade cost on the hover root-set and stays > 2 ms, report the number

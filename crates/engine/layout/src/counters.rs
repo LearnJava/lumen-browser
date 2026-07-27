@@ -392,23 +392,48 @@ pub fn incremental_restyle_enabled() -> bool {
     INCREMENTAL_RESTYLE.with(|c| c.get())
 }
 
-#[cfg(test)]
+/// BUG-341 S3/S17 — per-pass tally of what the cascade stage recomputed versus
+/// reused from `RestyleDelta::prev_styles`.
+///
+/// Same rationale as [`crate::box_tree::BoxBuildStats`]: an incremental cascade
+/// that reuses nothing produces exactly the full cascade's output, just slowly
+/// (the S8 lesson), so only a counter can tell a working reuse mechanism from a
+/// broken one. Public since S17 so gates outside this crate — where the real
+/// chrome document lives — can assert on it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CascadeStats {
+    /// Elements for which `walk` really called `compute_style`.
+    pub recomputed: u32,
+    /// Elements that took their `Arc<ComputedStyle>` from `prev_styles`.
+    pub reused: u32,
+}
+
 thread_local! {
-    /// BUG-341 S3 test instrumentation — counts `compute_style` calls made by
-    /// `walk` (i.e. `must_recompute == true`). Lets the differential tests
-    /// assert the incremental path recomputes strictly fewer nodes than a
-    /// full cascade, not just that the two agree.
-    static RECOMPUTE_COUNT: Cell<u32> = const { Cell::new(0) };
+    /// BUG-341 S3/S17 instrumentation, see [`CascadeStats`]. Always compiled —
+    /// two `Cell` bumps against a stage that costs microseconds per node.
+    ///
+    /// `walk` is a plain recursion on the calling thread (unlike `build_box`,
+    /// which fans out over rayon workers — S15's trap), so a thread-local tally
+    /// here really does see the whole document.
+    static CASCADE_STATS: Cell<CascadeStats> =
+        const { Cell::new(CascadeStats { recomputed: 0, reused: 0 }) };
 }
 
-#[cfg(test)]
-pub(crate) fn reset_recompute_count() {
-    RECOMPUTE_COUNT.with(|c| c.set(0));
+/// Returns the accumulated [`CascadeStats`] and resets the tally.
+pub fn take_cascade_stats() -> CascadeStats {
+    CASCADE_STATS.with(|s| s.replace(CascadeStats::default()))
 }
 
-#[cfg(test)]
-pub(crate) fn recompute_count() -> u32 {
-    RECOMPUTE_COUNT.with(|c| c.get())
+fn note_cascade(recomputed: bool) {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        if recomputed {
+            v.recomputed += 1;
+        } else {
+            v.reused += 1;
+        }
+        s.set(v);
+    });
 }
 
 /// CSS Generated Content L3 §3.2 — record the quote-nesting depth for each
@@ -495,9 +520,8 @@ fn walk(
             force || delta.dirty_roots.contains(&id) || !delta.prev_styles.contains_key(&id)
         }
     };
+    note_cascade(must_recompute);
     let style: Arc<ComputedStyle> = if must_recompute {
-        #[cfg(test)]
-        RECOMPUTE_COUNT.with(|c| c.set(c.get() + 1));
         Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode))
     } else {
         // Safe: `must_recompute` is false only when `incr` is `Some` and

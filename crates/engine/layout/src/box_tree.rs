@@ -17335,7 +17335,7 @@ mod tests {
             build_counter_style_registry, incremental_precompute_counters, precompute_counters,
             set_incremental_restyle, RestyleDelta,
         };
-        use crate::style::{restyle_root_set_for_node_change, ComputedStyle};
+        use crate::style::{restyle_node_index, restyle_root_set_for_node_change, ComputedStyle, NodeChange};
 
         let css = r#"
             .item { color: black; }
@@ -17374,7 +17374,9 @@ mod tests {
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &full_after_counters, &registry, false, None,
         );
 
-        let dirty_roots = restyle_root_set_for_node_change(&doc, [a]);
+        let node_index = restyle_node_index(&doc, &sheet);
+        let dirty_roots =
+            restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
         let delta = RestyleDelta {
             prev_styles: baseline_counters.styles(),
             dirty_roots,

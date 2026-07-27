@@ -21,9 +21,11 @@ mod model;
 pub use model::{
     bind_model, bind_model_tracked, ChromeBookmarkCardModel, ChromeBookmarkFolderModel, ChromeBookmarksModel,
     ChromeCertModel, ChromeContentView, ChromeDownloadModel, ChromeDropdownModel, ChromeFindModel,
+    ChromeMutations,
     ChromeHistoryModel, ChromeHistoryRow, ChromeModel, ChromePaletteModel,
     ChromePaletteResultModel, ChromePermState, ChromeRightSidebarModel, ChromeSettingsModel,
     ChromeSidebarTab, ChromeSuggestionModel, ChromeTabModel, ChromeWorkspaceModel, OmniboxModel,
+    SelectorTouch,
 };
 
 /// Error returned by [`ChromeIds::resolve`] when the chrome [`lumen_dom::Document`]

@@ -5044,7 +5044,7 @@ mod tests {
         use lumen_core::geom::{Rect, Size};
         use lumen_layout::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle, LayoutBox};
         use lumen_layout::counters::{set_incremental_restyle, RestyleDelta};
-        use lumen_layout::style::restyle_root_set_for_node_change;
+        use lumen_layout::style::{restyle_node_index, restyle_root_set_for_node_change, NodeChange};
 
         struct FixedMeasurer;
         impl lumen_layout::TextMeasurer for FixedMeasurer {
@@ -5079,7 +5079,12 @@ mod tests {
 
         let dirty_roots = {
             let d = doc.lock().unwrap();
-            restyle_root_set_for_node_change(&d, touched.nodes.iter().copied())
+            let node_index = restyle_node_index(&d, &sheet);
+            restyle_root_set_for_node_change(
+                &d,
+                touched.nodes.iter().map(|&n| (n, NodeChange::Unattributed)),
+                &node_index,
+            )
         };
         let delta = RestyleDelta { prev_styles: baseline_counters.styles(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Untracked };
 

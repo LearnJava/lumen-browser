@@ -2226,6 +2226,203 @@ selectors could react to a `[value]` write. Get the census first (which of the
 which are collateral), because the last two slices both found the planned
 premise was not where the time was.
 
+## S17 — the widen-to-parent nobody's selectors could react to
+
+**Branch `p1-bug341-s17`.** The S14 argument, applied to DOM mutations instead
+of interactive state.
+
+### The census, first
+
+The queue's own instruction for this slice was "get the census before touching
+anything", because S15 and S16 both found the planned premise was not where the
+time was. `bug341_s17_keystroke_restyle_census` (new, `#[ignore]`d diagnostic in
+`lumen-shell`) prints, for a `CC12_KEY` cycle: the mutation
+`bind_model_tracked` reported, the restyle root-set derived from it, how many
+nodes that root-set re-cascaded, and how many of those ended up with a
+*different* `ComputedStyle`.
+
+```
+selector-touched: input#omniInput attrs={"value"} structural=false
+dirty root:       div.omnibox (subtree 12 elements)
+cascade_recomputed=12  really_changed=0  recascaded_identical=12  boxes_built=38
+```
+
+One typed character writes exactly one attribute on exactly one node — and
+re-cascaded twelve elements, **all twelve producing a byte-identical
+`ComputedStyle`**, each of them losing its box on the way (`must_recompute` ⇒ not
+in `clean_subtrees` ⇒ `build_box_or_reuse` rebuilds it). 100 % collateral.
+
+### Why the root-set covered the omnibox
+
+`restyle_root_set_for_node_change` mapped every changed node to **its parent**,
+and re-cascaded that parent's whole subtree. The reason is real: class/attribute
+selectors don't match ancestors, so the node's own subtree covers the node and
+every descendant rule rooted at it (`node X`) — but a *sibling* combinator
+(`node + X`, `node ~ X`) reaches outside that subtree, and the parent's subtree
+is the smallest thing that contains both. S3 wrote that as an unconditional
+widen and every slice since inherited it.
+
+S7 already asked this exact question for interactive state ("does any selector
+need the wider fanout?") and S14 sharpened it to per-node ("can any selector even
+match *this* node?"). Nobody had asked it about attribute writes. For a `value`
+write on `#omniInput` the answer is no twice over: `chrome.html` contains **no
+sibling combinator at all**, and even if it did, its left-hand compound would
+have to be able to match `#omniInput`.
+
+### The slice
+
+`restyle_root_set_for_node_change` now takes what changed, not just where:
+
+```rust
+pub enum NodeChange<'a> { Attr(&'a str), Unattributed }
+pub fn restyle_root_set_for_node_change<'a>(
+    doc: &Document,
+    changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
+    index: &NodeRestyleIndex<'_>,
+) -> HashSet<NodeId>
+```
+
+`NodeRestyleIndex` (`restyle_node_index(doc, sheet)`, built from one scan of the
+sheet, exactly like S14's `StateRestyleIndex`) collects every compound from which
+a sibling combinator is reachable — `X + Y`, `X ~ Y`, `X + Y Z` — and answers, per
+node and per attribute name, whether any of them *could* match that node once the
+parts keyed on that attribute are treated as unknown. If none can, the write
+cannot be observed outside the node's own subtree and the root-set is the node
+itself.
+
+Reporting the attribute name is what makes the check per-node rather than
+per-sheet. `bind_model_tracked` now returns
+`selector: HashMap<NodeId, SelectorTouch { attrs: BTreeSet<String>, structural: bool }>`
+instead of a bare node set: `set_attr`/`remove_attr` record the name they wrote,
+`reconcile_row_list`/`remove_children_with_class` record `structural`. A
+sheet-wide "does any selector use `+`/`~`" test would have given the same answer
+on today's `chrome.html` and lost it entirely the day someone adds one unrelated
+`.a + .b` rule; with the name in hand, that rule only widens the nodes `.a` can
+actually match.
+
+Three shapes keep the pre-S17 behaviour verbatim:
+
+* `NodeChange::Unattributed` — a child-list change (no attribute name describes
+  it; `:nth-child`/`:empty`/sibling combinators all react), and every page-side
+  JS mutation, since `DomTouched` records node ids without names.
+* `:has()` anywhere in the sheet. That is BUG-348's direction — an ancestor's
+  match bound to a descendant's state — which no subtree-shaped root-set
+  expresses. The old widen-to-parent at least re-evaluated the immediate
+  parent's `:has()`; narrowing would take even that away, so such sheets are
+  `conservative` and S17 neither fixes nor worsens BUG-348.
+* `:nth-child(… of S)` / `:nth-last-child(… of S)`, and any shadow root — the
+  first is sibling reach with no combinator to see it, the second is S7's
+  unscanned-shadow-sheet carve-out.
+
+Two more document-scope reads are documented on the function as pre-existing
+gaps of the same family, not introduced here: `:indeterminate` on a radio group
+and `:default` on a form's submit button both read *other* elements'
+`name`/`checked`/`type` across the whole form, which the pre-S17
+widen-to-parent did not express either.
+
+### What S17 deliberately did **not** do
+
+The other half of the S14 argument — dropping the changed node from the root-set
+entirely when no selector keys on the mutated attribute at all — was measured
+and rejected. On this fixture it saves exactly one `compute_style` call:
+`#omniInput` has no element children, and its box is rebuilt regardless because
+the `value` write makes it content-dirty. What it would cost is a complete table
+of "every attribute name the cascade reads" — `style.rs` alone has ~40
+`get_attr("…")` sites spanning presentational hints, `attr()` in declarations,
+and a dozen pseudo-classes — where a single omission is a *silently wrong style*,
+not a slow frame. Not worth one node.
+
+### Gates
+
+* `bug341_s17_keystroke_recascades_the_input_not_the_omnibox` (lumen-shell, runs
+  by default) — ground truth first (two **full** cascades, before and after the
+  keystroke, are equal), then the count (root-set is `{#omniInput}`,
+  `CascadeStats::recomputed == 1`), then equality of the incremental cascade with
+  the full one. The count is the only half that can fail silently: a mechanism
+  that narrows nothing still reproduces the full cascade, just slowly.
+* `mutation_incremental_restyle_narrowed_attr_change_matches_full` (lumen-layout)
+  — the under-approximation gate. The sheet restyles the mutated node *and a
+  descendant of it* (`[data-x="2"] span`), and the assert compares the whole
+  cascade, not geometry (a colour change moves no boxes). Verified to fail with
+  a stale-descendant-style diff when the root-set is emptied by hand.
+* `style::node_fanout_tests` — 12 unit tests over the shapes: no sibling
+  combinator, a sibling rule keyed on the changed attribute, a sibling rule whose
+  left compound cannot match the node (the case a sheet-wide check gets wrong), a
+  sibling combinator *before* the matching compound, `@media` blocks, `:has()`,
+  `:nth-child(of)`, plain `:nth-child`, and a pseudo-class in the sibling-source
+  compound.
+* `CascadeStats` / `take_cascade_stats()` (`counters.rs`) replaced the
+  `#[cfg(test)]` `RECOMPUTE_COUNT` thread-local and is now public, so gates
+  outside `lumen-layout` — where the real chrome document lives — can assert on
+  it. `walk` is a plain recursion on the calling thread, unlike `build_box`, so
+  a thread-local tally really does see the whole document (S15's trap does not
+  apply here).
+
+### Measurement
+
+Counters on the shell fixture, `CC12_KEY` cycle:
+
+| | S16 | S17 |
+|---|---|---|
+| elements re-cascaded | 12 | **1** |
+| of which really changed style | 0 | 0 |
+| boxes built | 38 | **28** |
+| box subtrees cloned | 8 | 10 |
+
+Interleaved A/B ×3 (main = merge-base `8637e82fb`, then S17, alternating), by
+min:
+
+| | main | S17 |
+|---|---|---|
+| `CC12_KEY` min | 3.18 / 2.84 / 2.75 ms | **2.69 / 2.60 / 2.65 ms** |
+| `CC12_KEY` p95 | 7.68 / 7.24 / 7.26 ms | **7.52 / 6.86 / 6.71 ms** |
+| `CC12_HOVER` min | 1.46 / 1.51 / 1.74 ms | 1.88 / 1.54 / 1.42 ms (flat) |
+
+The `CC12_KEY` min groups separate — worst S17 (2.69) is below best main (2.75) —
+but only just: ≈5 %. `CC12_HOVER` overlaps, i.e. is unchanged, which is the
+intended result (this slice touches only the DOM-mutation root-set; a hover cycle
+reports no DOM mutation at all).
+
+Stage split, `LUMEN_PROFILE_TREE=1`, min / p50 over the 60 `CC12_KEY` cycles:
+
+| Stage | main | S17 |
+|---|---|---|
+| `precompute_counters` | 0.45 / 0.58 ms | **0.36 / 0.47 ms** |
+| `build_box` | 1.04 / 1.33 ms | **0.90 / 1.23 ms** |
+| `graft_geometry` | 0.28 / 0.43 ms | 0.28 / 0.40 ms |
+| `lay_out` | 0.07 / 0.09 ms | 0.07 / 0.09 ms |
+| **total** | 1.94 / 2.50 ms | **1.80 / 2.18 ms** |
+
+This is an honest small win, and the census says why it is small: cutting the
+cascade from 12 nodes to 1 removed 10 of 38 rebuilt boxes, not 35 of 38. The
+remaining 28 are not the cascade's doing at all.
+
+### Where this leaves CC-12
+
+`CC12_HOVER` unchanged: in budget by min (1.4-1.9 ms), p95 ≈4.4-5.8 ms (≈2-3×).
+`CC12_KEY` ≈1.3× by min (2.60-2.69 ms vs the 2 ms budget, was ≈1.4×) and ≈3.4× by
+p95.
+
+`build_box` is still the largest stage, and after S17 the reason has changed
+shape. The cascade re-cascades one node; the box tree rebuilds 28. The census's
+new column says where they come from — **the ancestor chain**:
+
+```
+rebuilt chain: Document(3) html(3) body(11) div.stage(3) div.app-frame(3)
+               div.app-body(7) div.main-col(13) div.toolbar(7)
+               div.omnibox-wrap(9) div.omnibox(7) input#omniInput(0)
+```
+
+Eleven levels from the document node down to `#omniInput`, and a content-dirty
+node makes every one of its ancestors un-clonable — each is rebuilt, and each
+rebuild re-visits all of its children (66 child slots in total, of which only 10
+became whole-subtree clones). **S18's question is therefore the reuse
+*granularity*, not the invalidation set**: `clean_subtrees` is recorded for
+elements only, so a rebuilt ancestor's text/comment children and any child whose
+own subtree wasn't recorded are reconstructed from scratch rather than moved
+across. Get that census before designing — three slices running, the planned
+premise has not been where the time was.
+
 ## Repro
 
 ```bash
@@ -2234,4 +2431,5 @@ cargo test -p lumen-shell --profile dev-release bug341_s3_incremental_cascade_pr
 cargo test -p lumen-shell --profile dev-release bug341_s4_incremental_box_build_share -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s5_incremental_pipeline_share -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s13_graft_reject_census -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s17_keystroke_restyle_census -- --ignored --nocapture
 ```

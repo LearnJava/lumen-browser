@@ -2238,6 +2238,25 @@ fn count_rendered_units(b: &lumen_layout::LayoutBox) -> usize {
     n
 }
 
+/// BUG-341 S17 — flatten `bind_model_tracked`'s per-node report into the
+/// `(NodeId, NodeChange)` pairs `restyle_root_set_for_node_change` consumes.
+///
+/// One node can report several attribute writes plus a child-list change in the
+/// same bind; each is answered separately and the root-set unions the results,
+/// so a node whose class changed *and* whose children moved still widens to its
+/// parent via the structural half.
+fn chrome_node_changes(
+    touched: &lumen_chrome::ChromeMutations,
+) -> impl Iterator<Item = (lumen_dom::NodeId, lumen_layout::style::NodeChange<'_>)> {
+    use lumen_layout::style::NodeChange;
+    touched.selector.iter().flat_map(|(id, t)| {
+        t.attrs
+            .iter()
+            .map(move |a| (*id, NodeChange::Attr(a.as_str())))
+            .chain(t.structural.then_some((*id, NodeChange::Unattributed)))
+    })
+}
+
 /// Извлечь `--devtools-port N` из аргументов, вернуть (port, остальные аргументы).
 fn extract_devtools_port(args: &[String]) -> Result<(Option<u16>, Vec<String>), String> {
     let mut port: Option<u16> = None;
@@ -8792,9 +8811,14 @@ impl Lumen {
                 // interactive-state one above — `touched` is empty on a pure
                 // hover/focus/active-only pass (S5's original case), non-empty
                 // whenever `bind_model` actually changed content this cycle.
+                // BUG-341 S17: the report names the mutated attributes, so the
+                // root-set can narrow each one to the node itself unless some
+                // selector reaches a sibling from a compound matching it.
+                let node_index = lumen_layout::style::restyle_node_index(doc, sheet);
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                     doc,
-                    touched.selector.iter().copied(),
+                    chrome_node_changes(&touched),
+                    &node_index,
                 ));
                 let delta = lumen_layout::counters::RestyleDelta {
                     prev_styles: &self.chrome_prev_cascade_styles,
@@ -9769,9 +9793,14 @@ impl Lumen {
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                 &doc, prev_active, new_interactive.2, &state_index,
             ));
+            // BUG-341 S17: `DomTouched` records node ids without attribute
+            // names, so every page-side mutation stays `Unattributed` — the
+            // pre-S17 widen-to-parent behaviour, unchanged.
+            let node_index = lumen_layout::style::restyle_node_index(&doc, &src.stylesheet);
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                 &doc,
-                touched.nodes.iter().copied(),
+                touched.nodes.iter().map(|&n| (n, lumen_layout::style::NodeChange::Unattributed)),
+                &node_index,
             ));
             drop(doc);
             // BUG-341 S16: the page-side tracker reports *selector-relevant*
@@ -24635,9 +24664,11 @@ mod tests {
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc, prev_active, new_interactive.2, &state_index,
                 ));
+                let node_index = lumen_layout::style::restyle_node_index(doc, sheet);
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                     doc,
-                    touched.selector.iter().copied(),
+                    chrome_node_changes(&touched),
+                    &node_index,
                 ));
                 let delta = lumen_layout::counters::RestyleDelta {
                     prev_styles: &state.prev_cascade_styles,
@@ -25106,6 +25137,112 @@ mod tests {
         );
     }
 
+
+    /// BUG-341 S17 regression gate: a keystroke must re-cascade the omnibox
+    /// input, not the omnibox.
+    ///
+    /// This is the S14 argument applied to DOM mutations. Typing one character
+    /// writes `#omniInput`'s `value` attribute; the pre-S17 root-set answered
+    /// that by invalidating the *parent's* whole subtree, because a sibling
+    /// combinator (`X + Y`) is the one shape that reaches outside the changed
+    /// node's own subtree. The census (`bug341_s17_keystroke_restyle_census`)
+    /// found that cost 12 re-cascaded elements, all 12 producing a
+    /// byte-identical `ComputedStyle`, and each losing its box on the way
+    /// (`must_recompute` ⇒ not in `clean_subtrees`).
+    ///
+    /// Three asserts, in this order on purpose. First the *ground truth*,
+    /// computed with no incremental machinery at all: the two full cascades
+    /// really are equal, so nothing in `chrome.html` reacts to the `value`
+    /// write. Then the **count gate** — the root-set is `{#omniInput}` and the
+    /// cascade recomputes exactly one element — which is the only thing that
+    /// can fail silently: a mechanism that narrows nothing still reproduces the
+    /// full cascade (S8's lesson), just slowly. Last, that the incremental
+    /// cascade run under the narrowed root-set equals the full one.
+    ///
+    /// If `chrome.html` ever gains a sibling rule that can match `#omniInput`,
+    /// the count assert flips and the honest fix is to record the number that
+    /// rule accounts for — not to loosen this into a percentage.
+    #[test]
+    fn bug341_s17_keystroke_recascades_the_input_not_the_omnibox() {
+        use lumen_layout::counters::{
+            incremental_precompute_counters, precompute_counters, set_incremental_restyle,
+            take_cascade_stats, RestyleDelta,
+        };
+        use lumen_layout::style::{restyle_node_index, restyle_root_set_for_node_change};
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let viewport = Size::new(1280.0, 800.0);
+        lumen_chrome::bind_model(&mut doc, &cc12_bench_model("a"));
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let omni = doc
+            .find_by_id(lumen_chrome::ids::OMNI_INPUT)
+            .expect("chrome preview must have #omniInput");
+        let omnibox = doc.get(omni).parent.expect("#omniInput must have a parent");
+
+        // Ground truth: cascade before and after one more typed character.
+        let before = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        let touched = lumen_chrome::bind_model_tracked(&mut doc, &cc12_bench_model("ab"));
+        let after = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        assert!(before.styles().len() > 100, "chrome document should cascade a non-trivial node count");
+        assert_eq!(
+            before.styles(),
+            after.styles(),
+            "no rule in chrome.html reacts to `#omniInput`'s `value`, so both full cascades must agree",
+        );
+
+        // The mutation report itself: exactly one node, exactly one attribute.
+        assert_eq!(
+            touched.selector.keys().copied().collect::<std::collections::HashSet<_>>(),
+            [omni].into_iter().collect::<std::collections::HashSet<_>>(),
+            "typing must report only #omniInput as selector-touched: {touched:?}",
+        );
+        assert_eq!(
+            touched.selector[&omni].attrs.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["value"],
+            "typing writes exactly the `value` attribute",
+        );
+
+        // The count gate: the narrowed root-set is the input itself, not the
+        // `.omnibox` wrapper whose 12-element subtree used to re-cascade.
+        let node_index = restyle_node_index(&doc, &sheet);
+        assert!(
+            !node_index.is_conservative(),
+            "chrome.html has no `:has()`/`:nth-child(of …)` and the chrome document has no shadow \
+             roots — if any of that changes, the per-node narrowing turns itself off and CC-12's \
+             keystroke cycle silently returns to re-cascading the whole `.omnibox`",
+        );
+        let dirty_roots =
+            restyle_root_set_for_node_change(&doc, chrome_node_changes(&touched), &node_index);
+        assert_eq!(
+            dirty_roots,
+            [omni].into_iter().collect::<std::collections::HashSet<_>>(),
+            "a `value` write must invalidate #omniInput alone; {:?} would be the pre-S17 \
+             widen-to-parent answer",
+            [omnibox],
+        );
+
+        let _ = take_cascade_stats();
+        let delta = RestyleDelta {
+            prev_styles: before.styles(),
+            dirty_roots,
+            content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+        };
+        set_incremental_restyle(true);
+        let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, &delta);
+        set_incremental_restyle(false);
+        let stats = take_cascade_stats();
+        assert_eq!(
+            stats.recomputed, 1,
+            "exactly one element (#omniInput) may re-run `compute_style` for a one-character \
+             omnibox change; got {stats:?}",
+        );
+        assert_eq!(
+            incr.styles(),
+            after.styles(),
+            "the incremental cascade under the narrowed root-set must equal the full one",
+        );
+    }
+
     /// BUG-341 S13 diagnostic: census of *why* `graft_geometry` refuses boxes
     /// on the two CC-12 interaction shapes.
     ///
@@ -25172,6 +25309,184 @@ mod tests {
             }
         }
         lumen_layout::incremental::set_graft_diagnostics(false);
+    }
+
+    /// Short human-readable identification of a DOM node, for the census
+    /// diagnostics below (`div#omniInput.foo`, `text"abc"`).
+    fn census_describe(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> String {
+        match &doc.get(id).data {
+            lumen_dom::NodeData::Element { name, attrs } => {
+                let mut s = name.local.to_string();
+                for a in attrs {
+                    match a.name.local.as_str() {
+                        "id" => s.push_str(&format!("#{}", a.value)),
+                        "class" => {
+                            for c in a.value.split_whitespace() {
+                                s.push_str(&format!(".{c}"));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                s
+            }
+            lumen_dom::NodeData::Text(t) => {
+                format!("text{:?}", t.chars().take(20).collect::<String>())
+            }
+            other => format!("{other:?}").chars().take(24).collect(),
+        }
+    }
+
+    /// BUG-341 S17 diagnostic: census of *why* a keystroke re-cascades and
+    /// rebuilds what it does.
+    ///
+    /// S16 left `build_box` as the largest stage on `CC12_KEY` with the census
+    /// "38 boxes built for one typed character, against 3 on a hover frame".
+    /// That number is downstream of the cascade: every re-cascaded node loses
+    /// its box (`must_recompute` ⇒ not in `clean_subtrees`). This prints, for
+    /// the keystroke cycle, the mutation the tracker reported, the restyle
+    /// root-set derived from it, how many nodes that root-set re-cascaded, and
+    /// — the load-bearing column — how many of those re-cascaded nodes ended up
+    /// with a **different** `ComputedStyle` than the one they already had.
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s17_keystroke_restyle_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S17) — see doc comment for run command"]
+    fn bug341_s17_keystroke_restyle_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        for i in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+            lumen_layout::set_interactive_state(None, None, None);
+
+            let (layout, counters) = match state.prev_pristine_layout.as_ref() {
+                Some(prev) => {
+                    let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                    let dirty_roots = lumen_layout::style::restyle_root_set_for_node_change(
+                        &doc,
+                        chrome_node_changes(&touched),
+                        &node_index,
+                    );
+                    if i == 3 {
+                        for (n, t) in &touched.selector {
+                            eprintln!(
+                                "[s17-census] selector-touched: {} attrs={:?} structural={}",
+                                census_describe(&doc, *n),
+                                t.attrs,
+                                t.structural,
+                            );
+                        }
+                        for n in &touched.content {
+                            eprintln!("[s17-census] content-touched:  {}", census_describe(&doc, *n));
+                        }
+                        for n in &dirty_roots {
+                            eprintln!(
+                                "[s17-census] dirty root: {} (subtree {} elements)",
+                                census_describe(&doc, *n),
+                                census_subtree_elements(&doc, *n),
+                            );
+                        }
+                        // The chain that cannot be cloned: every ancestor of a
+                        // content-dirty node is itself rebuilt, and each rebuild
+                        // costs its own box plus one `build_box_or_reuse` call
+                        // per child. This is what `boxes_built` is made of once
+                        // the cascade root-set is down to one node.
+                        let mut chain = Vec::new();
+                        let mut cur = touched.content.iter().copied().next();
+                        while let Some(n) = cur {
+                            chain.push(n);
+                            cur = doc.get(n).parent;
+                        }
+                        for n in chain.iter().rev() {
+                            eprintln!(
+                                "[s17-census] rebuilt chain: {} ({} children)",
+                                census_describe(&doc, *n),
+                                doc.get(*n).children.len(),
+                            );
+                        }
+                    }
+                    let delta = lumen_layout::counters::RestyleDelta {
+                        prev_styles: &state.prev_cascade_styles,
+                        dirty_roots,
+                        content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                    };
+                    lumen_layout::counters::set_incremental_restyle(true);
+                    lumen_layout::box_tree::set_incremental_box_build(true);
+                    let _ = lumen_layout::counters::take_cascade_stats();
+                    let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                    );
+                    lumen_layout::box_tree::set_incremental_box_build(false);
+                    lumen_layout::counters::set_incremental_restyle(false);
+                    result
+                }
+                None => lumen_layout::layout_measured_hyp_with_counters(
+                    &doc, &sheet, viewport, &measurer, &hyp, false,
+                ),
+            };
+            let cs = lumen_layout::counters::take_cascade_stats();
+            let bb = lumen_layout::box_tree::take_box_build_stats();
+
+            // Ground truth: of the nodes that re-cascaded, how many actually
+            // ended up with a different `ComputedStyle`?
+            let mut changed = Vec::new();
+            let mut identical = Vec::new();
+            for (nid, style) in counters.styles() {
+                if let Some(prev) = state.prev_cascade_styles.get(nid) {
+                    if std::sync::Arc::ptr_eq(prev, style) {
+                        continue; // reused, not recomputed
+                    }
+                    if **prev == **style {
+                        identical.push(*nid);
+                    } else {
+                        changed.push(*nid);
+                    }
+                }
+            }
+            if i == 3 {
+                for n in &changed {
+                    eprintln!("[s17-census] style REALLY changed: {}", census_describe(&doc, *n));
+                }
+                eprintln!(
+                    "[s17-census] recascaded-but-identical: {}",
+                    identical
+                        .iter()
+                        .map(|n| census_describe(&doc, *n))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+            }
+            eprintln!(
+                "[s17-census] cycle={i} cascade_recomputed={} cascade_reused={} \
+                 really_changed={} recascaded_identical={} boxes_built={} boxes_reused={}",
+                cs.recomputed,
+                cs.reused,
+                changed.len(),
+                identical.len(),
+                bb.built,
+                bb.reused,
+            );
+
+            state.prev_pristine_layout = Some(layout.clone());
+            state.prev_cascade_styles = counters.styles().clone();
+            lumen_layout::clear_interactive_state();
+        }
+    }
+
+    /// Number of element nodes in `id`'s subtree, inclusive — the "how wide is
+    /// this dirty root" column of the S17 census.
+    fn census_subtree_elements(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> usize {
+        let node = doc.get(id);
+        let own = usize::from(matches!(node.data, lumen_dom::NodeData::Element { .. }));
+        own + node.children.iter().map(|&c| census_subtree_elements(doc, c)).sum::<usize>()
     }
 
     /// BUG-341 S5: like `cc12_chrome_perf_gate_hover_and_keystroke_cycles`'s

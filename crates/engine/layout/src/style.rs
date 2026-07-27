@@ -11702,29 +11702,258 @@ pub fn restyle_root_set_for_state_change(
     set
 }
 
-/// BUG-341 S3 — conservative restyle root-set (brief §4) for a DOM attribute/
-/// class/structural change on `node` (chrome `bind_model` diff or a JS DOM
-/// mutation).
+/// BUG-341 S17 — true if `complex` contains a `:has()` anywhere, regardless of
+/// what it looks for.
+///
+/// `:has()` binds one node's match result to *other* nodes' state, in the one
+/// direction [`restyle_root_set_for_node_change`]'s subtree-shaped root-set
+/// cannot express (BUG-348). The pre-S17 widen-to-parent at least re-cascaded
+/// the mutated node's immediate parent, so a `:has()` on that parent happened
+/// to be re-evaluated; narrowing to the node itself would take even that away.
+/// Sheets using `:has()` therefore keep the old behaviour verbatim — this
+/// slice neither fixes nor worsens BUG-348.
+fn complex_selector_has_any_has(c: &ComplexSelector) -> bool {
+    fn compound_has_any_has(compound: &CompoundSelector) -> bool {
+        compound.parts.iter().any(|p| match p {
+            SimpleSelector::PseudoClass(PseudoClass::Has(_)) => true,
+            SimpleSelector::PseudoClass(
+                PseudoClass::Not(list) | PseudoClass::Is(list) | PseudoClass::Where(list),
+            ) => list.iter().any(complex_selector_has_any_has),
+            SimpleSelector::PseudoClass(
+                PseudoClass::NthChild(_, Some(list)) | PseudoClass::NthLastChild(_, Some(list)),
+            ) => list.iter().any(complex_selector_has_any_has),
+            _ => false,
+        })
+    }
+    compound_has_any_has(&c.head) || c.tail.iter().any(|(_, comp)| compound_has_any_has(comp))
+}
+
+/// BUG-341 S17 — true if `complex` uses `:nth-child(… of S)` /
+/// `:nth-last-child(… of S)`.
+///
+/// That form makes one element's match depend on which of its *siblings* match
+/// `S`, i.e. on a sibling's attributes, with no sibling combinator anywhere in
+/// the selector to signal it. It is the one shape
+/// [`collect_sibling_source_compounds`] cannot see, so its presence disables the
+/// narrowing wholesale.
+fn complex_selector_has_nth_of(c: &ComplexSelector) -> bool {
+    fn compound_has_nth_of(compound: &CompoundSelector) -> bool {
+        compound.parts.iter().any(|p| match p {
+            SimpleSelector::PseudoClass(
+                PseudoClass::NthChild(_, Some(_)) | PseudoClass::NthLastChild(_, Some(_)),
+            ) => true,
+            SimpleSelector::PseudoClass(
+                PseudoClass::Not(list) | PseudoClass::Is(list) | PseudoClass::Where(list),
+            ) => list.iter().any(complex_selector_has_nth_of),
+            _ => false,
+        })
+    }
+    compound_has_nth_of(&c.head) || c.tail.iter().any(|(_, comp)| compound_has_nth_of(comp))
+}
+
+/// BUG-341 S17 — collect every compound of `complex` that is followed, anywhere
+/// on the path to the subject, by a sibling combinator (`+`/`~`).
+///
+/// These are exactly the compounds through which a change on the node they
+/// match can reach *outside* that node's own subtree: `X + Y`, `X ~ Y`, and
+/// `X + Y Z` all restyle nodes that are not descendants of `X`'s match. A
+/// compound followed only by descendant/child combinators (or in subject
+/// position) resolves entirely within its own match's subtree, which the
+/// root-set already covers by putting the node itself in.
+fn collect_sibling_source_compounds<'a>(
+    complex: &'a ComplexSelector,
+    out: &mut Vec<&'a CompoundSelector>,
+) {
+    let mut compounds: Vec<&CompoundSelector> = Vec::with_capacity(1 + complex.tail.len());
+    compounds.push(&complex.head);
+    let mut combinators: Vec<Combinator> = Vec::with_capacity(complex.tail.len());
+    for (comb, comp) in &complex.tail {
+        combinators.push(*comb);
+        compounds.push(comp);
+    }
+    for (i, compound) in compounds.iter().enumerate() {
+        if combinators[i..]
+            .iter()
+            .any(|c| matches!(c, Combinator::NextSibling | Combinator::LaterSibling))
+        {
+            out.push(compound);
+        }
+    }
+}
+
+/// True when `part` is keyed on the attribute named `attr` — i.e. writing that
+/// attribute is what could flip this simple selector's result.
+fn simple_selector_keys_on_attr(part: &SimpleSelector, attr: &str) -> bool {
+    match part {
+        SimpleSelector::Class(_) => attr.eq_ignore_ascii_case("class"),
+        SimpleSelector::Id(_) => attr.eq_ignore_ascii_case("id"),
+        SimpleSelector::Attribute(a) => a.name.eq_ignore_ascii_case(attr),
+        _ => false,
+    }
+}
+
+/// BUG-341 S17 — could `compound` match `node` *after* a write to `node`'s
+/// `attr` attribute, ignoring what that attribute now holds?
+///
+/// The S14 shape ([`compound_could_match_after_state_flip`]) with the dynamic-
+/// state pseudo-classes swapped for "keyed on `attr`": every part must match
+/// structurally, except the parts whose value the write is what's in question
+/// (which are treated as possible), pseudo-elements (stripped by the real
+/// matcher before an element is tested) and pseudo-classes in general — a
+/// pseudo-class may read the mutated attribute itself (`:checked` reads
+/// `checked`, `:placeholder-shown` reads `value`) or hide an attribute-keyed
+/// selector inside a nested list, so all of them are treated as possible.
+///
+/// Over-approximates in one direction only — a compound reported as "could
+/// match" costs narrowing, never correctness.
+fn compound_could_match_after_attr_change(
+    compound: &CompoundSelector,
+    doc: &Document,
+    node: NodeId,
+    attr: &str,
+) -> bool {
+    let NodeData::Element { name, attrs } = &doc.get(node).data else {
+        return false;
+    };
+    compound.parts.iter().all(|part| match part {
+        SimpleSelector::PseudoElement(_) | SimpleSelector::PseudoClass(_) => true,
+        p if simple_selector_keys_on_attr(p, attr) => true,
+        other => matches_simple(other, doc, node, &name.local, attrs),
+    })
+}
+
+/// BUG-341 S17 — what [`restyle_root_set_for_node_change`] needs to know about
+/// the stylesheet in play, computed once per layout pass.
+///
+/// The DOM-mutation counterpart of [`StateRestyleIndex`], and built from the
+/// same single scan over every rule list in the sheet.
+pub struct NodeRestyleIndex<'a> {
+    /// Every compound in `sheet` from which a sibling combinator is reachable
+    /// ([`collect_sibling_source_compounds`]).
+    sibling_sources: Vec<&'a CompoundSelector>,
+    /// The per-node narrowing below is unsound for this document/sheet pair, so
+    /// every changed node widens to its parent (pre-S17 behaviour). Set by
+    /// `:has()` anywhere in the sheet (BUG-348's direction, deliberately left
+    /// exactly as it was), by `:nth-child(… of S)` (sibling reach with no
+    /// combinator to see it) or by the presence of any shadow root (shadow-tree
+    /// sheets are not scanned here — the same carve-out S7 made).
+    conservative: bool,
+}
+
+impl NodeRestyleIndex<'_> {
+    /// Whether per-node narrowing is disabled for this document/sheet pair.
+    pub fn is_conservative(&self) -> bool {
+        self.conservative
+    }
+
+    /// Number of sibling-reachable compounds the narrowing tests each changed
+    /// node against. Exposed for the count-based regression gates.
+    pub fn sibling_source_count(&self) -> usize {
+        self.sibling_sources.len()
+    }
+
+    /// Can a write to `node`'s `attr` attribute change the computed style of
+    /// anything *outside* `node`'s own subtree?
+    ///
+    /// Only through a compound that (a) is followed by a sibling combinator and
+    /// (b) can match `node` itself. If no such compound exists, every rule the
+    /// write can affect resolves inside `node`'s subtree, and the root-set needs
+    /// `node` alone rather than its parent.
+    pub fn attr_change_needs_fanout(&self, doc: &Document, node: NodeId, attr: &str) -> bool {
+        if self.conservative {
+            return true;
+        }
+        self.sibling_sources
+            .iter()
+            .any(|c| compound_could_match_after_attr_change(c, doc, node, attr))
+    }
+}
+
+/// BUG-341 S17 — builds the [`NodeRestyleIndex`] for one layout pass.
+///
+/// Costs one scan of the sheet's selectors (the same shape as
+/// [`restyle_state_index`]), then one structural match per changed node per
+/// sibling-reachable compound.
+pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRestyleIndex<'a> {
+    let mut conservative = document_has_shadow_roots(doc);
+    let mut sibling_sources = Vec::new();
+    for rules in stylesheet_rule_groups(sheet) {
+        for rule in rules {
+            for selector in &rule.selectors {
+                conservative |= complex_selector_has_any_has(selector);
+                conservative |= complex_selector_has_nth_of(selector);
+                collect_sibling_source_compounds(selector, &mut sibling_sources);
+            }
+        }
+    }
+    NodeRestyleIndex { sibling_sources, conservative }
+}
+
+/// BUG-341 S17 — one reported DOM mutation, as
+/// [`restyle_root_set_for_node_change`] needs to see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeChange<'a> {
+    /// The attribute named `.0` was written to, or removed from, the node. The
+    /// name is what lets the root-set ask which selectors could possibly react.
+    Attr(&'a str),
+    /// Something else changed, or the source cannot name what changed: a child
+    /// list moved (`:nth-child`, `:empty` and sibling combinators all react to
+    /// that, and no attribute name describes it), or the mutation came from a
+    /// tracker that does not record names (page-side JS). Always takes the
+    /// conservative widen-to-parent path — the pre-S17 behaviour for everything.
+    Unattributed,
+}
+
+/// BUG-341 S3/S17 — restyle root-set (brief §4) for DOM attribute/class/
+/// structural changes (chrome `bind_model` diff or a JS DOM mutation).
 ///
 /// Class/attribute/structural selectors don't match ancestors *by themselves*,
-/// so invalidating `node`'s parent's whole subtree covers `node` itself,
-/// descendant selectors rooted at `node` (`node X`), and sibling combinators
-/// (`node + X`, `node ~ X`) — all resolve within the parent's subtree. A node
-/// with no parent (the document root) invalidates itself.
+/// so the changed node's own subtree covers the node itself and every
+/// descendant selector rooted at it (`node X`). What reaches *outside* that
+/// subtree is a sibling combinator (`node + X`, `node ~ X`), which the pre-S17
+/// version covered by unconditionally invalidating the parent's whole subtree.
+///
+/// S17 asks the S14 question of that widening: which selectors could react to
+/// *this* attribute on *this* node? A `value` write on chrome's omnibox input
+/// re-cascaded all 12 elements of `div.omnibox` — and the census found all 12
+/// produced a byte-identical `ComputedStyle`, because `chrome.html` has no
+/// sibling combinator that could match `#omniInput` (in fact none at all).
+/// `index` — from [`restyle_node_index`] — is what answers that per node and
+/// per attribute name; a change reported as [`NodeChange::Unattributed`], or a
+/// sheet the index declares conservative, keeps the old widen-to-parent
+/// behaviour exactly.
+///
+/// A node with no parent (the document root) invalidates itself either way.
 ///
 /// **Known gap (BUG-348):** this does *not* account for `:has()` — which this
 /// engine does implement (`PseudoClass::Has`, `style.rs`'s `matches_relative`)
-/// — so a change on `node` that flips some ancestor `E`'s `:has(...)` result
-/// is not invalidated by this function at all (`E` is outside `node`'s
-/// parent's subtree whenever `E` is more than one level up). No fixture
-/// currently exercises this combination; see BUG-348 for the full writeup.
-pub fn restyle_root_set_for_node_change(
+/// — so a change on a node that flips some ancestor `E`'s `:has(...)` result is
+/// not invalidated by this function at all (`E` is outside the node's parent's
+/// subtree whenever `E` is more than one level up). Unchanged by S17: a sheet
+/// containing any `:has()` is `conservative`, i.e. keeps the pre-S17 root-set
+/// verbatim. No fixture currently exercises this combination; see BUG-348 for
+/// the full writeup.
+///
+/// **Second known gap, same family:** `:indeterminate` on a radio group and
+/// `:default` on a form's submit button read *other* elements' `name`/`checked`/
+/// `type` attributes across the whole form. Like `:has()`, that reach is
+/// document-shaped rather than subtree-shaped, so neither the pre-S17
+/// widen-to-parent nor S17's narrowing expresses it — pre-existing, not
+/// introduced here.
+pub fn restyle_root_set_for_node_change<'a>(
     doc: &Document,
-    nodes: impl IntoIterator<Item = NodeId>,
+    changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
+    index: &NodeRestyleIndex<'_>,
 ) -> HashSet<NodeId> {
-    nodes
+    changes
         .into_iter()
-        .map(|n| doc.get(n).parent.unwrap_or(n))
+        .map(|(n, change)| {
+            let needs_fanout = match change {
+                NodeChange::Unattributed => true,
+                NodeChange::Attr(attr) => index.attr_change_needs_fanout(doc, n, attr),
+            };
+            if needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n }
+        })
         .collect()
 }
 
@@ -35132,5 +35361,181 @@ mod state_fanout_tests {
             [ob].into_iter().collect::<HashSet<_>>(),
             "the `.omnibox` ancestor observes `:focus-within`; nothing above it does",
         );
+    }
+}
+
+// ─── BUG-341 S17: DOM-mutation fan-out narrowing ─────────────────────────────
+
+#[cfg(test)]
+mod node_fanout_tests {
+    use super::*;
+    use lumen_css_parser::parse as parse_css;
+    use lumen_html_parser::parse as parse_html;
+
+    /// `<ul>` with two `.item` siblings plus an unrelated subtree — the same
+    /// shape the S3/S7 differential tests use.
+    fn fixture() -> Document {
+        parse_html(
+            r#"<ul id="menu">
+                <li id="a" class="item" data-x="1">a</li>
+                <li id="b" class="item">b</li>
+            </ul>
+            <div id="unrelated"><p>x</p></div>"#,
+        )
+    }
+
+    fn roots(doc: &Document, sheet: &Stylesheet, node: NodeId, attr: &str) -> HashSet<NodeId> {
+        let index = restyle_node_index(doc, sheet);
+        restyle_root_set_for_node_change(doc, [(node, NodeChange::Attr(attr))], &index)
+    }
+
+    #[test]
+    fn a_sheet_without_sibling_combinators_narrows_to_the_node() {
+        let doc = fixture();
+        let sheet = parse_css(".item { color: black; } .item .icon { color: red; }");
+        let a = doc.find_by_id("a").expect("#a");
+        assert_eq!(
+            roots(&doc, &sheet, a, "data-x"),
+            [a].into_iter().collect::<HashSet<_>>(),
+            "no selector reaches a sibling, so the changed node's own subtree is the whole root-set",
+        );
+    }
+
+    #[test]
+    fn a_sibling_rule_keyed_on_the_changed_attribute_widens_to_the_parent() {
+        let doc = fixture();
+        let sheet = parse_css("[data-x=\"1\"] + .item { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(
+            roots(&doc, &sheet, a, "data-x"),
+            [menu].into_iter().collect::<HashSet<_>>(),
+            "writing `data-x` can flip the sibling rule — the parent's subtree covers that",
+        );
+    }
+
+    #[test]
+    fn a_sibling_rule_that_cannot_match_the_changed_node_still_narrows() {
+        // The sheet has a sibling combinator, but its left compound (`.other`)
+        // cannot match `#a` no matter what `data-x` becomes. This is the case a
+        // sheet-wide "does any selector use `+`/`~`" check would get wrong, and
+        // the reason the narrowing is per-node.
+        let doc = fixture();
+        let sheet = parse_css(".other + .item { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        assert_eq!(
+            roots(&doc, &sheet, a, "data-x"),
+            [a].into_iter().collect::<HashSet<_>>(),
+            "`.other` cannot match #a, so no sibling of #a can react to its `data-x`",
+        );
+    }
+
+    #[test]
+    fn a_class_write_widens_when_the_sibling_rule_is_class_keyed() {
+        // `.item.active + .item` — the left compound is entirely class-keyed,
+        // so a `class` write on #a could make it match. Must widen.
+        let doc = fixture();
+        let sheet = parse_css(".item.active + .item { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(roots(&doc, &sheet, a, "class"), [menu].into_iter().collect::<HashSet<_>>());
+        // …but a `data-x` write cannot: `.item.active` doesn't currently match
+        // #a and no `data-x` value can change that.
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [a].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn a_sibling_combinator_before_the_matching_compound_does_not_widen() {
+        // `[data-y] + [data-x]` — the compound `data-x` keys on is the subject;
+        // nothing follows it, so a write on it reaches nobody else.
+        let doc = fixture();
+        let sheet = parse_css("[data-y] + [data-x] { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [a].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn a_descendant_after_a_sibling_combinator_still_widens() {
+        let doc = fixture();
+        let sheet = parse_css("[data-x] ~ .item .icon { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [menu].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn a_structural_change_always_widens() {
+        // No attribute name describes "the child list moved", and
+        // `:nth-child`/`:empty`/sibling combinators all react to it.
+        let doc = fixture();
+        let sheet = parse_css(".item { color: black; }");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        let index = restyle_node_index(&doc, &sheet);
+        let parent = doc.get(menu).parent.expect("#menu has a parent");
+        assert_eq!(
+            restyle_root_set_for_node_change(&doc, [(menu, NodeChange::Unattributed)], &index),
+            [parent].into_iter().collect::<HashSet<_>>(),
+        );
+    }
+
+    #[test]
+    fn has_anywhere_in_the_sheet_disables_narrowing() {
+        // BUG-348's direction: `:has()` binds an ancestor's match to a
+        // descendant's state, which no subtree-shaped root-set expresses. S17
+        // must not make that worse, so such sheets keep the pre-S17 behaviour.
+        let doc = fixture();
+        let sheet = parse_css("ul:has(.item) { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        assert!(index.is_conservative(), ":has() anywhere must force the conservative path");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [menu].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn nth_child_of_selector_disables_narrowing() {
+        // `:nth-child(2 of .item)` makes one element's match depend on which of
+        // its *siblings* carry `.item` — sibling reach with no combinator to
+        // see it.
+        let doc = fixture();
+        let sheet = parse_css("li:nth-child(2 of .item) { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        assert!(index.is_conservative(), ":nth-child(… of …) must force the conservative path");
+    }
+
+    #[test]
+    fn a_plain_nth_child_does_not_disable_narrowing() {
+        // Positions don't move on an attribute write, so plain structural
+        // pseudo-classes are irrelevant to this narrowing (a *structural*
+        // change reports `Unattributed` and widens regardless).
+        let doc = fixture();
+        let sheet = parse_css("li:nth-child(2) { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        assert!(!index.is_conservative());
+        let a = doc.find_by_id("a").expect("#a");
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [a].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn a_pseudo_class_in_a_sibling_source_compound_is_treated_as_possible() {
+        // `.item:checked + .item` — `:checked` reads the `checked` attribute,
+        // so a `checked` write could flip the sibling rule. The narrowing must
+        // not look through pseudo-classes and conclude otherwise.
+        let doc = fixture();
+        let sheet = parse_css(".item:checked + .item { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(roots(&doc, &sheet, a, "checked"), [menu].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn media_blocks_are_scanned_too() {
+        // A sibling rule hidden inside `@media` must count — the same carve-out
+        // S7 made for `restyle_state_index`.
+        let doc = fixture();
+        let sheet = parse_css("@media (min-width: 1px) { [data-x] + .item { color: green; } }");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [menu].into_iter().collect::<HashSet<_>>());
     }
 }
