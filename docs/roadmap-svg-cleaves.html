@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 64,
+  "open": 65,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 336,
+ "total_bugs": 337,
  "phases": [
   {
    "id": "P0",
@@ -2177,9 +2177,12 @@
       {
        "id": "WPT-VENDOR-fedcm",
        "title": "WPT: вендорить + прогнать категорию `fedcm`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Federated Credential Management"
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/fedcm/`, 192 файла: `META.yml`/`WEB_FEATURES.yml`, 39 корневых `.https.`-тестов, 12 подкатегорий, `support/` — 60+ Python-эндпоинтов IdP и JSON-манифестов), скоуп 🚫 (Federated Credential Management), включена по постоянному решению пользователя. `run_report.py --all --root fedcm --recursive` — 44 с, 0/81 harness OK, 0/0 сабтестов: первая категория бэклога с полностью однородным исходом — все 81 id SKIP по `Executor does not support testdriver.js`, ни одного TIMEOUT/ERROR/FAIL. Это структурно: FedCM по спеке идёт через браузерный диалог выбора аккаунта, поэтому каждый тест синтезирует выбор через `test_driver`, а HTTPS-порт-гэп (84 из 103 файлов `.https.`) до срабатывания не доходит. Обследование — пробой `--dump-layout`: сам FedCM-стаб исправен и соответствует своей документации (Phase 0, `NotSupportedError`), но общий объект `CredentialsContainer` — нет. BUG-366: `navigator.credentials` расходится с WebIDL по 5 пунктам, главный — внутренний guard монки-патча `_get_original` торчит наружу перечислимым записываемым свойством (`digital_credentials.rs:44`); задевает и в-скоупный WebAuthn",
+       "bugs": [
+        "BUG-366"
+       ]
       },
       {
        "id": "WPT-VENDOR-fenced-frame",
@@ -6357,6 +6360,13 @@
    "status": "open",
    "title": "`EyeDropper.open()` всегда отклоняется с `ReferenceError: _lumen_eye_dropper_open is not defined` — нативная привязка не зарегистрирована как глобал ни на V8-,…",
    "component": "js (`crates/js/src/eye_dropper.rs:58` — тело шима EyeDropper; установка — `crates/js/src/lib.rs:1187` и `crates/js/src/v8_runtime.rs:3893`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-366": {
+   "status": "open",
+   "title": "`navigator.credentials` нарушает WebIDL по пяти пунктам сразу. (1) Методы `create`/`get`/`preventSilentAccess`/`store` присвоены самому инстансу (`credentials.r…",
+   "component": "js (`crates/js/src/credentials.rs:358-418` — тело шима `CredentialsContainer`; `crates/js/src/digital_credentials.rs:42-44` — утечка `_get_original`; установка — `crates/js/src/v8_runtime.rs:3881`/`3886`, `crates/js/src/lib.rs:1053`)",
    "date": null,
    "debtor": false
   }
