@@ -1701,6 +1701,150 @@ re-laid-out on a hover flip that changes one subtree.** Both `build_box`
   re-measuring — but only after the dirty-set question above, which may make the
   mechanism unnecessary.
 
+## S13 — layout's own output was reading as a style change
+
+S12 left one question: **1696 of 3121 boxes re-laid-out on a hover flip that
+changes one subtree** — genuinely changed, or collateral? The answer is neither
+of the two causes S12 guessed at (conservative root-set, `kind_layout_eq`
+rejects). None of those boxes had changed at all.
+
+### The census
+
+`graft_geometry` now tallies why it accepts or refuses each box
+(`incremental::GraftStats`, `take_graft_stats`), with an opt-in attribution pass
+behind `set_graft_diagnostics`. On the CC-12 chrome document, before this slice:
+
+| | `CC12_HOVER` | `SIBLING_HOVER` |
+|---|---:|---:|
+| visited | 318 | 318 |
+| reused clean | 196 | 196 |
+| rejected — node/kind identity | 0 | 0 |
+| rejected — style | **81** | **81** |
+| …of which differ *only* in used-value fields | **81** | **81** |
+| rejected — child count | 0 | 0 |
+| rejected — descendant changed | 41 | 41 |
+
+Every single style reject was a box whose fresh style differed from its
+predecessor's *only* in `width`/`height`/`box_sizing` — and a graft reject
+propagates upward, which is where the other 41 came from. 122 boxes re-laid-out
+per interaction, zero of them changed.
+
+### Cause
+
+`prev` is a **laid-out** tree, and layout writes used values back into the very
+styles the graft compares. `lay_out_flex` overwrites every flex item's
+`width`/`height`/`box_sizing` with the resolved used size (`box_tree.rs`, both
+the column and the row arm); the post-layout passes rewrite more. The freshly
+built tree carries none of that yet, so `new.style == prev.style` answers a
+question nobody asked: not "did the author's style change?" but "has this box
+been through layout since?". S8 found and fixed one instance of this at the root
+box (used viewport `height`); it is a general property of the field, not a
+special case of the root.
+
+The chrome document is built out of flexbox, so this was every interaction.
+
+### The slice
+
+`graft_geometry_with_cascade` takes the `CounterMap::styles` map of the pass that
+produced `prev` — the *unpolluted* cascade result — and compares against that:
+
+1. `Arc::ptr_eq(new.style, prev.style)` — unchanged, the cheapest case.
+2. `Arc::ptr_eq(new.style, prev_cascade[node])` — the incremental cascade hands
+   the same allocation back for reused nodes (S9/S12), so a narrow restyle
+   settles here for free.
+3. `*new.style == *prev_cascade[node]` — the wide-restyle case. CC-12's own
+   `SIDEBAR`/`None` toggle re-cascades most of the document to the values it
+   already had; those must still read as unchanged. (Without this clause the
+   toggle scenario kept all 81 rejects while `SIBLING_HOVER` dropped to 21 —
+   measured, not assumed.)
+4. `new.style == prev.style` — the pre-existing fallback.
+5. For a box whose node has **no** cascade entry at all: styles equal once
+   `width`/`height`/`box_sizing` are discounted. This is the anonymous-box
+   class — the wrapper a flex container generates around inline content, keyed
+   by a text node the cascade never visits. Instrumenting the residue showed all
+   21 remaining rejects were exactly this: `kind = Block`, one child, `width:
+   None` freshly derived against a fractional used px width in `prev`. No author
+   rule can put a width on such a box, so a difference confined to those fields
+   is layout output by construction. The probe copies a style, so it runs last
+   and only for this class.
+
+A reused subtree keeps its **own** freshly-cascaded style — only `rect` and
+`kind` come from `prev`. `kind` must be copied (it holds layout output paint
+reads back, e.g. `InlineRun`'s laid-out `lines`); the used values in the *style*
+are read by nothing outside the layout pass that wrote them, and adopting them
+would pin the pollution into the live tree permanently and mis-size the box if it
+later went dirty.
+
+### Gates: by count
+
+Same reasoning as S8's and S10's: geometry is identical either way, so only
+wall-clock would show a regression here, and machine noise hides it.
+
+* `bug341_s13_hover_flip_reuses_boxes_the_layout_pass_only_wrote_used_values_into`
+  (lumen-shell, runs by default) — on the real chrome document,
+  `reject_style_used_value_only == 0` and `reused_clean == visited`. The first
+  assert is the load-bearing one: it fails the moment a layout pass writes a used
+  value the graft cannot account for, whatever the stylesheet contains.
+* `graft_reuses_a_box_whose_prev_style_only_carries_used_values` — the mechanism
+  in isolation.
+* `graft_still_rejects_a_box_whose_cascade_style_changed` — the counterweight,
+  without which the fix would degrade into "styles never matter" and no
+  geometry-comparing test would notice.
+* `graft_stats_partition_the_visited_set` — the counters are the only instrument
+  the gates have; a double-count would make every number above wrong.
+
+### Measurement
+
+Census after the slice — **318 of 318 boxes reused, on both scenarios**, every
+reject bucket zero.
+
+Interleaved A/B (main, S13, ×3), dev-release, `cc12_chrome_perf_gate`:
+
+| | main min | S13 min | main p50 | S13 p50 |
+|---|---:|---:|---:|---:|
+| `CC12_HOVER` | 16.24 / 15.89 / 16.04 | **12.49 / 12.59 / 11.72** | 18.14 / 18.87 / 18.13 | **15.71 / 15.35 / 15.48** |
+| `CC12_KEY` | 6.19 / 6.07 / 6.14 | **3.93 / 3.89 / 3.85** | 9.33 / 8.10 / 8.89 | **4.89 / 4.96 / 4.76** |
+
+No overlap on any row — ≈23 % off `CC12_HOVER`, ≈37 % off `CC12_KEY` (≈16 % and
+≈44 % by p50).
+
+Per stage (`LUMEN_PROFILE_TREE=1`):
+
+| Stage | `CC12_HOVER` S12 → S13 | `CC12_KEY` S12 → S13 |
+|---|---|---|
+| `lay_out` | 2.44 → **0.00 ms** | 2.30 → **0.08 ms** |
+| `build_box` | 2.45 → 2.2-2.4 ms | 2.19 → 1.7-2.2 ms |
+| `graft_geometry` | 0.99 → 1.0-1.2 ms | 0.63 → 0.5-0.6 ms |
+| `precompute_counters` | 7.88 → 9-12 ms | 0.55 → 0.5-0.8 ms |
+
+`lay_out` is the stage this slice was aimed at and it is now free: with nothing
+dirty, every box takes the O(1) translate path. `graft_geometry` pays a little
+for the extra lookups; that is the trade and it is an order of magnitude smaller
+than what it buys.
+
+### Where this leaves CC-12
+
+Still red. Budget 2 ms p95; `CC12_HOVER` p95 ≈17.5-19.3 ms and `CC12_KEY` p95
+≈7.4-8.0 ms — a gap of ≈4-9× (was ≈5-12× after S12).
+
+The shape has changed again, and the two remaining costs are now clearly
+separated:
+
+* **`precompute_counters` on `CC12_HOVER`: 9-12 ms, ~75 % of the cycle.** This
+  is the conservative root-set S3 documented and every slice since has worked
+  around rather than at: the `SIDEBAR`/`None` toggle transitions from "nothing
+  hovered", which `restyle_root_set_for_state_change` correctly treats as "every
+  ancestor of the target flipped `:hover`" and expands to most of the document.
+  The census now proves the expansion is pure waste on this fixture — the
+  re-cascade produces byte-identical styles for all 318 boxes. Narrowing it (or
+  short-circuiting a re-cascade whose result is unchanged) is the biggest single
+  number left anywhere in this bug.
+* **`build_box` is now the dominant stage on `CC12_KEY` (1.7-2.2 ms of ~4 ms).**
+  The whole tree is rebuilt every cycle only to be grafted back onto the previous
+  geometry. This is exactly what S4's `incremental_build_box` was written for and
+  it is still switched off; with `Arc` styles and a now-*empty* dirty set, its
+  `index_by_node` trade-off is worth re-measuring — the mechanism may finally pay.
+
 ## Repro
 
 ```bash
@@ -1708,4 +1852,5 @@ cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate -- --ignor
 cargo test -p lumen-shell --profile dev-release bug341_s3_incremental_cascade_precompute_share -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s4_incremental_box_build_share -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s5_incremental_pipeline_share -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s13_graft_reject_census -- --ignored --nocapture
 ```

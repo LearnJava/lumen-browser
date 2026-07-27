@@ -24800,6 +24800,132 @@ mod tests {
         assert!(all_clean, "graft_geometry must report the whole tree clean when nothing changed");
     }
 
+    /// BUG-341 S13 regression gate: a hover flip must not force boxes back
+    /// through layout merely because the *previous* pass wrote its own used
+    /// values into their styles.
+    ///
+    /// `prev` is a laid-out tree: `lay_out_flex` overwrites each flex item's
+    /// `width`/`height`/`box_sizing` with the resolved used value, and the
+    /// post-layout passes rewrite more. The freshly-built tree carries none of
+    /// that, so a naive style comparison called 81 of this document's 318 boxes
+    /// "changed" — every one of them differing *only* in those fields — and
+    /// dragged 41 ancestors along, because a graft reject propagates upwards.
+    /// 122 boxes re-laid-out per interaction, none of them actually changed.
+    ///
+    /// Gated on the **count**, like its S8 predecessor above and for the same
+    /// reason: geometry is identical either way, so only wall-clock would show
+    /// this, and machine noise (±10-15%) hides it. The
+    /// `reject_style_used_value_only` assert is the load-bearing one — it fails
+    /// the moment a layout pass starts writing a used value the graft cannot
+    /// account for, whatever the stylesheet happens to contain.
+    #[test]
+    fn bug341_s13_hover_flip_reuses_boxes_the_layout_pass_only_wrote_used_values_into() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        lumen_layout::incremental::set_graft_diagnostics(true);
+        let mut state = Cc12IncrementalState::default();
+        let mut last = lumen_layout::incremental::GraftStats::default();
+        for i in 0..4 {
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let _ = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            last = lumen_layout::incremental::take_graft_stats();
+        }
+        lumen_layout::incremental::set_graft_diagnostics(false);
+
+        assert!(last.visited > 100, "chrome document should produce a non-trivial box tree: {last:?}");
+        assert_eq!(
+            last.reject_style_used_value_only, 0,
+            "{} boxes were refused reuse purely because the previous layout pass wrote used \
+             values back into their styles (BUG-341 S13) — the graft must compare against the \
+             cascade result, not against the laid-out tree's polluted styles. Full census: {last:?}",
+            last.reject_style_used_value_only,
+        );
+        assert_eq!(
+            last.reused_clean, last.visited,
+            "a hover flip that changes no computed style must leave the whole chrome document \
+             reusable, got {}/{} — census: {last:?}. If chrome.html gains a rule that really does \
+             restyle on `#sidebar:hover`, this number legitimately drops: replace the equality \
+             with the count that rule accounts for, do not loosen it to a percentage.",
+            last.reused_clean,
+            last.visited,
+        );
+    }
+
+    /// BUG-341 S13 diagnostic: census of *why* `graft_geometry` refuses boxes
+    /// on the two CC-12 interaction shapes.
+    ///
+    /// S12's detail scopes established that a hover flip touching one subtree
+    /// still re-lays-out ~1700 of ~3100 boxes, and that both `build_box` and
+    /// `lay_out` are close to linear in that number — but not whether those
+    /// boxes genuinely changed. This prints the partition
+    /// (`reused_clean` / identity / style / child-count / descendant) plus the
+    /// share of style rejects that vanish once the used-value writeback fields
+    /// are discounted. Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s13_graft_reject_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S13) — see doc comment for run command"]
+    fn bug341_s13_graft_reject_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+        let tabs_container = doc
+            .find_by_id(lumen_chrome::ids::SB_TABS)
+            .expect("chrome preview must have #sbTabs");
+        let tab_rows = doc.get(tabs_container).children.clone();
+        let (tab_a, tab_b) = (Some(tab_rows[0]), Some(tab_rows[1]));
+
+        lumen_layout::incremental::set_graft_diagnostics(true);
+
+        for (label, targets) in [
+            ("CC12_HOVER(sidebar/none)", [sidebar, None]),
+            ("SIBLING_HOVER(tabA/tabB)", [tab_a, tab_b]),
+        ] {
+            let mut state = Cc12IncrementalState::default();
+            for i in 0..6 {
+                let _ = cc12_bench_cycle(
+                    &mut doc,
+                    &sheet,
+                    &model,
+                    viewport,
+                    &measurer,
+                    &hyp,
+                    targets[i % 2],
+                    &mut state,
+                );
+                let s = lumen_layout::incremental::take_graft_stats();
+                if i >= 2 {
+                    eprintln!(
+                        "[s13-census] {label} cycle={i} visited={} clean={} \
+                         rej_identity={} rej_style={} (used_value_only={}, no_cascade={}, \
+                         cascade_differs={}) rej_child_count={} rej_descendant={}",
+                        s.visited,
+                        s.reused_clean,
+                        s.reject_identity,
+                        s.reject_style,
+                        s.reject_style_used_value_only,
+                        s.reject_style_no_cascade_entry,
+                        s.reject_style_cascade_differs,
+                        s.reject_child_count,
+                        s.reject_descendant,
+                    );
+                }
+            }
+        }
+        lumen_layout::incremental::set_graft_diagnostics(false);
+    }
+
     /// BUG-341 S5: like `cc12_chrome_perf_gate_hover_and_keystroke_cycles`'s
     /// `CC12_HOVER` scenario, but hover moves between two sibling tab rows
     /// (`#sbTabs`' first two children) instead of toggling `SIDEBAR`/`None`.

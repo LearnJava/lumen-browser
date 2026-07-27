@@ -161,6 +161,93 @@ fn index_by_node_inner<'a>(
     }
 }
 
+// ─── Graft accounting (BUG-341 S13) ─────────────────────────────────────────
+
+/// Per-pass tally of what [`graft_geometry`] reused and why it refused the rest.
+///
+/// BUG-341 S13: wall-clock cannot tell "the dirty set is genuinely wide" from
+/// "the reuse mechanism is refusing boxes it could have kept" — S8 shipped a
+/// mechanism that reused *nothing* and every differential test stayed green,
+/// because reusing nothing still produces the correct output. These counters
+/// make the distinction observable, and are what the S13 gates assert on.
+///
+/// The reject counters are not mutually exclusive per box in principle, but are
+/// recorded so they partition the visited set: a box is counted in exactly one
+/// of `reused_clean` / `reject_identity` / `reject_style` / `reject_child_count`
+/// / `reject_descendant`, in that priority order (identity is checked first and
+/// skips the subtree; a box that both changed style and has a changed
+/// descendant counts as `reject_style`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GraftStats {
+    /// Boxes `graft_geometry` compared against a predecessor.
+    pub visited: usize,
+    /// Boxes whose whole subtree was reused clean (O(1) translate afterwards).
+    pub reused_clean: usize,
+    /// Boxes whose `NodeId` or [`kind_layout_eq`] payload differed — the
+    /// subtree below is not even compared (positional matching is meaningless).
+    pub reject_identity: usize,
+    /// Boxes that matched by identity but whose [`crate::style::ComputedStyle`]
+    /// differed from the predecessor's.
+    pub reject_style: usize,
+    /// Boxes that matched by identity and style but gained or lost children.
+    pub reject_child_count: usize,
+    /// Boxes that matched entirely themselves but hold a changed descendant.
+    pub reject_descendant: usize,
+    /// Subset of `reject_style` whose styles become equal once the used-value
+    /// writeback fields (`width`/`height`/`box_sizing`) are taken from the
+    /// predecessor — i.e. boxes rejected only because `lay_out` wrote its own
+    /// output back into the previous tree's style. Only counted while
+    /// [`set_graft_diagnostics`] is on (the check costs a style copy).
+    pub reject_style_used_value_only: usize,
+    /// Subset of `reject_style` whose node has no entry in the previous pass's
+    /// cascade map — the box's style was not taken straight from the cascade
+    /// (anonymous/pseudo boxes, or a node the cascade never visited), so the
+    /// unpolluted comparison is unavailable for it. Diagnostics only.
+    pub reject_style_no_cascade_entry: usize,
+    /// Subset of `reject_style` whose node *has* a cascade entry that the fresh
+    /// style genuinely differs from — the honest "this style changed" bucket.
+    /// Diagnostics only.
+    pub reject_style_cascade_differs: usize,
+}
+
+thread_local! {
+    /// Accumulates [`GraftStats`] for the current pass; drained by [`take_graft_stats`].
+    static GRAFT_STATS: std::cell::Cell<GraftStats> = const { std::cell::Cell::new(GraftStats {
+        visited: 0,
+        reused_clean: 0,
+        reject_identity: 0,
+        reject_style: 0,
+        reject_child_count: 0,
+        reject_descendant: 0,
+        reject_style_used_value_only: 0,
+        reject_style_no_cascade_entry: 0,
+        reject_style_cascade_differs: 0,
+    }) };
+    /// Whether to attribute style rejects to used-value writeback (costly).
+    static GRAFT_DIAGNOSTICS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Take and reset this thread's [`GraftStats`].
+pub fn take_graft_stats() -> GraftStats {
+    GRAFT_STATS.with(|s| s.replace(GraftStats::default()))
+}
+
+/// Enable/disable the costly `reject_style_used_value_only` attribution.
+///
+/// Off by default: it copies a [`crate::style::ComputedStyle`] per rejected box.
+/// Diagnostic and test use only.
+pub fn set_graft_diagnostics(on: bool) {
+    GRAFT_DIAGNOSTICS.with(|d| d.set(on));
+}
+
+fn bump_graft(f: impl FnOnce(&mut GraftStats)) {
+    GRAFT_STATS.with(|s| {
+        let mut v = s.get();
+        f(&mut v);
+        s.set(v);
+    });
+}
+
 // ─── Streaming graft (PH1-2b) ──────────────────────────────────────────────────
 
 /// Mark every box in `b`'s subtree as [`DirtyBits::SELF_SIZE`].
@@ -195,7 +282,44 @@ pub fn mark_subtree_dirty(b: &mut LayoutBox) {
 /// prefix of each child list matches and the changed/new tail is re-laid-out.
 /// Returns `true` when `new`'s whole subtree was reused clean from `prev`.
 pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
+    graft_geometry_with_cascade(new, prev, None)
+}
+
+/// [`graft_geometry`], told which cascade result produced `prev`'s styles.
+///
+/// BUG-341 S13. `prev` is a *laid-out* tree, and layout writes used values back
+/// into the very styles this function compares: `lay_out_flex` overwrites every
+/// flex item's `width`/`height`/`box_sizing` with the resolved used value, and
+/// the post-layout passes (container queries, `::first-line`) rewrite more. The
+/// freshly-built tree has none of that yet, so a plain `new.style == prev.style`
+/// reports "changed" for boxes nothing changed on — and because a reject
+/// propagates to every ancestor, a handful of flex items poisons the whole
+/// document. Measured on the CC-12 chrome fixture: **81 of 318 boxes rejected on
+/// style, all 81 differing only in the used-value fields**, dragging 41
+/// ancestors down with them — 122 boxes re-laid-out per hover flip, none of
+/// which had actually changed.
+///
+/// `prev_cascade` is the [`crate::counters::CounterMap::styles`] map of the pass
+/// that produced `prev`. When the freshly-cascaded box still holds *the same
+/// allocation* that map recorded for its node, the cascade demonstrably produced
+/// an identical style for it this cycle, so whatever `prev`'s box-level style
+/// has accumulated since is layout output, not an author-visible change, and the
+/// box is reusable. That is a pointer comparison plus one hash lookup; it never
+/// claims reuse for a box whose fresh style is *not* the shared cascade entry
+/// (anonymous and pseudo boxes that derive their own style fall through to the
+/// structural comparison, exactly as before).
+///
+/// A reused subtree keeps its own freshly-cascaded styles (only geometry and
+/// `kind` come from `prev`), so the pollution never migrates into the live tree
+/// — see the clean branch below.
+pub fn graft_geometry_with_cascade(
+    new: &mut LayoutBox,
+    prev: &LayoutBox,
+    prev_cascade: Option<&std::collections::HashMap<NodeId, std::sync::Arc<crate::style::ComputedStyle>>>,
+) -> bool {
+    bump_graft(|s| s.visited += 1);
     if new.node != prev.node || !kind_layout_eq(&new.kind, &prev.kind) {
+        bump_graft(|s| s.reject_identity += 1);
         // Node identity or box-kind payload differ → this position no longer
         // describes the same box, so the children below it cannot be matched
         // positionally either. Leave the whole subtree dirty (marked by
@@ -221,13 +345,47 @@ pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
     // was re-cascaded to an equal value is still recognised as reusable (that
     // matters: the incremental cascade legitimately re-computes nodes whose
     // result is unchanged).
-    let self_reusable =
-        std::sync::Arc::ptr_eq(&new.style, &prev.style) || new.style == prev.style;
+    //
+    // BUG-341 S13: the third clause compares against the cascade entry `prev`
+    // was built from rather than against `prev`'s own, layout-polluted style —
+    // see this function's doc comment for the measured cost of not doing so.
+    let self_reusable = std::sync::Arc::ptr_eq(&new.style, &prev.style)
+        || prev_cascade.and_then(|c| c.get(&new.node)).is_some_and(|cascade| {
+            // Pointer first: on a narrow restyle the incremental cascade hands
+            // the *same* allocation back (S9/S12), so this is the common case
+            // and costs nothing. The structural fallback covers the wide
+            // restyles — CC-12's own `SIDEBAR`/`None` hover toggle re-cascades
+            // most of the document to values that are, node for node, the ones
+            // it already had, and those must still be recognised as unchanged.
+            std::sync::Arc::ptr_eq(&new.style, cascade) || *new.style == **cascade
+        })
+        || new.style == prev.style
+        // Anonymous boxes (the wrapper a flex container generates around inline
+        // content, and its kin) hold no cascade entry of their own — their node
+        // is a text node the cascade never visits — so no comparison above can
+        // reach them, and on the CC-12 fixture they were the entire remaining
+        // reject set: 21 boxes, every one with `width: None` freshly derived and
+        // a fractional used px width in `prev`. No author rule can put a
+        // `width`/`height` on such a box, so a difference confined to those
+        // fields is `lay_out`'s own output and nothing else. The probe copies a
+        // style, which is why it runs last and only for this narrow class.
+        || (prev_cascade.is_some_and(|c| !c.contains_key(&new.node))
+            && used_value_writeback_only(new, prev));
+    if !self_reusable && GRAFT_DIAGNOSTICS.with(|d| d.get()) {
+        if used_value_writeback_only(new, prev) {
+            bump_graft(|s| s.reject_style_used_value_only += 1);
+        }
+        match prev_cascade.and_then(|c| c.get(&new.node)) {
+            None => bump_graft(|s| s.reject_style_no_cascade_entry += 1),
+            Some(_) => bump_graft(|s| s.reject_style_cascade_differs += 1),
+        }
+    }
 
     let common = new.children.len().min(prev.children.len());
     let mut all_clean = self_reusable && new.children.len() == prev.children.len();
     for i in 0..common {
-        let child_clean = graft_geometry(&mut new.children[i], &prev.children[i]);
+        let child_clean =
+            graft_geometry_with_cascade(&mut new.children[i], &prev.children[i], prev_cascade);
         all_clean &= child_clean;
     }
 
@@ -244,13 +402,29 @@ pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
         // freshly-built `new` side).
         new.rect = prev.rect;
         new.kind = prev.kind.clone();
+        // `style` is deliberately NOT taken from `prev`, unlike `kind` above.
+        // `kind` holds layout output paint reads back (`InlineRun`'s laid-out
+        // `lines`); the used values in `prev`'s *style* are read by nothing
+        // outside the layout pass that wrote them. Adopting them would pin the
+        // pollution into the live tree for good — and a box that later goes
+        // dirty would be laid out against a stale used size instead of its own
+        // cascade value (BUG-341 S13).
         new.scroll_x = prev.scroll_x;
         new.scroll_y = prev.scroll_y;
         new.col_span = prev.col_span;
         new.row_span = prev.row_span;
         new.svg_group_transform = prev.svg_group_transform.clone();
         new.dirty = DirtyBits::CLEAN;
+        bump_graft(|s| s.reused_clean += 1);
         return true;
+    }
+
+    if !self_reusable {
+        bump_graft(|s| s.reject_style += 1);
+    } else if new.children.len() != prev.children.len() {
+        bump_graft(|s| s.reject_child_count += 1);
+    } else {
+        bump_graft(|s| s.reject_descendant += 1);
     }
 
     // This node matches but a descendant changed or a child was appended/removed:
@@ -258,6 +432,30 @@ pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
     // dirty/new children laid out fresh).
     new.dirty = DirtyBits::SELF_SIZE | DirtyBits::HAS_DIRTY_DESCENDANT;
     false
+}
+
+/// Whether `new` and `prev` differ *only* in the fields `lay_out` writes back
+/// into the box's own style as a used value.
+///
+/// BUG-341 S13: `lay_out_flex` overwrites a flex item's
+/// `width`/`height`/`box_sizing` with the resolved used value, and the
+/// replaced-element sizing path does the same for intrinsic sizes. The previous
+/// tree therefore carries those writes while a freshly-cascaded tree does not,
+/// which makes the two styles unequal for reasons that have nothing to do with
+/// the author's stylesheet. Copying the three fields across and re-comparing
+/// tells the two causes apart.
+///
+/// Used both as the diagnostic attribution behind [`set_graft_diagnostics`] and,
+/// in [`graft_geometry_with_cascade`], as the last-resort reuse test for boxes
+/// with no cascade entry — see the call site for why that is sound only there.
+/// Costs a [`crate::style::ComputedStyle`] copy, so it must stay on paths that
+/// have already failed every cheaper check.
+fn used_value_writeback_only(new: &LayoutBox, prev: &LayoutBox) -> bool {
+    let mut probe = (*new.style).clone();
+    probe.width = prev.style.width.clone();
+    probe.height = prev.style.height.clone();
+    probe.box_sizing = prev.style.box_sizing;
+    probe == *prev.style
 }
 
 /// Compare the layout-affecting payload of two [`crate::box_tree::BoxKind`]s.
@@ -831,6 +1029,122 @@ mod tests {
             Rect::new(0.0, 10.0, 100.0, 50.0),
             "the child's geometry must be grafted from prev",
         );
+    }
+
+    // ── BUG-341 S13: the used-value writeback must not read as a style change ──
+
+    /// A box whose *only* difference from its predecessor is what `lay_out`
+    /// wrote back into the predecessor's style (flex item main size, in this
+    /// fixture) must still be grafted clean when the cascade demonstrably
+    /// handed back the same style allocation for its node.
+    ///
+    /// A gate on the reuse **count**, not on output: a graft that refuses this
+    /// box still lays it out and produces identical geometry — just for 122 of
+    /// the chrome document's 318 boxes per hover flip, which is exactly what
+    /// the S13 census measured before this fix.
+    #[test]
+    fn graft_reuses_a_box_whose_prev_style_only_carries_used_values() {
+        let cascade_style = std::sync::Arc::new(ComputedStyle::root());
+        let node = NodeId::from_index(2);
+
+        // `prev` is a laid-out tree: `lay_out_flex` has overwritten the item's
+        // main size with the resolved used value.
+        let mut prev = leaf(2, Rect::new(0.0, 10.0, 100.0, 50.0));
+        prev.style = std::sync::Arc::clone(&cascade_style);
+        std::sync::Arc::make_mut(&mut prev.style).width = Some(crate::style::Length::Px(100.0));
+        let mut prev_root = block_with_children(1, Rect::new(0.0, 0.0, 800.0, 60.0), vec![prev]);
+        prev_root.style = std::sync::Arc::clone(&cascade_style);
+
+        // The freshly-cascaded tree holds the cascade cache's own allocation.
+        let mut fresh_child = leaf(2, Rect::ZERO);
+        fresh_child.style = std::sync::Arc::clone(&cascade_style);
+        let mut fresh = block_with_children(1, Rect::ZERO, vec![fresh_child]);
+        fresh.style = std::sync::Arc::clone(&cascade_style);
+        mark_subtree_dirty(&mut fresh);
+
+        let mut cascade = std::collections::HashMap::new();
+        cascade.insert(node, std::sync::Arc::clone(&cascade_style));
+        cascade.insert(NodeId::from_index(1), std::sync::Arc::clone(&cascade_style));
+
+        let all_clean = graft_geometry_with_cascade(&mut fresh, &prev_root, Some(&cascade));
+
+        assert!(all_clean, "a used-value-only difference must not defeat the graft");
+        assert!(fresh.children[0].dirty.is_clean());
+        assert_eq!(
+            fresh.children[0].rect,
+            Rect::new(0.0, 10.0, 100.0, 50.0),
+            "the reused box must carry prev's geometry",
+        );
+        assert_eq!(
+            fresh.children[0].style.width, None,
+            "a reused box keeps its own cascade style — inheriting prev's used values would \
+             pin layout output into the live tree and mis-size the box if it later goes dirty",
+        );
+    }
+
+    /// The counterpart: when the cascade produced a *different* style allocation
+    /// for the node, the box must still be rejected. Without this the S13 fix
+    /// would degrade into "styles never matter", which no differential test on
+    /// geometry alone would catch on an unchanged fixture.
+    #[test]
+    fn graft_still_rejects_a_box_whose_cascade_style_changed() {
+        let prev_cascade_style = std::sync::Arc::new(ComputedStyle::root());
+        let node = NodeId::from_index(2);
+
+        let mut prev = leaf(2, Rect::new(0.0, 10.0, 100.0, 50.0));
+        prev.style = std::sync::Arc::clone(&prev_cascade_style);
+
+        // A genuinely re-cascaded child: a different allocation *and* a
+        // different value.
+        let mut fresh_child = leaf(2, Rect::ZERO);
+        std::sync::Arc::make_mut(&mut fresh_child.style).font_size = 24.0;
+        let mut fresh = block_with_children(1, Rect::ZERO, vec![fresh_child]);
+        mark_subtree_dirty(&mut fresh);
+        let prev_root = block_with_children(1, Rect::new(0.0, 0.0, 800.0, 60.0), vec![prev]);
+
+        let mut cascade = std::collections::HashMap::new();
+        cascade.insert(node, prev_cascade_style);
+
+        let all_clean = graft_geometry_with_cascade(&mut fresh, &prev_root, Some(&cascade));
+
+        assert!(!all_clean, "a real cascade change must still be rejected");
+        assert!(fresh.children[0].dirty.is_dirty(), "the re-cascaded box must be re-laid-out");
+    }
+
+    /// The census counters must partition the visited set — every box lands in
+    /// exactly one bucket. They are the S13 gates' only instrument, and a
+    /// double-count or a gap would make every number derived from them wrong.
+    #[test]
+    fn graft_stats_partition_the_visited_set() {
+        let prev_root = block_with_children(
+            1,
+            Rect::new(0.0, 0.0, 800.0, 60.0),
+            vec![leaf(2, Rect::new(0.0, 10.0, 100.0, 50.0)), leaf(3, Rect::new(0.0, 60.0, 100.0, 20.0))],
+        );
+        let mut fresh_changed = leaf(2, Rect::ZERO);
+        std::sync::Arc::make_mut(&mut fresh_changed.style).font_size = 24.0;
+        let mut fresh =
+            block_with_children(1, Rect::ZERO, vec![fresh_changed, leaf(3, Rect::ZERO)]);
+        mark_subtree_dirty(&mut fresh);
+
+        let _ = take_graft_stats();
+        graft_geometry(&mut fresh, &prev_root);
+        let s = take_graft_stats();
+
+        assert_eq!(s.visited, 3, "root + two children");
+        assert_eq!(
+            s.reused_clean
+                + s.reject_identity
+                + s.reject_style
+                + s.reject_child_count
+                + s.reject_descendant,
+            s.visited,
+            "every visited box must be counted in exactly one bucket: {s:?}",
+        );
+        assert_eq!(s.reject_style, 1, "the re-cascaded child");
+        assert_eq!(s.reject_descendant, 1, "its parent");
+        assert_eq!(s.reused_clean, 1, "the untouched sibling");
+        assert_eq!(take_graft_stats(), GraftStats::default(), "taking must reset");
     }
 
     #[test]
