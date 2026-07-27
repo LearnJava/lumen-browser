@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-27",
  "counts": {
-  "open": 54,
+  "open": 56,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 326,
+ "total_bugs": 328,
  "phases": [
   {
    "id": "P0",
@@ -2133,9 +2133,14 @@
       {
        "id": "WPT-VENDOR-encoding",
        "title": "WPT: вендорить + прогнать категорию `encoding`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-27: вендорена (`tests/wpt/encoding/`, 341 файл: 54 корневых теста/хелпера, `resources/` 21, `streams/` 16, `legacy-mb-japanese/` euc-jp/iso-2022-jp/shift_jis, `legacy-mb-korean/euc-kr`, `legacy-mb-schinese/` gb18030/gbk, `legacy-mb-tchinese/big5`, `META.yml`/`WEB_FEATURES.yml`), в скоупе ⬜ (Encoding Standard — `TextEncoder`/`TextDecoder`, `TextEncoderStream`/`TextDecoderStream`, legacy-многобайтовые декодеры/энкодеры). Внекатегорийные хелперы `/common/subset-tests.js`, `/common/sab.js`, `/resources/WebIDLParser.js`+`idlharness.js` не довендорены (та же методология, что `FileAPI`/`ai`). `run_report.py --all --root encoding --recursive` — самый длинный прогон бэклога, **3 ч 36 мин**: 194 отобранных файла раскрылись в **1262 id** (93 файла несут `<meta name=variant>` → 1193 `?N-M`-варианта), **36/1262 harness OK, 146/2274 сабтестов**. Категория делится надвое: (а) блок `legacy-mb-*` — 1204 id, 1197 TIMEOUT на единой причине `subsetTest is not defined` (невендоренный `/common/subset-tests.js`), это survey-gap, а не дефект движка, но именно он съел ~3 из 3.6 часов; там же виден BUG-346 (404 на собственные `../../resources/*.js`). (б) корневой блок — 58 id, 30 harness OK — настоящий срез Encoding API, из него два новых бага: BUG-356 (`<a>`/`<link>` не рефлектят `href` вовсе, URL-декомпозиционные IDL-атрибуты отсутствуют на любом элементе — 451 сабтест в 5 файлах, крупнейшая причина среди исполнившихся) и BUG-357 (`TextDecoder` — UTF-8-заглушка: нет таблицы label→encoding, конструктор не бросает `RangeError`, `{fatal:true}` не бросает, `decode()` игнорирует `this.encoding`, BOM не срезается, `TextEncoder.encodeInto` отсутствует). Оба подтверждены вне WPT `--dump-layout`-пробами. Ещё 144 сабтеста падают на `createBuffer is not defined` (невендоренный `/common/sab.js`). Полностью прошёл один файл — `textencoder-constructor-non-utf.any.html` (79/79)",
+       "bugs": [
+        "BUG-356",
+        "BUG-357",
+        "BUG-346"
+       ]
       },
       {
        "id": "WPT-VENDOR-encoding-detection",
@@ -6292,6 +6297,20 @@
    "status": "open",
    "title": "На инкрементальном пути рестайла (`layout_mutation_incremental_restyle` — `relayout_chrome_host`/`try_relayout_raf_incremental`) взаимодействие, меняющее геомет…",
    "component": "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-356": {
+   "status": "open",
+   "title": "`<a>`/`<link>` не рефлектят `href` вовсе: чтение `href` у распарсенного живого якоря даёт `undefined`, присваивание `a.href = …` заводит обычное JS-свойство и н…",
+   "component": "js (`crates/js/src/dom.rs:4554-4571` — генерируемые пустые HTML*Element-интерфейсы, включая `HTMLAnchorElement`; `dom.rs:5499` `_lumen_make_element`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-357": {
+   "status": "open",
+   "title": "`TextDecoder` — заглушка «только UTF-8», label обрабатывается как непрозрачная строка. Шесть отклонений от Encoding Standard: (1) нет таблицы label→encoding — `…",
+   "component": "js (`crates/js/src/dom.rs:9189-9291` — чисто-JS пара `TextEncoder`/`TextDecoder`; `dom.rs:8734-8752` `TextDecoderStream`, оборачивающий тот же объект)",
    "date": null,
    "debtor": false
   }
