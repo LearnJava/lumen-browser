@@ -30,7 +30,7 @@ use lumen_core::geom::Size;
 use lumen_core::ColorSpace;
 use lumen_css_parser::{
     parse_inline_style, AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector,
-    Declaration, DirArg, FunctionRule, MediaContext, PropertyRule, PseudoClass, PseudoElementKind, SimpleSelector, Specificity,
+    Declaration, DirArg, FunctionRule, MediaContext, PropertyRule, PseudoClass, PseudoElementKind, Rule, SimpleSelector, Specificity,
     Stylesheet, SUPPORTED_PROPERTIES,
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
@@ -62,6 +62,34 @@ struct CascadeIndex {
     /// `compute_style`'s matching phase on a 3000-rule real-world sheet).
     active_media: Vec<bool>,
     active_supports: Vec<bool>,
+    /// BUG-341 S10 — whether the sheet contains *any* rule whose subject is a
+    /// `::-webkit-scrollbar*` pseudo-element. `compute_style` translates those
+    /// onto `scrollbar-width`/`scrollbar-color` (CC-CSS-1) by running three
+    /// extra pseudo-element cascades on **every** element; on a sheet with no
+    /// such rule — every page that is not Lumen's own chrome — all three were
+    /// pure waste. Node-independent, so it is decided once per sheet here.
+    has_webkit_scrollbar_rules: bool,
+    /// BUG-341 S10 — whether every `::-webkit-scrollbar*` rule in the sheet
+    /// selects *independently of which element is being styled*: a bare
+    /// `::-webkit-scrollbar` (optionally `*::-webkit-scrollbar`) with no
+    /// combinator, no class/id/type/attribute/pseudo-class constraint, and no
+    /// `attr()` in its declarations. Lumen's own chrome is written exactly that
+    /// way. When it holds, two elements with the same pseudo-inheritance base
+    /// necessarily compute the same scrollbar values — which is what lets
+    /// `apply_webkit_scrollbar_pseudos` reuse the inherited ones instead of
+    /// re-running three cascades per element.
+    webkit_scrollbar_rules_node_independent: bool,
+    /// BUG-341 S10 — whether any declaration in the sheet mentions `quote`
+    /// (`content: open-quote`, `quotes: …`). `counters::walk` probes
+    /// `::before`/`::after` on every node solely to keep the CSS Generated
+    /// Content L3 §3.2 quote-nesting counter continuous; with no quote
+    /// anywhere in the sheet that probe cannot produce a depth, so it is
+    /// skipped. Deliberately a substring test over raw declaration values: it
+    /// over-approximates (a `--quote-color` custom property arms it) and must,
+    /// because a `var()` can smuggle `open-quote` in from anywhere. `attr()`
+    /// arms it too: that value comes from the DOM, which a sheet-level
+    /// predicate cannot see.
+    has_quote_content: bool,
 }
 
 impl CascadeIndex {
@@ -73,6 +101,9 @@ impl CascadeIndex {
             supports: Vec::new(),
             active_media: Vec::new(),
             active_supports: Vec::new(),
+            has_webkit_scrollbar_rules: false,
+            webkit_scrollbar_rules_node_independent: false,
+            has_quote_content: false,
         }
     }
 
@@ -86,8 +117,72 @@ impl CascadeIndex {
             active_supports: sheet.supports_rules.iter()
                 .map(|s| s.condition.evaluate(SUPPORTED_PROPERTIES))
                 .collect(),
+            has_webkit_scrollbar_rules: all_rules(sheet)
+                .any(|r| r.selectors.iter().any(selector_targets_webkit_scrollbar)),
+            webkit_scrollbar_rules_node_independent: all_rules(sheet)
+                .filter(|r| r.selectors.iter().any(selector_targets_webkit_scrollbar))
+                .all(|r| {
+                    r.selectors.iter().all(webkit_scrollbar_selector_is_node_independent)
+                        && r.declarations.iter().all(|d| !d.value.contains("attr("))
+                }),
+            has_quote_content: all_rules(sheet).any(|r| {
+                r.declarations
+                    .iter()
+                    .any(|d| value_mentions_quote(&d.value) || d.value.contains("attr("))
+            }),
         }
     }
+}
+
+/// Every `Rule` in `sheet`, whichever container it sits in (top level,
+/// `@media`, `@supports`, `@layer`, `@scope`). Used for the node-independent
+/// sheet-wide predicates on [`CascadeIndex`]; a rule's container decides
+/// *whether* it applies, which is irrelevant to "does this sheet mention X at
+/// all" — over-approximating there only costs the fast path, never correctness.
+fn all_rules(sheet: &Stylesheet) -> impl Iterator<Item = &Rule> {
+    sheet
+        .rules
+        .iter()
+        .chain(sheet.media_rules.iter().flat_map(|m| m.rules.iter()))
+        .chain(sheet.supports_rules.iter().flat_map(|s| s.rules.iter()))
+        .chain(sheet.layers.iter().flat_map(|l| l.rules.iter()))
+        .chain(sheet.scope_rules.iter().flat_map(|s| s.rules.iter()))
+}
+
+/// Whether `selector`'s subject compound carries a `::-webkit-scrollbar*`
+/// pseudo-element (`::-webkit-scrollbar`, `-thumb`, `-track`), i.e. whether
+/// `apply_webkit_scrollbar_pseudos` could ever find something to apply.
+fn selector_targets_webkit_scrollbar(selector: &ComplexSelector) -> bool {
+    let subject = selector.tail.last().map_or(&selector.head, |(_, c)| c);
+    subject.parts.iter().any(|p| match p {
+        SimpleSelector::PseudoElement(PseudoElementKind::Unknown(name)) => {
+            name.to_ascii_lowercase().starts_with("-webkit-scrollbar")
+        }
+        _ => false,
+    })
+}
+
+/// Whether `selector` picks its subject without looking at the element —
+/// see [`CascadeIndex::webkit_scrollbar_rules_node_independent`]. Only called
+/// for selectors that already target a `::-webkit-scrollbar*` pseudo-element.
+fn webkit_scrollbar_selector_is_node_independent(selector: &ComplexSelector) -> bool {
+    // A combinator means an ancestor/sibling has to match — element-dependent.
+    selector.tail.is_empty()
+        && selector.head.parts.iter().all(|p| {
+            matches!(
+                p,
+                SimpleSelector::Universal | SimpleSelector::PseudoElement(_)
+            )
+        })
+}
+
+/// Case-insensitive `value.contains("quote")` without allocating — see
+/// [`CascadeIndex::has_quote_content`].
+fn value_mentions_quote(value: &str) -> bool {
+    value
+        .as_bytes()
+        .windows(5)
+        .any(|w| w.eq_ignore_ascii_case(b"quote"))
 }
 
 /// Perf cache key fields beyond (sheet pointer, rules count) that affect
@@ -137,6 +232,52 @@ thread_local! {
         RefCell::new((0, 0, CascadeMediaKey::NONE, CascadeIndex::empty()));
 }
 
+#[cfg(test)]
+thread_local! {
+    /// BUG-341 S10 test instrumentation — counts elements for which
+    /// `apply_webkit_scrollbar_pseudos` actually ran its three pseudo-element
+    /// cascades (i.e. took neither the "sheet has no such rule" nor the
+    /// "same inheritance base as the parent" fast path).
+    ///
+    /// Gated by count rather than by output on purpose: the values these
+    /// cascades produce are identical either way — that is the whole point of
+    /// the fast path — so a regression that silently reinstates the per-element
+    /// work is invisible to every differential test and shows up only as
+    /// wall-clock, where machine noise hides it (BUG-341 "S8").
+    static SCROLLBAR_PSEUDO_CASCADES: Cell<u32> = const { Cell::new(0) };
+
+    /// BUG-341 S10 test instrumentation — counts [`pseudo_inherited_style`]
+    /// calls, i.e. how often a pseudo-element's 302-field starting style was
+    /// actually built. Same reasoning as `SCROLLBAR_PSEUDO_CASCADES`: building
+    /// it and then discarding it produces exactly the same output.
+    static PSEUDO_BASE_BUILDS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Resets the BUG-341 S10 pseudo-base counter for the current thread.
+#[cfg(test)]
+pub(crate) fn reset_pseudo_base_builds() {
+    PSEUDO_BASE_BUILDS.with(|c| c.set(0));
+}
+
+/// Pseudo-element starting styles built since [`reset_pseudo_base_builds`].
+#[cfg(test)]
+pub(crate) fn pseudo_base_builds() -> u32 {
+    PSEUDO_BASE_BUILDS.with(|c| c.get())
+}
+
+/// Resets the BUG-341 S10 scrollbar-cascade counter for the current thread.
+#[cfg(test)]
+fn reset_scrollbar_pseudo_cascades() {
+    SCROLLBAR_PSEUDO_CASCADES.with(|c| c.set(0));
+}
+
+/// Elements that ran the full `::-webkit-scrollbar*` cascade since the last
+/// [`reset_scrollbar_pseudo_cascades`].
+#[cfg(test)]
+fn scrollbar_pseudo_cascades() -> u32 {
+    SCROLLBAR_PSEUDO_CASCADES.with(|c| c.get())
+}
+
 /// Invalidate the thread-local rule-index cache.
 ///
 /// Must be called at the start of every layout pass (`layout_measured_hyp`).
@@ -146,6 +287,39 @@ pub fn invalidate_rule_idx_cache() {
     RULE_IDX_CACHE.with(|cell| {
         cell.borrow_mut().0 = 0; // pointer 0 never matches a real sheet
     });
+}
+
+/// Refreshes the thread-local [`CascadeIndex`] for `sheet` if the cache key
+/// changed, then hands it to `f`.
+///
+/// The rebuild-then-borrow dance predates this helper and is spelled out inline
+/// at every candidate lookup in `compute_style`; new call sites should use this
+/// instead. Do not call anything that touches `RULE_IDX_CACHE` from inside `f` —
+/// the borrow is live for its duration.
+fn with_cascade_index<R>(
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+    f: impl FnOnce(&CascadeIndex) -> R,
+) -> R {
+    let sheet_ptr = sheet as *const Stylesheet as usize;
+    let sheet_rules_len = sheet.rules.len();
+    let media_key = CascadeMediaKey::current(viewport, dark_mode);
+    RULE_IDX_CACHE.with(|cell| {
+        let mut cached = cell.borrow_mut();
+        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len || cached.2 != media_key {
+            let media_ctx = media_context_from_viewport(viewport, dark_mode);
+            *cached = (sheet_ptr, sheet_rules_len, media_key, CascadeIndex::build(sheet, &media_ctx));
+        }
+    });
+    RULE_IDX_CACHE.with(|cell| f(&cell.borrow().3))
+}
+
+/// CSS Generated Content L3 §3.2 — whether `sheet` can produce quote content
+/// at all, i.e. whether the `::before`/`::after` probe in `counters::walk` can
+/// yield a quote depth. See [`CascadeIndex::has_quote_content`].
+pub fn sheet_has_quote_content(sheet: &Stylesheet, viewport: Size, dark_mode: bool) -> bool {
+    with_cascade_index(sheet, viewport, dark_mode, |idx| idx.has_quote_content)
 }
 
 thread_local! {
@@ -6240,6 +6414,12 @@ pub fn compute_style(
     viewport: Size,
     dark_mode: bool,
 ) -> ComputedStyle {
+    // BUG-341 S10: permanent per-phase instrumentation. Same-named sibling
+    // scopes are merged by `lumen_core::profile`, so a `LUMEN_PROFILE_TREE=1`
+    // run prints one aggregated line per phase with a `×N` call count instead
+    // of one line per node. Costs a cached bool check per phase when disabled.
+    let _prof = lumen_core::profile::scope_detail("compute_style");
+    let prof_init = lumen_core::profile::scope_detail("cs_init");
     let mut style = ComputedStyle {
         display: default_display(doc, node),
         // Наследуемые свойства (CSS inherited properties).
@@ -6634,6 +6814,8 @@ pub fn compute_style(
         apply_property_initial_values(&mut style.custom_props, &registry);
         return style;
     }
+    drop(prof_init);
+    let prof_ua = lumen_core::profile::scope_detail("cs_ua_hints");
 
     // UA stylesheet: семантические элементы получают italic / bold по
     // умолчанию, CSS-декларации ниже могут это переопределить.
@@ -6742,6 +6924,8 @@ pub fn compute_style(
     // (нормального или !important) inline всегда побеждает любой селектор —
     // это «Element-Attached Styles» тир в Cascade L4 §8.1, идущий после
     // Layer/Specificity/Order, но до Importance-инверсии.
+    drop(prof_ua);
+    let prof_match = lumen_core::profile::scope_detail("cs_match");
     let inline_decls: Vec<Declaration> = doc
         .get(node)
         .get_attr("style")
@@ -7062,6 +7246,8 @@ pub fn compute_style(
     matched.sort_by_key(|&(imp, inline, lp, spec, rule_idx, decl_idx, _)| {
         (imp, inline, lp, spec, rule_idx, decl_idx)
     });
+    drop(prof_match);
+    let prof_revert = lumen_core::profile::scope_detail("cs_revert_prepass");
 
     // CSS Cascade L5 §6.4.6 — `revert-layer`: a declaration whose value is
     // `revert-layer` rolls the cascaded value back to what it would be if all
@@ -7078,7 +7264,16 @@ pub fn compute_style(
     // declaration's own layer, so it cannot be applied per-declaration like
     // `inherit`/`initial`. Shorthand↔longhand reverts across layers are a known
     // limitation (grouping is by exact property name).
-    loop {
+    //
+    // BUG-341 S10: the loop below allocates a lowercased `String` key per
+    // matched declaration plus a `HashMap` just to discover, on essentially
+    // every element of every real page, that nothing declares `revert-layer`.
+    // One allocation-free scan first (measured: 1.4 ms per chrome layout pass,
+    // ~7% of the cascade stage).
+    while matched
+        .iter()
+        .any(|&(_, _, _, _, _, _, decl)| decl.value.trim().eq_ignore_ascii_case("revert-layer"))
+    {
         use std::collections::HashMap;
         // Winner per property = last occurrence in the cascade-sorted vec.
         // (lp, important, is_revert_layer)
@@ -7133,6 +7328,8 @@ pub fn compute_style(
     );
     let ua_baseline_storage: Option<ComputedStyle> = needs_ua_baseline.then(|| style.clone());
     let ua_baseline_ref: &ComputedStyle = ua_baseline_storage.as_ref().unwrap_or(inherited);
+    drop(prof_revert);
+    let prof_apply = lumen_core::profile::scope_detail("cs_apply");
 
     // Pre-pass: применяем font-size раньше, потому что em/% других свойств
     // считаются относительно computed font-size этого же элемента, а em для
@@ -7274,6 +7471,8 @@ pub fn compute_style(
     // CssColor-typed fields (border-color, background-color, etc.) now that
     // style.color_scheme is final. The `color` field (Color, not CssColor) was
     // already resolved inline in the `"color"` branch of apply_declaration.
+    drop(prof_apply);
+    let _prof_post = lumen_core::profile::scope_detail("cs_post");
     resolve_system_colors_in_style(&mut style, dark_mode);
 
     // CSS Color Adjustment L1 §3 — Forced Colors Mode: when the user preference
@@ -7313,7 +7512,7 @@ pub fn compute_style(
         _ => None,
     };
 
-    apply_webkit_scrollbar_pseudos(doc, node, sheet, &mut style, viewport, dark_mode);
+    apply_webkit_scrollbar_pseudos(doc, node, sheet, &mut style, inherited, viewport, dark_mode);
 
     style
 }
@@ -7327,14 +7526,57 @@ pub fn compute_style(
 /// `-webkit-font-smoothing` needs no handling here: it falls through the ordinary
 /// `apply_declaration` catch-all (parsed, then silently ignored) like any other
 /// unrecognized property.
+///
+/// `inherited` is the originating element's parent style, used only by the
+/// BUG-341 S10 fast paths below — both `scrollbar-width` and `scrollbar-color`
+/// are inherited properties, so `style` already carries the parent's result
+/// when this is called.
 fn apply_webkit_scrollbar_pseudos(
     doc: &Document,
     node: NodeId,
     sheet: &Stylesheet,
     style: &mut ComputedStyle,
+    inherited: &ComputedStyle,
     viewport: Size,
     dark_mode: bool,
 ) {
+    // BUG-341 S10: three full pseudo-element cascades per element — 55% of
+    // `compute_style` on Lumen's own chrome, and on every other sheet not one of
+    // them can match. Both facts are node-independent and decided once per sheet.
+    let (any_rules, node_independent) = with_cascade_index(sheet, viewport, dark_mode, |idx| {
+        (idx.has_webkit_scrollbar_rules, idx.webkit_scrollbar_rules_node_independent)
+    });
+    if !any_rules {
+        return;
+    }
+    // Fast path: the rules select the same way for every element, so the three
+    // cascades are a pure function of the pseudo-inheritance base. When this
+    // element's base is identical to its parent's, the results are identical
+    // too — and the parent's results are exactly what `scrollbar-width` /
+    // `scrollbar-color` inheritance has already written into `style`.
+    //
+    // Comparing the *constructed bases* rather than a hand-listed set of
+    // fields is deliberate: `pseudo_inherited_style` is the single definition
+    // of what a pseudo-element inherits, so a property added to it later is
+    // covered here automatically instead of silently weakening the check.
+    //
+    // The parent must be a real element: the root element's `inherited` is a
+    // synthetic `ComputedStyle::root()` that never went through this function,
+    // so its `scrollbar-width`/`scrollbar-color` are initial values, not a
+    // result to reuse. Reuse then chains inductively down the tree.
+    let parent_is_element = doc
+        .get(node)
+        .parent
+        .is_some_and(|p| matches!(doc.get(p).data, NodeData::Element { .. }));
+    if node_independent
+        && parent_is_element
+        && pseudo_inherited_style(style) == pseudo_inherited_style(inherited)
+    {
+        return;
+    }
+    #[cfg(test)]
+    SCROLLBAR_PSEUDO_CASCADES.with(|c| c.set(c.get() + 1));
+    let _prof = lumen_core::profile::scope_detail("cs_scrollbar_pseudos");
     // `scrollbar-width` (CSS Scrollbars 1 §2) has no numeric keyword — bucket the
     // pixel width into the closest of the two sized keywords. 9px is the midpoint
     // between `thin`'s 6px and `auto`'s 12px used-width (`display_list.rs`), and
@@ -7711,27 +7953,22 @@ fn marker_property_applies(prop: &str) -> bool {
         )
 }
 
-/// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
+/// Builds the starting `ComputedStyle` for a pseudo-element of `parent`: every
+/// field at its initial value (CSS Pseudo-elements L4 §4 makes `display`
+/// `inline`), then every inherited property copied down from the originating
+/// element.
 ///
-/// `pseudo` — "before" или "after" (без "::"). `dark_mode` forwarded to
-/// `@media (prefers-color-scheme: dark)` matching.
-///
-/// Возвращает `None` если:
-/// - нет CSS-правил для данного псевдоэлемента на этом узле, или
-/// - вычисленный `content` равен `none` / `normal`.
-pub fn compute_pseudo_element_style(
-    doc: &Document,
-    node: NodeId,
-    pseudo: &str,
-    sheet: &Stylesheet,
-    parent: &ComputedStyle,
-    viewport: Size,
-    dark_mode: bool,
-) -> Option<ComputedStyle> {
-    if !matches!(doc.get(node).data, NodeData::Element { .. }) {
-        return None;
-    }
-
+/// BUG-341 S10: extracted from [`compute_pseudo_element_style`] so it can run
+/// *after* the cascade match rather than before it. It costs a 302-field
+/// literal plus ~50 field clones, and the overwhelmingly common outcome — no
+/// rule matches this element for this pseudo-element — threw all of it away.
+/// The profile that found it: `precompute_counters` probes `::before`/`::after`
+/// on *every* node to keep `quotes` nesting continuous (1656 calls per chrome
+/// layout pass), and `apply_webkit_scrollbar_pseudos` adds three more per
+/// element.
+fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
+    #[cfg(test)]
+    PSEUDO_BASE_BUILDS.with(|c| c.set(c.get() + 1));
     // Pseudo-elements inherit from their originating element.
     // Start from root() (all fields at initial values) then override inherited properties.
     // CSS Pseudo-elements L4 §4: default display = inline.
@@ -7806,6 +8043,30 @@ pub fn compute_pseudo_element_style(
     style.text_wrap_style = parent.text_wrap_style;
     style.interpolate_size = parent.interpolate_size;
     style.quotes = parent.quotes.clone();
+    style
+}
+
+/// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
+///
+/// `pseudo` — "before" или "after" (без "::"). `dark_mode` forwarded to
+/// `@media (prefers-color-scheme: dark)` matching.
+///
+/// Возвращает `None` если:
+/// - нет CSS-правил для данного псевдоэлемента на этом узле, или
+/// - вычисленный `content` равен `none` / `normal`.
+pub fn compute_pseudo_element_style(
+    doc: &Document,
+    node: NodeId,
+    pseudo: &str,
+    sheet: &Stylesheet,
+    parent: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+) -> Option<ComputedStyle> {
+    if !matches!(doc.get(node).data, NodeData::Element { .. }) {
+        return None;
+    }
+    let _prof = lumen_core::profile::scope_detail("pseudo_style");
 
     // Собираем matching declarations из всех правил.
     //
@@ -7815,6 +8076,10 @@ pub fn compute_pseudo_element_style(
     // This function runs for *every* element for both "before" and "after" —
     // unlike `compute_style`, it was never indexed at all, making it one of the
     // largest un-indexed cascade costs on stylesheets with many `@media` rules.
+    //
+    // BUG-341 S10: matching runs *before* `pseudo_inherited_style` — see that
+    // function's doc comment. Nothing here reads the pseudo-element's own style.
+    let prof_match = lumen_core::profile::scope_detail("ps_match");
     let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
     let node_data = doc.get(node);
     let node_tag = node_data.element_name().map_or("", |q| q.local.as_str());
@@ -7921,10 +8186,17 @@ pub fn compute_pseudo_element_style(
         // CSS Lists L3 §2.1: ::marker always generates a marker box from list-style-type
         // without any explicit CSS rule. Other pseudo-elements require a matching declaration.
         if pseudo.eq_ignore_ascii_case("marker") {
-            return Some(style);
+            let _prof_init = lumen_core::profile::scope_detail("ps_init");
+            return Some(pseudo_inherited_style(parent));
         }
         return None;
     }
+    drop(prof_match);
+    let mut style = {
+        let _prof_init = lumen_core::profile::scope_detail("ps_init");
+        pseudo_inherited_style(parent)
+    };
+    let _prof_apply = lumen_core::profile::scope_detail("ps_apply");
 
     matched.sort_by_key(|&(imp, spec, rule_idx, decl_idx, _)| (imp, spec, rule_idx, decl_idx));
 
@@ -23696,6 +23968,143 @@ mod tests {
     // slow. That is the exact failure mode S8 uncovered in `graft_geometry`
     // (a reuse mechanism that reused nothing passed every differential test).
     // So the sharing itself has to be asserted, by pointer.
+
+    // ── BUG-341 S10: per-node pseudo-element cascades ────────────────────
+    //
+    // The profile of the *incremental* path (not the full-layout profile in
+    // the brief's §1) put 55% of `compute_style` in the three
+    // `::-webkit-scrollbar*` cascades run for every element, and most of the
+    // rest of `precompute_counters` in the `::before`/`::after` probe run for
+    // every node — including nodes whose style was reused wholesale. Neither
+    // shows up in any differential test, because doing the work and throwing
+    // the result away produces identical output. Hence counter gates.
+
+    /// Elements in `html`, each with its own computed style, cascaded in
+    /// document order so parent styles are the real inherited ones.
+    fn cascade_all(html: &str, css: &str) -> Vec<ComputedStyle> {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = Size::new(800.0, 600.0);
+        invalidate_rule_idx_cache();
+        let mut out = Vec::new();
+        let mut stack = vec![(doc.root(), ComputedStyle::root())];
+        while let Some((id, inherited)) = stack.pop() {
+            let style = compute_style(&doc, id, &sheet, &inherited, vp, false);
+            for &child in doc.get(id).children.iter().rev() {
+                stack.push((child, style.clone()));
+            }
+            if matches!(doc.get(id).data, NodeData::Element { .. }) {
+                out.push(style);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn webkit_scrollbar_cascade_skipped_when_sheet_declares_none() {
+        reset_scrollbar_pseudo_cascades();
+        let styles = cascade_all(
+            "<div><p>a</p><p>b</p></div>",
+            "div { color: red; } p { margin: 1px; }",
+        );
+        assert!(styles.len() >= 4, "html/body/div/p… all cascaded");
+        assert_eq!(
+            scrollbar_pseudo_cascades(),
+            0,
+            "a sheet without a `::-webkit-scrollbar*` rule must not run the \
+             pseudo-element cascade even once"
+        );
+    }
+
+    #[test]
+    fn webkit_scrollbar_cascade_reused_from_parent_when_base_matches() {
+        reset_scrollbar_pseudo_cascades();
+        let styles = cascade_all(
+            "<div><p>a</p><p>b</p><span>c</span></div>",
+            "::-webkit-scrollbar { width: 9px; }",
+        );
+        // Every element still ends up with the rule's effect — the fast path
+        // is a reuse, not a skip.
+        assert!(
+            styles.iter().all(|s| s.scrollbar_width == ScrollbarWidth::Thin),
+            "bare `::-webkit-scrollbar` must still reach every element"
+        );
+        // Only the elements whose pseudo-inheritance base differs from their
+        // parent's pay for it — here just the root, since nothing in the sheet
+        // changes an inherited property.
+        assert_eq!(
+            scrollbar_pseudo_cascades(),
+            1,
+            "node-independent scrollbar rules must be cascaded once, then \
+             reused through `scrollbar-width`/`scrollbar-color` inheritance"
+        );
+    }
+
+    #[test]
+    fn webkit_scrollbar_cascade_not_reused_when_rules_are_node_dependent() {
+        reset_scrollbar_pseudo_cascades();
+        let styles = cascade_all(
+            "<div class='sb'><p>a</p></div>",
+            ".sb::-webkit-scrollbar { width: 0; }",
+        );
+        assert_eq!(
+            scrollbar_pseudo_cascades() as usize,
+            styles.len(),
+            "a class-qualified scrollbar rule can match one element and not \
+             another, so no element may reuse its parent's result"
+        );
+        assert!(
+            styles.iter().any(|s| s.scrollbar_width == ScrollbarWidth::None),
+            "`.sb::-webkit-scrollbar {{ width: 0 }}` must still apply"
+        );
+    }
+
+    #[test]
+    fn pseudo_base_not_built_when_no_rule_matches() {
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("p::after { color: red; }");
+        let vp = Size::new(800.0, 600.0);
+        invalidate_rule_idx_cache();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let parent = ComputedStyle::root();
+
+        reset_pseudo_base_builds();
+        assert!(
+            compute_pseudo_element_style(&doc, div, "before", &sheet, &parent, vp, false).is_none()
+        );
+        assert_eq!(
+            pseudo_base_builds(),
+            0,
+            "no `div::before` rule matches — the 302-field starting style must \
+             not be built just to be thrown away"
+        );
+
+        let p = doc.get(div).children[0];
+        reset_pseudo_base_builds();
+        assert!(
+            compute_pseudo_element_style(&doc, p, "after", &sheet, &parent, vp, false).is_none(),
+            "`content` is absent, so ::after still generates nothing"
+        );
+        assert_eq!(pseudo_base_builds(), 1, "a matching rule does build one");
+    }
+
+    #[test]
+    fn sheet_quote_content_flag_tracks_declarations() {
+        let vp = Size::new(800.0, 600.0);
+        let plain = lumen_css_parser::parse("p::before { content: 'x'; }");
+        invalidate_rule_idx_cache();
+        assert!(!sheet_has_quote_content(&plain, vp, false));
+
+        let quoted = lumen_css_parser::parse("p::before { content: open-quote; }");
+        invalidate_rule_idx_cache();
+        assert!(sheet_has_quote_content(&quoted, vp, false));
+
+        // Over-approximating is the point: a `var()` can carry `open-quote` in
+        // from a custom property, so any mention anywhere arms the probe.
+        let indirect = lumen_css_parser::parse(":root { --q: open-quote; }");
+        invalidate_rule_idx_cache();
+        assert!(sheet_has_quote_content(&indirect, vp, false));
+    }
 
     #[test]
     fn custom_props_shared_with_parent_when_child_declares_none() {

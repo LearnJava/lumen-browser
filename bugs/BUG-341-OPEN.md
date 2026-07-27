@@ -1295,6 +1295,158 @@ families, transform lists, background layers, shadows), each cloned from the
 parent on every inherit. That — not another invalidation-narrowing slice — is
 the next thing to profile.
 
+## S10 — the per-node pseudo-element cascades
+
+S10 was planned as "the cost of building one `ComputedStyle`" — S9 left the
+cascade on top, and the struct is 302 fields with ~30 heap-owning ones cloned
+from the parent on every inherit. The brief's own rule (profile the path you
+change, BUG-341 "S8") was followed first, and it overturned the plan: building
+the style is **3%** of `compute_style`. More than half of it is pseudo-element
+cascades run per element for a feature almost nothing uses.
+
+### Profiling the profiler first
+
+Instrumenting `compute_style` per node made `build_box` report **288 ms**
+against a true ~5 ms. `lumen_core::profile`'s call tree is thread-local, so a
+scope opened on a rayon worker (`build_box` parallelises the per-child cascade)
+starts a *root* frame there and prints a whole tree per call — hundreds of trees
+per pass, with the stderr writes landing inside the stage being measured. Three
+changes made the utility usable at per-node granularity:
+
+* same-named sibling scopes merge, printing one line with a `×N` call count;
+* scopes on threads other than the first profiled one are ignored (their time
+  still shows up in the enclosing stage, where it belongs);
+* the per-node scopes sit behind `LUMEN_PROFILE_DETAIL=1`, so a plain
+  `LUMEN_PROFILE_TREE=1` stage run stays comparable with the numbers recorded
+  in the slices above.
+
+### What the incremental path actually spends (before S10)
+
+`layout_mutation_incremental_restyle`, dev-release, medians over 69 cycles.
+Detail rows come from a `LUMEN_PROFILE_DETAIL=1` run and carry their own
+overhead — read them as shares, not absolutes.
+
+| Stage | `CC12_HOVER` | `CC12_KEY` |
+|---|---:|---:|
+| **`precompute_counters`** | **28.2 ms (68%)** | 3.7 ms |
+| `lay_out` | 6.4 ms | 4.7 ms |
+| `build_box` | 5.5 ms | 3.8 ms |
+| `graft_geometry` | 1.4 ms | 0.7 ms |
+| whole pass | 41.5 ms | 14.3 ms |
+
+Inside `precompute_counters` on `CC12_HOVER` (828 nodes recomputed):
+
+| | ms | share of `compute_style` |
+|---|---:|---:|
+| `cs_post` → `::-webkit-scrollbar*` cascades | 11.95 | **55%** |
+| `cs_apply` (declarations) | 3.49 | 16% |
+| `cs_match` (selectors) | 2.77 | 13% |
+| `cs_revert_prepass` | 1.37 | 6% |
+| **`cs_init` (the 302-field literal + inherit clones)** | **0.66** | **3%** |
+| `cs_ua_hints` | 0.45 | 2% |
+| `quote_pseudos` (`::before`/`::after` probe, outside `compute_style`) | 3.65 | — |
+
+Two structural findings, neither visible in any differential test:
+
+1. **`apply_webkit_scrollbar_pseudos` ran three full pseudo-element cascades on
+   every element.** CC-CSS-1 translates `::-webkit-scrollbar`/`-thumb`/`-track`
+   onto `scrollbar-width`/`scrollbar-color`; `assets/chrome/chrome.html` writes
+   those rules *bare* (universal subject), so all three matched on all 828
+   nodes and were fully applied — to set two inherited fields.
+2. **`counters::walk` probed `::before`/`::after` on every node**, including
+   nodes whose style was reused wholesale, solely to keep the quote-nesting
+   counter continuous. On `CC12_KEY` — a dozen nodes recompute, 828 get probed —
+   that was **79% of the cascade stage**.
+
+### The slice
+
+* `compute_pseudo_element_style` matches **before** building the pseudo's
+  starting style (extracted as `pseudo_inherited_style`). The overwhelmingly
+  common outcome is "no rule matched", which used to build a 302-field style
+  and throw it away.
+* Sheet-level, node-independent facts precomputed once per sheet in
+  `CascadeIndex`: `has_webkit_scrollbar_rules` (false for every sheet that is
+  not Lumen's chrome → all three cascades skipped outright) and
+  `has_quote_content` (false for essentially every sheet → the `::before`/
+  `::after` probe skipped; deliberately over-approximating, since `var()` and
+  `attr()` can smuggle a quote in from anywhere).
+* When every `::-webkit-scrollbar*` rule selects node-independently (bare
+  selector, no combinator, no `attr()` in its declarations), an element whose
+  pseudo-inheritance base is identical to its parent's must compute identical
+  scrollbar values — and `scrollbar-width`/`scrollbar-color` are inherited, so
+  those values are already in the style. It reuses them instead of cascading.
+  The check compares two *constructed bases* rather than a hand-listed field
+  set, so a property added to `pseudo_inherited_style` later is covered
+  automatically instead of silently weakening it. The root element always
+  cascades: its `inherited` is a synthetic `ComputedStyle::root()` that never
+  went through this function, and reuse then chains inductively down the tree.
+* The `revert-layer` pre-pass allocated a lowercased `String` per matched
+  declaration plus a `HashMap` to discover, on every element of every real
+  page, that nothing declares `revert-layer`. One allocation-free scan gates it.
+
+### Gates: by count, not by output
+
+Doing this work and discarding the result produces byte-identical output — the
+same trap as `graft_geometry` in S8 — so the mechanism is asserted by counters:
+
+| Test | Asserts |
+|---|---|
+| `style::tests::webkit_scrollbar_cascade_skipped_when_sheet_declares_none` | zero pseudo cascades when no `::-webkit-scrollbar*` rule exists |
+| `style::tests::webkit_scrollbar_cascade_reused_from_parent_when_base_matches` | exactly **one** element cascades for a bare rule — and every element still ends up with the rule's effect |
+| `style::tests::webkit_scrollbar_cascade_not_reused_when_rules_are_node_dependent` | a class-qualified rule disables reuse for every element |
+| `style::tests::pseudo_base_not_built_when_no_rule_matches` | the starting style is not built when nothing matched (and is built when something does) |
+| `style::tests::sheet_quote_content_flag_tracks_declarations` | the quote flag tracks declarations, including the over-approximating `var()`/`attr()` cases |
+| `profile::tests::same_named_siblings_merge_with_a_call_count` | scope merging sums time and count recursively |
+
+`cargo test -p lumen-layout`: 3291 passed, 2 failed — `ch_approximated_as_half_em`
+and `ex_approximated_as_half_em`, the pre-existing BUG-339 flake documented in S5.
+
+### Measurement
+
+Interleaved A/B (main, S10, main, S10, main, S10), dev-release, comparing mins:
+
+| | main min | S10 min | main p50 | S10 p50 |
+|---|---:|---:|---:|---:|
+| `CC12_HOVER` | 40.1 / 48.6 / 45.3 | **37.7 / 36.1 / 36.2** | 63.1 / 55.0 / 53.8 | **45.9 / 42.9 / 42.7** |
+| `CC12_KEY` | 20.9 / 19.6 / 19.0 | **16.4 / 16.9 / 15.5** | 28.8 / 24.5 / 23.2 | **19.0 / 19.5 / 18.4** |
+
+≈20% on both scenarios. Per stage (`LUMEN_PROFILE_TREE=1`, medians):
+
+| | before | after |
+|---|---:|---:|
+| `precompute_counters` (HOVER) | 28.2 ms | **19.7 ms** |
+| `precompute_counters` (KEY) | 3.69 ms | **0.75 ms** |
+| `cs_scrollbar_pseudos` (HOVER, detail) | 11.95 ms / 828 elements | **5.76 ms / 356 elements** |
+| `cs_revert_prepass` (HOVER, detail) | 1.37 ms | **0.34 ms** |
+| `quote_pseudos` | 3.65 ms | **0 (skipped)** |
+
+### Where this leaves CC-12
+
+Still red. Budget 2 ms; `CC12_HOVER` is ~36-46 ms and `CC12_KEY` ~15-19 ms — a
+gap of ~8-20×, the same order as after S9: this slice bought ~20%, not an order
+of magnitude.
+
+The top item on `CC12_HOVER` is still the scrollbar translation: 356 of 828
+elements have a pseudo-inheritance base that differs from their parent's (chrome
+varies `font-size`/`color` a lot) and so still cascade, at 5.8 ms, plus ~2.4 ms
+for the base comparison itself. Two ways out, in increasing order of what they
+cost to decide:
+
+* **Cheap and exact:** memoise the parent's constructed base by pointer —
+  siblings rebuild the identical base today, which is most of that 2.4 ms.
+* **Big but semantic:** run the translation only for elements that can actually
+  have a scrollbar (`overflow` not `visible`, plus the root, `<body>` and text
+  controls). That is the 5.8 ms, and it is closer to WebKit, where
+  `::-webkit-scrollbar` styles the matched element's own scrollbar and does
+  *not* inherit — Lumen's inheritance of it is an artifact of translating onto
+  standard inherited properties. It is a behaviour change, so it needs an
+  explicit decision rather than being folded into a perf slice.
+
+Below that, `cs_apply` (3.7 ms) and `cs_match` (3.0 ms) are the next cascade
+items, and `lay_out` (5.3 ms) + `build_box` (3.6 ms) together now rival the
+cascade stage. `cs_init` — the premise S10 was planned on — remains 0.76 ms and
+is not worth a slice.
+
 ## Repro
 
 ```bash
