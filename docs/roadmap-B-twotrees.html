@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 63,
+  "open": 64,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 335,
+ "total_bugs": 336,
  "phases": [
   {
    "id": "P0",
@@ -2185,9 +2185,12 @@
       {
        "id": "WPT-VENDOR-eyedropper",
        "title": "WPT: вендорить + прогнать категорию `eyedropper`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). нишевый EyeDropper API"
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/eyedropper/`, 7 файлов: 2 корневых теста — `eye-dropper-abort-signal.tentative.https.html` и `idlharness.https.window.js`, `manual/` — 2 ручных демо `.tentative.html` + иконка `resources/eye_dropper_icon.svg`, `WEB_FEATURES.yml`, `LICENSE-WPT.md`; `META.yml` у категории нет), скоуп 🚫 (нишевый EyeDropper API, W3C Color WG). Самая маленькая категория бэклога: `run_report.py --all --root eyedropper --recursive` — **1 мин 36 с**, **0/2 harness OK, 0/0 сабтестов**, и оба id недоступны исполнителю: `eye-dropper-abort-signal` — SKIP (`Executor does not support testdriver.js`; тест обязан синтезировать клик через `test_driver.Actions`, потому что `open()` по спеке требует пользовательской активации), `idlharness.https.window.html` — TIMEOUT по тому же HTTPS-порт-гэпу (`invalid url: invalid port: \"None\"`), что WebCryptoAPI/ai/ambient-light/encrypted-media, до 404 на невендоренные WebIDLParser.js+idlharness.js дело даже не доходит. **Зафиксирован дефект собственного тулинга:** `run_report.py` напечатал «running 4 all vendored» против 2 реально отобранных манифестом — его `all_vendored_test_ids()` отсеивает ручные тесты только по подстроке `-manual` в имени файла, поэтому тесты, лежащие в каталоге `manual/` без суффикса, попадают в счётчик id (апстримовый манифест классифицирует оба как `support`). Тем же завышением затронуты уже вендоренные accname/core-aam/dpub-aam/editing — счётчики не переписывались задним числом, кандидат в DEVX. Прогон новых багов дать не мог, но проба `--dump-layout` вне WPT дала один: в отличие от остальных 🚫-категорий, EyeDropper в Lumen **реализован** (`crates/js/src/eye_dropper.rs`, шим ставится и на V8, и на rquickjs) — и сломан на 100%. BUG-365: `open()` всегда отклоняется `ReferenceError: _lumen_eye_dropper_open is not defined`, потому что нативная привязка не зарегистрирована как глобал, а `?.call?.()` от необъявленного идентификатора не защищает — опциональная цепочка коротит на `null`/`undefined`, но разрешение имени происходит раньше; документированный фолбэк «`#ffffff`, если привязки нет» и весь разбор ответа — мёртвый код. 6 юнит-тестов `eye_dropper::tests` при этом зелёные (прогнаны в сессии): проверяют `instanceof Promise` и вешают утверждения в `.then(...)`, который на отклонённом промисе не вызывается — набор проверяет форму API и ни одного его результата",
+       "bugs": [
+        "BUG-365"
+       ]
       },
       {
        "id": "WPT-VENDOR-fedcm",
@@ -6365,6 +6368,13 @@
    "status": "open",
    "title": "`new Worker(\"script.js\")` с внешним URL молча подставляет комментарий вместо тела скрипта (поддержаны только `data:`/`blob:lumen/`): скрипт не запрашивается по…",
    "component": "js (`crates/js/src/worker.rs:657-695` — конструктор `Worker`; тот же путь у `SharedWorker`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-365": {
+   "status": "open",
+   "title": "`EyeDropper.open()` всегда отклоняется с `ReferenceError: _lumen_eye_dropper_open is not defined` — нативная привязка не зарегистрирована как глобал ни на V8-,…",
+   "component": "js (`crates/js/src/eye_dropper.rs:58` — тело шима EyeDropper; установка — `crates/js/src/lib.rs:1187` и `crates/js/src/v8_runtime.rs:3893`)",
    "date": null,
    "debtor": false
   }
