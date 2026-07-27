@@ -2138,9 +2138,9 @@
       {
        "id": "WPT-VENDOR-entries-api",
        "title": "WPT: вендорить + прогнать категорию `entries-api`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/entries-api/`, 29 файлов: 14 `*-manual.html`, `idlharness.window.js`, `idlharness-manual.window.js`, `support.js`, `support/` — 8 файлов-фикстур для drag-and-drop, `META.yml`/`WEB_FEATURES.yml`/`README.md`, `LICENSE-WPT.md`), скоуп ⬜ (File and Directory Entries API — `FileSystemEntry`/`FileSystemFileEntry`/`FileSystemDirectoryEntry`/`FileSystemDirectoryReader`, `DataTransferItem.webkitGetAsEntry`, `<input webkitdirectory>`). Категория ручная по замыслу спеки (апстрим-README: тесты требуют перетаскивания файлов мышью), 15 из 16 тестовых файлов — `-manual` и отсекаются фильтром `run_report.py`, поэтому манифест отобрал ровно один id. Самый дешёвый профиль бэклога: ни одного `<meta name=variant>`, ни одного `.https.`-теста, внекатегорийные `src=` только уже вендоренные `testharness.js`+`testharnessreport.js` — `run_report.py --all --root entries-api --recursive` уложился в **1 мин 13 с**, **0/1 harness OK, 0/0 сабтестов**. Единственный id (`idlharness.window.html`) — TIMEOUT по известному survey-gap: невендоренные `/resources/WebIDLParser.js`+`/resources/idlharness.js` дают 404 → `idl_test is not defined`, как в `audio-session`/`background-sync`/`autoplay-policy-detection`. Проба `--dump-layout` вне WPT: сам Entries API не реализован — все пять интерфейсов `FileSystem*` `undefined`, `webkitdirectory`/`webkitEntries` нет на `<input>`, `webkitRelativePath` нет на `File.prototype`, `webkitGetAsEntry` нет на `DataTransferItem.prototype`; новых багов не заведено — падать было нечему, ни один тест не исполнился"
       },
       {
        "id": "WPT-VENDOR-event-timing",
