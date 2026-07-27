@@ -373,6 +373,28 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   `precompute_counters` 9-12 → 0.41 ms, `CC12_HOVER` ≈3.7× faster by min,
   `CC12_KEY` unchanged (its root-set was already empty). Surfaced BUG-355.
   BUG-341 "S14".
+- **S15 — the box tree was rebuilt every cycle only to be grafted back.**
+  ✅ Done. Re-measured S4's `incremental_build_box` (the queue's own
+  instruction) and wired it into `layout_mutation_incremental_restyle` plus both
+  production call sites. Two defects each of which alone drove reuse to zero:
+  the reuse gate was a thread-local `build_box`'s rayon workers never see (and
+  chrome is built entirely out of the 8+-child flex containers that take that
+  path), and the built/reused counters were `#[cfg(test)]` thread-locals blind
+  to the same workers — the first instrumented run of the real chrome document
+  reported 7 boxes built for a tree of 318. Gate is now `prev_index.is_some()`,
+  passed by reference; counters are public `BoxBuildStats` /
+  `take_box_build_stats()`, with the parallel branch folding each worker's tally
+  into the parent's thread. 4 count-based gates. `CC12_HOVER` 3.9-4.2 →
+  1.39-1.47 ms by min (≈2.8×), `build_box` 2.2-2.5 → 0.25-0.38 ms; `CC12_KEY`
+  flat (`dom_content_stable` is `false` there, so the mechanism is inert).
+  BUG-341 "S15".
+- **S16 — `dom_content_stable` is one boolean for the whole document.** ⬜ Open.
+  One changed omnibox text node disables box reuse for all 318 boxes. Needs a
+  per-node content-dirty set, which needs the chrome tracker to be *complete for
+  content* — `set_text`/`set_text_in_place`/`append_text` deliberately report
+  nothing today, because text cannot affect selector matching. That completeness
+  is the risky half: a missed mutation path yields a stale box (visible
+  corruption), not a slow frame. BUG-341 "S15" § "Where this leaves CC-12".
 
 **Stop conditions / honesty:** if after S5 the p95 floor is set by irreducible
 per-node cascade cost on the hover root-set and stays > 2 ms, report the number
