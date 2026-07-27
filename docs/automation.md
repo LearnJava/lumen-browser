@@ -27,7 +27,8 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 | Assert on geometry/cascade/a11y in Rust tests | `lumen-driver::BrowserSession`: `layout_box_by_selector`, `computed_style_snapshot`, `query_a11y` | InProcessSession = full headless pipeline |
 | Read console/network/a11y/layout of a live page | MCP resources `resource://console` / `network` / `a11y_tree` / `layout` / `screenshot` | live window only |
 | Per-frame paint timings | `LUMEN_FRAME_LOG=1` (or `=2` for top-8 DisplayCommands) | used by scripts/scroll_perf.py |
-| Layout/cascade phase timings as a call tree | `LUMEN_PROFILE_TREE=1` | stderr |
+| Layout/cascade phase timings as a call tree | `LUMEN_PROFILE_TREE=1` | stderr; same-named sibling scopes merge into one line with a `×N` call count |
+| Per-node breakdown inside the cascade (`compute_style` / pseudo-element phases) | `LUMEN_PROFILE_TREE=1 LUMEN_PROFILE_DETAIL=1` | read *shares within* a stage only — the per-node timers inflate the stage they sit in, so absolute numbers are not comparable with a stage-only run |
 | GUI timeline profiler | `cargo run --features tracy` | Tracy client needed |
 | Scroll performance benchmark | `scripts/scroll_perf.py`, `scripts/mt_stall_bench.py` | drives `--mcp-live-port` |
 | Real-site load perf: live GUI run (tab per site), stats, journal, bug filing | `python scripts/perf_audit.py` over `docs/perf/corpus.txt` (default: one visible window, `new_tab` per site, cumulative RAM); `--phases` = headless per-phase decomposition; full protocol = skill `/lumen-perf-audit` | dev-release build; screenshots via CPU path (BUG-221) |
@@ -86,7 +87,7 @@ Snapshot-test env vars: `SNAPSHOT_VS_EDGE_STRICT=1` (hard-gate `crates/driver/te
 | `LUMEN_PRESENT` | Present mode override |
 | `LUMEN_NO_FRAME_SKIP` / `LUMEN_NO_SCROLL_COMPOSITOR` / `LUMEN_NO_ANIM_SPLIT` / `LUMEN_NO_BBOX_SCISSOR` / `LUMEN_NO_BBOX_BACKDROP` / `LUMEN_NO_IMAGE_MIPS` / `LUMEN_NO_BAND_BIAS` | Disable one paint optimization each — **the paint-regression bisection kit** (crates/engine/paint/src/renderer.rs), driven automatically by `run.py --paint-bisect NN` (DEVX-4) |
 | `LUMEN_SCROLL_BLIT` / `LUMEN_NO_FAST_SCROLL_DEGRADE` | Scroll-blit opt / fast-scroll quality degrade |
-| `LUMEN_FRAME_LOG=1\|2` · `LUMEN_PROFILE_TREE=1` · `LUMEN_MEM_REPORT=1` · `LUMEN_BENCH` / `LUMEN_BENCH_ITERS` | Diagnostics (see chooser table) |
+| `LUMEN_FRAME_LOG=1\|2` · `LUMEN_PROFILE_TREE=1` (+ `LUMEN_PROFILE_DETAIL=1`) · `LUMEN_MEM_REPORT=1` · `LUMEN_BENCH` / `LUMEN_BENCH_ITERS` | Diagnostics (see chooser table) |
 
 ## Known stubs — do NOT rely on these
 

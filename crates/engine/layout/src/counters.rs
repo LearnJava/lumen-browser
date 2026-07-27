@@ -136,6 +136,13 @@ struct CounterCtx {
     stacks: HashMap<String, Vec<i32>>,
     /// Running quote-nesting depth in document order (CSS Content L3 §3.2).
     quote_depth: usize,
+    /// BUG-341 S10 — whether the stylesheet can produce quote content at all
+    /// (`style::sheet_has_quote_content`, decided once per pass). When false,
+    /// `walk` skips its per-node `::before`/`::after` probe: that probe exists
+    /// only to advance `quote_depth`, and without a quote anywhere in the sheet
+    /// it can never record one. Lives here rather than as a `walk` parameter
+    /// because it is per-pass state like the counter stacks themselves.
+    quotes_possible: bool,
 }
 
 impl CounterCtx {
@@ -208,7 +215,10 @@ pub fn precompute_counters(
     dark_mode: bool,
 ) -> CounterMap {
     let root_style = ComputedStyle::root();
-    let mut ctx = CounterCtx::default();
+    let mut ctx = CounterCtx {
+        quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
+        ..CounterCtx::default()
+    };
     let mut map = CounterMap::default();
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false);
     map
@@ -289,7 +299,10 @@ pub fn incremental_precompute_counters(
         return precompute_counters(doc, sheet, viewport, flat, dark_mode);
     }
     let root_style = ComputedStyle::root();
-    let mut ctx = CounterCtx::default();
+    let mut ctx = CounterCtx {
+        quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
+        ..CounterCtx::default()
+    };
     let mut map = CounterMap::default();
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(delta), false);
     map
@@ -444,12 +457,20 @@ fn walk(
     // Always run (even when `style` was reused) — `quote_depth` is a running
     // document-order counter that must stay continuous regardless of which
     // nodes recomputed their style.
-    if let Some(bps) =
-        compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode)
-    {
-        let depths = record_quote_depths(&bps.content, &mut ctx.quote_depth);
-        if !depths.is_empty() {
-            map.quotes.insert((id, QuoteSlot::Before), depths);
+    // BUG-341 S10: `quotes_possible` is the sheet-wide "could any declaration
+    // produce quote content" flag — when it is false this probe cannot record a
+    // depth, and skipping it removes two pseudo-element cascades per node
+    // (measured: 79% of `precompute_counters` on the CC12_KEY cycle, where only
+    // a dozen nodes recompute their own style but all 828 were probed).
+    if ctx.quotes_possible {
+        let _prof = lumen_core::profile::scope_detail("quote_pseudos");
+        if let Some(bps) =
+            compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode)
+        {
+            let depths = record_quote_depths(&bps.content, &mut ctx.quote_depth);
+            if !depths.is_empty() {
+                map.quotes.insert((id, QuoteSlot::Before), depths);
+            }
         }
     }
 
@@ -461,12 +482,15 @@ fn walk(
     }
 
     // ::after quotes come after all children in document order.
-    if let Some(aps) =
-        compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode)
-    {
-        let depths = record_quote_depths(&aps.content, &mut ctx.quote_depth);
-        if !depths.is_empty() {
-            map.quotes.insert((id, QuoteSlot::After), depths);
+    if ctx.quotes_possible {
+        let _prof = lumen_core::profile::scope_detail("quote_pseudos");
+        if let Some(aps) =
+            compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode)
+        {
+            let depths = record_quote_depths(&aps.content, &mut ctx.quote_depth);
+            if !depths.is_empty() {
+                map.quotes.insert((id, QuoteSlot::After), depths);
+            }
         }
     }
 
