@@ -156,36 +156,7 @@ pub fn clear_dirty(b: &mut LayoutBox) {
     }
 }
 
-// ─── Incremental box-build index (BUG-341 S4) ───────────────────────────────
-
-/// Index a previous [`LayoutBox`] tree by `NodeId` for `build_box_or_reuse`'s
-/// whole-subtree lookup.
-///
-/// A single `NodeId` can appear on more than one box in the tree: anonymous
-/// boxes (`InlineRun`, `InlineBlockRow`, `Marker`, `InlineSpace`, pseudo-
-/// element boxes) are tagged with their *owning* element's id, not a unique id
-/// of their own, and are always descendants of that owning element's own
-/// top-level box. Pre-order `insert`-keep-first therefore always keeps the
-/// outermost (real) box for a given id — the correct "whole subtree for this
-/// node" — even though later, deeper traversal steps revisit the same id on
-/// that element's own synthetic children.
-pub(crate) fn index_by_node(root: &LayoutBox) -> std::collections::HashMap<NodeId, &LayoutBox> {
-    let mut map = std::collections::HashMap::new();
-    index_by_node_inner(root, &mut map);
-    map
-}
-
-fn index_by_node_inner<'a>(
-    b: &'a LayoutBox,
-    map: &mut std::collections::HashMap<NodeId, &'a LayoutBox>,
-) {
-    map.entry(b.node).or_insert(b);
-    for child in &b.children {
-        index_by_node_inner(child, map);
-    }
-}
-
-// ─── Owned reuse index (BUG-341 S19) ────────────────────────────────────────
+// ─── Incremental box-build reuse index (BUG-341 S4/S19) ────────────────────────────────────────
 
 /// BUG-341 S19 — `NodeId` → the previous pass's whole subtree for that node,
 /// **owned**, for `box_tree::build_box_or_reuse` to adopt.
@@ -213,8 +184,8 @@ pub(crate) type ReuseIndex = std::collections::HashMap<NodeId, std::sync::Mutex<
 /// subtree is), so the topmost clean box is exactly the unit
 /// `build_box_or_reuse` will ask for, and the walk never descends into a
 /// region it has already handed over. That is also why this replaces S4's
-/// `index_by_node`: the index no longer hashes all 318 boxes, only the spine
-/// above the reusable ones.
+/// whole-tree `index_by_node` (deleted with this slice): the index no longer
+/// hashes all 318 boxes, only the spine above the reusable ones.
 ///
 /// Every position it empties keeps a husk carrying [`DirtyBits::MOVED_OUT`] —
 /// see that flag for why the graft must be able to recognise one.
@@ -242,10 +213,12 @@ fn extract_clean_subtrees_inner(
 ) {
     *visited += 1;
     for child in &mut b.children {
-        // `!out.contains_key` mirrors `index_by_node`'s keep-the-first rule: a
-        // `NodeId` can label more than one box (anonymous and pseudo-element
-        // boxes carry their owning element's id), and only the outermost one is
-        // "the whole subtree for this node".
+        // Keep the first: a `NodeId` can label more than one box (anonymous
+        // and pseudo-element boxes carry their owning element's id, and are
+        // always descendants of that element's own box), so the outermost
+        // occurrence — the one this pre-order walk reaches first — is the one
+        // that means "the whole subtree for this node". S4's `index_by_node`
+        // had the same rule for the same reason.
         if clean.contains(&child.node) && !out.contains_key(&child.node) {
             let husk = moved_out_husk(child);
             let taken = std::mem::replace(child, husk);
