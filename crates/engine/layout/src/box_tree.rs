@@ -74,9 +74,19 @@ pub fn incremental_box_build_enabled() -> bool {
 pub struct BoxBuildStats {
     /// `build_box` calls that really constructed a box.
     pub built: u32,
-    /// Whole `LayoutBox` subtrees cloned from the previous pass instead
+    /// Whole `LayoutBox` subtrees taken from the previous pass instead
     /// (`build_box_or_reuse`'s fast path).
     pub reused: u32,
+    /// BUG-341 S19 — boxes of the previous tree that
+    /// [`crate::incremental::extract_clean_subtrees`] had to walk to find those
+    /// subtrees: the spine above them, not the tree.
+    ///
+    /// Recorded on the calling thread (extraction runs before `build_box` fans
+    /// anything out), and always compiled — it is the counter that tells a
+    /// reuse index carved out of the previous tree from S4's `index_by_node`,
+    /// which hashed every box in it. A mechanism that regresses to the latter
+    /// still produces the same output, just slowly.
+    pub prev_index_visited: u32,
 }
 
 thread_local! {
@@ -86,7 +96,7 @@ thread_local! {
     /// build's output). Always compiled — two `Cell` bumps against a stage that
     /// costs microseconds per box — so a gate outside this crate can read it.
     static BOX_BUILD_STATS: Cell<BoxBuildStats> =
-        const { Cell::new(BoxBuildStats { built: 0, reused: 0 }) };
+        const { Cell::new(BoxBuildStats { built: 0, reused: 0, prev_index_visited: 0 }) };
 }
 
 /// Returns the accumulated [`BoxBuildStats`] and resets the tally.
@@ -132,19 +142,56 @@ pub fn take_box_build_log() -> Vec<NodeId> {
     BOX_BUILD_LOG.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default()
 }
 
-/// BUG-341 S18 census: nanoseconds spent inside `build_box_or_reuse`'s
-/// whole-subtree `clone`, and the number of boxes those clones copied. Only
-/// accumulated while [`set_box_build_diagnostics`] is on — the box count needs
-/// its own traversal, which must not run in production.
+/// BUG-341 S18/S19 census: what one incremental box-build pass spent on
+/// *copying and indexing* the previous tree, as opposed to building boxes.
+///
+/// Only accumulated while [`set_box_build_diagnostics`] is on — both halves
+/// need their own traversal of the previous tree, which must not run in
+/// production. Drained by [`take_box_copy_stats`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BoxCopyStats {
+    /// Nanoseconds spent taking whole reusable subtrees out of the previous
+    /// tree inside `build_box_or_reuse` (a deep `clone` before S19, an O(1)
+    /// move after it).
+    pub reuse_ns: u64,
+    /// Boxes those reuses carried over — the size of the reused region,
+    /// whether it was copied or moved.
+    pub reuse_boxes: u64,
+    /// Nanoseconds spent in [`crate::incremental::extract_clean_subtrees`]
+    /// building the id→subtree index the reuses draw from.
+    pub index_ns: u64,
+    /// Boxes that index walk visited. Before S19 this was the whole previous
+    /// tree (`index_by_node` hashed every box); after it, only the spine above
+    /// the reusable subtrees.
+    pub index_boxes: u64,
+}
+
 static BOX_CLONE_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// Boxes copied by the clones timed in [`BOX_CLONE_NS`].
 static BOX_CLONE_BOXES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static PREV_INDEX_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static PREV_INDEX_BOXES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Drains the BUG-341 S18 clone census: `(nanoseconds, boxes copied)`.
-pub fn take_box_clone_stats() -> (u64, u64) {
+/// Drains the BUG-341 S18/S19 copy census — see [`BoxCopyStats`].
+pub fn take_box_copy_stats() -> BoxCopyStats {
     use std::sync::atomic::Ordering::Relaxed;
-    (BOX_CLONE_NS.swap(0, Relaxed), BOX_CLONE_BOXES.swap(0, Relaxed))
+    BoxCopyStats {
+        reuse_ns: BOX_CLONE_NS.swap(0, Relaxed),
+        reuse_boxes: BOX_CLONE_BOXES.swap(0, Relaxed),
+        index_ns: PREV_INDEX_NS.swap(0, Relaxed),
+        index_boxes: PREV_INDEX_BOXES.swap(0, Relaxed),
+    }
+}
+
+/// Whether the S18/S19 copy census is on — see [`set_box_build_diagnostics`].
+pub(crate) fn box_build_diagnostics_on() -> bool {
+    BOX_BUILD_LOG_ON.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Records one index-build pass in the census (see [`BoxCopyStats`]).
+pub(crate) fn note_prev_index(ns: u64, boxes: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    PREV_INDEX_NS.fetch_add(ns, Relaxed);
+    PREV_INDEX_BOXES.fetch_add(boxes, Relaxed);
 }
 
 /// Number of boxes in `b`'s subtree, inclusive — census only.
@@ -167,6 +214,7 @@ fn add_box_build_stats(d: BoxBuildStats) {
         let mut v = s.get();
         v.built += d.built;
         v.reused += d.reused;
+        v.prev_index_visited += d.prev_index_visited;
         s.set(v);
     });
 }
@@ -2971,6 +3019,12 @@ pub fn layout_mutation_incremental(
 /// [`crate::counters::RestyleDelta`]'s own doc comment for the full
 /// correctness precondition.
 ///
+/// BUG-341 S19: `prev` is taken **by value** — this pass moves the reusable
+/// subtrees out of it into the tree it returns rather than copying them, so the
+/// previous tree does not survive the call. Callers persist the *returned* tree
+/// as the next cycle's `prev`; one that also needs the old tree afterwards must
+/// clone it before handing it over.
+///
 /// Returns the fresh `CounterMap` alongside the tree so the caller can carry
 /// its `styles()` forward as the next cycle's `prev_styles`.
 #[allow(clippy::too_many_arguments)]
@@ -2981,7 +3035,7 @@ pub fn layout_mutation_incremental_restyle(
     measurer: &dyn TextMeasurer,
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
-    prev: &LayoutBox,
+    mut prev: LayoutBox,
     delta: &crate::counters::RestyleDelta<'_>,
 ) -> (LayoutBox, CounterMap) {
     // Stage scopes deliberately reuse `layout_measured_hyp_with_counters`'
@@ -3013,9 +3067,11 @@ pub fn layout_mutation_incremental_restyle(
         // moved — `build_box` is now ~60% of the incremental cycle (S14's
         // profile) and, after S13/S14, the dirty set on a chrome interaction is
         // empty, so `clean_subtrees` licenses nearly the whole tree.
+        // BUG-341 S19: this is where `prev` is consumed — the reusable subtrees
+        // are moved into the tree being built, not copied out of it.
         if incremental_box_build_enabled() {
             incremental_build_box(
-                doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, prev,
+                doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, &mut prev,
             )
         } else {
             build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
@@ -3036,7 +3092,11 @@ pub fn layout_mutation_incremental_restyle(
         // were rejected on style every single hover flip — every one of them
         // differing only in those used-value fields — plus 41 ancestors
         // dragged along by the reject propagation.
-        crate::incremental::graft_geometry_with_cascade(&mut root, prev, Some(delta.prev_styles));
+        // BUG-341 S19: `prev` is a husked tree by now — the reusable subtrees
+        // are in `root`, and every position they came from carries
+        // `DirtyBits::MOVED_OUT`. The graft skips those on the S18 claim before
+        // it ever looks at the husk, and rejects any it reaches without one.
+        crate::incremental::graft_geometry_with_cascade(&mut root, &prev, Some(delta.prev_styles));
     }
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     {
@@ -4163,13 +4223,18 @@ fn build_base_select_box(
 /// BUG-341 S4 — per-node reuse decision point for incremental box-build.
 ///
 /// Called wherever `build_box` recurses into a DOM child. When incremental
-/// box-build is enabled and `id`'s whole style-subtree is known clean (see
-/// [`CounterMap::clean_subtrees`], gated by
-/// [`crate::counters::RestyleDelta::dom_content_stable`]) and `prev_index` has
-/// a matching entry, clones that previous [`LayoutBox`] subtree wholesale
-/// instead of rebuilding it. Otherwise falls through to a normal `build_box`
-/// call (which itself threads `prev_index` down, so a dirty ancestor's clean
-/// descendants still get reused at their own level).
+/// box-build is enabled and `prev_index` still holds `id`'s subtree, **takes**
+/// that previous [`LayoutBox`] subtree instead of rebuilding it. Otherwise
+/// falls through to a normal `build_box` call (which itself threads
+/// `prev_index` down, so a dirty ancestor's clean descendants still get reused
+/// at their own level).
+///
+/// BUG-341 S19: membership in `prev_index` *is* the reuse licence — the index
+/// is built by [`crate::incremental::extract_clean_subtrees`] from exactly
+/// [`CounterMap::clean_subtrees`], so the separate `clean_subtrees` test S4-S18
+/// did here would be asking the same question twice. Each entry can be taken
+/// only once, which is also what keeps the previous tree's boxes from ending up
+/// in two places at once.
 #[allow(clippy::too_many_arguments)]
 fn build_box_or_reuse(
     doc: &Document,
@@ -4181,7 +4246,7 @@ fn build_box_or_reuse(
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
     dark_mode: bool,
-    prev_index: Option<&std::collections::HashMap<NodeId, &LayoutBox>>,
+    prev_index: Option<&crate::incremental::ReuseIndex>,
 ) -> LayoutBox {
     // BUG-341 S15: the gate is `prev_index.is_some()`, NOT the
     // `INCREMENTAL_BOX_BUILD` thread-local — `build_box` fans flex/grid
@@ -4192,47 +4257,57 @@ fn build_box_or_reuse(
     // consulted once, at `incremental_build_box`, which is what decides whether
     // an index exists at all.
     if let Some(idx) = prev_index
-        && counters.clean_subtrees().contains(&id)
-        && let Some(prev_box) = idx.get(&id)
+        && let Some(cell) = idx.get(&id)
     {
-        BOX_BUILD_STATS.with(|s| {
-            let mut v = s.get();
-            v.reused += 1;
-            s.set(v);
-        });
-        let mut cloned = if BOX_BUILD_LOG_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        let taken = if box_build_diagnostics_on() {
             use std::sync::atomic::Ordering::Relaxed;
             let t = std::time::Instant::now();
-            let cloned = (*prev_box).clone();
+            let taken = cell.lock().ok().and_then(|mut slot| slot.take());
             BOX_CLONE_NS.fetch_add(t.elapsed().as_nanos() as u64, Relaxed);
-            BOX_CLONE_BOXES.fetch_add(count_boxes(&cloned), Relaxed);
-            cloned
+            if let Some(b) = taken.as_ref() {
+                BOX_CLONE_BOXES.fetch_add(count_boxes(b), Relaxed);
+            }
+            taken
         } else {
-            (*prev_box).clone()
+            cell.lock().ok().and_then(|mut slot| slot.take())
         };
-        // BUG-341 S18: tell the two stages that follow — `mark_subtree_dirty`
-        // and `graft_geometry` — that this subtree came out of `prev` itself.
-        // Both of them exist to answer "may this subtree keep the previous
-        // pass's geometry", and here the answer is known by construction, so
-        // both can honour it at the root instead of walking the copy against
-        // its own original. Only the root carries the flag: the clone stops the
-        // recursion, so nothing inside it can hold a claim of its own.
-        cloned.dirty = crate::incremental::DirtyBits::REUSED_SUBTREE;
-        return cloned;
+        if let Some(mut subtree) = taken {
+            BOX_BUILD_STATS.with(|s| {
+                let mut v = s.get();
+                v.reused += 1;
+                s.set(v);
+            });
+            // BUG-341 S18: tell the two stages that follow — `mark_subtree_dirty`
+            // and `graft_geometry` — that this subtree came out of `prev` itself.
+            // Both of them exist to answer "may this subtree keep the previous
+            // pass's geometry", and here the answer is known by construction, so
+            // both can honour it at the root instead of walking the copy against
+            // its own original. Only the root carries the flag: the move stops the
+            // recursion, so nothing inside it can hold a claim of its own.
+            subtree.dirty = crate::incremental::DirtyBits::REUSED_SUBTREE;
+            return subtree;
+        }
     }
     build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev_index)
 }
 
 /// BUG-341 S4 — incremental box-build entry point.
 ///
-/// Builds the `LayoutBox` tree rooted at `id`, cloning whole subtrees from
+/// Builds the `LayoutBox` tree rooted at `id`, **moving** whole subtrees out of
 /// `prev` wherever [`CounterMap::clean_subtrees`] says it is safe to (see
 /// [`build_box_or_reuse`]) instead of calling `build_box` for them. Must
 /// reproduce a full `build_box` pass bit-for-bit for the same final state —
 /// the `incr == full` differential tests in `incremental.rs` guard this.
 ///
+/// BUG-341 S19: `prev` is taken by unique reference and is **gutted** by the
+/// call — every reusable subtree ends up in the returned tree, and its old
+/// position holds a husk (see [`crate::incremental::DirtyBits::MOVED_OUT`]).
+/// The only thing a caller may still do with `prev` afterwards is hand it to
+/// [`crate::incremental::graft_geometry_with_cascade`], which recognises the
+/// husks; anything else must clone `prev` first.
+///
 /// Gated behind [`set_incremental_box_build`]: flag off (the default) makes
-/// this behave exactly like `build_box(..., None)`.
+/// this behave exactly like `build_box(..., None)` and leaves `prev` untouched.
 ///
 /// BUG-341 S15 wired this into [`layout_mutation_incremental_restyle`], the
 /// chrome and page incremental pipelines' entry point. The full-layout entry
@@ -4250,12 +4325,21 @@ pub fn incremental_build_box(
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
     dark_mode: bool,
-    prev: &LayoutBox,
+    prev: &mut LayoutBox,
 ) -> LayoutBox {
     if !incremental_box_build_enabled() {
         return build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, None);
     }
-    let prev_index = crate::incremental::index_by_node(prev);
+    let t = std::time::Instant::now();
+    let (prev_index, visited) = crate::incremental::extract_clean_subtrees(prev, counters.clean_subtrees());
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.prev_index_visited += visited as u32;
+        s.set(v);
+    });
+    if box_build_diagnostics_on() {
+        note_prev_index(t.elapsed().as_nanos() as u64, visited);
+    }
     build_box_or_reuse(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, Some(&prev_index))
 }
 
@@ -4270,11 +4354,11 @@ fn build_box(
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
     dark_mode: bool,
-    // BUG-341 S4: `Some` when an incremental box-build pass is in progress —
-    // an id→box index over the previous pass's tree, consulted by
-    // `build_box_or_reuse` at every recursive call site below. `None` for the
-    // full/legacy build path (all current pipeline entry points).
-    prev_index: Option<&std::collections::HashMap<NodeId, &LayoutBox>>,
+    // BUG-341 S4/S19: `Some` when an incremental box-build pass is in progress —
+    // an id→owned-subtree index carved out of the previous pass's tree,
+    // consulted by `build_box_or_reuse` at every recursive call site below.
+    // `None` for the full/legacy build path (all current pipeline entry points).
+    prev_index: Option<&crate::incremental::ReuseIndex>,
 ) -> LayoutBox {
     BOX_BUILD_STATS.with(|s| {
         let mut v = s.get();
@@ -4632,6 +4716,9 @@ fn build_box(
                     add_box_build_stats(BoxBuildStats {
                         built: par_built.load(Relaxed),
                         reused: par_reused.load(Relaxed),
+                        // Extraction runs once, on the thread that owns `prev`
+                        // — a worker never adds to this.
+                        prev_index_visited: 0,
                     });
                 }
             } else {
@@ -17333,7 +17420,7 @@ mod tests {
         set_interactive_state(Some(a), None, None);
         crate::style::invalidate_rule_idx_cache();
         let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
-        let prev_tree = super::build_box(
+        let mut prev_tree = super::build_box(
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
         );
 
@@ -17361,7 +17448,7 @@ mod tests {
         super::set_incremental_box_build(true);
         let _ = super::take_box_build_stats();
         let mut incr_tree = super::incremental_build_box(
-            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &prev_tree,
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &mut prev_tree,
         );
         let bb = super::take_box_build_stats();
         let (built, reused) = (bb.built, bb.reused);
@@ -17435,7 +17522,7 @@ mod tests {
 
         crate::style::invalidate_rule_idx_cache();
         let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
-        let prev_tree = super::build_box(
+        let mut prev_tree = super::build_box(
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
         );
 
@@ -17470,7 +17557,7 @@ mod tests {
         super::set_incremental_box_build(true);
         let _ = super::take_box_build_stats();
         let mut incr_tree = super::incremental_build_box(
-            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &prev_tree,
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &mut prev_tree,
         );
         let reused = super::take_box_build_stats().reused;
         super::set_incremental_box_build(false);
@@ -17546,7 +17633,7 @@ mod tests {
 
         crate::style::invalidate_rule_idx_cache();
         let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
-        let prev_tree = super::build_box(
+        let mut prev_tree = super::build_box(
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
         );
 
@@ -17585,7 +17672,7 @@ mod tests {
         super::set_incremental_box_build(true);
         let _ = super::take_box_build_stats();
         let incr_tree = super::incremental_build_box(
-            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &prev_tree,
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &mut prev_tree,
         );
         let bb = super::take_box_build_stats();
         super::set_incremental_box_build(false);

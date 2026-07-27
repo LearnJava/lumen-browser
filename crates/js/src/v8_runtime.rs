@@ -5088,10 +5088,14 @@ mod tests {
         };
         let delta = RestyleDelta { prev_styles: baseline_counters.styles(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Untracked };
 
+        // BUG-341 S19: the incremental pass consumes `prev` (it moves the
+        // reusable subtrees into the tree it returns), and the geometry
+        // sanity check at the end of this test still needs the old tree.
+        let prev_rects_source = prev.clone();
         set_incremental_restyle(true);
         let (incr, _incr_counters) = {
             let d = doc.lock().unwrap();
-            layout_mutation_incremental_restyle(&d, &sheet, vp, &FixedMeasurer, &hp, false, &prev, &delta)
+            layout_mutation_incremental_restyle(&d, &sheet, vp, &FixedMeasurer, &hp, false, prev, &delta)
         };
         set_incremental_restyle(false);
 
@@ -5123,7 +5127,7 @@ mod tests {
         // but `height:auto` grows by `padding-top + padding-bottom`.
         let main = doc.lock().unwrap().find_by_id("main").unwrap();
         let mut prev_rects = Vec::new();
-        collect_rects(&prev, &mut prev_rects);
+        collect_rects(&prev_rects_source, &mut prev_rects);
         let prev_main = prev_rects.iter().find(|(n, _)| *n == main).unwrap().1;
         let full_main = fb.iter().find(|(n, _)| *n == main).unwrap().1;
         assert!(
