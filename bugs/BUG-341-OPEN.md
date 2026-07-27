@@ -1553,6 +1553,154 @@ The next items, in order:
   the hover flip actually dirties. Narrowing *which* nodes are dirty (S3-S7's
   line of work) would cut both at once.
 
+## S12 — `LayoutBox::style` behind an `Arc`, copy-on-write
+
+S11 handed S12 three candidates and put `lay_out` first. Profiling it — the
+first time anything below stage level in `lay_out` had been measured — found
+that a third of the stage is a single line, and that the same line's cost is
+paid twice more elsewhere in the frame.
+
+### What `lay_out` actually spends
+
+Permanent `scope_detail` scopes now sit inside `lay_out_inner`
+(`LUMEN_PROFILE_TREE=1 LUMEN_PROFILE_DETAIL=1`). On `CC12_HOVER`, before S12:
+
+| Scope | Time | Calls | What it is |
+|---|---:|---:|---|
+| `lo_style_clone` | 2.33 ms | 1696 | `let s = b.style.clone()` — the snapshot `lay_out_inner` takes to dodge the borrow checker |
+| `lo_wrap` | — | **0** | text wrapping: never runs on the incremental path |
+| `lo_svg` | — | **0** | SVG layout: never runs either |
+| `lo_chex` | 0.15 ms | 1696 | per-box `ch`/`ex` font metrics |
+| `lo_translate` | 0.08 ms | 1425 | the clean-subtree fast path |
+
+(The instrumented run inflates `lay_out` from 3.7 ms to 4.8 ms; ~0.22 µs per
+scope. `lo_style_clone`'s real share is therefore ≈1.2 ms of 3.7 ms.)
+
+Two things fall out of that table. First, the expensive content work — text
+wrapping, SVG — is already fully grafted away; what is left is arithmetic over
+boxes plus one deep copy per box. Second, `lo_style_clone` + `lo_translate`
+give the counter no slice had until now: **1696 of 3121 boxes are re-laid-out
+on every hover flip, 1425 are reused.**
+
+`ComputedStyle` is 3.2 KB, 302 fields, ~30 of them heap-allocated. Per frame the
+chrome pipeline copied it three times per box: `build_box` copying it out of the
+cascade cache (`CounterMap::styles`, already `Arc<ComputedStyle>` since S9),
+`lay_out_inner`'s snapshot, and the whole-tree `clone()` that persists `prev`
+(`clone_tree`, 1.5 ms in the `[cc12-split]` line).
+
+### The slice
+
+`LayoutBox::style` is now `Arc<ComputedStyle>`. Reads are unchanged — `Arc`
+derefs, so `b.style.field` and `&b.style` still compile everywhere — and all
+three copies became refcount bumps. The passes that genuinely write a used value
+back into a box's style take their copy through `Arc::make_mut`, on exactly the
+boxes they touch: flex item stretch (main and cross axis), `font-size-adjust`,
+container-query restyle, `propagate_canvas_background`, the `::first-line`
+in-place restyle, and the table cell's temporary `width` swap. Semantics are
+identical to before — `build_box` used to hand each box a private copy; now the
+copy is taken at the moment of writing.
+
+`apply_font_size_adjust` gained an explicit `FontSizeAdjust::None` test at the
+call site. It already existed *inside* `apply_font_size_adjust_to_style`, but
+reaching for `Arc::make_mut` to call it would have deep-copied the shared style
+on every box in the document, for a property almost nothing sets — the one place
+where the naive translation would have made things worse, not better.
+
+`graft_geometry` compares `Arc::ptr_eq` before the 302-field `==`. When the
+incremental cascade handed a node back unchanged, both trees hold the *same*
+allocation. The structural compare stays behind it, so a node re-cascaded to an
+equal value is still recognised as reusable.
+
+Not done, and deliberately: `collect_box_styles`/`prev_styles` (the page-side
+transition scheduler) still deep-copies every style per relayout. It owns its
+snapshot to diff against the next frame, so sharing it needs `prev_styles` to
+hold `Arc`s too — a page-pipeline follow-up, outside this slice's measured path.
+`InlineSegment::style` and `InlineFrag::style` are likewise untouched.
+
+### Gates: by identity, not by output
+
+The S8/S9 lesson applies verbatim — a version that deep-copies instead of
+sharing passes every differential test and is merely slow.
+
+| Test | Asserts |
+|---|---|
+| `incremental::tests::built_boxes_share_the_cascade_cache_style_allocation` | `Arc::ptr_eq(box.style, counters.styles()[id])` after `build_box`, and again after `tree.clone()` |
+| `incremental::tests::used_value_writeback_does_not_leak_into_the_cascade_cache` | the copy-on-write half: a stretched flex item either still shares the cache entry or took a private copy — the cache never sees the used value |
+
+`cargo test -p lumen-layout`: 3297 passed, 2 failed (`ch`/`ex_approximated_as_half_em`,
+the pre-existing BUG-339 flake). `lumen-chrome` 58, `lumen-paint` 973,
+`lumen-shell` 1706 — all green. CPU snapshot references
+(`cases::snapshot_cpu`, `--features cpu-render`) unchanged, pixel-identical.
+
+`python graphic_tests/run.py --continue-on-fail`: 4 non-debtor failures, none
+of them this slice. The first attempt was thrown away — TEST-00 hit the known
+"magenta marker not found" focus race, which cascades "no crop offset" into all
+148 remaining tests; re-run after TEST-00 passes.
+
+| Test | Verdict |
+|---|---|
+| 10 (`min-max-width`) | 100.00 % here and 100.00 % in the 2026-07-26 main run — pre-existing, byte-for-byte the same diff region |
+| 147 (`background-repeat: space`) | 27.4463 % vs 27.4544 % on main — pre-existing, BUG-330 |
+| 71 (`@starting-style`) | *improved* 6.08 % → 1.76 %; flagged `FAIL`/`RATCHET` only because it now beats its own BUG-199 debtor baseline |
+| 61 (`view-transitions`) | **not a Lumen difference at all.** `61-view-transitions-lumen-cropped.png` is byte-identical (`md5 50e4453…`) between the S12 and the main worktree; the two runs' *Edge reference* captures differ — Edge was grabbed mid-cross-fade in one of them, tinting the whole page purple, which is where the 99.5 % comes from. Headless `--screenshot` output of this page is also byte-identical between the two binaries |
+
+Tests 61 and 71 are both animation-timing pages, and both reference and capture
+are re-grabbed per run — treat a large swing on either as a capture-phase
+question first, and settle it by diffing the two `-lumen-cropped.png` files
+directly rather than by comparing diff percentages.
+
+### Measurement
+
+Interleaved A/B (main, S12, ×3), dev-release, `cc12_chrome_perf_gate`:
+
+| | main min | S12 min | main p50 | S12 p50 |
+|---|---:|---:|---:|---:|
+| `CC12_HOVER` | 16.5 / 18.1 / 17.4 | **13.6 / 15.1 / 15.0** | 18.6 / 20.2 / 19.9 | **15.8 / 17.0 / 17.1** |
+| `CC12_KEY` | 8.7 / 8.6 / 8.8 | **6.3 / 6.1 / 6.3** | 10.5 / 11.8 / 10.8 | **7.5 / 7.4 / 7.5** |
+
+No overlap between the two groups on any of the four rows — ≈15 % off
+`CC12_HOVER`, ≈28 % off `CC12_KEY`.
+
+Per stage (`LUMEN_PROFILE_TREE=1`, medians, quiet machine):
+
+| Stage | `CC12_HOVER` before → after | `CC12_KEY` before → after |
+|---|---|---|
+| `lay_out` | 3.70 → **2.44 ms** | 3.76 → **2.30 ms** |
+| `build_box` | 2.82 → 2.45 ms | 2.53 → 2.19 ms |
+| `clone_tree` (bookkeeping) | 1.48 → **0.73 ms** | 1.31 → **0.64 ms** |
+| `graft_geometry` | 0.90 → 0.99 ms | 0.64 → 0.63 ms |
+| `precompute_counters` | 7.40 → 7.88 ms | 0.55 → 0.55 ms |
+| whole cycle (p50) | 18.49 → 16.81 ms | 10.43 → 7.96 ms |
+
+`lo_style_clone` (renamed `lo_style_ref`) went 2.33 ms → **0.11 ms** for the same
+1696 calls, which is the change doing exactly and only what it was aimed at.
+`precompute_counters` and `graft_geometry` are flat within noise (their mins are
+6.02 → 6.10 and 0.75 → 0.76); nothing regressed.
+
+### Where this leaves CC-12
+
+Still red. Budget 2 ms; `CC12_HOVER` ~13.6-17 ms and `CC12_KEY` ~6.1-7.5 ms — a
+gap of ~3-8× (was ~4-10× after S11). The per-frame cost is now spread thin
+rather than concentrated: no single stage is above 2.5 ms on either scenario.
+
+The next lever is the one the new counters exposed, and it is bigger than
+anything left in a single stage: **1696 of 3121 boxes are rebuilt and
+re-laid-out on a hover flip that changes one subtree.** Both `build_box`
+(2.2-2.45 ms) and `lay_out` (2.3-2.44 ms) are almost linear in that count, and
+`cs_apply`/`cs_match` scale with the 828 elements the same flip re-cascades. So:
+
+* Find out why the dirty set is that wide. `graft_geometry` reuses 1425 boxes;
+  `mark_subtree_dirty` + the cascade's dirty-root-set decide the rest. Whether
+  the remaining 1696 genuinely changed, or are collateral from a conservative
+  root-set (S3-S7's line) or from `kind_layout_eq` rejecting a match, has not
+  been measured — gate whatever comes out of it on the reuse *count*, which now
+  exists (`lo_translate` vs `lo_style_ref`).
+* S4's `incremental_build_box` is still off, still for the right reason
+  (`index_by_node` re-hashes the whole previous tree per call). With `Arc`
+  styles the index is cheaper to build than it was, so the trade-off is worth
+  re-measuring — but only after the dirty-set question above, which may make the
+  mechanism unnecessary.
+
 ## Repro
 
 ```bash

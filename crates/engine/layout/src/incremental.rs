@@ -1518,7 +1518,7 @@ mod tests {
             false,
         );
 
-        fn find<'a>(b: &'a LayoutBox, id: NodeId) -> Option<&'a LayoutBox> {
+        fn find(b: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
             if b.node == id && !matches!(b.kind, BoxKind::Skip) {
                 return Some(b);
             }
@@ -1572,7 +1572,7 @@ mod tests {
             false,
         );
 
-        fn find<'a>(b: &'a LayoutBox, id: NodeId) -> Option<&'a LayoutBox> {
+        fn find(b: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
             if b.node == id && !matches!(b.kind, BoxKind::Skip) {
                 return Some(b);
             }
