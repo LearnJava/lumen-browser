@@ -1375,6 +1375,207 @@ mod tests {
         }
     }
 
+    // ── BUG-341 S15: incremental box-build wired into the restyle path ─────
+
+    /// Shared fixture for the S15 gates: a hover flip on a deep node under a
+    /// container whose siblings are provably clean. Returns
+    /// `(doc, sheet, prev, prev_counters, icon)`.
+    #[allow(clippy::type_complexity)]
+    fn s15_fixture() -> (
+        lumen_dom::Document,
+        lumen_css_parser::Stylesheet,
+        LayoutBox,
+        crate::CounterMap,
+        lumen_dom::NodeId,
+    ) {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_measured_hyp_with_counters;
+        use crate::style::clear_interactive_state;
+        use lumen_core::ext::NullHyphenationProvider;
+
+        // 10 siblings — over `RAYON_MIN_FLEX_CHILDREN`, so the container's
+        // children are built on rayon workers. That path is exactly where the
+        // pre-S15 thread-local flag check silently disabled reuse.
+        let mut html = String::from(r#"<div class="card"><ul id="list">"#);
+        for i in 0..10 {
+            html.push_str(&format!(
+                r#"<li id="i{i}" class="item"><span id="s{i}" class="icon">x</span></li>"#
+            ));
+        }
+        html.push_str("</ul></div>");
+        let css = r#"
+            #list { display: flex; }
+            .item { color: black; height: 20px; }
+            .icon { height: 8px; }
+            .item:hover { color: blue; height: 30px; }
+            .item:hover .icon { height: 16px; color: green; }
+        "#;
+        let doc = parse_html(&html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+        let icon = doc.find_by_id("s3").expect("#s3 must exist");
+
+        clear_interactive_state();
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+        (doc, sheet, prev, prev_counters, icon)
+    }
+
+    /// BUG-341 S15 counter gate: the box-build stage must actually *reuse*
+    /// subtrees, not merely produce the right answer.
+    ///
+    /// The S8 lesson applies verbatim here — a reuse mechanism that reuses
+    /// nothing satisfies every `incremental == full` differential test, just
+    /// slowly. So this asserts the tally: the flip touches one `<li>` and its
+    /// `<span>`, so the other nine `<li>` subtrees must come out of `prev`
+    /// wholesale, and the total number of boxes really constructed must drop
+    /// well below what a full build costs.
+    #[test]
+    fn bug341_s15_hover_flip_reuses_the_clean_sibling_subtrees() {
+        use crate::box_tree::{
+            layout_mutation_incremental_restyle, set_incremental_box_build, take_box_build_stats,
+        };
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use crate::style::{
+            clear_interactive_state, restyle_root_set_for_state_change, restyle_state_index,
+            set_interactive_state,
+        };
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let (doc, sheet, prev, prev_counters, icon) = s15_fixture();
+        let vp = Size::new(800.0, 600.0);
+        // `prev`'s own build is the "what a full build costs" reference.
+        let full_built = take_box_build_stats().built;
+        assert!(full_built > 10, "fixture must build a non-trivial tree, got {full_built}");
+
+        set_interactive_state(Some(icon), None, None);
+        let state_index = restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
+        let delta =
+            RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, dom_content_stable: true };
+        set_incremental_restyle(true);
+        set_incremental_box_build(true);
+        let _ = take_box_build_stats();
+        let (_incr, _c) = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+        );
+        let stats = take_box_build_stats();
+        set_incremental_box_build(false);
+        set_incremental_restyle(false);
+        clear_interactive_state();
+
+        assert!(
+            stats.reused >= 9,
+            "the nine untouched <li> siblings must be cloned from prev, got {stats:?}",
+        );
+        assert!(
+            stats.built * 2 < full_built,
+            "incremental build must construct far fewer boxes than a full one \
+             ({} built vs {full_built} full) — {stats:?}",
+            stats.built,
+        );
+    }
+
+    /// BUG-341 S15: whatever the box-build stage reuses, the resulting tree
+    /// must still be indistinguishable from a full rebuild + full cascade.
+    ///
+    /// Same transition as the counter gate above, compared against the
+    /// reference the whole track is defined by.
+    #[test]
+    fn bug341_s15_reused_boxes_match_a_full_rebuild() {
+        use crate::box_tree::{
+            layout_measured_hyp_with_counters, layout_mutation_incremental_restyle,
+            set_incremental_box_build,
+        };
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use crate::style::{
+            clear_interactive_state, restyle_root_set_for_state_change, restyle_state_index,
+            set_interactive_state,
+        };
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let (doc, sheet, prev, prev_counters, icon) = s15_fixture();
+        let vp = Size::new(800.0, 600.0);
+
+        set_interactive_state(Some(icon), None, None);
+        let state_index = restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
+        let delta =
+            RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, dom_content_stable: true };
+        set_incremental_restyle(true);
+        set_incremental_box_build(true);
+        let (incr, incr_counters) = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+        );
+        set_incremental_box_build(false);
+        set_incremental_restyle(false);
+
+        set_interactive_state(Some(icon), None, None);
+        let (full, full_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+        clear_interactive_state();
+
+        assert_eq!(
+            incr_counters.styles(),
+            full_counters.styles(),
+            "cascade must still reproduce the full cascade exactly",
+        );
+        let mut ia = Vec::new();
+        let mut fb = Vec::new();
+        collect_rects(&incr, &mut ia);
+        collect_rects(&full, &mut fb);
+        assert_eq!(ia.len(), fb.len(), "box count must match full layout");
+        for ((na, ra), (nb, rb)) in ia.iter().zip(fb.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+    }
+
+    /// BUG-341 S15: a DOM-content change must switch the reuse off entirely.
+    ///
+    /// `dom_content_stable: false` is the whole correctness contract — text and
+    /// attribute values `build_box` reads are invisible to a style-equality
+    /// comparison, so `clean_subtrees` must stay empty and every box must be
+    /// rebuilt. Nothing else in the mechanism checks this.
+    #[test]
+    fn bug341_s15_dom_content_change_disables_box_reuse() {
+        use crate::box_tree::{
+            layout_mutation_incremental_restyle, set_incremental_box_build, take_box_build_stats,
+        };
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use crate::style::clear_interactive_state;
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let (doc, sheet, prev, prev_counters, _icon) = s15_fixture();
+        let vp = Size::new(800.0, 600.0);
+        clear_interactive_state();
+
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.styles(),
+            dirty_roots: std::collections::HashSet::new(),
+            dom_content_stable: false,
+        };
+        set_incremental_restyle(true);
+        set_incremental_box_build(true);
+        let _ = take_box_build_stats();
+        let _ = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+        );
+        let stats = take_box_build_stats();
+        set_incremental_box_build(false);
+        set_incremental_restyle(false);
+
+        assert_eq!(
+            stats.reused, 0,
+            "a delta that cannot vouch for DOM content must reuse nothing — {stats:?}",
+        );
+    }
+
     #[test]
     fn mutation_incremental_restyle_hover_transition_matches_full() {
         // S5 wires the S3 incremental cascade into a real pipeline entry

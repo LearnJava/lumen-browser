@@ -8807,6 +8807,11 @@ impl Lumen {
                     dom_content_stable: touched.is_empty(),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
+                // BUG-341 S15: reuse whole box subtrees from `prev` too, not
+                // just their geometry. Licensed by the same `dom_content_stable`
+                // precondition this call site already establishes above — with
+                // it `false`, `clean_subtrees` stays empty and the flag is inert.
+                lumen_layout::box_tree::set_incremental_box_build(true);
                 let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
                     doc,
                     sheet,
@@ -8817,6 +8822,7 @@ impl Lumen {
                     prev,
                     &delta,
                 );
+                lumen_layout::box_tree::set_incremental_box_build(false);
                 lumen_layout::counters::set_incremental_restyle(false);
                 result
             }
@@ -9770,9 +9776,14 @@ impl Lumen {
             let dom_content_stable = touched.nodes.is_empty();
             let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, dom_content_stable };
             lumen_layout::counters::set_incremental_restyle(true);
+            // BUG-341 S15 — see the twin call in `relayout_chrome_host`: the
+            // box-build reuse rides on the same `dom_content_stable` precondition
+            // computed just above.
+            lumen_layout::box_tree::set_incremental_box_build(true);
             let result = relayout_page_incremental_restyle(
                 src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb, &delta,
             );
+            lumen_layout::box_tree::set_incremental_box_build(false);
             lumen_layout::counters::set_incremental_restyle(false);
             Some(result)
         } else {
@@ -24591,7 +24602,7 @@ mod tests {
         hyp: &KnuthLiangHyphenation,
         hover: Option<lumen_dom::NodeId>,
         state: &mut Cc12IncrementalState,
-    ) -> f64 {
+    ) -> (f64, lumen_layout::box_tree::BoxBuildStats) {
         let touched = lumen_chrome::bind_model_tracked(doc, model);
         lumen_layout::set_interactive_state(hover, None, None);
         let new_interactive = (hover, None, None);
@@ -24621,9 +24632,11 @@ mod tests {
                     dom_content_stable: touched.is_empty(),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
+                lumen_layout::box_tree::set_incremental_box_build(true);
                 let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
                     doc, sheet, viewport, measurer, hyp, false, prev, &delta,
                 );
+                lumen_layout::box_tree::set_incremental_box_build(false);
                 lumen_layout::counters::set_incremental_restyle(false);
                 result
             }
@@ -24645,13 +24658,16 @@ mod tests {
         let _dl = paint_ordered(&layout);
         let t_paint = t3.elapsed().as_secs_f64() * 1000.0;
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let bb = lumen_layout::box_tree::take_box_build_stats();
         eprintln!(
             "[cc12-split] total={ms:.2} layout={t_layout:.2} clone_tree={t_clone_tree:.2} \
-             clone_styles={t_clone_styles:.2} paint={t_paint:.2}"
+             clone_styles={t_clone_styles:.2} paint={t_paint:.2} \
+             boxes_built={} boxes_reused={}",
+            bb.built, bb.reused
         );
         lumen_layout::clear_interactive_state();
         state.prev_interactive = new_interactive;
-        ms
+        (ms, bb)
     }
 
     /// CC-12 (docs/tasks/p1-css-chrome.md): perf gate for the chrome
@@ -24702,7 +24718,7 @@ mod tests {
         for i in 0..WARMUP + SAMPLES {
             let hover = if i % 2 == 0 { hover_target } else { None };
             let model = cc12_bench_model("");
-            let ms =
+            let (ms, _) =
                 cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut hover_state);
             if i >= WARMUP {
                 hover_stats.record(ms as f32);
@@ -24720,7 +24736,7 @@ mod tests {
                 typed.clear();
             }
             let model = cc12_bench_model(&typed);
-            let ms =
+            let (ms, _) =
                 cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut key_state);
             if i >= WARMUP {
                 key_stats.record(ms as f32);
@@ -24855,6 +24871,67 @@ mod tests {
              with the count that rule accounts for, do not loosen it to a percentage.",
             last.reused_clean,
             last.visited,
+        );
+    }
+
+    /// BUG-341 S15 regression gate: a hover flip that re-cascades nothing must
+    /// not rebuild the box tree either.
+    ///
+    /// After S13/S14 the chrome document's dirty set on a `#sidebar`/`None`
+    /// toggle is empty and `graft_geometry` reuses all 318 boxes — yet the tree
+    /// was still built from scratch every cycle, only to be grafted straight
+    /// back onto the previous geometry (`build_box` was 2.2-2.5 ms of a
+    /// ~3.7 ms cycle, the largest item left). S4's `clean_subtrees` mechanism
+    /// existed for exactly this and had been switched off since S4's own
+    /// measurement rejected it.
+    ///
+    /// The gate is the **count**, not wall-clock: cloning versus rebuilding
+    /// produces the identical tree, so nothing but a counter can tell the two
+    /// apart, and the 15% machine noise this fixture sits in hides the whole
+    /// effect. `built` at single digits means the whole document came across in
+    /// one subtree clone; a regression (e.g. the reuse flag stops reaching the
+    /// rayon workers that build large flex containers, which is precisely what
+    /// happened before S15) sends it back into the hundreds.
+    #[test]
+    fn bug341_s15_hover_flip_reuses_the_box_tree_instead_of_rebuilding_it() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut first_full_built = 0;
+        let mut last = lumen_layout::box_tree::BoxBuildStats::default();
+        for i in 0..4 {
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let (_, bb) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            // Cycle 0 has no `prev` — it is the full-rebuild reference.
+            if i == 0 {
+                first_full_built = bb.built;
+            }
+            last = bb;
+        }
+
+        assert!(
+            first_full_built > 100,
+            "the first (full) cycle should build a non-trivial chrome tree, got {first_full_built}",
+        );
+        assert!(
+            last.reused >= 1,
+            "a hover flip nothing can react to must clone the document's box subtree from the \
+             previous cycle, got {last:?}",
+        );
+        assert!(
+            last.built < 10,
+            "{} boxes were rebuilt on a cycle whose cascade dirty set is empty (full rebuild is \
+             {first_full_built}) — the S4 `clean_subtrees` reuse is not reaching them. Census: \
+             {last:?}",
+            last.built,
         );
     }
 
@@ -25054,7 +25131,7 @@ mod tests {
         let mut state = Cc12IncrementalState::default();
         for i in 0..WARMUP + SAMPLES {
             let hover = if i % 2 == 0 { Some(tab_a) } else { Some(tab_b) };
-            let ms = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            let (ms, _) = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
             if i >= WARMUP {
                 stats.record(ms as f32);
             }
