@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-27",
  "counts": {
-  "open": 52,
+  "open": 53,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 324,
+ "total_bugs": 325,
  "phases": [
   {
    "id": "P0",
@@ -2123,9 +2123,12 @@
       {
        "id": "WPT-VENDOR-element-timing",
        "title": "WPT: вендорить + прогнать категорию `element-timing`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-27: вендорена (`tests/wpt/element-timing/`, 70 файлов: 49 корневых тестовых `.html`, `idlharness.window.js`, `resources/` — хелпер `element-timing-helpers.js` + iframe-фикстуры + svg/png/jpg + 4 Python-хендлера, `META.yml`/`WEB_FEATURES.yml`/`LICENSE-WPT.md`), скоуп ⬜ (Element Timing API — атрибут `elementtiming` + записи `PerformanceElementTiming`). Побочно закрыт survey-gap категории `container-timing` (она ссылалась на невендоренный `/element-timing/resources/element-timing-helpers.js`). Не довендорены `/images/black-rectangle.png`/`green-100x50.png`/`blue.png`, `/common/redirect.py`, `/resources/WebIDLParser.js`+`idlharness.js` — та же методология, что `FileAPI`/`ai`. `run_report.py --all --root element-timing --recursive` прошёл целиком за ~4:16 (52 id, ни одного `.https.` — HTTPS-порт-гэпа здесь нет): 51/52 harness OK, 1/51 сабтестов. Единый root cause — 50 FAIL на `assert_implements: PerformanceElementTiming is not implemented` (Element Timing не реализован вовсе); 1 TIMEOUT — `idlharness.window.html` (404 на невендоренные зависимости, `idl_test is not defined`). Единственный прошедший сабтест (`supported-element-type.html`) вскрыл BUG-354: `PerformanceObserver.supportedEntryTypes` рекламирует 5 нереализованных типов записей (`element`/`event`/`first-input`/`longtask`/`soft-navigation`), из-за чего feature-detection даёт ложноположительный ответ; подтверждено вне WPT `--dump-layout`-пробой",
+       "bugs": [
+        "BUG-354"
+       ]
       },
       {
        "id": "WPT-VENDOR-encoding",
@@ -6275,6 +6278,13 @@
    "status": "open",
    "title": "`element.focus()`/`blur()` отсутствуют на ЛЮБОМ элементе (включая `<input>`/`<textarea>`/`document.body`), `document.activeElement` отсутствует вовсе, `document…",
    "component": "js (`crates/js/src/dom.rs` — живой `Element`/`HTMLElement` и объект `document`), shell (`crates/shell/src/main.rs::focused_node` — уже существующее нативное состояние фокуса)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-354": {
+   "status": "open",
+   "title": "`PerformanceObserver.supportedEntryTypes` возвращает фиксированный список из 12 типов, из которых **пять не реализованы вовсе**: `element`, `event`, `first-inpu…",
+   "component": "js (`crates/js/src/dom.rs:11067-11074` — захардкоженный аксессор `supportedEntryTypes`, плюс `observe()` рядом)",
    "date": null,
    "debtor": false
   }
