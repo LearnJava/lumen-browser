@@ -2423,6 +2423,112 @@ own subtree wasn't recorded are reconstructed from scratch rather than moved
 across. Get that census before designing — three slices running, the planned
 premise has not been where the time was.
 
+## S18 — the reuse claim the next two stages re-derived from scratch
+
+**Branch `p1-bug341-s18`.** The queue asked for the reuse *granularity*, and for
+the census first.
+
+### The census, first
+
+`bug341_s18_keystroke_box_build_census` (new, `#[ignore]`d diagnostic in
+`lumen-shell`) logs the `NodeId` of every box a cycle really builds — a
+process-wide log, not a thread-local one, because `build_box` fans out over
+rayon workers (S15's trap). For the `CC12_KEY` cycle:
+
+```
+built=28 (distinct 28) reused=10 chain_len=11
+on-chain:        11 — Document html body div.stage div.app-frame div.app-body
+                      div.main-col div.toolbar div.omnibox-wrap div.omnibox input#omniInput
+non-element:     15 — doctype, 7 comments, 7 whitespace text nodes
+elem-not-clean:   0
+clean-but-built:  2 — svg, aside#sidebar  (no box in `prev`: display:none ⇒ Skip ⇒ filtered out)
+chain child slots total=66 reused=10 built=27
+cascade_recomputed=1  compute_style_calls=31
+```
+
+So the 28 are: the 11-level ancestor chain (irreducible without a finer unit
+than "element subtree"), 15 non-element children of those ancestors, and 2
+elements with no predecessor box. The queue's hypothesis — that the 15
+non-elements are worth chasing — **is wrong, and the counter says so before any
+code changed**: they cost one `compute_style` each (`counters::walk` records no
+style for a non-element, so `build_box`'s cache lookup misses), and the whole
+cycle runs 31 `compute_style` calls against a cascade stage that runs 1. At S10's
+measured ~0.9 µs per call that is ~30 µs of a ~2600 µs cycle.
+
+### Where the time actually was
+
+The stage profile of the *incremental* path (`LUMEN_PROFILE_TREE=1`, no
+`DETAIL` — the detail scopes opened on rayon workers are dropped, so the
+in-`build_box` breakdown understates itself):
+
+| stage | keystroke cycle |
+|---|---:|
+| `precompute_counters` | 0.51-0.67 ms |
+| `build_box` | 0.98-1.02 ms — **of which 0.45 ms is one deep clone of 299 boxes** |
+| `graft_geometry` | 0.40-0.98 ms |
+| `lay_out` | 0.07-0.13 ms |
+
+The unit of reuse was doing its job (299 of 318 boxes came across without being
+rebuilt) and then having that work re-derived twice. `build_box_or_reuse` clones
+a subtree out of `prev`; `mark_subtree_dirty` then marks all 318 boxes dirty;
+`graft_geometry` then compares each box **against the very box it was copied
+from** and clears the bit again. Two full walks per frame to re-establish a fact
+the box-build stage had already proved by construction.
+
+### The fix
+
+A `DirtyBits::REUSED_SUBTREE` claim, set by `build_box_or_reuse` on the root of
+each wholesale clone and consumed in O(1) by `graft_geometry_with_cascade`
+(clear the bit, mark clean, return "reusable" without descending). It rides in
+the box's own `dirty` field rather than in a side table precisely because the
+producers are rayon workers: a shared set would need a lock on the hot path and
+a thread-local one would lose every claim made on a worker.
+
+`mark_subtree_dirty` deliberately keeps walking *through* a claim (it only
+preserves the bit instead of overwriting it). That is what keeps every path out
+of the graft that does not explicitly clean a box — a structural mismatch, a
+trailing child with no predecessor — at its exact pre-S18 meaning: the box stays
+dirty and is laid out fresh. The alternative (skip the mark walk too) would have
+needed an explicit claim-revocation pass on each of those paths, trading a byte
+write per box for a correctness surface where a missed revocation is a *stale
+clean box*, i.e. visible corruption rather than a slow frame.
+
+### Measured
+
+Stage profile, keystroke cycle: `graft_geometry` **0.40-0.98 → 0.04-0.05 ms**.
+The graft now compares 4 boxes on a hover flip (3 rebuilt + 1 claim standing for
+the other 314) and <100 on a keystroke, against 318 before.
+
+Wall-clock, interleaved A/B ×3 against `main` (`1ae2a6ef3`), by min:
+`CC12_KEY` 3.00/2.50/2.58 → **2.09/2.14/2.38 ms** (≈8-14 %, the groups do not
+overlap). `CC12_HOVER` 1.99/1.58/1.47 → 1.50/1.56/1.51 ms — **within this
+machine's noise**, no claim made. Gates: `CC12_HOVER` in budget by min, `CC12_KEY`
+≈1.1-1.2× by min (was ≈1.3×); both still red on p95.
+
+The S13 gate and the S13 census now run with `box_reuse_off` — with reuse on
+they would measure "1 box visited, 1 reused" instead of the per-box reject
+census they were written for. That is the S18 claim working, not a regression.
+
+### What S19 should look at
+
+The census leaves two deep copies of the whole tree in every frame, and they are
+now the largest items:
+
+- **0.45 ms** — `build_box_or_reuse`'s `(*prev_box).clone()`, 299 boxes copied
+  out of a `prev` the caller borrows. Making the pipeline hand `prev` over by
+  value would let those subtrees be *moved* instead: detach the maximal
+  reusable roots out of the owned `prev` into an id→subtree map before the
+  build, leave the gutted positions to the graft — which, thanks to this
+  slice, already skips exactly those positions in O(1).
+- **~0.7 ms** — the pipeline's own `prev_pristine_layout = layout.clone()`
+  (`clone_tree` in the `[cc12-split]` line), a second full copy for the same
+  purpose.
+
+Both are the same question one level up: the unit of reuse is a *copy*, and it
+wants to be a *move* (or a share). `precompute_counters` at ~0.55 ms for a
+single recomputed node is the third item — the `CounterMap` is rebuilt from
+scratch every cycle.
+
 ## Repro
 
 ```bash
@@ -2432,4 +2538,5 @@ cargo test -p lumen-shell --profile dev-release bug341_s4_incremental_box_build_
 cargo test -p lumen-shell --profile dev-release bug341_s5_incremental_pipeline_share -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s13_graft_reject_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s17_keystroke_restyle_census -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s18_keystroke_box_build_census -- --ignored --nocapture
 ```

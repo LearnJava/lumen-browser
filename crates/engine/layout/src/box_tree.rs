@@ -100,6 +100,67 @@ pub fn take_box_build_stats() -> BoxBuildStats {
     BOX_BUILD_STATS.with(|s| s.replace(BoxBuildStats::default()))
 }
 
+/// BUG-341 S18 — census hook: when on, every real `build_box` call appends the
+/// `NodeId` it built to a process-wide log, so a diagnostic can ask *which*
+/// boxes a cycle rebuilt, not merely how many.
+///
+/// Process-wide (a `Mutex`, not a thread-local) on purpose: `build_box` fans
+/// large flex/grid containers out over rayon workers, and a thread-local log
+/// would silently report only the boxes that happened to be built on the
+/// calling thread — the S15 trap. Off by default; the [`AtomicBool`] is checked
+/// before the lock so the hot path costs one relaxed load.
+static BOX_BUILD_LOG_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The log itself — see [`BOX_BUILD_LOG_ON`].
+static BOX_BUILD_LOG: std::sync::Mutex<Vec<NodeId>> = std::sync::Mutex::new(Vec::new());
+
+/// Enables/disables the BUG-341 S18 per-node build census, clearing the log.
+///
+/// Process-wide, so a test that turns it on must not run concurrently with
+/// another layout pass in the same process — the census tests are `#[ignore]`d
+/// manual diagnostics for exactly that reason.
+pub fn set_box_build_diagnostics(on: bool) {
+    if let Ok(mut log) = BOX_BUILD_LOG.lock() {
+        log.clear();
+    }
+    BOX_BUILD_LOG_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Drains the BUG-341 S18 build census — the `NodeId` of every box really built
+/// since the last drain, in completion order (see [`set_box_build_diagnostics`]).
+pub fn take_box_build_log() -> Vec<NodeId> {
+    BOX_BUILD_LOG.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default()
+}
+
+/// BUG-341 S18 census: nanoseconds spent inside `build_box_or_reuse`'s
+/// whole-subtree `clone`, and the number of boxes those clones copied. Only
+/// accumulated while [`set_box_build_diagnostics`] is on — the box count needs
+/// its own traversal, which must not run in production.
+static BOX_CLONE_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Boxes copied by the clones timed in [`BOX_CLONE_NS`].
+static BOX_CLONE_BOXES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Drains the BUG-341 S18 clone census: `(nanoseconds, boxes copied)`.
+pub fn take_box_clone_stats() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (BOX_CLONE_NS.swap(0, Relaxed), BOX_CLONE_BOXES.swap(0, Relaxed))
+}
+
+/// Number of boxes in `b`'s subtree, inclusive — census only.
+fn count_boxes(b: &LayoutBox) -> u64 {
+    1 + b.children.iter().map(count_boxes).sum::<u64>()
+}
+
+/// Records `id` in the census log when [`set_box_build_diagnostics`] is on.
+fn note_box_built(id: NodeId) {
+    if BOX_BUILD_LOG_ON.load(std::sync::atomic::Ordering::Relaxed)
+        && let Ok(mut log) = BOX_BUILD_LOG.lock()
+    {
+        log.push(id);
+    }
+}
+
 /// Folds `d` into the current thread's [`BoxBuildStats`] tally.
 fn add_box_build_stats(d: BoxBuildStats) {
     BOX_BUILD_STATS.with(|s| {
@@ -4139,7 +4200,25 @@ fn build_box_or_reuse(
             v.reused += 1;
             s.set(v);
         });
-        return (*prev_box).clone();
+        let mut cloned = if BOX_BUILD_LOG_ON.load(std::sync::atomic::Ordering::Relaxed) {
+            use std::sync::atomic::Ordering::Relaxed;
+            let t = std::time::Instant::now();
+            let cloned = (*prev_box).clone();
+            BOX_CLONE_NS.fetch_add(t.elapsed().as_nanos() as u64, Relaxed);
+            BOX_CLONE_BOXES.fetch_add(count_boxes(&cloned), Relaxed);
+            cloned
+        } else {
+            (*prev_box).clone()
+        };
+        // BUG-341 S18: tell the two stages that follow — `mark_subtree_dirty`
+        // and `graft_geometry` — that this subtree came out of `prev` itself.
+        // Both of them exist to answer "may this subtree keep the previous
+        // pass's geometry", and here the answer is known by construction, so
+        // both can honour it at the root instead of walking the copy against
+        // its own original. Only the root carries the flag: the clone stops the
+        // recursion, so nothing inside it can hold a claim of its own.
+        cloned.dirty = crate::incremental::DirtyBits::REUSED_SUBTREE;
+        return cloned;
     }
     build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev_index)
 }
@@ -4202,6 +4281,7 @@ fn build_box(
         v.built += 1;
         s.set(v);
     });
+    note_box_built(id);
     // BUG-284: `precompute_counters` already ran a full document-order cascade
     // pass over this exact tree (same `inherited` chain, same sheet/viewport/
     // dark_mode) to resolve counter-reset/increment/set — reuse its cached
