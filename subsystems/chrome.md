@@ -271,9 +271,28 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   HashSet<NodeId>>>` collects the touched set only while `bind_model_tracked` is on the call stack;
   plain `bind_model` (e.g. the very first bind, before any previous cascade cache exists) pays no
   tracking cost. Newly-created nodes need no explicit reporting: `incremental_precompute_counters`
-  already force-recomputes any node absent from `prev_styles`, and this pipeline's `build_box` always
-  reads live DOM content regardless of the cascade's dirty-root-set (`dom_content_stable: false` on any
-  DOM-mutation delta) — see `crates/engine/layout/subsystems/layout.md` and BUG-341 "S6".
+  already force-recomputes any node absent from `prev_styles` — see
+  `crates/engine/layout/subsystems/layout.md` and BUG-341 "S6".
+- **BUG-341 S16 — the tracker is now complete for *content*, and that completeness is structural.**
+  `bind_model_tracked` returns `ChromeMutations { selector, content }`: `selector` is S6's set above
+  (drives the cascade root-set), `content` additionally names every node whose text data or child list
+  moved (drives `lumen_layout::counters::ContentDirty::Nodes`, i.e. which `LayoutBox` subtrees may be
+  cloned rather than rebuilt). A miss here is not a slow frame — it is a **stale box on screen** — so
+  the invariant is not maintained by inspection: every raw `Document` mutator goes through
+  `attach_child` / `insert_child_before` / `detach_node` / `set_attr` / `remove_attr` / `set_text`,
+  and `every_dom_mutation_in_model_rs_goes_through_a_tracked_primitive` scans this file's own source
+  (`include_str!`) rejecting any un-marked `doc.append_child(` / `doc.insert_before(` / `doc.detach(` /
+  `doc.get_mut(`. If it fails on your new code, route the call through a wrapper — don't add the marker.
+  **Gotcha this surfaced (the same shape as `bind_palette`'s, two slices later, and it would have
+  silently undone S15):** twelve cells (`bind_cert`'s title/value/fingerprint, `#findCount`,
+  `#statTrackers`, the bookmarks/history titles) called `set_text`, which detached and recreated its
+  text node on *every* bind, changed or not. Nothing noticed while only selector-relevance was tracked;
+  the moment content was, an unchanged rebind reported twelve content-dirty nodes and would have
+  cancelled whole-document box reuse on every hover frame. `set_text` absorbed `set_text_in_place`'s
+  compare-then-write-in-place body — there is now one text setter, and it is a genuine no-op when the
+  string is unchanged. `bind_omnibox`'s warning banner got the same treatment. **Any new binding must
+  compare before it writes**; `bind_model_tracked_reports_no_content_for_an_unchanged_model` is the
+  gate.
   **Gotcha this surfaced**: `bind_palette` used to unconditionally remove+recreate its `.cp-empty`
   "nothing found" placeholder on *every* call whenever `results` was empty (the common case — palette
   normally closed), which made `#cpList` permanently "touched" and needlessly widened `dirty_roots`

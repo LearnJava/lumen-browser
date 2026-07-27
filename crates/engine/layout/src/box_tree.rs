@@ -17271,7 +17271,7 @@ mod tests {
         let delta = RestyleDelta {
             prev_styles: baseline_counters.styles(),
             dirty_roots,
-            dom_content_stable: true,
+            content_dirty: crate::counters::ContentDirty::Nothing,
         };
         set_incremental_restyle(true);
         crate::style::invalidate_rule_idx_cache();
@@ -17378,7 +17378,7 @@ mod tests {
         let delta = RestyleDelta {
             prev_styles: baseline_counters.styles(),
             dirty_roots,
-            dom_content_stable: false,
+            content_dirty: crate::counters::ContentDirty::Untracked,
         };
         set_incremental_restyle(true);
         crate::style::invalidate_rule_idx_cache();
@@ -17423,8 +17423,131 @@ mod tests {
         }
         assert_eq!(
             reused, 0,
-            "a DOM class mutation (dom_content_stable=false) must never reuse a \
+            "a DOM class mutation (ContentDirty::Untracked) must never reuse a \
              box subtree — got {reused} reuses",
+        );
+    }
+
+    /// BUG-341 S16 gate: a text-only mutation must cost exactly the subtree that
+    /// contains it, and must not go stale.
+    ///
+    /// Before S16 the whole document was declared content-unstable by a single
+    /// boolean, so this cycle rebuilt every box. The mechanism replacing it is
+    /// the *risky* half of the slice: if the mutation source under-reports, a
+    /// reused subtree keeps the old text — visible corruption, not a slow frame.
+    /// Hence both halves are asserted here, and in this order:
+    ///
+    /// 1. **Correctness first** — every `InlineSegment`'s text in the
+    ///    incremental tree equals a full rebuild's. This is what fails if
+    ///    `ContentDirty` stops propagating up from the mutated text node.
+    /// 2. **Then the counter** — the untouched sibling subtree is cloned, and
+    ///    the mutated node's own chain is not. A mechanism that reuses nothing
+    ///    passes (1) perfectly and is simply the pre-S16 behaviour (S8's
+    ///    lesson), so only a count can tell the two apart.
+    #[test]
+    fn box_build_text_mutation_reuses_everything_but_the_mutated_chain() {
+        use lumen_dom::{build_flat_tree, NodeData};
+        use crate::counters::{
+            build_counter_style_registry, incremental_precompute_counters, precompute_counters,
+            set_incremental_restyle, ContentDirty, RestyleDelta,
+        };
+        use crate::style::ComputedStyle;
+
+        let html = r#"<div id="host"><p id="line">short</p></div>
+        <div id="unrelated"><p>x</p><p>y</p><p>z</p></div>"#;
+        let mut doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("p { color: black; }");
+        let vp = Size::new(800.0, 600.0);
+        let flat = build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let registry = build_counter_style_registry(&sheet);
+
+        crate::style::invalidate_rule_idx_cache();
+        let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let prev_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
+        );
+
+        // The mutation: text data only. No attribute, no structure, no style —
+        // precisely the case the cascade is blind to.
+        let line = doc.find_by_id("line").expect("#line must exist");
+        let text_node = *doc
+            .get(line)
+            .children
+            .first()
+            .expect("#line must have a text child");
+        match &mut doc.get_mut(text_node).data {
+            NodeData::Text(s) => *s = "a considerably longer replacement string".to_owned(),
+            other => panic!("expected a text node, got {other:?}"),
+        }
+
+        crate::style::invalidate_rule_idx_cache();
+        let full_after_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let full_after_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &full_after_counters, &registry, false, None,
+        );
+
+        // A complete content report: exactly the mutated text node. No cascade
+        // dirty root at all — text cannot change selector matching.
+        let content = std::collections::HashSet::from([text_node]);
+        let delta = RestyleDelta {
+            prev_styles: baseline_counters.styles(),
+            dirty_roots: std::collections::HashSet::new(),
+            content_dirty: ContentDirty::Nodes(&content),
+        };
+        set_incremental_restyle(true);
+        crate::style::invalidate_rule_idx_cache();
+        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        set_incremental_restyle(false);
+
+        super::set_incremental_box_build(true);
+        let _ = super::take_box_build_stats();
+        let incr_tree = super::incremental_build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &prev_tree,
+        );
+        let bb = super::take_box_build_stats();
+        super::set_incremental_box_build(false);
+
+        fn collect_text(b: &super::LayoutBox, out: &mut Vec<String>) {
+            if let super::BoxKind::InlineRun { segments, .. } = &b.kind {
+                for seg in segments {
+                    out.push(seg.text.clone());
+                }
+            }
+            for c in &b.children {
+                collect_text(c, out);
+            }
+        }
+        let mut incr_text = Vec::new();
+        let mut full_text = Vec::new();
+        collect_text(&incr_tree, &mut incr_text);
+        collect_text(&full_after_tree, &mut full_text);
+        assert_eq!(
+            incr_text, full_text,
+            "the incremental tree carries stale text — a subtree containing the mutated text \
+             node was reused. `ContentDirty` must propagate from the text node up through every \
+             ancestor's `children_clean`.",
+        );
+        assert!(
+            incr_text.iter().any(|t| t.contains("considerably longer")),
+            "sanity: the mutation must be visible in the rebuilt tree at all, got {incr_text:?}",
+        );
+
+        // The counter half: #unrelated is untouched, so it must come across as
+        // a clone; the mutated chain must not.
+        assert!(
+            bb.reused > 0,
+            "a text-only mutation must still let untouched subtrees (#unrelated) be cloned — \
+             got {bb:?}. This is the whole point of S16: pre-S16 the document-wide flag made \
+             this 0.",
+        );
+        assert!(
+            !incr_counters.clean_subtrees().contains(&line),
+            "#line contains the mutated text node and must not be marked clean",
+        );
+        assert!(
+            !incr_counters.clean_subtrees().contains(&text_node),
+            "the mutated text node itself must not be marked clean",
         );
     }
 }
