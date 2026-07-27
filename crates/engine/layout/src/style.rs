@@ -69,16 +69,6 @@ struct CascadeIndex {
     /// such rule — every page that is not Lumen's own chrome — all three were
     /// pure waste. Node-independent, so it is decided once per sheet here.
     has_webkit_scrollbar_rules: bool,
-    /// BUG-341 S10 — whether every `::-webkit-scrollbar*` rule in the sheet
-    /// selects *independently of which element is being styled*: a bare
-    /// `::-webkit-scrollbar` (optionally `*::-webkit-scrollbar`) with no
-    /// combinator, no class/id/type/attribute/pseudo-class constraint, and no
-    /// `attr()` in its declarations. Lumen's own chrome is written exactly that
-    /// way. When it holds, two elements with the same pseudo-inheritance base
-    /// necessarily compute the same scrollbar values — which is what lets
-    /// `apply_webkit_scrollbar_pseudos` reuse the inherited ones instead of
-    /// re-running three cascades per element.
-    webkit_scrollbar_rules_node_independent: bool,
     /// BUG-341 S10 — whether any declaration in the sheet mentions `quote`
     /// (`content: open-quote`, `quotes: …`). `counters::walk` probes
     /// `::before`/`::after` on every node solely to keep the CSS Generated
@@ -102,7 +92,6 @@ impl CascadeIndex {
             active_media: Vec::new(),
             active_supports: Vec::new(),
             has_webkit_scrollbar_rules: false,
-            webkit_scrollbar_rules_node_independent: false,
             has_quote_content: false,
         }
     }
@@ -119,12 +108,6 @@ impl CascadeIndex {
                 .collect(),
             has_webkit_scrollbar_rules: all_rules(sheet)
                 .any(|r| r.selectors.iter().any(selector_targets_webkit_scrollbar)),
-            webkit_scrollbar_rules_node_independent: all_rules(sheet)
-                .filter(|r| r.selectors.iter().any(selector_targets_webkit_scrollbar))
-                .all(|r| {
-                    r.selectors.iter().all(webkit_scrollbar_selector_is_node_independent)
-                        && r.declarations.iter().all(|d| !d.value.contains("attr("))
-                }),
             has_quote_content: all_rules(sheet).any(|r| {
                 r.declarations
                     .iter()
@@ -160,20 +143,6 @@ fn selector_targets_webkit_scrollbar(selector: &ComplexSelector) -> bool {
         }
         _ => false,
     })
-}
-
-/// Whether `selector` picks its subject without looking at the element —
-/// see [`CascadeIndex::webkit_scrollbar_rules_node_independent`]. Only called
-/// for selectors that already target a `::-webkit-scrollbar*` pseudo-element.
-fn webkit_scrollbar_selector_is_node_independent(selector: &ComplexSelector) -> bool {
-    // A combinator means an ancestor/sibling has to match — element-dependent.
-    selector.tail.is_empty()
-        && selector.head.parts.iter().all(|p| {
-            matches!(
-                p,
-                SimpleSelector::Universal | SimpleSelector::PseudoElement(_)
-            )
-        })
 }
 
 /// Case-insensitive `value.contains("quote")` without allocating — see
@@ -7512,9 +7481,43 @@ pub fn compute_style(
         _ => None,
     };
 
-    apply_webkit_scrollbar_pseudos(doc, node, sheet, &mut style, inherited, viewport, dark_mode);
+    apply_webkit_scrollbar_pseudos(doc, node, sheet, &mut style, viewport, dark_mode);
 
     style
+}
+
+/// Whether a scrollbar can ever be shown for `node`, i.e. whether translating
+/// `::-webkit-scrollbar*` onto its `scrollbar-width`/`scrollbar-color` can have
+/// any effect (BUG-341 S11).
+///
+/// The condition mirrors paint's own: `lumen_paint::display_list` emits a
+/// scrollbar only for a box whose `overflow-x`/`overflow-y` is `scroll` or
+/// `auto` (`overflow: hidden` scrolls programmatically but draws no bar), and
+/// `box_tree::scrollbar_gutter_{inline,block}` reserve gutter under the same
+/// condition. The root element and `<body>` are included regardless: they are
+/// the conventional target for styling the *page* scrollbar, and it costs two
+/// elements per document to keep that idiom working if the viewport scrollbar
+/// ever starts reading its style from them.
+///
+/// **This is a deliberate behaviour change** (user decision, 2026-07-27),
+/// not a pure optimization. Before it, the translation ran on *every* element,
+/// so `::-webkit-scrollbar` rules matching a non-scrollable element wrote
+/// `scrollbar-width`/`scrollbar-color` there and — both being inherited
+/// properties — leaked down to scrollable descendants that matched no rule of
+/// their own. WebKit has no such inheritance: `::-webkit-scrollbar` styles the
+/// scrollbar of the element it matches. Lumen's leak was an artifact of
+/// translating a pseudo-element onto standard inherited properties, so
+/// narrowing is also a fidelity fix. The standard `scrollbar-width` /
+/// `scrollbar-color` properties are untouched and keep inheriting normally.
+fn element_can_have_scrollbar(doc: &Document, node: NodeId, style: &ComputedStyle) -> bool {
+    if matches!(style.overflow_x, Overflow::Scroll | Overflow::Auto)
+        || matches!(style.overflow_y, Overflow::Scroll | Overflow::Auto)
+    {
+        return true;
+    }
+    doc.get(node)
+        .element_name()
+        .is_some_and(|q| matches!(q.local.as_ref(), "html" | "body"))
 }
 
 /// CC-CSS-1: legacy WebKit scrollbar pseudo-elements (`::-webkit-scrollbar`,
@@ -7527,51 +7530,26 @@ pub fn compute_style(
 /// `apply_declaration` catch-all (parsed, then silently ignored) like any other
 /// unrecognized property.
 ///
-/// `inherited` is the originating element's parent style, used only by the
-/// BUG-341 S10 fast paths below — both `scrollbar-width` and `scrollbar-color`
-/// are inherited properties, so `style` already carries the parent's result
-/// when this is called.
+/// **Runs only for elements that can actually have a scrollbar** — see
+/// [`element_can_have_scrollbar`] and BUG-341 "S11" for the behaviour change
+/// this implies.
 fn apply_webkit_scrollbar_pseudos(
     doc: &Document,
     node: NodeId,
     sheet: &Stylesheet,
     style: &mut ComputedStyle,
-    inherited: &ComputedStyle,
     viewport: Size,
     dark_mode: bool,
 ) {
     // BUG-341 S10: three full pseudo-element cascades per element — 55% of
     // `compute_style` on Lumen's own chrome, and on every other sheet not one of
-    // them can match. Both facts are node-independent and decided once per sheet.
-    let (any_rules, node_independent) = with_cascade_index(sheet, viewport, dark_mode, |idx| {
-        (idx.has_webkit_scrollbar_rules, idx.webkit_scrollbar_rules_node_independent)
-    });
-    if !any_rules {
+    // them can match. Node-independent, so it is decided once per sheet.
+    if !with_cascade_index(sheet, viewport, dark_mode, |idx| idx.has_webkit_scrollbar_rules) {
         return;
     }
-    // Fast path: the rules select the same way for every element, so the three
-    // cascades are a pure function of the pseudo-inheritance base. When this
-    // element's base is identical to its parent's, the results are identical
-    // too — and the parent's results are exactly what `scrollbar-width` /
-    // `scrollbar-color` inheritance has already written into `style`.
-    //
-    // Comparing the *constructed bases* rather than a hand-listed set of
-    // fields is deliberate: `pseudo_inherited_style` is the single definition
-    // of what a pseudo-element inherits, so a property added to it later is
-    // covered here automatically instead of silently weakening the check.
-    //
-    // The parent must be a real element: the root element's `inherited` is a
-    // synthetic `ComputedStyle::root()` that never went through this function,
-    // so its `scrollbar-width`/`scrollbar-color` are initial values, not a
-    // result to reuse. Reuse then chains inductively down the tree.
-    let parent_is_element = doc
-        .get(node)
-        .parent
-        .is_some_and(|p| matches!(doc.get(p).data, NodeData::Element { .. }));
-    if node_independent
-        && parent_is_element
-        && pseudo_inherited_style(style) == pseudo_inherited_style(inherited)
-    {
+    // BUG-341 S11: and of the sheets that do declare them, only scroll
+    // containers can show the result.
+    if !element_can_have_scrollbar(doc, node, style) {
         return;
     }
     #[cfg(test)]
@@ -22506,17 +22484,25 @@ mod tests {
         // CC-CSS-1: `::-webkit-scrollbar{width}` has no standard keyword equivalent —
         // bucketed into thin (<=9px) vs auto (>9px). The chrome reference's own
         // 9px falls on the `thin` side of the bucket boundary.
-        let sheet = lumen_css_parser::parse("div::-webkit-scrollbar { width: 9px; }");
+        // BUG-341 S11: the translation only runs for elements that can show a
+        // scrollbar, so the subject has to be a scroll container.
+        let sheet = lumen_css_parser::parse(
+            "div { overflow: auto; } div::-webkit-scrollbar { width: 9px; }",
+        );
         let doc = lumen_html_parser::parse("<div>x</div>");
         let did = doc.get(doc.body().unwrap()).children[0];
         let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
         assert_eq!(st.scrollbar_width, ScrollbarWidth::Thin);
 
-        let sheet = lumen_css_parser::parse("div::-webkit-scrollbar { width: 16px; }");
+        let sheet = lumen_css_parser::parse(
+            "div { overflow: auto; } div::-webkit-scrollbar { width: 16px; }",
+        );
         let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
         assert_eq!(st.scrollbar_width, ScrollbarWidth::Auto);
 
-        let sheet = lumen_css_parser::parse("div::-webkit-scrollbar { width: 0; }");
+        let sheet = lumen_css_parser::parse(
+            "div { overflow: auto; } div::-webkit-scrollbar { width: 0; }",
+        );
         let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
         assert_eq!(st.scrollbar_width, ScrollbarWidth::None);
     }
@@ -22526,7 +22512,8 @@ mod tests {
         // CC-CSS-1: `-thumb`/`-track{background}` translate onto the standard
         // `scrollbar-color` (thumb, track) pair — chrome reference pattern.
         let sheet = lumen_css_parser::parse(
-            "div::-webkit-scrollbar-thumb { background: #112233; } \
+            "div { overflow: auto; } \
+             div::-webkit-scrollbar-thumb { background: #112233; } \
              div::-webkit-scrollbar-track { background: #445566; }",
         );
         let doc = lumen_html_parser::parse("<div>x</div>");
@@ -22542,7 +22529,9 @@ mod tests {
         // Only one side declared: no honest per-side default to graft onto the
         // missing side, so the standard `scrollbar-color` stays untouched (falls
         // back to UA defaults in paint) rather than fabricating a track color.
-        let sheet = lumen_css_parser::parse("div::-webkit-scrollbar-thumb { background: #112233; }");
+        let sheet = lumen_css_parser::parse(
+            "div { overflow: auto; } div::-webkit-scrollbar-thumb { background: #112233; }",
+        );
         let doc = lumen_html_parser::parse("<div>x</div>");
         let did = doc.get(doc.body().unwrap()).children[0];
         let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
@@ -23981,7 +23970,7 @@ mod tests {
 
     /// Elements in `html`, each with its own computed style, cascaded in
     /// document order so parent styles are the real inherited ones.
-    fn cascade_all(html: &str, css: &str) -> Vec<ComputedStyle> {
+    fn cascade_all(html: &str, css: &str) -> Vec<(String, ComputedStyle)> {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let vp = Size::new(800.0, 600.0);
@@ -23993,11 +23982,19 @@ mod tests {
             for &child in doc.get(id).children.iter().rev() {
                 stack.push((child, style.clone()));
             }
-            if matches!(doc.get(id).data, NodeData::Element { .. }) {
-                out.push(style);
+            if let Some(q) = doc.get(id).element_name() {
+                out.push((q.local.to_string(), style));
             }
         }
         out
+    }
+
+    /// The one element with tag `tag` in a `cascade_all` result.
+    fn only(styles: &[(String, ComputedStyle)], tag: &str) -> ComputedStyle {
+        let mut found = styles.iter().filter(|(t, _)| t == tag);
+        let style = found.next().unwrap_or_else(|| panic!("no <{tag}> cascaded")).1.clone();
+        assert!(found.next().is_none(), "more than one <{tag}>");
+        style
     }
 
     #[test]
@@ -24016,47 +24013,110 @@ mod tests {
         );
     }
 
+    // BUG-341 S11: the translation runs only where a scrollbar can appear.
+    // `element_can_have_scrollbar`'s doc comment has the reasoning; these pin
+    // both halves of it — that scroll containers still get styled, and that
+    // nothing else pays for (or inherits) the translation.
+
     #[test]
-    fn webkit_scrollbar_cascade_reused_from_parent_when_base_matches() {
+    fn webkit_scrollbar_cascade_only_for_scroll_containers() {
         reset_scrollbar_pseudo_cascades();
         let styles = cascade_all(
-            "<div><p>a</p><p>b</p><span>c</span></div>",
-            "::-webkit-scrollbar { width: 9px; }",
+            "<div class='sc'>a</div><section><p>b</p></section>",
+            ".sc::-webkit-scrollbar { width: 0; } .sc { overflow-y: auto; }",
         );
-        // Every element still ends up with the rule's effect — the fast path
-        // is a reuse, not a skip.
-        assert!(
-            styles.iter().all(|s| s.scrollbar_width == ScrollbarWidth::Thin),
-            "bare `::-webkit-scrollbar` must still reach every element"
+        assert_eq!(
+            only(&styles, "div").scrollbar_width,
+            ScrollbarWidth::None,
+            "a scroll container must still pick up its `::-webkit-scrollbar` rule"
         );
-        // Only the elements whose pseudo-inheritance base differs from their
-        // parent's pay for it — here just the root, since nothing in the sheet
-        // changes an inherited property.
+        assert_eq!(
+            only(&styles, "section").scrollbar_width,
+            ScrollbarWidth::Auto,
+            "an element outside the scroll container's subtree is untouched"
+        );
+        // `<html>` and `<body>` are in the gate unconditionally (they are the
+        // conventional page-scrollbar target), plus the one real scroll
+        // container — everything else is skipped.
         assert_eq!(
             scrollbar_pseudo_cascades(),
-            1,
-            "node-independent scrollbar rules must be cascaded once, then \
-             reused through `scrollbar-width`/`scrollbar-color` inheritance"
+            3,
+            "only html, body and the scroll container may cascade"
         );
     }
 
     #[test]
-    fn webkit_scrollbar_cascade_not_reused_when_rules_are_node_dependent() {
+    fn webkit_scrollbar_translation_does_not_leak_from_a_non_scrollable_element() {
+        // The behaviour BUG-341 S11 removed: a `::-webkit-scrollbar` rule
+        // matching a *non-scrollable* element used to write the inherited
+        // `scrollbar-width` there, from where every descendant picked it up.
+        reset_scrollbar_pseudo_cascades();
+        let styles = cascade_all(
+            "<div class='plain'><p class='sc'>a</p></div>",
+            ".plain::-webkit-scrollbar { width: 0; } .sc { overflow: auto; }",
+        );
+        assert_eq!(
+            only(&styles, "div").scrollbar_width,
+            ScrollbarWidth::Auto,
+            "`.plain` cannot show a scrollbar, so its rule must not apply"
+        );
+        assert_eq!(
+            only(&styles, "p").scrollbar_width,
+            ScrollbarWidth::Auto,
+            "and the scrollable descendant, which matches no rule of its own, \
+             must not inherit it — WebKit has no such inheritance"
+        );
+    }
+
+    #[test]
+    fn webkit_scrollbar_bare_rule_still_reaches_the_page_through_body() {
+        // A bare `::-webkit-scrollbar` (the common page-scrollbar idiom, and
+        // what `assets/chrome/chrome.html` uses) matches `<body>`, which is in
+        // the gate unconditionally — so the standard inherited property carries
+        // the value down exactly as before S11. Nothing on a real page changes.
+        let styles = cascade_all(
+            "<div><p>a</p></div>",
+            "::-webkit-scrollbar { width: 9px; }",
+        );
+        assert_eq!(only(&styles, "body").scrollbar_width, ScrollbarWidth::Thin);
+        assert_eq!(only(&styles, "p").scrollbar_width, ScrollbarWidth::Thin);
+    }
+
+    #[test]
+    fn webkit_scrollbar_cascade_skipped_for_overflow_hidden() {
+        reset_scrollbar_pseudo_cascades();
+        let styles = cascade_all(
+            "<div class='clip'>a</div>",
+            ".clip::-webkit-scrollbar { width: 0; } .clip { overflow: hidden; }",
+        );
+        // `overflow: hidden` scrolls programmatically but draws no bar — the
+        // same condition paint's `emit_scrollbars` uses.
+        assert_eq!(only(&styles, "div").scrollbar_width, ScrollbarWidth::Auto);
+        assert_eq!(scrollbar_pseudo_cascades(), 2, "html and body only");
+    }
+
+    #[test]
+    fn standard_scrollbar_width_still_inherits() {
+        // The narrowing applies to the `::-webkit-scrollbar*` translation, not
+        // to the standard properties: `scrollbar-width` is inherited by CSS
+        // Scrollbars L1 §2 and must keep reaching non-scrollable descendants.
+        let styles = cascade_all("<div><p>a</p></div>", "div { scrollbar-width: thin; }");
+        assert_eq!(only(&styles, "p").scrollbar_width, ScrollbarWidth::Thin);
+    }
+
+    #[test]
+    fn webkit_scrollbar_class_qualified_rule_applies_to_its_scroll_container() {
         reset_scrollbar_pseudo_cascades();
         let styles = cascade_all(
             "<div class='sb'><p>a</p></div>",
-            ".sb::-webkit-scrollbar { width: 0; }",
+            ".sb::-webkit-scrollbar { width: 0; } .sb { overflow: scroll; }",
         );
         assert_eq!(
-            scrollbar_pseudo_cascades() as usize,
-            styles.len(),
-            "a class-qualified scrollbar rule can match one element and not \
-             another, so no element may reuse its parent's result"
+            only(&styles, "div").scrollbar_width,
+            ScrollbarWidth::None,
+            "`.sb::-webkit-scrollbar {{ width: 0 }}` must still suppress the bar"
         );
-        assert!(
-            styles.iter().any(|s| s.scrollbar_width == ScrollbarWidth::None),
-            "`.sb::-webkit-scrollbar {{ width: 0 }}` must still apply"
-        );
+        assert_eq!(scrollbar_pseudo_cascades(), 3, "html, body and .sb");
     }
 
     #[test]
