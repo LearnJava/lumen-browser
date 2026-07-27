@@ -1701,6 +1701,395 @@ re-laid-out on a hover flip that changes one subtree.** Both `build_box`
   re-measuring — but only after the dirty-set question above, which may make the
   mechanism unnecessary.
 
+## S13 — layout's own output was reading as a style change
+
+S12 left one question: **1696 of 3121 boxes re-laid-out on a hover flip that
+changes one subtree** — genuinely changed, or collateral? The answer is neither
+of the two causes S12 guessed at (conservative root-set, `kind_layout_eq`
+rejects). None of those boxes had changed at all.
+
+### The census
+
+`graft_geometry` now tallies why it accepts or refuses each box
+(`incremental::GraftStats`, `take_graft_stats`), with an opt-in attribution pass
+behind `set_graft_diagnostics`. On the CC-12 chrome document, before this slice:
+
+| | `CC12_HOVER` | `SIBLING_HOVER` |
+|---|---:|---:|
+| visited | 318 | 318 |
+| reused clean | 196 | 196 |
+| rejected — node/kind identity | 0 | 0 |
+| rejected — style | **81** | **81** |
+| …of which differ *only* in used-value fields | **81** | **81** |
+| rejected — child count | 0 | 0 |
+| rejected — descendant changed | 41 | 41 |
+
+Every single style reject was a box whose fresh style differed from its
+predecessor's *only* in `width`/`height`/`box_sizing` — and a graft reject
+propagates upward, which is where the other 41 came from. 122 boxes re-laid-out
+per interaction, zero of them changed.
+
+### Cause
+
+`prev` is a **laid-out** tree, and layout writes used values back into the very
+styles the graft compares. `lay_out_flex` overwrites every flex item's
+`width`/`height`/`box_sizing` with the resolved used size (`box_tree.rs`, both
+the column and the row arm); the post-layout passes rewrite more. The freshly
+built tree carries none of that yet, so `new.style == prev.style` answers a
+question nobody asked: not "did the author's style change?" but "has this box
+been through layout since?". S8 found and fixed one instance of this at the root
+box (used viewport `height`); it is a general property of the field, not a
+special case of the root.
+
+The chrome document is built out of flexbox, so this was every interaction.
+
+### The slice
+
+`graft_geometry_with_cascade` takes the `CounterMap::styles` map of the pass that
+produced `prev` — the *unpolluted* cascade result — and compares against that:
+
+1. `Arc::ptr_eq(new.style, prev.style)` — unchanged, the cheapest case.
+2. `Arc::ptr_eq(new.style, prev_cascade[node])` — the incremental cascade hands
+   the same allocation back for reused nodes (S9/S12), so a narrow restyle
+   settles here for free.
+3. `*new.style == *prev_cascade[node]` — the wide-restyle case. CC-12's own
+   `SIDEBAR`/`None` toggle re-cascades most of the document to the values it
+   already had; those must still read as unchanged. (Without this clause the
+   toggle scenario kept all 81 rejects while `SIBLING_HOVER` dropped to 21 —
+   measured, not assumed.)
+4. `new.style == prev.style` — the pre-existing fallback.
+5. For a box whose node has **no** cascade entry at all: styles equal once
+   `width`/`height`/`box_sizing` are discounted. This is the anonymous-box
+   class — the wrapper a flex container generates around inline content, keyed
+   by a text node the cascade never visits. Instrumenting the residue showed all
+   21 remaining rejects were exactly this: `kind = Block`, one child, `width:
+   None` freshly derived against a fractional used px width in `prev`. No author
+   rule can put a width on such a box, so a difference confined to those fields
+   is layout output by construction. The probe copies a style, so it runs last
+   and only for this class.
+
+A reused subtree keeps its **own** freshly-cascaded style — only `rect` and
+`kind` come from `prev`. `kind` must be copied (it holds layout output paint
+reads back, e.g. `InlineRun`'s laid-out `lines`); the used values in the *style*
+are read by nothing outside the layout pass that wrote them, and adopting them
+would pin the pollution into the live tree permanently and mis-size the box if it
+later went dirty.
+
+### Gates: by count
+
+Same reasoning as S8's and S10's: geometry is identical either way, so only
+wall-clock would show a regression here, and machine noise hides it.
+
+* `bug341_s13_hover_flip_reuses_boxes_the_layout_pass_only_wrote_used_values_into`
+  (lumen-shell, runs by default) — on the real chrome document,
+  `reject_style_used_value_only == 0` and `reused_clean == visited`. The first
+  assert is the load-bearing one: it fails the moment a layout pass writes a used
+  value the graft cannot account for, whatever the stylesheet contains.
+* `graft_reuses_a_box_whose_prev_style_only_carries_used_values` — the mechanism
+  in isolation.
+* `graft_still_rejects_a_box_whose_cascade_style_changed` — the counterweight,
+  without which the fix would degrade into "styles never matter" and no
+  geometry-comparing test would notice.
+* `graft_stats_partition_the_visited_set` — the counters are the only instrument
+  the gates have; a double-count would make every number above wrong.
+
+### Measurement
+
+Census after the slice — **318 of 318 boxes reused, on both scenarios**, every
+reject bucket zero.
+
+Interleaved A/B (main, S13, ×3), dev-release, `cc12_chrome_perf_gate`:
+
+| | main min | S13 min | main p50 | S13 p50 |
+|---|---:|---:|---:|---:|
+| `CC12_HOVER` | 16.24 / 15.89 / 16.04 | **12.49 / 12.59 / 11.72** | 18.14 / 18.87 / 18.13 | **15.71 / 15.35 / 15.48** |
+| `CC12_KEY` | 6.19 / 6.07 / 6.14 | **3.93 / 3.89 / 3.85** | 9.33 / 8.10 / 8.89 | **4.89 / 4.96 / 4.76** |
+
+No overlap on any row — ≈23 % off `CC12_HOVER`, ≈37 % off `CC12_KEY` (≈16 % and
+≈44 % by p50).
+
+Per stage (`LUMEN_PROFILE_TREE=1`):
+
+| Stage | `CC12_HOVER` S12 → S13 | `CC12_KEY` S12 → S13 |
+|---|---|---|
+| `lay_out` | 2.44 → **0.00 ms** | 2.30 → **0.08 ms** |
+| `build_box` | 2.45 → 2.2-2.4 ms | 2.19 → 1.7-2.2 ms |
+| `graft_geometry` | 0.99 → 1.0-1.2 ms | 0.63 → 0.5-0.6 ms |
+| `precompute_counters` | 7.88 → 9-12 ms | 0.55 → 0.5-0.8 ms |
+
+`lay_out` is the stage this slice was aimed at and it is now free: with nothing
+dirty, every box takes the O(1) translate path. `graft_geometry` pays a little
+for the extra lookups; that is the trade and it is an order of magnitude smaller
+than what it buys.
+
+### Where this leaves CC-12
+
+Still red. Budget 2 ms p95; `CC12_HOVER` p95 ≈17.5-19.3 ms and `CC12_KEY` p95
+≈7.4-8.0 ms — a gap of ≈4-9× (was ≈5-12× after S12).
+
+The shape has changed again, and the two remaining costs are now clearly
+separated:
+
+* **`precompute_counters` on `CC12_HOVER`: 9-12 ms, ~75 % of the cycle.** This
+  is the conservative root-set S3 documented and every slice since has worked
+  around rather than at: the `SIDEBAR`/`None` toggle transitions from "nothing
+  hovered", which `restyle_root_set_for_state_change` correctly treats as "every
+  ancestor of the target flipped `:hover`" and expands to most of the document.
+  The census now proves the expansion is pure waste on this fixture — the
+  re-cascade produces byte-identical styles for all 318 boxes. Narrowing it (or
+  short-circuiting a re-cascade whose result is unchanged) is the biggest single
+  number left anywhere in this bug.
+* **`build_box` is now the dominant stage on `CC12_KEY` (1.7-2.2 ms of ~4 ms).**
+  The whole tree is rebuilt every cycle only to be grafted back onto the previous
+  geometry. This is exactly what S4's `incremental_build_box` was written for and
+  it is still switched off; with `Arc` styles and a now-*empty* dirty set, its
+  `index_by_node` trade-off is worth re-measuring — the mechanism may finally pay.
+
+## S14 — the flipped ancestor chain nobody's selectors could react to
+
+The number S13 pointed at: `precompute_counters` was 9-12 ms of `CC12_HOVER`'s
+~13 ms cycle, all of it the conservative interactive-state root-set.
+
+### Why the root-set covered the document
+
+`:hover` matches the element under the pointer *and every ancestor of it* (CSS
+Selectors L4 §4.3), so a "nothing was hovered → `#sidebar` is hovered"
+transition really does flip the `:hover` boolean on `#sidebar`, `<body>`,
+`<html>` and the document node. `restyle_root_set_for_state_change` put all of
+them in the root-set, and a dirty root at the document node forces
+`counters::walk`'s `force` flag on for the whole tree — a full re-cascade of
+every node, every other cycle. S13's census had already proved the result was
+byte-identical for all 318 boxes.
+
+The flip is real. What was missing is that a flip is only *observable* through a
+compound that depends on dynamic state **and matches the flipped node**:
+`chrome.html`'s hover rules are `button:hover`, `.tab-row:hover`,
+`.hbar-tab:hover` and ~30 more of the same shape, and not one of them can match
+`<body>`, `<html>` or `aside#sidebar`.
+
+### The slice
+
+`restyle_state_needs_fanout(doc, sheet) -> bool` becomes
+`restyle_state_index(doc, sheet) -> StateRestyleIndex<'_>`, built from the same
+single scan of the sheet S7 already ran, now also collecting every compound that
+depends on dynamic state (`collect_state_compounds`) and a `conservative` flag.
+`restyle_root_set_for_state_change` takes the index and drops any flipped node
+that `state_flip_can_matter` rejects — no state-dependent compound can even
+structurally match it (`compound_could_match_after_state_flip`: every part must
+match, with the dynamic-state pseudo-classes and any pseudo-element treated as
+"possible", since their value is exactly what's in question).
+
+Soundness rests on one property: every nested-selector form the engine looks
+through for dynamic state (`:not()`, `:is()`, `:where()`, `:host()`,
+`:nth-child(… of …)`) evaluates its inner selector against the *same* node as
+the compound carrying it. `:has()` is the exception — it binds the state to a
+different node than the subject — so a sheet with a dynamic `:has()`, or a
+document with any shadow root (whose sheets are not scanned, same carve-out S7
+made), sets `conservative` and keeps the pre-S14 behaviour exactly.
+
+Over-approximation is one-directional: a compound whose state hides inside a
+nested list (`:is(.tab:hover, .x)`) has that part treated as matching anything,
+so it keeps the whole chain. That costs narrowing, never correctness.
+
+### Gates
+
+`bug341_s14_hover_flip_no_rule_can_react_to_recascades_nothing` (lumen-shell,
+runs by default) asserts in this order: the two *full* cascades — nothing
+hovered vs `#sidebar` hovered — are equal (ground truth, no incremental
+machinery involved); the narrowed root-set for that transition is **empty**
+(the count gate, S8's lesson: a mechanism that narrows nothing still reproduces
+the full cascade exactly, just slowly); and the incremental cascade run under
+that empty root-set equals the full post-transition cascade bit-for-bit.
+
+`mutation_incremental_restyle_hover_entering_from_nothing_matches_full`
+(lumen-layout) is the under-approximation gate: hover enters from nothing onto a
+deep `.icon`, where two flipped ancestors (`.card`, `.item`) *do* carry hover
+rules and one of them (`.item:hover .icon`) restyles a descendant — dropping
+either would leave a stale style and a wrong height.
+
+Seven unit tests in `style::state_fanout_tests` cover the shapes: chain fully
+dropped, only the matching ancestor kept, `::before` on a hover compound,
+dynamic `:has()`, shadow root, state nested in `:is()`, and `:focus-within` on a
+matching ancestor (chrome's `.omnibox:focus-within` — the one dynamic-state
+pseudo that legitimately matches ancestors).
+
+### Measurement
+
+Interleaved A/B (main, S14, ×3), dev-release, `cc12_chrome_perf_gate`:
+
+| | main min | S14 min |
+|---|---:|---:|
+| `CC12_HOVER` | 14.09 / 14.46 / 14.95 | **3.63 / 3.70 / 4.03** |
+| `CC12_KEY` | 3.86 / 3.88 / 3.82 | 3.76 / 4.01 / 3.96 |
+
+No overlap on `CC12_HOVER` — ≈3.7× faster (−74 %). `CC12_KEY` is unchanged, as
+expected: its hover is `None` on every cycle, so its state root-set was already
+empty and this slice cannot touch it.
+
+Per stage (`LUMEN_PROFILE_TREE=1`, medians over 70 cycles):
+
+| Stage | `CC12_HOVER` S13 → S14 | `CC12_KEY` S13 → S14 |
+|---|---|---|
+| `precompute_counters` | 9-12 → **0.41 ms** | 0.5-0.8 → 0.56 ms |
+| `build_box` | 2.2-2.4 → 2.45 ms | 1.7-2.2 → 2.23 ms |
+| `graft_geometry` | 1.0-1.2 → 0.67 ms | 0.5-0.6 → 0.61 ms |
+| `lay_out` | 0.00 → 0.00 ms | 0.08 → 0.11 ms |
+
+The bench's own bookkeeping moved too: `clone_styles` (the per-cycle
+`CounterMap::styles().clone()`) fell 0.86 → 0.02 ms, because the old map's
+`Arc<ComputedStyle>`s are now shared with the new one instead of being the last
+reference to 828 freshly-built styles that had to be dropped.
+
+### A pre-existing hole this slice surfaced
+
+Writing the under-approximation gate turned up **BUG-355**: when an *ancestor's*
+geometry-affecting style changes (`.card:hover { padding: 9px }`), its
+clean-grafted descendants keep their previous used width — `graft_geometry`
+compares each box's own style only, and `lay_out` translates a clean subtree in
+O(1) without resizing it. Reproduced with every node forced into `dirty_roots`,
+so it is independent of the root-set and predates S14; filed separately, and the
+S14 test carries the repro in a comment.
+
+### Where this leaves CC-12
+
+Still red. Budget 2 ms p95; by min `CC12_HOVER` is now 3.6-4.0 ms and
+`CC12_KEY` 3.8-4.0 ms — a gap of ≈2× on min (p95 on this loaded machine runs
+8-10 ms, ≈4-5×; the two scenarios have converged and neither is dominated by the
+cascade any more).
+
+**`build_box` is now the largest stage on both scenarios** (2.2-2.5 ms of a
+~3.7-3.9 ms cycle): the whole box tree is rebuilt every cycle only to be grafted
+straight back onto the previous geometry. That is precisely what S4's
+`incremental_build_box` was written for, and it is still switched off — S4's
+honest measurement rejected it because `index_by_node` (a full walk + hash of
+the previous tree per call) cost more than the ~8 % of `build_box` it saved.
+Both halves of that trade have changed since: `build_box` is now ~60 % of the
+cycle rather than 8 %, styles are `Arc`s, and the dirty set is empty on both
+fixtures, so `clean_subtrees` should license reusing nearly the whole tree.
+Re-measure it before designing anything new.
+
+## S15 — the box tree was rebuilt every cycle only to be grafted back
+
+**Branch `p1-bug341-s15`.** Took the option S14's queue left: re-measure S4's
+`incremental_build_box` before designing anything new. It won, decisively, and
+the reason it had lost in S4 turned out to be only half the story.
+
+### What was wrong
+
+After S13/S14 a `#sidebar`/`None` hover flip on the chrome document re-cascades
+**nothing** and `graft_geometry` reuses **all 318 boxes**. Yet `build_box` still
+constructed all of them from scratch every cycle — 2.2-2.5 ms of a ~3.7 ms
+cycle, the largest remaining stage — purely so the graft could immediately throw
+the fresh geometry away and copy the previous one back in.
+
+S4 had already written the mechanism for exactly this (`build_box_or_reuse` +
+`CounterMap::clean_subtrees`: clone a whole `LayoutBox` subtree from `prev`
+instead of rebuilding it) and left it switched off, because S4's own honest
+measurement showed a net loss — `index_by_node`'s whole-prev-tree hash cost more
+than the ~8 % of `build_box` it saved. Both halves of that trade had moved:
+`build_box` is now ~60 % of the incremental cycle, `ComputedStyle` and
+`LayoutBox::style` are behind `Arc` (S9/S12), and the dirty set is empty.
+
+### Two defects, each of which alone drove reuse to zero
+
+1. **The reuse gate was a thread-local the workers never saw.**
+   `build_box_or_reuse` consulted `INCREMENTAL_BOX_BUILD`, but `build_box` fans
+   flex/grid containers with 8 or more children out over rayon workers
+   (ADR-016 M4.1), and a rayon worker's thread-locals start at their defaults —
+   the very trap `StyleEnvSnapshot` exists to work around for style state.
+   Chrome is built out of exactly such containers, so reuse was disabled for
+   almost every node that mattered. The gate is now `prev_index.is_some()`, a
+   parameter threaded down by reference; the flag is read once, in
+   `incremental_build_box`, which is what decides whether an index is built.
+
+2. **The counters were blind to the same threads.** `BOX_BUILD_COUNT` /
+   `BOX_BUILD_REUSE_COUNT` were `#[cfg(test)]` thread-locals, so everything
+   built on a worker was invisible: the first instrumented run of the real
+   chrome document reported "7 boxes built" for a tree of 318. Replaced by a
+   public `box_tree::BoxBuildStats` / `take_box_build_stats()`, with the
+   parallel branch draining each worker's tally into the thread running the
+   parent container. The drain stays exact when rayon work-steals a closure onto
+   the calling thread — whatever it takes from that thread comes straight back
+   in the fold.
+
+Note the shape of defect 2: it is the S10 profiler bug again, in a different
+costume. Instrumentation that is thread-local while the code it measures is not
+does not report a small error — it reports a number from a different program.
+
+### Wiring
+
+`layout_mutation_incremental_restyle` now calls `incremental_build_box` when
+`set_incremental_box_build` is on; both production call sites
+(`relayout_chrome_host` and the page-side `try_relayout_raf_incremental`) turn
+it on next to their existing `set_incremental_restyle(true)`. No new
+correctness precondition: the reuse is licensed by `CounterMap::clean_subtrees`,
+which is only populated when `RestyleDelta::dom_content_stable` is `true` —
+exactly the contract those call sites already establish.
+
+### Gates — by count
+
+Output cannot distinguish "cloned the subtree" from "rebuilt an identical
+subtree", so every gate here asserts the tally (S8's lesson, third slice
+running):
+
+- `bug341_s15_hover_flip_reuses_the_box_tree_instead_of_rebuilding_it`
+  (lumen-shell, runs by default) — on the real `chrome.html`: the first cycle
+  builds 100+ boxes, every later cycle must build fewer than 10 and reuse at
+  least one subtree. This is the test that would have caught defect 1.
+- `bug341_s15_hover_flip_reuses_the_clean_sibling_subtrees` (lumen-layout) — a
+  10-sibling flex container, deliberately over `RAYON_MIN_FLEX_CHILDREN`, so the
+  gate runs through the parallel path.
+- `bug341_s15_reused_boxes_match_a_full_rebuild` — the usual `incr == full`
+  differential half, on the same fixture.
+- `bug341_s15_dom_content_change_disables_box_reuse` — `dom_content_stable:
+  false` must reuse nothing. This is the entire correctness contract, and
+  nothing else in the mechanism checks it.
+
+### Measurement (interleaved A/B ×3, by min)
+
+| | main | S15 |
+|---|---|---|
+| `CC12_HOVER` | 3.94 / 4.19 / 4.06 ms | **1.39 / 1.45 / 1.47 ms** (≈2.8×) |
+| `CC12_KEY` | 3.89 / 3.67 / 4.02 ms | 3.95 / 4.03 / 3.93 ms (flat) |
+
+The two groups do not overlap on any row of `CC12_HOVER`. Stage split
+(`LUMEN_PROFILE_TREE=1`, min/p50 over 69 cycles):
+
+| Stage | HOVER | KEY |
+|---|---|---|
+| `precompute_counters` | 0.27 / 0.42 ms | 0.43 / 0.56 ms |
+| `build_box` | **0.25 / 0.38 ms** (was 2.2-2.5) | **1.88 / 2.31 ms** |
+| `graft_geometry` | 0.19 / 0.25 ms | 0.50 / 0.66 ms |
+| `lay_out` | 0.00 ms | 0.08 / 0.10 ms |
+| `post_layout_passes` | 0.07 / 0.10 ms | 0.08 / 0.10 ms |
+| **total** | **0.85 / 1.15 ms** | **3.13 / 3.82 ms** |
+
+`CC12_KEY` is flat *by design*: `bind_model` rewrites the omnibox text every
+keystroke, so `touched` is non-empty, `dom_content_stable` is `false`,
+`clean_subtrees` stays empty and the mechanism is inert. Display-list
+neutrality checked with `graphic_tests/dump_golden.py` (12/12 identical).
+
+### Where this leaves CC-12
+
+Still red, but the two scenarios have separated again. `CC12_HOVER` is **under
+the 2 ms budget by min for the first time** (1.4-1.5 ms); its p95 on this loaded
+machine is 5.2-6.0 ms, ≈3×. `CC12_KEY` is unchanged at 3.9-4.0 ms by min, ≈2×,
+p95 8.3 ms.
+
+**S16 is `CC12_KEY`, and the blocker is named:** `dom_content_stable` is a single
+document-wide boolean. One changed text node in the omnibox disables box reuse
+for all 318 boxes, including the ~300 that no mutation went anywhere near. The
+generalisation is a per-node content-dirty set — a subtree is content-clean when
+no touched node lies inside it — but it needs the chrome tracker to be
+*complete* for content, which it currently is not: `record_touched` is called
+from `set_attr`/`remove_attr`/`remove_children_with_class`/`reconcile_row_list`
+(all selector-relevant), while `set_text`/`set_text_in_place`/`append_text`
+report nothing, since a text change cannot affect selector matching. Making the
+tracker content-complete is the load-bearing, and the risky, part: an
+uninstrumented mutation path yields a stale box, i.e. visible corruption, not a
+slow frame. Audit `crates/chrome/src/model.rs` for every direct
+`append_child`/`detach`/`create_*` call, not just the primitives.
+
 ## Repro
 
 ```bash
@@ -1708,4 +2097,5 @@ cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate -- --ignor
 cargo test -p lumen-shell --profile dev-release bug341_s3_incremental_cascade_precompute_share -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s4_incremental_box_build_share -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s5_incremental_pipeline_share -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s13_graft_reject_census -- --ignored --nocapture
 ```

@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-27",
  "counts": {
-  "open": 53,
+  "open": 54,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 325,
+ "total_bugs": 326,
  "phases": [
   {
    "id": "P0",
@@ -6269,6 +6269,13 @@
    "component": "js (`crates/js/src/dom.rs:11067-11074` — захардкоженный аксессор `supportedEntryTypes`, плюс `observe()` рядом)",
    "date": null,
    "debtor": false
+  },
+  "BUG-355": {
+   "status": "open",
+   "title": "На инкрементальном пути рестайла (`layout_mutation_incremental_restyle` — `relayout_chrome_host`/`try_relayout_raf_incremental`) взаимодействие, меняющее геомет…",
+   "component": "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6485,6 +6492,9 @@
   "layout (`box_tree.rs`, `lay_out_flex`) — **general engine bug, not chrome-specific**": [
    "BUG-341",
    "BUG-343"
+  ],
+  "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
+   "BUG-355"
   ],
   "layout (`crates/engine/layout/src/style.rs::restyle_root_set_for_node_change`)": [
    "BUG-349"

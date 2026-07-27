@@ -8768,25 +8768,25 @@ impl Lumen {
                 // BUG-341 S7: computed once per pass, not once per axis — the
                 // stylesheet/shadow-DOM shape doesn't change between the three
                 // hover/focus/active calls below.
-                let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(doc, sheet);
+                let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
                 let mut dirty_roots = std::collections::HashSet::new();
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_hover,
                     new_interactive.0,
-                    needs_fanout,
+                    &state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_focus,
                     new_interactive.1,
-                    needs_fanout,
+                    &state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_active,
                     new_interactive.2,
-                    needs_fanout,
+                    &state_index,
                 ));
                 // BUG-341 S6: DOM-mutation root-set, unioned with the
                 // interactive-state one above — `touched` is empty on a pure
@@ -8807,6 +8807,11 @@ impl Lumen {
                     dom_content_stable: touched.is_empty(),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
+                // BUG-341 S15: reuse whole box subtrees from `prev` too, not
+                // just their geometry. Licensed by the same `dom_content_stable`
+                // precondition this call site already establishes above — with
+                // it `false`, `clean_subtrees` stays empty and the flag is inert.
+                lumen_layout::box_tree::set_incremental_box_build(true);
                 let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
                     doc,
                     sheet,
@@ -8817,6 +8822,7 @@ impl Lumen {
                     prev,
                     &delta,
                 );
+                lumen_layout::box_tree::set_incremental_box_build(false);
                 lumen_layout::counters::set_incremental_restyle(false);
                 result
             }
@@ -9751,16 +9757,16 @@ impl Lumen {
             let (prev_hover, prev_focus, prev_active) = self.page_prev_interactive;
             let doc = src.document.lock().unwrap();
             // BUG-341 S7: computed once per pass, reused across all three axes.
-            let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(&doc, &src.stylesheet);
+            let state_index = lumen_layout::style::restyle_state_index(&doc, &src.stylesheet);
             let mut dirty_roots = std::collections::HashSet::new();
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                &doc, prev_hover, new_interactive.0, needs_fanout,
+                &doc, prev_hover, new_interactive.0, &state_index,
             ));
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                &doc, prev_focus, new_interactive.1, needs_fanout,
+                &doc, prev_focus, new_interactive.1, &state_index,
             ));
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                &doc, prev_active, new_interactive.2, needs_fanout,
+                &doc, prev_active, new_interactive.2, &state_index,
             ));
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                 &doc,
@@ -9770,9 +9776,14 @@ impl Lumen {
             let dom_content_stable = touched.nodes.is_empty();
             let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, dom_content_stable };
             lumen_layout::counters::set_incremental_restyle(true);
+            // BUG-341 S15 — see the twin call in `relayout_chrome_host`: the
+            // box-build reuse rides on the same `dom_content_stable` precondition
+            // computed just above.
+            lumen_layout::box_tree::set_incremental_box_build(true);
             let result = relayout_page_incremental_restyle(
                 src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb, &delta,
             );
+            lumen_layout::box_tree::set_incremental_box_build(false);
             lumen_layout::counters::set_incremental_restyle(false);
             Some(result)
         } else {
@@ -24591,7 +24602,7 @@ mod tests {
         hyp: &KnuthLiangHyphenation,
         hover: Option<lumen_dom::NodeId>,
         state: &mut Cc12IncrementalState,
-    ) -> f64 {
+    ) -> (f64, lumen_layout::box_tree::BoxBuildStats) {
         let touched = lumen_chrome::bind_model_tracked(doc, model);
         lumen_layout::set_interactive_state(hover, None, None);
         let new_interactive = (hover, None, None);
@@ -24600,16 +24611,16 @@ mod tests {
         let (layout, counters) = match state.prev_pristine_layout.as_ref() {
             Some(prev) => {
                 let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
-                let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(doc, sheet);
+                let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
                 let mut dirty_roots = std::collections::HashSet::new();
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                    doc, prev_hover, new_interactive.0, needs_fanout,
+                    doc, prev_hover, new_interactive.0, &state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                    doc, prev_focus, new_interactive.1, needs_fanout,
+                    doc, prev_focus, new_interactive.1, &state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                    doc, prev_active, new_interactive.2, needs_fanout,
+                    doc, prev_active, new_interactive.2, &state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                     doc,
@@ -24621,9 +24632,11 @@ mod tests {
                     dom_content_stable: touched.is_empty(),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
+                lumen_layout::box_tree::set_incremental_box_build(true);
                 let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
                     doc, sheet, viewport, measurer, hyp, false, prev, &delta,
                 );
+                lumen_layout::box_tree::set_incremental_box_build(false);
                 lumen_layout::counters::set_incremental_restyle(false);
                 result
             }
@@ -24645,13 +24658,16 @@ mod tests {
         let _dl = paint_ordered(&layout);
         let t_paint = t3.elapsed().as_secs_f64() * 1000.0;
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let bb = lumen_layout::box_tree::take_box_build_stats();
         eprintln!(
             "[cc12-split] total={ms:.2} layout={t_layout:.2} clone_tree={t_clone_tree:.2} \
-             clone_styles={t_clone_styles:.2} paint={t_paint:.2}"
+             clone_styles={t_clone_styles:.2} paint={t_paint:.2} \
+             boxes_built={} boxes_reused={}",
+            bb.built, bb.reused
         );
         lumen_layout::clear_interactive_state();
         state.prev_interactive = new_interactive;
-        ms
+        (ms, bb)
     }
 
     /// CC-12 (docs/tasks/p1-css-chrome.md): perf gate for the chrome
@@ -24702,7 +24718,7 @@ mod tests {
         for i in 0..WARMUP + SAMPLES {
             let hover = if i % 2 == 0 { hover_target } else { None };
             let model = cc12_bench_model("");
-            let ms =
+            let (ms, _) =
                 cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut hover_state);
             if i >= WARMUP {
                 hover_stats.record(ms as f32);
@@ -24720,7 +24736,7 @@ mod tests {
                 typed.clear();
             }
             let model = cc12_bench_model(&typed);
-            let ms =
+            let (ms, _) =
                 cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut key_state);
             if i >= WARMUP {
                 key_stats.record(ms as f32);
@@ -24800,6 +24816,284 @@ mod tests {
         assert!(all_clean, "graft_geometry must report the whole tree clean when nothing changed");
     }
 
+    /// BUG-341 S13 regression gate: a hover flip must not force boxes back
+    /// through layout merely because the *previous* pass wrote its own used
+    /// values into their styles.
+    ///
+    /// `prev` is a laid-out tree: `lay_out_flex` overwrites each flex item's
+    /// `width`/`height`/`box_sizing` with the resolved used value, and the
+    /// post-layout passes rewrite more. The freshly-built tree carries none of
+    /// that, so a naive style comparison called 81 of this document's 318 boxes
+    /// "changed" — every one of them differing *only* in those fields — and
+    /// dragged 41 ancestors along, because a graft reject propagates upwards.
+    /// 122 boxes re-laid-out per interaction, none of them actually changed.
+    ///
+    /// Gated on the **count**, like its S8 predecessor above and for the same
+    /// reason: geometry is identical either way, so only wall-clock would show
+    /// this, and machine noise (±10-15%) hides it. The
+    /// `reject_style_used_value_only` assert is the load-bearing one — it fails
+    /// the moment a layout pass starts writing a used value the graft cannot
+    /// account for, whatever the stylesheet happens to contain.
+    #[test]
+    fn bug341_s13_hover_flip_reuses_boxes_the_layout_pass_only_wrote_used_values_into() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        lumen_layout::incremental::set_graft_diagnostics(true);
+        let mut state = Cc12IncrementalState::default();
+        let mut last = lumen_layout::incremental::GraftStats::default();
+        for i in 0..4 {
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let _ = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            last = lumen_layout::incremental::take_graft_stats();
+        }
+        lumen_layout::incremental::set_graft_diagnostics(false);
+
+        assert!(last.visited > 100, "chrome document should produce a non-trivial box tree: {last:?}");
+        assert_eq!(
+            last.reject_style_used_value_only, 0,
+            "{} boxes were refused reuse purely because the previous layout pass wrote used \
+             values back into their styles (BUG-341 S13) — the graft must compare against the \
+             cascade result, not against the laid-out tree's polluted styles. Full census: {last:?}",
+            last.reject_style_used_value_only,
+        );
+        assert_eq!(
+            last.reused_clean, last.visited,
+            "a hover flip that changes no computed style must leave the whole chrome document \
+             reusable, got {}/{} — census: {last:?}. If chrome.html gains a rule that really does \
+             restyle on `#sidebar:hover`, this number legitimately drops: replace the equality \
+             with the count that rule accounts for, do not loosen it to a percentage.",
+            last.reused_clean,
+            last.visited,
+        );
+    }
+
+    /// BUG-341 S15 regression gate: a hover flip that re-cascades nothing must
+    /// not rebuild the box tree either.
+    ///
+    /// After S13/S14 the chrome document's dirty set on a `#sidebar`/`None`
+    /// toggle is empty and `graft_geometry` reuses all 318 boxes — yet the tree
+    /// was still built from scratch every cycle, only to be grafted straight
+    /// back onto the previous geometry (`build_box` was 2.2-2.5 ms of a
+    /// ~3.7 ms cycle, the largest item left). S4's `clean_subtrees` mechanism
+    /// existed for exactly this and had been switched off since S4's own
+    /// measurement rejected it.
+    ///
+    /// The gate is the **count**, not wall-clock: cloning versus rebuilding
+    /// produces the identical tree, so nothing but a counter can tell the two
+    /// apart, and the 15% machine noise this fixture sits in hides the whole
+    /// effect. `built` at single digits means the whole document came across in
+    /// one subtree clone; a regression (e.g. the reuse flag stops reaching the
+    /// rayon workers that build large flex containers, which is precisely what
+    /// happened before S15) sends it back into the hundreds.
+    #[test]
+    fn bug341_s15_hover_flip_reuses_the_box_tree_instead_of_rebuilding_it() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut first_full_built = 0;
+        let mut last = lumen_layout::box_tree::BoxBuildStats::default();
+        for i in 0..4 {
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let (_, bb) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            // Cycle 0 has no `prev` — it is the full-rebuild reference.
+            if i == 0 {
+                first_full_built = bb.built;
+            }
+            last = bb;
+        }
+
+        assert!(
+            first_full_built > 100,
+            "the first (full) cycle should build a non-trivial chrome tree, got {first_full_built}",
+        );
+        assert!(
+            last.reused >= 1,
+            "a hover flip nothing can react to must clone the document's box subtree from the \
+             previous cycle, got {last:?}",
+        );
+        assert!(
+            last.built < 10,
+            "{} boxes were rebuilt on a cycle whose cascade dirty set is empty (full rebuild is \
+             {first_full_built}) — the S4 `clean_subtrees` reuse is not reaching them. Census: \
+             {last:?}",
+            last.built,
+        );
+    }
+
+    /// BUG-341 S14 regression gate: a hover flip no rule in the sheet can
+    /// react to must re-cascade nothing at all.
+    ///
+    /// This is CC-12's own `#sidebar`/`None` toggle — the shape S3 documented
+    /// as its worst case and every slice since then worked around. `:hover`
+    /// genuinely does flip on every ancestor of `#sidebar` up to the document
+    /// root (CSS Selectors L4 §4.3), so the pre-S14 root-set contained the root
+    /// and forced a whole-document re-cascade — 6.8-8.4 ms of a ~12 ms cycle,
+    /// producing byte-identical styles for all 318 boxes (S13's census proved
+    /// the "identical" half).
+    ///
+    /// Two asserts, in this order on purpose. The first is the *ground truth*:
+    /// the two cascades really are equal, independently of any narrowing code.
+    /// The second is the **count gate** — the root-set is empty — which is the
+    /// only thing that can fail if the narrowing silently stops narrowing: a
+    /// mechanism that reuses nothing still reproduces the full cascade exactly
+    /// (S8's lesson), just slowly. If `chrome.html` ever gains a rule that
+    /// really does restyle on `#sidebar:hover` or on one of its ancestors, both
+    /// asserts flip together and the fix is to point this test at a different
+    /// node, not to loosen it.
+    #[test]
+    fn bug341_s14_hover_flip_no_rule_can_react_to_recascades_nothing() {
+        use lumen_layout::counters::{
+            incremental_precompute_counters, precompute_counters, set_incremental_restyle, RestyleDelta,
+        };
+        use lumen_layout::style::{restyle_root_set_for_state_change, restyle_state_index};
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        lumen_chrome::bind_model(&mut doc, &cc12_bench_model(""));
+        let viewport = Size::new(1280.0, 800.0);
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let sidebar = doc
+            .find_by_id(lumen_chrome::ids::SIDEBAR)
+            .expect("chrome preview must have #sidebar");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(
+            !index.is_conservative(),
+            "chrome.html has no dynamic `:has()` and the chrome document has no shadow roots — \
+             if either changes, the per-node narrowing turns itself off and CC-12's hover cycle \
+             silently returns to a whole-document re-cascade",
+        );
+        assert!(
+            index.state_compound_count() > 10,
+            "chrome.html has dozens of `:hover` rules; scanning found only {} — the narrowing \
+             would be trivially (and uselessly) correct on an empty compound list",
+            index.state_compound_count(),
+        );
+
+        // Ground truth, computed without any incremental machinery: nothing
+        // hovered vs `#sidebar` hovered produce the same cascade.
+        lumen_layout::set_interactive_state(None, None, None);
+        let none_map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        lumen_layout::set_interactive_state(Some(sidebar), None, None);
+        let hovered_map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        lumen_layout::clear_interactive_state();
+        assert!(none_map.styles().len() > 100, "chrome document should cascade a non-trivial node count");
+        assert_eq!(
+            none_map.styles(),
+            hovered_map.styles(),
+            "no rule in chrome.html reacts to hovering #sidebar, so both full cascades must agree",
+        );
+
+        // The count gate: the narrowed root-set for that transition is empty.
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(sidebar), &index);
+        assert!(
+            dirty_roots.is_empty(),
+            "hovering #sidebar flips `:hover` on {} node(s) the restyle root-set still keeps, but \
+             no selector in chrome.html can observe any of them (asserted above) — BUG-341 S14",
+            dirty_roots.len(),
+        );
+
+        // And the incremental cascade run under that empty root-set still
+        // reproduces the full post-transition cascade bit-for-bit.
+        lumen_layout::set_interactive_state(Some(sidebar), None, None);
+        let delta = RestyleDelta {
+            prev_styles: none_map.styles(),
+            dirty_roots,
+            dom_content_stable: true,
+        };
+        set_incremental_restyle(true);
+        let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, &delta);
+        set_incremental_restyle(false);
+        lumen_layout::clear_interactive_state();
+        assert_eq!(
+            incr.styles(),
+            hovered_map.styles(),
+            "incremental cascade with an empty root-set must equal the full post-transition cascade",
+        );
+    }
+
+    /// BUG-341 S13 diagnostic: census of *why* `graft_geometry` refuses boxes
+    /// on the two CC-12 interaction shapes.
+    ///
+    /// S12's detail scopes established that a hover flip touching one subtree
+    /// still re-lays-out ~1700 of ~3100 boxes, and that both `build_box` and
+    /// `lay_out` are close to linear in that number — but not whether those
+    /// boxes genuinely changed. This prints the partition
+    /// (`reused_clean` / identity / style / child-count / descendant) plus the
+    /// share of style rejects that vanish once the used-value writeback fields
+    /// are discounted. Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s13_graft_reject_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S13) — see doc comment for run command"]
+    fn bug341_s13_graft_reject_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+        let tabs_container = doc
+            .find_by_id(lumen_chrome::ids::SB_TABS)
+            .expect("chrome preview must have #sbTabs");
+        let tab_rows = doc.get(tabs_container).children.clone();
+        let (tab_a, tab_b) = (Some(tab_rows[0]), Some(tab_rows[1]));
+
+        lumen_layout::incremental::set_graft_diagnostics(true);
+
+        for (label, targets) in [
+            ("CC12_HOVER(sidebar/none)", [sidebar, None]),
+            ("SIBLING_HOVER(tabA/tabB)", [tab_a, tab_b]),
+        ] {
+            let mut state = Cc12IncrementalState::default();
+            for i in 0..6 {
+                let _ = cc12_bench_cycle(
+                    &mut doc,
+                    &sheet,
+                    &model,
+                    viewport,
+                    &measurer,
+                    &hyp,
+                    targets[i % 2],
+                    &mut state,
+                );
+                let s = lumen_layout::incremental::take_graft_stats();
+                if i >= 2 {
+                    eprintln!(
+                        "[s13-census] {label} cycle={i} visited={} clean={} \
+                         rej_identity={} rej_style={} (used_value_only={}, no_cascade={}, \
+                         cascade_differs={}) rej_child_count={} rej_descendant={}",
+                        s.visited,
+                        s.reused_clean,
+                        s.reject_identity,
+                        s.reject_style,
+                        s.reject_style_used_value_only,
+                        s.reject_style_no_cascade_entry,
+                        s.reject_style_cascade_differs,
+                        s.reject_child_count,
+                        s.reject_descendant,
+                    );
+                }
+            }
+        }
+        lumen_layout::incremental::set_graft_diagnostics(false);
+    }
+
     /// BUG-341 S5: like `cc12_chrome_perf_gate_hover_and_keystroke_cycles`'s
     /// `CC12_HOVER` scenario, but hover moves between two sibling tab rows
     /// (`#sbTabs`' first two children) instead of toggling `SIDEBAR`/`None`.
@@ -24837,7 +25131,7 @@ mod tests {
         let mut state = Cc12IncrementalState::default();
         for i in 0..WARMUP + SAMPLES {
             let hover = if i % 2 == 0 { Some(tab_a) } else { Some(tab_b) };
-            let ms = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            let (ms, _) = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
             if i >= WARMUP {
                 stats.record(ms as f32);
             }
@@ -24922,8 +25216,8 @@ mod tests {
         let full_summary = full_stats.summary().expect("samples collected");
         eprintln!("{}", full_summary.display_with("BUG341_S3_FULL_PRECOMPUTE"));
 
-        let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(&doc, &sheet);
-        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), needs_fanout);
+        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), &state_index);
         let dirty_count = dirty_roots.len();
         let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, dom_content_stable: true };
         set_incremental_restyle(true);
@@ -25045,8 +25339,8 @@ mod tests {
         let full_summary = full_stats.summary().expect("samples collected");
         eprintln!("{}", full_summary.display_with("BUG341_S4_FULL_BUILD_BOX"));
 
-        let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(&doc, &sheet);
-        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), needs_fanout);
+        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), &state_index);
         let delta = RestyleDelta {
             prev_styles: baseline.styles(),
             dirty_roots,
