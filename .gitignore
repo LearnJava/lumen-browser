@@ -61,3 +61,6 @@ __pycache__/
 /tests/wpt/metadata/.cache/
 last_session.db-shm
 last_session.db-wal
+
+# A/B baseline binaries built by scripts/perf-baseline.sh (кэш по SHA, ~79 МБ на запись)
+/.claude/perf-baseline/

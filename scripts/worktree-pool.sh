@@ -32,7 +32,7 @@
 #
 # Гарды (ничего не затирается молча):
 #   1. незакоммиченная работа в слоте → отказ (шли `git commit` или разбирайся);
-#   2. свои коммиты, не влитые в base → отказ (сначала влей или удали ветку);
+#   2. свои коммиты, не влитые в main → отказ (сначала влей или удали ветку);
 #   3. прерванный `git worktree add` (есть index.lock, нет index, своих коммитов
 #      нет) → чиним сами: это не работа, а недоделанный checkout.
 
@@ -91,7 +91,10 @@ case "$slot" in
 esac
 
 path="$POOL/$slot"
-git show-ref --verify --quiet "refs/heads/$base" || die "Базовая ветка '$base' не найдена."
+# base — любой committish: ветка для обычных задач, SHA для perf-base
+# (scripts/perf-baseline.sh паркует слот на конкретном коммите).
+git rev-parse --verify --quiet "$base^{commit}" >/dev/null \
+  || die "База '$base' не разрешается в коммит."
 
 branch_exists() { git show-ref --verify --quiet "refs/heads/$1"; }
 
@@ -113,7 +116,12 @@ if ! gd=$(slot_gitdir "$path"); then
 fi
 
 # --- Гард 3: прерванный checkout (недоделанный `worktree add`) ---
-own_commits() { git -C "$path" log --oneline "$base..HEAD" 2>/dev/null | wc -l | tr -d ' '; }
+# Терять можно только то, что не влито в интеграционную ветку. Сравнивать с
+# запрошенной базой нельзя: при парковке слота на более СТАРЫЙ коммит (так
+# делает scripts/perf-baseline.sh для perf-base) всё, что появилось между тем
+# коммитом и main, выглядело бы «невлитой работой», хотя терять нечего.
+INTEGRATION=main
+own_commits() { git -C "$path" log --oneline "$INTEGRATION..HEAD" 2>/dev/null | wc -l | tr -d ' '; }
 
 if [ -f "$gd/index.lock" ] && [ ! -f "$gd/index" ]; then
   if [ "$(own_commits)" != 0 ]; then
@@ -139,8 +147,8 @@ fi
 cur=$(git -C "$path" branch --show-current 2>/dev/null)
 ahead=$(own_commits)
 if [ "$ahead" != 0 ]; then
-  echo "В слоте $slot ветка '${cur:-detached}' имеет $ahead коммит(ов) вне '$base':" >&2
-  git -C "$path" log --oneline "$base..HEAD" | head -10 >&2
+  echo "В слоте $slot ветка '${cur:-detached}' имеет $ahead коммит(ов) вне '$INTEGRATION':" >&2
+  git -C "$path" log --oneline "$INTEGRATION..HEAD" | head -10 >&2
   die "Влей их или удали ветку, потом повтори — переключение потеряло бы их из вида."
 fi
 
