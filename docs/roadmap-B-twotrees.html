@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-27",
  "counts": {
-  "open": 56,
+  "open": 58,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 328,
+ "total_bugs": 330,
  "phases": [
   {
    "id": "P0",
@@ -2145,9 +2145,13 @@
       {
        "id": "WPT-VENDOR-encoding-detection",
        "title": "WPT: вендорить + прогнать категорию `encoding-detection`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-27: вендорена (`tests/wpt/encoding-detection/`, 109 файлов: 75 корневых `*.tentative.html`/`.html`-тестов, `support/` — 31 `*-late.sub.html`-фикстура для popup-раунда, два `__dir__.headers` с `X-Content-Type-Options: nosniff` (здесь несущий: он глушит MIME-сниффинг, чтобы решала только эвристика кодировки), `LICENSE-WPT.md`; `META.yml`/`WEB_FEATURES.yml` апстрим для этой категории не поставляет), скоуп ⬜ (tentative-спека Encoding Detection — определение legacy-кодировки по байтам содержимого и языку страницы, наблюдаемое через `document.characterSet`). **Внекатегорийных зависимостей нет вовсе** — только `/resources/testharness.js`+`testharnessreport.js`, поэтому survey-gap'а типа `FileAPI`/`ai` здесь не возникает; `<meta name=variant>` не используется, `.https.`-тестов нет. Самая дешёвая категория бэклога: `run_report.py --all --root encoding-detection --recursive` уложился в **8 мин 25 с**, 75 файлов дали ровно 75 id без раскрытия — **44/75 harness OK, 0/44 сабтестов**. Два блока, у каждого одна причина. (а) Все 44 исполнившихся теста падают на BUG-358: живой глобальный `document` не отдаёт ни одного атрибута метаданных (`characterSet`/`charset`/`inputEncoding`/`compatMode`/`contentType`/`URL`/`documentURI`/`location` — свойств нет вовсе, `'characterSet' in document` === false); каждый тест категории это `assert_equals(document.characterSet, \"<enc>\", …)`, отсюда единообразное `but got (undefined) undefined` x43 плюс один `.toUpperCase()`-вариант. Атрибуты определены только на detached-документах (`crates/js/src/dom.rs:4762-4769`), живой документ — отдельный литерал `dom.rs:6989+`. (б) Все 31 TIMEOUT — ровно набор `*-late.tentative.html`, все на BUG-359: `window.open(\"support/…\")` не резолвит относительный URL против базы документа (`invalid url: missing scheme`) — третий независимый сайт семейства BUG-346/BUG-347; за ним второй барьер — `window.open` отдаёт заглушку без реального `opener`/`postMessage`, а шелл открывает новую вкладку. Оба бага подтверждены вне WPT `--dump-layout`-пробами. Зафиксировано для будущего фикса: даже с подключённым `characterSet` прошли бы максимум 2 из 44 — тесты требуют 22 различные кодировки, а `lumen_encoding::Encoding` знает из них windows-1251 и IBM866 (третий legacy-член — koi8-**r**, категория тестирует koi8-**u**)",
+       "bugs": [
+        "BUG-358",
+        "BUG-359"
+       ]
       },
       {
        "id": "WPT-VENDOR-encrypted-media",
@@ -6311,6 +6315,20 @@
    "status": "open",
    "title": "`TextDecoder` — заглушка «только UTF-8», label обрабатывается как непрозрачная строка. Шесть отклонений от Encoding Standard: (1) нет таблицы label→encoding — `…",
    "component": "js (`crates/js/src/dom.rs:9189-9291` — чисто-JS пара `TextEncoder`/`TextDecoder`; `dom.rs:8734-8752` `TextDecoderStream`, оборачивающий тот же объект)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-358": {
+   "status": "open",
+   "title": "Живой глобальный `document` не отдаёт НИ ОДНОГО атрибута метаданных документа: `characterSet`, `charset`, `inputEncoding`, `compatMode`, `contentType`, `URL`, `…",
+   "component": "js (`crates/js/src/dom.rs:6989+` — рукописный литерал `var document = {…}`, стоящий за живым глобальным документом; сравни `dom.rs:4728-4769` `_lumen_build_detached_document`, где эти же атрибуты определены)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-359": {
+   "status": "open",
+   "title": "Междокументная навигация не резолвит относительные URL: `window.open(\"support/x.html\")` со страницы `http://…/encoding-detection/…html` уходит в сеть как есть и…",
+   "component": "js (`crates/js/src/dom.rs:11540` `window.open`; `dom.rs:7450-7475` `_lumen_navigate_or_fragment`), shell (`crates/shell/src/main.rs:600-614` `resolve_js_navigation`, `main.rs:12836-12852` — слив popup-запросов)",
    "date": null,
    "debtor": false
   }
