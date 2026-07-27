@@ -119,7 +119,9 @@ cargo run -p lumen-shell -- --dump-display-list samples/page.html  # headless pa
 
 **Cargo output rules:** always `-p <crate>`, never `--workspace` (exception: P5). Success → 1 line. Errors → full `error[...]` block, skip all warnings. Test failure → test name + first 10 lines.
 
-**Run discipline (details in `docs/commands.md`):** one cargo run — one log file (`> .tmp/<name>.log 2>&1`, then grep the file; never re-run cargo just to re-filter output). During iteration `cargo check -p` only; one `clippy -p` + targeted tests before the commit; full gates (workspace clippy + scoped-test) run exactly once inside `/lumen-task-finish`, synchronously in the foreground — never as background tasks.
+**Run discipline (details in `docs/commands.md`):** one cargo run — one log file (`> .tmp/<name>.log 2>&1`, then grep the file; never re-run cargo just to re-filter output). During iteration `cargo check -p` only; one `clippy -p` + targeted tests before the commit; full gates (workspace clippy + scoped-test) run exactly once inside `/lumen-task-finish`, synchronously in the foreground — never as background tasks. Don't hand-run expensive crate tests before the gate — `scoped-test.sh` repeats them.
+
+**Long runs you are not blocked on** (baseline builds, `test --no-run`, the graphic pipeline) go to the background via the Bash tool's `run_in_background: true` — the harness notifies you on exit, so keep working meanwhile. Never `cmd &` **plus** `run_in_background` (silently kills the process) and never poll with `sleep N` — that pattern burned 76 of 188 minutes on 2026-07-27. Foreground-only exceptions: the final gates, and the full graphic pipeline (gdigrab needs a focused window; backgrounded, TEST-00 fails "magenta marker not found" and cascades).
 
 ---
 
@@ -141,6 +143,8 @@ python graphic_tests/run.py --bisect 100         # diagnose interaction test
 3. Update `graphic_tests/COVERAGE.md`
 4. Add entry to `TESTS` in `graphic_tests/run.py`
 5. **If the property affects paint/rasterization**, regenerate the deterministic CPU snapshot references in the **same commit**: `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render cases::snapshot_cpu` (then review the changed PNGs are correct, not garbage). Skipping this drifts `graphic_tests/snapshots/cpu/` on unrelated pages and later red-lights the `scoped-test.sh` gate for someone else — the recurring BUG-118 / BUG-149 / BUG-297 / BUG-316 staleness.
+
+**When the full ~20-min run is required:** anything that can move pixels — paint/display list, layout geometry, a CSS property, font/text/image. For changes that cannot alter the display list (pure perf, refactors, tooling, docs) the gate is `scripts/scoped-test.sh` (includes the deterministic CPU snapshots) + `python graphic_tests/dump_golden.py`; claiming display-list neutrality requires showing an empty `dump_golden.py` diff. Details — [`docs/graphic-tests.md`](docs/graphic-tests.md).
 
 **Hard rules:** never edit test pages to work around engine limits; never change thresholds (0.5% for all); no screenshots committed.
 
@@ -197,15 +201,23 @@ Branch naming: `p<N>-<task-name>` (P1–P5 prefix mandatory). `--no-ff` required
 
 **Forbidden:** direct commit to main · force-push · rewriting history · `git config` · `--no-verify` · `git push` without explicit user request.
 
-**Every session MUST work in its own `git worktree`** — path `.claude/worktrees/<task-name>/`. Remove immediately after merge.
+**Every session MUST work in its own `git worktree`** — use your **persistent pool slot**, one per developer, instead of creating a worktree per task:
+
+```bash
+cd "$(bash scripts/worktree-pool.sh p<N>-work p<N>-task-name | tail -1)"   # occupy
+bash scripts/worktree-pool.sh list                                        # who holds what
+bash scripts/worktree-pool.sh release p<N>-work                           # free (step 3 of the checklist)
+```
+
+The slot (`.claude/worktrees/p1-work` … `p5-work`, plus `perf-base`) is created once and reused — only the branch changes, so `target/` stays warm and rebuilds are incremental. `git worktree remove` after every task deleted that cache and cost 9–15 min of cold build per task, plus 3 min for the `add` itself. Build **only `dev-release`** inside a slot (warm `dev-release` ≈ 4.7 GB; five slots on `debug` would be ~70 GB). The script refuses to switch a slot with uncommitted or unmerged work. Details — [`docs/git-workflow.md`](docs/git-workflow.md).
 
 **7-step completion checklist** (all mandatory, full details in `docs/git-workflow.md`):
 1. `cargo clippy -p <crate> -- -D warnings` + `cargo test -p <crate>`
 2. `git merge --no-ff p<N>-task-name -m "Merge …"`
-3. `git branch -d p<N>-task-name`
+3. `bash scripts/worktree-pool.sh release p<N>-work` then `git branch -d p<N>-task-name` (a slot holding the branch makes `branch -d` fail)
 4. Delete pointer line from `STATUS-PN.md`, commit
 5. `git push origin main`
-6. `git worktree remove .claude/worktrees/<task-name>`
+6. Pool slot — nothing to remove (freed in step 3). Ad-hoc worktree — `git worktree remove .claude/worktrees/<task-name>`
 
 ---
 

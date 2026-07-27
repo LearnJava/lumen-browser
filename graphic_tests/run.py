@@ -82,9 +82,61 @@ if hasattr(sys.stdout, 'reconfigure'):
 # --- Конфиг ---
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-FFMPEG = os.path.join(REPO, 'utils', 'ffmpeg.exe')
+
+
+def _main_worktree() -> str | None:
+    """Путь к главному рабочему дереву репозитория (или None, если REPO и есть оно).
+
+    В worktree `.claude/worktrees/<task>/` файл `.git` — это текстовый указатель
+    `gitdir: <main>/.git/worktrees/<task>`, откуда и восстанавливается главное
+    дерево. Нужно, чтобы находить gitignored-артефакты (`utils/ffmpeg.exe`),
+    которых в свежем worktree нет по определению.
+    """
+    dotgit = os.path.join(REPO, '.git')
+    if not os.path.isfile(dotgit):
+        return None  # REPO — главное дерево (.git это каталог)
+    try:
+        with open(dotgit, encoding='utf-8') as f:
+            line = f.read().strip()
+    except OSError:
+        return None
+    if not line.startswith('gitdir:'):
+        return None
+    gitdir = line.split(':', 1)[1].strip()
+    # <main>/.git/worktrees/<task> → <main>
+    marker = os.sep + '.git' + os.sep + 'worktrees' + os.sep
+    norm = os.path.normpath(gitdir)
+    idx = norm.find(marker)
+    if idx < 0:
+        return None
+    main = norm[:idx]
+    return main if os.path.isdir(main) else None
+
+
+def _resolve_ffmpeg() -> str:
+    """Ищет ffmpeg.exe: свой `utils/`, затем `utils/` главного дерева.
+
+    `utils/ffmpeg.exe` gitignored (`.gitignore:23`), поэтому в свежем worktree
+    его нет — без этого фолбэка прогон падал Python-трейсбеком на первом тесте
+    (или, в --ipc, на первом ffmpeg_crop).
+    """
+    candidates = [os.path.join(REPO, 'utils', 'ffmpeg.exe')]
+    main = _main_worktree()
+    if main:
+        candidates.append(os.path.join(main, 'utils', 'ffmpeg.exe'))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]  # не найден — preflight сообщит, где искали
+
+
+FFMPEG = _resolve_ffmpeg()
 EDGE = r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+# Профиль сборки. NB: дефолт `release`, а итерационная сборка обычно
+# `dev-release` — рассинхрон ловит preflight_binary(), а не молчаливая
+# 10-минутная пересборка чужого профиля (см. ensure_lumen).
 LUMEN_PROFILE = os.environ.get('LUMEN_PROFILE', 'release')
+LUMEN_PROFILE_EXPLICIT = 'LUMEN_PROFILE' in os.environ
 LUMEN = os.path.join(REPO, 'target', LUMEN_PROFILE, 'lumen.exe')
 SHOTS = os.path.join(REPO, 'graphic_tests', 'screenshots')
 RESULTS_DIR = os.path.join(REPO, 'graphic_tests', 'results')
@@ -1125,11 +1177,71 @@ def _build_lumen() -> bool:
     return True
 
 
+def _built_profiles() -> list[str]:
+    """Профили, для которых в `target/` уже лежит lumen.exe."""
+    target = os.path.join(REPO, 'target')
+    if not os.path.isdir(target):
+        return []
+    return sorted(
+        p for p in os.listdir(target)
+        if os.path.exists(os.path.join(target, p, 'lumen.exe'))
+    )
+
+
 def ensure_lumen(force_build: bool = False) -> None:
-    """Гарантирует наличие release-бинаря. force_build=True — пересобрать в любом случае."""
-    if force_build or not os.path.exists(LUMEN):
+    """Гарантирует наличие бинаря нужного профиля.
+
+    force_build=True — пересобрать в любом случае. Если бинаря нет, но собран
+    ДРУГОЙ профиль — не собираем молча (это стоило 10 минут холодной release-
+    сборки в сессии 2026-07-27: LUMEN_PROFILE не задан → дефолт `release` →
+    `not os.path.exists(LUMEN)` → полная сборка не того профиля, убитая
+    таймаутом), а выходим с подсказкой, какой профиль уже готов.
+    """
+    if force_build:
         if not _build_lumen():
             sys.exit(2)
+        return
+    if os.path.exists(LUMEN):
+        return
+    other = [p for p in _built_profiles() if p != LUMEN_PROFILE]
+    if other:
+        hint = other[0] if len(other) == 1 else '|'.join(other)
+        print(f'lumen.exe для профиля `{LUMEN_PROFILE}` не собран: {LUMEN}')
+        print(f'Уже собраны: {", ".join(other)}. Запусти с готовым профилем:')
+        print(f'  LUMEN_PROFILE={hint} python graphic_tests/run.py ...')
+        print('или пересобери явно: python graphic_tests/run.py --build '
+              '(LUMEN_PROFILE задаёт профиль сборки).')
+        sys.exit(2)
+    print(f'lumen.exe нет ни для одного профиля — собираю `{LUMEN_PROFILE}` '
+          '(холодная сборка: до ~10 мин).')
+    if not _build_lumen():
+        sys.exit(2)
+
+
+def preflight() -> None:
+    """Проверяет внешние инструменты ДО прогона (секунда вместо 20 минут).
+
+    Оба артефакта gitignored, поэтому в свежем worktree отсутствуют, а без
+    проверки прогон падает на них по одному тесту за раз: ffmpeg — трейсбеком,
+    Edge — цепочкой «Edge screenshot missing» на все 148 тестов.
+    """
+    missing: list[str] = []
+    if not os.path.exists(FFMPEG):
+        main = _main_worktree()
+        where = FFMPEG + (f' (и в главном дереве {main})' if main else '')
+        src = os.path.join(main or REPO, 'utils', 'ffmpeg.exe')
+        missing.append(
+            f'ffmpeg.exe не найден: {where}\n'
+            f'  → скопируй: cp "{src}" "{os.path.join(REPO, "utils")}"\n'
+            f'    (или распакуй utils/ffmpeg-full_build/bin/ffmpeg.exe)'
+        )
+    if not os.path.exists(EDGE):
+        missing.append(f'msedge.exe не найден: {EDGE} — Edge-эталоны снять нечем.')
+    if missing:
+        print('Preflight не пройден:')
+        for m in missing:
+            print(f'- {m}')
+        sys.exit(2)
 
 
 def run_one(tid: str, html: str, threshold: float, label: str,
@@ -1611,6 +1723,7 @@ def main() -> int:
         return 2
 
     os.makedirs(SHOTS, exist_ok=True)
+    preflight()
     ensure_lumen(force_build=args.build)
 
     if args.paint_bisect:
@@ -1667,6 +1780,16 @@ def main() -> int:
         print(f'--bisect {args.bisect}: зависимости {", ".join(DEPS[args.bisect])} + сам тест')
     elif args.only:
         run_filter = {args.only}
+        # Магента-калибровка (TEST-00) кладёт crop offset в
+        # screenshots/crop_offset.txt, а каталог gitignored — в свежем worktree
+        # кэша нет, и `--only NN` падал с «no crop offset — run TEST-00 first»,
+        # выталкивая в полный 20-минутный прогон. Дотягиваем TEST-00 сами, как
+        # это уже делают --bisect и --recheck. В --ipc offset не нужен вовсе
+        # (CPU-снимок от (0,0)).
+        if not args.ipc and args.only != '00' and _load_crop_offset() is None:
+            run_filter.add('00')
+            print('Нет кэша crop offset — добавляю TEST-00 (калибровка) перед '
+                  f'TEST-{args.only}.')
     elif args.recheck:
         latest = _load_latest()
         if latest is None:
@@ -1778,10 +1901,19 @@ def main() -> int:
     failed  = [r for r in results if r['status'] == 'FAIL']
     debtors = [r for r in results if r['status'] == 'DEBTOR']
     passed  = [r for r in results if r['status'] == 'PASS']
-    if failed:
+    # ERROR (diff_pct < 0: снимок не снялся, ffmpeg/IPC упал, нет crop offset)
+    # раньше не попадал ни в одну корзину — прогон, где ВСЁ упало с ERROR,
+    # печатал «All N tests passed» и возвращал 0. В --continue-on-fail это
+    # ровно тот режим, которым гоняют полный прогон.
+    errored = [r for r in results if r['status'] == 'ERROR']
+    if failed or errored:
         debtor_note = (f'  ({len(debtors)} known-debtor: ' + ', '.join(r['id'] for r in debtors) + ')'
                        if debtors else '')
-        print(f'\n{len(failed)}/{len(results)} tests FAILED: ' + ', '.join(r['id'] for r in failed))
+        if failed:
+            print(f'\n{len(failed)}/{len(results)} tests FAILED: ' + ', '.join(r['id'] for r in failed))
+        if errored:
+            print(f'\n{len(errored)}/{len(results)} tests ERRORED (снимок/ffmpeg/IPC): '
+                  + ', '.join(r['id'] for r in errored))
         if debtor_note:
             print(debtor_note)
         return 1

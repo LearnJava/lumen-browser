@@ -258,7 +258,7 @@ mod tests {
     }
 
     fn make_inline_run_box(rect: Rect, lines: Vec<Vec<InlineFrag>>) -> LayoutBox {
-        let style = ComputedStyle::root();
+        let style = std::sync::Arc::new(ComputedStyle::root());
         LayoutBox {
             node: NodeId::from_index(1),
             rect,

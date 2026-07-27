@@ -54,11 +54,46 @@ def _build_lumen() -> bool:
     return res.returncode == 0
 
 
+def _built_profiles() -> list[str]:
+    """Профили, для которых в `target/` уже лежит lumen.exe."""
+    target = os.path.join(REPO, 'target')
+    if not os.path.isdir(target):
+        return []
+    return sorted(
+        p for p in os.listdir(target)
+        if os.path.exists(os.path.join(target, p, 'lumen.exe'))
+    )
+
+
 def ensure_lumen(force_build: bool) -> None:
-    if force_build or not os.path.exists(LUMEN):
+    """Гарантирует бинарь нужного профиля, не собирая молча чужой.
+
+    Тот же preflight, что в run.py (`ensure_lumen`): `LUMEN_PROFILE` по
+    умолчанию `release`, а итерационная сборка обычно `dev-release`, и
+    проверка «файла нет → собрать» запускала холодную сборку не того профиля
+    на ~10 минут. Дублирование намеренное: два независимых скрипта в одной
+    папке, общий модуль ради 20 строк ломал бы их автономность.
+    """
+    if force_build:
         if not _build_lumen():
             print('Сборка Lumen упала.')
             sys.exit(2)
+        return
+    if os.path.exists(LUMEN):
+        return
+    other = [p for p in _built_profiles() if p != LUMEN_PROFILE]
+    if other:
+        hint = other[0] if len(other) == 1 else '|'.join(other)
+        print(f'lumen.exe для профиля `{LUMEN_PROFILE}` не собран: {LUMEN}')
+        print(f'Уже собраны: {", ".join(other)}. Запусти с готовым профилем:')
+        print(f'  LUMEN_PROFILE={hint} python graphic_tests/dump_golden.py ...')
+        print('или пересобери явно: --build (профиль задаётся LUMEN_PROFILE).')
+        sys.exit(2)
+    print(f'lumen.exe нет ни для одного профиля — собираю `{LUMEN_PROFILE}` '
+          '(холодная сборка: до ~10 мин).')
+    if not _build_lumen():
+        print('Сборка Lumen упала.')
+        sys.exit(2)
 
 
 def dump(page: str, flag: str) -> str:

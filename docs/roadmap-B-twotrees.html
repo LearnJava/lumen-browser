@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-26",
+ "generated": "2026-07-27",
  "counts": {
   "open": 50,
   "fixed": 272,
@@ -3901,6 +3901,70 @@
        "status": "done",
        "size": "XS",
        "note": "`pointer-events` уже enforced бесплатно (общий `lumen_paint::hit_test`, chrome tooltip-DoD n/a — нет tooltip-элемента в ассете). Реальный пробел был в `user-select`: во всём Lumen нет drag-выделения мышью вообще (Selection API только программный, через JS) — DoD-предпосылка спекулятивна не только для хрома. Сделано корректное и проверяемое: UA-дефолт `html{user-select:none}` в `lumen_chrome::parse_document` (только для chrome-документа, эталон не трогался), задел на будущий drag-select. После CC-5"
+      }
+     ]
+    },
+    {
+     "id": "TEST",
+     "title": "TEST: полнота тестирования движка (fuzzing / expectations / reftests / conformance)",
+     "status": "planned",
+     "note": "Дорожка полноты тестирования движка (владелец тулинга — P2; движковые фиксы по находкам — P3/P1). Индустриальные практики движков-с-нуля (Servo, Ladybird, WPT/Firefox) поверх уже существующего тулинга Lumen (graphic_tests, DEVX-2/3, P2-wpt, health-журнал PERF-6, KNOWN_DEBTORS-храповик): фаззинг парсеров и целых страниц, expectations-система для WPT, reftest-executor, Ahem, спец-конформанс (test262/Wasm/WebGL). Бриф с DoD по срезам — docs/tasks/p2-test-track.md. Рекомендуемый порядок: TEST-1 → TEST-2 → TEST-3 → TEST-4/TEST-5 → опц. TEST-6..8",
+     "tasks": [
+      {
+       "id": "TEST-1",
+       "title": "TEST-1: cargo-fuzz харнессы на парсеры",
+       "status": "planned",
+       "size": "M",
+       "note": "cargo-fuzz (libFuzzer) харнессы на входные парсеры: css-parser, HTML, Url::parse/resolve (хрупкость показали BUG-346/347), шрифтовые декодеры lumen-font, декодеры изображений. Каталог fuzz/ вне основного workspace (nightly нужен только фаззеру); seed-корпус из graphic_tests/samples/WPT; краши минимизировать и группировать в BUG-NNN; репры в fuzz/regressions/. Аналог Ladybird FuzzCSSParser. Бриф docs/tasks/p2-test-track.md"
+      },
+      {
+       "id": "TEST-2",
+       "title": "TEST-2: DOM/layout-фаззер страниц (Domato-стиль)",
+       "status": "planned",
+       "size": "L",
+       "note": "Генеративный фаззер целых страниц в стиле Domato (Google Project Zero; у Ladybird стабильно находит краши в DOM/layout/декодерах/CSS-математике): scripts/page_fuzz.py генерирует случайные почти-валидные HTML/CSS/JS-страницы с фиксируемым seed, прогон пачками через headless --screenshot/--dump-layout --deterministic; сигналы — паника (panic-hook health.log из PERF-6), hang/таймаут, белый экран (rendered_units==0 при dom>=20); минимизатор-бисекция до репро; --selftest; находки в BUG-NNN, seed-регрессии — smoke-список. После TEST-1. Бриф docs/tasks/p2-test-track.md"
+      },
+      {
+       "id": "TEST-3",
+       "title": "TEST-3: WPT expectations-система (гейт на регрессии)",
+       "status": "planned",
+       "size": "M",
+       "note": "Expectations/metadata-система для WPT по образцу Firefox: per-test ожидаемые результаты, сгенерированные из текущего прогона run_report.py; новый режим run_report.py --check — exit≠0 только на отклонение от ожиданий (регрессия PASS, новый TIMEOUT), неожиданные PASS печатаются как «сузить ожидания» (храповик, аналог KNOWN_DEBTORS). Превращает 277 вендоренных категорий WPT-VENDOR из разового аудита в регрессионный набор. Бриф docs/tasks/p2-test-track.md"
+      },
+      {
+       "id": "TEST-4",
+       "title": "TEST-4: WPT reftest-executor (открывает css/-корпус)",
+       "status": "planned",
+       "size": "L",
+       "note": "Reftest-executor для WPT-интеграции: сейчас исполняются только testharness-тесты, а reftests — основной способ тестировать рендеринг (весь корпус css/ непрогоняем). Поддержка link rel=match/mismatch (цепочки), class=reftest-wait, meta fuzzy; скриншоты детерминированным CPU-рендером (screenshot_cpu_rgba, как snapshot-тесты) + пиксельное сравнение. Точки: tests/wpt/browsers/lumen.py + run_report.py. Смоук на 3–5 простых css/-reftest-ах. Желательно после TEST-5 (Ahem), иначе текстовые reftests зашумлены метриками шрифта. Бриф docs/tasks/p2-test-track.md"
+      },
+      {
+       "id": "TEST-5",
+       "title": "TEST-5: шрифт Ahem для детерминированных reftest-ов",
+       "status": "planned",
+       "size": "S",
+       "note": "Бандл шрифта Ahem (W3C, свободная лицензия; все глифы — квадраты em, стандарт детерминированных reftest-ов) в assets/fonts/ + регистрация в lumen-font наравне с Inter-Regular; загрузка как web-font из вендоренного дерева WPT через существующий TTF/WOFF2-путь; unit-тест метрик (advance==em, ascent/descent по спеке Ahem). Бриф docs/tasks/p2-test-track.md"
+      },
+      {
+       "id": "TEST-6",
+       "title": "TEST-6: test262-smoke эмбеддинга (опц.)",
+       "status": "opt",
+       "size": "M",
+       "note": "test262-smoke для V8-эмбеддинга: сам V8 конформен — проверяем НАШУ интеграцию (realm, глобальные объекты, microtask-порядок, $262-хост-хуки) на подмножестве официального набора tc39/test262; раннер поверх headless JS-исполнения; информационный отчёт, не гейт. Бриф docs/tasks/p2-test-track.md"
+      },
+      {
+       "id": "TEST-7",
+       "title": "TEST-7: Wasm spec tests (опц.)",
+       "status": "opt",
+       "size": "M",
+       "note": "Официальные spec-тесты WebAssembly на wasm-путь Lumen (P3-v8-s9): раннер + отчёт, провалы группировать в BUG-NNN. Бриф docs/tasks/p2-test-track.md"
+      },
+      {
+       "id": "TEST-8",
+       "title": "TEST-8: WebGL conformance subset (опц.)",
+       "status": "opt",
+       "size": "L",
+       "note": "Khronos WebGL conformance suite (1.0, минимальное подмножество) на webgl_canvas; делать после стабилизации canvas/webgl-пути (BUG-348); информационный отчёт, не гейт. Бриф docs/tasks/p2-test-track.md"
       }
      ]
     }

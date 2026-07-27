@@ -1052,6 +1052,655 @@ S5/S6/S7 for the standing remaining levers (box-build skip re-evaluation,
 the residual `lay_out_flex` cost / layout-result cache, DOM-mutation-change
 narrowing).
 
+## S8 — `graft_geometry` was reusing nothing at all: two defects, both fixed
+
+**This slice changed the diagnosis of the whole track.** S1's profile — the one
+every slice from S3 onwards reasoned from — describes the **full** layout pass.
+Nobody had ever profiled the *incremental* path itself. Adding the same stage
+scopes to `layout_mutation_incremental_restyle` (committed, so this stays
+visible) produced this, on today's code, post S1-S7:
+
+```
+# cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate -- --ignored --nocapture
+# with LUMEN_PROFILE_TREE=1; averages over the 60 recorded cycles of each fixture
+HOVER  total=111.4  cascade=59.9  lay_out=42.0  build_box=9.0  graft=0.04  post=1.2
+KEY    total= 64.8  cascade=23.8  lay_out=33.0  build_box=6.7  graft=0.04  post=1.0
+# outside `lumen-layout`, inside the timed region (new `[cc12-split]` line):
+KEY    clone_tree=4.2  clone_styles=8.0  paint=0.5
+```
+
+`graft=0.04ms` over a whole document is the finding: **the incremental-layout
+half — the one this task's brief §2 called "mature" and built everything else
+on top of — was inert.** It reused zero boxes, on every interaction, for the
+entire history of this bug. Two independent defects, either of which alone
+drives reuse to zero:
+
+**1. `kind_layout_eq` was missing 6 of `BoxKind`'s 20 variants.** `Contents`,
+`Table`, `TableRowGroup`, `SvgRoot`, `SvgShape`, `SvgText` fell into its
+`_ => false` arm. That is not a local loss: `graft_geometry` propagates a
+failure up to every ancestor, so a single unlisted kind anywhere disables
+incremental layout for the whole tree — and `assets/chrome/chrome.html` is
+built out of SVG icons. Fixed by handling all six, with `PartialEq` derived on
+`ViewBox`/`SvgTransform`/`SvgShapeKind`. `svg_paint_matrix` is deliberately
+**excluded** from the comparison: it is a layout *output* (identity on a
+freshly-built box, written during `lay_out`, see `box_tree.rs` "Stored in the
+dedicated `svg_paint_matrix` output field"), so comparing it would make every
+SVG shape unequal to its own laid-out predecessor — the same trap that makes
+`InlineRun` compare `segments` and not its laid-out `lines`. Without that
+exclusion the fix would have been a silent no-op.
+
+**2. `graft_geometry` returned *before* recursing into children on any style
+mismatch.** `lay_out` writes the used viewport `height` back into the root
+box's `ComputedStyle`, so a freshly-built root can never equal its own
+laid-out predecessor — every cycle, guaranteed, on any document. One node at
+the root therefore threw away geometry reuse for the entire document. Fixed:
+a style mismatch now marks only that node dirty and still recurses; each child
+is judged on its own `style`, which already carries the new cascade's result.
+Node-identity and box-kind mismatches still abandon the subtree (positional
+child matching is no longer meaningful there).
+
+**Why S2-S7's differential tests never caught this.** They assert
+`incremental == full` on the *output*. A graft that reuses nothing satisfies
+that perfectly — it just recomputes everything. The regression was invisible in
+geometry and only observable as wall-clock, where this machine's ±10-15%
+noise floor hides it. Added a direct gate on the *count* instead:
+`graft_geometry_reuses_whole_chrome_tree_when_nothing_changed`
+(`crates/shell/src/main.rs`) lays out an unchanged chrome document twice and
+asserts **100%** of boxes graft clean. Before the fixes: 217/318 boxes, and
+`false` at the root. After: 318/318. Two unit tests in `incremental.rs` cover
+the newly-handled kinds, the `svg_paint_matrix` exclusion, and the
+style-mismatch-still-grafts-children contract.
+
+**Measured** (same harness/machine as S5-S7):
+
+```
+lay_out         31ms -> 16ms
+CC12_HOVER p50  117.6ms -> 94.5ms
+CC12_KEY   p50   78.7ms -> 69.7ms
+```
+
+`cargo test -p lumen-layout`: 3281 passed, 2 failed (the pre-existing
+`FONT_CH_EX` pair, BUG-339). `clippy` clean on `lumen-layout` + `lumen-shell`.
+
+**Full §6 verification, run before the merge (2026-07-27):** `clippy` clean on
+`lumen-layout` + `lumen-shell` + `lumen-chrome`; `cargo test -p lumen-chrome`
+58 passed / 0 failed; `cargo test -p lumen-shell` 1705 passed / 0 failed;
+CPU snapshot references (`lumen-driver --features cpu-render
+cases::snapshot_cpu`) **unchanged** — the deterministic pixel gate confirms
+geometry is bit-identical, which is the exact contract a geometry-reuse change
+has to keep. `python graphic_tests/run.py --continue-on-fail` (149 tests,
+`LUMEN_PROFILE=dev-release`): 77 known debtors all within tolerance, **no new
+regressions**; the two non-debtor lines are unrelated to this slice —
+TEST-147 27.45% is the pre-existing, still-OPEN BUG-330 (identical number to
+the one BUG-330 already records from the DS-9 branch), and TEST-71's "FAIL" is
+a *ratchet* verdict, i.e. an improvement (BUG-199 debtor 4.53% → 2.11%) that
+the harness reports so its baseline gets lowered. The TEST-71 baseline was
+deliberately left untouched: BUG-199's own diagnosis is that the residual diff
+is an Edge capture-timing artifact, so ratcheting on a single observation
+risks a spurious REGRESS later, and it is not this slice's finding.
+
+**CC-12's gate stays red** (2ms budget, ~35-47× over). Honest accounting: this
+is a real, structural fix — the incremental-layout machinery now actually
+works, which also benefits page load and every real page, not just chrome —
+but it does not close a two-orders-of-magnitude gap on its own.
+
+### What S8 exposed next (start here)
+
+The post-fix split moves the bottleneck, and the new top item is the same root
+cause in two places:
+
+```
+HOVER  total=85.5  cascade=49.1  lay_out=16.8  graft=14.1  build_box=6.8
+KEY    total=59.4  cascade=22.0  lay_out=15.6  graft=13.6  build_box=6.2
+```
+
+`graft` went 0.04ms -> ~14ms because it is now doing real work: comparing a
+**3216-byte, 302-field `ComputedStyle` — including a `HashMap<String, String>`
+of 30 inherited custom properties — once per box.** The same fat struct is what
+makes `clone_tree` + `clone_styles` cost ~12-13ms per cycle (the incremental
+design's own bookkeeping: `state.prev_pristine_layout = layout.clone()` and
+`state.prev_cascade_styles = counters.styles().clone()`, both O(whole
+document), both inside the timed region), and it is a large part of `cascade`
+too — `compute_style` clones the parent's `custom_props` map per node
+(`style.rs:6198`, `style.rs:7678`).
+
+Micro-benchmark of `compute_style`'s per-node cost by how much heap-owning
+inherited state the parent carries (dev-release, 3 runs, 2300 calls each; the
+first cold-machine run read ~5x higher and was discarded):
+
+| inherited state | per node |
+|---|---:|
+| 0 custom props, 0 font families | 0.31-0.46 µs |
+| 0 props, 5 font families | 0.70-0.87 µs |
+| **30 props (what chrome.html declares), 5 families** | **3.7-4.7 µs** |
+| 120 props, 5 families | 20.2-21.8 µs |
+
+So the recommended next slice (**S9**) is representation, not invalidation:
+
+1. `custom_props: Arc<HashMap<...>>` with copy-on-write (`Arc::make_mut`) —
+   only the handful of nodes that actually declare a custom property pay a
+   real copy. This gives `graft`'s style comparison an `Arc::ptr_eq` fast path
+   (should collapse most of the ~14ms), cuts the per-node cascade cost, and
+   shrinks both bookkeeping clones. Blast radius is small: 8 `custom_props`
+   sites outside `style.rs`.
+2. Then re-measure and consider `LayoutBox.style: Arc<ComputedStyle>` and
+   `prev_cascade_styles: HashMap<NodeId, Arc<ComputedStyle>>`, which turns both
+   O(document) bookkeeping clones into refcount bumps.
+
+Unlike every slice from S3 to S7, this is a pure data-representation change:
+output must stay bit-identical, so the existing differential tests are the
+gate, and there is no invalidation-correctness risk to trade off.
+
+## S9 — `ComputedStyle` made cheap to clone and to compare
+
+Both steps S8 recommended, implemented and measured. Pure data-representation
+change; no invalidation set was touched, and no output changed.
+
+### 1. `custom_props` behind an `Arc` with copy-on-write
+
+New type `lumen_layout::style::CustomProps` (`Arc<HashMap<String, String>>`,
+`Deref` for reads, `make_mut` for writes) replaces the bare `HashMap` in
+`ComputedStyle::custom_props` and in `ContainerContext::custom_props`.
+
+CSS Variables L1 makes every custom property inherited, so `compute_style`
+copied the parent's whole map into every node — the cost S8 measured at
+3.7–4.7 µs/node with chrome's 30 properties vs 0.31–0.46 µs with none.
+Inheritance is now a refcount bump; only the nodes that actually declare a
+`--name` fork the map. Three write sites take the CoW path
+(`style.rs`: the custom-property pass, `apply_property_initial_values`, and the
+`inherits: false` `retain`); the `retain` is additionally guarded by a
+"would this actually drop a key?" scan, so a page that registers `@property`
+rules it does not use still shares.
+
+Two extra wins fell out of the representation:
+
+* `CustomProps::default()` is a process-wide singleton, so every node in a
+  document that declares no custom property at all shares one allocation.
+* `PartialEq` short-circuits on `Arc::ptr_eq` before comparing contents. That
+  is spelled out in `CustomProps::eq` rather than left to `Arc`'s own
+  (unspecified) pointer specialisation, so `graft_geometry`'s per-box
+  `ComputedStyle` comparison has a guaranteed fast path.
+
+### 2. Cascade cache holds `Arc<ComputedStyle>`
+
+`CounterMap::styles` is now `HashMap<NodeId, Arc<ComputedStyle>>` (and so is
+`RestyleDelta::prev_styles`, `Lumen::chrome_prev_cascade_styles`,
+`Lumen::page_prev_cascade_styles`, `PageSnapshot::page_prev_cascade_styles`).
+Three consumers that each deep-copied a whole `ComputedStyle` per node became
+refcount bumps: the incremental cascade's reuse path in `counters::walk` (taken
+for *every* node outside the dirty root-set), the map's own insert, and the
+pipeline's per-cycle `counters.styles().clone()` snapshot.
+
+`LayoutBox.style` was deliberately **not** converted. `lay_out` writes used
+values back into a box's own style (S8 found the viewport-height write on the
+root), so it needs owned, mutable styles; sharing them is a separate design,
+not a mechanical change. With bookkeeping now at ~1.5 ms it is also no longer
+where the money is.
+
+### Gates: by identity, not by output
+
+S8's lesson applied directly. Every existing differential test compares cascade
+*output*, and a mechanism that deep-copies instead of sharing satisfies all of
+them — it is merely slow, which is exactly how `graft_geometry` stayed inert
+for five slices. So the sharing itself is asserted by pointer:
+
+| Test | Asserts |
+|---|---|
+| `style::tests::custom_props_shared_with_parent_when_child_declares_none` | child shares the parent's map allocation |
+| `style::tests::custom_props_copy_on_write_when_child_declares_one` | child forks, and the fork is not visible upwards |
+| `style::tests::custom_props_empty_map_is_a_shared_singleton` | no per-node allocation for property-free documents |
+| `style::tests::custom_props_eq_compares_contents_when_not_shared` | the pointer check is a fast path, not the semantics |
+| `incremental::tests::incr_cascade_reuse_hands_back_the_same_style_allocation` | nodes outside the dirty root-set come back as the *same* `Arc`; nodes inside it do not, and their recompute lands on the same value |
+
+### Measurement
+
+Wall-clock had to be taken as an interleaved A/B — a parallel session was
+loading the machine, and non-interleaved runs of *unmodified main* varied
+between p50 71 ms and p50 109 ms on `CC12_HOVER`, i.e. the noise alone was
+larger than the effect S3–S7 were chasing. Three alternating rounds
+(main, S9, main, S9, main, S9), dev-release:
+
+| | main min | S9 min | main p50 | S9 p50 |
+|---|---:|---:|---:|---:|
+| `CC12_HOVER` | 66.4 / 81.1 / 69.1 | **26.4 / 29.6 / 26.3** | 71.5 / 109.2 / 100.0 | **36.8 / 33.5 / 28.8** |
+| `CC12_KEY` | 48.9 / 51.7 / 55.9 | **11.3 / 14.6 / 11.2** | 54.5 / 60.0 / 84.6 | **16.8 / 18.1 / 12.5** |
+
+≈2.6× on `CC12_HOVER`, ≈4.2× on `CC12_KEY` (comparing mins, the quantity least
+contaminated by contention).
+
+Per-stage, from a quiet-machine pair of runs (`[cc12-split]` medians, and
+`LUMEN_PROFILE_TREE=1` stage medians — the tree numbers carry their own
+instrumentation overhead and are only comparable to each other):
+
+| | main | after step 1 | after step 2 |
+|---|---:|---:|---:|
+| `clone_styles` (HOVER / KEY) | 9.30 / 9.97 | 3.76 / 3.13 | **0.95 / 0.04** |
+| `clone_tree` (HOVER / KEY) | 5.03 / 5.21 | 2.16 / 1.75 | **1.71 / 1.40** |
+| `precompute_counters` (tree) | 45.73 | 20.23 | — |
+| `lay_out` (tree) | 22.80 | 4.00 | — |
+| `graft_geometry` (tree) | 2.52 | 0.95 | — |
+
+Note `lay_out` dropping 22.8 → 4.0 ms: it was not "layout" cost at all, it was
+`ComputedStyle` copying inside layout.
+
+### Where this leaves CC-12
+
+Still red. Budget is 2 ms; `CC12_KEY` is now ~11–17 ms and `CC12_HOVER`
+~26–37 ms — the gap is ~8–20×, down from ~300× when BUG-341 was filed and
+~35–50× before this slice. The remaining top item is the cascade itself
+(`precompute_counters`), i.e. the `compute_style` calls for whatever *is*
+dirty, and beneath it the per-node `ComputedStyle` construction cost: the
+struct is still 302 fields with ~30 heap-owning ones (`Vec<String>` font
+families, transform lists, background layers, shadows), each cloned from the
+parent on every inherit. That — not another invalidation-narrowing slice — is
+the next thing to profile.
+
+## S10 — the per-node pseudo-element cascades
+
+S10 was planned as "the cost of building one `ComputedStyle`" — S9 left the
+cascade on top, and the struct is 302 fields with ~30 heap-owning ones cloned
+from the parent on every inherit. The brief's own rule (profile the path you
+change, BUG-341 "S8") was followed first, and it overturned the plan: building
+the style is **3%** of `compute_style`. More than half of it is pseudo-element
+cascades run per element for a feature almost nothing uses.
+
+### Profiling the profiler first
+
+Instrumenting `compute_style` per node made `build_box` report **288 ms**
+against a true ~5 ms. `lumen_core::profile`'s call tree is thread-local, so a
+scope opened on a rayon worker (`build_box` parallelises the per-child cascade)
+starts a *root* frame there and prints a whole tree per call — hundreds of trees
+per pass, with the stderr writes landing inside the stage being measured. Three
+changes made the utility usable at per-node granularity:
+
+* same-named sibling scopes merge, printing one line with a `×N` call count;
+* scopes on threads other than the first profiled one are ignored (their time
+  still shows up in the enclosing stage, where it belongs);
+* the per-node scopes sit behind `LUMEN_PROFILE_DETAIL=1`, so a plain
+  `LUMEN_PROFILE_TREE=1` stage run stays comparable with the numbers recorded
+  in the slices above.
+
+### What the incremental path actually spends (before S10)
+
+`layout_mutation_incremental_restyle`, dev-release, medians over 69 cycles.
+Detail rows come from a `LUMEN_PROFILE_DETAIL=1` run and carry their own
+overhead — read them as shares, not absolutes.
+
+| Stage | `CC12_HOVER` | `CC12_KEY` |
+|---|---:|---:|
+| **`precompute_counters`** | **28.2 ms (68%)** | 3.7 ms |
+| `lay_out` | 6.4 ms | 4.7 ms |
+| `build_box` | 5.5 ms | 3.8 ms |
+| `graft_geometry` | 1.4 ms | 0.7 ms |
+| whole pass | 41.5 ms | 14.3 ms |
+
+Inside `precompute_counters` on `CC12_HOVER` (828 nodes recomputed):
+
+| | ms | share of `compute_style` |
+|---|---:|---:|
+| `cs_post` → `::-webkit-scrollbar*` cascades | 11.95 | **55%** |
+| `cs_apply` (declarations) | 3.49 | 16% |
+| `cs_match` (selectors) | 2.77 | 13% |
+| `cs_revert_prepass` | 1.37 | 6% |
+| **`cs_init` (the 302-field literal + inherit clones)** | **0.66** | **3%** |
+| `cs_ua_hints` | 0.45 | 2% |
+| `quote_pseudos` (`::before`/`::after` probe, outside `compute_style`) | 3.65 | — |
+
+Two structural findings, neither visible in any differential test:
+
+1. **`apply_webkit_scrollbar_pseudos` ran three full pseudo-element cascades on
+   every element.** CC-CSS-1 translates `::-webkit-scrollbar`/`-thumb`/`-track`
+   onto `scrollbar-width`/`scrollbar-color`; `assets/chrome/chrome.html` writes
+   those rules *bare* (universal subject), so all three matched on all 828
+   nodes and were fully applied — to set two inherited fields.
+2. **`counters::walk` probed `::before`/`::after` on every node**, including
+   nodes whose style was reused wholesale, solely to keep the quote-nesting
+   counter continuous. On `CC12_KEY` — a dozen nodes recompute, 828 get probed —
+   that was **79% of the cascade stage**.
+
+### The slice
+
+* `compute_pseudo_element_style` matches **before** building the pseudo's
+  starting style (extracted as `pseudo_inherited_style`). The overwhelmingly
+  common outcome is "no rule matched", which used to build a 302-field style
+  and throw it away.
+* Sheet-level, node-independent facts precomputed once per sheet in
+  `CascadeIndex`: `has_webkit_scrollbar_rules` (false for every sheet that is
+  not Lumen's chrome → all three cascades skipped outright) and
+  `has_quote_content` (false for essentially every sheet → the `::before`/
+  `::after` probe skipped; deliberately over-approximating, since `var()` and
+  `attr()` can smuggle a quote in from anywhere).
+* When every `::-webkit-scrollbar*` rule selects node-independently (bare
+  selector, no combinator, no `attr()` in its declarations), an element whose
+  pseudo-inheritance base is identical to its parent's must compute identical
+  scrollbar values — and `scrollbar-width`/`scrollbar-color` are inherited, so
+  those values are already in the style. It reuses them instead of cascading.
+  The check compares two *constructed bases* rather than a hand-listed field
+  set, so a property added to `pseudo_inherited_style` later is covered
+  automatically instead of silently weakening it. The root element always
+  cascades: its `inherited` is a synthetic `ComputedStyle::root()` that never
+  went through this function, and reuse then chains inductively down the tree.
+* The `revert-layer` pre-pass allocated a lowercased `String` per matched
+  declaration plus a `HashMap` to discover, on every element of every real
+  page, that nothing declares `revert-layer`. One allocation-free scan gates it.
+
+### Gates: by count, not by output
+
+Doing this work and discarding the result produces byte-identical output — the
+same trap as `graft_geometry` in S8 — so the mechanism is asserted by counters:
+
+| Test | Asserts |
+|---|---|
+| `style::tests::webkit_scrollbar_cascade_skipped_when_sheet_declares_none` | zero pseudo cascades when no `::-webkit-scrollbar*` rule exists |
+| `style::tests::webkit_scrollbar_cascade_reused_from_parent_when_base_matches` | exactly **one** element cascades for a bare rule — and every element still ends up with the rule's effect |
+| `style::tests::webkit_scrollbar_cascade_not_reused_when_rules_are_node_dependent` | a class-qualified rule disables reuse for every element |
+| `style::tests::pseudo_base_not_built_when_no_rule_matches` | the starting style is not built when nothing matched (and is built when something does) |
+| `style::tests::sheet_quote_content_flag_tracks_declarations` | the quote flag tracks declarations, including the over-approximating `var()`/`attr()` cases |
+| `profile::tests::same_named_siblings_merge_with_a_call_count` | scope merging sums time and count recursively |
+
+`cargo test -p lumen-layout`: 3291 passed, 2 failed — `ch_approximated_as_half_em`
+and `ex_approximated_as_half_em`, the pre-existing BUG-339 flake documented in S5.
+
+### Measurement
+
+Interleaved A/B (main, S10, main, S10, main, S10), dev-release, comparing mins:
+
+| | main min | S10 min | main p50 | S10 p50 |
+|---|---:|---:|---:|---:|
+| `CC12_HOVER` | 40.1 / 48.6 / 45.3 | **37.7 / 36.1 / 36.2** | 63.1 / 55.0 / 53.8 | **45.9 / 42.9 / 42.7** |
+| `CC12_KEY` | 20.9 / 19.6 / 19.0 | **16.4 / 16.9 / 15.5** | 28.8 / 24.5 / 23.2 | **19.0 / 19.5 / 18.4** |
+
+≈20% on both scenarios. Per stage (`LUMEN_PROFILE_TREE=1`, medians):
+
+| | before | after |
+|---|---:|---:|
+| `precompute_counters` (HOVER) | 28.2 ms | **19.7 ms** |
+| `precompute_counters` (KEY) | 3.69 ms | **0.75 ms** |
+| `cs_scrollbar_pseudos` (HOVER, detail) | 11.95 ms / 828 elements | **5.76 ms / 356 elements** |
+| `cs_revert_prepass` (HOVER, detail) | 1.37 ms | **0.34 ms** |
+| `quote_pseudos` | 3.65 ms | **0 (skipped)** |
+
+### Where this leaves CC-12
+
+Still red. Budget 2 ms; `CC12_HOVER` is ~36-46 ms and `CC12_KEY` ~15-19 ms — a
+gap of ~8-20×, the same order as after S9: this slice bought ~20%, not an order
+of magnitude.
+
+The top item on `CC12_HOVER` is still the scrollbar translation: 356 of 828
+elements have a pseudo-inheritance base that differs from their parent's (chrome
+varies `font-size`/`color` a lot) and so still cascade, at 5.8 ms, plus ~2.4 ms
+for the base comparison itself. Two ways out, in increasing order of what they
+cost to decide:
+
+* **Cheap and exact:** memoise the parent's constructed base by pointer —
+  siblings rebuild the identical base today, which is most of that 2.4 ms.
+* **Big but semantic:** run the translation only for elements that can actually
+  have a scrollbar (`overflow` not `visible`, plus the root, `<body>` and text
+  controls). That is the 5.8 ms, and it is closer to WebKit, where
+  `::-webkit-scrollbar` styles the matched element's own scrollbar and does
+  *not* inherit — Lumen's inheritance of it is an artifact of translating onto
+  standard inherited properties. It is a behaviour change, so it needs an
+  explicit decision rather than being folded into a perf slice.
+
+Below that, `cs_apply` (3.7 ms) and `cs_match` (3.0 ms) are the next cascade
+items, and `lay_out` (5.3 ms) + `build_box` (3.6 ms) together now rival the
+cascade stage. `cs_init` — the premise S10 was planned on — remains 0.76 ms and
+is not worth a slice.
+
+## S11 — `::-webkit-scrollbar*` only where a scrollbar can appear
+
+S10 left the scrollbar translation as the top item on `CC12_HOVER`: 356 of 828
+elements still ran three pseudo-element cascades because their
+pseudo-inheritance base differed from their parent's, and the base comparison
+that spared the other 472 cost ~2.4 ms by itself. S10 laid out two ways
+forward; the user chose the semantic one (2026-07-27).
+
+### The decision
+
+Recorded as [ADR-022](../docs/decisions/ADR-022-webkit-scrollbar-scroll-containers-only.md).
+The translation now runs only for elements that can actually show a scrollbar —
+`overflow-x`/`overflow-y` is `scroll` or `auto` (exactly the condition
+`lumen_paint::display_list::emit_scrollbars` and
+`box_tree::scrollbar_gutter_{inline,block}` use), plus the root element and
+`<body>` unconditionally, since those are the conventional target for styling
+the *page* scrollbar. One definition: `style::element_can_have_scrollbar`.
+
+It is a behaviour change, not a pure optimization. CC-CSS-1 translates the
+pseudo-elements onto the standard `scrollbar-width`/`scrollbar-color`, which are
+**inherited** (CSS Scrollbars L1 §2), so a rule matching a *non-scrollable*
+element used to write its result there and leak it to every descendant —
+including scrollable ones that matched no rule of their own. WebKit has no such
+inheritance, so the narrowing is also a fidelity fix.
+
+What did *not* change: the properties themselves still inherit. A bare
+`::-webkit-scrollbar { … }` — the common page idiom, and what
+`assets/chrome/chrome.html` writes — matches `<body>`, and the value reaches the
+whole page from there exactly as before. Lumen's chrome and both graphic tests
+(51, `1000000-final`) style scroll containers directly, so nothing they render
+changes.
+
+S10's node-independence fast path was **removed**, not kept alongside: it reused
+"the parent's already-computed result", which is only sound when some ancestor
+actually computed one. Under narrowing most ancestors no longer do.
+
+### Gates
+
+Counter gates as in S10, plus the two halves of the new semantics:
+
+| Test | Asserts |
+|---|---|
+| `style::tests::webkit_scrollbar_cascade_only_for_scroll_containers` | a scroll container is still styled; an element outside its subtree is not; exactly 3 elements cascade (html, body, the container) |
+| `style::tests::webkit_scrollbar_translation_does_not_leak_from_a_non_scrollable_element` | the removed behaviour: a rule on a non-scrollable element reaches neither it nor its scrollable descendant |
+| `style::tests::webkit_scrollbar_bare_rule_still_reaches_the_page_through_body` | the compatibility path — a bare rule matches `<body>` and inherits down |
+| `style::tests::webkit_scrollbar_cascade_skipped_for_overflow_hidden` | `overflow: hidden` scrolls but draws no bar, matching paint's condition |
+| `style::tests::standard_scrollbar_width_still_inherits` | the standard properties are untouched by the narrowing |
+
+The three pre-existing CC-CSS-1 tests (`webkit_scrollbar_width_maps_to_*`,
+`webkit_scrollbar_thumb_track_map_to_*`, `webkit_scrollbar_thumb_without_track_*`)
+now make their `<div>` a scroll container — they encoded the old "any element"
+behaviour.
+
+`cargo test -p lumen-layout`: 3295 passed, 2 failed (`ch`/`ex_approximated_as_half_em`,
+the pre-existing BUG-339 flake, reproduced on unmodified main).
+
+### Measurement
+
+Interleaved A/B (S10-main, S11, ×3), dev-release, comparing mins:
+
+| | main (S10) min | S11 min | main p50 | S11 p50 |
+|---|---:|---:|---:|---:|
+| `CC12_HOVER` | 22.7 / 21.0 / 24.1 | **16.4 / 16.9 / 17.4** | 26.1 / 27.4 / 37.6 | **19.9 / 19.6 / 21.0** |
+| `CC12_KEY` | 9.6 / 9.0 / 9.2 | **8.2 / 8.5 / 8.3** | 11.7 / 11.6 / 12.1 | **10.7 / 11.0 / 10.9** |
+
+≈25% off `CC12_HOVER`, ≈9% off `CC12_KEY` (the key cycle recomputes a dozen
+nodes, so it had little scrollbar cost left to lose). Note the absolute numbers
+are lower than S10's table on both sides — that run shared the machine with a
+parallel build; only the interleaved comparison is meaningful.
+
+Per stage after S11 (`LUMEN_PROFILE_TREE=1`, medians, quiet machine):
+
+| Stage | `CC12_HOVER` | `CC12_KEY` |
+|---|---:|---:|
+| `precompute_counters` | 8.5 ms | 0.58 ms |
+| `lay_out` | 4.4 ms | 3.9 ms |
+| `build_box` | 2.9 ms | 2.5 ms |
+| `graft_geometry` | 0.97 ms | 0.68 ms |
+| whole pass | 17.6 ms | 8.6 ms |
+
+Inside `compute_style` on `CC12_HOVER` (detail run, 828 nodes): `cs_apply`
+2.76 ms, `cs_match` 2.21 ms, `cs_init` 0.60 ms, **`cs_post` 0.49 ms** (was
+8.13 ms after S10 — the scrollbar translation is gone from the per-node path),
+`cs_ua_hints` 0.32 ms, `cs_revert_prepass` 0.24 ms.
+
+### Where this leaves CC-12
+
+Still red, but the shape has changed: the cascade is no longer the dominant
+stage. Budget 2 ms; `CC12_HOVER` ~16-21 ms and `CC12_KEY` ~8-11 ms — a gap of
+~4-10× (was ~8-20× after S10).
+
+The next items, in order:
+
+* `lay_out` (4.4 / 3.9 ms) — now the single largest stage on both scenarios,
+  and untouched since S8's `graft_geometry` fix. `graft_geometry` reuses
+  geometry for structurally-identical subtrees; what `lay_out` still does for
+  the rest has never been profiled below stage level.
+* `build_box` (2.9 / 2.5 ms) — S4 built a reuse mechanism for it
+  (`incremental_build_box`) and measured it as a net loss because
+  `index_by_node` re-hashes the whole previous tree per call; that index, not
+  the idea, is what needs fixing.
+* `cs_apply` (2.8 ms) + `cs_match` (2.2 ms) — the irreducible-looking half of
+  the cascade: declaration application and selector matching for the 828 nodes
+  the hover flip actually dirties. Narrowing *which* nodes are dirty (S3-S7's
+  line of work) would cut both at once.
+
+## S12 — `LayoutBox::style` behind an `Arc`, copy-on-write
+
+S11 handed S12 three candidates and put `lay_out` first. Profiling it — the
+first time anything below stage level in `lay_out` had been measured — found
+that a third of the stage is a single line, and that the same line's cost is
+paid twice more elsewhere in the frame.
+
+### What `lay_out` actually spends
+
+Permanent `scope_detail` scopes now sit inside `lay_out_inner`
+(`LUMEN_PROFILE_TREE=1 LUMEN_PROFILE_DETAIL=1`). On `CC12_HOVER`, before S12:
+
+| Scope | Time | Calls | What it is |
+|---|---:|---:|---|
+| `lo_style_clone` | 2.33 ms | 1696 | `let s = b.style.clone()` — the snapshot `lay_out_inner` takes to dodge the borrow checker |
+| `lo_wrap` | — | **0** | text wrapping: never runs on the incremental path |
+| `lo_svg` | — | **0** | SVG layout: never runs either |
+| `lo_chex` | 0.15 ms | 1696 | per-box `ch`/`ex` font metrics |
+| `lo_translate` | 0.08 ms | 1425 | the clean-subtree fast path |
+
+(The instrumented run inflates `lay_out` from 3.7 ms to 4.8 ms; ~0.22 µs per
+scope. `lo_style_clone`'s real share is therefore ≈1.2 ms of 3.7 ms.)
+
+Two things fall out of that table. First, the expensive content work — text
+wrapping, SVG — is already fully grafted away; what is left is arithmetic over
+boxes plus one deep copy per box. Second, `lo_style_clone` + `lo_translate`
+give the counter no slice had until now: **1696 of 3121 boxes are re-laid-out
+on every hover flip, 1425 are reused.**
+
+`ComputedStyle` is 3.2 KB, 302 fields, ~30 of them heap-allocated. Per frame the
+chrome pipeline copied it three times per box: `build_box` copying it out of the
+cascade cache (`CounterMap::styles`, already `Arc<ComputedStyle>` since S9),
+`lay_out_inner`'s snapshot, and the whole-tree `clone()` that persists `prev`
+(`clone_tree`, 1.5 ms in the `[cc12-split]` line).
+
+### The slice
+
+`LayoutBox::style` is now `Arc<ComputedStyle>`. Reads are unchanged — `Arc`
+derefs, so `b.style.field` and `&b.style` still compile everywhere — and all
+three copies became refcount bumps. The passes that genuinely write a used value
+back into a box's style take their copy through `Arc::make_mut`, on exactly the
+boxes they touch: flex item stretch (main and cross axis), `font-size-adjust`,
+container-query restyle, `propagate_canvas_background`, the `::first-line`
+in-place restyle, and the table cell's temporary `width` swap. Semantics are
+identical to before — `build_box` used to hand each box a private copy; now the
+copy is taken at the moment of writing.
+
+`apply_font_size_adjust` gained an explicit `FontSizeAdjust::None` test at the
+call site. It already existed *inside* `apply_font_size_adjust_to_style`, but
+reaching for `Arc::make_mut` to call it would have deep-copied the shared style
+on every box in the document, for a property almost nothing sets — the one place
+where the naive translation would have made things worse, not better.
+
+`graft_geometry` compares `Arc::ptr_eq` before the 302-field `==`. When the
+incremental cascade handed a node back unchanged, both trees hold the *same*
+allocation. The structural compare stays behind it, so a node re-cascaded to an
+equal value is still recognised as reusable.
+
+Not done, and deliberately: `collect_box_styles`/`prev_styles` (the page-side
+transition scheduler) still deep-copies every style per relayout. It owns its
+snapshot to diff against the next frame, so sharing it needs `prev_styles` to
+hold `Arc`s too — a page-pipeline follow-up, outside this slice's measured path.
+`InlineSegment::style` and `InlineFrag::style` are likewise untouched.
+
+### Gates: by identity, not by output
+
+The S8/S9 lesson applies verbatim — a version that deep-copies instead of
+sharing passes every differential test and is merely slow.
+
+| Test | Asserts |
+|---|---|
+| `incremental::tests::built_boxes_share_the_cascade_cache_style_allocation` | `Arc::ptr_eq(box.style, counters.styles()[id])` after `build_box`, and again after `tree.clone()` |
+| `incremental::tests::used_value_writeback_does_not_leak_into_the_cascade_cache` | the copy-on-write half: a stretched flex item either still shares the cache entry or took a private copy — the cache never sees the used value |
+
+`cargo test -p lumen-layout`: 3297 passed, 2 failed (`ch`/`ex_approximated_as_half_em`,
+the pre-existing BUG-339 flake). `lumen-chrome` 58, `lumen-paint` 973,
+`lumen-shell` 1706 — all green. CPU snapshot references
+(`cases::snapshot_cpu`, `--features cpu-render`) unchanged, pixel-identical.
+
+`python graphic_tests/run.py --continue-on-fail`: 4 non-debtor failures, none
+of them this slice. The first attempt was thrown away — TEST-00 hit the known
+"magenta marker not found" focus race, which cascades "no crop offset" into all
+148 remaining tests; re-run after TEST-00 passes.
+
+| Test | Verdict |
+|---|---|
+| 10 (`min-max-width`) | 100.00 % here and 100.00 % in the 2026-07-26 main run — pre-existing, byte-for-byte the same diff region |
+| 147 (`background-repeat: space`) | 27.4463 % vs 27.4544 % on main — pre-existing, BUG-330 |
+| 71 (`@starting-style`) | *improved* 6.08 % → 1.76 %; flagged `FAIL`/`RATCHET` only because it now beats its own BUG-199 debtor baseline |
+| 61 (`view-transitions`) | **not a Lumen difference at all.** `61-view-transitions-lumen-cropped.png` is byte-identical (`md5 50e4453…`) between the S12 and the main worktree; the two runs' *Edge reference* captures differ — Edge was grabbed mid-cross-fade in one of them, tinting the whole page purple, which is where the 99.5 % comes from. Headless `--screenshot` output of this page is also byte-identical between the two binaries |
+
+Tests 61 and 71 are both animation-timing pages, and both reference and capture
+are re-grabbed per run — treat a large swing on either as a capture-phase
+question first, and settle it by diffing the two `-lumen-cropped.png` files
+directly rather than by comparing diff percentages.
+
+### Measurement
+
+Interleaved A/B (main, S12, ×3), dev-release, `cc12_chrome_perf_gate`:
+
+| | main min | S12 min | main p50 | S12 p50 |
+|---|---:|---:|---:|---:|
+| `CC12_HOVER` | 16.5 / 18.1 / 17.4 | **13.6 / 15.1 / 15.0** | 18.6 / 20.2 / 19.9 | **15.8 / 17.0 / 17.1** |
+| `CC12_KEY` | 8.7 / 8.6 / 8.8 | **6.3 / 6.1 / 6.3** | 10.5 / 11.8 / 10.8 | **7.5 / 7.4 / 7.5** |
+
+No overlap between the two groups on any of the four rows — ≈15 % off
+`CC12_HOVER`, ≈28 % off `CC12_KEY`.
+
+Per stage (`LUMEN_PROFILE_TREE=1`, medians, quiet machine):
+
+| Stage | `CC12_HOVER` before → after | `CC12_KEY` before → after |
+|---|---|---|
+| `lay_out` | 3.70 → **2.44 ms** | 3.76 → **2.30 ms** |
+| `build_box` | 2.82 → 2.45 ms | 2.53 → 2.19 ms |
+| `clone_tree` (bookkeeping) | 1.48 → **0.73 ms** | 1.31 → **0.64 ms** |
+| `graft_geometry` | 0.90 → 0.99 ms | 0.64 → 0.63 ms |
+| `precompute_counters` | 7.40 → 7.88 ms | 0.55 → 0.55 ms |
+| whole cycle (p50) | 18.49 → 16.81 ms | 10.43 → 7.96 ms |
+
+`lo_style_clone` (renamed `lo_style_ref`) went 2.33 ms → **0.11 ms** for the same
+1696 calls, which is the change doing exactly and only what it was aimed at.
+`precompute_counters` and `graft_geometry` are flat within noise (their mins are
+6.02 → 6.10 and 0.75 → 0.76); nothing regressed.
+
+### Where this leaves CC-12
+
+Still red. Budget 2 ms; `CC12_HOVER` ~13.6-17 ms and `CC12_KEY` ~6.1-7.5 ms — a
+gap of ~3-8× (was ~4-10× after S11). The per-frame cost is now spread thin
+rather than concentrated: no single stage is above 2.5 ms on either scenario.
+
+The next lever is the one the new counters exposed, and it is bigger than
+anything left in a single stage: **1696 of 3121 boxes are rebuilt and
+re-laid-out on a hover flip that changes one subtree.** Both `build_box`
+(2.2-2.45 ms) and `lay_out` (2.3-2.44 ms) are almost linear in that count, and
+`cs_apply`/`cs_match` scale with the 828 elements the same flip re-cascades. So:
+
+* Find out why the dirty set is that wide. `graft_geometry` reuses 1425 boxes;
+  `mark_subtree_dirty` + the cascade's dirty-root-set decide the rest. Whether
+  the remaining 1696 genuinely changed, or are collateral from a conservative
+  root-set (S3-S7's line) or from `kind_layout_eq` rejecting a match, has not
+  been measured — gate whatever comes out of it on the reuse *count*, which now
+  exists (`lo_translate` vs `lo_style_ref`).
+* S4's `incremental_build_box` is still off, still for the right reason
+  (`index_by_node` re-hashes the whole previous tree per call). With `Arc`
+  styles the index is cheaper to build than it was, so the trade-off is worth
+  re-measuring — but only after the dirty-set question above, which may make the
+  mechanism unnecessary.
+
 ## Repro
 
 ```bash

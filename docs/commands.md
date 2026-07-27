@@ -86,6 +86,15 @@ grep -E "^error" .tmp/clippy.log      # re-filter for free
 
 **Gate discipline — when to run what.** During iteration: `cargo check -p <crate>` only. Right before the commit: one `cargo clippy -p <crate> --all-targets -- -D warnings` + targeted tests (`cargo test -p <crate> -- <module>`). Full gates — workspace clippy + `scripts/scoped-test.sh` — run exactly **once**, inside `/lumen-task-finish`; don't run them manually before or after it. Run gates **synchronously in the foreground** (Bash `timeout: 600000`), never as background tasks: background output files buffer through pipes, look empty for the whole run, and provoke minutes of polling plus a duplicate run of the same command.
 
+**Long *iteration* runs are the opposite case — background them.** A gate blocks: you cannot proceed without its verdict, so you wait for it in the foreground. A long build/test you don't need the answer to *right now* (a baseline build, a `--no-run` test build, a full graphic pipeline) should go to the background with the Bash tool's `run_in_background: true`, so the harness notifies you on exit and you keep working meanwhile.
+
+What this replaces: `cmd & ... sleep 540; check-log` — the anti-pattern that ate **76 of 188 minutes** in the session of 2026-07-27 (9 poll cycles; one `sleep 900` hit the tool's 600 s ceiling, another slept 500 s past a result that was already there). Rules:
+
+- Never combine the two mechanisms: `cmd &` **plus** `run_in_background` silently kills the process.
+- Don't poll a background job with `sleep`. Wait for the completion notification; if you must peek, `Read` the output file once — but note it buffers and usually looks empty until the command exits.
+- Two exceptions that must stay in the foreground: the final gates (above) and the **full graphic pipeline** — gdigrab captures the desktop, so a backgrounded run has no focused window and TEST-00 fails with "magenta marker not found", cascading to every test (verified 2026-07-27).
+- Don't hand-run the expensive crate tests before the gate: `scripts/scoped-test.sh` runs them again. A manual `cargo test -p lumen-shell` cost 17 minutes that the gate then repeated. Targeted tests (`-- <module>`) on the crate you touched are fine.
+
 **Precise task descriptions upfront.** Before describing a bug or task, grep/read to find the exact location first. Include file:line so the next session doesn't re-search:
 
 ```

@@ -29,6 +29,7 @@
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use lumen_dom::{Document, FlatTree, NodeData, NodeId};
 
@@ -73,7 +74,14 @@ pub struct CounterMap {
     /// same `inherited` chain (pure function of doc/sheet/viewport/dark_mode),
     /// so its own `compute_style(id, ...)` call would recompute an identical
     /// result — reusing this cache skips a second full cascade pass per node.
-    styles: HashMap<NodeId, ComputedStyle>,
+    ///
+    /// BUG-341 S9: behind an [`Arc`] because this map has three consumers that
+    /// each used to deep-copy a whole `ComputedStyle` per node — the incremental
+    /// cascade's reuse path (`walk` below), the per-cycle snapshot the pipeline
+    /// keeps for the next delta (`CounterMap::styles().clone()`), and this map's
+    /// own insert. All three are now refcount bumps. Nothing mutates a cached
+    /// style in place, so the sharing is unobservable.
+    styles: HashMap<NodeId, Arc<ComputedStyle>>,
     /// BUG-341 S4: `NodeId`s whose own `ComputedStyle` AND entire descendant
     /// subtree are byte-identical to the previous pass (`walk`'s
     /// `must_recompute` was `false` for every node in the subtree), populated
@@ -101,7 +109,19 @@ impl CounterMap {
     /// Returns the `ComputedStyle` this map's traversal computed for `id`, if
     /// any (BUG-284 cascade-reuse cache — see the `styles` field).
     pub fn style_for(&self, id: NodeId) -> Option<&ComputedStyle> {
-        self.styles.get(&id)
+        self.styles.get(&id).map(|s| &**s)
+    }
+
+    /// Like [`Self::style_for`], but hands back the shared allocation itself.
+    ///
+    /// BUG-341 S12: `build_box` stores the cascade result straight into
+    /// `LayoutBox::style` (now an `Arc<ComputedStyle>`), so the cache entry can
+    /// be shared rather than deep-copied per node — a 3.2 KB struct with ~30
+    /// heap fields, built once per node and previously copied once more into
+    /// every box. The few build-time rewrites (image intrinsic hints, marker
+    /// styles) take their copy via `Arc::make_mut`.
+    pub fn style_arc(&self, id: NodeId) -> Option<Arc<ComputedStyle>> {
+        self.styles.get(&id).cloned()
     }
 
     /// Returns the full per-node `ComputedStyle` cascade cache (BUG-341 S2).
@@ -109,7 +129,7 @@ impl CounterMap {
     /// The map the full cascade produced, keyed by `NodeId`. It is the reference
     /// the incremental cascade (BUG-341 S3+) must reproduce bit-for-bit; the
     /// `incr == full` differential tests compare two such maps directly.
-    pub fn styles(&self) -> &HashMap<NodeId, ComputedStyle> {
+    pub fn styles(&self) -> &HashMap<NodeId, Arc<ComputedStyle>> {
         &self.styles
     }
 
@@ -128,6 +148,13 @@ struct CounterCtx {
     stacks: HashMap<String, Vec<i32>>,
     /// Running quote-nesting depth in document order (CSS Content L3 §3.2).
     quote_depth: usize,
+    /// BUG-341 S10 — whether the stylesheet can produce quote content at all
+    /// (`style::sheet_has_quote_content`, decided once per pass). When false,
+    /// `walk` skips its per-node `::before`/`::after` probe: that probe exists
+    /// only to advance `quote_depth`, and without a quote anywhere in the sheet
+    /// it can never record one. Lives here rather than as a `walk` parameter
+    /// because it is per-pass state like the counter stacks themselves.
+    quotes_possible: bool,
 }
 
 impl CounterCtx {
@@ -200,7 +227,10 @@ pub fn precompute_counters(
     dark_mode: bool,
 ) -> CounterMap {
     let root_style = ComputedStyle::root();
-    let mut ctx = CounterCtx::default();
+    let mut ctx = CounterCtx {
+        quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
+        ..CounterCtx::default()
+    };
     let mut map = CounterMap::default();
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false);
     map
@@ -223,7 +253,7 @@ pub fn precompute_counters(
 pub struct RestyleDelta<'a> {
     /// The previous cascade's per-node style cache — [`CounterMap::styles`]
     /// from an earlier full or incremental pass over the same document.
-    pub prev_styles: &'a HashMap<NodeId, ComputedStyle>,
+    pub prev_styles: &'a HashMap<NodeId, Arc<ComputedStyle>>,
     /// Root nodes whose entire subtree must be re-cascaded.
     pub dirty_roots: HashSet<NodeId>,
     /// BUG-341 S4: `true` when this delta is known to reflect *only* an
@@ -281,7 +311,10 @@ pub fn incremental_precompute_counters(
         return precompute_counters(doc, sheet, viewport, flat, dark_mode);
     }
     let root_style = ComputedStyle::root();
-    let mut ctx = CounterCtx::default();
+    let mut ctx = CounterCtx {
+        quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
+        ..CounterCtx::default()
+    };
     let mut map = CounterMap::default();
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(delta), false);
     map
@@ -408,19 +441,21 @@ fn walk(
             force || delta.dirty_roots.contains(&id) || !delta.prev_styles.contains_key(&id)
         }
     };
-    let style = if must_recompute {
+    let style: Arc<ComputedStyle> = if must_recompute {
         #[cfg(test)]
         RECOMPUTE_COUNT.with(|c| c.set(c.get() + 1));
-        compute_style(doc, id, sheet, inherited, viewport, dark_mode)
+        Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode))
     } else {
         // Safe: `must_recompute` is false only when `incr` is `Some` and
         // `prev_styles` contains `id` (checked in the match arm above).
-        incr.unwrap().prev_styles[&id].clone()
+        // BUG-341 S9: a refcount bump, not a `ComputedStyle` deep copy — this
+        // is the reuse path, taken for every node outside the dirty root set.
+        Arc::clone(&incr.unwrap().prev_styles[&id])
     };
     // BUG-284: cache so `build_box`'s own `compute_style(id, ...)` call (same
     // doc/sheet/viewport/dark_mode, same `inherited` chain) can reuse this
     // result instead of recomputing an identical cascade.
-    map.styles.insert(id, style.clone());
+    map.styles.insert(id, Arc::clone(&style));
 
     // CSS Lists L3 §4: counter-reset first, then counter-increment, then counter-set.
     ctx.apply_reset(&style.counter_reset);
@@ -434,12 +469,20 @@ fn walk(
     // Always run (even when `style` was reused) — `quote_depth` is a running
     // document-order counter that must stay continuous regardless of which
     // nodes recomputed their style.
-    if let Some(bps) =
-        compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode)
-    {
-        let depths = record_quote_depths(&bps.content, &mut ctx.quote_depth);
-        if !depths.is_empty() {
-            map.quotes.insert((id, QuoteSlot::Before), depths);
+    // BUG-341 S10: `quotes_possible` is the sheet-wide "could any declaration
+    // produce quote content" flag — when it is false this probe cannot record a
+    // depth, and skipping it removes two pseudo-element cascades per node
+    // (measured: 79% of `precompute_counters` on the CC12_KEY cycle, where only
+    // a dozen nodes recompute their own style but all 828 were probed).
+    if ctx.quotes_possible {
+        let _prof = lumen_core::profile::scope_detail("quote_pseudos");
+        if let Some(bps) =
+            compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode)
+        {
+            let depths = record_quote_depths(&bps.content, &mut ctx.quote_depth);
+            if !depths.is_empty() {
+                map.quotes.insert((id, QuoteSlot::Before), depths);
+            }
         }
     }
 
@@ -451,12 +494,15 @@ fn walk(
     }
 
     // ::after quotes come after all children in document order.
-    if let Some(aps) =
-        compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode)
-    {
-        let depths = record_quote_depths(&aps.content, &mut ctx.quote_depth);
-        if !depths.is_empty() {
-            map.quotes.insert((id, QuoteSlot::After), depths);
+    if ctx.quotes_possible {
+        let _prof = lumen_core::profile::scope_detail("quote_pseudos");
+        if let Some(aps) =
+            compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode)
+        {
+            let depths = record_quote_depths(&aps.content, &mut ctx.quote_depth);
+            if !depths.is_empty() {
+                map.quotes.insert((id, QuoteSlot::After), depths);
+            }
         }
     }
 

@@ -36,6 +36,7 @@ use crate::field_sizing::field_sizing_content_intrinsic;
 use crate::style::FieldSizing;
 use crate::TextMeasurer;
 use std::cell::Cell;
+use std::sync::Arc;
 
 // EE-3: when true, `lay_out` checks `b.dirty.is_clean()` and skips clean subtrees.
 thread_local! {
@@ -210,7 +211,7 @@ fn is_picture_element(doc: &Document, id: NodeId) -> bool {
 
 /// SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
 /// to the CSS pixel rect of the `<svg>` element. All four values are in SVG user units.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ViewBox {
     /// Left edge of the SVG viewport in user units.
     pub min_x: f32,
@@ -322,7 +323,7 @@ pub enum SvgBaselineShift {
 
 /// SVG transformation data from the `transform` presentation attribute.
 /// Stores parsed transform functions in order of application.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SvgTransform {
     /// Transform matrix components: [a, b, c, d, e, f] representing the 2D transformation matrix.
     /// Default is identity matrix [1, 0, 0, 1, 0, 0].
@@ -364,7 +365,7 @@ impl SvgTransform {
 
 /// Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling).
 /// Coordinate origin: top-left of the SVG viewport.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SvgShapeKind {
     /// `<rect x y width height rx ry>`. Corner radii `rx`/`ry` default to 0 (sharp corners).
     Rect { x: f32, y: f32, width: f32, height: f32, rx: f32, ry: f32 },
@@ -1060,7 +1061,7 @@ fn process_svg_node(
     let Some(name) = doc.get(child_id).element_name() else {
         return; // text node / comment / etc.
     };
-    let style = crate::style::compute_style(doc, child_id, sheet, inherited, viewport, dark_mode);
+    let style = Arc::new(crate::style::compute_style(doc, child_id, sheet, inherited, viewport, dark_mode));
     if style.display == crate::style::Display::None {
         return;
     }
@@ -1681,7 +1682,25 @@ pub struct LayoutBox {
     /// Border-box rectangle: (x, y) is the top-left corner after margin,
     /// (width, height) includes padding + border but NOT margin.
     pub rect: Rect,
-    pub style: ComputedStyle,
+    /// Computed style of this box, shared with the cascade cache
+    /// (`CounterMap::styles`) and with every previous-frame tree that still
+    /// holds it, behind copy-on-write.
+    ///
+    /// BUG-341 S12: this used to be an owned `ComputedStyle` — a 3.2 KB,
+    /// 302-field struct with ~30 heap-allocated fields. Every box therefore
+    /// paid a deep copy in `build_box` (from the cascade cache), a second one
+    /// in `lay_out_inner` (which snapshots the style to dodge the borrow
+    /// checker), and a third in every whole-tree `clone()` the incremental
+    /// pipeline does per frame to persist `prev`. Measured on `CC12_HOVER`:
+    /// 1.2 ms of `lay_out`'s 3.7 ms, plus 1.5 ms of per-cycle bookkeeping.
+    /// Behind an `Arc` all three become refcount bumps, and the handful of
+    /// passes that genuinely rewrite a used value (`font-size-adjust`, flex
+    /// item stretch, container queries) take the copy via
+    /// [`std::sync::Arc::make_mut`] on exactly the boxes they touch.
+    ///
+    /// Reads are unchanged: `Arc` derefs to `ComputedStyle`, so `b.style.field`
+    /// and `&b.style` (coerced to `&ComputedStyle`) both still work.
+    pub style: Arc<ComputedStyle>,
     pub kind: BoxKind,
     pub children: Vec<LayoutBox>,
     /// HTML `colspan` attribute (table cells only). Number of columns this cell spans.
@@ -2132,7 +2151,7 @@ fn extract_first_letter_float(
         let inner = LayoutBox {
             node,
             rect: Rect::ZERO,
-            style: inner_style,
+            style: Arc::new(inner_style),
             kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
             children: vec![],
             col_span: 1,
@@ -2144,7 +2163,7 @@ fn extract_first_letter_float(
         return Some(LayoutBox {
             node,
             rect: Rect::ZERO,
-            style: outer_style,
+            style: Arc::new(outer_style),
             kind: BoxKind::Block,
             children: vec![inner],
             col_span: 1,
@@ -2250,7 +2269,7 @@ fn extract_initial_letter(
         let inner = LayoutBox {
             node,
             rect: Rect::ZERO,
-            style: inner_style,
+            style: Arc::new(inner_style),
             kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
             children: vec![],
             col_span: 1,
@@ -2271,7 +2290,7 @@ fn extract_initial_letter(
         return Some(LayoutBox {
             node,
             rect: Rect::ZERO,
-            style: outer_style,
+            style: Arc::new(outer_style),
             kind: BoxKind::Block,
             children: vec![inner],
             col_span: 1,
@@ -2514,7 +2533,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
         if lines.len() < 2 {
             // The whole run is the first formatted line: restyle the box in place
             // so paint uses the ::first-line font metrics for its single line box.
-            child.style = *fls;
+            child.style = Arc::new(*fls);
             i += 1;
             continue;
         }
@@ -2544,7 +2563,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
             dirty: Default::default(),
         };
         // Reuse the original box as the first-line box.
-        child.style = *fls;
+        child.style = Arc::new(*fls);
         child.rect.height = fl_h;
         child.kind = BoxKind::InlineRun {
             segments: consumed_segs,
@@ -2879,31 +2898,52 @@ pub fn layout_mutation_incremental_restyle(
     prev: &LayoutBox,
     delta: &crate::counters::RestyleDelta<'_>,
 ) -> (LayoutBox, CounterMap) {
+    // Stage scopes deliberately reuse `layout_measured_hyp_with_counters`'
+    // names so `LUMEN_PROFILE_TREE=1` yields a directly comparable split of
+    // the *incremental* path — BUG-341 §1's profile only ever described the
+    // full pass, and every slice since S3 has been reasoning from it.
+    let _prof = lumen_core::profile::scope("layout_mutation_incremental_restyle");
     crate::style::invalidate_rule_idx_cache();
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
-    let flat = build_flat_tree(doc);
+    let flat = {
+        let _prof = lumen_core::profile::scope("build_flat_tree");
+        build_flat_tree(doc)
+    };
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
-    let counters =
-        crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta);
+    let counters = {
+        let _prof = lumen_core::profile::scope("precompute_counters");
+        crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta)
+    };
     let registry = build_counter_style_registry(sheet);
-    let mut root =
-        build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
+    let mut root = {
+        let _prof = lumen_core::profile::scope("build_box");
+        build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
+    };
     propagate_canvas_background(doc, &mut root);
     apply_font_size_adjust(&mut root, measurer);
-    // Every freshly-built box needs layout; graft clears the bit on reusable
-    // subtrees so the incremental pass only re-lays-out new/changed content.
-    crate::incremental::mark_subtree_dirty(&mut root);
-    crate::incremental::graft_geometry(&mut root, prev);
+    {
+        let _prof = lumen_core::profile::scope("graft_geometry");
+        // Every freshly-built box needs layout; graft clears the bit on reusable
+        // subtrees so the incremental pass only re-lays-out new/changed content.
+        crate::incremental::mark_subtree_dirty(&mut root);
+        crate::incremental::graft_geometry(&mut root, prev);
+    }
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    lay_out_incremental(
-        &mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp,
-    );
-    // Post-layout passes — same set as layout_measured_hyp/layout_mutation_incremental, same order.
-    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
-    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
-    apply_anchor_positions(&mut root, viewport);
-    split_first_line_boxes(&mut root);
+    {
+        let _prof = lumen_core::profile::scope("lay_out");
+        lay_out_incremental(
+            &mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp,
+        );
+    }
+    {
+        let _prof = lumen_core::profile::scope("post_layout_passes");
+        // Post-layout passes — same set as layout_measured_hyp/layout_mutation_incremental, same order.
+        apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
+        apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
+        apply_anchor_positions(&mut root, viewport);
+        split_first_line_boxes(&mut root);
+    }
     (root, counters)
 }
 
@@ -2959,7 +2999,13 @@ fn apply_font_size_adjust_to_style(style: &mut ComputedStyle, m: &dyn TextMeasur
 /// `frag.style.font_size`) pick up the scaled size from a single source. Inline
 /// text segments carry their own cloned style, so they are adjusted too.
 fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
-    apply_font_size_adjust_to_style(&mut b.style, m);
+    // BUG-341 S12: the `None` test lives here rather than only inside
+    // `apply_font_size_adjust_to_style`, because reaching for `Arc::make_mut`
+    // on a style shared with the cascade cache would deep-copy it — on every
+    // box of the document, for a property almost no box sets.
+    if !matches!(b.style.font_size_adjust, crate::style::FontSizeAdjust::None) {
+        apply_font_size_adjust_to_style(Arc::make_mut(&mut b.style), m);
+    }
     if let BoxKind::InlineRun { segments, .. } = &mut b.kind {
         for seg in segments.iter_mut() {
             apply_font_size_adjust_to_style(&mut seg.style, m);
@@ -3028,10 +3074,12 @@ fn propagate_canvas_background(doc: &Document, root: &mut LayoutBox) {
         return;
     }
 
-    let bg_color = body.style.background_color.take();
-    let bg_layers = std::mem::take(&mut body.style.background_layers);
-    html_box.style.background_color = bg_color;
-    html_box.style.background_layers = bg_layers;
+    let body_style = Arc::make_mut(&mut body.style);
+    let bg_color = body_style.background_color.take();
+    let bg_layers = std::mem::take(&mut body_style.background_layers);
+    let html_style = Arc::make_mut(&mut html_box.style);
+    html_style.background_color = bg_color;
+    html_style.background_layers = bg_layers;
 }
 
 /// CSS Backgrounds §3.11.1 — the canvas background color.
@@ -3185,7 +3233,7 @@ fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment
     LayoutBox {
         node,
         rect: Rect::ZERO,
-        style: anon_style(parent),
+        style: Arc::new(anon_style(parent)),
         kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None },
         children: vec![],
         col_span: 1,
@@ -3237,7 +3285,7 @@ fn build_anon_text_item(
     Some(LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        style: item_style,
+        style: Arc::new(item_style),
         kind: BoxKind::Block,
         children: vec![run],
         col_span: 1,
@@ -3310,7 +3358,7 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
     LayoutBox {
         node,
         rect: Rect::ZERO,
-        style: anon_style(parent),
+        style: Arc::new(anon_style(parent)),
         kind: BoxKind::InlineBlockRow,
         children: items,
         col_span: 1,
@@ -3648,7 +3696,7 @@ fn inject_pseudo(
             let b = LayoutBox {
                 node: parent_id,
                 rect: Rect::ZERO,
-                style: ps,
+                style: Arc::new(ps),
                 kind: BoxKind::Block,
                 children: inner,
                 col_span: 1,
@@ -3839,7 +3887,7 @@ fn inject_marker(
     children.insert(0, LayoutBox {
         node:     parent_id,
         rect:     Rect::ZERO,
-        style:    ms,
+        style:    Arc::new(ms),
         kind:     BoxKind::Marker {
             text,
             position:        style.list_style_position,
@@ -3975,7 +4023,7 @@ fn build_base_select_box(
     let trigger = LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        style: trigger_style,
+        style: Arc::new(trigger_style),
         kind: BoxKind::Block,
         children: trigger_children,
         col_span: 1,
@@ -3989,7 +4037,7 @@ fn build_base_select_box(
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        style: style.clone(),
+        style: Arc::new(style.clone()),
         // FlowRoot: establishes a BFC and lays out the trigger as a block child,
         // regardless of the select's own (inline-block) UA display.
         kind: BoxKind::FlowRoot,
@@ -4095,9 +4143,8 @@ fn build_box(
     // dark_mode) to resolve counter-reset/increment/set — reuse its cached
     // result instead of paying for an identical `compute_style` call again.
     let mut style = counters
-        .style_for(id)
-        .cloned()
-        .unwrap_or_else(|| compute_style(doc, id, sheet, inherited, viewport, dark_mode));
+        .style_arc(id)
+        .unwrap_or_else(|| Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode)));
 
     // HTML/CSS «Customizable Select»: a `<select appearance:base-select>` renders
     // as an author-styleable widget tree instead of the opaque native control.
@@ -4127,12 +4174,12 @@ fn build_box(
                 if style.width.is_none()
                     && let Some(w) = src.intrinsic_width
                 {
-                    style.width = Some(Length::Px(w as f32));
+                    Arc::make_mut(&mut style).width = Some(Length::Px(w as f32));
                 }
                 if style.height.is_none()
                     && let Some(h) = src.intrinsic_height
                 {
-                    style.height = Some(Length::Px(h as f32));
+                    Arc::make_mut(&mut style).height = Some(Length::Px(h as f32));
                 }
                 let is_lazy = doc.get(id).get_attr("loading")
                     .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
@@ -4145,10 +4192,10 @@ fn build_box(
                 // Explicit width/height attrs applied earlier as presentational hints;
                 // fill only if still unset.
                 if style.width.is_none() {
-                    style.width = Some(Length::Px(300.0));
+                    Arc::make_mut(&mut style).width = Some(Length::Px(300.0));
                 }
                 if style.height.is_none() {
-                    style.height = Some(Length::Px(150.0));
+                    Arc::make_mut(&mut style).height = Some(Length::Px(150.0));
                 }
                 BoxKind::Video { src, poster }
             } else if is_canvas_element(doc, id) {
@@ -4166,10 +4213,10 @@ fn build_box(
                 // The bitmap dimensions act as intrinsic size; explicit CSS
                 // width/height (or presentational hints) win if already set.
                 if style.width.is_none() {
-                    style.width = Some(Length::Px(cw as f32));
+                    Arc::make_mut(&mut style).width = Some(Length::Px(cw as f32));
                 }
                 if style.height.is_none() {
-                    style.height = Some(Length::Px(ch as f32));
+                    Arc::make_mut(&mut style).height = Some(Length::Px(ch as f32));
                 }
                 BoxKind::Canvas { width: cw, height: ch }
             } else if is_audio_element(doc, id) {
@@ -4180,11 +4227,11 @@ fn build_box(
                 // With controls, UA must render a control interface; we use 40px height.
                 if controls {
                     if style.height.is_none() {
-                        style.height = Some(Length::Px(40.0));
+                        Arc::make_mut(&mut style).height = Some(Length::Px(40.0));
                     }
                 } else {
-                    style.width = Some(Length::Px(0.0));
-                    style.height = Some(Length::Px(0.0));
+                    Arc::make_mut(&mut style).width = Some(Length::Px(0.0));
+                    Arc::make_mut(&mut style).height = Some(Length::Px(0.0));
                 }
                 BoxKind::Audio { src, controls }
             } else if is_iframe_element(doc, id) {
@@ -4195,10 +4242,10 @@ fn build_box(
                 // Explicit width/height attrs applied earlier as presentational hints;
                 // fill only if still unset.
                 if style.width.is_none() {
-                    style.width = Some(Length::Px(300.0));
+                    Arc::make_mut(&mut style).width = Some(Length::Px(300.0));
                 }
                 if style.height.is_none() {
-                    style.height = Some(Length::Px(150.0));
+                    Arc::make_mut(&mut style).height = Some(Length::Px(150.0));
                 }
                 BoxKind::Iframe { src, srcdoc }
             } else if is_form_control_element(doc, id) {
@@ -4322,12 +4369,12 @@ fn build_box(
                 if style.width.is_none()
                     && let Some(w) = doc.get(id).get_attr("width").and_then(|v| v.trim().parse::<f32>().ok())
                 {
-                    style.width = Some(crate::style::Length::Px(w));
+                    Arc::make_mut(&mut style).width = Some(crate::style::Length::Px(w));
                 }
                 if style.height.is_none()
                     && let Some(h) = doc.get(id).get_attr("height").and_then(|v| v.trim().parse::<f32>().ok())
                 {
-                    style.height = Some(crate::style::Length::Px(h));
+                    Arc::make_mut(&mut style).height = Some(crate::style::Length::Px(h));
                 }
                 BoxKind::SvgRoot {
                     view_box: parse_view_box(doc, id),
@@ -4542,7 +4589,7 @@ fn build_box(
                             row_items.push(LayoutBox {
                                 node: id,
                                 rect: Rect::ZERO,
-                                style: anon_style(&style),
+                                style: Arc::new(anon_style(&style)),
                                 kind: BoxKind::InlineSpace,
                                 children: vec![],
                                 col_span: 1,
@@ -5720,6 +5767,7 @@ fn lay_out_inner(
     // The block-children loop in the parent already advanced child_y using the
     // existing height, so the position is consistent across siblings.
     if INCREMENTAL_LAYOUT_MODE.with(|m| m.get()) && b.dirty.is_clean() {
+        let _prof = lumen_core::profile::scope_detail("lo_translate");
         crate::incremental::translate_subtree(b, start_x - b.rect.x, start_y - b.rect.y);
         return;
     }
@@ -5737,6 +5785,7 @@ fn lay_out_inner(
         }
     }
     let _ch_ex_guard = {
+        let _prof = lumen_core::profile::scope_detail("lo_chex");
         let ch_ex = measurer.map(|m| {
             let fs = b.style.font_size.max(0.0);
             (
@@ -5766,6 +5815,7 @@ fn lay_out_inner(
     // SVG root dispatches to its own layout algorithm: replaced-element sizing
     // from CSS width/height (or viewBox fallback), then SVG-coordinate shape positioning.
     if matches!(b.kind, BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. }) {
+        let _prof = lumen_core::profile::scope_detail("lo_svg");
         lay_out_svg_root(b, start_x, start_y, available_width, available_height, viewport);
         return;
     }
@@ -5794,7 +5844,15 @@ fn lay_out_inner(
         return;
     }
 
-    let s = b.style.clone();
+    // BUG-341 S12: an `Arc` bump, not a 3.2 KB deep copy. The scope stays
+    // because its call count is the honest "boxes fully laid out this pass"
+    // counter (`lo_translate`'s count is the ones reused from `prev`), and
+    // because a future edit that reintroduces an owned clone here would show up
+    // as this line growing from ~0.1 ms back towards the 2.3 ms it was.
+    let s = {
+        let _prof = lumen_core::profile::scope_detail("lo_style_ref");
+        Arc::clone(&b.style)
+    };
     let em = s.font_size;
     let cb = available_width;
 
@@ -7318,7 +7376,8 @@ fn lay_out_table_row(
                 c.rect.x + c.rect.width + mr
             }
         };
-        let saved_width = if use_global { b.children[i].style.width.take() } else { None };
+        let saved_width =
+            if use_global { Arc::make_mut(&mut b.children[i].style).width.take() } else { None };
         lay_out(
             &mut b.children[i],
             cell_x,
@@ -7332,7 +7391,7 @@ fn lay_out_table_row(
             false,
         );
         if use_global {
-            b.children[i].style.width = saved_width;
+            Arc::make_mut(&mut b.children[i].style).width = saved_width;
         }
     }
 
@@ -8767,8 +8826,9 @@ fn lay_out_flex(
                 // is used verbatim instead of having border+padding added on top of it
                 // for a content-box item (which double-counts the border). Mirrors the
                 // cross-axis stretch path below.
-                children[i].style.box_sizing = BoxSizing::BorderBox;
-                children[i].style.height = Some(Length::Px(inner_main));
+                let item_style = Arc::make_mut(&mut children[i].style);
+                item_style.box_sizing = BoxSizing::BorderBox;
+                item_style.height = Some(Length::Px(inner_main));
                 // BUG-294: pass the item's *margin-box* start (no margin pre-added).
                 // `lay_out_inner` unconditionally adds the box's own `margin_left`/
                 // `margin_top` to the `start_x`/`start_y` it receives, so pre-adding
@@ -8790,7 +8850,7 @@ fn lay_out_flex(
                 main_cursor += outer_main + item_gap + jc_gap;
             } else {
                 let inner_main = (outer_main - m_l - m_r).max(0.0);
-                children[i].style.width = Some(Length::Px(inner_main));
+                Arc::make_mut(&mut children[i].style).width = Some(Length::Px(inner_main));
                 // CSS Flexbox §9.8: percentage cross sizes (e.g. height:100%) resolve
                 // against the flex container's definite cross size.
                 // BUG-294: margin-box start — `lay_out_inner` adds `m_l`/`m_t` itself
@@ -8899,8 +8959,9 @@ fn lay_out_flex(
                             let rx = item.rect.x;
                             let ry = item.rect.y;
                             let rw = item.rect.width;
-                            item.style.box_sizing = BoxSizing::BorderBox;
-                            item.style.height = Some(Length::Px(stretch_h));
+                            let item_style = Arc::make_mut(&mut item.style);
+                            item_style.box_sizing = BoxSizing::BorderBox;
+                            item_style.height = Some(Length::Px(stretch_h));
                             lay_out(item, rx, ry, rw, Some(stretch_h), measurer, viewport, pcb, hp, false);
                         }
                     }
@@ -10119,6 +10180,7 @@ fn wrap_inline_run(
     word_break: WordBreak,
     overflow_wrap: OverflowWrap,
 ) -> Vec<Vec<InlineFrag>> {
+    let _prof = lumen_core::profile::scope_detail("lo_wrap");
     let space_w = m.char_width(' ', container_font_size);
 
     let mut result: Vec<Vec<InlineFrag>> = Vec::new();
@@ -11121,7 +11183,7 @@ fn re_style_subtree(
     dark_mode: bool,
 ) {
     if !matches!(b.kind, BoxKind::Skip) {
-        apply_container_rules(&mut b.style, doc, b.node, sheet, ctx, viewport, dark_mode);
+        apply_container_rules(Arc::make_mut(&mut b.style), doc, b.node, sheet, ctx, viewport, dark_mode);
     }
     // Don't propagate into nested containers — they'll build their own context.
     if matches!(b.style.container_type, ContainerType::Normal) {
@@ -16843,7 +16905,7 @@ mod tests {
         let inline_box = super::LayoutBox {
             node: lumen_dom::NodeId::from_index(0),
             rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
-            style: inline_style,
+            style: std::sync::Arc::new(inline_style),
             kind: super::BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
             children: vec![],
             col_span: 1,
@@ -16859,7 +16921,7 @@ mod tests {
         let mut root = super::LayoutBox {
             node: lumen_dom::NodeId::from_index(0),
             rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
-            style: root_style,
+            style: std::sync::Arc::new(root_style),
             kind: super::BoxKind::Block,
             children: vec![inline_box],
             col_span: 1,
@@ -16898,7 +16960,7 @@ mod tests {
         let mut b = super::LayoutBox {
             node: lumen_dom::NodeId::from_index(0),
             rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
-            style: s,
+            style: std::sync::Arc::new(s),
             kind: super::BoxKind::Block,
             children: vec![],
             col_span: 1,
@@ -16932,7 +16994,7 @@ mod tests {
         let mut b = super::LayoutBox {
             node: lumen_dom::NodeId::from_index(0),
             rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
-            style: s,
+            style: std::sync::Arc::new(s),
             kind: super::BoxKind::Block,
             children: vec![],
             col_span: 1,

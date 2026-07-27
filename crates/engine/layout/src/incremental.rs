@@ -195,17 +195,37 @@ pub fn mark_subtree_dirty(b: &mut LayoutBox) {
 /// prefix of each child list matches and the changed/new tail is re-laid-out.
 /// Returns `true` when `new`'s whole subtree was reused clean from `prev`.
 pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
-    if new.node != prev.node
-        || !kind_layout_eq(&new.kind, &prev.kind)
-        || new.style != prev.style
-    {
-        // Node identity, box kind payload or style differ → cannot reuse this
-        // box. Leave the whole subtree dirty (marked by `mark_subtree_dirty`).
+    if new.node != prev.node || !kind_layout_eq(&new.kind, &prev.kind) {
+        // Node identity or box-kind payload differ → this position no longer
+        // describes the same box, so the children below it cannot be matched
+        // positionally either. Leave the whole subtree dirty (marked by
+        // `mark_subtree_dirty`).
         return false;
     }
 
+    // A style difference means *this* box must be re-laid-out, but it says
+    // nothing about its descendants — each child is compared against its own
+    // predecessor below, and the fresh tree was built with the new cascade, so
+    // any inherited change is already visible in the child's own `style`.
+    // Returning early here (BUG-341 "S8") threw away geometry reuse for the
+    // entire document whenever a single node's style differed: the chrome
+    // document hits exactly that every cycle, because `lay_out` writes the used
+    // viewport `height` back into the root box's `style`, so a freshly-built
+    // root never equals its own laid-out predecessor. One such node at the root
+    // meant `graft_geometry` reused nothing at all, on every interaction.
+    //
+    // BUG-341 S12: the pointer test short-circuits the 302-field comparison for
+    // every box whose style came unchanged out of the incremental cascade —
+    // both trees then hold the *same* `Arc` from `CounterMap::styles`. The
+    // structural `==` still runs when the pointers differ, so a box whose style
+    // was re-cascaded to an equal value is still recognised as reusable (that
+    // matters: the incremental cascade legitimately re-computes nodes whose
+    // result is unchanged).
+    let self_reusable =
+        std::sync::Arc::ptr_eq(&new.style, &prev.style) || new.style == prev.style;
+
     let common = new.children.len().min(prev.children.len());
-    let mut all_clean = new.children.len() == prev.children.len();
+    let mut all_clean = self_reusable && new.children.len() == prev.children.len();
     for i in 0..common {
         let child_clean = graft_geometry(&mut new.children[i], &prev.children[i]);
         all_clean &= child_clean;
@@ -249,18 +269,80 @@ pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
 /// compared field-by-field. `InlineRun` compares its `segments` (the pre-layout
 /// inline content) so that text accumulating into an open element during
 /// streaming is detected as changed. Differing discriminants are never equal.
+///
+/// **Every [`crate::box_tree::BoxKind`] variant must be listed here.** A missing
+/// one falls into the `_ => false` arm, which does not merely lose that box's own
+/// geometry: [`graft_geometry`] propagates the failure up, so every ancestor is
+/// re-laid-out too, and a single unlisted kind anywhere in the document defeats
+/// incremental layout for the whole tree. That is exactly what BUG-341 "S8"
+/// found — `Contents`/`Table`/`TableRowGroup`/`SvgRoot`/`SvgShape`/`SvgText`
+/// were absent, and the chrome document's SVG icons alone kept `graft_geometry`
+/// returning `false` at the root on every single cycle.
 fn kind_layout_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::BoxKind) -> bool {
     use crate::box_tree::BoxKind::{
-        Audio, Block, Canvas, FlowRoot, FormControl, Iframe, Image, InlineBlockRow, InlineRun,
-        InlineSpace, Marker, Skip, TableRow, Video,
+        Audio, Block, Canvas, Contents, FlowRoot, FormControl, Iframe, Image, InlineBlockRow,
+        InlineRun, InlineSpace, Marker, Skip, SvgRoot, SvgShape, SvgText, Table, TableRow,
+        TableRowGroup, Video,
     };
     match (a, b) {
         (Block, Block)
         | (InlineBlockRow, InlineBlockRow)
         | (TableRow, TableRow)
+        | (TableRowGroup, TableRowGroup)
+        | (Table, Table)
+        | (Contents, Contents)
         | (InlineSpace, InlineSpace)
         | (Skip, Skip)
         | (FlowRoot, FlowRoot) => true,
+        (
+            SvgRoot { view_box: v1, preserve_aspect_ratio: p1 },
+            SvgRoot { view_box: v2, preserve_aspect_ratio: p2 },
+        ) => v1 == v2 && p1 == p2,
+        // `svg_paint_matrix` is deliberately excluded: it is a layout *output*
+        // (`box_tree.rs`, "Stored in the dedicated `svg_paint_matrix` output
+        // field"), identity on a freshly-built box and only filled in during
+        // `lay_out`. Comparing it would make every SVG shape unequal to its own
+        // laid-out predecessor — the same reason `InlineRun` compares `segments`
+        // (pre-layout) and not its laid-out `lines`. A clean graft copies `kind`
+        // wholesale from `prev`, so the computed matrix carries forward.
+        (
+            SvgShape { shape: s1, svg_transform: t1, .. },
+            SvgShape { shape: s2, svg_transform: t2, .. },
+        ) => s1 == s2 && t1 == t2,
+        (
+            SvgText {
+                text: t1,
+                x: x1,
+                y: y1,
+                dx: dx1,
+                dy: dy1,
+                text_anchor: a1,
+                dominant_baseline: b1,
+                baseline_shift: sh1,
+                svg_transform: tr1,
+            },
+            SvgText {
+                text: t2,
+                x: x2,
+                y: y2,
+                dx: dx2,
+                dy: dy2,
+                text_anchor: a2,
+                dominant_baseline: b2,
+                baseline_shift: sh2,
+                svg_transform: tr2,
+            },
+        ) => {
+            t1 == t2
+                && x1 == x2
+                && y1 == y2
+                && dx1 == dx2
+                && dy1 == dy2
+                && a1 == a2
+                && b1 == b2
+                && sh1 == sh2
+                && tr1 == tr2
+        }
         (InlineRun { segments: sa, .. }, InlineRun { segments: sb, .. }) => segments_eq(sa, sb),
         (
             Image { src: s1, alt: a1, is_lazy: l1 },
@@ -320,7 +402,7 @@ mod tests {
         LayoutBox {
             node: NodeId::from_index(id as usize),
             rect,
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],
             col_span: 1,
@@ -336,7 +418,7 @@ mod tests {
         LayoutBox {
             node: NodeId::from_index(id as usize),
             rect,
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children,
             col_span: 1,
@@ -632,6 +714,125 @@ mod tests {
         }
     }
 
+    // ── BUG-341 S8: every BoxKind must be graftable; a style break must not
+    //    cost the subtree its geometry ─────────────────────────────────────
+
+    /// Each of the six variants `kind_layout_eq` used to omit (falling into its
+    /// `_ => false` arm) must now compare equal to itself. A variant missing
+    /// here does not just lose its own box: `graft_geometry` propagates the
+    /// failure to every ancestor, so one unlisted kind anywhere disables
+    /// incremental layout for the whole document — which is precisely how
+    /// chrome's SVG icons kept reuse at zero for slices S1-S7.
+    #[test]
+    fn kind_layout_eq_covers_every_box_kind_variant() {
+        use crate::box_tree::{
+            PreserveAspectRatio, SvgAlignX, SvgAlignY, SvgBaselineShift, SvgDominantBaseline,
+            SvgMeetOrSlice, SvgShapeKind, SvgTextAnchor, SvgTransform, ViewBox,
+        };
+
+        let kinds = vec![
+            BoxKind::Contents,
+            BoxKind::Table,
+            BoxKind::TableRowGroup,
+            BoxKind::SvgRoot {
+                view_box: Some(ViewBox { min_x: 0.0, min_y: 0.0, width: 24.0, height: 24.0 }),
+                preserve_aspect_ratio: PreserveAspectRatio {
+                    align_x: SvgAlignX::Mid,
+                    align_y: SvgAlignY::Mid,
+                    meet_or_slice: SvgMeetOrSlice::Meet,
+                },
+            },
+            BoxKind::SvgShape {
+                shape: SvgShapeKind::Path { d: "M0 0 L10 10".to_owned() },
+                svg_transform: SvgTransform::translate(3.0, 4.0),
+                svg_paint_matrix: SvgTransform::identity(),
+            },
+            BoxKind::SvgText {
+                text: "hi".to_owned(),
+                x: 1.0,
+                y: 2.0,
+                dx: 0.0,
+                dy: 0.0,
+                text_anchor: SvgTextAnchor::default(),
+                dominant_baseline: SvgDominantBaseline::default(),
+                baseline_shift: SvgBaselineShift::default(),
+                svg_transform: SvgTransform::identity(),
+            },
+        ];
+        for k in &kinds {
+            assert!(kind_layout_eq(k, &k.clone()), "kind {k:?} must be equal to itself");
+        }
+        // Differing payload must still be unequal — the fix must not degrade
+        // into "all SVG boxes are interchangeable".
+        assert!(!kind_layout_eq(
+            &BoxKind::SvgShape {
+                shape: SvgShapeKind::Circle { cx: 0.0, cy: 0.0, r: 1.0 },
+                svg_transform: SvgTransform::identity(),
+                svg_paint_matrix: SvgTransform::identity(),
+            },
+            &BoxKind::SvgShape {
+                shape: SvgShapeKind::Circle { cx: 0.0, cy: 0.0, r: 2.0 },
+                svg_transform: SvgTransform::identity(),
+                svg_paint_matrix: SvgTransform::identity(),
+            },
+        ));
+    }
+
+    /// `svg_paint_matrix` is a layout *output*: identity on a freshly-built box,
+    /// filled in during `lay_out`. Comparing it would make every SVG shape
+    /// unequal to its own laid-out predecessor, silently reproducing the very
+    /// bug this slice fixed.
+    #[test]
+    fn kind_layout_eq_ignores_the_layout_written_svg_paint_matrix() {
+        use crate::box_tree::{SvgShapeKind, SvgTransform};
+
+        let fresh = BoxKind::SvgShape {
+            shape: SvgShapeKind::Circle { cx: 1.0, cy: 1.0, r: 5.0 },
+            svg_transform: SvgTransform::identity(),
+            svg_paint_matrix: SvgTransform::identity(),
+        };
+        let laid_out = BoxKind::SvgShape {
+            shape: SvgShapeKind::Circle { cx: 1.0, cy: 1.0, r: 5.0 },
+            svg_transform: SvgTransform::identity(),
+            svg_paint_matrix: SvgTransform { matrix: [2.0, 0.0, 0.0, 2.0, 40.0, 12.0] },
+        };
+        assert!(kind_layout_eq(&fresh, &laid_out));
+    }
+
+    /// A node whose style changed must be re-laid-out, but its descendants keep
+    /// their geometry. Before BUG-341 S8 `graft_geometry` returned before
+    /// recursing, so a single differing node — the root box, on every cycle,
+    /// because `lay_out` writes the used viewport `height` back into its style —
+    /// threw away geometry reuse for the entire document.
+    #[test]
+    fn graft_style_change_still_reuses_child_geometry() {
+        let prev = block_with_children(
+            1,
+            Rect::new(0.0, 0.0, 800.0, 60.0),
+            vec![leaf(2, Rect::new(0.0, 10.0, 100.0, 50.0))],
+        );
+
+        let mut fresh =
+            block_with_children(1, Rect::ZERO, vec![leaf(2, Rect::ZERO)]);
+        // Only the parent's style differs — exactly the used-value write-back shape.
+        std::sync::Arc::make_mut(&mut fresh.style).height = Some(crate::style::Length::Px(600.0));
+        mark_subtree_dirty(&mut fresh);
+
+        let all_clean = graft_geometry(&mut fresh, &prev);
+
+        assert!(!all_clean, "the node whose style changed must not report itself clean");
+        assert!(fresh.dirty.is_dirty(), "the changed node must be re-laid-out");
+        assert!(
+            fresh.children[0].dirty.is_clean(),
+            "the unchanged child must keep its geometry — losing it here is the S8 regression",
+        );
+        assert_eq!(
+            fresh.children[0].rect,
+            Rect::new(0.0, 10.0, 100.0, 50.0),
+            "the child's geometry must be grafted from prev",
+        );
+    }
+
     #[test]
     fn graft_identical_tree_is_all_clean() {
         let prev = leaf(2, Rect::new(0.0, 10.0, 100.0, 50.0));
@@ -674,10 +875,10 @@ mod tests {
     #[test]
     fn graft_changed_style_marks_dirty() {
         let mut prev_root = leaf(1, Rect::new(0.0, 0.0, 100.0, 50.0));
-        prev_root.style.font_size = 16.0;
+        std::sync::Arc::make_mut(&mut prev_root.style).font_size = 16.0;
 
         let mut fresh = leaf(1, Rect::ZERO);
-        fresh.style.font_size = 24.0; // style changed
+        std::sync::Arc::make_mut(&mut fresh.style).font_size = 24.0; // style changed
         mark_subtree_dirty(&mut fresh);
 
         let clean = graft_geometry(&mut fresh, &prev_root);
@@ -1224,6 +1425,172 @@ mod tests {
         let full = full_cascade(html, css);
         let incr = incremental_cascade(html, css);
         assert_cascades_eq(&full, &incr);
+    }
+
+    /// BUG-341 S9 gate — by *identity*, not by output.
+    ///
+    /// `assert_cascades_eq` cannot tell a reused `ComputedStyle` from a fresh
+    /// deep copy of one: both compare equal. That is precisely how S8's
+    /// `graft_geometry` stayed inert for five slices while passing every
+    /// differential test. So assert what the reuse path is actually for —
+    /// nodes outside the dirty root-set must come back as the *same*
+    /// allocation the previous pass produced, and nodes inside it must not.
+    #[test]
+    fn incr_cascade_reuse_hands_back_the_same_style_allocation() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use lumen_dom::build_flat_tree;
+        use crate::counters::{incremental_precompute_counters, precompute_counters, set_incremental_restyle, RestyleDelta};
+
+        let doc = parse_html(r#"<div id="a"><p>one</p></div><div id="b"><p>two</p></div>"#);
+        let sheet = parse_css("div { color: red; } p { font-weight: bold; }");
+        let vp = Size::new(800.0, 600.0);
+        let flat = build_flat_tree(&doc);
+
+        crate::style::invalidate_rule_idx_cache();
+        let prev = precompute_counters(&doc, &sheet, vp, &flat, false);
+
+        // Dirty exactly one subtree root; everything else must be reused.
+        let dirty_root = doc.find_by_id("a").expect("#a exists");
+        let mut dirty_roots = std::collections::HashSet::new();
+        dirty_roots.insert(dirty_root);
+
+        set_incremental_restyle(true);
+        crate::style::invalidate_rule_idx_cache();
+        let delta = RestyleDelta {
+            prev_styles: prev.styles(),
+            dirty_roots,
+            dom_content_stable: true,
+        };
+        let incr = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        set_incremental_restyle(false);
+
+        let clean = doc.find_by_id("b").expect("#b exists");
+        assert!(
+            std::sync::Arc::ptr_eq(&prev.styles()[&clean], &incr.styles()[&clean]),
+            "a node outside the dirty root-set must be handed back as the same \
+             allocation, not re-cascaded or deep-copied"
+        );
+        // Its descendants ride the same reuse.
+        let clean_child = doc.get(clean).children[0];
+        assert!(std::sync::Arc::ptr_eq(&prev.styles()[&clean_child], &incr.styles()[&clean_child]));
+
+        assert!(
+            !std::sync::Arc::ptr_eq(&prev.styles()[&dirty_root], &incr.styles()[&dirty_root]),
+            "a node in the dirty root-set must have been re-cascaded"
+        );
+        assert_eq!(
+            prev.styles()[&dirty_root], incr.styles()[&dirty_root],
+            "…and the recompute must land on the same value",
+        );
+    }
+
+    /// BUG-341 S12 gate — by identity, not by output.
+    ///
+    /// `build_box` must hand the cascade cache's `Arc<ComputedStyle>` straight
+    /// into `LayoutBox::style` rather than deep-copying it, and cloning a laid
+    /// out tree (the incremental pipeline does exactly that once per frame to
+    /// persist `prev`) must share those allocations too. Both were 3.2 KB,
+    /// ~30-heap-field copies per box before S12: measured at 1.2 ms of
+    /// `lay_out`'s 3.7 ms plus 1.5 ms of per-cycle bookkeeping on `CC12_HOVER`.
+    ///
+    /// A regression here is invisible in geometry — the output is identical
+    /// either way, only slower — which is why this asserts pointers. Same
+    /// reasoning as `incr_cascade_reuse_hands_back_the_same_style_allocation`
+    /// above and the S8 count gate.
+    #[test]
+    fn built_boxes_share_the_cascade_cache_style_allocation() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_measured_hyp_with_counters;
+
+        let doc = parse_html(r#"<div id="a"><p id="p">one</p></div>"#);
+        let sheet = parse_css("div { color: red; } p { font-weight: bold; }");
+        let vp = Size::new(800.0, 600.0);
+
+        crate::style::invalidate_rule_idx_cache();
+        let (tree, counters) = layout_measured_hyp_with_counters(
+            &doc,
+            &sheet,
+            vp,
+            &FixedMeasurer,
+            &lumen_core::ext::NullHyphenationProvider,
+            false,
+        );
+
+        fn find(b: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
+            if b.node == id && !matches!(b.kind, BoxKind::Skip) {
+                return Some(b);
+            }
+            b.children.iter().find_map(|c| find(c, id))
+        }
+
+        let p = doc.find_by_id("p").expect("#p exists");
+        let p_box = find(&tree, p).expect("#p has a box");
+        assert!(
+            std::sync::Arc::ptr_eq(&p_box.style, &counters.styles()[&p]),
+            "build_box must share the cascade cache's allocation, not clone it"
+        );
+
+        // Persisting the tree for the next frame must not resurrect the copy.
+        let persisted = tree.clone();
+        let persisted_p = find(&persisted, p).expect("#p has a box in the clone");
+        assert!(
+            std::sync::Arc::ptr_eq(&persisted_p.style, &p_box.style),
+            "cloning a layout tree must share styles, not deep-copy them"
+        );
+    }
+
+    /// BUG-341 S12: the copy-on-write half of the contract above.
+    ///
+    /// The passes that rewrite a used value into a box's style (flex item
+    /// stretch, `font-size-adjust`, container queries) reach it through
+    /// `Arc::make_mut`, so they must get a private copy and leave the cascade
+    /// cache — shared with the *previous* frame's tree — untouched. Without
+    /// this, a stretched flex item would corrupt the cascade result every other
+    /// pipeline stage compares against.
+    #[test]
+    fn used_value_writeback_does_not_leak_into_the_cascade_cache() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_measured_hyp_with_counters;
+
+        let doc = parse_html(r#"<div id="row"><span id="item">x</span></div>"#);
+        let sheet = parse_css(
+            "#row { display: flex; align-items: stretch; height: 200px; } \
+             #item { display: block; }",
+        );
+        let vp = Size::new(800.0, 600.0);
+
+        crate::style::invalidate_rule_idx_cache();
+        let (tree, counters) = layout_measured_hyp_with_counters(
+            &doc,
+            &sheet,
+            vp,
+            &FixedMeasurer,
+            &lumen_core::ext::NullHyphenationProvider,
+            false,
+        );
+
+        fn find(b: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
+            if b.node == id && !matches!(b.kind, BoxKind::Skip) {
+                return Some(b);
+            }
+            b.children.iter().find_map(|c| find(c, id))
+        }
+
+        let item = doc.find_by_id("item").expect("#item exists");
+        let item_box = find(&tree, item).expect("#item has a box");
+        let cached = &counters.styles()[&item];
+        // Either the box still shares the cache entry (nothing was written
+        // back), or it took a private copy — never a mutated shared one.
+        if !std::sync::Arc::ptr_eq(&item_box.style, cached) {
+            assert_eq!(
+                cached.height, None,
+                "the cascade cache must keep the *computed* height, not the used \
+                 value a stretch pass wrote into the box"
+            );
+        }
     }
 
     #[test]

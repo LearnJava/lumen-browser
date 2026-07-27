@@ -1,0 +1,1985 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Full Design Prototype</title>
+<style>
+/* ============ DESIGN TOKENS ============ */
+:root {
+  --s0: #FFFFFF; --s1: #F8F9FA; --s2: #F0F2F5; --s3: #E6E9ED;
+  --stroke: #E1E4E8; --stroke-strong: #C9CDD2;
+  --text-1: #1F2328; --text-2: #656D76; --text-3: #8B949E;
+  --accent: #0066FF;
+  --profile-personal: #0066FF;
+  --profile-work: #8B5CF6;
+  --profile-anon: #FF3B30;
+  --profile-guest: #8E8E93;
+  --container-color: #10B981;
+  --ws-color: #8B5CF6;
+  --danger: #E5484D;
+  --warn: #F5A524;
+  --success: #30A46C;
+  --r-sm: 2px; --r-md: 4px; --r-lg: 6px;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.06), 0 4px 12px rgba(0,0,0,.08);
+  --shadow-2: 0 4px 8px rgba(0,0,0,.08), 0 12px 32px rgba(0,0,0,.12);
+  --font-ui: -apple-system, "Segoe UI", "Golos Text", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+}
+[data-theme="dark"] {
+  --s0: #121212; --s1: #1A1A1A; --s2: #242424; --s3: #2D2D2D;
+  --stroke: #2D2D2D; --stroke-strong: #3D3D3D;
+  --text-1: #E6E6E6; --text-2: #8B949E; --text-3: #656D76;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.3), 0 4px 12px rgba(0,0,0,.4);
+  --shadow-2: 0 4px 8px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.5);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--s0);
+  display: flex; flex-direction: column;
+  transition: background .15s, color .15s;
+}
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+input { font: inherit; color: inherit; background: none; border: none; outline: none; }
+
+/* ============ TOOLTIP SYSTEM ============ */
+#tooltip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 10000;
+  max-width: 320px;
+  padding: 6px 10px;
+  background: #1F2328;
+  color: #F0F2F5;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  box-shadow: 0 4px 12px rgba(0,0,0,.25);
+  opacity: 0;
+  transition: opacity .12s;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+#tooltip.visible { opacity: 1; }
+#tooltip .tt-kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  background: rgba(255,255,255,.12);
+  border-radius: 3px;
+  margin-left: 6px;
+  color: #C9CDD2;
+}
+#tooltip .tt-section {
+  display: block;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255,255,255,.15);
+  color: #C9CDD2;
+  font-size: 10px;
+}
+#tooltip .tt-section:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+#tooltip .tt-accent { color: #7FB3FF; }
+#tooltip .tt-warn { color: #F5A524; }
+#tooltip .tt-danger { color: #FF6B6B; }
+#tooltip .tt-success { color: #5FD3A1; }
+
+/* ============ PROFILE BORDER ============ */
+#app {
+  flex: 1; display: flex; flex-direction: column;
+  border: 1px solid var(--profile-color, var(--profile-personal));
+  margin: 0; overflow: hidden;
+  transition: border-color .2s;
+}
+body[data-profile="work"] #app { --profile-color: var(--profile-work); }
+body[data-profile="anon"] #app { --profile-color: var(--profile-anon); }
+body[data-profile="guest"] #app { --profile-color: var(--profile-guest); filter: saturate(.2); }
+
+/* ============ TOP BAR ============ */
+.topbar {
+  height: 32px; background: var(--s1); border-bottom: 1px solid var(--stroke);
+  display: flex; align-items: center; padding: 0 8px; gap: 4px;
+}
+.topbar.hidden { display: none; }
+.topbar .ws-pill {
+  display: flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 10px;
+  background: var(--s2); font-size: 11px; font-weight: 500;
+  border: 1px solid transparent; cursor: pointer;
+}
+.topbar .ws-pill.active { background: var(--s2); border-color: var(--ws-color); color: var(--text-1); }
+.topbar .ws-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ws-color); }
+.h-tabs { display: flex; align-items: flex-end; gap: 2px; margin-left: 8px; flex: 1; overflow: hidden; }
+.h-tab {
+  height: 26px; padding: 0 10px; background: var(--s1);
+  border: 1px solid transparent; border-bottom: none;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-2); cursor: pointer;
+  max-width: 180px; min-width: 40px;
+  position: relative;
+}
+.h-tab:hover { background: var(--s2); }
+.h-tab.active { background: var(--s0); color: var(--text-1); border-color: var(--stroke); }
+.h-tab.active::after {
+  content: ""; position: absolute; bottom: -1px; left: 0; right: 0;
+  height: 1px; background: var(--s0);
+}
+.h-tab .container-mark { width: 3px; height: 14px; border-radius: 1px; background: var(--container-color); }
+.h-tab .favicon { width: 12px; height: 12px; border-radius: 2px; background: var(--s3); flex-shrink: 0; }
+.h-tab .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.h-tab.sleeping .favicon { opacity: .4; }
+.h-tab.sleeping .title { color: var(--text-3); }
+.h-tab .close { opacity: 0; width: 14px; height: 14px; border-radius: 2px; display: flex; align-items: center; justify-content: center; font-size: 10px; }
+.h-tab:hover .close { opacity: 1; }
+.h-tab .close:hover { background: var(--s3); }
+
+/* ============ MAIN LAYOUT ============ */
+.main { flex: 1; display: flex; overflow: hidden; }
+
+/* ============ LEFT SIDEBAR ============ */
+.sidebar {
+  width: 260px; background: var(--s1); border-right: 1px solid var(--stroke);
+  display: flex; flex-direction: column;
+  transition: width .15s;
+}
+.sidebar.collapsed { width: 48px; }
+.sidebar.collapsed .tab-title, .sidebar.collapsed .ws-name,
+.sidebar.collapsed .section-label, .sidebar.collapsed .profile-name,
+.sidebar.collapsed .tab-group-label, .sidebar.collapsed .sidebar-footer-text,
+.sidebar.collapsed .profile-sub { display: none; }
+.sidebar.collapsed .tab-item { justify-content: center; padding: 6px; }
+.sidebar.collapsed .ws-item { justify-content: center; padding: 6px; }
+
+.sb-section { display: flex; flex-direction: column; }
+.section-label {
+  padding: 8px 12px 4px; font-size: 10px; text-transform: uppercase;
+  color: var(--text-3); letter-spacing: .5px; font-weight: 600;
+}
+
+.profile-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-bottom: 1px solid var(--stroke);
+  cursor: pointer;
+}
+.profile-bar:hover { background: var(--s2); }
+.profile-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--profile-color, var(--profile-personal));
+  display: flex; align-items: center; justify-content: center;
+  color: white; font-weight: 600; font-size: 12px;
+  border: 2px solid var(--profile-color, var(--profile-personal));
+  flex-shrink: 0;
+}
+.profile-name { font-weight: 500; font-size: 13px; }
+.profile-sub { font-size: 11px; color: var(--text-2); }
+
+.ws-list { padding: 4px 6px; border-bottom: 1px solid var(--stroke); }
+.ws-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px; border-radius: var(--r-md);
+  cursor: pointer; font-size: 12px; color: var(--text-2);
+  border-left: 2px solid transparent;
+}
+.ws-item:hover { background: var(--s2); color: var(--text-1); }
+.ws-item.active { background: var(--s2); color: var(--text-1); border-left-color: var(--ws-color); font-weight: 500; }
+.ws-icon {
+  width: 18px; height: 18px; border-radius: 4px;
+  background: var(--ws-color); display: flex; align-items: center; justify-content: center;
+  color: white; font-size: 10px; font-weight: 600; flex-shrink: 0;
+}
+.ws-add {
+  padding: 5px 8px; color: var(--text-3); font-size: 12px;
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  border-radius: var(--r-md);
+}
+.ws-add:hover { background: var(--s2); color: var(--text-1); }
+
+.tabs-list { flex: 1; overflow-y: auto; padding: 4px 6px; }
+.tab-group { margin-bottom: 4px; }
+.tab-group-label {
+  font-size: 10px; color: var(--text-3); padding: 4px 8px;
+  text-transform: uppercase; letter-spacing: .5px; font-weight: 600;
+  display: flex; align-items: center; gap: 4px; cursor: pointer;
+}
+.tab-group-label:hover { color: var(--text-2); }
+.tab-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; border-radius: var(--r-sm);
+  cursor: pointer; font-size: 12px; color: var(--text-2);
+  border-left: 2px solid transparent;
+  position: relative;
+}
+.tab-item:hover { background: var(--s2); color: var(--text-1); }
+.tab-item.active {
+  background: var(--s2); color: var(--text-1); font-weight: 500;
+  border-left-color: var(--ws-color);
+}
+.tab-item .container-mark { width: 3px; height: 14px; border-radius: 1px; background: var(--container-color); flex-shrink: 0; }
+.tab-item .favicon { width: 14px; height: 14px; border-radius: 2px; background: var(--s3); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 9px; }
+.tab-item .tab-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab-item.sleeping .favicon { opacity: .4; }
+.tab-item.sleeping .tab-title { color: var(--text-3); }
+.tab-item.restoring .favicon::after {
+  content: ""; width: 10px; height: 10px; border: 1.5px solid var(--text-3);
+  border-top-color: transparent; border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.tab-item .tab-close { opacity: 0; width: 16px; height: 16px; border-radius: 2px; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+.tab-item:hover .tab-close { opacity: 1; }
+.tab-item .tab-close:hover { background: var(--s3); }
+.tab-item.tree-child { padding-left: 24px; }
+.tab-item.tree-child::before {
+  content: ""; position: absolute; left: 14px; top: 0; bottom: 50%;
+  border-left: 1px solid var(--stroke-strong);
+  border-bottom: 1px solid var(--stroke-strong);
+  border-bottom-left-radius: 3px;
+  width: 8px;
+}
+.sidebar-footer {
+  padding: 6px; border-top: 1px solid var(--stroke);
+  display: flex; gap: 4px;
+}
+.sidebar-footer button {
+  flex: 1; padding: 6px; border-radius: var(--r-sm);
+  color: var(--text-2); font-size: 11px;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+}
+.sidebar-footer button:hover { background: var(--s2); color: var(--text-1); }
+
+/* ============ CENTER COLUMN ============ */
+.center { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--s0); }
+
+.toolbar {
+  height: 40px; background: var(--s0); border-bottom: 1px solid var(--stroke);
+  display: flex; align-items: center; padding: 0 8px; gap: 4px;
+}
+.tb-btn {
+  width: 28px; height: 28px; border-radius: var(--r-sm);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-2); cursor: pointer; position: relative;
+}
+.tb-btn:hover { background: var(--s2); color: var(--text-1); }
+.tb-btn.disabled { color: var(--text-3); cursor: default; }
+.tb-btn.disabled:hover { background: none; color: var(--text-3); }
+.tb-sep { width: 1px; height: 16px; background: var(--stroke); margin: 0 4px; }
+
+.omnibox-wrap { flex: 1; position: relative; max-width: 720px; margin: 0 auto; }
+.omnibox {
+  height: 28px; background: var(--s1); border: 1px solid var(--stroke);
+  border-radius: var(--r-md); display: flex; align-items: center;
+  padding: 0 8px; gap: 6px;
+  transition: border-color .1s, box-shadow .1s;
+}
+.omnibox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,102,255,.15); }
+.omnibox .prefix { color: var(--accent); font-weight: 600; font-size: 12px; }
+.omnibox input { flex: 1; font-size: 13px; }
+.omnibox input::placeholder { color: var(--text-3); }
+.omnibox .ob-actions { display: flex; gap: 2px; }
+.omnibox .ob-icon { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; color: var(--text-3); border-radius: 2px; }
+.omnibox .ob-icon:hover { background: var(--s2); color: var(--text-1); }
+
+.ob-dropdown {
+  position: absolute; top: 34px; left: 0; right: 0;
+  background: var(--s0); border: 1px solid var(--stroke);
+  border-radius: var(--r-md); box-shadow: var(--shadow-2);
+  padding: 4px; display: none; z-index: 100;
+  max-height: 380px; overflow-y: auto;
+}
+.ob-dropdown.open { display: block; }
+.ob-group-label {
+  font-size: 10px; text-transform: uppercase; color: var(--text-3);
+  padding: 6px 8px 2px; letter-spacing: .5px; font-weight: 600;
+}
+.ob-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.ob-item:hover, .ob-item.selected { background: var(--s2); }
+.ob-item .ob-ico {
+  width: 20px; height: 20px; border-radius: 3px;
+  display: flex; align-items: center; justify-content: center;
+  color: white; font-size: 10px; font-weight: 700; flex-shrink: 0;
+}
+.ob-ico.tabs { background: #3B82F6; }
+.ob-ico.history { background: #6B7280; }
+.ob-ico.bookmarks { background: #F59E0B; }
+.ob-ico.readlater { background: #F97316; }
+.ob-ico.ai { background: #8B5CF6; }
+.ob-item .ob-main { flex: 1; min-width: 0; }
+.ob-item .ob-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ob-item .ob-sub { font-size: 11px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ob-item .ob-kbd { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); padding: 1px 5px; background: var(--s1); border: 1px solid var(--stroke); border-radius: 3px; }
+
+/* ============ PAGE CONTENT ============ */
+.page { flex: 1; overflow-y: auto; position: relative; }
+.page-content { display: none; height: 100%; }
+.page-content.active { display: block; }
+
+.newtab {
+  height: 100%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; padding: 40px;
+  background: var(--s0);
+}
+.newtab-logo { font-size: 28px; font-weight: 300; color: var(--text-1); margin-bottom: 24px; letter-spacing: -1px; }
+.newtab-logo span { color: var(--accent); font-weight: 600; }
+.newtab-omni {
+  width: 100%; max-width: 560px; height: 44px;
+  background: var(--s1); border: 1px solid var(--stroke);
+  border-radius: 22px; display: flex; align-items: center;
+  padding: 0 16px; gap: 10px;
+  box-shadow: var(--shadow-1);
+}
+.newtab-omni:focus-within { border-color: var(--accent); }
+.newtab-omni input { flex: 1; font-size: 14px; }
+.newtab-tiles {
+  display: grid; grid-template-columns: repeat(8, 64px);
+  gap: 12px; margin-top: 32px;
+}
+.tile {
+  width: 64px; height: 64px; border-radius: var(--r-lg);
+  background: var(--s1); border: 1px solid var(--stroke);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; cursor: pointer; font-size: 10px; color: var(--text-2);
+}
+.tile:hover { background: var(--s2); border-color: var(--stroke-strong); }
+.tile-ico { width: 24px; height: 24px; border-radius: 4px; background: var(--s3); }
+
+.website {
+  height: 100%; padding: 40px; overflow-y: auto;
+  background: var(--s0);
+}
+.website h1 { font-size: 24px; margin-bottom: 12px; }
+.website p { color: var(--text-2); line-height: 1.6; margin-bottom: 12px; max-width: 640px; }
+.website .fake-cam-btn {
+  padding: 8px 14px; background: var(--accent); color: white;
+  border-radius: var(--r-md); font-size: 13px; margin-top: 12px;
+}
+
+.history-page { padding: 32px 40px; }
+.history-page h1 { font-size: 20px; margin-bottom: 16px; }
+.history-search {
+  width: 100%; max-width: 560px; height: 36px;
+  background: var(--s1); border: 1px solid var(--stroke);
+  border-radius: var(--r-md); padding: 0 12px;
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 24px;
+}
+.history-search:focus-within { border-color: var(--accent); }
+.history-search input { flex: 1; font-size: 13px; }
+.history-actions { display: flex; gap: 8px; margin-bottom: 20px; }
+.history-actions button {
+  padding: 5px 10px; border: 1px solid var(--stroke);
+  border-radius: var(--r-md); font-size: 12px; color: var(--text-2);
+}
+.history-actions button:hover { background: var(--s2); color: var(--text-1); }
+.history-group-label {
+  font-size: 11px; color: var(--text-3); text-transform: uppercase;
+  letter-spacing: .5px; font-weight: 600; padding: 8px 0;
+  border-bottom: 1px solid var(--stroke); margin-bottom: 4px;
+}
+.history-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 4px; border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.history-item:hover { background: var(--s2); }
+.history-item .favicon { width: 16px; height: 16px; border-radius: 2px; background: var(--s3); flex-shrink: 0; }
+.history-item .h-title { flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-item .h-url { color: var(--text-2); font-size: 12px; width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-item .h-time { color: var(--text-3); font-size: 11px; width: 60px; text-align: right; }
+.history-item .h-actions { opacity: 0; display: flex; gap: 2px; }
+.history-item:hover .h-actions { opacity: 1; }
+.history-item .h-actions button {
+  width: 22px; height: 22px; border-radius: 2px;
+  color: var(--text-2); font-size: 11px;
+}
+.history-item .h-actions button:hover { background: var(--s3); }
+
+.bookmarks-page { display: flex; height: 100%; }
+.bm-tree {
+  width: 220px; border-right: 1px solid var(--stroke);
+  padding: 16px; overflow-y: auto; background: var(--s1);
+}
+.bm-tree h3 { font-size: 11px; text-transform: uppercase; color: var(--text-3); letter-spacing: .5px; margin-bottom: 8px; }
+.bm-folder {
+  padding: 4px 8px; border-radius: var(--r-sm);
+  font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+}
+.bm-folder:hover { background: var(--s2); }
+.bm-folder.active { background: var(--s2); font-weight: 500; }
+.bm-folder.nested { padding-left: 20px; }
+.bm-list { flex: 1; padding: 20px 24px; overflow-y: auto; }
+.bm-list h2 { font-size: 16px; margin-bottom: 12px; }
+.bm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.bm-card {
+  padding: 10px 12px; border: 1px solid var(--stroke);
+  border-radius: var(--r-md); cursor: pointer;
+  display: flex; align-items: center; gap: 10px;
+  background: var(--s0);
+}
+.bm-card:hover { background: var(--s2); border-color: var(--stroke-strong); }
+.bm-card.read-later { border-left: 3px solid #F97316; }
+.bm-card .favicon { width: 16px; height: 16px; border-radius: 2px; background: var(--s3); flex-shrink: 0; }
+.bm-card .bm-title { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bm-card .bm-url { font-size: 10px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.settings-page { display: flex; height: 100%; }
+.settings-nav {
+  width: 200px; border-right: 1px solid var(--stroke);
+  padding: 16px 8px; background: var(--s1);
+}
+.settings-nav-item {
+  padding: 7px 12px; border-radius: var(--r-sm);
+  font-size: 13px; cursor: pointer; color: var(--text-2);
+  display: flex; align-items: center; gap: 8px;
+}
+.settings-nav-item:hover { background: var(--s2); color: var(--text-1); }
+.settings-nav-item.active { background: var(--s2); color: var(--text-1); font-weight: 500; }
+.settings-content { flex: 1; padding: 32px 40px; overflow-y: auto; }
+.settings-content h2 { font-size: 18px; margin-bottom: 4px; }
+.settings-content .sub { color: var(--text-2); font-size: 12px; margin-bottom: 24px; }
+.settings-block { margin-bottom: 24px; }
+.settings-block h3 { font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--text-1); }
+.setting-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--stroke);
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-label { font-size: 13px; }
+.setting-desc { font-size: 11px; color: var(--text-2); margin-top: 2px; }
+.toggle {
+  width: 32px; height: 18px; border-radius: 9px;
+  background: var(--s3); border: 1px solid var(--stroke);
+  position: relative; cursor: pointer; transition: background .15s;
+  flex-shrink: 0;
+}
+.toggle::after {
+  content: ""; position: absolute; top: 1px; left: 1px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: white; box-shadow: 0 1px 2px rgba(0,0,0,.2);
+  transition: left .15s;
+}
+.toggle.on { background: var(--accent); border-color: var(--accent); }
+.toggle.on::after { left: 15px; }
+
+.radio-group { display: flex; gap: 8px; }
+.radio-opt {
+  padding: 8px 14px; border: 1px solid var(--stroke);
+  border-radius: var(--r-md); font-size: 12px; cursor: pointer;
+  background: var(--s0);
+}
+.radio-opt:hover { background: var(--s2); }
+.radio-opt.active { border-color: var(--accent); background: rgba(0,102,255,.08); color: var(--accent); font-weight: 500; }
+
+.popover-anchor { position: relative; }
+.popover {
+  position: absolute; top: 36px; right: 0;
+  width: 320px; background: var(--s0);
+  border: 1px solid var(--stroke); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2); padding: 12px;
+  display: none; z-index: 200;
+}
+.popover.open { display: block; }
+.popover h4 { font-size: 13px; margin-bottom: 4px; }
+.popover .pop-sub { font-size: 11px; color: var(--text-2); margin-bottom: 12px; }
+.popover .pop-section { margin-bottom: 12px; }
+.popover .pop-section-label {
+  font-size: 10px; text-transform: uppercase; color: var(--text-3);
+  letter-spacing: .5px; font-weight: 600; margin-bottom: 6px;
+}
+.perm-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 0;
+}
+.perm-row .perm-ico {
+  width: 24px; height: 24px; border-radius: 4px;
+  background: var(--s2); display: flex; align-items: center; justify-content: center;
+  font-size: 12px;
+}
+.perm-row .perm-name { flex: 1; font-size: 12px; }
+.perm-row .perm-status { font-size: 10px; color: var(--text-3); margin-top: 1px; }
+.perm-btns { display: flex; gap: 4px; }
+.perm-btn {
+  width: 26px; height: 26px; border-radius: var(--r-sm);
+  border: 1px solid var(--stroke); font-size: 12px;
+  display: flex; align-items: center; justify-content: center;
+}
+.perm-btn:hover { background: var(--s2); }
+.perm-btn.allow.active { background: var(--success); color: white; border-color: var(--success); }
+.perm-btn.deny.active { background: var(--danger); color: white; border-color: var(--danger); }
+
+.blocked-stats {
+  background: var(--s1); border-radius: var(--r-md);
+  padding: 10px; margin-bottom: 12px;
+}
+.blocked-row {
+  display: flex; justify-content: space-between;
+  font-size: 11px; padding: 2px 0;
+}
+.blocked-row .num { font-weight: 600; color: var(--accent); font-family: var(--font-mono); }
+
+.downloads-panel {
+  position: fixed; bottom: 8px; right: 8px;
+  width: 340px; max-height: 360px;
+  background: var(--s0); border: 1px solid var(--stroke);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-2);
+  display: none; flex-direction: column; z-index: 150;
+  overflow: hidden;
+}
+.downloads-panel.open { display: flex; }
+.dp-header {
+  padding: 10px 12px; border-bottom: 1px solid var(--stroke);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.dp-header h4 { font-size: 12px; font-weight: 600; }
+.dp-list { overflow-y: auto; flex: 1; }
+.dl-item {
+  padding: 10px 12px; border-bottom: 1px solid var(--stroke);
+}
+.dl-item:last-child { border-bottom: none; }
+.dl-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.dl-ico { width: 20px; height: 20px; border-radius: 3px; background: var(--s2); display: flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0; }
+.dl-name { flex: 1; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl-meta { font-size: 10px; color: var(--text-2); display: flex; gap: 8px; margin-bottom: 4px; }
+.dl-progress { height: 2px; background: var(--s2); border-radius: 1px; overflow: hidden; }
+.dl-progress .bar { height: 100%; background: var(--accent); transition: width .3s; }
+.dl-actions { display: flex; gap: 6px; margin-top: 6px; }
+.dl-actions button { font-size: 10px; color: var(--accent); padding: 2px 0; }
+.dl-actions button:hover { text-decoration: underline; }
+.dl-item.done .dl-progress { display: none; }
+.dl-item.error .dl-name { color: var(--danger); }
+
+.find-bar {
+  position: absolute; top: 8px; right: 16px;
+  background: var(--s0); border: 1px solid var(--stroke);
+  border-radius: var(--r-md); box-shadow: var(--shadow-1);
+  padding: 4px; display: none; align-items: center; gap: 4px;
+  z-index: 50;
+}
+.find-bar.open { display: flex; }
+.find-bar input {
+  width: 180px; height: 24px; padding: 0 8px;
+  background: var(--s1); border-radius: var(--r-sm);
+  font-size: 12px;
+}
+.find-bar .count { font-size: 11px; color: var(--text-2); padding: 0 4px; font-family: var(--font-mono); }
+.find-bar button { width: 22px; height: 22px; border-radius: var(--r-sm); color: var(--text-2); display: flex; align-items: center; justify-content: center; font-size: 11px; }
+.find-bar button:hover { background: var(--s2); color: var(--text-1); }
+
+.cmd-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.3);
+  display: none; align-items: flex-start; justify-content: center;
+  padding-top: 120px; z-index: 500;
+}
+.cmd-overlay.open { display: flex; }
+.cmd-box {
+  width: 600px; background: var(--s0);
+  border: 1px solid var(--stroke); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2); overflow: hidden;
+}
+.cmd-input {
+  width: 100%; padding: 14px 16px; font-size: 14px;
+  border-bottom: 1px solid var(--stroke);
+}
+.cmd-results { max-height: 360px; overflow-y: auto; padding: 4px; }
+.cmd-group-label {
+  font-size: 10px; text-transform: uppercase; color: var(--text-3);
+  letter-spacing: .5px; font-weight: 600; padding: 8px 10px 4px;
+}
+.cmd-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: var(--r-sm);
+  cursor: pointer; font-size: 13px;
+}
+.cmd-item:hover, .cmd-item.selected { background: var(--s2); }
+.cmd-item .cmd-ico { width: 18px; color: var(--text-2); font-size: 12px; }
+.cmd-item .cmd-kbd { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-3); }
+
+.demo-controls {
+  position: fixed; bottom: 12px; left: 12px;
+  background: var(--s0); border: 1px solid var(--stroke);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-1);
+  padding: 8px; display: flex; gap: 4px; z-index: 300;
+  font-size: 11px;
+}
+.demo-controls button {
+  padding: 4px 8px; border-radius: var(--r-sm);
+  color: var(--text-2);
+}
+.demo-controls button:hover { background: var(--s2); color: var(--text-1); }
+.demo-controls .sep { width: 1px; background: var(--stroke); margin: 0 2px; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--s3); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--stroke-strong); }
+
+.ico { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ============ DEVTOOLS ============ */
+.devtools {
+  height: 250px; background: var(--s1); border-top: 1px solid var(--stroke);
+  display: none; flex-direction: column;
+  resize: vertical; overflow: auto;
+}
+.devtools.open { display: flex; }
+.devtools-header {
+  height: 32px; background: var(--s1); border-bottom: 1px solid var(--stroke);
+  display: flex; align-items: center; padding: 0 8px; gap: 2px;
+}
+.devtools-tab {
+  padding: 4px 12px; font-size: 11px; color: var(--text-2);
+  border-radius: var(--r-sm); cursor: pointer;
+}
+.devtools-tab:hover { background: var(--s2); color: var(--text-1); }
+.devtools-tab.active { background: var(--s2); color: var(--text-1); font-weight: 500; }
+.devtools-close {
+  margin-left: auto; width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); border-radius: var(--r-sm);
+}
+.devtools-close:hover { background: var(--s2); color: var(--text-1); }
+.devtools-content { flex: 1; overflow: auto; font-family: var(--font-mono); font-size: 11px; }
+.devtools-panel { display: none; height: 100%; }
+.devtools-panel.active { display: block; }
+
+/* Elements panel */
+.dom-tree { padding: 8px; }
+.dom-node { padding: 2px 0; padding-left: 16px; position: relative; }
+.dom-node::before {
+  content: "▸"; position: absolute; left: 4px;
+  color: var(--text-3); font-size: 9px;
+}
+.dom-node.expanded::before { content: "▾"; }
+.dom-tag { color: #0066FF; }
+.dom-attr { color: #8B5CF6; }
+.dom-text { color: var(--text-1); }
+.dom-node:hover { background: var(--s2); }
+
+/* Console panel */
+.console { padding: 8px; }
+.console-line { padding: 3px 0; border-bottom: 1px solid var(--stroke); }
+.console-line.error { background: rgba(229,72,77,.1); border-left: 2px solid var(--danger); padding-left: 8px; }
+.console-line.warn { background: rgba(245,165,36,.1); border-left: 2px solid var(--warn); padding-left: 8px; }
+.console-line.log { padding-left: 8px; }
+.console-prompt { display: flex; gap: 4px; padding: 8px; border-top: 1px solid var(--stroke); }
+.console-prompt input { flex: 1; font-family: var(--font-mono); font-size: 11px; }
+
+/* Network panel */
+.network-table { width: 100%; border-collapse: collapse; }
+.network-table th {
+  text-align: left; padding: 6px 8px; font-size: 10px;
+  color: var(--text-3); text-transform: uppercase;
+  border-bottom: 1px solid var(--stroke); font-weight: 600;
+}
+.network-table td {
+  padding: 4px 8px; font-size: 11px; border-bottom: 1px solid var(--stroke);
+}
+.network-table tr:hover { background: var(--s2); }
+.status-badge {
+  padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600;
+}
+.status-2xx { background: rgba(48,164,108,.15); color: var(--success); }
+.status-3xx { background: rgba(0,102,255,.15); color: var(--accent); }
+.status-4xx, .status-5xx { background: rgba(229,72,77,.15); color: var(--danger); }
+
+/* ============ AI SIDEBAR ============ */
+.ai-sidebar {
+  width: 320px; background: var(--s1); border-left: 1px solid var(--stroke);
+  display: none; flex-direction: column;
+  transition: width .15s;
+}
+.ai-sidebar.open { display: flex; }
+.ai-sidebar-header {
+  height: 40px; background: var(--s1); border-bottom: 1px solid var(--stroke);
+  display: flex; align-items: center; padding: 0 12px; gap: 8px;
+}
+.ai-sidebar-header .ai-icon {
+  width: 20px; height: 20px; border-radius: 4px;
+  background: linear-gradient(135deg, #8B5CF6, #EC4899);
+  display: flex; align-items: center; justify-content: center;
+  color: white; font-size: 11px;
+}
+.ai-sidebar-header h4 { font-size: 12px; font-weight: 600; flex: 1; }
+.ai-sidebar-close {
+  width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); border-radius: var(--r-sm);
+}
+.ai-sidebar-close:hover { background: var(--s2); color: var(--text-1); }
+.ai-messages { flex: 1; overflow-y: auto; padding: 12px; }
+.ai-message {
+  margin-bottom: 12px; padding: 8px 10px; border-radius: var(--r-md);
+  font-size: 12px; line-height: 1.5;
+}
+.ai-message.user {
+  background: var(--s2); margin-left: 24px;
+}
+.ai-message.assistant {
+  background: var(--s0); border: 1px solid var(--stroke);
+  margin-right: 24px;
+}
+.ai-message.assistant::before {
+  content: "✦"; display: inline-block; margin-right: 6px;
+  color: #8B5CF6; font-weight: 700;
+}
+.ai-input-wrap {
+  padding: 12px; border-top: 1px solid var(--stroke);
+}
+.ai-input {
+  width: 100%; height: 36px; background: var(--s0);
+  border: 1px solid var(--stroke); border-radius: var(--r-md);
+  padding: 0 10px; font-size: 12px;
+}
+.ai-input:focus { border-color: var(--accent); }
+
+/* ============ FOCUS MODE ============ */
+.focus-overlay {
+  position: fixed; inset: 0; background: var(--s0);
+  display: none; flex-direction: column; z-index: 800;
+}
+.focus-overlay.open { display: flex; }
+.focus-timer {
+  position: absolute; top: 16px; right: 16px;
+  background: var(--s1); border: 1px solid var(--stroke);
+  border-radius: var(--r-md); padding: 8px 12px;
+  font-family: var(--font-mono); font-size: 14px;
+  display: flex; align-items: center; gap: 8px;
+}
+.focus-timer button {
+  width: 20px; height: 20px; border-radius: var(--r-sm);
+  color: var(--text-2); display: flex; align-items: center; justify-content: center;
+}
+.focus-timer button:hover { background: var(--s2); color: var(--text-1); }
+.focus-content { flex: 1; padding: 40px; overflow-y: auto; }
+.focus-exit {
+  position: absolute; bottom: 16px; right: 16px;
+  padding: 6px 12px; background: var(--s1); border: 1px solid var(--stroke);
+  border-radius: var(--r-md); font-size: 11px; color: var(--text-2);
+}
+.focus-exit:hover { background: var(--s2); color: var(--text-1); }
+
+/* ============ CERTIFICATE VIEWER ============ */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.4);
+  display: none; align-items: center; justify-content: center;
+  z-index: 900;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  width: 560px; max-height: 80vh; background: var(--s0);
+  border: 1px solid var(--stroke); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2); display: flex; flex-direction: column;
+}
+.modal-header {
+  padding: 16px 20px; border-bottom: 1px solid var(--stroke);
+  display: flex; align-items: center; gap: 10px;
+}
+.modal-header h3 { font-size: 14px; font-weight: 600; flex: 1; }
+.modal-close {
+  width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); border-radius: var(--r-sm);
+}
+.modal-close:hover { background: var(--s2); color: var(--text-1); }
+.modal-body { padding: 20px; overflow-y: auto; flex: 1; }
+.cert-status {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px; background: rgba(48,164,108,.1);
+  border: 1px solid rgba(48,164,108,.3); border-radius: var(--r-md);
+  margin-bottom: 16px;
+}
+.cert-status .icon { font-size: 18px; }
+.cert-status .text { font-size: 12px; }
+.cert-status .text strong { display: block; margin-bottom: 2px; }
+.cert-section { margin-bottom: 16px; }
+.cert-section h4 {
+  font-size: 11px; text-transform: uppercase; color: var(--text-3);
+  letter-spacing: .5px; font-weight: 600; margin-bottom: 8px;
+}
+.cert-row {
+  display: flex; padding: 4px 0; font-size: 12px;
+}
+.cert-row .label { width: 140px; color: var(--text-2); flex-shrink: 0; }
+.cert-row .value { flex: 1; font-family: var(--font-mono); font-size: 11px; word-break: break-all; }
+.cert-fingerprint {
+  padding: 8px; background: var(--s1); border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: 10px; line-height: 1.6;
+  color: var(--text-2);
+}
+.modal-footer {
+  padding: 12px 20px; border-top: 1px solid var(--stroke);
+  display: flex; justify-content: flex-end; gap: 8px;
+}
+.modal-footer button {
+  padding: 6px 14px; border-radius: var(--r-md);
+  font-size: 12px; border: 1px solid var(--stroke);
+}
+.modal-footer button:hover { background: var(--s2); }
+.modal-footer button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+.modal-footer button.primary:hover { background: #0052CC; }
+
+/* ============ PRINT DIALOG ============ */
+.print-dialog {
+  width: 800px; max-height: 90vh; background: var(--s0);
+  border: 1px solid var(--stroke); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2); display: flex; flex-direction: column;
+}
+.print-preview {
+  flex: 1; padding: 20px; overflow-y: auto;
+  background: var(--s1); border-bottom: 1px solid var(--stroke);
+}
+.print-page {
+  width: 100%; max-width: 600px; margin: 0 auto;
+  background: white; padding: 40px; min-height: 400px;
+  box-shadow: var(--shadow-1); font-size: 11px; color: #333;
+}
+.print-page h1 { font-size: 16px; margin-bottom: 12px; color: #000; }
+.print-page p { margin-bottom: 8px; line-height: 1.5; }
+.print-settings {
+  padding: 16px 20px; display: flex; gap: 20px;
+}
+.print-setting {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.print-setting label {
+  font-size: 10px; text-transform: uppercase; color: var(--text-3);
+  letter-spacing: .5px; font-weight: 600;
+}
+.print-setting select, .print-setting input {
+  padding: 4px 8px; border: 1px solid var(--stroke);
+  border-radius: var(--r-sm); font-size: 12px;
+  background: var(--s0);
+}
+</style>
+</head>
+<body data-theme="light" data-profile="personal" data-layout="vertical">
+
+<div id="app">
+  <div class="topbar hidden" id="topbar">
+    <div class="ws-pill" data-tooltip="Текущий профиль: Личный\nМастер-ключ активен\n\nКлик — меню переключения профилей">
+      <span class="dot" style="background: var(--profile-personal)"></span>Личный
+    </div>
+    <div class="ws-pill active" data-tooltip="Пространство: Работа\n7 открытых вкладок\n\nКлик — переключить пространство">
+      <span class="dot"></span>Работа
+    </div>
+    <div class="ws-pill" data-tooltip="Пространство: Side-проект\n3 вкладки">
+      <span class="dot" style="background:#10B981"></span>Side
+    </div>
+    <div class="ws-pill" style="background:transparent;border:1px dashed var(--stroke-strong);color:var(--text-3)" data-tooltip="Создать новое пространство\n\nКаждое пространство — изолированный набор вкладок, не путать с группами вкладок">+ </div>
+    <div class="h-tabs" id="h-tabs"></div>
+  </div>
+
+  <div class="main">
+    <aside class="sidebar" id="sidebar">
+      <div class="profile-bar" id="profileBar" data-tooltip="Профиль: Личный\nМастер-ключ активен\n\nКлик — переключить профиль (Личный / Рабочий / Анонимный / Гостевой)\n\nКаждый профиль имеет изолированное хранилище cookie, history, закладок.\nПереключение с подтверждением, если есть несохранённые вкладки.">
+        <div class="profile-avatar" id="profileAvatar">Л</div>
+        <div>
+          <div class="profile-name" id="profileName">Личный</div>
+          <div class="profile-sub" id="profileSub">Мастер-ключ активен</div>
+        </div>
+      </div>
+
+      <div class="sb-section">
+        <div class="section-label" data-tooltip="Пространства — уровень группировки НАД вкладками. Каждое пространство имеет свой цвет и набор вкладок. Не путать с группами вкладок внутри пространства.">Пространства</div>
+        <div class="ws-list" id="wsList">
+          <div class="ws-item active" data-ws="work" style="--ws-color:#8B5CF6" data-tooltip="Пространство: Работа\n7 вкладок · активно\n\nЦвет: фиолетовый\nВсе вкладки этого пространства имеют фиолетовый маркер.">
+            <div class="ws-icon">Р</div><span class="ws-name">Работа</span>
+          </div>
+          <div class="ws-item" data-ws="personal" style="--ws-color:#0066FF" data-tooltip="Пространство: Личное\n4 вкладки\n\nЦвет: синий">
+            <div class="ws-icon" style="background:#0066FF">Л</div><span class="ws-name">Личное</span>
+          </div>
+          <div class="ws-item" data-ws="side" style="--ws-color:#10B981" data-tooltip="Пространство: Side-проект\n3 вкладки\n\nЦвет: зелёный">
+            <div class="ws-icon" style="background:#10B981">S</div><span class="ws-name">Side-проект</span>
+          </div>
+          <div class="ws-add" data-tooltip="Создать новое пространство\n\nБыстрое создание с выбором цвета и иконки. Пространства переключаются мгновенно, без перезагрузки.">+ <span class="sidebar-footer-text">Новое пространство</span></div>
+        </div>
+      </div>
+
+      <div class="sb-section" style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+        <div class="section-label" data-tooltip="Вкладки текущего пространства. Поддерживаются:\n• Дерево (родитель/потомки)\n• Контейнеры (изоляция cookie/storage)\n• Группы (сворачиваемые)\n• Спящие/восстанавливающиеся">Вкладки · Работа</div>
+        <div class="tabs-list" id="tabsList"></div>
+      </div>
+
+      <div class="sidebar-footer">
+        <button data-tooltip="Новая вкладка в текущем пространстве\n\nГорячая клавиша: Ctrl+T" title="Новая вкладка">+ <span class="sidebar-footer-text">Вкладка</span></button>
+        <button id="toggleSidebar" data-tooltip="Свернуть/развернуть сайдбар\n\nВ свёрнутом виде остаются только иконки пространств и фавиконы вкладок (ширина 48px)." title="Свернуть">◀</button>
+      </div>
+    </aside>
+
+    <div class="center">
+      <div class="toolbar">
+        <button class="tb-btn disabled" data-tooltip="Назад\n\nИспользует bfcache — мгновенный переход без перезагрузки, если страница в кэше.\n\nГорячая клавиша: Alt+←">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <button class="tb-btn" data-tooltip="Вперёд\n\nГорячая клавиша: Alt+→">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+        </button>
+        <button class="tb-btn" data-tooltip="Перезагрузить страницу\n\nГорячая клавиша: Ctrl+R / F5\nCtrl+Shift+R — жёсткая перезагрузка без кэша">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>
+        </button>
+        <div class="tb-sep"></div>
+
+        <div class="omnibox-wrap popover-anchor">
+          <div class="omnibox" id="omnibox">
+            <span class="prefix" id="omniPrefix" data-tooltip="Префикс запроса\n\n@ — универсальный поиск\n@history — только история\n@tabs — только открытые вкладки\n@bookmarks — только закладки\n@read-later — отложенное чтение\n@ai — вопрос к AI\n!g — bang-алиас (Google и т.п.)">@</span>
+            <input id="omniInput" placeholder="Введите адрес, @history, @tabs, !g запрос..." data-tooltip="Омнибокс — универсальный ввод\n\n• Обычный текст → поиск или переход по URL\n• @prefix → фильтрация по типу (history/tabs/bookmarks/ai)\n• !g запрос → bang-алиас (поиск в Google)\n• Стрелки ↑↓ — навигация по результатам\n• Enter — открыть, Ctrl+Enter — в новой вкладке\n• Tab — автодополнение" />
+            <div class="ob-actions">
+              <span class="ob-icon" data-tooltip="Добавить в закладки\n\nКлик — быстрое добавление текущей страницы в избранное.\nЗвезда заполняется, если страница уже в закладках." title="Закладка">☆</span>
+              <span class="ob-icon" id="shieldsBtn" data-tooltip="Щиты и разрешения сайта\n\nКлик — открыть панель:\n• Статистика заблокированных запросов (реклама, трекеры, фингерпринт)\n• Per-origin разрешения (камера/микрофон/гео/уведомления)\n• Без чекбокса «запомнить» — только на этот сеанс" title="Щиты и разрешения">🛡</span>
+              <span class="ob-icon" id="certBtn" data-tooltip="Просмотр TLS-сертификата\n\nКлик — показать детали сертификата:\n• Issuer, Subject, даты валидности\n• Fingerprint (SHA-256)\n• Subject Alternative Names\n• Цепочка доверия" title="Сертификат">🔒</span>
+            </div>
+          </div>
+          <div class="ob-dropdown" id="obDropdown"></div>
+
+          <div class="popover" id="permPopover">
+            <h4>Щиты · example.com</h4>
+            <div class="pop-sub">Соединение защищено. Заблокировано в этой сессии:</div>
+            <div class="blocked-stats">
+              <div class="blocked-row"><span>Реклама и трекеры</span><span class="num">47</span></div>
+              <div class="blocked-row"><span>Фингерпринт-скрипты</span><span class="num">12</span></div>
+              <div class="blocked-row"><span>Coin-miner'ы</span><span class="num">0</span></div>
+            </div>
+            <div class="pop-section">
+              <div class="pop-section-label" data-tooltip="Разрешения применяются per-origin (только для этого домена).\nНет чекбокса «запомнить навсегда» — по умолчанию только на текущий сеанс.\nДля постоянного разрешения — about:settings/privacy">Разрешения · per-origin</div>
+              <div class="perm-row">
+                <div class="perm-ico" data-tooltip="Камера — доступ к веб-камере">📷</div>
+                <div style="flex:1">
+                  <div class="perm-name">Камера</div>
+                  <div class="perm-status">Только этот сеанс</div>
+                </div>
+                <div class="perm-btns">
+                  <button class="perm-btn allow active" data-perm="cam" data-tooltip="Разрешить доступ к камере\n\nДействует только в текущем сеансе. После закрытия вкладки доступ будет запрошен снова.">✓</button>
+                  <button class="perm-btn deny" data-perm="cam" data-tooltip="Запретить доступ к камере\n\nСайт не сможет использовать камеру до явного разрешения.">✕</button>
+                </div>
+              </div>
+              <div class="perm-row">
+                <div class="perm-ico" data-tooltip="Микрофон — доступ к аудиовходу"></div>
+                <div style="flex:1">
+                  <div class="perm-name">Микрофон</div>
+                  <div class="perm-status">Не запрашивалось</div>
+                </div>
+                <div class="perm-btns">
+                  <button class="perm-btn allow" data-perm="mic" data-tooltip="Разрешить доступ к микрофону\n\nТолько на этот сеанс.">✓</button>
+                  <button class="perm-btn deny active" data-perm="mic" data-tooltip="Запретить доступ к микрофону">✕</button>
+                </div>
+              </div>
+              <div class="perm-row">
+                <div class="perm-ico" data-tooltip="Геолокация — доступ к координатам устройства">📍</div>
+                <div style="flex:1">
+                  <div class="perm-name">Геолокация</div>
+                  <div class="perm-status">Запрещено</div>
+                </div>
+                <div class="perm-btns">
+                  <button class="perm-btn allow" data-perm="geo" data-tooltip="Разрешить доступ к геолокации\n\nТолько на этот сеанс.">✓</button>
+                  <button class="perm-btn deny active" data-perm="geo" data-tooltip="Запретить доступ к геолокации">✕</button>
+                </div>
+              </div>
+              <div class="perm-row">
+                <div class="perm-ico" data-tooltip="Уведомления — push-уведомления от сайта">🔔</div>
+                <div style="flex:1">
+                  <div class="perm-name">Уведомления</div>
+                  <div class="perm-status">Не запрашивалось</div>
+                </div>
+                <div class="perm-btns">
+                  <button class="perm-btn allow" data-perm="notif" data-tooltip="Разрешить уведомления\n\nТолько на этот сеанс.">✓</button>
+                  <button class="perm-btn deny" data-perm="notif" data-tooltip="Запретить уведомления">✕</button>
+                </div>
+              </div>
+            </div>
+            <div style="font-size:10px;color:var(--text-3);border-top:1px solid var(--stroke);padding-top:8px">
+              ⚠ Нет чекбокса «запомнить». Для постоянных разрешений — about:settings/privacy
+            </div>
+          </div>
+        </div>
+
+        <div class="tb-sep"></div>
+        <button class="tb-btn" id="downloadsBtn" data-tooltip="Панель загрузок\n\nПоказывает активные, завершённые и ошибочные загрузки.\nПрогресс-бары, скорость, время до завершения.\n\nГорячая клавиша: Ctrl+J" title="Загрузки">⬇</button>
+        <button class="tb-btn" data-tooltip="Расширения браузера\n\nУправление установленными расширениями, их разрешениями и режимами работы (всегда активно / по клику / только на определённых сайтах)." title="Расширения">🧩</button>
+        <button class="tb-btn" id="cmdBtn" data-tooltip="Command Palette — универсальный поиск команд\n\nFuzzy-поиск по:\n• Командам браузера\n• Открытым вкладкам\n• Закладкам\n• Настройкам\n\nГорячая клавиша: Ctrl+K" title="Command Palette (Ctrl+K)">⌘</button>
+        <button class="tb-btn" id="aiBtn" data-tooltip="AI Sidebar — чат с AI-ассистентом\n\nОткрывает правую панель для вопросов по содержимому страницы, переводу, суммаризации.\n\nМожно перестыковать к левому краю." title="AI Sidebar">✦</button>
+        <button class="tb-btn" id="focusBtn" data-tooltip="Focus/Pomodoro режим\n\nСкрывает весь UI, оставляет только контент и таймер.\n\nГорячая клавиша: Ctrl+Shift+F" title="Focus Mode">🎯</button>
+        <button class="tb-btn" id="devtoolsBtn" data-tooltip="DevTools — инструменты разработчика\n\nDOM-инспектор, JS-консоль, Network log, Sources.\n\nГорячая клавиша: F12 / Ctrl+Shift+I" title="DevTools"></button>
+        <button class="tb-btn" id="printBtn" data-tooltip="Печать страницы\n\nОткрывает диалог с превью и настройками печати.\n\nГорячая клавиша: Ctrl+P" title="Печать">🖨</button>
+        <button class="tb-btn" data-tooltip="Главное меню\n\nНастройки, история, загрузки, справка, о браузере." title="Меню">☰</button>
+      </div>
+
+      <div class="page">
+        <div class="find-bar" id="findBar">
+          <input placeholder="Найти на странице..." value="приватность" data-tooltip="Поиск текста на текущей странице\n\nEnter — следующее совпадение\nShift+Enter — предыдущее" />
+          <span class="count" data-tooltip="Счётчик совпадений: текущее / всего">3 / 15</span>
+          <button title="Пред." data-tooltip="Предыдущее совпадение\n\nГорячая клавиша: Shift+Enter">▲</button>
+          <button title="След." data-tooltip="Следующее совпадение\n\nГорячая клавиша: Enter">▼</button>
+          <button id="findClose" data-tooltip="Закрыть поиск\n\nГорячая клавиша: Esc">✕</button>
+        </div>
+
+        <div class="page-content active" data-page="newtab">
+          <div class="newtab">
+            <div class="newtab-logo">lu<span>men</span></div>
+            <div class="newtab-omni">
+              <span style="color:var(--text-3)">🔍</span>
+              <input placeholder="Поиск или адрес — @history, @tabs, !g ..." data-tooltip="Быстрый поиск с новой вкладки\n\nПоддерживает те же префиксы, что и омнибокс: @history, @tabs, @bookmarks, @ai, !g" />
+            </div>
+            <div class="newtab-tiles">
+              <div class="tile" data-tooltip="GitHub — часто посещаемый сайт\n\nКлик — открыть в новой вкладке\nПКМ — редактировать плитку"><div class="tile-ico"></div>GitHub</div>
+              <div class="tile" data-tooltip="Хабр — часто посещаемый сайт"><div class="tile-ico"></div>Habr</div>
+              <div class="tile" data-tooltip="Почта — часто посещаемый сайт"><div class="tile-ico"></div>Почта</div>
+              <div class="tile" data-tooltip="Календарь — часто посещаемый сайт"><div class="tile-ico"></div>Календарь</div>
+              <div class="tile" data-tooltip="Google Docs — часто посещаемый сайт"><div class="tile-ico"></div>Docs</div>
+              <div class="tile" data-tooltip="Figma — часто посещаемый сайт"><div class="tile-ico"></div>Figma</div>
+              <div class="tile" data-tooltip="Linear — часто посещаемый сайт"><div class="tile-ico"></div>Linear</div>
+              <div class="tile" data-tooltip="Добавить плитку часто посещаемого сайта\n\nМаксимум 8 плиток на новой вкладке. Никаких «рекомендаций» и «топ сайтов»."><div class="tile-ico"></div>+</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="page-content" data-page="website">
+          <div class="website">
+            <h1>Пример сайта — example.com</h1>
+            <p>Это демонстрационная страница. Нажмите на щит 🛡 в адресной строке, чтобы увидеть permission popover с real-time статистикой заблокированных запросов.</p>
+            <p>Все разрешения (камера, микрофон, геолокация, уведомления) запрашиваются per-origin и действуют только в рамках текущего сеанса — без скрытого «запомнить навсегда».</p>
+            <button class="fake-cam-btn" data-tooltip="Кнопка-триггер запроса камеры\n\nПри клике сайт запрашивает доступ к камере → появляется permission popover с выбором Разрешить/Запретить только на этот сеанс.">Запросить доступ к камере</button>
+            <p style="margin-top:24px;color:var(--text-3);font-size:11px">Попробуйте Ctrl+F — find-in-page, Ctrl+K — command palette, переключите профиль внизу слева.</p>
+          </div>
+        </div>
+
+        <div class="page-content" data-page="history">
+          <div class="history-page">
+            <h1>История</h1>
+            <div class="history-search">
+              <span style="color:var(--text-3)">🔍</span>
+              <input placeholder="Полнотекстовый поиск по заголовкам и URL..." data-tooltip="FTS-поиск по истории\n\nИщет по заголовкам страниц и URL.\nТакже доступен из омнибокса через префикс @history — без открытия этого экрана." />
+            </div>
+            <div class="history-actions">
+              <button data-tooltip="Экспорт истории в JSON/CSV\n\nПолезно для бэкапа или миграции в другой браузер.">Экспорт</button>
+              <button data-tooltip="Удалить диапазон истории\n\nВыбор периода (час/день/неделя/всё время) и удаление записей.">Удалить диапазон</button>
+              <button data-tooltip="Очистить историю за сегодня\n\nБыстрое действие без диалога выбора диапазона.">Очистить за сегодня</button>
+            </div>
+            <div style="padding:8px 12px;background:rgba(245,165,36,.1);border:1px solid rgba(245,165,36,.3);border-radius:4px;font-size:11px;color:var(--warn);margin-bottom:16px" data-tooltip="Индикатор приватной сессии\n\nВ анонимном/гостевом профиле история не пишется. Жёлтая обводка окна + этот баннер — явное напоминание.">
+              ⚠ В приватных сессиях история не пишется — это видно по жёлтой обводке окна.
+            </div>
+            <div class="history-group-label">Сегодня</div>
+            <div class="history-item" data-tooltip="Design systems for dense interfaces — Smashing Magazine\n\nОткрыто сегодня в 14:32\nКлик — открыть страницу\nПКМ — контекстное меню (открыть в новой вкладке/окне/пространстве)">
+              <div class="favicon"></div>
+              <div class="h-title">Design systems for dense interfaces — Smashing Magazine</div>
+              <div class="h-url">smashingmagazine.com/2024/design-systems</div>
+              <div class="h-time">14:32</div>
+              <div class="h-actions">
+                <button data-tooltip="Добавить в закладки">☆</button>
+                <button data-tooltip="Ещё действия: открыть в новой вкладке, копировать URL, удалить из истории">⋯</button>
+              </div>
+            </div>
+            <div class="history-item" data-tooltip="Rust wgpu tutorial — графика без OpenGL\n\nОткрыто сегодня в 13:11">
+              <div class="favicon"></div><div class="h-title">Rust wgpu tutorial — графика без OpenGL</div><div class="h-url">github.com/rust-tutorials/wgpu</div><div class="h-time">13:11</div>
+              <div class="h-actions"><button data-tooltip="В закладки">☆</button><button data-tooltip="Ещё">⋯</button></div>
+            </div>
+            <div class="history-item" data-tooltip="Архитектура браузеров на Rust — Хабр\n\nОткрыто сегодня в 11:45">
+              <div class="favicon"></div><div class="h-title">Архитектура браузеров на Rust — Хабр</div><div class="h-url">habr.com/ru/articles/780120</div><div class="h-time">11:45</div>
+              <div class="h-actions"><button>☆</button><button></button></div>
+            </div>
+            <div class="history-group-label">Вчера</div>
+            <div class="history-item" data-tooltip="FemtoVG — векторная графика на Rust\n\nОткрыто вчера в 19:20">
+              <div class="favicon"></div><div class="h-title">FemtoVG — векторная графика на Rust</div><div class="h-url">github.com/femtovg/femtovg</div><div class="h-time">19:20</div>
+              <div class="h-actions"><button>☆</button><button>⋯</button></div>
+            </div>
+            <div class="history-item" data-tooltip="IDN homograph attacks — защита от омоглифов\n\nОткрыто вчера в 16:05\n\nВажно для кириллицы: защита от подмены доменов типа apple.com с кириллической «а».">
+              <div class="favicon"></div><div class="h-title">IDN homograph attacks — защита от омоглифов</div><div class="h-url">unicode.org/reports/tr39</div><div class="h-time">16:05</div>
+              <div class="h-actions"><button>☆</button><button>⋯</button></div>
+            </div>
+            <div class="history-group-label">На этой неделе</div>
+            <div class="history-item" data-tooltip="Vivaldi — обзор вкладок и пространств\n\nОткрыто в понедельник">
+              <div class="favicon"></div><div class="h-title">Vivaldi — обзор вкладок и пространств</div><div class="h-url">vivaldi.com/features/tab-management</div><div class="h-time">Пн</div>
+              <div class="h-actions"><button>☆</button><button>⋯</button></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="page-content" data-page="bookmarks">
+          <div class="bookmarks-page">
+            <div class="bm-tree">
+              <h3 data-tooltip="Дерево закладок\n\nDrag-and-drop для реорганизации.\nПКМ на папке — свойства, экспорт, удаление.">Закладки</h3>
+              <div class="bm-folder active" data-tooltip="Все закладки — корневая папка\n\n24 элемента"> Все закладки</div>
+              <div class="bm-folder nested" data-tooltip="Избранное — быстрые закладки\n\nОтображаются на панели закладок под адресной строкой (если включена).">⭐ Избранное</div>
+              <div class="bm-folder nested" data-tooltip="Read later — отложенное чтение\n\n3 непрочитанных записи\n\nВизуально отличаются от обычных закладок: оранжевый маркер слева, иконка «книга с часами». Это разные сущности — не путать."> Read later (3)</div>
+              <div class="bm-folder nested" data-tooltip="Папка: Работа">💼 Работа</div>
+              <div class="bm-folder nested" data-tooltip="Папка: Инструменты">🛠 Инструменты</div>
+              <div class="bm-folder nested" data-tooltip="Папка: Статьи"> Статьи</div>
+              <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke)">
+                <h3 data-tooltip="Панель закладок — горизонтальная полоса под адресной строкой\n\nОпционально скрываемая. Быстрый доступ к избранным закладкам без открытия менеджера.">Панель закладок</h3>
+                <div class="bm-folder" data-tooltip="Быстрый доступ — отображается на панели закладок">📁 Быстрый доступ</div>
+              </div>
+            </div>
+            <div class="bm-list">
+              <h2>Все закладки · 24</h2>
+              <div class="bm-grid">
+                <div class="bm-card" data-tooltip="GitHub\ngithub.com\n\nКлик — открыть\nПКМ — редактировать, переместить, удалить"><div class="favicon"></div><div><div class="bm-title">GitHub</div><div class="bm-url">github.com</div></div></div>
+                <div class="bm-card" data-tooltip="Linear — задачи\nlinear.app/team"><div class="favicon"></div><div><div class="bm-title">Linear — задачи</div><div class="bm-url">linear.app/team</div></div></div>
+                <div class="bm-card read-later" data-tooltip="📖 Read-later запись (НЕ обычная закладка)\n\nПочему Rust быстрее C++ в 2024\nhabr.com · непрочитано\n\nОранжевый левый бордер — визуальное отличие от закладки.\nПри открытии автоматически помечается как прочитанная."><div class="favicon"></div><div><div class="bm-title">📖 Почему Rust быстрее C++ в 2024</div><div class="bm-url">habr.com · непрочитано</div></div></div>
+                <div class="bm-card" data-tooltip="Figma — Lumen UI\nfigma.com/file/abc"><div class="favicon"></div><div><div class="bm-title">Figma — Lumen UI</div><div class="bm-url">figma.com/file/abc</div></div></div>
+                <div class="bm-card" data-tooltip="Документация wgpu\ndocs.rs/wgpu"><div class="favicon"></div><div><div class="bm-title">Документация wgpu</div><div class="bm-url">docs.rs/wgpu</div></div></div>
+                <div class="bm-card read-later" data-tooltip="📖 Read-later запись\nArc Browser: разбор UX\nmedium.com · непрочитано"><div class="favicon"></div><div><div class="bm-title">📖 Arc Browser: разбор UX</div><div class="bm-url">medium.com · непрочитано</div></div></div>
+                <div class="bm-card" data-tooltip="Habr — профиль\nhabr.com/users/me"><div class="favicon"></div><div><div class="bm-title">Habr — профиль</div><div class="bm-url">habr.com/users/me</div></div></div>
+                <div class="bm-card" data-tooltip="Google Docs\ndocs.google.com"><div class="favicon"></div><div><div class="bm-title">Google Docs</div><div class="bm-url">docs.google.com</div></div></div>
+                <div class="bm-card read-later" data-tooltip="📖 Read-later запись\nАнти-омоглиф защита IDN\nunicode.org · непрочитано\n\nВажно для кириллицы: защита от доменов-подделок."><div class="favicon"></div><div><div class="bm-title">📖 Анти-омоглиф защита IDN</div><div class="bm-url">unicode.org · непрочитано</div></div></div>
+                <div class="bm-card" data-tooltip="MDN Web Docs\ndeveloper.mozilla.org"><div class="favicon"></div><div><div class="bm-title">MDN Web Docs</div><div class="bm-url">developer.mozilla.org</div></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="page-content" data-page="settings">
+          <div class="settings-page">
+            <div class="settings-nav">
+              <div class="settings-nav-item" data-tooltip="Раздел: Общие\n\nСтартовая страница, поисковый движок по умолчанию, поведение новой вкладки, импорт данных."> Общие</div>
+              <div class="settings-nav-item active" data-tooltip="Раздел: Приватность и щиты\n\nУровень защиты, блокировки, anti-fingerprint, DoH, разрешения per-origin.">🛡 Приватность</div>
+              <div class="settings-nav-item" data-tooltip="Раздел: Внешний вид\n\nТема (light/dark/system), акцентный цвет, раскладка вкладок (горизонт/вертикаль), шрифты.">🎨 Внешний вид</div>
+              <div class="settings-nav-item" data-tooltip="Раздел: Загрузки\n\nПуть сохранения, поведение (спрашивать/автоматически), очистка завершённых.">⬇ Загрузки</div>
+              <div class="settings-nav-item" data-tooltip="Раздел: Сеть\n\nHTTP/3 (QUIC), DNS over HTTPS, прокси, сертификаты.">🌐 Сеть</div>
+              <div class="settings-nav-item" data-tooltip="Раздел: Adblock\n\nСписки подписок (EasyList, RU-adlist и др.), вкл/выкл, статус последнего обновления.">🚫 Adblock</div>
+              <div class="settings-nav-item" data-tooltip="Раздел: Язык\n\nСпелчекер, локаль UI, предпочтительные языки для контента.">🌍 Язык</div>
+            </div>
+            <div class="settings-content">
+              <h2>Приватность и щиты</h2>
+              <div class="sub">Все настройки честные: тумблер сразу показывает реальное состояние. Никакой телеметрии.</div>
+
+              <div class="settings-block">
+                <h3 data-tooltip="Уровень защиты определяет агрессивность блокировок.\n\nStandard — базовая защита (реклама + трекеры)\nStrict — + анти-фингерпринтинг\nTor-like — + маршрутизация через Tor (возможны поломки сайтов)">Уровень защиты</h3>
+                <div class="radio-group" id="shieldLevel">
+                  <div class="radio-opt active" data-lvl="standard" data-tooltip="Standard — базовый уровень\n\nБлокирует рекламу и известные трекеры.\nМинимум поломок сайтов.\nРекомендуется для повседневного использования.">Standard</div>
+                  <div class="radio-opt" data-lvl="strict" data-tooltip="Strict — усиленный уровень\n\n+ Маскировка canvas, audio, WebGL, шрифтов\n+ Блокировка third-party cookies\nВозможны редкие поломки сайтов.">Strict</div>
+                  <div class="radio-opt" data-lvl="tor" data-tooltip="Tor-like — максимальный уровень\n\n+ Маршрутизация через Tor\n+ Полная изоляция от фингерпринта\n⚠ Возможны значительные поломки сайтов и замедление">Tor-like</div>
+                </div>
+                <div style="font-size:11px;color:var(--text-2);margin-top:8px">Standard блокирует рекламу и трекеры. Strict дополнительно маскирует фингерпринт. Tor-like маршрутизирует трафик через Tor — возможны поломки сайтов.</div>
+              </div>
+
+              <div class="settings-block">
+                <h3>Блокировки</h3>
+                <div class="setting-row">
+                  <div><div class="setting-label">Блокировать рекламу</div><div class="setting-desc">Подписки EasyList + RU-adlist, обновляются ежедневно</div></div>
+                  <div class="toggle on" data-toggle data-tooltip="Блокировка рекламы: ВКЛ\n\nИспользуются списки EasyList и RU-adlist.\nОбновление: автоматически, раз в день.\nПоследнее обновление: сегодня, 03:14"></div>
+                </div>
+                <div class="setting-row">
+                  <div><div class="setting-label">Анти-фингерпринтинг</div><div class="setting-desc">Маскировка canvas, audio, WebGL, шрифтов</div></div>
+                  <div class="toggle on" data-toggle data-tooltip="Анти-фингерпринтинг: ВКЛ\n\nМаскируются: canvas fingerprint, audio context, WebGL renderer, список шрифтов, timezone, language.\n\nПроверить на lumen://shields-test"></div>
+                </div>
+                <div class="setting-row">
+                  <div><div class="setting-label">Блокировать third-party cookies</div><div class="setting-desc">Полная изоляция хранилищ по домену</div></div>
+                  <div class="toggle on" data-toggle data-tooltip="Third-party cookies: ЗАБЛОКИРОВАНЫ\n\nКаждый домен имеет изолированное хранилище.\nКонтейнеры вкладок усиливают эту изоляцию."></div>
+                </div>
+                <div class="setting-row">
+                  <div><div class="setting-label">HTTPS-only mode</div><div class="setting-desc">Принудительное шифрование, предупреждение для HTTP</div></div>
+                  <div class="toggle on" data-toggle data-tooltip="HTTPS-only: ВКЛ\n\nВсе запросы принудительно идут по HTTPS.\nДля HTTP-сайтов показывается предупреждение."></div>
+                </div>
+              </div>
+
+              <div class="settings-block">
+                <h3>Сеть</h3>
+                <div class="setting-row">
+                  <div><div class="setting-label">DNS over HTTPS</div><div class="setting-desc">Cloudflare (1.1.1.1) · защита от DNS-spoofing</div></div>
+                  <div class="toggle on" data-toggle data-tooltip="DNS over HTTPS: ВКЛ\n\nПровайдер: Cloudflare (1.1.1.1)\nЗащита от DNS-spoofing и перехвата провайдером."></div>
+                </div>
+                <div class="setting-row">
+                  <div><div class="setting-label">HTTP/3 (QUIC)</div><div class="setting-desc">Быстрое соединение по UDP</div></div>
+                  <div class="toggle on" data-toggle data-tooltip="HTTP/3 (QUIC): ВКЛ\n\nБыстрое соединение по UDP с уменьшением задержек.\nОткат к HTTP/2 при проблемах с UDP."></div>
+                </div>
+              </div>
+
+              <div class="settings-block">
+                <h3>Разрешения по умолчанию</h3>
+                <div class="setting-row">
+                  <div><div class="setting-label">Камера / микрофон</div><div class="setting-desc">Спрашивать каждый раз, per-origin, без «запомнить»</div></div>
+                  <div class="toggle on" data-toggle data-tooltip="Запрос камеры/микрофона: ВКЛ\n\nСайт должен явно запросить доступ.\nРазрешение действует только на текущий сеанс.\nНет скрытого «запомнить навсегда»."></div>
+                </div>
+                <div class="setting-row">
+                  <div><div class="setting-label">Уведомления</div><div class="setting-desc">Запрещены по умолчанию</div></div>
+                  <div class="toggle" data-toggle data-tooltip="Уведомления: ЗАПРЕЩЕНЫ по умолчанию\n\nСайты не могут отправлять push-уведомления без явного разрешения per-origin."></div>
+                </div>
+                <div class="setting-row">
+                  <div><div class="setting-label">Геолокация</div><div class="setting-desc">Запрещена по умолчанию</div></div>
+                  <div class="toggle" data-toggle data-tooltip="Геолокация: ЗАПРЕЩЕНА по умолчанию\n\nСайты не получают доступ к координатам без явного разрешения."></div>
+                </div>
+              </div>
+
+              <div style="margin-top:24px;padding:12px;background:var(--s1);border-radius:var(--r-md);font-size:11px;color:var(--text-2)" data-tooltip="Прозрачность Lumen\n\n• Нет телеметрии\n• Код движка открыт\n• Вы можете проверить блокировки на lumen://shields-test\n• Синхронизация через локальный P2P или пользовательский WebDAV/S3">
+                💡 <b>Прозрачность:</b> Lumen не собирает телеметрию. Код движка — открыт. Вы можете проверить, что именно блокируется, на <span style="color:var(--accent);cursor:pointer">lumen://shields-test</span>.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DEVTOOLS -->
+      <div class="devtools" id="devtools">
+        <div class="devtools-header">
+          <div class="devtools-tab active" data-tab="elements" data-tooltip="Elements — DOM-инспектор\n\nПросмотр и редактирование DOM-дерева, CSS-стилей, computed properties.">Elements</div>
+          <div class="devtools-tab" data-tab="console" data-tooltip="Console — JS-консоль\n\nВыполнение JavaScript, просмотр логов, ошибок, предупреждений.">Console</div>
+          <div class="devtools-tab" data-tab="network" data-tooltip="Network — сетевые запросы\n\nВсе HTTP-запросы: статус, тип, размер, время, headers, response.">Network</div>
+          <div class="devtools-tab" data-tab="sources" data-tooltip="Sources — исходный код\n\nПросмотр JS/CSS файлов, установка breakpoints, отладка.">Sources</div>
+          <div class="devtools-close" id="devtoolsClose" data-tooltip="Закрыть DevTools\n\nГорячая клавиша: F12 / Ctrl+Shift+I">✕</div>
+        </div>
+        <div class="devtools-content">
+          <div class="devtools-panel active" data-panel="elements">
+            <div class="dom-tree">
+              <div class="dom-node expanded">
+                <span class="dom-tag">&lt;html</span> <span class="dom-attr">lang</span>=<span class="dom-text">"ru"</span><span class="dom-tag">&gt;</span>
+              </div>
+              <div class="dom-node expanded" style="padding-left:32px">
+                <span class="dom-tag">&lt;head&gt;</span>
+              </div>
+              <div class="dom-node expanded" style="padding-left:32px">
+                <span class="dom-tag">&lt;body</span> <span class="dom-attr">data-theme</span>=<span class="dom-text">"light"</span><span class="dom-tag">&gt;</span>
+              </div>
+              <div class="dom-node" style="padding-left:48px">
+                <span class="dom-tag">&lt;div</span> <span class="dom-attr">id</span>=<span class="dom-text">"app"</span><span class="dom-tag">&gt;</span>
+              </div>
+              <div class="dom-node" style="padding-left:64px">
+                <span class="dom-tag">&lt;aside</span> <span class="dom-attr">class</span>=<span class="dom-text">"sidebar"</span><span class="dom-tag">&gt;</span>
+              </div>
+              <div class="dom-node" style="padding-left:64px">
+                <span class="dom-tag">&lt;div</span> <span class="dom-attr">class</span>=<span class="dom-text">"center"</span><span class="dom-tag">&gt;</span>
+              </div>
+            </div>
+          </div>
+          <div class="devtools-panel" data-panel="console">
+            <div class="console">
+              <div class="console-line log"><span style="color:var(--text-3)">[14:32:11]</span> Lumen engine initialized (wgpu backend)</div>
+              <div class="console-line log"><span style="color:var(--text-3)">[14:32:12]</span> Profile loaded: personal (master-key active)</div>
+              <div class="console-line warn"><span style="color:var(--warn)">[14:32:15]</span> Third-party cookie blocked: analytics.example.com</div>
+              <div class="console-line error"><span style="color:var(--danger)">[14:32:18]</span> Fingerprint attempt detected: canvas.toDataURL()</div>
+              <div class="console-line log"><span style="color:var(--text-3)">[14:32:20]</span> Shield stats: 47 ads/trackers blocked</div>
+              <div class="console-prompt">
+                <span style="color:var(--accent)">&gt;</span>
+                <input placeholder="Введите JavaScript..." />
+              </div>
+            </div>
+          </div>
+          <div class="devtools-panel" data-panel="network">
+            <table class="network-table">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Type</th>
+                  <th>URL</th>
+                  <th>Size</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="status-badge status-2xx">200</span></td>
+                  <td>document</td>
+                  <td>example.com/</td>
+                  <td>12.4 KB</td>
+                  <td>142 ms</td>
+                </tr>
+                <tr>
+                  <td><span class="status-badge status-2xx">200</span></td>
+                  <td>stylesheet</td>
+                  <td>example.com/style.css</td>
+                  <td>8.2 KB</td>
+                  <td>89 ms</td>
+                </tr>
+                <tr>
+                  <td><span class="status-badge status-3xx">304</span></td>
+                  <td>script</td>
+                  <td>example.com/app.js</td>
+                  <td>0 B</td>
+                  <td>12 ms</td>
+                </tr>
+                <tr>
+                  <td><span class="status-badge status-2xx">200</span></td>
+                  <td>image</td>
+                  <td>example.com/logo.png</td>
+                  <td>24.1 KB</td>
+                  <td>203 ms</td>
+                </tr>
+                <tr style="opacity:.5">
+                  <td><span class="status-badge status-4xx">403</span></td>
+                  <td>script</td>
+                  <td>ads.tracker.com/track.js</td>
+                  <td>0 B</td>
+                  <td>0 ms</td>
+                </tr>
+                <tr style="opacity:.5">
+                  <td><span class="status-badge status-4xx">403</span></td>
+                  <td>image</td>
+                  <td>analytics.example.com/pixel.gif</td>
+                  <td>0 B</td>
+                  <td>0 ms</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="devtools-panel" data-panel="sources">
+            <div style="padding:16px;color:var(--text-3);font-size:12px">
+              Sources panel — просмотр исходного кода JS/CSS, установка breakpoints, отладка.<br><br>
+              В полной версии здесь будет дерево файлов проекта и редактор кода с подсветкой синтаксиса.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI SIDEBAR -->
+    <div class="ai-sidebar" id="aiSidebar">
+      <div class="ai-sidebar-header">
+        <div class="ai-icon">✦</div>
+        <h4>AI Assistant</h4>
+        <div class="ai-sidebar-close" id="aiSidebarClose" data-tooltip="Закрыть AI Sidebar">✕</div>
+      </div>
+      <div class="ai-messages">
+        <div class="ai-message user">Объясни, как работает анти-фингерпринтинг в Lumen</div>
+        <div class="ai-message assistant">Анти-фингерпринтинг в Lumen работает на нескольких уровнях:\n\n1. **Canvas fingerprint** — возвращается шумовое изображение вместо реального рендера\n2. **Audio context** — добавляется случайная задержка в обработку аудио\n3. **WebGL** — маскируется реальный renderer/vendor\n4. **Шрифты** — возвращается стандартный набор, скрывая установленные шрифты\n5. **Timezone/Language** — опциональная маскировка\n\nВсе эти техники делают ваш браузер неотличимым от тысяч других, что значительно усложняет отслеживание.</div>
+        <div class="ai-message user">Сравни wgpu и skia для рендеринга UI</div>
+        <div class="ai-message assistant">**wgpu** (WebGPU/Vulkan/Metal/DX12):\n- Низкоуровневый GPU API\n- Отличная производительность для кастомного рендера\n- Требует больше кода для базовых операций\n- Идеален для браузерного движка с собственным paint\n\n**Skia** (2D графическая библиотека):\n- Высокоуровневый API\n- Готовые примитивы (текст, пути, изображения)\n- Используется в Chrome, Flutter, Android\n- Меньше контроля, но быстрее разработка\n\nДля Lumen с собственным движком wgpu предпочтительнее — полный контроль над pipeline.</div>
+      </div>
+      <div class="ai-input-wrap">
+        <input class="ai-input" placeholder="Спросить AI о странице..." data-tooltip="Введите вопрос к AI\n\nAI может:\n• Суммаризировать содержимое страницы\n• Перевести текст\n• Ответить на вопросы по коду\n• Объяснить концепции" />
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DOWNLOADS PANEL -->
+<div class="downloads-panel" id="downloadsPanel">
+  <div class="dp-header">
+    <h4 data-tooltip="Панель загрузок — 3 элемента">Загрузки · 3</h4>
+    <button id="dlClose" style="color:var(--text-3)" data-tooltip="Закрыть панель загрузок">✕</button>
+  </div>
+  <div class="dp-list">
+    <div class="dl-item" data-tooltip="rust-wgpu-tutorial.pdf\n\nСтатус: загружается\n12.4 / 24.1 МБ (51%)\nСкорость: 2.1 МБ/с\nОсталось: ~5 сек">
+      <div class="dl-top"><div class="dl-ico">📄</div><div class="dl-name">rust-wgpu-tutorial.pdf</div></div>
+      <div class="dl-meta"><span>12.4 / 24.1 МБ</span><span>2.1 МБ/с</span><span>ост. 5 сек</span></div>
+      <div class="dl-progress"><div class="bar" style="width:51%"></div></div>
+    </div>
+    <div class="dl-item done" data-tooltip="design-system-preview.png\n\nСтатус: завершено\nРазмер: 1.2 МБ\n\nДоступные действия: открыть файл, показать в папке, удалить">
+      <div class="dl-top"><div class="dl-ico">🖼</div><div class="dl-name">design-system-preview.png</div></div>
+      <div class="dl-meta"><span>1.2 МБ</span><span>Завершено</span></div>
+      <div class="dl-actions"><button data-tooltip="Открыть файл в системном приложении">Открыть</button><button data-tooltip="Показать файл в папке загрузок (проводник/Finder)">Папку</button><button data-tooltip="Удалить файл с диска">Удалить</button></div>
+    </div>
+    <div class="dl-item error" data-tooltip="broken-link.zip\n\nСтатус: ошибка сети\n\nВозможные действия: повторить загрузку, удалить запись">
+      <div class="dl-top"><div class="dl-ico">⚠</div><div class="dl-name">broken-link.zip</div></div>
+      <div class="dl-meta"><span>Ошибка сети</span></div>
+      <div class="dl-actions"><button data-tooltip="Повторить загрузку">Повторить</button><button data-tooltip="Удалить запись о загрузке">Удалить</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- COMMAND PALETTE -->
+<div class="cmd-overlay" id="cmdOverlay">
+  <div class="cmd-box">
+    <input class="cmd-input" id="cmdInput" placeholder="Команда, вкладка или закладка..." data-tooltip="Command Palette — fuzzy-поиск\n\nИщет по:\n• Командам браузера (с горячими клавишами)\n• Открытым вкладкам (быстрое переключение)\n• Закладкам\n• Настройкам\n\nEsc — закрыть" />
+    <div class="cmd-results" id="cmdResults">
+      <div class="cmd-group-label">Команды</div>
+      <div class="cmd-item" data-tooltip="Новая вкладка в текущем пространстве"><span class="cmd-ico"></span>Новая вкладка<span class="cmd-kbd">Ctrl+T</span></div>
+      <div class="cmd-item" data-tooltip="Открыть менеджер закладок"><span class="cmd-ico">📁</span>Открыть закладки<span class="cmd-kbd">Ctrl+B</span></div>
+      <div class="cmd-item" data-tooltip="Открыть экран истории"><span class="cmd-ico">🕐</span>История<span class="cmd-kbd">Ctrl+H</span></div>
+      <div class="cmd-item" data-tooltip="Найти текст на текущей странице"><span class="cmd-ico">🔍</span>Найти на странице<span class="cmd-kbd">Ctrl+F</span></div>
+      <div class="cmd-item" data-tooltip="Открыть панель щитов и разрешений текущего сайта"><span class="cmd-ico">🛡</span>Щиты и разрешения</div>
+      <div class="cmd-item" data-tooltip="Открыть настройки браузера"><span class="cmd-ico">⚙</span>Настройки</div>
+      <div class="cmd-item" data-tooltip="Переключить профиль (Личный/Рабочий/Аноним/Гость)\n\nС подтверждением, если есть несохранённые вкладки."><span class="cmd-ico">👤</span>Переключить профиль</div>
+      <div class="cmd-item" data-tooltip="Открыть DevTools — инструменты разработчика"><span class="cmd-ico">🛠</span>DevTools<span class="cmd-kbd">F12</span></div>
+      <div class="cmd-item" data-tooltip="Включить Focus/Pomodoro режим"><span class="cmd-ico">🎯</span>Focus Mode<span class="cmd-kbd">Ctrl+Shift+F</span></div>
+      <div class="cmd-group-label">Открытые вкладки</div>
+      <div class="cmd-item" data-tooltip="Вкладка: Design systems — Smashing Magazine\nПространство: Работа · активна"><span class="cmd-ico">📄</span>Design systems — Smashing Magazine</div>
+      <div class="cmd-item" data-tooltip="Вкладка: Rust wgpu tutorial\nПространство: Работа · спит"><span class="cmd-ico">📄</span>Rust wgpu tutorial</div>
+      <div class="cmd-item" data-tooltip="Вкладка: Архитектура браузеров на Rust\nПространство: Работа · восстанавливается"><span class="cmd-ico">📄</span>Архитектура браузеров на Rust</div>
+    </div>
+  </div>
+</div>
+
+<!-- FOCUS MODE OVERLAY -->
+<div class="focus-overlay" id="focusOverlay">
+  <div class="focus-timer">
+    <span id="focusTime">25:00</span>
+    <button id="focusToggle" data-tooltip="Старт/Пауза таймера">▶</button>
+    <button id="focusReset" data-tooltip="Сбросить таймер">↺</button>
+  </div>
+  <div class="focus-content">
+    <h1 style="font-size:24px;margin-bottom:12px">Focus Mode</h1>
+    <p style="color:var(--text-2);line-height:1.6;max-width:640px">Весь интерфейс скрыт. Только контент и таймер Pomodoro (25 минут).</p>
+    <p style="color:var(--text-2);line-height:1.6;max-width:640px;margin-top:12px">Никаких уведомлений, никаких вкладок, никаких отвлечений. Только вы и страница.</p>
+  </div>
+  <button class="focus-exit" id="focusExit" data-tooltip="Выйти из Focus Mode\n\nВесь интерфейс вернётся в прежнее состояние.\n\nГорячая клавиша: Esc">Выйти из Focus Mode (Esc)</button>
+</div>
+
+<!-- CERTIFICATE VIEWER MODAL -->
+<div class="modal-overlay" id="certModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span style="font-size:18px">🔒</span>
+      <h3>Сертификат · example.com</h3>
+      <div class="modal-close" id="certClose" data-tooltip="Закрыть просмотр сертификата">✕</div>
+    </div>
+    <div class="modal-body">
+      <div class="cert-status">
+        <div class="icon">✓</div>
+        <div class="text">
+          <strong>Соединение защищено</strong>
+          <span style="color:var(--text-2)">Действительный сертификат · TLS 1.3</span>
+        </div>
+      </div>
+
+      <div class="cert-section">
+        <h4>Основная информация</h4>
+        <div class="cert-row">
+          <div class="label">Выдан для</div>
+          <div class="value">example.com</div>
+        </div>
+        <div class="cert-row">
+          <div class="label">Выдан</div>
+          <div class="value">Let's Encrypt Authority X3</div>
+        </div>
+        <div class="cert-row">
+          <div class="label">Действует с</div>
+          <div class="value">15 января 2024, 00:00:00</div>
+        </div>
+        <div class="cert-row">
+          <div class="label">Действует до</div>
+          <div class="value">15 апреля 2024, 23:59:59</div>
+        </div>
+        <div class="cert-row">
+          <div class="label">Серийный номер</div>
+          <div class="value">04:A3:B2:C1:D4:E5:F6:07:18:29:3A:4B:5C:6D:7E:8F</div>
+        </div>
+      </div>
+
+      <div class="cert-section">
+        <h4>Subject Alternative Names</h4>
+        <div class="cert-row">
+          <div class="label">DNS Names</div>
+          <div class="value">example.com, www.example.com</div>
+        </div>
+      </div>
+
+      <div class="cert-section">
+        <h4>Fingerprint (SHA-256)</h4>
+        <div class="cert-fingerprint">
+          A1:B2:C3:D4:E5:F6:07:18:29:3A:4B:5C:6D:7E:8F:90<br>
+          A1:B2:C3:D4:E5:F6:07:18:29:3A:4B:5C:6D:7E:8F:90
+        </div>
+      </div>
+
+      <div class="cert-section">
+        <h4>Цепочка доверия</h4>
+        <div class="cert-row">
+          <div class="label">1. Сервер</div>
+          <div class="value">example.com</div>
+        </div>
+        <div class="cert-row">
+          <div class="label">2. Intermediate</div>
+          <div class="value">Let's Encrypt Authority X3</div>
+        </div>
+        <div class="cert-row">
+          <div class="label">3. Root</div>
+          <div class="value">DST Root CA X3 ✓ (доверенный)</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="certExport" data-tooltip="Экспортировать сертификат в PEM-формате">Экспорт</button>
+      <button class="primary" id="certOk" data-tooltip="Закрыть">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- PRINT DIALOG -->
+<div class="modal-overlay" id="printModal">
+  <div class="print-dialog">
+    <div class="modal-header">
+      <span style="font-size:18px">🖨</span>
+      <h3>Печать</h3>
+      <div class="modal-close" id="printClose" data-tooltip="Отменить печать"></div>
+    </div>
+    <div class="print-preview">
+      <div class="print-page">
+        <h1>Пример сайта — example.com</h1>
+        <p>Это демонстрационная страница. Нажмите на щит 🛡 в адресной строке, чтобы увидеть permission popover с real-time статистикой заблокированных запросов.</p>
+        <p>Все разрешения (камера, микрофон, геолокация, уведомления) запрашиваются per-origin и действуют только в рамках текущего сеанса — без скрытого «запомнить навсегда».</p>
+        <p style="margin-top:24px;color:#666;font-size:10px">Это превью печати. Реальный вывод зависит от настроек принтера и полей страницы.</p>
+      </div>
+    </div>
+    <div class="print-settings">
+      <div class="print-setting">
+        <label>Принтер</label>
+        <select>
+          <option>Сохранить как PDF</option>
+          <option>HP LaserJet Pro</option>
+          <option>Canon PIXMA</option>
+        </select>
+      </div>
+      <div class="print-setting">
+        <label>Копии</label>
+        <input type="number" value="1" min="1" max="99" style="width:60px" />
+      </div>
+      <div class="print-setting">
+        <label>Ориентация</label>
+        <select>
+          <option>Книжная</option>
+          <option>Альбомная</option>
+        </select>
+      </div>
+      <div class="print-setting">
+        <label>Поля</label>
+        <select>
+          <option>Обычные</option>
+          <option>Узкие</option>
+          <option>Широкие</option>
+          <option>Без полей</option>
+        </select>
+      </div>
+      <div class="print-setting">
+        <label>Колонтитулы</label>
+        <select>
+          <option>Показать</option>
+          <option>Скрыть</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="printCancel" data-tooltip="Отменить">Отмена</button>
+      <button class="primary" id="printConfirm" data-tooltip="Начать печать или сохранить PDF">Печать</button>
+    </div>
+  </div>
+</div>
+
+<!-- DEMO CONTROLS -->
+<div class="demo-controls">
+  <button id="dcTheme" data-tooltip="Переключить тему: Light ↔ Dark\n\nТакже доступно в Настройки → Внешний вид → Тема (light/dark/system)">🌓 Тема</button>
+  <div class="sep"></div>
+  <button data-profile="personal" data-tooltip="Профиль: Личный\n\nСиняя обводка окна.\nМастер-ключ активен.\nПолный доступ к данным.">👤 Личный</button>
+  <button data-profile="work" data-tooltip="Профиль: Рабочий\n\nФиолетовая обводка окна.\nИзолированное хранилище.\nОтдельные закладки, история, cookie.">💼 Рабочий</button>
+  <button data-profile="anon" data-tooltip="Профиль: Анонимный\n\nКрасная обводка окна.\nИстория не пишется.\nЩит всегда активен.\nМастер-ключ не сохраняется."> Аноним</button>
+  <button data-profile="guest" data-tooltip="Профиль: Гостевой\n\nСерая обводка окна.\nИнтерфейс монохромный (saturate 0.2).\nНет доступа к данным основного профиля.\nВременная сессия.">👻 Гость</button>
+  <div class="sep"></div>
+  <button id="dcLayout" data-tooltip="Переключить макет вкладок\n\nВертикальный: сайдбар слева (как сейчас)\nГоризонтальный: классическая строка вкладок сверху">⇄ Макет</button>
+  <div class="sep"></div>
+  <button data-page="newtab" data-tooltip="Страница: Новая вкладка\n\nЧистый экран без лент новостей и рекомендаций.\nТолько омнибокс и плитки часто посещаемых сайтов.">🏠 NewTab</button>
+  <button data-page="website" data-tooltip="Страница: Пример сайта\n\nДемонстрация permission popover (клик на 🛡 в тулбаре).">🌐 Сайт</button>
+  <button data-page="history" data-tooltip="Страница: История\n\nFTS-поиск, группировка по датам, массовые действия.">🕐 История</button>
+  <button data-page="bookmarks" data-tooltip="Страница: Менеджер закладок\n\nДерево папок + grid view.\nRead-later записи визуально отличаются.">⭐ Закладки</button>
+  <button data-page="settings" data-tooltip="Страница: Настройки\n\n7 разделов, честные тогглы, без скрытых переключателей.">⚙ Настройки</button>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+// ============ TOOLTIP SYSTEM ============
+const tooltipEl = document.getElementById('tooltip');
+let tooltipTimer = null;
+let currentTooltipTarget = null;
+
+function showTooltip(e, text) {
+  if (!text) return;
+  clearTimeout(tooltipTimer);
+  tooltipTimer = setTimeout(() => {
+    let html = text
+      .replace(/\n/g, '<br>')
+      .replace(/(Ctrl\+[\w+]+|Alt\+[\w+]+|Shift\+[\w+]+|F\d+|Esc|Enter|Tab|ПКМ)/g, '<span class="tt-kbd">$1</span>')
+      .replace(/(ВКЛ|ЗАБЛОКИРОВАНЫ|активно|завершено|доверенный|защищено)/g, '<span class="tt-success">$1</span>')
+      .replace(/(ЗАПРЕЩЕНЫ|ЗАПРЕЩЕНА|ошибка|спит|восстанавливается)/g, '<span class="tt-danger">$1</span>')
+      .replace(/(⚠|возможны поломки|непрочитано)/g, '<span class="tt-warn">$1</span>');
+    tooltipEl.innerHTML = html;
+    tooltipEl.classList.add('visible');
+    positionTooltip(e);
+  }, 350);
+}
+
+function positionTooltip(e) {
+  const rect = tooltipEl.getBoundingClientRect();
+  const pad = 12;
+  let x = e.clientX + pad;
+  let y = e.clientY + pad;
+  if (x + rect.width > window.innerWidth - pad) x = e.clientX - rect.width - pad;
+  if (y + rect.height > window.innerHeight - pad) y = e.clientY - rect.height - pad;
+  tooltipEl.style.left = x + 'px';
+  tooltipEl.style.top = y + 'px';
+}
+
+function hideTooltip() {
+  clearTimeout(tooltipTimer);
+  tooltipEl.classList.remove('visible');
+  currentTooltipTarget = null;
+}
+
+document.addEventListener('mouseover', (e) => {
+  const target = e.target.closest('[data-tooltip]');
+  if (target && target !== currentTooltipTarget) {
+    currentTooltipTarget = target;
+    showTooltip(e, target.dataset.tooltip);
+  }
+});
+document.addEventListener('mousemove', (e) => {
+  if (tooltipEl.classList.contains('visible')) positionTooltip(e);
+});
+document.addEventListener('mouseout', (e) => {
+  const target = e.target.closest('[data-tooltip]');
+  if (target) hideTooltip();
+});
+
+// ============ STATE ============
+const state = {
+  tabs: [
+    { id: 1, title: "Новая вкладка", page: "newtab", favicon: "🏠", sleeping: false, restoring: false, container: null, child: false },
+    { id: 2, title: "Design systems — Smashing Magazine", page: "website", favicon: "📄", sleeping: false, restoring: false, container: "work", child: false },
+    { id: 3, title: "↳ Threads · обсуждение", page: "website", favicon: "💬", sleeping: false, restoring: false, container: "work", child: true },
+    { id: 4, title: "Rust wgpu tutorial", page: "website", favicon: "", sleeping: true, restoring: false, container: null, child: false },
+    { id: 5, title: "Архитектура браузеров на Rust", page: "website", favicon: "📄", sleeping: false, restoring: true, container: null, child: false },
+    { id: 6, title: "Figma — Lumen UI", page: "website", favicon: "", sleeping: false, restoring: false, container: "design", child: false },
+    { id: 7, title: "Linear · задачи", page: "website", favicon: "📋", sleeping: true, restoring: false, container: null, child: false },
+  ],
+  activeTab: 2,
+  profile: "personal",
+  layout: "vertical"
+};
+
+const profileMeta = {
+  personal: { name: "Личный", letter: "Л", sub: "Мастер-ключ активен" },
+  work:     { name: "Рабочий", letter: "Р", sub: "Изолированное хранилище" },
+  anon:     { name: "Анонимный", letter: "🕶", sub: "История не пишется" },
+  guest:    { name: "Гостевой", letter: "G", sub: "Без доступа к данным" }
+};
+
+// ============ RENDER ============
+function renderTabs() {
+  const list = document.getElementById("tabsList");
+  const htabs = document.getElementById("h-tabs");
+  list.innerHTML = ""; htabs.innerHTML = "";
+
+  const group = document.createElement("div");
+  group.className = "tab-group";
+  group.innerHTML = `<div class="tab-group-label">▾ Работа · 7 вкладок</div>`;
+  list.appendChild(group);
+
+  state.tabs.forEach(t => {
+    const el = document.createElement("div");
+    el.className = "tab-item" + (t.id === state.activeTab ? " active" : "") +
+                   (t.sleeping ? " sleeping" : "") + (t.restoring ? " restoring" : "") +
+                   (t.child ? " tree-child" : "");
+    
+    let statusText = "Активна";
+    if (t.sleeping) statusText = "Спит (hibernated) — клик для восстановления";
+    if (t.restoring) statusText = "Восстанавливается...";
+    let containerText = t.container ? `\nКонтейнер: ${t.container} (изоляция cookie/storage)` : "";
+    let treeText = t.child ? "\nДочерняя вкладка (tree-tab)" : "";
+    
+    el.dataset.tooltip = `${t.title}\n\nСтатус: ${statusText}${containerText}${treeText}\n\nКлик — переключиться\n — закрыть`;
+    
+    el.innerHTML = `
+      ${t.container ? `<div class="container-mark" title="Контейнер: ${t.container}"></div>` : ""}
+      <div class="favicon">${t.sleeping ? "❄" : t.restoring ? "" : t.favicon}</div>
+      <div class="tab-title">${t.title}</div>
+      <div class="tab-close">✕</div>
+    `;
+    el.onclick = (e) => {
+      if (e.target.classList.contains("tab-close")) return;
+      state.activeTab = t.id;
+      switchPage(t.page);
+      renderTabs();
+    };
+    group.appendChild(el);
+
+    const h = document.createElement("div");
+    h.className = "h-tab" + (t.id === state.activeTab ? " active" : "") + (t.sleeping ? " sleeping" : "");
+    h.dataset.tooltip = `${t.title}\n\nСтатус: ${statusText}${containerText}`;
+    h.innerHTML = `
+      ${t.container ? `<div class="container-mark"></div>` : ""}
+      <div class="favicon"></div>
+      <div class="title">${t.title}</div>
+      <div class="close">✕</div>
+    `;
+    h.onclick = () => { state.activeTab = t.id; switchPage(t.page); renderTabs(); };
+    htabs.appendChild(h);
+  });
+}
+
+function switchPage(page) {
+  document.querySelectorAll(".page-content").forEach(p => p.classList.remove("active"));
+  const target = document.querySelector(`.page-content[data-page="${page}"]`);
+  if (target) target.classList.add("active");
+}
+
+function setProfile(p) {
+  state.profile = p;
+  document.body.dataset.profile = p;
+  const m = profileMeta[p];
+  document.getElementById("profileName").textContent = m.name;
+  document.getElementById("profileSub").textContent = m.sub;
+  document.getElementById("profileAvatar").textContent = m.letter;
+}
+
+function setLayout(l) {
+  state.layout = l;
+  document.body.dataset.layout = l;
+  document.getElementById("topbar").classList.toggle("hidden", l === "vertical");
+  document.getElementById("sidebar").style.display = l === "horizontal" ? "none" : "flex";
+}
+
+// ============ OMNIBOX ============
+const omniInput = document.getElementById("omniInput");
+const omniPrefix = document.getElementById("omniPrefix");
+const obDropdown = document.getElementById("obDropdown");
+
+const omniboxData = {
+  "": [
+    { type: "tabs", title: "Design systems — Smashing Magazine", sub: "Вкладка · активна", kbd: "Ctrl+2" },
+    { type: "bookmarks", title: "GitHub", sub: "Закладка · github.com" },
+    { type: "history", title: "Rust wgpu tutorial", sub: "Вчера · github.com/rust-tutorials" },
+    { type: "readlater", title: "Почему Rust быстрее C++ в 2024", sub: "Read later · непрочитано" },
+    { type: "ai", title: "Спросить AI: как устроен paint-движок?", sub: "@ai" },
+  ],
+  "@tabs": [
+    { type: "tabs", title: "Design systems — Smashing Magazine", sub: "Воркспейс: Работа" },
+    { type: "tabs", title: "Rust wgpu tutorial", sub: "Спит · 2 часа" },
+    { type: "tabs", title: "Архитектура браузеров на Rust", sub: "Восстанавливается..." },
+  ],
+  "@history": [
+    { type: "history", title: "Design systems for dense interfaces", sub: "Сегодня 14:32 · smashingmagazine.com" },
+    { type: "history", title: "Rust wgpu tutorial", sub: "Сегодня 13:11 · github.com" },
+    { type: "history", title: "Архитектура браузеров на Rust — Хабр", sub: "Сегодня 11:45 · habr.com" },
+  ],
+  "@bookmarks": [
+    { type: "bookmarks", title: "GitHub", sub: "github.com" },
+    { type: "bookmarks", title: "Linear — задачи", sub: "linear.app/team" },
+    { type: "bookmarks", title: "Документация wgpu", sub: "docs.rs/wgpu" },
+  ],
+  "@ai": [
+    { type: "ai", title: "Объясни архитектуру Lumen", sub: "AI-ответ · 12 сек назад" },
+    { type: "ai", title: "Сравни wgpu и skia", sub: "AI-ответ · вчера" },
+  ]
+};
+
+function renderOmnibox(query) {
+  let prefix = "", key = "";
+  if (query.startsWith("@")) {
+    const parts = query.split(" ");
+    prefix = parts[0];
+    key = ["@tabs","@history","@bookmarks","@ai","@notes","@read-later"].includes(prefix) ? prefix : "";
+  }
+  omniPrefix.textContent = prefix || "@";
+  omniPrefix.style.display = prefix ? "inline" : "none";
+
+  const items = omniboxData[key] || omniboxData[""];
+  const groupLabel = key ? key : "Быстрый доступ";
+  obDropdown.innerHTML = `<div class="ob-group-label">${groupLabel}</div>` +
+    items.map((it, i) => `
+      <div class="ob-item ${i === 0 ? "selected" : ""}">
+        <div class="ob-ico ${it.type}">${({tabs:"↹",history:"⏱",bookmarks:"★",readlater:"📖",ai:"✦"})[it.type]}</div>
+        <div class="ob-main">
+          <div class="ob-title">${it.title}</div>
+          <div class="ob-sub">${it.sub}</div>
+        </div>
+        ${it.kbd ? `<span class="ob-kbd">${it.kbd}</span>` : ""}
+      </div>
+    `).join("");
+}
+
+omniInput.addEventListener("focus", () => { obDropdown.classList.add("open"); renderOmnibox(omniInput.value); });
+omniInput.addEventListener("input", () => renderOmnibox(omniInput.value));
+omniInput.addEventListener("blur", () => setTimeout(() => obDropdown.classList.remove("open"), 150));
+
+// ============ SHIELDS POPOVER ============
+const shieldsBtn = document.getElementById("shieldsBtn");
+const permPopover = document.getElementById("permPopover");
+shieldsBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  permPopover.classList.toggle("open");
+});
+document.addEventListener("click", (e) => {
+  if (!permPopover.contains(e.target) && e.target !== shieldsBtn) {
+    permPopover.classList.remove("open");
+  }
+});
+document.querySelectorAll(".perm-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const perm = btn.dataset.perm;
+    const isAllow = btn.classList.contains("allow");
+    document.querySelectorAll(`.perm-btn[data-perm="${perm}"]`).forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    const row = btn.closest(".perm-row");
+    row.querySelector(".perm-status").textContent = isAllow ? "Разрешено · этот сеанс" : "Запрещено";
+  });
+});
+
+// ============ DOWNLOADS ============
+const dlPanel = document.getElementById("downloadsPanel");
+document.getElementById("downloadsBtn").addEventListener("click", () => dlPanel.classList.toggle("open"));
+document.getElementById("dlClose").addEventListener("click", () => dlPanel.classList.remove("open"));
+
+// ============ FIND BAR ============
+const findBar = document.getElementById("findBar");
+document.getElementById("findClose").addEventListener("click", () => findBar.classList.remove("open"));
+
+// ============ COMMAND PALETTE ============
+const cmdOverlay = document.getElementById("cmdOverlay");
+document.getElementById("cmdBtn").addEventListener("click", () => cmdOverlay.classList.add("open"));
+cmdOverlay.addEventListener("click", (e) => { if (e.target === cmdOverlay) cmdOverlay.classList.remove("open"); });
+
+// ============ DEVTOOLS ============
+const devtools = document.getElementById("devtools");
+document.getElementById("devtoolsBtn").addEventListener("click", () => devtools.classList.toggle("open"));
+document.getElementById("devtoolsClose").addEventListener("click", () => devtools.classList.remove("open"));
+document.querySelectorAll(".devtools-tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".devtools-tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".devtools-panel").forEach(p => p.classList.remove("active"));
+    tab.classList.add("active");
+    document.querySelector(`.devtools-panel[data-panel="${tab.dataset.tab}"]`).classList.add("active");
+  });
+});
+
+// ============ AI SIDEBAR ============
+const aiSidebar = document.getElementById("aiSidebar");
+document.getElementById("aiBtn").addEventListener("click", () => aiSidebar.classList.toggle("open"));
+document.getElementById("aiSidebarClose").addEventListener("click", () => aiSidebar.classList.remove("open"));
+
+// ============ FOCUS MODE ============
+const focusOverlay = document.getElementById("focusOverlay");
+document.getElementById("focusBtn").addEventListener("click", () => focusOverlay.classList.add("open"));
+document.getElementById("focusExit").addEventListener("click", () => focusOverlay.classList.remove("open"));
+
+let focusTimer = 25 * 60;
+let focusInterval = null;
+let focusRunning = false;
+
+function updateFocusTimer() {
+  const m = Math.floor(focusTimer / 60);
+  const s = focusTimer % 60;
+  document.getElementById("focusTime").textContent = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+}
+
+document.getElementById("focusToggle").addEventListener("click", () => {
+  focusRunning = !focusRunning;
+  document.getElementById("focusToggle").textContent = focusRunning ? "⏸" : "▶";
+  if (focusRunning) {
+    focusInterval = setInterval(() => {
+      focusTimer--;
+      updateFocusTimer();
+      if (focusTimer <= 0) {
+        clearInterval(focusInterval);
+        focusRunning = false;
+        document.getElementById("focusToggle").textContent = "▶";
+      }
+    }, 1000);
+  } else {
+    clearInterval(focusInterval);
+  }
+});
+
+document.getElementById("focusReset").addEventListener("click", () => {
+  focusTimer = 25 * 60;
+  updateFocusTimer();
+  if (focusRunning) {
+    focusRunning = false;
+    clearInterval(focusInterval);
+    document.getElementById("focusToggle").textContent = "▶";
+  }
+});
+
+// ============ CERTIFICATE VIEWER ============
+const certModal = document.getElementById("certModal");
+document.getElementById("certBtn").addEventListener("click", () => certModal.classList.add("open"));
+document.getElementById("certClose").addEventListener("click", () => certModal.classList.remove("open"));
+document.getElementById("certOk").addEventListener("click", () => certModal.classList.remove("open"));
+document.getElementById("certExport").addEventListener("click", () => {
+  alert("Сертификат экспортирован в PEM-формате");
+});
+
+// ============ PRINT DIALOG ============
+const printModal = document.getElementById("printModal");
+document.getElementById("printBtn").addEventListener("click", () => printModal.classList.add("open"));
+document.getElementById("printClose").addEventListener("click", () => printModal.classList.remove("open"));
+document.getElementById("printCancel").addEventListener("click", () => printModal.classList.remove("open"));
+document.getElementById("printConfirm").addEventListener("click", () => {
+  alert("Печать начата (или сохранено как PDF)");
+  printModal.classList.remove("open");
+});
+
+// ============ TOGGLES ============
+document.querySelectorAll("[data-toggle]").forEach(t => {
+  t.addEventListener("click", () => t.classList.toggle("on"));
+});
+
+// ============ SHIELD LEVEL ============
+document.querySelectorAll("#shieldLevel .radio-opt").forEach(opt => {
+  opt.addEventListener("click", () => {
+    document.querySelectorAll("#shieldLevel .radio-opt").forEach(o => o.classList.remove("active"));
+    opt.classList.add("active");
+  });
+});
+
+// ============ DEMO CONTROLS ============
+document.getElementById("dcTheme").addEventListener("click", () => {
+  document.body.dataset.theme = document.body.dataset.theme === "light" ? "dark" : "light";
+});
+document.querySelectorAll("[data-profile]").forEach(b => {
+  b.addEventListener("click", () => setProfile(b.dataset.profile));
+});
+document.getElementById("dcLayout").addEventListener("click", () => {
+  setLayout(state.layout === "vertical" ? "horizontal" : "vertical");
+});
+document.querySelectorAll("[data-page]").forEach(b => {
+  b.addEventListener("click", () => switchPage(b.dataset.page));
+});
+document.getElementById("toggleSidebar").addEventListener("click", () => {
+  document.getElementById("sidebar").classList.toggle("collapsed");
+});
+
+document.querySelectorAll(".ws-item").forEach(ws => {
+  ws.addEventListener("click", () => {
+    document.querySelectorAll(".ws-item").forEach(w => w.classList.remove("active"));
+    ws.classList.add("active");
+  });
+});
+
+// ============ KEYBOARD ============
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+    e.preventDefault();
+    cmdOverlay.classList.toggle("open");
+    if (cmdOverlay.classList.contains("open")) document.getElementById("cmdInput").focus();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+    e.preventDefault();
+    findBar.classList.add("open");
+    findBar.querySelector("input").focus();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "I") {
+    e.preventDefault();
+    devtools.classList.toggle("open");
+  }
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "F") {
+    e.preventDefault();
+    focusOverlay.classList.add("open");
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === "p") {
+    e.preventDefault();
+    printModal.classList.add("open");
+  }
+  if (e.key === "F12") {
+    e.preventDefault();
+    devtools.classList.toggle("open");
+  }
+  if (e.key === "Escape") {
+    cmdOverlay.classList.remove("open");
+    findBar.classList.remove("open");
+    permPopover.classList.remove("open");
+    focusOverlay.classList.remove("open");
+    certModal.classList.remove("open");
+    printModal.classList.remove("open");
+  }
+});
+
+// ============ INIT ============
+renderTabs();
+renderOmnibox("");
+updateFocusTimer();
+</script>
+</body>
+</html>

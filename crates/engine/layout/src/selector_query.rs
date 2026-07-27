@@ -73,7 +73,7 @@ impl LayoutBox {
     /// Converts the internal ComputedStyle to a snapshot suitable for
     /// driver assertions and debugging.
     pub fn style_snapshot(&self) -> ComputedStyleSnapshot {
-        ComputedStyleSnapshot::from(&self.style)
+        ComputedStyleSnapshot::from(&*self.style)
     }
 }
 
@@ -280,7 +280,7 @@ pub fn computed_style_by_selector(
     doc: &Document,
     sel: &str,
 ) -> Option<ComputedStyleSnapshot> {
-    find_box_by_selector(root, doc, sel).map(|b| ComputedStyleSnapshot::from(&b.style))
+    find_box_by_selector(root, doc, sel).map(|b| ComputedStyleSnapshot::from(&*b.style))
 }
 
 // ──────────────── find_all_by_selector ────────────────

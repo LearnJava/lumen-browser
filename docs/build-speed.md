@@ -21,6 +21,7 @@
 | ✅ `debug = "line-tables-only"` (dev) + `debug = false` (deps); профиль `debugging` для отладчика | `Cargo.toml` | S1 6.25с→4.24с; S3 тёплый 12м49с→8м25с; relink driver-тестов 7.6с→2.8с (§3.1, замер 2026-07-12) |
 | ✅ `incremental = true` в dev-release | `Cargo.toml` | touch shell 47с→3.8с; каскад layout→shell 50с→8.6с (§4.3, замер 2026-07-12) |
 | ✅ Фич-диета wgpu: `dx12+wgsl+std`, дефолт-фичи off (§4.2) | `Cargo.toml` | −8 крейтов из графа (ash/glow/gpu-alloc/…), схлопнут дубль glow; замер 2026-07-12 |
+| ✅ Пул постоянных worktree (`scripts/worktree-pool.sh`) | `docs/git-workflow.md`, шаг 3 чеклиста | убирает холодную сборку **на каждую задачу**: слот переиспользуется, `target/` остаётся тёплым. Раньше `git worktree remove` уносил кэш, и следующая задача платила S3 (9–15 мин) + сам `add` (3 мин, 62 291 файл). Замер-мотивация — разбор сессии 2026-07-27: 15.5 мин на первый `test -p lumen-shell --no-run` в свежем worktree + 22 мин на второй worktree ради baseline-бинаря main |
 
 Известные факты о workspace:
 - `cargo test --workspace` до BT-1 = ~110 линковок; линковка и сборка доминируют, прогон тестов — секунды.
@@ -278,7 +279,7 @@ Cargo пайплайнит по `.rmeta`: правка **тела** функци
 | 🚫 cargo-nextest ради скорости | Уже проверено на этом workspace (2026-06-21): ускоряет прогон (и так секунды), линковку не режет |
 | 🚫 cachepot | Мёртв (форк sccache, заброшен на 0.1.0-rc.1) |
 | 🚫 Precompiled proc-macros / watt | serde откатил precompiled в 1.0.184; механизма в Cargo нет; кэширование макрорасширений в rustc не шипнуто |
-| 🚫 Общий `CARGO_TARGET_DIR` на все worktree | target-lock сериализует параллельные сессии P1–P5 + готовая готча «фантомные ошибки»; наш ответ — sccache |
+| 🚫 Общий `CARGO_TARGET_DIR` на все worktree | target-lock сериализует параллельные сессии P1–P5 + готовая готча «фантомные ошибки»; наш ответ — sccache и пул постоянных worktree (§1: у каждого слота свой `target/`, но слот переиспользуется, поэтому тёплый кэш не выбрасывается) |
 
 ---
 

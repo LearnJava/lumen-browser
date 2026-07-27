@@ -32,6 +32,17 @@ Profiling the *current* code (main + all three prior BUG-341 fixes) with
 `p50≈85 ms` — machine/contention difference. The **relative split is the load-
 bearing result** and is stable across runs.)
 
+> **Read this before reasoning from the table above.** It profiles the **full**
+> layout pass. Slices S3-S7 all planned against it as though it described the
+> *incremental* path too — it does not, and that mistake cost five slices.
+> S8 profiled the incremental path itself (`layout_mutation_incremental_restyle`
+> now carries the same stage scopes, permanently) and found `graft_geometry`
+> reusing **zero** boxes, i.e. the "mature layout half" of §2 below was inert
+> the whole time. Always re-measure the path you are actually changing, and
+> prefer a gate on a *count* (boxes reused, nodes recomputed) over wall-clock:
+> the differential tests stayed green throughout, because reusing nothing still
+> produces the correct output. See BUG-341 "S8".
+
 **Consequence:** a layout-result cache that made `lay_out` free would still
 leave `precompute_counters` (53 %) + `build_box` (8 %) = 61 % of the cost
 standing — on BUG-341's reference machine, ~52 ms, still **~26× over budget**.
@@ -282,6 +293,63 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   fixed — separate scope) BUG-349 while re-verifying this area: `restyle_
   root_set_for_node_change`'s doc comment incorrectly claimed this engine has
   no `:has()`.
+
+- **S8 — profile the incremental path; fix `graft_geometry`.** ✅ Done.
+  Two independent defects made geometry reuse a no-op on every interaction:
+  `kind_layout_eq` omitted 6 of `BoxKind`'s 20 variants (all SVG kinds among
+  them — chrome is built out of SVG icons), and `graft_geometry` returned
+  before recursing into children whenever one node's style differed, which the
+  root box does every cycle because `lay_out` writes the used viewport
+  `height` back into its `ComputedStyle`. Fixed both; added a count-based
+  regression gate (`graft_geometry_reuses_whole_chrome_tree_when_nothing_
+  changed`, 318/318 boxes vs 217/318 before) plus unit tests for the newly
+  handled kinds and the `svg_paint_matrix` exclusion. Measured: `lay_out`
+  31→16 ms, `CC12_HOVER` p50 117.6→94.5 ms, `CC12_KEY` p50 78.7→69.7 ms.
+  Gate still red. Full numbers + the next lever — BUG-341 "S8".
+- **S9 — make `ComputedStyle` cheap to clone and compare (recommended next).**
+  Not started. S8's post-fix split puts `graft` at ~14 ms (comparing a
+  3216-byte, 302-field `ComputedStyle` with a 30-entry
+  `HashMap<String, String>` per box), the pipeline's own bookkeeping clones at
+  ~12-13 ms, and the cascade at 22-49 ms — all three dominated by the same fat
+  struct. Slice: `custom_props: Arc<HashMap<..>>` + copy-on-write first (8 use
+  sites outside `style.rs`, gives graft an `Arc::ptr_eq` fast path), re-measure,
+  then consider `LayoutBox.style: Arc<ComputedStyle>`. This is a pure
+  representation change — output must stay bit-identical, so the existing
+  differential tests are the gate and there is no invalidation-correctness
+  trade-off. Numbers and the per-node micro-benchmark — BUG-341 "S8".
+
+- **S10 — the per-node pseudo-element cascades.** ✅ Done. Premise ("building a
+  `ComputedStyle` is expensive") was wrong and the profile said so before the
+  first edit: construction is 3 % of `compute_style`. Over half went to
+  pseudo-element cascades run on every element — `::-webkit-scrollbar*` (55 %)
+  and the `::before`/`::after` quote-depth probe (79 % of the cascade stage on
+  `CC12_KEY`). Fixed by matching before building, per-sheet node-independent
+  facts in `CascadeIndex`, and gating the `revert-layer` pre-pass. The profiler
+  itself was fixed too (thread-local trees on rayon workers reported `build_box`
+  at 288 ms against ~5 ms). ≈20 % off both scenarios. BUG-341 "S10".
+- **S11 — `::-webkit-scrollbar*` only where a scrollbar can appear.** ✅ Done,
+  [ADR-022](../decisions/ADR-022-webkit-scrollbar-scroll-containers-only.md)
+  (user decision 2026-07-27). Also a fidelity fix: the translation writes to the
+  *inherited* `scrollbar-width`/`scrollbar-color`, so a rule on a non-scrollable
+  element used to leak to every descendant. ≈25 % off `CC12_HOVER`, ≈9 % off
+  `CC12_KEY`. BUG-341 "S11".
+- **S12 — `LayoutBox::style` behind an `Arc`, copy-on-write.** ✅ Done. First
+  measurement below stage level inside `lay_out`: a third of it is
+  `let s = b.style.clone()` in `lay_out_inner`, a 3.2 KB / 302-field / ~30-heap-
+  field copy taken per box purely to dodge the borrow checker (1.2 ms of
+  3.7 ms), and the same struct is copied twice more per frame — `build_box`
+  out of the cascade cache, and the whole-tree `clone()` that persists `prev`.
+  All three became refcount bumps; the passes that write a *used* value back
+  (flex stretch, `font-size-adjust`, container queries, canvas background,
+  `::first-line`, table cell width) take their copy via `Arc::make_mut`.
+  `graft_geometry` gained an `Arc::ptr_eq` short-circuit. Gates are by
+  *identity* (`built_boxes_share_the_cascade_cache_style_allocation`,
+  `used_value_writeback_does_not_leak_into_the_cascade_cache`). Interleaved A/B
+  ×3: `CC12_HOVER` ≈15 % faster, `CC12_KEY` ≈28 %, no overlap between groups;
+  `lay_out` 3.7 → 2.4 ms, `clone_tree` 1.5 → 0.7 ms. Gate still red (~3-8×).
+  New permanent `scope_detail` scopes in `lay_out_inner` produced the counter no
+  slice had: **1696 of 3121 boxes are rebuilt and re-laid-out on a hover flip**,
+  1425 reused. That, not any single stage, is the next lever. BUG-341 "S12".
 
 **Stop conditions / honesty:** if after S5 the p95 floor is set by irreducible
 per-node cascade cost on the hover root-set and stays > 2 ms, report the number

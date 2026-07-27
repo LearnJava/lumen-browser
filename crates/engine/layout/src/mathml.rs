@@ -409,7 +409,7 @@ fn lay_out_msub(mathml: &MathmlBox) -> LayoutBox {
 }
 
 /// Create an empty anonymous box for layout stacking with the given style.
-fn make_anonymous_box_with_style(style: ComputedStyle) -> LayoutBox {
+fn make_anonymous_box_with_style(style: std::sync::Arc<ComputedStyle>) -> LayoutBox {
     LayoutBox {
         node: NodeId::from_index(0),
         rect: Rect::ZERO,
@@ -628,7 +628,7 @@ mod tests {
 
     /// Helper: box with a given rect and default style.
     fn sized_box(width: f32, height: f32) -> LayoutBox {
-        let mut b = make_anonymous_box_with_style(ComputedStyle::root());
+        let mut b = make_anonymous_box_with_style(std::sync::Arc::new(ComputedStyle::root()));
         b.rect = Rect::new(0.0, 0.0, width, height);
         b
     }
@@ -656,7 +656,7 @@ mod tests {
         // scale = MATH_SCRIPT_SCALE^2 instead of the one-level default.
         let base = sized_box(50.0, 20.0);
         let mut script = sized_box(30.0, 15.0);
-        script.style.math_depth = 2;
+        std::sync::Arc::make_mut(&mut script.style).math_depth = 2;
         let mut root = sized_box(0.0, 0.0);
         root.children = vec![base, script];
 

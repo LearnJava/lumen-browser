@@ -16182,7 +16182,7 @@ mod tests {
     /// store in `BackgroundImage::Url` once `image-set()` parsing is wired —
     /// lets us exercise the paint-side resolution without the CSS parser.
     fn set_first_bg_image_set(b: &mut LayoutBox, value: &str) -> bool {
-        if let Some(layer) = b.style.background_layers.first_mut() {
+        if let Some(layer) = std::sync::Arc::make_mut(&mut b.style).background_layers.first_mut() {
             layer.image = BackgroundImage::Url(value.to_string());
             return true;
         }

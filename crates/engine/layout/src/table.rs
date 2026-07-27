@@ -614,7 +614,7 @@ mod tests {
         LayoutBox {
             node: lumen_dom::NodeId::from_index(0),
             rect: lumen_core::geom::Rect::ZERO,
-            style: crate::style::ComputedStyle::root(),
+            style: std::sync::Arc::new(crate::style::ComputedStyle::root()),
             kind,
             children: Vec::new(),
             col_span: 1,

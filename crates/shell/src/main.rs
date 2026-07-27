@@ -3937,7 +3937,7 @@ impl LoadedPage {
             layout_box: lumen_layout::LayoutBox {
                 node: NodeId::from_index(0),
                 rect: Rect::ZERO,
-                style: lumen_layout::style::ComputedStyle::root(),
+                style: std::sync::Arc::new(lumen_layout::style::ComputedStyle::root()),
                 kind: lumen_layout::BoxKind::Block,
                 children: Vec::new(),
                 col_span: 1,
@@ -5157,7 +5157,7 @@ struct PageSnapshot {
     /// with `layout_box` (same producer, same invalidation rule) so a tab
     /// switch back to this snapshot cannot resurrect a cache that no longer
     /// matches the restored tree.
-    page_prev_cascade_styles: Option<HashMap<NodeId, ComputedStyle>>,
+    page_prev_cascade_styles: Option<HashMap<NodeId, std::sync::Arc<ComputedStyle>>>,
     page_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
     anim_frame: Option<lumen_layout::AnimationFrame>,
     layout_box: Option<lumen_layout::LayoutBox>,
@@ -5735,7 +5735,11 @@ fn parse_font_weight(s: Option<&str>) -> u16 {
 /// Результат используется `transition_scheduler.sync()` для сравнения
 /// предыдущего и нового стиля после каждого relayout-а.
 fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) {
-    map.insert(lb.node, lb.style.clone());
+    // BUG-341 S12: `LayoutBox::style` is now an `Arc`, but the transition
+    // scheduler owns its snapshot (it diffs it against the next frame), so this
+    // stays a deep copy. Sharing it here would need `prev_styles` to hold `Arc`s
+    // too — a page-pipeline follow-up, not part of this slice's measured path.
+    map.insert(lb.node, (*lb.style).clone());
     for child in &lb.children {
         collect_box_styles(child, map);
     }
@@ -7385,7 +7389,7 @@ struct Lumen {
     /// pre-adjust styles the cascade itself produced, or the incremental
     /// cascade's `incr == full` correctness gate (BUG-341 brief §4) would
     /// compare against the wrong reference.
-    chrome_prev_cascade_styles: HashMap<NodeId, ComputedStyle>,
+    chrome_prev_cascade_styles: HashMap<NodeId, std::sync::Arc<ComputedStyle>>,
     /// BUG-341 S5: `(hover, focus, active)` node ids from the previous pass —
     /// `restyle_root_set_for_state_change`'s `prev` argument for each axis, so
     /// a hover/focus/active transition can compute its conservative dirty
@@ -7443,7 +7447,7 @@ struct Lumen {
     /// `try_relayout_raf_incremental` falls back to the existing
     /// full-cascade-plus-graft path (`layout_mutation_incremental`) whenever
     /// this is `None`.
-    page_prev_cascade_styles: Option<HashMap<NodeId, ComputedStyle>>,
+    page_prev_cascade_styles: Option<HashMap<NodeId, std::sync::Arc<ComputedStyle>>>,
     /// Interactive state (`hovered_nid`/`focused_node`/`active_nid`) at the
     /// moment `page_prev_cascade_styles` was captured — the `prev` side of the
     /// next call's `restyle_root_set_for_state_change`. Only meaningful when
@@ -24554,7 +24558,8 @@ mod tests {
     #[derive(Default)]
     struct Cc12IncrementalState {
         prev_pristine_layout: Option<lumen_layout::LayoutBox>,
-        prev_cascade_styles: HashMap<lumen_dom::NodeId, lumen_layout::style::ComputedStyle>,
+        prev_cascade_styles:
+            HashMap<lumen_dom::NodeId, std::sync::Arc<lumen_layout::style::ComputedStyle>>,
         prev_interactive: (Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>),
     }
 
@@ -24624,10 +24629,26 @@ mod tests {
             }
             None => lumen_layout::layout_measured_hyp_with_counters(doc, sheet, viewport, measurer, hyp, false),
         };
+        // BUG-341 S8: split the timed region so the incremental design's own
+        // per-cycle bookkeeping (two deep clones of the whole document) is
+        // visible separately from the layout work it is meant to be saving —
+        // the S8 re-analysis found that bookkeeping to be ~12-13ms of the
+        // cycle, which no stage profile inside `lumen-layout` can show.
+        let t_layout = t0.elapsed().as_secs_f64() * 1000.0;
+        let t1 = std::time::Instant::now();
         state.prev_pristine_layout = Some(layout.clone());
+        let t_clone_tree = t1.elapsed().as_secs_f64() * 1000.0;
+        let t2 = std::time::Instant::now();
         state.prev_cascade_styles = counters.styles().clone();
+        let t_clone_styles = t2.elapsed().as_secs_f64() * 1000.0;
+        let t3 = std::time::Instant::now();
         let _dl = paint_ordered(&layout);
+        let t_paint = t3.elapsed().as_secs_f64() * 1000.0;
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "[cc12-split] total={ms:.2} layout={t_layout:.2} clone_tree={t_clone_tree:.2} \
+             clone_styles={t_clone_styles:.2} paint={t_paint:.2}"
+        );
         lumen_layout::clear_interactive_state();
         state.prev_interactive = new_interactive;
         ms
@@ -24720,6 +24741,63 @@ mod tests {
              the current numbers and the open follow-up (S6) needed to close this",
             key_summary.p95_ms,
         );
+    }
+
+    /// BUG-341 S8 regression gate: `graft_geometry` must reuse the **whole**
+    /// chrome box tree when two consecutive layouts see an identical document.
+    ///
+    /// This is the test whose absence let two independent defects sit in the
+    /// incremental-layout path unnoticed through slices S1-S7, while every
+    /// differential test stayed green (they assert `incremental == full`
+    /// *output*, which a graft that reuses nothing also satisfies — just
+    /// slowly). Both are described in BUG-341 "S8": `kind_layout_eq` was
+    /// missing 6 of `BoxKind`'s 20 variants (every SVG kind among them, and
+    /// chrome is built out of SVG icons), and `graft_geometry` returned before
+    /// recursing whenever one node's style differed — which the root box does
+    /// on every single cycle, because `lay_out` writes the used viewport
+    /// `height` back into it. Either one alone drove reuse to zero.
+    ///
+    /// Asserting the *count* rather than the output is the point: a reuse
+    /// regression is invisible in geometry and only shows up as wall-clock,
+    /// where machine noise (±10-15% on this project's reference machine) hides
+    /// it. Keep this test exact — "most boxes clean" is not a useful contract.
+    #[test]
+    fn graft_geometry_reuses_whole_chrome_tree_when_nothing_changed() {
+        use lumen_layout::incremental::{graft_geometry, mark_subtree_dirty, DirtyBits};
+
+        fn count(b: &lumen_layout::box_tree::LayoutBox, clean: &mut usize, total: &mut usize) {
+            *total += 1;
+            if b.dirty == DirtyBits::CLEAN {
+                *clean += 1;
+            }
+            for c in &b.children {
+                count(c, clean, total);
+            }
+        }
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        lumen_chrome::bind_model(&mut doc, &cc12_bench_model(""));
+
+        let (prev, _) =
+            lumen_layout::layout_measured_hyp_with_counters(&doc, &sheet, viewport, &measurer, &hyp, false);
+        let (mut next, _) =
+            lumen_layout::layout_measured_hyp_with_counters(&doc, &sheet, viewport, &measurer, &hyp, false);
+
+        mark_subtree_dirty(&mut next);
+        let all_clean = graft_geometry(&mut next, &prev);
+        let (mut clean, mut total) = (0usize, 0usize);
+        count(&next, &mut clean, &mut total);
+
+        assert!(total > 100, "chrome document should produce a non-trivial box tree, got {total}");
+        assert_eq!(
+            clean, total,
+            "graft_geometry reused only {clean}/{total} boxes of an unchanged chrome document —              every box must be reusable when nothing changed (BUG-341 S8). A drop here means some              `BoxKind` variant is missing from `kind_layout_eq`, or a layout pass writes a used              value back into `ComputedStyle` that the freshly-built tree cannot match.",
+        );
+        assert!(all_clean, "graft_geometry must report the whole tree clean when nothing changed");
     }
 
     /// BUG-341 S5: like `cc12_chrome_perf_gate_hover_and_keystroke_cycles`'s
@@ -24934,7 +25012,7 @@ mod tests {
         let unused_placeholder = lumen_layout::LayoutBox {
             node: doc.root(),
             rect: Rect::ZERO,
-            style: root_style.clone(),
+            style: std::sync::Arc::new(root_style.clone()),
             kind: lumen_layout::BoxKind::Skip,
             children: vec![],
             col_span: 1,
