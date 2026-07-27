@@ -1715,7 +1715,7 @@ mod tests {
             layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental_restyle,
         };
         use crate::counters::{set_incremental_restyle, RestyleDelta};
-        use crate::style::restyle_root_set_for_node_change;
+        use crate::style::{restyle_node_index, restyle_root_set_for_node_change, NodeChange};
         use lumen_core::ext::NullHyphenationProvider;
 
         let html = r#"<ul id="menu">
@@ -1748,7 +1748,9 @@ mod tests {
             }
         }
 
-        let dirty_roots = restyle_root_set_for_node_change(&doc, [a]);
+        let node_index = restyle_node_index(&doc, &sheet);
+        let dirty_roots =
+            restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
         let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
@@ -1758,6 +1760,107 @@ mod tests {
 
         let full = layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
 
+        let mut ia = Vec::new();
+        let mut fb = Vec::new();
+        collect_rects(&incr, &mut ia);
+        collect_rects(&full, &mut fb);
+        assert_eq!(ia.len(), fb.len(), "box count must match full layout");
+        for ((na, ra), (nb, rb)) in ia.iter().zip(fb.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+    }
+
+
+    /// BUG-341 S17 — the narrowed DOM root-set must still reproduce a full
+    /// cascade exactly, including the mutated node's *descendants*.
+    ///
+    /// Correctness first: the sheet restyles `#a` itself, a descendant of `#a`
+    /// (`[data-x="2"] span`), and — via a sibling combinator whose left compound
+    /// cannot match `#a` — a sibling of a *different* element. S17 narrows the
+    /// root-set from `#menu` (the parent) to `#a` alone, so if the narrowing
+    /// were wrong about what a `data-x` write can reach, the `<span>` inside
+    /// `#a` would keep its old colour and this comparison of the whole cascade
+    /// (not just geometry — a colour change moves no boxes) would fail.
+    ///
+    /// Then the count: the root-set really is `{#a}`, which is the only thing
+    /// that can regress silently — a mechanism that narrows nothing still
+    /// reproduces the full cascade, just slowly (the S8 lesson).
+    #[test]
+    fn mutation_incremental_restyle_narrowed_attr_change_matches_full() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use lumen_dom::{build_flat_tree, NodeData};
+        use crate::box_tree::{
+            layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental_restyle,
+        };
+        use crate::counters::{precompute_counters, set_incremental_restyle, RestyleDelta};
+        use crate::style::{restyle_node_index, restyle_root_set_for_node_change, NodeChange};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = r#"<ul id="menu">
+            <li id="a" class="item" data-x="1"><span id="as">a</span></li>
+            <li id="b" class="item"><span id="bs">b</span></li>
+        </ul>
+        <div id="unrelated"><p>x</p></div>"#;
+        let css = r#"
+            .item { color: black; padding: 4px; height: 20px; }
+            [data-x="2"] { color: blue; height: 40px; }
+            [data-x="2"] span { color: red; }
+            .other + .item { color: green; }
+        "#;
+        let mut doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+
+        let a = doc.find_by_id("a").expect("#a must exist");
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(a).data {
+            for attr in attrs.iter_mut() {
+                if attr.name.local == "data-x" {
+                    attr.value = "2".to_string();
+                }
+            }
+        }
+
+        let node_index = restyle_node_index(&doc, &sheet);
+        let dirty_roots =
+            restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("data-x"))], &node_index);
+        assert_eq!(
+            dirty_roots,
+            [a].into_iter().collect::<std::collections::HashSet<_>>(),
+            "the only sibling rule in this sheet is `.other + .item`, which cannot match #a — \
+             S17 must narrow the root-set to #a instead of widening to #menu",
+        );
+
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.styles(),
+            dirty_roots,
+            content_dirty: crate::counters::ContentDirty::Untracked,
+        };
+        set_incremental_restyle(true);
+        crate::style::invalidate_rule_idx_cache();
+        let (incr, incr_counters) = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+        );
+        set_incremental_restyle(false);
+
+        let flat = build_flat_tree(&doc);
+        crate::style::invalidate_rule_idx_cache();
+        let full_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        assert_eq!(
+            incr_counters.styles(),
+            full_counters.styles(),
+            "the narrowed root-set must reproduce the full cascade for every node — a `data-x` \
+             write restyles #a and, via `[data-x=\"2\"] span`, its descendant",
+        );
+
+        let full = layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
         let mut ia = Vec::new();
         let mut fb = Vec::new();
         collect_rects(&incr, &mut ia);
@@ -1789,7 +1892,7 @@ mod tests {
             layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental_restyle,
         };
         use crate::counters::{set_incremental_restyle, RestyleDelta};
-        use crate::style::restyle_root_set_for_node_change;
+        use crate::style::{restyle_node_index, restyle_root_set_for_node_change, NodeChange};
         use lumen_core::ext::NullHyphenationProvider;
 
         let html = r#"<ul id="menu">
@@ -1818,7 +1921,9 @@ mod tests {
 
         // Structural change: `reconcile_row_list` reports the container
         // (`#menu`) touched, not the newly-created node itself.
-        let dirty_roots = restyle_root_set_for_node_change(&doc, [menu]);
+        let node_index = restyle_node_index(&doc, &sheet);
+        let dirty_roots =
+            restyle_root_set_for_node_change(&doc, [(menu, NodeChange::Unattributed)], &node_index);
         let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
@@ -2230,8 +2335,8 @@ mod tests {
         use lumen_html_parser::parse as parse_html;
         use lumen_dom::build_flat_tree;
         use crate::counters::{
-            incremental_precompute_counters, precompute_counters, recompute_count,
-            reset_recompute_count, set_incremental_restyle, RestyleDelta,
+            incremental_precompute_counters, precompute_counters, set_incremental_restyle,
+            take_cascade_stats, RestyleDelta,
         };
         use crate::style::{clear_interactive_state, restyle_root_set_for_state_change, set_interactive_state};
 
@@ -2270,10 +2375,10 @@ mod tests {
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
         let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
-        reset_recompute_count();
+        take_cascade_stats();
         crate::style::invalidate_rule_idx_cache();
         let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
-        let recomputed = recompute_count() as usize;
+        let recomputed = take_cascade_stats().recomputed as usize;
         set_incremental_restyle(false);
         clear_interactive_state();
 
@@ -2299,10 +2404,10 @@ mod tests {
         use lumen_html_parser::parse as parse_html;
         use lumen_dom::{build_flat_tree, NodeData};
         use crate::counters::{
-            incremental_precompute_counters, precompute_counters, recompute_count,
-            reset_recompute_count, set_incremental_restyle, RestyleDelta,
+            incremental_precompute_counters, precompute_counters, set_incremental_restyle,
+            take_cascade_stats, RestyleDelta,
         };
-        use crate::style::restyle_root_set_for_node_change;
+        use crate::style::{restyle_node_index, restyle_root_set_for_node_change, NodeChange};
 
         let css = r#"
             .item { color: black; }
@@ -2336,15 +2441,17 @@ mod tests {
         crate::style::invalidate_rule_idx_cache();
         let full_after = precompute_counters(&doc, &sheet, vp, &flat, false);
 
-        let dirty_roots = restyle_root_set_for_node_change(&doc, [a]);
+        let node_index = restyle_node_index(&doc, &sheet);
+        let dirty_roots =
+            restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
         // BUG-341 S4: a DOM class mutation is NOT `dom_content_stable` — box-build
         // reuse must not trust style-equality alone here (see `RestyleDelta` doc).
         let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
         set_incremental_restyle(true);
-        reset_recompute_count();
+        take_cascade_stats();
         crate::style::invalidate_rule_idx_cache();
         let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
-        let recomputed = recompute_count() as usize;
+        let recomputed = take_cascade_stats().recomputed as usize;
         set_incremental_restyle(false);
 
         assert_eq!(

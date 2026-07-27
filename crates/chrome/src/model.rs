@@ -14,7 +14,7 @@
 //! this slice's DoD (tab/theme/profile/workspace switches reflect in chrome).
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
 
@@ -433,10 +433,17 @@ pub struct ChromeWorkspaceModel {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChromeMutations {
     /// Nodes whose *selector-relevant* state changed — an attribute value (most
-    /// commonly `class`) or a row-list container's child count. Feeds
+    /// commonly `class`) or a row-list container's child count — mapped to
+    /// *what* changed about them. Feeds
     /// `lumen_layout::style::restyle_root_set_for_node_change`, i.e. decides
     /// which nodes must re-run the cascade.
-    pub selector: HashSet<NodeId>,
+    ///
+    /// BUG-341 S17: the attribute *names* are carried, not just the node ids.
+    /// A root-set that knows only "something on `#omniInput` changed" has to
+    /// assume a sibling rule could react and widen to the parent's whole
+    /// subtree; one that knows the name is `value` can ask whether any selector
+    /// in the sheet reaches a sibling from a compound matching that node.
+    pub selector: HashMap<NodeId, SelectorTouch>,
     /// Nodes whose *content* changed — text-node data, an element's child list,
     /// or any attribute (`build_box` reads `src`/`value`/`width`/… directly, so
     /// every attribute write counts here too). Feeds
@@ -460,6 +467,19 @@ impl ChromeMutations {
     }
 }
 
+/// What changed about one selector-relevant node in a [`ChromeMutations`]
+/// report (BUG-341 S17).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SelectorTouch {
+    /// Names of the attributes written to (or removed from) this node.
+    /// Lowercase as written by the `bind_*` helpers.
+    pub attrs: BTreeSet<String>,
+    /// The node's child list changed. No attribute name describes that, and
+    /// `:nth-child`/`:empty`/sibling combinators all react to it, so a
+    /// structural touch always takes the conservative widen-to-parent path.
+    pub structural: bool,
+}
+
 thread_local! {
     /// BUG-341 S6/S16 — collects what [`bind_model`] actually mutated during
     /// the call currently in progress. `None` when no [`bind_model_tracked`]
@@ -469,14 +489,27 @@ thread_local! {
     static MUTATION_TRACKER: RefCell<Option<ChromeMutations>> = const { RefCell::new(None) };
 }
 
-/// Records `id` as *selector-relevantly* touched by the [`bind_model_tracked`]
-/// call currently in progress, if any. Also records it as content-dirty: every
-/// caller of this function writes an attribute or restructures a child list,
-/// both of which `build_box` reads. A no-op outside [`bind_model_tracked`].
-fn record_touched(id: NodeId) {
+/// Records a write to `id`'s `attr` attribute in the [`bind_model_tracked`]
+/// call currently in progress, if any. Also records `id` as content-dirty —
+/// `build_box` reads attributes (`src`/`value`/`width`/…) directly. A no-op
+/// outside [`bind_model_tracked`].
+fn record_attr(id: NodeId, attr: &str) {
     MUTATION_TRACKER.with(|t| {
         if let Some(m) = t.borrow_mut().as_mut() {
-            m.selector.insert(id);
+            m.selector.entry(id).or_default().attrs.insert(attr.to_ascii_lowercase());
+            m.content.insert(id);
+        }
+    });
+}
+
+/// Records `id`'s child list as changed in the [`bind_model_tracked`] call
+/// currently in progress, if any — selector-relevant (`:nth-child`, `:empty`,
+/// sibling combinators) *and* content-relevant. A no-op outside
+/// [`bind_model_tracked`].
+fn record_structural(id: NodeId) {
+    MUTATION_TRACKER.with(|t| {
+        if let Some(m) = t.borrow_mut().as_mut() {
+            m.selector.entry(id).or_default().structural = true;
             m.content.insert(id);
         }
     });
@@ -1073,7 +1106,7 @@ fn reconcile_row_list<T>(
         // any `:nth-child`/`:last-child`/sibling-combinator rule over this
         // list. Per-row content changes (a row updated in place) are caught
         // by `update`'s own `set_attr` calls instead.
-        record_touched(container);
+        record_structural(container);
     }
 
     for (i, item) in items.iter().enumerate() {
@@ -1395,7 +1428,7 @@ fn remove_children_with_class(doc: &mut Document, container: NodeId, class: &str
     if removed_any {
         // BUG-341 S6: a structural change (row(s) gone) — the container's
         // remaining/future children can depend on it via `:nth-child` etc.
-        record_touched(container);
+        record_structural(container);
     }
 }
 
@@ -1427,12 +1460,13 @@ fn set_attr(doc: &mut Document, id: NodeId, name: &str, value: &str) {
                 attr.value = value.to_string();
                 // BUG-341 S6: value actually changed — a selector keyed on
                 // this attribute (most commonly `class`) could now match
-                // differently.
-                record_touched(id);
+                // differently. S17 carries the name, so the root-set can ask
+                // which selectors key on *this* attribute.
+                record_attr(id, name);
             }
         } else {
             attrs.push(Attribute { name: QualName::html(name.to_ascii_lowercase()), value: value.to_string() });
-            record_touched(id);
+            record_attr(id, name);
         }
     }
 }
@@ -1442,7 +1476,7 @@ fn remove_attr(doc: &mut Document, id: NodeId, name: &str) {
         let before = attrs.len();
         attrs.retain(|a| !a.name.local.eq_ignore_ascii_case(name));
         if attrs.len() != before {
-            record_touched(id);
+            record_attr(id, name);
         }
     }
 }
@@ -1716,7 +1750,18 @@ mod tests {
         bind_model_tracked(&mut doc, &ChromeModel { dark_theme: false, ..ChromeModel::default() });
         let touched = bind_model_tracked(&mut doc, &ChromeModel { dark_theme: true, ..ChromeModel::default() });
         let body = doc.body().expect("asset has <body>");
-        assert_eq!(touched.selector, HashSet::from([body]), "only <body> should be reported touched");
+        assert_eq!(
+            touched.selector.keys().copied().collect::<HashSet<_>>(),
+            HashSet::from([body]),
+            "only <body> should be reported touched",
+        );
+        // BUG-341 S17: the report names the attribute, not just the node.
+        assert_eq!(
+            touched.selector[&body].attrs.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["data-theme"],
+            "a theme flip writes exactly `data-theme`",
+        );
+        assert!(!touched.selector[&body].structural, "a theme flip moves no children");
     }
 
     /// Adding a tab is a structural change on `#sbTabs`/`#hbarTabs` (the
@@ -1743,8 +1788,14 @@ mod tests {
         let touched = bind_model_tracked(&mut doc, &two_tabs);
         let sb_tabs = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
         let hbar_tabs = doc.find_by_id(crate::ids::HBAR_TABS).expect("asset has #hbarTabs");
-        assert!(touched.selector.contains(&sb_tabs), "touched must include #sbTabs: {touched:?}");
-        assert!(touched.selector.contains(&hbar_tabs), "touched must include #hbarTabs: {touched:?}");
+        assert!(
+            touched.selector.get(&sb_tabs).is_some_and(|t| t.structural),
+            "touched must report #sbTabs as structural: {touched:?}",
+        );
+        assert!(
+            touched.selector.get(&hbar_tabs).is_some_and(|t| t.structural),
+            "touched must report #hbarTabs as structural: {touched:?}",
+        );
     }
 
     #[test]

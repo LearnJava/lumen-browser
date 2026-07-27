@@ -304,6 +304,18 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   trap before assuming "empty results" is a no-op. Measured: `CC12_KEY` (typed omnibox text, changes
   every cycle) ~30% p50 win, the first real improvement on that fixture since BUG-341 opened; `CC12_
   HOVER` (S3's own worst-case fixture) unaffected, as expected — see BUG-341 "S6" for full numbers.
+- **BUG-341 S17 — the tracker reports attribute *names*, not just node ids.** `ChromeMutations::selector`
+  is now `HashMap<NodeId, SelectorTouch { attrs: BTreeSet<String>, structural: bool }>`:
+  `set_attr`/`remove_attr` record the name they wrote (`record_attr`), `reconcile_row_list` and
+  `remove_children_with_class` record a child-list change (`record_structural`). The name is what lets
+  `lumen_layout::style::restyle_root_set_for_node_change` ask, per node, whether any selector could
+  reach a *sibling* from a compound matching it — otherwise it must widen every change to the parent's
+  whole subtree, which on a one-character omnibox keystroke re-cascaded all 12 elements of
+  `div.omnibox` to byte-identical styles. A sheet-wide "does any selector use `+`/`~`" test would give
+  the same answer on today's `chrome.html` and lose it the day someone adds one unrelated `.a + .b`
+  rule; with the name in hand, that rule only widens the nodes its left compound can actually match.
+  `structural` stays conservative — no attribute name describes "the child list moved", and
+  `:nth-child`/`:empty`/sibling combinators all react to it. See BUG-341 "S17".
 
 ## Deferred
 
