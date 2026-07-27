@@ -197,15 +197,23 @@ Branch naming: `p<N>-<task-name>` (P1–P5 prefix mandatory). `--no-ff` required
 
 **Forbidden:** direct commit to main · force-push · rewriting history · `git config` · `--no-verify` · `git push` without explicit user request.
 
-**Every session MUST work in its own `git worktree`** — path `.claude/worktrees/<task-name>/`. Remove immediately after merge.
+**Every session MUST work in its own `git worktree`** — use your **persistent pool slot**, one per developer, instead of creating a worktree per task:
+
+```bash
+cd "$(bash scripts/worktree-pool.sh p<N>-work p<N>-task-name | tail -1)"   # occupy
+bash scripts/worktree-pool.sh list                                        # who holds what
+bash scripts/worktree-pool.sh release p<N>-work                           # free (step 3 of the checklist)
+```
+
+The slot (`.claude/worktrees/p1-work` … `p5-work`, plus `perf-base`) is created once and reused — only the branch changes, so `target/` stays warm and rebuilds are incremental. `git worktree remove` after every task deleted that cache and cost 9–15 min of cold build per task, plus 3 min for the `add` itself. Build **only `dev-release`** inside a slot (warm `dev-release` ≈ 4.7 GB; five slots on `debug` would be ~70 GB). The script refuses to switch a slot with uncommitted or unmerged work. Details — [`docs/git-workflow.md`](docs/git-workflow.md).
 
 **7-step completion checklist** (all mandatory, full details in `docs/git-workflow.md`):
 1. `cargo clippy -p <crate> -- -D warnings` + `cargo test -p <crate>`
 2. `git merge --no-ff p<N>-task-name -m "Merge …"`
-3. `git branch -d p<N>-task-name`
+3. `bash scripts/worktree-pool.sh release p<N>-work` then `git branch -d p<N>-task-name` (a slot holding the branch makes `branch -d` fail)
 4. Delete pointer line from `STATUS-PN.md`, commit
 5. `git push origin main`
-6. `git worktree remove .claude/worktrees/<task-name>`
+6. Pool slot — nothing to remove (freed in step 3). Ad-hoc worktree — `git worktree remove .claude/worktrees/<task-name>`
 
 ---
 
