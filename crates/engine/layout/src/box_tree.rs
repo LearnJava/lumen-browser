@@ -2927,7 +2927,15 @@ pub fn layout_mutation_incremental_restyle(
         // Every freshly-built box needs layout; graft clears the bit on reusable
         // subtrees so the incremental pass only re-lays-out new/changed content.
         crate::incremental::mark_subtree_dirty(&mut root);
-        crate::incremental::graft_geometry(&mut root, prev);
+        // BUG-341 S13: `prev` is a laid-out tree, so its styles carry the used
+        // values `lay_out` wrote back into them; `delta.prev_styles` is the
+        // unpolluted cascade those boxes were built from, and lets the graft
+        // tell "the author's style changed" from "layout wrote its own output
+        // here last cycle". Without it, 81 of the chrome document's 318 boxes
+        // were rejected on style every single hover flip — every one of them
+        // differing only in those used-value fields — plus 41 ancestors
+        // dragged along by the reject propagation.
+        crate::incremental::graft_geometry_with_cascade(&mut root, prev, Some(delta.prev_styles));
     }
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     {
