@@ -1288,6 +1288,94 @@ mod tests {
     // ── BUG-341 S5: layout_mutation_incremental_restyle ───────────────────
 
     #[test]
+    fn mutation_incremental_restyle_hover_entering_from_nothing_matches_full() {
+        // BUG-341 S14's exact shape and its exact risk: hover arrives from
+        // "nothing hovered" onto a *deep* node, so `:hover` flips on the whole
+        // ancestor chain and S14 drops from the root-set every ancestor no
+        // state-dependent compound can match. Here two of those ancestors
+        // (`.card`, `.item`) *can* be matched and must survive the narrowing —
+        // `.item:hover .icon` restyles a descendant, so dropping `.item` would
+        // leave `.icon` with a stale style and a visibly wrong height.
+        //
+        // `.card:hover` deliberately changes a *colour*, not `padding`: an
+        // ancestor whose own box metrics change leaves its clean-grafted
+        // descendants at their previous used width, which is BUG-355 — a
+        // pre-existing hole in `graft_geometry`, reproducible with every node
+        // in `dirty_roots` and therefore not about this narrowing at all. Put
+        // `padding: 9px` back here once BUG-355 is fixed; this test is the
+        // repro.
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle};
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use crate::style::{clear_interactive_state, restyle_root_set_for_state_change, set_interactive_state};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = r#"<div class="card"><ul id="list">
+            <li id="a" class="item"><span id="icon" class="icon">x</span></li>
+            <li id="b" class="item"><span class="icon">y</span></li>
+        </ul></div>"#;
+        let css = r#"
+            .card { padding: 3px; }
+            .item { color: black; height: 20px; }
+            .icon { height: 8px; }
+            .card:hover { color: navy; }
+            .item:hover { color: blue; height: 30px; }
+            .item:hover .icon { height: 16px; color: green; }
+        "#;
+        let doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+        let icon = doc.find_by_id("icon").expect("#icon must exist");
+
+        // Baseline pass (`prev`): nothing hovered.
+        clear_interactive_state();
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+
+        // Incremental: the pointer enters, landing on the deep `.icon`.
+        set_interactive_state(Some(icon), None, None);
+        let state_index = crate::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
+        assert!(
+            !dirty_roots.is_empty(),
+            "the `.card`/`.item` ancestors carry hover rules — narrowing them away would be wrong",
+        );
+        let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, dom_content_stable: true };
+        set_incremental_restyle(true);
+        let (incr, incr_counters) = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+        );
+        set_incremental_restyle(false);
+
+        // Reference: full layout + full cascade of the post-transition state.
+        set_interactive_state(Some(icon), None, None);
+        let (full, full_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+        clear_interactive_state();
+
+        assert_eq!(
+            incr_counters.styles(),
+            full_counters.styles(),
+            "narrowed incremental cascade must reproduce the full cascade exactly",
+        );
+
+        let mut ia = Vec::new();
+        let mut fb = Vec::new();
+        collect_rects(&incr, &mut ia);
+        collect_rects(&full, &mut fb);
+        assert_eq!(ia.len(), fb.len(), "box count must match full layout");
+        for ((na, ra), (nb, rb)) in ia.iter().zip(fb.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+    }
+
+    #[test]
     fn mutation_incremental_restyle_hover_transition_matches_full() {
         // S5 wires the S3 incremental cascade into a real pipeline entry
         // point, combined with the existing graft-geometry reuse
@@ -1331,8 +1419,8 @@ mod tests {
 
         // Incremental: hover moves from #a to #b.
         set_interactive_state(Some(b), None, None);
-        let needs_fanout = crate::style::restyle_state_needs_fanout(&doc, &sheet);
-        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), needs_fanout);
+        let state_index = crate::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
         let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, dom_content_stable: true };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
@@ -1381,8 +1469,8 @@ mod tests {
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
         );
 
-        let needs_fanout = crate::style::restyle_state_needs_fanout(&doc, &sheet);
-        let dirty_roots = restyle_root_set_for_state_change(&doc, None, None, needs_fanout);
+        let state_index = crate::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, None, &state_index);
         assert!(dirty_roots.is_empty(), "no-op transition must yield an empty root-set");
         let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, dom_content_stable: true };
         set_incremental_restyle(true);
@@ -1977,8 +2065,8 @@ mod tests {
         let full_after = precompute_counters(&doc, &sheet, vp, &flat, false);
 
         // Incremental: same transition, conservative root-set derived from it.
-        let needs_fanout = crate::style::restyle_state_needs_fanout(&doc, &sheet);
-        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), needs_fanout);
+        let state_index = crate::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
         let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, dom_content_stable: true };
         set_incremental_restyle(true);
         reset_recompute_count();

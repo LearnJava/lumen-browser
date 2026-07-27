@@ -350,6 +350,29 @@ Each slice is independently mergeable, guarded, and check-in-gated.
   New permanent `scope_detail` scopes in `lay_out_inner` produced the counter no
   slice had: **1696 of 3121 boxes are rebuilt and re-laid-out on a hover flip**,
   1425 reused. That, not any single stage, is the next lever. BUG-341 "S12".
+- **S13 — layout's own output was reading as a style change.** ✅ Done. Answer to
+  S12's counter: of the 318 chrome boxes, 81 were refused reuse on style and
+  **all 81 differed only in `width`/`height`/`box_sizing`**, dragging 41
+  ancestors with them — `prev` is a *laid-out* tree and `lay_out_flex` writes
+  used values back into every flex item's style, so `new.style == prev.style`
+  answered "has this box been through layout", not "did its author style
+  change". `graft_geometry_with_cascade` now compares against the previous
+  pass's *cascade* (`RestyleDelta::prev_styles`). Gate by count; census after:
+  318/318 reused, `lay_out` 2.44 → 0.00 ms. ≈23 % off `CC12_HOVER`, ≈37 % off
+  `CC12_KEY`. BUG-341 "S13".
+- **S14 — the flipped ancestor chain nobody's selectors could react to.**
+  ✅ Done. `:hover` flips on every ancestor of the pointer target, so a "nothing
+  hovered → deep node" transition put the document node in the restyle root-set
+  and re-cascaded everything, byte-identically. `restyle_state_needs_fanout`
+  became `restyle_state_index` → `StateRestyleIndex`, which also collects every
+  dynamic-state compound in the sheet; a flipped node no such compound can even
+  structurally match is dropped from the root-set. Sound because every
+  nested-selector form the engine looks through (`:not`/`:is`/`:where`/`:host`/
+  `:nth-child(… of …)`) binds the state to the same node as its compound;
+  `:has()` and shadow roots set `conservative` and keep the old behaviour.
+  `precompute_counters` 9-12 → 0.41 ms, `CC12_HOVER` ≈3.7× faster by min,
+  `CC12_KEY` unchanged (its root-set was already empty). Surfaced BUG-355.
+  BUG-341 "S14".
 
 **Stop conditions / honesty:** if after S5 the p95 floor is set by irreducible
 per-node cascade cost on the hover root-set and stays > 2 ms, report the number

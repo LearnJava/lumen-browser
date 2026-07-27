@@ -1769,7 +1769,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:107` **fn** `unindex_semantic` — Remove a history entry's embedding from the semantic index, if present
 `crates/knowledge/src/store.rs:118` **fn** `search_semantic` — Semantic (embedding-similarity) search over history entries indexed
 
-## lumen-layout  (658 symbols)
+## lumen-layout  (663 symbols)
 
 `crates/engine/layout/src/anchor.rs:47` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:76` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -2381,38 +2381,43 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style.rs:11310` **fn** `pop_ch_ex_context` — Restores the `ch`/`ex` metric context to a value previously returned by
 `crates/engine/layout/src/style.rs:11334` **fn** `set_interactive_state` — Sets the interactive hover/focus/active state for the next layout pass
 `crates/engine/layout/src/style.rs:11345` **fn** `clear_interactive_state` — Clears hover/focus/active state after layout
-`crates/engine/layout/src/style.rs:11498` **fn** `restyle_state_needs_fanout` — BUG-341 S7 — computes, once per interactive-state transition (reuse across
-`crates/engine/layout/src/style.rs:11525` **fn** `restyle_root_set_for_state_change` — BUG-341 S3/S7 — restyle root-set (brief §4) for an interactive-state
-`crates/engine/layout/src/style.rs:11568` **fn** `restyle_root_set_for_node_change` — BUG-341 S3 — conservative restyle root-set (brief §4) for a DOM attribute/
-`crates/engine/layout/src/style.rs:11593` **fn** `set_forced_colors` — Enables/disables Forced Colors Mode (CSS Color Adjustment L1 §3) for all
-`crates/engine/layout/src/style.rs:11598` **fn** `forced_colors_active` — True when Forced Colors Mode is active on the current thread
-`crates/engine/layout/src/style.rs:11617` **fn** `set_print_media` — Selects the `print` (`true`) or `screen` (`false`) `@media` type for all
-`crates/engine/layout/src/style.rs:11622` **fn** `print_media_active` — True when the current layout pass renders for `print` media
-`crates/engine/layout/src/style.rs:11645` **struct** `StyleEnvSnapshot` — Snapshot of all style-pass thread-locals needed for rayon worker threads
-`crates/engine/layout/src/style.rs:11656` **fn** `capture` — Capture the current thread's style environment
-`crates/engine/layout/src/style.rs:11671` **fn** `install` — Install this snapshot on the **current** (worker) thread
-`crates/engine/layout/src/style.rs:11752` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
-`crates/engine/layout/src/style.rs:11760` **fn** `is_auto`
-`crates/engine/layout/src/style.rs:11767` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
-`crates/engine/layout/src/style.rs:11777` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
-`crates/engine/layout/src/style.rs:11785` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
-`crates/engine/layout/src/style.rs:11796` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
-`crates/engine/layout/src/style.rs:11871` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
-`crates/engine/layout/src/style.rs:11900` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
-`crates/engine/layout/src/style.rs:11929` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
-`crates/engine/layout/src/style.rs:11953` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
-`crates/engine/layout/src/style.rs:12151` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
-`crates/engine/layout/src/style.rs:12200` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
-`crates/engine/layout/src/style.rs:12206` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
-`crates/engine/layout/src/style.rs:12212` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
-`crates/engine/layout/src/style.rs:12368` **fn** `parse_length`
-`crates/engine/layout/src/style.rs:16269` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
-`crates/engine/layout/src/style.rs:18372` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
-`crates/engine/layout/src/style.rs:19606` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
-`crates/engine/layout/src/style.rs:19686` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
-`crates/engine/layout/src/style.rs:20095` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
-`crates/engine/layout/src/style.rs:21043` **fn** `parse_color`
-`crates/engine/layout/src/style.rs:21219` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
+`crates/engine/layout/src/style.rs:11529` **struct** `StateRestyleIndex` — BUG-341 S7/S14 — everything [`restyle_root_set_for_state_change`] needs to
+`crates/engine/layout/src/style.rs:11546` **fn** `needs_fanout` — S7 — whether a flipped node's invalidation widens to its parent
+`crates/engine/layout/src/style.rs:11551` **fn** `is_conservative` — S14 — whether per-node narrowing is disabled for this document/sheet
+`crates/engine/layout/src/style.rs:11557` **fn** `state_compound_count` — S14 — number of state-dependent compounds the narrowing tests each
+`crates/engine/layout/src/style.rs:11571` **fn** `state_flip_can_matter` — S14 — can an interactive-state flip on `node` change *any* computed
+`crates/engine/layout/src/style.rs:11635` **fn** `restyle_state_index` — BUG-341 S7/S14 — builds the [`StateRestyleIndex`] for one layout pass
+`crates/engine/layout/src/style.rs:11679` **fn** `restyle_root_set_for_state_change` — BUG-341 S3/S7 — restyle root-set (brief §4) for an interactive-state
+`crates/engine/layout/src/style.rs:11721` **fn** `restyle_root_set_for_node_change` — BUG-341 S3 — conservative restyle root-set (brief §4) for a DOM attribute/
+`crates/engine/layout/src/style.rs:11746` **fn** `set_forced_colors` — Enables/disables Forced Colors Mode (CSS Color Adjustment L1 §3) for all
+`crates/engine/layout/src/style.rs:11751` **fn** `forced_colors_active` — True when Forced Colors Mode is active on the current thread
+`crates/engine/layout/src/style.rs:11770` **fn** `set_print_media` — Selects the `print` (`true`) or `screen` (`false`) `@media` type for all
+`crates/engine/layout/src/style.rs:11775` **fn** `print_media_active` — True when the current layout pass renders for `print` media
+`crates/engine/layout/src/style.rs:11798` **struct** `StyleEnvSnapshot` — Snapshot of all style-pass thread-locals needed for rayon worker threads
+`crates/engine/layout/src/style.rs:11809` **fn** `capture` — Capture the current thread's style environment
+`crates/engine/layout/src/style.rs:11824` **fn** `install` — Install this snapshot on the **current** (worker) thread
+`crates/engine/layout/src/style.rs:11905` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
+`crates/engine/layout/src/style.rs:11913` **fn** `is_auto`
+`crates/engine/layout/src/style.rs:11920` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
+`crates/engine/layout/src/style.rs:11930` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
+`crates/engine/layout/src/style.rs:11938` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
+`crates/engine/layout/src/style.rs:11949` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
+`crates/engine/layout/src/style.rs:12024` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
+`crates/engine/layout/src/style.rs:12053` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
+`crates/engine/layout/src/style.rs:12082` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
+`crates/engine/layout/src/style.rs:12106` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
+`crates/engine/layout/src/style.rs:12304` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
+`crates/engine/layout/src/style.rs:12353` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
+`crates/engine/layout/src/style.rs:12359` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
+`crates/engine/layout/src/style.rs:12365` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
+`crates/engine/layout/src/style.rs:12521` **fn** `parse_length`
+`crates/engine/layout/src/style.rs:16422` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
+`crates/engine/layout/src/style.rs:18525` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
+`crates/engine/layout/src/style.rs:19759` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
+`crates/engine/layout/src/style.rs:19839` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
+`crates/engine/layout/src/style.rs:20248` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
+`crates/engine/layout/src/style.rs:21196` **fn** `parse_color`
+`crates/engine/layout/src/style.rs:21372` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
 `crates/engine/layout/src/subgrid.rs:24` **struct** `SubgridContext` — Resolved track sizes and cumulative offsets for one grid axis (columns or rows)
 `crates/engine/layout/src/subgrid.rs:35` **fn** `from_parent_tracks` — Build from a slice of parent track sizes and the gap value used between them
 `crates/engine/layout/src/subgrid.rs:46` **fn** `total_size` — Total span width/height occupied by all inherited tracks (including inter-track gaps)
@@ -5582,4 +5587,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5505 symbols in 24 crates*
+*Total: 5510 symbols in 24 crates*

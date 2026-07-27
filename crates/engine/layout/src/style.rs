@@ -11460,6 +11460,124 @@ fn rules_need_state_fanout(rules: &[lumen_css_parser::Rule]) -> bool {
     rules.iter().any(|r| r.selectors.iter().any(selector_needs_state_fanout))
 }
 
+/// BUG-341 S14 — collect every compound of `complex` whose matching result can
+/// flip with the interactive state of the *node bound to that compound*.
+///
+/// All the nested-list forms [`pseudo_class_depends_on_dynamic_state`] looks
+/// through (`:not()`/`:is()`/`:where()`/`:host()`/`:nth-child(… of …)`) evaluate
+/// their inner selector against the same subject node as the compound that
+/// carries them, so "this compound depends on dynamic state" and "the node this
+/// compound is matched against is the node whose state flips" are the same
+/// statement. `:has()` is the one exception (it binds state to a *different*
+/// node) and is excluded from the narrowing entirely — see
+/// [`StateRestyleIndex::conservative`].
+fn collect_state_compounds<'a>(complex: &'a ComplexSelector, out: &mut Vec<&'a CompoundSelector>) {
+    if compound_depends_on_dynamic_state(&complex.head) {
+        out.push(&complex.head);
+    }
+    for (_, compound) in &complex.tail {
+        if compound_depends_on_dynamic_state(compound) {
+            out.push(compound);
+        }
+    }
+}
+
+fn collect_rules_state_compounds<'a>(
+    rules: &'a [lumen_css_parser::Rule],
+    out: &mut Vec<&'a CompoundSelector>,
+) {
+    for rule in rules {
+        for selector in &rule.selectors {
+            collect_state_compounds(selector, out);
+        }
+    }
+}
+
+/// BUG-341 S14 — could `compound` match `node` *after* an interactive-state
+/// flip on `node`, ignoring what that state currently is?
+///
+/// Every part must match structurally, except the two kinds whose value this
+/// question deliberately leaves open: the dynamic-state pseudo-classes
+/// themselves (their boolean is exactly what is being flipped) and pseudo-
+/// elements (stripped by the real matcher — [`matches_complex_for_pseudo`] —
+/// before the compound is matched against an element, so treating them as
+/// matching keeps `.tab:hover::before` attributable to `.tab`).
+///
+/// Over-approximates in one direction only: a compound whose dynamic state
+/// hides inside a nested list (`:is(.tab:hover, .x)`) has *all* its state-
+/// carrying parts treated as "possible", so it matches any element. That costs
+/// narrowing, never correctness.
+fn compound_could_match_after_state_flip(
+    compound: &CompoundSelector,
+    doc: &Document,
+    node: NodeId,
+) -> bool {
+    let NodeData::Element { name, attrs } = &doc.get(node).data else {
+        return false;
+    };
+    compound.parts.iter().all(|part| match part {
+        SimpleSelector::PseudoElement(_) => true,
+        SimpleSelector::PseudoClass(pc) if pseudo_class_depends_on_dynamic_state(pc) => true,
+        other => matches_simple(other, doc, node, &name.local, attrs),
+    })
+}
+
+/// BUG-341 S7/S14 — everything [`restyle_root_set_for_state_change`] needs to
+/// know about the stylesheet in play, computed once per layout pass and reused
+/// across the three interactive-state axes (hover/focus/active) since the
+/// stylesheet's shape does not change between them.
+pub struct StateRestyleIndex<'a> {
+    /// S7 — widen each flipped node's invalidation to its parent's subtree
+    /// (some selector reaches a sibling from a dynamic-state compound).
+    needs_fanout: bool,
+    /// S14 — the per-node narrowing below is unsound for this document/sheet
+    /// pair, so every flipped node stays in the root set (pre-S14 behaviour).
+    /// Set by `:has()` depending on dynamic state (state on one node restyles
+    /// an arbitrarily distant ancestor) or by the presence of any shadow root
+    /// (shadow-tree sheets are not scanned here — same carve-out S7 made).
+    conservative: bool,
+    /// S14 — every compound in `sheet` whose match can flip with the state of
+    /// the node it is matched against ([`collect_state_compounds`]).
+    state_compounds: Vec<&'a CompoundSelector>,
+}
+
+impl StateRestyleIndex<'_> {
+    /// S7 — whether a flipped node's invalidation widens to its parent.
+    pub fn needs_fanout(&self) -> bool {
+        self.needs_fanout
+    }
+
+    /// S14 — whether per-node narrowing is disabled for this document/sheet.
+    pub fn is_conservative(&self) -> bool {
+        self.conservative
+    }
+
+    /// S14 — number of state-dependent compounds the narrowing tests each
+    /// flipped node against. Exposed for the count-based regression gates.
+    pub fn state_compound_count(&self) -> usize {
+        self.state_compounds.len()
+    }
+
+    /// S14 — can an interactive-state flip on `node` change *any* computed
+    /// style in the document?
+    ///
+    /// It can only do so through a compound that (a) depends on dynamic state
+    /// and (b) is matched against `node` itself; everything such a compound can
+    /// reach — its own subject, and descendants via `N:hover X` — is inside
+    /// `node`'s own subtree (sibling reach is what `needs_fanout` widens for,
+    /// and `:has()` reach is what `conservative` disables narrowing for). So if
+    /// no state-dependent compound can even structurally match `node`, the flip
+    /// is unobservable and `node` contributes nothing to the restyle root set.
+    pub fn state_flip_can_matter(&self, doc: &Document, node: NodeId) -> bool {
+        if self.conservative {
+            return true;
+        }
+        self.state_compounds
+            .iter()
+            .any(|c| compound_could_match_after_state_flip(c, doc, node))
+    }
+}
+
 /// BUG-341 S7 — true if any selector anywhere in `sheet` (top-level rules plus
 /// every `@layer`/`@media`/`@supports`/`@scope`/`@starting-style`/`@container`
 /// block) needs [`selector_needs_state_fanout`]'s widen-to-parent behaviour.
@@ -11467,14 +11585,31 @@ fn rules_need_state_fanout(rules: &[lumen_css_parser::Rule]) -> bool {
 /// selector inside a currently-inactive block still counts) — safe (never
 /// narrows incorrectly) and avoids threading viewport/dark-mode state into
 /// this check.
+/// Test-only: the sheet half of [`restyle_state_index`]'s `needs_fanout`
+/// computation, kept as a named predicate because the S7 unit tests below
+/// assert on it selector-shape by selector-shape. Production code takes the
+/// single fused scan in `restyle_state_index` instead.
+#[cfg(test)]
 fn stylesheet_needs_state_fanout(sheet: &Stylesheet) -> bool {
-    rules_need_state_fanout(&sheet.rules)
-        || sheet.media_rules.iter().any(|m| rules_need_state_fanout(&m.rules))
-        || sheet.layers.iter().any(|l| rules_need_state_fanout(&l.rules))
-        || sheet.supports_rules.iter().any(|s| rules_need_state_fanout(&s.rules))
-        || sheet.scope_rules.iter().any(|s| rules_need_state_fanout(&s.rules))
-        || sheet.starting_style_rules.iter().any(|s| rules_need_state_fanout(&s.rules))
-        || sheet.container_rules.iter().any(|c| rules_need_state_fanout(&c.rules))
+    stylesheet_rule_groups(sheet).any(rules_need_state_fanout)
+}
+
+/// Every rule list in `sheet`, top-level plus every conditional/grouping
+/// at-rule block. Iterated unconditionally — see
+/// [`stylesheet_needs_state_fanout`] for why an inactive `@media` block still
+/// counts.
+fn stylesheet_rule_groups(sheet: &Stylesheet) -> impl Iterator<Item = &[lumen_css_parser::Rule]> {
+    std::iter::once(sheet.rules.as_slice())
+        .chain(sheet.media_rules.iter().map(|m| m.rules.as_slice()))
+        .chain(sheet.layers.iter().map(|l| l.rules.as_slice()))
+        .chain(sheet.supports_rules.iter().map(|s| s.rules.as_slice()))
+        .chain(sheet.scope_rules.iter().map(|s| s.rules.as_slice()))
+        .chain(sheet.starting_style_rules.iter().map(|s| s.rules.as_slice()))
+        .chain(sheet.container_rules.iter().map(|c| c.rules.as_slice()))
+}
+
+fn rules_have_dynamic_has(rules: &[lumen_css_parser::Rule]) -> bool {
+    rules.iter().any(|r| r.selectors.iter().any(complex_selector_has_dynamic_has))
 }
 
 /// True if `doc` has any shadow host. Shadow-tree stylesheets
@@ -11489,14 +11624,25 @@ fn document_has_shadow_roots(doc: &Document) -> bool {
     (0..doc.len()).any(|i| doc.is_shadow_host(NodeId::from_index(i)))
 }
 
-/// BUG-341 S7 — computes, once per interactive-state transition (reuse across
-/// the hover/focus/active axes — each calls [`restyle_root_set_for_state_change`]
-/// separately but the stylesheet/shadow-DOM shape doesn't change between
-/// them), whether [`restyle_root_set_for_state_change`] must keep the S3
-/// conservative widen-to-parent fanout or can narrow to each flipped node's
-/// own subtree.
-pub fn restyle_state_needs_fanout(doc: &Document, sheet: &Stylesheet) -> bool {
-    document_has_shadow_roots(doc) || stylesheet_needs_state_fanout(sheet)
+/// BUG-341 S7/S14 — builds the [`StateRestyleIndex`] for one layout pass.
+///
+/// Computed once per interactive-state transition and reused across the
+/// hover/focus/active axes — each calls [`restyle_root_set_for_state_change`]
+/// separately, but the stylesheet/shadow-DOM shape doesn't change between them.
+/// Costs one scan of the sheet's selectors (the same scan S7 already did for
+/// `needs_fanout` alone), then one structural match per flipped node per
+/// state-dependent compound.
+pub fn restyle_state_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> StateRestyleIndex<'a> {
+    let shadow = document_has_shadow_roots(doc);
+    let mut needs_fanout = false;
+    let mut conservative = shadow;
+    let mut state_compounds = Vec::new();
+    for rules in stylesheet_rule_groups(sheet) {
+        needs_fanout |= rules_need_state_fanout(rules);
+        conservative |= rules_have_dynamic_has(rules);
+        collect_rules_state_compounds(rules, &mut state_compounds);
+    }
+    StateRestyleIndex { needs_fanout: needs_fanout || shadow, conservative, state_compounds }
 }
 
 /// BUG-341 S3/S7 — restyle root-set (brief §4) for an interactive-state
@@ -11511,22 +11657,30 @@ pub fn restyle_state_needs_fanout(doc: &Document, sheet: &Stylesheet) -> bool {
 /// already true, and stays true, for either "some descendant is `prev`" or
 /// "some descendant is `new`").
 ///
-/// `needs_fanout` — from [`restyle_state_needs_fanout`] — selects between two
-/// behaviours per flipped node `N`: `true` invalidates `N`'s *parent's* whole
-/// subtree (S3's conservative over-approximation, covering `N:hover + X`,
-/// `N:hover ~ X`); `false` (S7 narrowing) invalidates only `N` itself — sound
-/// exactly when no selector anywhere needs the wider fanout (no sibling
-/// combinator after a dynamic-state compound, no `:has()` depending on
-/// dynamic state, no shadow roots), since a descendant combinator after a
-/// dynamic-state compound (`N:hover X`) already resolves within `N`'s own
-/// subtree without any widening.
+/// `index` — from [`restyle_state_index`] — controls two independent
+/// narrowings applied to every flipped node `N`:
 ///
-/// Returns an empty set for a no-op transition (`prev == new`).
+/// * [`StateRestyleIndex::needs_fanout`] (S7) selects how wide `N`'s
+///   invalidation is: `true` invalidates `N`'s *parent's* whole subtree (S3's
+///   conservative over-approximation, covering `N:hover + X`, `N:hover ~ X`);
+///   `false` invalidates only `N` itself — sound exactly when no selector
+///   anywhere needs the wider fanout, since a descendant combinator after a
+///   dynamic-state compound (`N:hover X`) already resolves within `N`'s own
+///   subtree without any widening.
+/// * [`StateRestyleIndex::state_flip_can_matter`] (S14) drops `N` from the set
+///   entirely when no state-dependent compound in the sheet can even match it.
+///   This is what keeps a "nothing was hovered → deep element is hovered"
+///   transition from invalidating the whole document: `:hover` does flip on
+///   every ancestor up to the root, but on a sheet whose only hover rules are
+///   `button:hover` / `.tab-row:hover` none of those ancestors can observe it.
+///
+/// Returns an empty set for a no-op transition (`prev == new`), and — since
+/// S14 — also for a transition no selector in the sheet can react to.
 pub fn restyle_root_set_for_state_change(
     doc: &Document,
     prev: Option<NodeId>,
     new: Option<NodeId>,
-    needs_fanout: bool,
+    index: &StateRestyleIndex<'_>,
 ) -> HashSet<NodeId> {
     let mut set = HashSet::new();
     if prev == new {
@@ -11539,12 +11693,11 @@ pub fn restyle_root_set_for_state_change(
         .zip(new_chain.iter())
         .take_while(|(a, b)| a == b)
         .count();
-    let root_for = |n: NodeId| if needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n };
-    for &n in &prev_chain[common..] {
-        set.insert(root_for(n));
-    }
-    for &n in &new_chain[common..] {
-        set.insert(root_for(n));
+    let root_for = |n: NodeId| if index.needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n };
+    for &n in prev_chain[common..].iter().chain(new_chain[common..].iter()) {
+        if index.state_flip_can_matter(doc, n) {
+            set.insert(root_for(n));
+        }
     }
     set
 }
@@ -34780,17 +34933,21 @@ mod state_fanout_tests {
         let host = doc.get(body).children[0];
         doc.attach_shadow(host, lumen_dom::ShadowRootMode::Open);
         let sheet = parse_css(".item:hover { color: blue; }");
+        let index = restyle_state_index(&doc, &sheet);
         assert!(
-            restyle_state_needs_fanout(&doc, &sheet),
+            index.needs_fanout(),
             "a document with any shadow root must stay on the conservative path (shadow selectors aren't scanned)",
         );
+        assert!(index.is_conservative(), "a shadow root must also disable S14's per-node narrowing");
     }
 
     #[test]
     fn no_shadow_root_and_safe_sheet_allows_narrowing() {
         let doc = lumen_html_parser::parse(r#"<div class="item"></div>"#);
         let sheet = parse_css(".item:hover { color: blue; }");
-        assert!(!restyle_state_needs_fanout(&doc, &sheet), "no shadow roots + no fanout-needing selector must narrow");
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(!index.needs_fanout(), "no shadow roots + no fanout-needing selector must narrow");
+        assert!(!index.is_conservative(), "no shadow roots + no dynamic :has() must allow per-node narrowing");
     }
 
     #[test]
@@ -34809,10 +34966,10 @@ mod state_fanout_tests {
         let a = doc.find_by_id("a").expect("#a");
         let b = doc.find_by_id("b").expect("#b");
 
-        let needs_fanout = restyle_state_needs_fanout(&doc, &sheet);
-        assert!(!needs_fanout, "chrome-shaped hover CSS must not need fanout");
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(!index.needs_fanout(), "chrome-shaped hover CSS must not need fanout");
 
-        let roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), needs_fanout);
+        let roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &index);
         assert_eq!(
             roots,
             [a, b].into_iter().collect::<HashSet<_>>(),
@@ -34832,14 +34989,148 @@ mod state_fanout_tests {
         let b = doc.find_by_id("b").expect("#b");
         let parent = doc.get(a).parent.expect("#a has a parent");
 
-        let needs_fanout = restyle_state_needs_fanout(&doc, &sheet);
-        assert!(needs_fanout, "sibling-combinator hover CSS must need fanout");
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(index.needs_fanout(), "sibling-combinator hover CSS must need fanout");
 
-        let roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), needs_fanout);
+        let roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &index);
         assert_eq!(
             roots,
             [parent].into_iter().collect::<HashSet<_>>(),
             "widened root-set must be the flipped nodes' shared parent",
+        );
+    }
+
+    // ── BUG-341 S14: per-node narrowing of the flipped ancestor chain ────────
+
+    /// The shape CC-12 hits every other cycle and the reason S14 exists: on a
+    /// "nothing was hovered → deep node is hovered" transition `:hover` really
+    /// does flip on every ancestor up to the document root, so the pre-S14
+    /// root-set contained the root and forced a whole-document re-cascade.
+    #[test]
+    fn nothing_hovered_to_deep_node_drops_ancestors_no_hover_rule_can_match() {
+        let html = r#"<main><section><div id="deep"><span>x</span></div></section></main>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css("button:hover { color: red; } .tab-row:hover .icon { display: none; }");
+        let deep = doc.find_by_id("deep").expect("#deep");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(!index.is_conservative(), "plain hover rules must allow narrowing");
+
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(deep), &index);
+        assert!(
+            roots.is_empty(),
+            "no selector can react to hover on #deep or any of its ancestors, so the whole \
+             flipped chain must drop out of the root-set, got {roots:?}",
+        );
+    }
+
+    #[test]
+    fn only_the_ancestors_a_hover_rule_can_match_stay_in_the_root_set() {
+        let html = r#"<main><button id="btn"><span id="label">x</span></button></main>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css("button:hover { color: red; }");
+        let btn = doc.find_by_id("btn").expect("#btn");
+        let label = doc.find_by_id("label").expect("#label");
+
+        let index = restyle_state_index(&doc, &sheet);
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(label), &index);
+        assert_eq!(
+            roots,
+            [btn].into_iter().collect::<HashSet<_>>(),
+            "`button:hover` can only observe the flip on the <button> itself — <main>, <body>, \
+             <html> and the document node must all drop out",
+        );
+    }
+
+    #[test]
+    fn pseudo_element_after_a_hover_compound_still_attributes_to_its_element() {
+        // `.tab:hover::before` — the real matcher strips `::before` before
+        // matching the compound against an element, so the narrowing must not
+        // let the pseudo-element part veto the match.
+        let html = r#"<ul><li id="a" class="tab"></li></ul>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css(".tab:hover::before { content: \"x\"; }");
+        let a = doc.find_by_id("a").expect("#a");
+
+        let index = restyle_state_index(&doc, &sheet);
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(a), &index);
+        assert_eq!(
+            roots,
+            [a].into_iter().collect::<HashSet<_>>(),
+            "a `::before` on a hover compound must keep its element in the root-set",
+        );
+    }
+
+    #[test]
+    fn dynamic_has_disables_per_node_narrowing() {
+        // `:has()` binds the state to a node other than the one carrying the
+        // compound, so S14's "the flip is only observable on the node it
+        // matches" argument does not hold — the whole chain must stay.
+        let html = r#"<main><section><div id="deep"></div></section></main>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css("article:has(.child:hover) { color: blue; }");
+        let deep = doc.find_by_id("deep").expect("#deep");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(index.is_conservative(), "dynamic :has() must disable narrowing");
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(deep), &index);
+        assert!(
+            roots.len() > 1,
+            "the conservative path must keep the whole flipped ancestor chain, got {roots:?}",
+        );
+    }
+
+    #[test]
+    fn shadow_root_disables_per_node_narrowing() {
+        let mut doc = lumen_html_parser::parse(r#"<div id="host"><div id="deep"></div></div>"#);
+        let host = doc.find_by_id("host").expect("#host");
+        doc.attach_shadow(host, lumen_dom::ShadowRootMode::Open);
+        let sheet = parse_css("button:hover { color: red; }");
+        let deep = doc.find_by_id("deep").expect("#deep");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(index.is_conservative(), "a shadow root must disable narrowing (shadow sheets unscanned)");
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(deep), &index);
+        assert!(!roots.is_empty(), "the conservative path must keep the flipped chain, got {roots:?}");
+    }
+
+    #[test]
+    fn state_nested_in_is_matches_conservatively() {
+        // `:is(.tab:hover, .x)` — the narrowing cannot tell which branch the
+        // state sits in, so the whole compound is treated as "could match
+        // anything". Over-approximating costs narrowing, never correctness.
+        let html = r#"<main><div id="deep"></div></main>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css(":is(.tab:hover, .x) { color: red; }");
+        let deep = doc.find_by_id("deep").expect("#deep");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(!index.is_conservative(), ":is() with dynamic state is not the :has() case");
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(deep), &index);
+        assert!(
+            roots.len() > 1,
+            "a compound whose state hides in a nested list must keep the whole chain, got {roots:?}",
+        );
+    }
+
+    #[test]
+    fn focus_within_on_a_matching_ancestor_stays_in_the_root_set() {
+        // `:focus-within` is the one dynamic-state pseudo that legitimately
+        // matches ancestors, and chrome.html uses exactly this shape
+        // (`.omnibox:focus-within`) — the narrowing must keep the matching
+        // ancestor while still dropping the ones above it.
+        let html = r#"<main><div id="ob" class="omnibox"><input id="inp"></div></main>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css(".omnibox:focus-within { border-color: blue; }");
+        let ob = doc.find_by_id("ob").expect("#ob");
+        let inp = doc.find_by_id("inp").expect("#inp");
+
+        let index = restyle_state_index(&doc, &sheet);
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(inp), &index);
+        assert_eq!(
+            roots,
+            [ob].into_iter().collect::<HashSet<_>>(),
+            "the `.omnibox` ancestor observes `:focus-within`; nothing above it does",
         );
     }
 }

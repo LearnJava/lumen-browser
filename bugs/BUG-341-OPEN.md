@@ -1845,6 +1845,129 @@ separated:
   it is still switched off; with `Arc` styles and a now-*empty* dirty set, its
   `index_by_node` trade-off is worth re-measuring — the mechanism may finally pay.
 
+## S14 — the flipped ancestor chain nobody's selectors could react to
+
+The number S13 pointed at: `precompute_counters` was 9-12 ms of `CC12_HOVER`'s
+~13 ms cycle, all of it the conservative interactive-state root-set.
+
+### Why the root-set covered the document
+
+`:hover` matches the element under the pointer *and every ancestor of it* (CSS
+Selectors L4 §4.3), so a "nothing was hovered → `#sidebar` is hovered"
+transition really does flip the `:hover` boolean on `#sidebar`, `<body>`,
+`<html>` and the document node. `restyle_root_set_for_state_change` put all of
+them in the root-set, and a dirty root at the document node forces
+`counters::walk`'s `force` flag on for the whole tree — a full re-cascade of
+every node, every other cycle. S13's census had already proved the result was
+byte-identical for all 318 boxes.
+
+The flip is real. What was missing is that a flip is only *observable* through a
+compound that depends on dynamic state **and matches the flipped node**:
+`chrome.html`'s hover rules are `button:hover`, `.tab-row:hover`,
+`.hbar-tab:hover` and ~30 more of the same shape, and not one of them can match
+`<body>`, `<html>` or `aside#sidebar`.
+
+### The slice
+
+`restyle_state_needs_fanout(doc, sheet) -> bool` becomes
+`restyle_state_index(doc, sheet) -> StateRestyleIndex<'_>`, built from the same
+single scan of the sheet S7 already ran, now also collecting every compound that
+depends on dynamic state (`collect_state_compounds`) and a `conservative` flag.
+`restyle_root_set_for_state_change` takes the index and drops any flipped node
+that `state_flip_can_matter` rejects — no state-dependent compound can even
+structurally match it (`compound_could_match_after_state_flip`: every part must
+match, with the dynamic-state pseudo-classes and any pseudo-element treated as
+"possible", since their value is exactly what's in question).
+
+Soundness rests on one property: every nested-selector form the engine looks
+through for dynamic state (`:not()`, `:is()`, `:where()`, `:host()`,
+`:nth-child(… of …)`) evaluates its inner selector against the *same* node as
+the compound carrying it. `:has()` is the exception — it binds the state to a
+different node than the subject — so a sheet with a dynamic `:has()`, or a
+document with any shadow root (whose sheets are not scanned, same carve-out S7
+made), sets `conservative` and keeps the pre-S14 behaviour exactly.
+
+Over-approximation is one-directional: a compound whose state hides inside a
+nested list (`:is(.tab:hover, .x)`) has that part treated as matching anything,
+so it keeps the whole chain. That costs narrowing, never correctness.
+
+### Gates
+
+`bug341_s14_hover_flip_no_rule_can_react_to_recascades_nothing` (lumen-shell,
+runs by default) asserts in this order: the two *full* cascades — nothing
+hovered vs `#sidebar` hovered — are equal (ground truth, no incremental
+machinery involved); the narrowed root-set for that transition is **empty**
+(the count gate, S8's lesson: a mechanism that narrows nothing still reproduces
+the full cascade exactly, just slowly); and the incremental cascade run under
+that empty root-set equals the full post-transition cascade bit-for-bit.
+
+`mutation_incremental_restyle_hover_entering_from_nothing_matches_full`
+(lumen-layout) is the under-approximation gate: hover enters from nothing onto a
+deep `.icon`, where two flipped ancestors (`.card`, `.item`) *do* carry hover
+rules and one of them (`.item:hover .icon`) restyles a descendant — dropping
+either would leave a stale style and a wrong height.
+
+Seven unit tests in `style::state_fanout_tests` cover the shapes: chain fully
+dropped, only the matching ancestor kept, `::before` on a hover compound,
+dynamic `:has()`, shadow root, state nested in `:is()`, and `:focus-within` on a
+matching ancestor (chrome's `.omnibox:focus-within` — the one dynamic-state
+pseudo that legitimately matches ancestors).
+
+### Measurement
+
+Interleaved A/B (main, S14, ×3), dev-release, `cc12_chrome_perf_gate`:
+
+| | main min | S14 min |
+|---|---:|---:|
+| `CC12_HOVER` | 14.09 / 14.46 / 14.95 | **3.63 / 3.70 / 4.03** |
+| `CC12_KEY` | 3.86 / 3.88 / 3.82 | 3.76 / 4.01 / 3.96 |
+
+No overlap on `CC12_HOVER` — ≈3.7× faster (−74 %). `CC12_KEY` is unchanged, as
+expected: its hover is `None` on every cycle, so its state root-set was already
+empty and this slice cannot touch it.
+
+Per stage (`LUMEN_PROFILE_TREE=1`, medians over 70 cycles):
+
+| Stage | `CC12_HOVER` S13 → S14 | `CC12_KEY` S13 → S14 |
+|---|---|---|
+| `precompute_counters` | 9-12 → **0.41 ms** | 0.5-0.8 → 0.56 ms |
+| `build_box` | 2.2-2.4 → 2.45 ms | 1.7-2.2 → 2.23 ms |
+| `graft_geometry` | 1.0-1.2 → 0.67 ms | 0.5-0.6 → 0.61 ms |
+| `lay_out` | 0.00 → 0.00 ms | 0.08 → 0.11 ms |
+
+The bench's own bookkeeping moved too: `clone_styles` (the per-cycle
+`CounterMap::styles().clone()`) fell 0.86 → 0.02 ms, because the old map's
+`Arc<ComputedStyle>`s are now shared with the new one instead of being the last
+reference to 828 freshly-built styles that had to be dropped.
+
+### A pre-existing hole this slice surfaced
+
+Writing the under-approximation gate turned up **BUG-355**: when an *ancestor's*
+geometry-affecting style changes (`.card:hover { padding: 9px }`), its
+clean-grafted descendants keep their previous used width — `graft_geometry`
+compares each box's own style only, and `lay_out` translates a clean subtree in
+O(1) without resizing it. Reproduced with every node forced into `dirty_roots`,
+so it is independent of the root-set and predates S14; filed separately, and the
+S14 test carries the repro in a comment.
+
+### Where this leaves CC-12
+
+Still red. Budget 2 ms p95; by min `CC12_HOVER` is now 3.6-4.0 ms and
+`CC12_KEY` 3.8-4.0 ms — a gap of ≈2× on min (p95 on this loaded machine runs
+8-10 ms, ≈4-5×; the two scenarios have converged and neither is dominated by the
+cascade any more).
+
+**`build_box` is now the largest stage on both scenarios** (2.2-2.5 ms of a
+~3.7-3.9 ms cycle): the whole box tree is rebuilt every cycle only to be grafted
+straight back onto the previous geometry. That is precisely what S4's
+`incremental_build_box` was written for, and it is still switched off — S4's
+honest measurement rejected it because `index_by_node` (a full walk + hash of
+the previous tree per call) cost more than the ~8 % of `build_box` it saved.
+Both halves of that trade have changed since: `build_box` is now ~60 % of the
+cycle rather than 8 %, styles are `Arc`s, and the dirty set is empty on both
+fixtures, so `clean_subtrees` should license reusing nearly the whole tree.
+Re-measure it before designing anything new.
+
 ## Repro
 
 ```bash

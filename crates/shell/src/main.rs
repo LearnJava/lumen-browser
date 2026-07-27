@@ -8768,25 +8768,25 @@ impl Lumen {
                 // BUG-341 S7: computed once per pass, not once per axis — the
                 // stylesheet/shadow-DOM shape doesn't change between the three
                 // hover/focus/active calls below.
-                let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(doc, sheet);
+                let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
                 let mut dirty_roots = std::collections::HashSet::new();
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_hover,
                     new_interactive.0,
-                    needs_fanout,
+                    &state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_focus,
                     new_interactive.1,
-                    needs_fanout,
+                    &state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                     doc,
                     prev_active,
                     new_interactive.2,
-                    needs_fanout,
+                    &state_index,
                 ));
                 // BUG-341 S6: DOM-mutation root-set, unioned with the
                 // interactive-state one above — `touched` is empty on a pure
@@ -9751,16 +9751,16 @@ impl Lumen {
             let (prev_hover, prev_focus, prev_active) = self.page_prev_interactive;
             let doc = src.document.lock().unwrap();
             // BUG-341 S7: computed once per pass, reused across all three axes.
-            let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(&doc, &src.stylesheet);
+            let state_index = lumen_layout::style::restyle_state_index(&doc, &src.stylesheet);
             let mut dirty_roots = std::collections::HashSet::new();
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                &doc, prev_hover, new_interactive.0, needs_fanout,
+                &doc, prev_hover, new_interactive.0, &state_index,
             ));
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                &doc, prev_focus, new_interactive.1, needs_fanout,
+                &doc, prev_focus, new_interactive.1, &state_index,
             ));
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                &doc, prev_active, new_interactive.2, needs_fanout,
+                &doc, prev_active, new_interactive.2, &state_index,
             ));
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                 &doc,
@@ -24600,16 +24600,16 @@ mod tests {
         let (layout, counters) = match state.prev_pristine_layout.as_ref() {
             Some(prev) => {
                 let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
-                let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(doc, sheet);
+                let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
                 let mut dirty_roots = std::collections::HashSet::new();
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                    doc, prev_hover, new_interactive.0, needs_fanout,
+                    doc, prev_hover, new_interactive.0, &state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                    doc, prev_focus, new_interactive.1, needs_fanout,
+                    doc, prev_focus, new_interactive.1, &state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                    doc, prev_active, new_interactive.2, needs_fanout,
+                    doc, prev_active, new_interactive.2, &state_index,
                 ));
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
                     doc,
@@ -24858,6 +24858,97 @@ mod tests {
         );
     }
 
+    /// BUG-341 S14 regression gate: a hover flip no rule in the sheet can
+    /// react to must re-cascade nothing at all.
+    ///
+    /// This is CC-12's own `#sidebar`/`None` toggle — the shape S3 documented
+    /// as its worst case and every slice since then worked around. `:hover`
+    /// genuinely does flip on every ancestor of `#sidebar` up to the document
+    /// root (CSS Selectors L4 §4.3), so the pre-S14 root-set contained the root
+    /// and forced a whole-document re-cascade — 6.8-8.4 ms of a ~12 ms cycle,
+    /// producing byte-identical styles for all 318 boxes (S13's census proved
+    /// the "identical" half).
+    ///
+    /// Two asserts, in this order on purpose. The first is the *ground truth*:
+    /// the two cascades really are equal, independently of any narrowing code.
+    /// The second is the **count gate** — the root-set is empty — which is the
+    /// only thing that can fail if the narrowing silently stops narrowing: a
+    /// mechanism that reuses nothing still reproduces the full cascade exactly
+    /// (S8's lesson), just slowly. If `chrome.html` ever gains a rule that
+    /// really does restyle on `#sidebar:hover` or on one of its ancestors, both
+    /// asserts flip together and the fix is to point this test at a different
+    /// node, not to loosen it.
+    #[test]
+    fn bug341_s14_hover_flip_no_rule_can_react_to_recascades_nothing() {
+        use lumen_layout::counters::{
+            incremental_precompute_counters, precompute_counters, set_incremental_restyle, RestyleDelta,
+        };
+        use lumen_layout::style::{restyle_root_set_for_state_change, restyle_state_index};
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        lumen_chrome::bind_model(&mut doc, &cc12_bench_model(""));
+        let viewport = Size::new(1280.0, 800.0);
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let sidebar = doc
+            .find_by_id(lumen_chrome::ids::SIDEBAR)
+            .expect("chrome preview must have #sidebar");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(
+            !index.is_conservative(),
+            "chrome.html has no dynamic `:has()` and the chrome document has no shadow roots — \
+             if either changes, the per-node narrowing turns itself off and CC-12's hover cycle \
+             silently returns to a whole-document re-cascade",
+        );
+        assert!(
+            index.state_compound_count() > 10,
+            "chrome.html has dozens of `:hover` rules; scanning found only {} — the narrowing \
+             would be trivially (and uselessly) correct on an empty compound list",
+            index.state_compound_count(),
+        );
+
+        // Ground truth, computed without any incremental machinery: nothing
+        // hovered vs `#sidebar` hovered produce the same cascade.
+        lumen_layout::set_interactive_state(None, None, None);
+        let none_map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        lumen_layout::set_interactive_state(Some(sidebar), None, None);
+        let hovered_map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        lumen_layout::clear_interactive_state();
+        assert!(none_map.styles().len() > 100, "chrome document should cascade a non-trivial node count");
+        assert_eq!(
+            none_map.styles(),
+            hovered_map.styles(),
+            "no rule in chrome.html reacts to hovering #sidebar, so both full cascades must agree",
+        );
+
+        // The count gate: the narrowed root-set for that transition is empty.
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(sidebar), &index);
+        assert!(
+            dirty_roots.is_empty(),
+            "hovering #sidebar flips `:hover` on {} node(s) the restyle root-set still keeps, but \
+             no selector in chrome.html can observe any of them (asserted above) — BUG-341 S14",
+            dirty_roots.len(),
+        );
+
+        // And the incremental cascade run under that empty root-set still
+        // reproduces the full post-transition cascade bit-for-bit.
+        lumen_layout::set_interactive_state(Some(sidebar), None, None);
+        let delta = RestyleDelta {
+            prev_styles: none_map.styles(),
+            dirty_roots,
+            dom_content_stable: true,
+        };
+        set_incremental_restyle(true);
+        let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, &delta);
+        set_incremental_restyle(false);
+        lumen_layout::clear_interactive_state();
+        assert_eq!(
+            incr.styles(),
+            hovered_map.styles(),
+            "incremental cascade with an empty root-set must equal the full post-transition cascade",
+        );
+    }
+
     /// BUG-341 S13 diagnostic: census of *why* `graft_geometry` refuses boxes
     /// on the two CC-12 interaction shapes.
     ///
@@ -25048,8 +25139,8 @@ mod tests {
         let full_summary = full_stats.summary().expect("samples collected");
         eprintln!("{}", full_summary.display_with("BUG341_S3_FULL_PRECOMPUTE"));
 
-        let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(&doc, &sheet);
-        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), needs_fanout);
+        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), &state_index);
         let dirty_count = dirty_roots.len();
         let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, dom_content_stable: true };
         set_incremental_restyle(true);
@@ -25171,8 +25262,8 @@ mod tests {
         let full_summary = full_stats.summary().expect("samples collected");
         eprintln!("{}", full_summary.display_with("BUG341_S4_FULL_BUILD_BOX"));
 
-        let needs_fanout = lumen_layout::style::restyle_state_needs_fanout(&doc, &sheet);
-        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), needs_fanout);
+        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), &state_index);
         let delta = RestyleDelta {
             prev_styles: baseline.styles(),
             dirty_roots,
