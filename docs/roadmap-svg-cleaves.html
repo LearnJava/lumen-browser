@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-27",
  "counts": {
-  "open": 50,
+  "open": 52,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 322,
+ "total_bugs": 324,
  "phases": [
   {
    "id": "P0",
@@ -2094,9 +2094,13 @@
       {
        "id": "WPT-VENDOR-editing",
        "title": "WPT: вендорить + прогнать категорию `editing`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-27: вендорена (`tests/wpt/editing/`, 379 файлов: `crashtests/` 144, `other/` 97, `run/` 43, `data/` 36, `whitespaces/` 19, `plaintext-only/` 13, `manual/` 9, `edit-context/` 9, `include/` 6, плюс `META.yml`/`README`/`event.html`), скоуп ⬜ (legacy-editing — `document.execCommand`/`contenteditable`/`designMode` — плюс современный EditContext API). Внекатегорийные хелперы `/resources/testdriver*.js`, `/common/subset-tests.js`, `/img/lion.svg` не довендорены (та же методология, что `FileAPI`/`ai`). `run_report.py --all --root editing --recursive` отобрал 700 id (321 файл, `run/*.html` раскрываются в `?N-M`-варианты), добежал за ~34 мин: 86/700 harness OK, 14/2310 сабтестов passed, 429 SKIP (`Executor does not support testdriver.js` — 61% категории, редактирование по природе требует синтетического ввода), 183 TIMEOUT, 2 ERROR. Две доминирующие движковые причины: BUG-346 (не схлопываются `..`-сегменты — 614 из 723 HTTP-404 приходятся на СОБСТВЕННЫЕ вендоренные файлы категории, запрошенные через `..`; отсюда весь генерируемый `run/`-конформанс-набор не загрузил свой движок тестов — `EditorTestUtils is not defined` ×8324, `browserTests is not defined` ×109) и новый BUG-353 (`element.focus()`/`blur()`/`document.activeElement` отсутствуют в шиме целиком — 371 сабтест в 12 файлах). Полностью прошёл один файл — `other/removeformat_background_color.html` (6/6). Заведён BUG-353, остальное — уже заведённый BUG-346, известные гэпы исполнителя и ожидаемая нереализованность самой спеки редактирования",
+       "bugs": [
+        "BUG-353",
+        "BUG-346"
+       ]
       },
       {
        "id": "WPT-VENDOR-element-timing",
@@ -6241,6 +6245,20 @@
    "component": "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)",
    "date": null,
    "debtor": false
+  },
+  "BUG-352": {
+   "status": "open",
+   "title": "Адресная строка (omnibox) после нескольких быстрых навигаций подряд в одном окне/вкладке (типичный паттерн `wptrunner`) визуально превращается в наложенную кашу…",
+   "component": "paint (`crates/engine/paint/src/renderer.rs` frame-skip/`content_generation`/page-band caching — подозреваемое место)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-353": {
+   "status": "open",
+   "title": "`element.focus()`/`blur()` отсутствуют на ЛЮБОМ элементе (включая `<input>`/`<textarea>`/`document.body`), `document.activeElement` отсутствует вовсе, `document…",
+   "component": "js (`crates/js/src/dom.rs` — живой `Element`/`HTMLElement` и объект `document`), shell (`crates/shell/src/main.rs::focused_node` — уже существующее нативное состояние фокуса)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6596,6 +6614,9 @@
   ],
   "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg": [
    "BUG-277"
+  ],
+  "paint (`crates/engine/paint/src/renderer.rs` frame-skip/`content_generation`/page-band caching — подозреваемое место)": [
+   "BUG-352"
   ],
   "paint (`display_list.rs::emit_inline_run`)": [
    "BUG-289"
