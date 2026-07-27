@@ -67,6 +67,26 @@ visible: **the single passing subtest of the whole 52-test category** is
 which passes only because of this bug, while the other 50 subtests fail on
 `assert_implements: PerformanceElementTiming is not implemented`.
 
+**Second confirmation, WPT-VENDOR-event-timing (2026-07-28).** The `event-timing`
+category is almost entirely `testdriver.js`-bound (67 of its 71 ids SKIP), so
+exactly two tests executed — and *both* of them are feature-detection tests that
+land on this bug:
+
+* `supported-types.window.html` — `assert_implements(window.PerformanceEventTiming,
+  'Event Timing is not supported.')` fails: the interface does not exist, yet the
+  list advertises the entry types it backs.
+* `supported-types-consistent-with-self.html` — fails `assert_equals: expected
+  false but got true`. This test is written specifically to catch *this* class of
+  defect: it compares `supportedEntryTypes.includes('first-input')` /
+  `.includes('event')` against `'PerformanceEventTiming' in self` and requires the
+  two to agree. Lumen answers `true` / `false` — the exact inconsistency described
+  above, caught without needing any of the API to work.
+
+So the two categories whose entry types are mis-advertised (`element` from
+`element-timing`, `event`+`first-input` from `event-timing`) have now both been
+run, and both point at the same literal. `soft-navigation`/`longtask` are still
+unvendored — expect the same result there.
+
 ## Возможный фикс (не реализован в этой сессии)
 
 Two independent halves, both small:

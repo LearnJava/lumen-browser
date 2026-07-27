@@ -2145,9 +2145,12 @@
       {
        "id": "WPT-VENDOR-event-timing",
        "title": "WPT: вендорить + прогнать категорию `event-timing`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/event-timing/`, 78 файлов: 69 корневых `.html` — в т.ч. один `-manual` и два `.tentative.`, `idlharness.any.js`, `idlharness.window.js`, `supported-types.window.js`, `resources/` — `event-timing-test-utils.js`+`crossiframe-childframe.html`+`slow-image.py`, `META.yml`/`WEB_FEATURES.yml`, `LICENSE-WPT.md`), скоуп ⬜ (Event Timing API — `PerformanceEventTiming`, типы записей `event`/`first-input`, `performance.eventCounts`/`interactionCount`). Самый быстрый многотестовый прогон бэклога: ни одного `<meta name=variant>`, ни одного `.https.`-теста, 69 файлов дали ровно 71 id, `run_report.py --all --root event-timing --recursive` — **40 с**, **2/71 harness OK, 0/2 сабтестов**. Категория рекордно завязана на testdriver: **67 из 71 id — SKIP** (`Executor does not support testdriver.js`; Event Timing меряет задержку обработки реального ввода, поэтому почти каждый тест синтезирует клик/тап/клавишу через `test_driver.click`/`Actions` — 94%, больше в абсолюте, чем `accname` (19 id) и `attribution-reporting` (19 из 24)); 2 TIMEOUT — оба `idlharness.*` по известному survey-gap невендоренных `/resources/WebIDLParser.js`+`idlharness.js` (404 → `idl_test is not defined`), как в `audio-session`/`entries-api`/`element-timing`. Выполнились ровно два теста, оба feature-detection, оба на уже заведённом BUG-354: `supported-types.window.html` — FAIL `assert_implements(window.PerformanceEventTiming)`; `supported-types-consistent-with-self.html` — FAIL `expected false but got true`, тест ловит рассогласование напрямую (`PerformanceObserver.supportedEntryTypes` рекламирует `event`/`first-input`, а `'PerformanceEventTiming' in self` === false). Вторая категория после `element-timing` на том же захардкоженном списке `crates/js/src/dom.rs:11067`; в BUG-354 дописано подтверждение, новых багов не заведено. Проба `--dump-layout` вне WPT: Event Timing не реализован вовсе — `PerformanceEventTiming`/`EventCounts`/`performance.eventCounts`/`performance.interactionCount` все `undefined`, при этом `observe({entryTypes:['event']})` не бросает и молча ничего не доставляет",
+       "bugs": [
+        "BUG-354"
+       ]
       },
       {
        "id": "WPT-VENDOR-eventsource",
