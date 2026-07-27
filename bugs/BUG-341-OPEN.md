@@ -1447,6 +1447,112 @@ items, and `lay_out` (5.3 ms) + `build_box` (3.6 ms) together now rival the
 cascade stage. `cs_init` — the premise S10 was planned on — remains 0.76 ms and
 is not worth a slice.
 
+## S11 — `::-webkit-scrollbar*` only where a scrollbar can appear
+
+S10 left the scrollbar translation as the top item on `CC12_HOVER`: 356 of 828
+elements still ran three pseudo-element cascades because their
+pseudo-inheritance base differed from their parent's, and the base comparison
+that spared the other 472 cost ~2.4 ms by itself. S10 laid out two ways
+forward; the user chose the semantic one (2026-07-27).
+
+### The decision
+
+Recorded as [ADR-022](../docs/decisions/ADR-022-webkit-scrollbar-scroll-containers-only.md).
+The translation now runs only for elements that can actually show a scrollbar —
+`overflow-x`/`overflow-y` is `scroll` or `auto` (exactly the condition
+`lumen_paint::display_list::emit_scrollbars` and
+`box_tree::scrollbar_gutter_{inline,block}` use), plus the root element and
+`<body>` unconditionally, since those are the conventional target for styling
+the *page* scrollbar. One definition: `style::element_can_have_scrollbar`.
+
+It is a behaviour change, not a pure optimization. CC-CSS-1 translates the
+pseudo-elements onto the standard `scrollbar-width`/`scrollbar-color`, which are
+**inherited** (CSS Scrollbars L1 §2), so a rule matching a *non-scrollable*
+element used to write its result there and leak it to every descendant —
+including scrollable ones that matched no rule of their own. WebKit has no such
+inheritance, so the narrowing is also a fidelity fix.
+
+What did *not* change: the properties themselves still inherit. A bare
+`::-webkit-scrollbar { … }` — the common page idiom, and what
+`assets/chrome/chrome.html` writes — matches `<body>`, and the value reaches the
+whole page from there exactly as before. Lumen's chrome and both graphic tests
+(51, `1000000-final`) style scroll containers directly, so nothing they render
+changes.
+
+S10's node-independence fast path was **removed**, not kept alongside: it reused
+"the parent's already-computed result", which is only sound when some ancestor
+actually computed one. Under narrowing most ancestors no longer do.
+
+### Gates
+
+Counter gates as in S10, plus the two halves of the new semantics:
+
+| Test | Asserts |
+|---|---|
+| `style::tests::webkit_scrollbar_cascade_only_for_scroll_containers` | a scroll container is still styled; an element outside its subtree is not; exactly 3 elements cascade (html, body, the container) |
+| `style::tests::webkit_scrollbar_translation_does_not_leak_from_a_non_scrollable_element` | the removed behaviour: a rule on a non-scrollable element reaches neither it nor its scrollable descendant |
+| `style::tests::webkit_scrollbar_bare_rule_still_reaches_the_page_through_body` | the compatibility path — a bare rule matches `<body>` and inherits down |
+| `style::tests::webkit_scrollbar_cascade_skipped_for_overflow_hidden` | `overflow: hidden` scrolls but draws no bar, matching paint's condition |
+| `style::tests::standard_scrollbar_width_still_inherits` | the standard properties are untouched by the narrowing |
+
+The three pre-existing CC-CSS-1 tests (`webkit_scrollbar_width_maps_to_*`,
+`webkit_scrollbar_thumb_track_map_to_*`, `webkit_scrollbar_thumb_without_track_*`)
+now make their `<div>` a scroll container — they encoded the old "any element"
+behaviour.
+
+`cargo test -p lumen-layout`: 3295 passed, 2 failed (`ch`/`ex_approximated_as_half_em`,
+the pre-existing BUG-339 flake, reproduced on unmodified main).
+
+### Measurement
+
+Interleaved A/B (S10-main, S11, ×3), dev-release, comparing mins:
+
+| | main (S10) min | S11 min | main p50 | S11 p50 |
+|---|---:|---:|---:|---:|
+| `CC12_HOVER` | 22.7 / 21.0 / 24.1 | **16.4 / 16.9 / 17.4** | 26.1 / 27.4 / 37.6 | **19.9 / 19.6 / 21.0** |
+| `CC12_KEY` | 9.6 / 9.0 / 9.2 | **8.2 / 8.5 / 8.3** | 11.7 / 11.6 / 12.1 | **10.7 / 11.0 / 10.9** |
+
+≈25% off `CC12_HOVER`, ≈9% off `CC12_KEY` (the key cycle recomputes a dozen
+nodes, so it had little scrollbar cost left to lose). Note the absolute numbers
+are lower than S10's table on both sides — that run shared the machine with a
+parallel build; only the interleaved comparison is meaningful.
+
+Per stage after S11 (`LUMEN_PROFILE_TREE=1`, medians, quiet machine):
+
+| Stage | `CC12_HOVER` | `CC12_KEY` |
+|---|---:|---:|
+| `precompute_counters` | 8.5 ms | 0.58 ms |
+| `lay_out` | 4.4 ms | 3.9 ms |
+| `build_box` | 2.9 ms | 2.5 ms |
+| `graft_geometry` | 0.97 ms | 0.68 ms |
+| whole pass | 17.6 ms | 8.6 ms |
+
+Inside `compute_style` on `CC12_HOVER` (detail run, 828 nodes): `cs_apply`
+2.76 ms, `cs_match` 2.21 ms, `cs_init` 0.60 ms, **`cs_post` 0.49 ms** (was
+8.13 ms after S10 — the scrollbar translation is gone from the per-node path),
+`cs_ua_hints` 0.32 ms, `cs_revert_prepass` 0.24 ms.
+
+### Where this leaves CC-12
+
+Still red, but the shape has changed: the cascade is no longer the dominant
+stage. Budget 2 ms; `CC12_HOVER` ~16-21 ms and `CC12_KEY` ~8-11 ms — a gap of
+~4-10× (was ~8-20× after S10).
+
+The next items, in order:
+
+* `lay_out` (4.4 / 3.9 ms) — now the single largest stage on both scenarios,
+  and untouched since S8's `graft_geometry` fix. `graft_geometry` reuses
+  geometry for structurally-identical subtrees; what `lay_out` still does for
+  the rest has never been profiled below stage level.
+* `build_box` (2.9 / 2.5 ms) — S4 built a reuse mechanism for it
+  (`incremental_build_box`) and measured it as a net loss because
+  `index_by_node` re-hashes the whole previous tree per call; that index, not
+  the idea, is what needs fixing.
+* `cs_apply` (2.8 ms) + `cs_match` (2.2 ms) — the irreducible-looking half of
+  the cascade: declaration application and selector matching for the 828 nodes
+  the hover flip actually dirties. Narrowing *which* nodes are dirty (S3-S7's
+  line of work) would cut both at once.
+
 ## Repro
 
 ```bash
