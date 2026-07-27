@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-27",
+ "generated": "2026-07-28",
  "counts": {
-  "open": 58,
+  "open": 60,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 330,
+ "total_bugs": 332,
  "phases": [
   {
    "id": "P0",
@@ -2134,13 +2134,6 @@
         "BUG-358",
         "BUG-359"
        ]
-      },
-      {
-       "id": "WPT-VENDOR-encrypted-media",
-       "title": "WPT: вендорить + прогнать категорию `encrypted-media`",
-       "status": "planned",
-       "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
       },
       {
        "id": "WPT-VENDOR-entries-api",
@@ -6313,6 +6306,20 @@
    "component": "js (`crates/js/src/dom.rs:11540` `window.open`; `dom.rs:7450-7475` `_lumen_navigate_or_fragment`), shell (`crates/shell/src/main.rs:600-614` `resolve_js_navigation`, `main.rs:12836-12852` — слив popup-запросов)",
    "date": null,
    "debtor": false
+  },
+  "BUG-360": {
+   "status": "open",
+   "title": "Event-handler-атрибуты HTML не работают вовсе: `<div onclick=\"…\">` (как из парсера, так и через `setAttribute`) хранится как обычный атрибут и никогда не компил…",
+   "component": "js (`crates/js/src/dom.rs:5929` — `dispatchEvent` живого элемента; `dom.rs:3813` `_lumen_dispatch`, `dom.rs:3831` `_lumen_dispatch_bubble`, `dom.rs:3869` `_lumen_dispatch_rich`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-361": {
+   "status": "open",
+   "title": "`document.permissionsPolicy.features()` отдаёт `Object.keys(_ppStore)` — ключи политики, объявленной HTTP-заголовком `Permissions-Policy`, — вместо требуемого с…",
+   "component": "js (`crates/js/src/permissions_policy.rs:47-49` `FeaturePolicy.prototype.features`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6423,11 +6430,17 @@
   "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)": [
    "BUG-340"
   ],
+  "js (`crates/js/src/dom.rs:5929` — `dispatchEvent` живого элемента; `dom.rs:3813` `_lumen_dispatch`, `dom.rs:3831` `_lumen_dispatch_bubble`, `dom.rs:3869` `_lumen_dispatch_rich`)": [
+   "BUG-360"
+  ],
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"
   ],
   "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
    "BUG-344"
+  ],
+  "js (`crates/js/src/permissions_policy.rs:47-49` `FeaturePolicy.prototype.features`)": [
+   "BUG-361"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
