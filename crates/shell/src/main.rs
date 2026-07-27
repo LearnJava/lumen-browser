@@ -6236,7 +6236,9 @@ fn relayout_page_incremental_restyle(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
-    prev: &lumen_layout::LayoutBox,
+    // BUG-341 S19: consumed — the reusable subtrees are moved out of it into
+    // the tree returned. See `layout_mutation_incremental_restyle`.
+    prev: lumen_layout::LayoutBox,
     delta: &lumen_layout::counters::RestyleDelta<'_>,
 ) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
     compute_layout_incremental_restyle(
@@ -6254,7 +6256,9 @@ fn compute_layout_incremental_restyle(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
-    prev: &lumen_layout::LayoutBox,
+    // BUG-341 S19: consumed — the reusable subtrees are moved out of it into
+    // the tree returned. See `layout_mutation_incremental_restyle`.
+    prev: lumen_layout::LayoutBox,
     delta: &lumen_layout::counters::RestyleDelta<'_>,
 ) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
@@ -8778,9 +8782,14 @@ impl Lumen {
         let forced_colors = lumen_layout::forced_colors_active();
         let viewport_stable = self.chrome_prev_viewport == Some(viewport);
         let forced_colors_stable = self.chrome_prev_forced_colors == forced_colors;
+        // BUG-341 S19: `take()`, not `as_ref()` — the incremental path below
+        // *moves* the reusable subtrees out of the previous tree instead of
+        // copying them, so the previous tree does not survive the call. The
+        // field is reassigned from this pass's own result a few lines further
+        // down, on both arms.
         let (mut layout, cascade_styles) = match (
             viewport_stable && forced_colors_stable,
-            self.chrome_prev_pristine_layout.as_ref(),
+            self.chrome_prev_pristine_layout.take(),
         ) {
             (true, Some(prev)) => {
                 let (prev_hover, prev_focus, prev_active) = self.chrome_prev_interactive;
@@ -9776,7 +9785,12 @@ impl Lumen {
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
         let new_interactive = (self.hovered_nid, self.focused_node, self.active_nid);
         let touched = self.js_ctx.as_ref().map(|js| js.take_dom_touched()).unwrap_or_default();
-        let restyle_attempt = if !touched.unattributed
+        // BUG-341 S19: the two paths are one `if`/`else` rather than an
+        // `Option` plus a `match` because the restyle path now *consumes*
+        // `prev_lb` (it moves the reusable subtrees straight into the fresh
+        // tree instead of copying them), and only this shape lets the compiler
+        // see that the fallback below runs exactly when the move did not.
+        let (new_dl, new_lb, fresh_cascade_styles) = if !touched.unattributed
             && let Some(prev_styles) = self.page_prev_cascade_styles.as_ref()
         {
             let (prev_hover, prev_focus, prev_active) = self.page_prev_interactive;
@@ -9822,23 +9836,17 @@ impl Lumen {
             // box-build reuse rides on the same content precondition computed
             // just above.
             lumen_layout::box_tree::set_incremental_box_build(true);
-            let result = relayout_page_incremental_restyle(
-                src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb, &delta,
+            let (dl, lb, counters) = relayout_page_incremental_restyle(
+                src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, prev_lb, &delta,
             );
             lumen_layout::box_tree::set_incremental_box_build(false);
             lumen_layout::counters::set_incremental_restyle(false);
-            Some(result)
+            (dl, lb, Some(counters.styles().clone()))
         } else {
-            None
-        };
-        let (new_dl, new_lb, fresh_cascade_styles) = match restyle_attempt {
-            Some((dl, lb, counters)) => (dl, lb, Some(counters.styles().clone())),
-            None => {
-                let (dl, lb) = relayout_page_incremental(
-                    src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb,
-                );
-                (dl, lb, None)
-            }
+            let (dl, lb) = relayout_page_incremental(
+                src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb,
+            );
+            (dl, lb, None)
         };
         lumen_layout::clear_interactive_state();
         lumen_layout::set_cv_scroll(0.0, 0.0);
@@ -24657,7 +24665,7 @@ mod tests {
         let new_interactive = (hover, None, None);
 
         let t0 = std::time::Instant::now();
-        let (layout, counters) = match state.prev_pristine_layout.as_ref() {
+        let (layout, counters) = match state.prev_pristine_layout.take() {
             Some(prev) => {
                 let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
                 let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
@@ -25060,6 +25068,64 @@ mod tests {
         );
     }
 
+    /// BUG-341 S19 regression gate: finding the reusable subtrees must cost the
+    /// spine above them, not a walk of the whole previous tree.
+    ///
+    /// The reuse unit became a *move* in S19 (the subtrees are taken out of the
+    /// previous tree instead of deep-copied out of it — see
+    /// `lumen-layout`'s `bug341_s19_reuse_takes_the_subtree_out_of_prev_
+    /// instead_of_copying_it` for that half), and carving the index that way
+    /// stops at each reusable subtree's root instead of hashing every box the
+    /// way S4's `index_by_node` did. This is the production-document counter for
+    /// it: on a keystroke, chrome's 318 boxes are found through ~19.
+    ///
+    /// A counter, not wall-clock — an index that walks the whole tree again
+    /// produces the identical result, and 0.02 ms on this fixture is far inside
+    /// the machine noise the whole cycle sits in.
+    #[test]
+    fn bug341_s19_reuse_index_walks_the_spine_not_the_previous_tree() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        let mut first_full_built = 0;
+        let mut last = lumen_layout::box_tree::BoxBuildStats::default();
+        for i in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let (_, bb) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut state);
+            if i == 0 {
+                first_full_built = bb.built;
+            }
+            last = bb;
+        }
+
+        assert!(
+            first_full_built > 100,
+            "the first (full) cycle should build a non-trivial chrome tree, got {first_full_built}",
+        );
+        assert!(
+            last.reused >= 5,
+            "a keystroke must still take whole subtrees out of the previous tree — {last:?}",
+        );
+        assert!(
+            last.prev_index_visited < 50,
+            "{} boxes of the previous tree were walked to find {} reusable subtrees on a keystroke \
+             that rebuilds ~28 of 318 — the index is being built over the whole tree again \
+             (S4's `index_by_node`), not carved out of the spine. Census: {last:?}. If \
+             chrome.html gains structure that genuinely rebuilds a large region on every \
+             keystroke, record the count that structure accounts for; do not turn this into a \
+             percentage of whatever the code currently does.",
+            last.prev_index_visited,
+            last.reused,
+        );
+    }
+
     /// BUG-341 S14 regression gate: a hover flip no rule in the sheet can
     /// react to must re-cascade nothing at all.
     ///
@@ -25384,7 +25450,7 @@ mod tests {
             let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
             lumen_layout::set_interactive_state(None, None, None);
 
-            let (layout, counters) = match state.prev_pristine_layout.as_ref() {
+            let (layout, counters) = match state.prev_pristine_layout.take() {
                 Some(prev) => {
                     let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
                     let dirty_roots = lumen_layout::style::restyle_root_set_for_node_change(
@@ -25620,7 +25686,7 @@ mod tests {
             lumen_layout::box_tree::set_box_build_diagnostics(last);
             let _ = lumen_layout::counters::take_cascade_stats();
             let _ = lumen_layout::style::take_compute_style_calls();
-            let (layout, counters) = match state.prev_pristine_layout.as_ref() {
+            let (layout, counters) = match state.prev_pristine_layout.take() {
                 Some(prev) => {
                     let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
                     let dirty_roots = lumen_layout::style::restyle_root_set_for_node_change(
@@ -25651,16 +25717,19 @@ mod tests {
             let bb = lumen_layout::box_tree::take_box_build_stats();
             let cs = lumen_layout::counters::take_cascade_stats();
             let full_cascades = lumen_layout::style::take_compute_style_calls();
-            let (clone_ns, clone_boxes) = lumen_layout::box_tree::take_box_clone_stats();
+            let copy = lumen_layout::box_tree::take_box_copy_stats();
             eprintln!(
                 "[s18-census] cycle={i} cascade_recomputed={} cascade_reused={} \
                  boxes_built={} boxes_reused={} compute_style_calls={full_cascades} \
-                 subtree_clone={:.3}ms over {clone_boxes} boxes",
+                 subtree_reuse={:.3}ms over {} boxes; prev_index={:.3}ms over {} boxes",
                 cs.recomputed,
                 cs.reused,
                 bb.built,
                 bb.reused,
-                clone_ns as f64 / 1e6,
+                copy.reuse_ns as f64 / 1e6,
+                copy.reuse_boxes,
+                copy.index_ns as f64 / 1e6,
+                copy.index_boxes,
             );
 
             if last {
@@ -25777,6 +25846,122 @@ mod tests {
             state.prev_pristine_layout = Some(layout.clone());
             state.prev_cascade_styles = counters.styles().clone();
             lumen_layout::clear_interactive_state();
+        }
+    }
+
+    /// Boxes in `b`'s subtree, inclusive — census only.
+    fn census_count_boxes(b: &lumen_layout::LayoutBox) -> u64 {
+        1 + b.children.iter().map(census_count_boxes).sum::<u64>()
+    }
+
+    /// BUG-341 S19 diagnostic: census of the whole-tree **copies** an
+    /// incremental cycle makes, as opposed to the boxes it builds.
+    ///
+    /// S18 drove the graft down to O(1) per reused subtree and left the copies
+    /// as the largest remaining items. This prints, per cycle and per scenario,
+    /// the three the queue names: the reuse copy taken out of `prev` inside
+    /// `build_box_or_reuse`, the index walk over `prev` that feeds it, and the
+    /// pipeline's own `layout.clone()` that persists the next cycle's `prev`
+    /// — each with the number of boxes it touched, so a later run can tell
+    /// "the copy got cheaper" from "the region got smaller".
+    ///
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s19_copy_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S19) — see doc comment for run command"]
+    fn bug341_s19_copy_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        for scenario in ["KEY", "HOVER"] {
+            let mut state = Cc12IncrementalState::default();
+            let mut typed = String::new();
+            for i in 0..6 {
+                let (model, hover) = if scenario == "KEY" {
+                    typed.push('a');
+                    (cc12_bench_model(&typed), None)
+                } else {
+                    (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+                };
+                // Diagnostics on for the last two cycles only: the census
+                // traversals they add are themselves measurable, and the first
+                // cycles are the cold full-layout ones anyway.
+                lumen_layout::box_tree::set_box_build_diagnostics(i >= 4);
+                let prev_boxes =
+                    state.prev_pristine_layout.as_ref().map_or(0, census_count_boxes);
+                let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+                lumen_layout::set_interactive_state(hover, None, None);
+                let (layout, counters) = match state.prev_pristine_layout.take() {
+                    Some(prev) => {
+                        let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
+                        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+                        let mut dirty_roots = std::collections::HashSet::new();
+                        for (was, now) in [
+                            (prev_hover, hover),
+                            (prev_focus, None),
+                            (prev_active, None),
+                        ] {
+                            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                                &doc, was, now, &state_index,
+                            ));
+                        }
+                        let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                            &doc,
+                            chrome_node_changes(&touched),
+                            &node_index,
+                        ));
+                        let delta = lumen_layout::counters::RestyleDelta {
+                            prev_styles: &state.prev_cascade_styles,
+                            dirty_roots,
+                            content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        };
+                        lumen_layout::counters::set_incremental_restyle(true);
+                        lumen_layout::box_tree::set_incremental_box_build(true);
+                        let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                        );
+                        lumen_layout::box_tree::set_incremental_box_build(false);
+                        lumen_layout::counters::set_incremental_restyle(false);
+                        result
+                    }
+                    None => lumen_layout::layout_measured_hyp_with_counters(
+                        &doc, &sheet, viewport, &measurer, &hyp, false,
+                    ),
+                };
+                let bb = lumen_layout::box_tree::take_box_build_stats();
+                let copy = lumen_layout::box_tree::take_box_copy_stats();
+                let t = std::time::Instant::now();
+                let persisted = layout.clone();
+                let clone_tree_ns = t.elapsed().as_nanos() as u64;
+                let clone_tree_boxes = census_count_boxes(&persisted);
+                let cs = lumen_layout::counters::take_cascade_stats();
+                if i >= 4 {
+                    eprintln!(
+                        "[s19-census] {scenario} cycle={i} prev_boxes={prev_boxes} \
+                         cascade_recomputed={} boxes_built={} boxes_reused={} | \
+                         subtree_reuse={:.3}ms/{} boxes | prev_index={:.3}ms/{} boxes | \
+                         clone_tree={:.3}ms/{clone_tree_boxes} boxes",
+                        cs.recomputed,
+                        bb.built,
+                        bb.reused,
+                        copy.reuse_ns as f64 / 1e6,
+                        copy.reuse_boxes,
+                        copy.index_ns as f64 / 1e6,
+                        copy.index_boxes,
+                        clone_tree_ns as f64 / 1e6,
+                    );
+                }
+                lumen_layout::box_tree::set_box_build_diagnostics(false);
+                state.prev_pristine_layout = Some(persisted);
+                state.prev_cascade_styles = counters.styles().clone();
+                state.prev_interactive = (hover, None, None);
+                lumen_layout::clear_interactive_state();
+            }
         }
     }
 
@@ -25997,7 +26182,7 @@ mod tests {
         // first call has no real "prev" yet, so pass an unused placeholder
         // (never consulted while the flag is off).
         set_incremental_box_build(false);
-        let unused_placeholder = lumen_layout::LayoutBox {
+        let mut unused_placeholder = lumen_layout::LayoutBox {
             node: doc.root(),
             rect: Rect::ZERO,
             style: std::sync::Arc::new(root_style.clone()),
@@ -26013,16 +26198,21 @@ mod tests {
         lumen_layout::set_interactive_state(Some(tab_a), None, None);
         let baseline = precompute_counters(&doc, &sheet, viewport, &flat, false);
         let prev_tree = incremental_build_box(
-            &doc, &sheet, doc.root(), &root_style, viewport, &flat, &baseline, &registry, false, &unused_placeholder,
+            &doc, &sheet, doc.root(), &root_style, viewport, &flat, &baseline, &registry, false, &mut unused_placeholder,
         );
 
         let mut full_stats = lumen_paint::FrameStats::new();
         for i in 0..WARMUP + SAMPLES {
             lumen_layout::set_interactive_state(Some(tab_b), None, None);
             let map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+            // BUG-341 S19: each iteration gets its own `prev` — the incremental
+            // path moves the reusable subtrees out of it, so a shared one would
+            // be empty from the second sample on. The copy is outside the timed
+            // region, exactly like the cascade above it.
+            let mut prev_copy = prev_tree.clone();
             let t0 = std::time::Instant::now();
             let tree = incremental_build_box(
-                &doc, &sheet, doc.root(), &root_style, viewport, &flat, &map, &registry, false, &prev_tree,
+                &doc, &sheet, doc.root(), &root_style, viewport, &flat, &map, &registry, false, &mut prev_copy,
             );
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             if i >= WARMUP {
@@ -26047,9 +26237,11 @@ mod tests {
         for i in 0..WARMUP + SAMPLES {
             lumen_layout::set_interactive_state(Some(tab_b), None, None);
             let map = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, &delta);
+            // See the full-rebuild loop above: one fresh `prev` per sample.
+            let mut prev_copy = prev_tree.clone();
             let t0 = std::time::Instant::now();
             let tree = incremental_build_box(
-                &doc, &sheet, doc.root(), &root_style, viewport, &flat, &map, &registry, false, &prev_tree,
+                &doc, &sheet, doc.root(), &root_style, viewport, &flat, &map, &registry, false, &mut prev_copy,
             );
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             if i >= WARMUP {
@@ -26068,7 +26260,7 @@ mod tests {
         lumen_layout::set_interactive_state(Some(tab_b), None, None);
         let full_after_map = precompute_counters(&doc, &sheet, viewport, &flat, false);
         let full_after_tree = incremental_build_box(
-            &doc, &sheet, doc.root(), &root_style, viewport, &flat, &full_after_map, &registry, false, &prev_tree,
+            &doc, &sheet, doc.root(), &root_style, viewport, &flat, &full_after_map, &registry, false, &mut prev_tree.clone(),
         );
         lumen_layout::clear_interactive_state();
         let incr_tree = last_incr_tree.expect("at least one sample");

@@ -58,6 +58,18 @@ impl DirtyBits {
     /// path, and a thread-local one would silently lose everything built on a
     /// worker (the S15 trap).
     pub const REUSED_SUBTREE: Self = DirtyBits(0b1000);
+    /// BUG-341 S19 — this box in a *previous* tree is a husk: its subtree was
+    /// moved out into the reuse index by [`extract_clean_subtrees`] and now
+    /// lives in the freshly-built tree instead of here.
+    ///
+    /// Only ever set on boxes of the `prev` tree handed to
+    /// [`graft_geometry_with_cascade`], which rejects such a position outright.
+    /// That rejection is what makes the move safe without proving that the new
+    /// tree always carries a matching [`Self::REUSED_SUBTREE`] claim over it:
+    /// when it does, the claim is honoured first and the husk is never read;
+    /// when it does not, the position is rebuilt and re-laid-out — a slower
+    /// frame, never a box wearing a husk's empty geometry.
+    pub const MOVED_OUT: Self = DirtyBits(0b1_0000);
 
     /// Returns `true` when no bits are set (layout is up-to-date).
     #[inline]
@@ -144,32 +156,100 @@ pub fn clear_dirty(b: &mut LayoutBox) {
     }
 }
 
-// ─── Incremental box-build index (BUG-341 S4) ───────────────────────────────
+// ─── Incremental box-build reuse index (BUG-341 S4/S19) ────────────────────────────────────────
 
-/// Index a previous [`LayoutBox`] tree by `NodeId` for `build_box_or_reuse`'s
-/// whole-subtree lookup.
+/// BUG-341 S19 — `NodeId` → the previous pass's whole subtree for that node,
+/// **owned**, for `box_tree::build_box_or_reuse` to adopt.
 ///
-/// A single `NodeId` can appear on more than one box in the tree: anonymous
-/// boxes (`InlineRun`, `InlineBlockRow`, `Marker`, `InlineSpace`, pseudo-
-/// element boxes) are tagged with their *owning* element's id, not a unique id
-/// of their own, and are always descendants of that owning element's own
-/// top-level box. Pre-order `insert`-keep-first therefore always keeps the
-/// outermost (real) box for a given id — the correct "whole subtree for this
-/// node" — even though later, deeper traversal steps revisit the same id on
-/// that element's own synthetic children.
-pub(crate) fn index_by_node(root: &LayoutBox) -> std::collections::HashMap<NodeId, &LayoutBox> {
-    let mut map = std::collections::HashMap::new();
-    index_by_node_inner(root, &mut map);
-    map
+/// The entries are behind a `Mutex` because `build_box` fans large flex/grid
+/// containers out over rayon workers, so several of them may claim their
+/// subtrees concurrently (the S15 trap: anything that assumes a single thread
+/// here silently stops working on exactly the containers chrome is built out
+/// of). Each entry is taken at most once, so the locks are uncontended; a
+/// single lock around the whole map would put every worker in a queue.
+pub(crate) type ReuseIndex = std::collections::HashMap<NodeId, std::sync::Mutex<Option<LayoutBox>>>;
+
+/// BUG-341 S19 — move every maximal reusable subtree out of `prev` into an
+/// index the box-build stage can adopt from, leaving a husk behind.
+///
+/// S15 gave the box-build stage a reuse unit, but the unit was a **copy**: a
+/// keystroke cycle deep-cloned 299 of chrome's 318 boxes out of a `prev` the
+/// caller was only lending, and the census that named this slice measured that
+/// copy at 0.5-0.7 ms — the single largest item left in the cycle. Nothing
+/// needed the copy: `prev` is dead the moment the pass returns, so the reusable
+/// subtrees can be *taken*.
+///
+/// The walk stops at every node in `clean` — [`crate::counters::CounterMap::
+/// clean_subtrees`] is downward-closed (a node is clean only if its whole
+/// subtree is), so the topmost clean box is exactly the unit
+/// `build_box_or_reuse` will ask for, and the walk never descends into a
+/// region it has already handed over. That is also why this replaces S4's
+/// whole-tree `index_by_node` (deleted with this slice): the index no longer
+/// hashes all 318 boxes, only the spine above the reusable ones.
+///
+/// Every position it empties keeps a husk carrying [`DirtyBits::MOVED_OUT`] —
+/// see that flag for why the graft must be able to recognise one.
+pub(crate) fn extract_clean_subtrees(
+    prev: &mut LayoutBox,
+    clean: &std::collections::HashSet<NodeId>,
+) -> (ReuseIndex, u64) {
+    let mut out = ReuseIndex::default();
+    let mut visited = 0u64;
+    if clean.contains(&prev.node) {
+        let husk = moved_out_husk(prev);
+        let taken = std::mem::replace(prev, husk);
+        out.insert(taken.node, std::sync::Mutex::new(Some(taken)));
+        return (out, 1);
+    }
+    extract_clean_subtrees_inner(prev, clean, &mut out, &mut visited);
+    (out, visited)
 }
 
-fn index_by_node_inner<'a>(
-    b: &'a LayoutBox,
-    map: &mut std::collections::HashMap<NodeId, &'a LayoutBox>,
+fn extract_clean_subtrees_inner(
+    b: &mut LayoutBox,
+    clean: &std::collections::HashSet<NodeId>,
+    out: &mut ReuseIndex,
+    visited: &mut u64,
 ) {
-    map.entry(b.node).or_insert(b);
-    for child in &b.children {
-        index_by_node_inner(child, map);
+    *visited += 1;
+    for child in &mut b.children {
+        // Keep the first: a `NodeId` can label more than one box (anonymous
+        // and pseudo-element boxes carry their owning element's id, and are
+        // always descendants of that element's own box), so the outermost
+        // occurrence — the one this pre-order walk reaches first — is the one
+        // that means "the whole subtree for this node". S4's `index_by_node`
+        // had the same rule for the same reason.
+        if clean.contains(&child.node) && !out.contains_key(&child.node) {
+            let husk = moved_out_husk(child);
+            let taken = std::mem::replace(child, husk);
+            out.insert(taken.node, std::sync::Mutex::new(Some(taken)));
+        } else {
+            extract_clean_subtrees_inner(child, clean, out, visited);
+        }
+    }
+}
+
+/// The husk left in `prev` where [`extract_clean_subtrees`] took a subtree.
+///
+/// Keeps only what costs nothing to keep (`node`, `rect`, a refcount bump on
+/// the style); `kind` is [`crate::box_tree::BoxKind::Skip`] — "does not
+/// participate in layout" — because the real one may carry laid-out payload
+/// whose clone is precisely the cost this slice removes. Nothing reads either
+/// field: [`DirtyBits::MOVED_OUT`] makes the graft reject the position before
+/// it looks.
+fn moved_out_husk(b: &LayoutBox) -> LayoutBox {
+    LayoutBox {
+        node: b.node,
+        rect: b.rect,
+        style: std::sync::Arc::clone(&b.style),
+        kind: crate::box_tree::BoxKind::Skip,
+        children: Vec::new(),
+        col_span: 1,
+        row_span: 1,
+        svg_group_transform: None,
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        dirty: DirtyBits::MOVED_OUT,
     }
 }
 
@@ -362,7 +442,16 @@ pub fn graft_geometry_with_cascade(
         });
         return true;
     }
-    if new.node != prev.node || !kind_layout_eq(&new.kind, &prev.kind) {
+    // BUG-341 S19: `prev`'s subtree here was moved into the freshly-built tree
+    // rather than copied into it, so this position holds a husk. Reaching it
+    // means the new tree did *not* claim that subtree back (`REUSED_SUBTREE`
+    // above), which the box-build stage only does when it rebuilt this position
+    // into something else — there is nothing left to graft against, and the
+    // husk's own fields describe no box. Reject exactly as a changed identity
+    // would: the subtree stays dirty and is laid out fresh.
+    if prev.dirty.contains(DirtyBits::MOVED_OUT) || new.node != prev.node
+        || !kind_layout_eq(&new.kind, &prev.kind)
+    {
         bump_graft(|s| s.reject_identity += 1);
         // Node identity or box-kind payload differ → this position no longer
         // describes the same box, so the children below it cannot be matched
@@ -1390,7 +1479,7 @@ mod tests {
         let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
         );
         set_incremental_restyle(false);
 
@@ -1504,7 +1593,7 @@ mod tests {
         set_incremental_box_build(true);
         let _ = take_box_build_stats();
         let (_incr, _c) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
         );
         let stats = take_box_build_stats();
         set_incremental_box_build(false);
@@ -1520,6 +1609,154 @@ mod tests {
             "incremental build must construct far fewer boxes than a full one \
              ({} built vs {full_built} full) — {stats:?}",
             stats.built,
+        );
+    }
+
+    /// Boxes in `b`'s subtree, inclusive — gate bookkeeping only.
+    fn gate_count_boxes(b: &LayoutBox) -> usize {
+        1 + b.children.iter().map(gate_count_boxes).sum::<usize>()
+    }
+
+    /// Husks [`extract_clean_subtrees`] left behind in `b`'s subtree.
+    fn gate_count_husks(b: &LayoutBox) -> usize {
+        usize::from(b.dirty.contains(DirtyBits::MOVED_OUT))
+            + b.children.iter().map(gate_count_husks).sum::<usize>()
+    }
+
+    /// BUG-341 S19 counter gate: the reuse unit must be a **move**, not a copy.
+    ///
+    /// S15 gave the box-build stage a unit of reuse and S18 stopped the two
+    /// stages after it from re-deriving what that unit already proved; what
+    /// neither asked is where the reused boxes come *from*. They were deep
+    /// copies of a `prev` the caller was only lending — on the chrome fixture,
+    /// 299 of 318 boxes copied per keystroke — and a copy is invisible in
+    /// output, so every differential test stayed green through it.
+    ///
+    /// The observable difference is what the pass leaves behind: a mechanism
+    /// that copies hands `prev` back whole, one that moves hands back a spine
+    /// with a husk per subtree taken. Both halves are asserted, plus the index
+    /// walk that finds them (S4's `index_by_node` hashed the entire previous
+    /// tree; extraction stops at each reusable subtree's root).
+    #[test]
+    fn bug341_s19_reuse_takes_the_subtree_out_of_prev_instead_of_copying_it() {
+        use crate::box_tree::{incremental_build_box, set_incremental_box_build, take_box_build_stats};
+        use crate::counters::{
+            build_counter_style_registry, incremental_precompute_counters, set_incremental_restyle,
+            RestyleDelta,
+        };
+        use crate::style::{
+            clear_interactive_state, restyle_root_set_for_state_change, restyle_state_index,
+            set_interactive_state, ComputedStyle,
+        };
+        use lumen_dom::build_flat_tree;
+
+        let (doc, sheet, mut prev, prev_counters, icon) = s15_fixture();
+        let vp = Size::new(800.0, 600.0);
+        let boxes_before = gate_count_boxes(&prev);
+        assert!(boxes_before > 20, "fixture must build a non-trivial tree, got {boxes_before}");
+
+        set_interactive_state(Some(icon), None, None);
+        let state_index = restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.styles(),
+            dirty_roots,
+            content_dirty: crate::counters::ContentDirty::Nothing,
+        };
+        let flat = build_flat_tree(&doc);
+        crate::style::invalidate_rule_idx_cache();
+        set_incremental_restyle(true);
+        let counters =
+            incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        let registry = build_counter_style_registry(&sheet);
+        set_incremental_box_build(true);
+        let _ = take_box_build_stats();
+        let root_style = ComputedStyle::root();
+        let new_tree = incremental_build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, &mut prev,
+        );
+        let stats = take_box_build_stats();
+        set_incremental_box_build(false);
+        set_incremental_restyle(false);
+        clear_interactive_state();
+
+        assert!(stats.reused >= 9, "fixture must reuse the untouched siblings — {stats:?}");
+
+        // The moved subtrees are in the new tree, so they are gone from `prev`
+        // — a copying mechanism would leave `boxes_after == boxes_before`.
+        let boxes_after = gate_count_boxes(&prev);
+        let husks = gate_count_husks(&prev);
+        assert_eq!(
+            husks, stats.reused as usize,
+            "one husk per subtree taken, got {husks} husks for {} reuses",
+            stats.reused,
+        );
+        // Conservation: each husk replaces a whole subtree, so the boxes that
+        // really left `prev` are what it had minus the spine it kept. A copying
+        // mechanism leaves this at zero.
+        let moved = boxes_before - (boxes_after - husks);
+        assert!(
+            moved >= stats.reused as usize && moved * 2 > boxes_before,
+            "the reusable subtrees must be moved out of `prev`, not copied out of it: \
+             {boxes_before} boxes before, {boxes_after} after ({husks} husks) = {moved} moved \
+             — {stats:?}",
+        );
+        assert!(
+            gate_count_boxes(&new_tree) > boxes_after,
+            "the boxes `prev` lost must be in the new tree",
+        );
+        assert!(
+            stats.prev_index_visited as usize * 2 < boxes_before,
+            "the reuse index must walk the spine above the reusable subtrees, not the whole \
+             previous tree ({} of {boxes_before} boxes visited) — {stats:?}",
+            stats.prev_index_visited,
+        );
+    }
+
+    /// BUG-341 S19 safety gate: a husk must never be grafted onto.
+    ///
+    /// `extract_clean_subtrees` empties the positions it takes from, so a
+    /// position in `prev` can describe a box that is no longer there. The graft
+    /// normally never reaches one — the new tree carries S18's
+    /// `REUSED_SUBTREE` claim over it and is honoured first — but "normally"
+    /// is not an invariant the box-build stage can promise for a tree it
+    /// rebuilt around the mutation, and a husk mistaken for a predecessor is
+    /// *visible corruption* (a box declared clean with a subtree that no longer
+    /// exists), not a slow frame. Without [`DirtyBits::MOVED_OUT`] the pair
+    /// below matches on node, kind and child count and the graft would adopt
+    /// the husk's geometry.
+    #[test]
+    fn bug341_s19_graft_refuses_a_position_whose_subtree_was_moved_out() {
+        use crate::box_tree::BoxKind;
+        use crate::style::ComputedStyle;
+
+        let node = lumen_dom::NodeId::from_index(7);
+        let husk = LayoutBox {
+            node,
+            rect: Rect::new(1.0, 2.0, 3.0, 4.0),
+            style: std::sync::Arc::new(ComputedStyle::root()),
+            kind: BoxKind::Skip,
+            children: Vec::new(),
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: DirtyBits::MOVED_OUT,
+        };
+        let mut fresh = LayoutBox { rect: Rect::new(9.0, 9.0, 9.0, 9.0), ..husk.clone() };
+        mark_subtree_dirty(&mut fresh);
+
+        let reused = graft_geometry(&mut fresh, &husk);
+        assert!(!reused, "a moved-out position must not be reported as reusable");
+        assert!(
+            fresh.dirty.is_dirty(),
+            "a box grafted against a husk must stay dirty and be laid out fresh",
+        );
+        assert_eq!(
+            fresh.rect,
+            Rect::new(9.0, 9.0, 9.0, 9.0),
+            "the husk's geometry must not be adopted",
         );
     }
 
@@ -1552,7 +1789,7 @@ mod tests {
         set_incremental_restyle(true);
         set_incremental_box_build(true);
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
         );
         set_incremental_box_build(false);
         set_incremental_restyle(false);
@@ -1609,7 +1846,7 @@ mod tests {
         set_incremental_box_build(true);
         let _ = take_box_build_stats();
         let _ = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
         );
         let stats = take_box_build_stats();
         set_incremental_box_build(false);
@@ -1670,7 +1907,7 @@ mod tests {
         let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
         );
         set_incremental_restyle(false);
 
@@ -1721,7 +1958,7 @@ mod tests {
         let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
         );
         set_incremental_restyle(false);
         clear_interactive_state();
@@ -1799,7 +2036,7 @@ mod tests {
         let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
         );
         set_incremental_restyle(false);
 
@@ -1891,7 +2128,7 @@ mod tests {
         set_incremental_restyle(true);
         crate::style::invalidate_rule_idx_cache();
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
         );
         set_incremental_restyle(false);
 
@@ -1972,7 +2209,7 @@ mod tests {
         let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
         );
         set_incremental_restyle(false);
 

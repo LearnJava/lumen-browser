@@ -2529,6 +2529,118 @@ wants to be a *move* (or a share). `precompute_counters` at ~0.55 ms for a
 single recomputed node is the third item — the `CounterMap` is rebuilt from
 scratch every cycle.
 
+## S19 — the unit of reuse wanted to be a move, not a copy
+
+### The census, first
+
+Four slices running, the queue's planned premise had landed somewhere other than
+where the time was, so S19 opened with a purpose-built census
+(`bug341_s19_copy_census`, `#[ignore]`d) printing every whole-tree copy a cycle
+makes, each with the boxes it touched:
+
+| item | KEY | HOVER |
+|---|---|---|
+| `build_box_or_reuse`'s subtree copy | **0.51-0.68 ms** / 299 boxes | **0.24-0.25 ms** / 315 boxes |
+| `index_by_node` over `prev` | 0.018-0.030 ms / 318 boxes | 0.018 ms / 318 boxes |
+| pipeline's `prev_pristine_layout = layout.clone()` | 0.28-0.38 ms / 318 boxes | 0.30-0.36 ms / 318 boxes |
+
+It confirmed one half of what S18 predicted and refuted the other. The subtree
+copy really was the largest item in the cycle. The index walk — the thing S4's
+own measurement had blamed for rejecting whole-subtree reuse in the first place
+— costs **0.02 ms** and decides nothing; had the slice started from S4's story
+it would have optimised a rounding error.
+
+### The fix
+
+The copy was never needed. `prev` is dead the moment the pass returns, so the
+reusable subtrees can be **taken** out of it:
+
+- `layout_mutation_incremental_restyle` takes `prev` **by value**;
+  `incremental_build_box` takes `&mut LayoutBox` and guts it.
+- `incremental::extract_clean_subtrees` walks `prev` top-down and stops at every
+  node in `CounterMap::clean_subtrees`. That set is downward-closed (a node is
+  clean only if its whole subtree is), so the topmost clean box is exactly the
+  unit `build_box_or_reuse` will ask for, and the walk never descends into a
+  region it has already handed over — which is also why the index is now built
+  over the **spine** (19 of 318 boxes on a keystroke) instead of the tree.
+  `index_by_node` was deleted with this slice.
+- The index is `HashMap<NodeId, Mutex<Option<LayoutBox>>>`. The takers are rayon
+  workers (`build_box` fans flex/grid containers out, and chrome is built out of
+  exactly those — the S15 trap), so a shared `&mut` is impossible and a single
+  lock around the map would queue the workers behind each other. One `Mutex` per
+  entry, each taken at most once; that "at most once" is also what keeps a box
+  from ending up in two places.
+
+### The husk, and why it is marked
+
+Every emptied position keeps a husk carrying `DirtyBits::MOVED_OUT`. The graft
+normally never reaches one — the new tree carries S18's `REUSED_SUBTREE` claim
+over it and that is honoured first — but "normally" is not something the
+box-build stage can promise for a region it rebuilt around the mutation, and a
+husk mistaken for a predecessor is a box declared *clean* with a subtree that no
+longer exists: visible corruption, not a slow frame. `graft_geometry_with_cascade`
+therefore rejects a `MOVED_OUT` position exactly as it rejects a changed
+identity. The husk's `kind` is `BoxKind::Skip` — "does not participate in
+layout" — which on its own would already fail `kind_layout_eq` for any real box,
+but not for another `Skip` (a `display:none` element's own box), and that
+coincidence is precisely what the flag exists to cover.
+
+### Gates
+
+By counter and by conservation, never by output — a move and a copy produce the
+identical tree:
+
+- `bug341_s19_reuse_takes_the_subtree_out_of_prev_instead_of_copying_it`
+  (lumen-layout): after the pass `prev` has lost the boxes the new tree gained
+  and holds exactly one husk per reuse, and the index walked the spine. A
+  copying mechanism leaves `prev` whole and this at zero.
+- `bug341_s19_graft_refuses_a_position_whose_subtree_was_moved_out`: a husk and
+  a fresh box matching on node, kind and child count — without `MOVED_OUT` the
+  graft would adopt the husk's geometry.
+- `bug341_s19_reuse_index_walks_the_spine_not_the_previous_tree` (lumen-shell,
+  runs by default): the production document's number, < 50 of 318.
+
+`BoxBuildStats` gained `prev_index_visited`; `take_box_clone_stats` became
+`take_box_copy_stats() -> BoxCopyStats`.
+
+### Measured
+
+Census after the slice, same cycles: subtree reuse **0.51-0.68 → 0.002 ms**
+(KEY), **0.24 → 0.000 ms** (HOVER), carrying the same 299/315 boxes; index walk
+318 → **19** (KEY) / **3** (HOVER) boxes. `boxes_built`/`boxes_reused` unchanged
+at 28/10 and 3/1 — the reused region is identical, only its price moved.
+
+Wall-clock, interleaved A/B ×3 against the branch point (`faffda85d`), by min:
+`CC12_HOVER` 1.32/1.57/1.38 → **0.81/0.94/0.89 ms** (≈1.6×), `CC12_KEY`
+2.43/2.28/2.24 → **1.90/2.09/2.07 ms** (≈8-16 %). Neither pair of groups
+overlaps. HOVER gains more than the census's 0.25 ms: the copy also had to be
+*freed* again each frame, and that allocator traffic leaves with it.
+
+### Where this leaves CC-12
+
+`CC12_HOVER` is inside the 2 ms budget by min (0.81-0.94) and ≈1.1-1.6× on p95
+(2.27-3.17). `CC12_KEY` is at the budget by min (1.90-2.09) and ≈2.3× on p95
+(4.49-4.78). Still red on p95, and the gap is now p95-only on both scenarios.
+
+### What S20 should look at
+
+The census's other two items are untouched and are now the largest:
+
+- **~0.3-0.5 ms** — the pipeline's own `prev_pristine_layout = layout.clone()`.
+  Unlike the copy this slice removed, this one is not obviously unnecessary:
+  `relayout_chrome_host` keeps a pristine tree because `take_content_area`
+  mutates the live one straight after. Making it a move needs that mutation to
+  become restorable (detach `#contentArea`, re-attach it before the next cycle)
+  and the live tree to be relinquished at the top of the next pass — a real
+  design, not a signature change.
+- **~0.55 ms** — `precompute_counters` for a *single* recomputed node: the
+  `CounterMap` (styles, counter snapshots, `clean_subtrees`) is rebuilt from
+  scratch every cycle, ~5 hash operations × 828 nodes to reproduce what it
+  already had.
+
+Same shape as this slice: ask what the stage re-creates that it could carry
+over. And the same discipline — census first.
+
 ## Repro
 
 ```bash
@@ -2539,4 +2651,5 @@ cargo test -p lumen-shell --profile dev-release bug341_s5_incremental_pipeline_s
 cargo test -p lumen-shell --profile dev-release bug341_s13_graft_reject_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s17_keystroke_restyle_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s18_keystroke_box_build_census -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s19_copy_census -- --ignored --nocapture
 ```
