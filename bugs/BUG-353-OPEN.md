@@ -1,4 +1,4 @@
-# BUG-352 — `element.focus()`/`blur()` and `document.activeElement` missing entirely from the JS shim
+# BUG-353 — `element.focus()`/`blur()` and `document.activeElement` missing entirely from the JS shim
 
 **Статус:** OPEN
 **Компонент:** js (`crates/js/src/dom.rs` — the live-DOM `Element`/`HTMLElement` object literal and the `document` object literal), shell (`crates/shell/src/main.rs` — `focused_node`, which already exists and is the state a `focus()` binding would drive)
