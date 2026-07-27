@@ -95,6 +95,19 @@ Current coverage — `graphic_tests/COVERAGE.md`.
 
 ---
 
+## When the full run is required
+
+The full `--continue-on-fail` pipeline costs ~20 min, needs a focused window (gdigrab captures the desktop — never background it) and carries gdigrab noise. It is **mandatory** whenever the change can move pixels:
+
+- paint / rasterization, display-list construction, compositing;
+- layout geometry, inline/flow/flex/grid/table algorithms;
+- a new or changed CSS property (the per-property rule below already requires it);
+- font, text metrics, image decoding, colour handling.
+
+It is **not** the right gate for changes that cannot alter the display list — pure perf work and refactors (data structures, caching, `Arc`/copy-on-write), tooling, Python, docs. Those are covered by `scripts/scoped-test.sh`, which includes the deterministic CPU snapshot tests, plus `python graphic_tests/dump_golden.py` (DEVX-3) — a headless text-diff of layout/paint dumps that takes seconds.
+
+If you claim a change is display-list-neutral, **show it**: an empty `dump_golden.py` diff (or unchanged `--dump-display-list` on the affected pages) is the evidence. Without that evidence, run the full pipeline — "it's only a refactor" is exactly how pixel regressions land.
+
 ## Run rules
 
 0. **Test-run history lives in `graphic_tests/results/*.json`.** JSON result files are committed to git (`.gitignore` excludes only `*.html` reports). After every full `--continue-on-fail` run: `git add graphic_tests/results/<timestamp>.json && git commit -m "тесты: прогон YYYY-MM-DD"`. Do NOT write manual "Прогон..." tables in `BUGS.md` — the JSON is the source of truth. Delta vs previous run is printed automatically by `run.py`. KNOWN_DEBTORS (Phase 2 tests) live in `KNOWN_DEBTORS` dict in `run.py`; BUGS.md carries only BUG-NNN entries.
