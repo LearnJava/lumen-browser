@@ -2041,7 +2041,7 @@ mod tests {
         LayoutBox {
             node,
             rect,
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],
             col_span: 1,

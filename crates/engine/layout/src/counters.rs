@@ -112,6 +112,18 @@ impl CounterMap {
         self.styles.get(&id).map(|s| &**s)
     }
 
+    /// Like [`Self::style_for`], but hands back the shared allocation itself.
+    ///
+    /// BUG-341 S12: `build_box` stores the cascade result straight into
+    /// `LayoutBox::style` (now an `Arc<ComputedStyle>`), so the cache entry can
+    /// be shared rather than deep-copied per node — a 3.2 KB struct with ~30
+    /// heap fields, built once per node and previously copied once more into
+    /// every box. The few build-time rewrites (image intrinsic hints, marker
+    /// styles) take their copy via `Arc::make_mut`.
+    pub fn style_arc(&self, id: NodeId) -> Option<Arc<ComputedStyle>> {
+        self.styles.get(&id).cloned()
+    }
+
     /// Returns the full per-node `ComputedStyle` cascade cache (BUG-341 S2).
     ///
     /// The map the full cascade produced, keyed by `NodeId`. It is the reference
