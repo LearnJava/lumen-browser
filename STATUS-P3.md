@@ -25,7 +25,6 @@ docs/tasks/p3-cascade-perf.md — Задача 1 влита (кэш active @medi
 BUGS.md:303
 BUGS.md:310
 BUGS.md:317
-BUGS.md:318
 BUGS.md:320
 BUGS.md:321
 BUGS.md:442
