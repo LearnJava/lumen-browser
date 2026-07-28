@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 98,
+  "open": 100,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 370,
+ "total_bugs": 372,
  "phases": [
   {
    "id": "P0",
@@ -2379,9 +2379,13 @@
       {
        "id": "WPT-VENDOR-hr-time",
        "title": "WPT: вендорить + прогнать категорию `hr-time`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/hr-time/`, 19 файлов: `META.yml`, `WEB_FEATURES.yml`, 13 тестовых файлов верхнего уровня, `resources/` из 8 файлов, `LICENSE-WPT.md`), скоуп ⬜ (кандидат). Самодостаточная категория (0 variant/testdriver.js). `run_report.py --all --root hr-time --recursive` — **1 мин 37 с, 4/13 harness OK, 8/16 сабтестов** (2 ERROR session-reuse класса BUG-380, 1 TIMEOUT недовендоренный idlharness, 1 обычный HTTPS-порт-гэп) — почти все id реально исполнились. BUG-400 (`performance` не наследует `EventTarget`, нет `toJSON()`, `dom.rs:10987`) и BUG-401 (`performance` полностью отсутствует в Worker global scope, `worker.rs::worker_global_shim`) — оба из реально исполнившихся FAIL/TIMEOUT. Два оставшихся TIMEOUT (`test_cross_frame_start.html`, `navigation-start-post-before-unload.html`) не новая находка — упираются в уже задокументированный (CAPABILITIES.md, без отдельного BUG-номера) предел `<iframe>` без browsing context",
+       "bugs": [
+        "BUG-400",
+        "BUG-401"
+       ]
       },
       {
        "id": "WPT-VENDOR-hsts",
@@ -6657,6 +6661,20 @@
    "status": "open",
    "title": "`window.isSecureContext` захардкожен `true` безусловно для любой страницы вместо вычисления по W3C Secure Contexts §3.1 из уже распарсенного протокола/хоста — л…",
    "component": "js (`crates/js/src/dom.rs:11531` — `window.isSecureContext = true;` литерал; неиспользованный источник данных — `dom.rs:7397` `_lumen_loc_parts`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-400": {
+   "status": "open",
+   "title": "`performance` не реализует интерфейс `Performance` целиком: не наследует `EventTarget` (`performance.addEventListener is not a function`) и не имеет `toJSON()`…",
+   "component": "js (`crates/js/src/dom.rs:10987-11048` — `var performance = {...}`, объектный литерал)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-401": {
+   "status": "open",
+   "title": "`performance` полностью отсутствует в Worker global scope — `worker_global_shim` не заводит ни `performance.now()`, ни `timeOrigin`; любой воркер-скрипт, читающ…",
+   "component": "js (`crates/js/src/worker.rs:439-566` — `worker_global_shim`)",
    "date": null,
    "debtor": false
   }
