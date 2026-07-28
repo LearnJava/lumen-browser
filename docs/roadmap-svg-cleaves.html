@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 101,
+  "open": 103,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 373,
+ "total_bugs": 375,
  "phases": [
   {
    "id": "P0",
@@ -3911,8 +3911,59 @@
        "id": "CC-15",
        "title": "CC-15: Удаление legacy-хрома",
        "status": "planned",
-       "size": "S",
-       "note": "Удаление legacy слайсами (по образцу S12b): toolbar.rs-билдер, tabs/strip.rs-рендер, DisplayList-код panels/*, Palette-константы (кроме непокрытого макетом — риск 5 брифа); финал — удаление rollback-флага"
+       "size": "M",
+       "note": "Проскоуплено 2026-07-28 (ветка p1-cc15-scoping, только доксинк, кода не менялось) — реальный масштаб шире одной строки (по образцу S12b M→XL): `toolbar.rs`/`tabs/strip.rs` — смешанные data+paint модули, файлы не удаляются целиком, нужно точечно вырезать функции покраски/hit-теста, сохранив геометрические константы (`CHROME_H`, `avatar_x()`, `TAB_BAR_HEIGHT` и т.п.), которые безусловно читают и `content_layout_viewport()`/`resumed()`, и легаси-навсегда-панели. Панельный список риска-5 при сверке с кодом оказался неполным в обе стороны: 9 доп. панелей (`note_viewer`/`focus_panel`/`read_later_panel`/`privacy_panel`/`workspace_panel`/`vertical_tabs`/`tree_tabs`/pip-группа) не гейтированы флагом и не были названы легаси-навсегда явно; `panels/profile_menu.rs`, наоборот, числился «движковым», но не мигрирован. Побочно найдены 2 живых бага флипа CC-14: BUG-403 (поповер профиля невидим под дефолтным движковым хромом — рендер остался в легаси-гейте, hit-test безусловен) и BUG-404 (`flush_pointer_moves`, живой обработчик движения мыши, использует захардкоженный `toolbar::CHROME_H`/`left_dock()` вместо `page_offset()` — тот же класс, что CC-14 исправила для automation-пути `resolve_automation_target`, здесь не тронут). Разбивка на срезы — CC-15-1..CC-15-6",
+       "bugs": [
+        "BUG-403",
+        "BUG-404"
+       ],
+       "tasks": [
+        {
+         "id": "CC-15-1",
+         "title": "CC-15-1: Фикс/скоуп profile_menu перед удалением",
+         "status": "planned",
+         "size": "XS",
+         "note": "Не удаление — фикс корректности до начала: закрыть BUG-403 (поповер профиля невидим под дефолтным хромом), либо привязав `#profileMenu` к `ChromeModel`/`bind_model` (по образцу CC-9/10), либо явно задокументировав `panels/profile_menu.rs` как легаси-навсегда и выведя его из скоупа удаления CC-15. Блокирует CC-15-3 (нужно решение о судьбе `profile_menu.rs` до вырезания toolbar.rs-функций, которые он использует — `toolbar::avatar_x()`/`CHROME_H`)",
+         "bugs": [
+          "BUG-403"
+         ]
+        },
+        {
+         "id": "CC-15-2",
+         "title": "CC-15-2: Мёртвый расчёт hovered_tab_idx",
+         "status": "planned",
+         "size": "S",
+         "note": "Убрать безусловный (негейтированный) расчёт `hovered_tab_idx` на каждый `CursorMoved` (main.rs:13880-13902, зовёт `tabs::strip::hit_test`/`TAB_BAR_HEIGHT`/`LAYOUT_BTN_W`/`SETTINGS_BTN_W`), потребитель которого (тултип таб-бара, main.rs:16885) сам уже гейтирован `!css_chrome_enabled` — мёртвая работа на каждый кадр под дефолтным хромом"
+        },
+        {
+         "id": "CC-15-3",
+         "title": "CC-15-3: Покраска/hit-test toolbar.rs + tabs/strip.rs",
+         "status": "planned",
+         "size": "M",
+         "note": "Вырезать функции покраски/hit-теста из `toolbar.rs` (`build_toolbar`/`push_btn`/`push_avatar`/`hit_test`/`ToolbarHit`/`ToolbarActive`) и `tabs/strip.rs` (`build_tab_bar`/`build_tab_tooltip`/`hit_test`/`hit_test_layout_btn`/`build_layout_toggle_btn`/`hit_test_settings_btn`/`build_settings_btn`/`TabHit`) + их гейтированные вызовы в main.rs (блок `!self.focus.active && !self.css_chrome_enabled`, main.rs:16869-16983, и парные `MouseInput`-ветки). НЕ трогать: `CHROME_H`, `avatar_x()`, `TAB_BAR_HEIGHT`, `DRAG_THRESHOLD`, `LAYOUT_BTN_W`, `SETTINGS_BTN_W`, `TabStrip`/`TabEntry`/`TabDragState`/`TabLayout` — читаются безусловно (`content_layout_viewport()`, `resumed()`, keep-forever-панели). После CC-15-1, CC-15-2"
+        },
+        {
+         "id": "CC-15-4",
+         "title": "CC-15-4: Удаление гейтированных panels/*",
+         "status": "planned",
+         "size": "S",
+         "note": "Удалить 10 подтверждённо-гейтированных `panels/*`-билдеров (`bookmark_panel`/`print_panel`/`settings_panel`/`cert_panel`/`history_panel`/`command_palette`/`ai_panel`/`sidebar_panel`/`shields_panel`/`permission_panel`) + их гейтированные вызовы в main.rs; по одному-два файла за подсрез при необходимости. Перед удалением каждого — грепом убедиться, что тип модуля (напр. `PanelCertData`, `SettingsSection`) не читается легаси-навсегда кодом. После CC-15-1"
+        },
+        {
+         "id": "CC-15-5",
+         "title": "CC-15-5: Чистка неиспользуемых полей Palette",
+         "status": "planned",
+         "size": "XS",
+         "note": "Убрать из `Palette` (`panels/themes.rs`) поля `toolbar_bg`/`tab_sleep_bg`/`tab_hibernate_bg` + их DARK/LIGHT/`desaturated()`/тесты — только после CC-15-3, когда исчезнут последние читатели в `toolbar.rs`/`tabs/strip.rs` (перепроверить грепом на момент исполнения, список этой строки не источник истины). После CC-15-3"
+        },
+        {
+         "id": "CC-15-6",
+         "title": "CC-15-6: Удаление rollback-флага",
+         "status": "planned",
+         "size": "M",
+         "note": "Финал: удалить флаг отката `LUMEN_LEGACY_CHROME` (`css_chrome_enabled`, его вычисление main.rs:893, все оставшиеся `if`/`else`/`&&`-ветки) — только когда срезам CC-15-3..CC-15-5 больше нечего откатывать на легаси-стороне этих веток. Самый рискованный срез, по аналогии с финальным удалением rollback-пути в S12b. После CC-15-3, CC-15-4, CC-15-5"
+        }
+       ]
       },
       {
        "id": "CC-16",
@@ -6685,6 +6736,20 @@
    "status": "open",
    "title": "HSTS (RFC 6797) полностью реализован и юнит-протестирован в `lumen-network`/`lumen-storage`, но `HttpClient::with_hsts(...)` не вызывается ни в одном продакшн-п…",
    "component": "network/shell (`crates/network/src/lib.rs::with_hsts`, `crates/shell/src/config.rs::apply_http`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-403": {
+   "status": "open",
+   "title": "Клик по аватару движкового хрома безусловно выставляет `profile_menu.visible = true` (хит-тест тоже безусловен), но рендер поповера (`build_panel`) лежит внутри…",
+   "component": "shell (`crates/shell/src/main.rs`, `panels::profile_menu`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-404": {
+   "status": "open",
+   "title": "Живой (не automation) обработчик буферизованных `pointermove`-семплов считает page-координаты через захардкоженные `toolbar::CHROME_H`/`left_dock()` вместо един…",
+   "component": "shell (`crates/shell/src/main.rs::flush_pointer_moves`)",
    "date": null,
    "debtor": false
   }
