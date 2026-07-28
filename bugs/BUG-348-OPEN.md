@@ -104,3 +104,47 @@ category. Every graphic test, sample page, or real site that uses `CanvasRenderi
 is affected. `graphic_tests/57-canvas-2d.html`'s CPU-screenshot snapshot renders blank
 placeholders instead of its fillRect/arc/path/strokeRect boxes (visually confirmed
 2026-07-26, `.tmp/canvas2d-check.png`, not committed).
+
+## Уточнение охвата (P2, 2026-07-28, WPT-VENDOR-html-canvas) — сломан один путь создания из четырёх
+
+Заголовок «unconditionally / for **every** canvas» **неверен**, и это меняет и приоритет,
+и способ проверки фикса. Патчится не `HTMLCanvasElement`, а один метод `document`,
+поэтому шим `_addCanvasStubs` достаётся ровно тем элементам, что прошли через
+`document.createElement`. Проба (`--dump-layout`, один и тот же `fillRect` во все четыре
+канваса):
+
+```
+parsed.2d=true     # <canvas> из разметки          — рисует, getImageData даёт 18,52,86,255
+made.2d=false      # document.createElement        — null (этот баг)
+madeNS.2d=true     # document.createElementNS(xhtml)— рисует
+cloned.2d=true     # made.cloneNode(false)         — рисует (клон «сломанного» элемента цел)
+```
+
+Зеркальное следствие: `webgl` доступен **только** на `createElement`-канвасе
+(`parsed.webgl=null`), то есть два шима не сосуществуют, а делят элементы по пути
+создания. Оба факта воспроизводятся одной страницей без автоматизации.
+
+Пункт 3 исходного описания (blank-снимок `57-canvas-2d.html`) **не является
+свидетельством этого бага**: страница берёт канвасы через `getElementById`, то есть
+рабочим путём, а headless-путь `--screenshot`/`render_source_to_png` выполняется с
+выключенным интерактивным JS (`crates/shell/src/main.rs:1437` — `false, // headless: no
+interactive JS`) и без регистрации пиксельных источников, поэтому там любой `<canvas>`
+рисуется серым плейсхолдером `DrawImage` по построению (это же зафиксировано в
+шапке `crates/driver/tests/cases/snapshot_cpu.rs`). Blank-снимок и коммиченный эталон
+`graphic_tests/snapshots/cpu/57-canvas-2d.png` — ожидаемое поведение headless-режима, а
+не признак поломки Canvas 2D. Живой прогон TEST-57 идёт по разметочному пути и потому
+этим багом не затронут ([BUG-099](BUG-099-OPEN.md), долг 2.96 % — параметры шрифта и AA).
+
+Проверять фикс, соответственно, надо не снимком, а страницей с обоими путями создания
+(и `webgl` на разметочном канвасе), либо прогоном `html/canvas`.
+
+Практическая цена по WPT (срез `html/canvas`, 2026-07-28): канонические
+сгенерированные тесты берут `<canvas id="c">` из разметки (`canvas-tests.js::_addTest`)
+и потому исполняются, а на `document.createElement` завязаны более новые файлы —
+88 из 1730 в `element/` — и вся серия `the-canvas-state` (23 id, 62 из 68 сабтестов
+падают `Cannot read/set properties of null`). Точные числа — в строке
+`WPT-VENDOR-html-canvas` ROADMAP.md.
+
+Та же строка `_addCanvasStubs` порождает [BUG-419](BUG-419-OPEN.md): анти-fingerprint
+заглушка `toDataURL`/`toBlob` живёт в этом же патче и потому закрывает ровно один путь
+создания элемента из четырёх.
