@@ -9,13 +9,13 @@ Legend: ✅ implemented · 🟡 parsed/stored, rendering deferred · ⬜ not sta
 
 ---
 
-## Quick stats (2026-07-04, recounted by table rows: `grep -c "^| .*<marker>"`; rows may carry >1 marker in notes)
+## Quick stats (2026-07-28, recounted by table rows: `grep -c "^| .*<marker>"`; rows may carry >1 marker in notes)
 
 | Status | Properties |
 |--------|-----------|
-| ✅ Fully implemented | ~266 |
-| 🟡 Partial (parsed, not rendered) | ~132 |
-| ⬜ Not started | ~88 |
+| ✅ Fully implemented | ~333 |
+| 🟡 Partial (parsed, not rendered) | ~91 |
+| ⬜ Not started | ~51 |
 | 🚫 Out of scope | ~20 (props in "Out of scope" modules) |
 
 ---
@@ -184,7 +184,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `float` | ✅ | left/right/none — FloatContext placement; shrink-to-fit width |
 | `clear` | ✅ | left/right/both — FloatContext.clear_y() clearance |
 | `-webkit-line-clamp` / `line-clamp` | ✅ | parsed + layout algorithm: truncate lines, ellipsis, priority over text-overflow |
-| `contain-intrinsic-size` | 🟡 | parsed; intrinsic size hint ⬜ |
+| `contain-intrinsic-size` | ✅ | parsed + applied under `contain: size` — `contain_intrinsic_width`/`_height` supply the placeholder inline/block size (style.rs:15843); 3 layout tests |
 
 ### [T0] Borders & Outlines
 
@@ -204,7 +204,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `color` | ✅ | named/hex/rgb/rgba/hsl/hsla/oklch; currentColor |
 | `background-color` | ✅ | |
-| `color-scheme` | 🟡 | parsed; UA switching ⬜ |
+| `color-scheme` | ✅ | UA switching wired: form controls + system-color resolution (style.rs:6394,6973,7020,12391) |
 | `forced-color-adjust` | ✅ | Forced Colors Mode (Color Adjust L1 §3): system-palette forcing post-pass in compute_style (element-aware LinkText/ButtonText/GrayText/Field pairs, shadows→none, non-url() background-image→none, bg transparency preserved); `(forced-colors: active)` media wired; shell a11y toggle relayouts (P4 2026-07-04) |
 | `print-color-adjust` / `color-adjust` | 🟡 | parsed/stored; print rendering ⬜ |
 | `accent-color` | ✅ | parsed + wired to form controls (checkbox/radio/range/progress) in display_list.rs (P4 2026-06-14); 5 tests + graphic 110 |
@@ -223,7 +223,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `font-size-adjust` | ✅ | real OS/2 x-height scaling (P4 2026-06-13); тест 95 |
 | `font-optical-sizing` | ✅ | auto injects opsz=font-size into variation axes; none skips |
 | `font-palette` | 🟡 | normal/light/dark/dashed-ident parsed (inherited); custom idents resolved against @font-palette-values in compute_style → DrawText.font_palette; renderer ignores it — no COLR/CPAL rasterization in lumen-font yet |
-| `@font-face` | 🟡 | all descriptors parsed; file loading ⬜ |
+| `@font-face` | ✅ | all descriptors parsed; file loading done — `font-display: swap`, async fetch off the critical path (WQ#20) |
 | `@font-palette-values` | 🟡 | parsed + matched (name/family, base-palette, override-colors); rendering deferred with COLR |
 
 ### [T0] Text Styling
@@ -265,10 +265,10 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `:enabled`, `:disabled`, `:checked` | ✅ | attribute-based form-state matching, style.rs:8004/8130 |
 | `:is(S)`, `:where(S)`, `:has(S)` | ✅ | full matching; `:where` zero-specificity; `:has` relative, style.rs:7690 |
 | `::before`, `::after` | ✅ | block-level ✅; inline ✅ (display:inline/inline-block in IFC) |
-| `::first-line`, `::first-letter` | 🟡 | parsed + `compute_pseudo_element_style`; segment style-override wiring ⬜ (box_tree.rs handoffs) |
+| `::first-line`, `::first-letter` | ✅ | parsed + `compute_pseudo_element_style`; segment style-override wired (`apply_first_letter_pseudo`/`apply_first_letter_style`, box_tree.rs:1664-1995) |
 | `::marker` | ✅ | per-rule box styling ✅ (color/font/content override + content:none suppress); list-style-image ✅; property set restricted to §5.5 (font/color/white-space/direction/unicode-bidi/text-combine-upright/content/animation) |
 | `::selection` | 🟡 | parsed; live selection highlight application ⬜ (Selection API, P3) |
-| `::placeholder` | ⬜ | Pseudo-Elements L4; no `PseudoElementKind::Placeholder` variant |
+| `::placeholder` | ✅ | `PseudoElementKind::Placeholder` (style.rs:7221, p4-placeholder-pseudo) |
 | `:nth-child(An+B of S)` | ✅ | "of S" filter via `element_index_filtered`, style.rs:7664 |
 
 ### [T0] Flexbox
@@ -319,23 +319,23 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `transition` (shorthand) | 🟡 | |
-| `transition-property` | 🟡 | Vec<String>; "all" |
-| `transition-duration` / `transition-delay` | 🟡 | Vec<f32> seconds |
-| `transition-timing-function` | 🟡 | TimingFunction enum |
-| Per-frame interpolation | ⬜ | lerp wiring in shell tick |
+| `transition` (shorthand) | ✅ | |
+| `transition-property` | ✅ | Vec<String>; "all" |
+| `transition-duration` / `transition-delay` | ✅ | Vec<f32> seconds |
+| `transition-timing-function` | ✅ | TimingFunction enum |
+| Per-frame interpolation | ✅ | per-frame lerp with timing-function interpolation in the shell tick (WQ#2) |
 
 ### [T1] Animations
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `animation` (shorthand) | 🟡 | |
-| `animation-name` / `animation-duration` / `animation-delay` | 🟡 | |
-| `animation-timing-function` | 🟡 | |
-| `animation-iteration-count` / `animation-direction` | 🟡 | |
-| `animation-fill-mode` / `animation-play-state` | 🟡 | |
+| `animation` (shorthand) | ✅ | |
+| `animation-name` / `animation-duration` / `animation-delay` | ✅ | |
+| `animation-timing-function` | ✅ | |
+| `animation-iteration-count` / `animation-direction` | ✅ | |
+| `animation-fill-mode` / `animation-play-state` | ✅ | |
 | `animation-timeline` / `animation-range` | ✅ | animation-timeline parsed (Auto/Scroll/View/Named); P4 2026-06-10 |
-| `@keyframes` | 🟡 | parsed; AnimationScheduler::tick ⬜ |
+| `@keyframes` | ✅ | parsed + `AnimationScheduler::tick` wired (WQ#3) |
 
 ### [T1] CSS Nesting
 
@@ -348,10 +348,10 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Value | Status | Notes |
 |-------|--------|-------|
-| `display: table` | 🟡 | parsed; layout engine ⬜ |
-| `display: table-row` | 🟡 | parsed |
-| `display: table-cell` | 🟡 | parsed |
-| `display: table-header-group` / `table-footer-group` | 🟡 | parsed |
+| `display: table` | ✅ | layout engine done — `BoxKind::Table` (Tier1 #5) |
+| `display: table-row` | ✅ | |
+| `display: table-cell` | ✅ | |
+| `display: table-header-group` / `table-footer-group` | ✅ | |
 | `border-collapse` | ✅ | ComputedStyle.border_collapse wired; collapse zeroes spacing; 5 unit-тестов + graphic test 80 (P4 2026-06-10) |
 | `border-spacing` | ✅ | border_spacing_h/v in ComputedStyle; zero when collapse mode |
 | `empty-cells` | ✅ | ComputedStyle.empty_cells (inherited); `hide` suppresses border+bg of empty cells in separate mode; wired in emit_table_cell; 6 unit + 5 paint tests + graphic test 115 (P4 2026-06-14) |
@@ -381,7 +381,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `list-style` / `list-style-type` | ✅ | disc/circle/square → geometric marker boxes; decimal/roman/alpha → text glyphs; `emit_list_marker` display_list.rs:4927 |
 | `list-style-position` | 🟡 | inside/outside; positioning ⬜ |
 | `list-style-image` | ✅ | url() parsed; image marker rendered (DrawImage replaces bullet, CSS Lists L3 §2.3) |
-| `counter-reset` / `counter-increment` | 🟡 | Vec<(name,val)>; resolution ⬜ |
+| `counter-reset` / `counter-increment` | ✅ | resolution done — `precompute_counters()` pre-order DOM walk (see T3 Counters) |
 | `counter-set` | ✅ | CSS Lists L3 §4; Vec<(name,val)>; apply_set после reset/increment; тест 97 2026-06-13 |
 | `@counter-style` | ✅ | `parse_counter_style_rule` + `CounterStyleRegistry` effective in counter formatting, counters.rs:26 |
 
@@ -419,7 +419,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `filter` | ✅ | GPU pipeline: blur/brightness/contrast/grayscale/hue-rotate/invert/saturate/sepia/drop-shadow |
-| `backdrop-filter` | 🟡 | parsed; backdrop GPU compositing ⬜ |
+| `backdrop-filter` | ✅ | backdrop GPU compositing pass with LRU cache (WQ#28) |
 
 ### [T2] Clipping & Masking
 
@@ -431,8 +431,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `mask-image` | 🟡 | GPU mask composite pipeline ✅ (PushMask/PopMask + PushMaskLayer/PopMaskLayer); alpha compositing ✅; luminance mode ✅ 2026-05-29 |
 | `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed; `mask-position` wired into `PushMaskImage` (initial `center`, CSS Masking L1 §4.4) 2026-06-22; `mask-repeat` tile geometry: `repeat`/`no-repeat`/`repeat-x`/`repeat-y`/`round`/`space` ✅ (shared `bg_tile_geometry` + `space_axis_geometry`, §3.4 round rescale 2026-07-12, `space` gap distribution 2026-07-18); femtovg url image-mask **render** still deferred (backend, scissor no-op) — round/space are visible via the wgpu mask path + background-image |
 | `mask-mode` | ✅ | `alpha` / `luminance` / `match-source` (CSS Masking L1 §6.4); gradient masks bake `luminance(rgb)·alpha` into stop alpha (BUG-218, 2026-06-19) |
-| `mask-origin` | 🟡 | wired: sets the mask positioning area (border/padding/content box) via `background_origin_rect`, initial `border-box` (§4.5) 2026-06-22 |
-| `mask-clip` / `mask-composite` | 🟡 | `mask-clip` full `<coord-box> \| no-clip` grammar ✅: `padding-box`/`content-box`/`fill-box` wrap the mask group in `PushClipRect`/`PopClip` (scissor path; `fill-box` = content box for CSS boxes, CSS Box 4 §1); `border-box`/`stroke-box`/`view-box`/`no-clip` = no-op (border box or unclipped) 2026-07-18; `mask-composite` multi-layer ⬜ |
+| `mask-origin` | ✅ | sets the mask positioning area (border/padding/content box) via `background_origin_rect`, initial `border-box` (§4.5) 2026-06-22 |
+| `mask-clip` / `mask-composite` | 🟡 | `mask-clip` full `<coord-box> \| no-clip` grammar ✅: `padding-box`/`content-box`/`fill-box` wrap the mask group in `PushClipRect`/`PopClip` (scissor path; `fill-box` = content box for CSS boxes, CSS Box 4 §1); `border-box`/`stroke-box`/`view-box`/`no-clip` = no-op (border box or unclipped) 2026-07-18; `mask-composite` multi-layer ⬜ — blocked on multi-layer mask infrastructure: `mask_image` is a single value, not a list |
 
 ### [T2] Compositing
 
@@ -447,8 +447,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Element | Status | Notes |
 |---------|--------|-------|
 | `::before` / `::after` | ✅ | block-level generation ✅; inline ✅ |
-| `::first-line` / `::first-letter` | ⬜ | line split required |
-| `::marker` | ⬜ | list marker box |
+| `::first-line` / `::first-letter` | ✅ | line split done — drop-cap float + `apply_first_letter_pseudo` (WQ#15) |
+| `::marker` | ✅ | `MarkerBox` in `box_tree.rs` (WQ#16); see the T0 Selectors row for the restricted property set |
 | `::placeholder` | ✅ | input placeholder (p4-placeholder-pseudo) |
 | `::selection` | ⬜ | text selection highlight |
 
@@ -456,9 +456,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `background` (shorthand) | 🟡 | single layer ✅; multiple ⬜ |
+| `background` (shorthand) | ✅ | multiple layers — `Vec<BackgroundLayer>` + cycling shorthand (WQ#18) |
 | `background-color` | ✅ | |
-| `background-image` | 🟡 | url() ✅; linear/radial/repeating gradient GPU ✅; conic-gradient ✅ |
+| `background-image` | ✅ | url() ✅; linear/radial/repeating gradient GPU ✅; conic-gradient ✅; multiple layers ✅ (WQ#18) |
 | `background-repeat` / `background-position` / `background-size` | ✅ | `repeat`/`no-repeat`/`repeat-x`/`repeat-y` ✅; `round` ✅ (§3.4 tile rescale to whole count, `bg_tile_geometry` 2026-07-12); `space` ✅ (§3.4 whole tiles pinned to both edges, leftover distributed as equal gaps via `space_axis_geometry`; all tiling paths — femtovg/CPU/wgpu bg+mask; 2026-07-18, test 147) |
 | `background-attachment` | 🟡 | parsed; scroll/fixed ⬜ |
 | `background-origin` / `background-clip` | 🟡 | parsed; text clip ⬜ |
@@ -473,13 +473,13 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `grid-template-columns` / `grid-template-rows` | 🟡 | px/fr/auto/repeat()/minmax() ✅ |
+| `grid-template-columns` / `grid-template-rows` | ✅ | px/fr/auto/repeat()/minmax() |
 | `grid-template-areas` | ✅ | parsed + named area placement in lay_out_grid; GridLine::Named resolved |
 | `grid-template` / `grid` (super-shorthand) | 🟡 | |
 | `grid-auto-columns` / `grid-auto-rows` | 🟡 | |
 | `grid-auto-flow` | ✅ | row/column/dense/column dense ✅ 2026-05-24 |
 | `grid-column*` / `grid-row*` / `grid-area` | 🟡 | auto/int/span |
-| `subgrid` | 🟡 | CSS Grid L2; layout algorithm ✅ 2026-06-03; CSS parsing ✅ (subgrid keyword) |
+| `subgrid` | ✅ | CSS Grid L2; track inheritance via `SubgridContext`/`SUBGRID_COL_CTX`/`SUBGRID_ROW_CTX` in `box_tree.rs` (WQ#30) 2026-06-03 |
 | `masonry` | 🟡 | CSS Grid L3; layout algorithm ✅ 2026-06-10 (`masonry.rs`, greedy waterfall); CSS: masonry-auto-flow P4 |
 
 ### [T2] Intrinsic Sizing
@@ -489,7 +489,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `min-content` | ✅ | Length::MinContent; phase-0 approx = longest-word width 2026-05-24 |
 | `max-content` | ✅ | Length::MaxContent; max_content_outer_width() measures text 2026-05-24 |
 | `fit-content` / `fit-content(L)` | ✅ | Length::FitContent(Option<Box<Length>>); capped at available 2026-05-24 |
-| `stretch` / `available` | 🟡 | parsed as FitContent(None) |
+| `stretch` / `available` | 🟡 | parsed as FitContent(None); distinct semantics ⬜ — both are an alias today, neither stretches to fill nor reports the available space separately |
 
 ### [T2] Transforms L2 / 3D
 
@@ -517,7 +517,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `scroll-snap-type` / `scroll-snap-align` / `scroll-snap-stop` | ✅ | find_scroll_snap_y + proximity snapping |
-| `scroll-margin*` / `scroll-padding*` | 🟡 | parsed |
+| `scroll-margin*` / `scroll-padding*` | 🟡 | parsed; not applied to the snap-port geometry ⬜ |
 | `scroll-behavior` | 🟡 | auto/smooth parsed |
 | `overscroll-behavior*` | 🟡 | parsed; gesture boundary ⬜ |
 | `scroll-timeline` / `view-timeline` | ✅ | scroll-timeline-name/axis, view-timeline-name/axis shorthands+longhands; collect_named_* wired; P4 2026-06-10 |
@@ -531,8 +531,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `column-rule` / `column-rule-*` | ✅ | rendered between columns (solid/dashed/dotted) |
 | `column-span` | 🟡 | parsed; spanning ⬜ |
 | `column-fill` | 🟡 | parsed; balancing ⬜ |
-| `break-before` / `break-after` / `break-inside` | 🟡 | parsed/stored; fragmentation algorithm ⬜ |
-| `orphans` / `widows` | 🟡 | parsed/stored; paged-media layout ⬜ |
+| `break-before` / `break-after` / `break-inside` | ✅ | fragmentation algorithm in `pagination.rs` (Tier4 #45); paged media itself is out of project scope |
+| `orphans` / `widows` | ✅ | `pagination.rs` (Tier4 #45); paged-media output out of scope |
 
 ### [T3] Container Queries
 
@@ -600,10 +600,10 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@charset` | ✅ | parsed; ignored (UTF-8 only) |
 | `@namespace` | ✅ | parsed; no XML namespaces |
 | `@import` | ✅ | URL extracted + file loaded (shell `inline_css_imports`): recursive fetch (file/http via prefetch cache), imported rules prepended (Cascade L4 §6.5), media-query gate, cycle/depth guard; nested imports resolve against the sheet's own URL. Streaming progressive frames apply on the final layout pass |
-| `@media` | 🟡 | condition eval partial; resize hook ⬜ |
-| `@supports` | 🟡 | parsed; feature detection ⬜ |
-| `@font-face` | 🟡 | descriptors parsed; loading ⬜ |
-| `@keyframes` | 🟡 | parsed; scheduler ⬜ |
+| `@media` | ✅ | condition eval + re-eval on resize (Tier1 #12); residual is JS-side only — `matchMedia` live change events, see WQ#11 |
+| `@supports` | ✅ | feature detection incl. `selector()`/`font-tech()`/`font-format()` (Tier3 #36) |
+| `@font-face` | ✅ | descriptors parsed + file loading (`font-display: swap`, async fetch) (WQ#20) |
+| `@keyframes` | ✅ | parsed + `AnimationScheduler::tick` (WQ#3) |
 | `@layer` | ✅ | parsed; cascade ordering ✅ |
 | `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
 | `@color-profile` | 🟡 | CSS Color L5 §4; parsed+stored (`ColorProfileRule`, css-parser); `color(--name c1 c2 c3)` recognized in `parse_css_color_fn` (style.rs); real ICC transform + declared-name validation deferred (p4-color-profile 2026-07-15, test 142, KNOWN_DEBTOR BUG-282) |
@@ -624,7 +624,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `Q` | ✅ | = 0.25mm → px |
 | `calc()` | ✅ | arithmetic |
 | `min()`/`max()`/`clamp()` | ✅ | comparison |
-| `var()` | 🟡 | partial substitution |
+| `var()` | ✅ | recursive + fallback + calc() + env() + cycle guard (see T1 Custom Properties) |
 | `url()` | ✅ | |
 | `svh`/`dvh`/`lvh`/`svw`/`dvw`/`lvw` | ✅ | = vh/vw (Phase 0 fixed viewport) |
 | `svmin`/`dvmin`/`lvmin`/`svmax`/`dvmax`/`lvmax` | ✅ | = vmin/vmax |
@@ -651,7 +651,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `shape-outside` / `shape-margin` / `shape-image-threshold` | 🟡 | parsed; float wrapping ⬜ |
-| `offset` / `offset-path` / `offset-distance` / `offset-rotate` / `offset-anchor` | 🟡 | parsed; motion layout algorithm stub ready (P1 2026-06-02); CSS wiring pending (P4) |
+| `offset` / `offset-path` / `offset-distance` / `offset-rotate` / `offset-anchor` | 🟡 | `offset-path`/`offset-distance`/`offset-rotate`/`ray()` wired end-to-end (Tier4 #44); residual: `offset-anchor` and `url()` motion paths ⬜ |
 
 ### [T4] Containment (advanced)
 
