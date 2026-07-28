@@ -2261,9 +2261,9 @@
       {
        "id": "WPT-VENDOR-fonts",
        "title": "WPT: вендорить + прогнать категорию `fonts`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/fonts/`, 205 файлов + `LICENSE-WPT.md`), скоуп ⬜ (кандидат). Не тестовая категория — чисто ресурсный каталог (Ahem/CSSTest/Lato/GentiumPlus/noto и др.), собственный `README.md` отсылает тесты к `/css-fonts`: ни одного `.html`/`.js` нет. `run_report.py --all --root fonts --recursive` — `no tests selected`, 0 id. Проба уровнем выше (`@font-face { src: url(Ahem.ttf) }`, `--dump-layout`): ширина текста в headless-снимке соответствует fallback-шрифту, а не Ahem — не баг, а ожидаемое ограничение однослотовых headless-путей (`--dump-layout`/`--screenshot`/…), которые не крутят `about_to_wait` и потому не дожидаются асинхронного `FontLoaded` для `url()`-источников (PH3-19 FOUT-механизм рассчитан на живой event-loop). Других находок нет"
       },
       {
        "id": "WPT-VENDOR-forced-colors-mode",
