@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 119,
+  "open": 124,
   "fixed": 273,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 392,
+ "total_bugs": 397,
  "phases": [
   {
    "id": "P0",
@@ -4050,6 +4050,16 @@
        "note": "Research: разрез конвейера «после матчинга» — пред-вычисленные списки деклараций на узел (+альтернативные наборы для hover/тем/профилей) и вход в layout мимо Stylesheet; требует расчленения compute_style/build_box; только при доказанной перф-нужде из CC-12"
       },
       {
+       "id": "CC-18",
+       "title": "CC-18: Плавающая панель управления",
+       "status": "planned",
+       "size": "M",
+       "note": "Плавающая панель управления как штатная фича браузера (решение пользователя 2026-07-28, не обсуждается): перенести из макета `demo-bar` в продуктовый хром — перетаскиваемая панель поверх контента с переключателями профиля (Личный/Рабочий/Аноним/Гость), темы, раскладки вкладок (вертикальные/горизонтальные), экрана (Новая/Страница/История/Закладки/Настройки) и режима Фокус; 7 форм самой панели (Карточка/Компакт/Полоса/Док/Сетка/Панель/Мини), дабл-клик по шапке — сброс позиции, Ctrl+K — палитра. Генератор ассетов сейчас вырезает `demo-bar` как «не продукт» (scripts/gen_chrome_assets.py, strip_demo_bar_html) — вырезание отменяется, onclick-обработчики переезжают в Rust по образцу CC-5. Блокер: BUG-426, без него переключатели мертвы. После BUG-426",
+       "bugs": [
+        "BUG-426"
+       ]
+      },
+      {
        "id": "CC-CSS-1",
        "title": "CC-CSS-1: -webkit-скроллбары + font-smoothing",
        "status": "done",
@@ -6941,6 +6951,41 @@
    "component": "chrome (`#view-history`, `#view-bookmarks`), shell (`panels/history_panel.rs`, `panels/bookmark_panel.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-423": {
+   "status": "open",
+   "title": "**Сабсеты `unicode-range` одной @font-face-семьи затирают друг друга — с реальных страниц пропадают буквы.** yandex.ru отдаёт «Stella Sans» 16 сабсетами с одной…",
+   "component": "font (`font_registry.rs:56` — `register_from_bytes`), shell (`main.rs:12102` — `LoadEvent::FontLoaded`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-424": {
+   "status": "open",
+   "title": "Иконки движкового хрома рисуются мусором: назад/вперёд/reload — несколько наложенных штрихов ~10 px, правый кластер из 7 кнопок сжат в ~20 px у правого края окн…",
+   "component": "chrome (`assets/chrome/chrome.html` — инлайн SVG-спрайт), paint (`<use href=\"#id\">`), shell (раскладка тулбара)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-425": {
+   "status": "open",
+   "title": "Вертикальный сайдбар: все элементы списка вкладок нарисованы на одной строке поверх друг друга (в макете — вертикальное дерево из 5 строк), заголовок группы `ВК…",
+   "component": "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-426": {
+   "status": "open",
+   "title": "Пять действий хрома сведены в пустую ветку `=> {}` (`SetProfile`, `ArchiveCard`, `ToggleSwitch`, `ToggleFocusTimer`, `ToggleFocus`, `SetDevtoolsTab`): профиль н…",
+   "component": "shell (`main.rs:9807` — `dispatch_chrome_action`), chrome, `scripts/gen_chrome_assets.py`",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-427": {
+   "status": "open",
+   "title": "Вёрстка https://yandex.ru: поисковая строка наезжает на шапку, правая колонка — пустые серые плашки, подписи карточек съехали, ряд ссылок шапки наложен сам на с…",
+   "component": "layout / paint (не локализован)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6949,6 +6994,12 @@
   ],
   "bidi-server (protocol.rs)": [
    "BUG-319"
+  ],
+  "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout": [
+   "BUG-425"
+  ],
+  "chrome (`assets/chrome/chrome.html` — инлайн SVG-спрайт), paint (`<use href=\"#id\">`), shell (раскладка тулбара)": [
+   "BUG-424"
   ],
   "css-parser": [
    "BUG-022",
@@ -6990,6 +7041,9 @@
   ],
   "font (`Rasterizer::rasterize`)": [
    "BUG-283"
+  ],
+  "font (`font_registry.rs:56` — `register_from_bytes`), shell (`main.rs:12102` — `LoadEvent::FontLoaded`)": [
+   "BUG-423"
   ],
   "font (`system_fonts.rs`)": [
    "BUG-329"
@@ -7181,6 +7235,9 @@
   ],
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"
+  ],
+  "layout / paint (не локализован)": [
+   "BUG-427"
   ],
   "layout+paint": [
    "BUG-005",
