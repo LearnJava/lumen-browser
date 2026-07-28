@@ -3171,29 +3171,123 @@ The groups do not overlap on min in any round on either scenario.
 `CC12_KEY` is inside by min (0.73-0.77) and ~1.05-1.25x on p95 (2.09-2.50, was
 ~1.3-1.5x). The gate is formally red on `CC12_KEY`'s p95 alone.
 
-### What S24 should look at
+## S24 — the cascade cache, carried instead of rebuilt
 
-Both of this slice's items are now floors, not costs: the pseudo stage is 6
-calls with 6 hits, and the counter snapshots are gone. What remains on the KEY
-cycle, from the same census:
+### Census first (ninth in a row), and it split the queue's item in two
 
-- **`CounterMap::styles` and `clean_subtrees`, still rebuilt from scratch** —
-  828 inserts each, ~0.02-0.12 ms after the capacity reservation. A HOVER cycle
-  reuses every one of the 828 styles from `prev_styles` and then re-inserts all
-  828 into a fresh map, and the pipeline afterwards clones the map again to
-  become the next cycle's `prev_styles`. The S19 answer applies verbatim: hand
-  the previous map **in by value** and overwrite only the recomputed entries
-  instead of rebuilding it. Two things must be settled first — how entries for
-  nodes deleted from the DOM are evicted (a recycled `NodeId` served a stale
-  style is visible corruption, not a slow frame), and that `clean_subtrees` is
-  a *per-pass* fact and cannot be carried over, only recomputed or inverted
-  (represent the dirty closure instead of its complement).
-- the box-build stage on KEY (28 boxes, ~0.3 ms of self-time), the largest
-  single stage left.
+`bug341_s20_stage_census` on the pre-slice code:
 
-Census first, and check it sees all threads: S23 is the fourth slice where a
-thread-local tally was the thing that had to be fixed before the finding could
-be trusted.
+| | HOVER | KEY |
+|---|---|---|
+| whole pass | 0.271-0.337 ms | 0.657-0.721 ms |
+| `precompute_counters` share (profile tree) | ~55-60 % | ~40 % |
+| `CounterMap` replay: `styles` (828) | 0.018-0.037 ms | 0.018-0.068 ms |
+| `CounterMap` replay: `clean_subtrees` (818-828) | 0.013-0.014 ms | 0.013-0.016 ms |
+| `CounterMap` replay: counter snapshots | 0 (S23) | 0 (S23) |
+
+So the queue's premise held in shape — the cascade stage is the largest item on
+both scenarios and the map inside it is rebuilt every pass — but the census
+sized the part **this slice removes** (the `styles` half) at ~6-10 % of the
+cycle, i.e. below the ±10-15 % noise floor of the project's A/B protocol.
+That is worth writing down before the code, not after: on this fixture a
+counter gate was always going to be the only report available.
+
+The queue's second named cost, *"the pipeline afterwards clones the map again"*,
+the census could not see at all (it clones outside the timed region). The bench
+split could: `clone_styles` is **0.01-0.07 ms**, because `HashMap::clone` copies
+the raw table and bumps 828 refcounts rather than re-inserting. That half of the
+note was simply wrong, and only the measurement says so.
+
+### What the slice does
+
+`CascadeStyles` — the per-node cascade cache — is moved into the pass
+(`RestyleDelta::prev_styles`, by value) and moved back out inside its
+`CounterMap` (`CounterMap::into_styles`). `walk`'s reuse path is one `get_mut`
+where S3-S23 needed three hash operations (`contains_key` for the decision, an
+index for the value, an insert into a fresh map). The pipeline's
+`styles().clone()` is gone from both the chrome and the page path.
+
+Two consequences, and each of them is *visible corruption* rather than a slow
+frame if it is left unhandled:
+
+1. **The graft asked "what cascade was `prev` built from".** The live map now
+   holds *this* pass's values, and the freshly built box holds the very same
+   allocation — so `Arc::ptr_eq` would report "unchanged" for exactly the nodes
+   whose style changed, and their boxes would keep last pass's geometry under a
+   new style. The pass therefore records what it **displaced**
+   (`CounterMap::replaced_styles`: one entry on a keystroke cycle, none on a
+   hover flip) and the graft reads through `PrevCascade` — displaced first, live
+   second. The S22 shape: keep the difference, not a copy of the whole.
+2. **An entry existed iff the immediately preceding pass visited that node.**
+   Nothing named that property, but it is what forces a recompute for a node
+   detached and re-attached, or moved to a new parent, whose style was cascaded
+   under a different inherited chain. (`lumen_dom` allocates `NodeId`s
+   monotonically and never frees a node, so a stale entry is not a wrong-*node*
+   hazard — the queue's worry — but a wrong-*pass* one.) Entries carry a pass
+   ordinal and `finish_pass` sweeps the untouched ones whenever the counts
+   disagree: the old rebuild's price on the rare pass that removed something,
+   and nothing at all in the steady state.
+
+### Gates — by counter, each on both arms
+
+- `bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_it`
+  (lumen-shell, runs by default): eight interaction cycles write into **one**
+  map (`passes_lived == 8`) and none of them sweeps; then a cycle with a
+  shrunken model really detaches rows, must sweep, and must leave no detached
+  node in the cache. The second arm is the load-bearing one — the cheapest way
+  to satisfy "never rebuild" is to never evict, which breaks the invariant
+  above.
+- `bug341_s24_the_pass_records_the_style_it_displaced_for_the_graft`
+  (lumen-layout): the displaced entry holds the *pre*-change value while the
+  live one holds the new one, and a node the pass reused stays **out** of the
+  record (a "record" that copied the whole map would satisfy arm one while
+  restoring the per-pass copy). Verified to redden: with the record removed the
+  test fails on the missing entry.
+
+### Measurement — no wall-clock claim
+
+Interleaved A/B x3 against `main` (4738d6245), by min:
+
+| | main | S24 |
+|---|---|---|
+| `CC12_HOVER` min | 0.47 / 0.40 / 0.41 ms | 0.42 / 0.43 / 0.39 ms |
+| `CC12_KEY` min | 0.77 / 0.73 / 0.73 ms | 0.72 / 0.70 / 0.74 ms |
+| `clone_styles` phase | 0.01-0.07 ms | **0.00 ms** |
+
+The groups overlap on both scenarios, so **no claim is made**. What is asserted
+is what the counters show: the map is carried (`passes_lived` grows with the
+cycle count), the steady state never sweeps, and the pipeline copy is gone. The
+census had already sized the removed work below the protocol's resolution;
+this is that prediction coming true, not a surprise.
+
+`dump_golden.py` 12/12 with no diff. The CC-12 gate is where S23 left it —
+inside budget by min on both scenarios, formally red on `CC12_KEY`'s p95.
+
+### What S25 should look at
+
+- **`clean_subtrees`, still built from scratch** — 818-828 inserts per pass,
+  0.013-0.016 ms. The set is closed downward (a node is clean iff its whole
+  subtree is), so its complement is a handful of nodes: 0 on HOVER, 10 on KEY.
+  Represent the dirty closure instead. **The trap is that membership is
+  elements-only, and that is load-bearing**: `extract_clean_subtrees` queries
+  `clean.contains(&box.node)`, and an anonymous flex wrapper is keyed by a
+  *text* node the cascade never visits. A naive `!dirty.contains(id)` reports
+  those clean, and `build_box_or_reuse` would then hand the text node's slot a
+  wrapper box that belongs around it — a wrong tree, not a slow frame. So the
+  inverted form needs a variant for "nothing is clean" (full pass / `Untracked`
+  content record, where today's empty set means exactly that) and an
+  elements-only predicate, which means passing `doc` into
+  `extract_clean_subtrees`.
+- **the box-build stage on KEY** — 28 boxes, ~0.32 ms of self-time, of which
+  `div.omnibox-wrap` alone is 0.13-0.17 ms. This is the largest single item left
+  on either scenario and, unlike the cascade-cache work, it is comfortably above
+  the noise floor. Take it first if only one fits.
+
+And a methodological note this slice earned: **when the census sizes an item
+below the noise floor of the measurement protocol, decide *before* writing the
+code that a counter gate is a sufficient report.** Nine censuses in, the habit
+of running one first is established; what it does not yet do is ask whether the
+number it produced is large enough for the protocol that will have to confirm it.
 
 ## Repro
 
