@@ -64,7 +64,17 @@ root cause:
 
 * `accelerometer` — `accelerometer-supported-by-permissions-policy.html`,
 * `ambient-light` — `AmbientLightSensor-supported-by-permissions-policy.html`,
-* `encrypted-media` — этот тест.
+* `encrypted-media` — этот тест,
+* `font-access` — `permissions-policy/local-fonts-supported-by-permissions-policy.html`
+  (P2, WPT-VENDOR-font-access 2026-07-28): четвёртая категория, и здесь цена
+  максимальна — это **единственный** тест категории, который вообще исполняется
+  (остальные 11 уходят в HTTPS-порт-гэп и testdriver-SKIP), поэтому баг в
+  одиночку определяет её результат: 1/12 harness OK, 0/1 сабтестов.
+  Проба той же страницы: `features()` — 0 элементов, `allowsFeature('local-fonts')`
+  — `true`, `allowsFeature('made-up-xyz')` — тоже `true` (для
+  **нераспознанного** имени спека требует `false`, так что default-allow из
+  `permissions_policy.rs:39` покрывает не только незаявленные, но и
+  несуществующие фичи — учесть при фиксе п.1).
 
 Апстрим содержит такой `*-supported-by-permissions-policy*` тест почти в каждой
 категории, чья фича упомянута в реестре Permissions Policy (`gyroscope`,
