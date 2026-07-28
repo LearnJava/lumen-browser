@@ -2009,8 +2009,25 @@ impl Renderer {
         // preference chain below (also used when the probe is disabled or this
         // isn't Windows). `WGPU_BACKEND` env-var still overrides both.
         let probed = crate::backend_probe::pick_backend(&window).await;
+        // Windows order is Vulkan-first (2026-07-28, user decision): pipeline
+        // compilation on this Intel Iris Plus costs ~0.28 s on Vulkan against
+        // 3–7 s on DX12 for the exact same 16 pipelines (measured under
+        // `LUMEN_FRAME_LOG=1`, see `bugs/BUG-274-OPEN.md` and BUG-406) — that
+        // gap is the bulk of the "window says Not Responding on launch"
+        // report. It matches `backend_probe::pick_backend`'s own candidate
+        // order (Vulkan → GL → DX12), so the two no longer disagree.
+        //
+        // This chain is only consulted when the probe does *not* decide: the
+        // probe's accepted candidate is prepended below, so on a normal
+        // Windows launch the probe still wins. It governs when the probe is
+        // switched off (`LUMEN_NO_BACKEND_PROBE=1`) or reports `None`. In
+        // that first case the BUG-275 white-window risk is no longer screened
+        // by a real presentation check — the probe exists precisely because
+        // some Intel iGPUs present a blank Vulkan swapchain — so a machine
+        // hitting BUG-275 *and* disabling the probe now needs an explicit
+        // `WGPU_BACKEND=dx12`.
         let static_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
-            &[wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
+            &[wgpu::Backends::VULKAN, wgpu::Backends::DX12, wgpu::Backends::GL]
         } else {
             &[wgpu::Backends::PRIMARY, wgpu::Backends::GL]
         };
@@ -2150,10 +2167,15 @@ impl Renderer {
         height: u32,
         target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Mirror the windowed-mode fallback chain (BUG-057/274/275) minus the
-        // probe: headless has no window to verify real presentation against, and
-        // callers (tests, `--screenshot`, driver snapshots) need deterministic
-        // backend selection run to run. `WGPU_BACKEND` still overrides.
+        // Headless keeps DX12 first — deliberately **not** the windowed chain's
+        // Vulkan-first order (2026-07-28). Callers here (tests, `--screenshot`,
+        // driver snapshots) are pixel-comparison paths that need the same
+        // adapter run to run, and there is no window to verify presentation
+        // against, so the probe cannot screen BUG-275. Startup pipeline-compile
+        // latency — the reason the windowed chain flipped (BUG-406) — does not
+        // matter for a one-shot headless render, whereas silently changing which
+        // GPU API rasterizes the reference images would. `WGPU_BACKEND` still
+        // overrides.
         let backend_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
             &[wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
         } else {
