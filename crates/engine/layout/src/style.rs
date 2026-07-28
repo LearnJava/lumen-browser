@@ -20493,8 +20493,13 @@ fn apply_mask_longhand<T: Copy>(
 /// остаются initial-значениями [`MaskLayer::default`] — это и есть reset-часть
 /// семантики шортхенда.
 ///
-/// `<geometry-box>`: первое вхождение задаёт **и** `mask-origin`, **и**
-/// `mask-clip`; второе — только `mask-clip` (§4.8, как у `background`).
+/// `<geometry-box>` заполняет два независимых слота — origin и clip — а не
+/// «первое вхождение / второе вхождение» подряд: `no-clip` может занять слот
+/// clip только, поэтому `no-clip padding-box` даёт `origin: padding-box` +
+/// `clip: no-clip`, а не `clip: padding-box`. Одиночный `<geometry-box>`
+/// задаёт **оба** слота (§4.8, как у `background`); при двух — первый идёт в
+/// origin, второй в clip.
+///
 /// Ключевые слова `fill-box` / `stroke-box` / `view-box` в позиции origin
 /// схлопываются до `border-box`-семантики (`mask-origin` в нашей модели —
 /// [`BackgroundOrigin`] из трёх CSS-боксов), но в позиции clip сохраняются
@@ -20509,9 +20514,10 @@ fn parse_single_mask_layer(
     let tokens = tokenize_bg_layer(layer_str);
     let n = tokens.len();
     let mut idx = 0;
-    // Сколько `<geometry-box>` уже встретилось: первое → origin + clip,
-    // второе → только clip.
-    let mut geometry_boxes = 0u8;
+    // Слоты origin / clip заполняются независимо: `no-clip` занимает только
+    // clip, поэтому счётчиком «первый / второй бокс» обойтись нельзя.
+    let mut origin_set = false;
+    let mut clip_set = false;
 
     while idx < n {
         let t = tokens[idx];
@@ -20564,16 +20570,24 @@ fn parse_single_mask_layer(
 
         // <geometry-box> | no-clip
         if let Some(c) = MaskClip::parse(t) {
-            if geometry_boxes == 0 && !t.eq_ignore_ascii_case("no-clip") {
-                // Первый бокс задаёт origin и clip сразу.
+            if t.eq_ignore_ascii_case("no-clip") {
+                // `no-clip` валиден только как mask-clip — слот origin не трогаем.
+                layer.clip = c;
+                clip_set = true;
+            } else if !origin_set {
+                // Первый настоящий <geometry-box> идёт в origin и, пока clip не
+                // занят, дублируется в clip (одиночный бокс задаёт оба).
                 if let Some(o) = BackgroundOrigin::parse(t) {
                     layer.origin = o;
                 }
+                origin_set = true;
+                if !clip_set {
+                    layer.clip = c;
+                }
+            } else if !clip_set {
                 layer.clip = c;
-            } else {
-                layer.clip = c;
+                clip_set = true;
             }
-            geometry_boxes = geometry_boxes.saturating_add(1);
             idx += 1;
             continue;
         }

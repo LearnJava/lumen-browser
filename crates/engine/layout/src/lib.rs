@@ -10733,6 +10733,24 @@ mod tests {
     }
 
     #[test]
+    fn mask_shorthand_no_clip_before_geometry_box() {
+        // `||` — порядок свободный: `no-clip` занимает слот clip, поэтому
+        // следующий <geometry-box> обязан попасть в origin, а не затереть clip.
+        let root = lay("<p>x</p>", "p { mask: url(m.png) no-clip padding-box; }");
+        let m = first_p_mask(&root);
+        assert_eq!(m.origin, BackgroundOrigin::PaddingBox);
+        assert_eq!(m.clip, MaskClip::NoClip);
+    }
+
+    #[test]
+    fn mask_shorthand_two_geometry_boxes_fill_origin_then_clip() {
+        let root = lay("<p>x</p>", "p { mask: url(m.png) padding-box content-box; }");
+        let m = first_p_mask(&root);
+        assert_eq!(m.origin, BackgroundOrigin::PaddingBox);
+        assert_eq!(m.clip, MaskClip::ContentBox);
+    }
+
+    #[test]
     fn mask_shorthand_resets_unspecified_longhands() {
         let root = lay(
             "<p>x</p>",
