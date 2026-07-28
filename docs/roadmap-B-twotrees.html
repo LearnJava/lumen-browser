@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 79,
+  "open": 83,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 351,
+ "total_bugs": 355,
  "phases": [
   {
    "id": "P0",
@@ -2255,9 +2255,15 @@
       {
        "id": "WPT-VENDOR-focus",
        "title": "WPT: вендорить + прогнать категорию `focus`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/focus/`, 116 файлов: `WEB_FEATURES.yml` — `META.yml` у категории нет, 45 файлов верхнего уровня (из них 2 `-ref.html` эталона reftest-ов и 2 crashtest-а), `support/` из 69 хелперов (25 — `.sub.html`), `LICENSE-WPT.md`), скоуп ⬜ (кандидат). `run_report.py --all --root focus --recursive` — **8 мин 21 с, 7/39 harness OK, 0/7 сабтестов** (28 TIMEOUT, 4 SKIP, 7 `Test OK`, все семь с падающими сабтестами). Глоб дал 45 id, wptrunner отобрал 39. Структурно это самая дешёвая категория backlog-а и первая, где стена — движок, а не порты: ни одного `.https.` файла, variant-ов нет, `testdriver.js` тянут 5 файлов из 115. Три четверти id умирают до своего утверждения по двум разным причинам: 17 из 39 — на BUG-359 (`window.open` не резолвит относительный URL; прогон дал этому багу численный ценник, а не новую находку), ещё ~13 — на отсутствии у `<iframe>` browsing context вообще (`contentWindow`/`contentDocument` — `null`, `window.frames === window`, `window.length` 0 при двух `<iframe>`). Сигнал дали 7 исполнившихся тестов и распался на четыре находки. BUG-381 (головная): focus-API нет в JS вовсе — `Element.prototype.focus`/`blur`, `document.activeElement`, `document.hasFocus`, `window.focus`/`blur`, `tabIndex`/`autofocus` — `undefined`, события `focus`/`blur`/`focusin`/`focusout` шелл не диспатчит, при том что настоящее состояние фокуса у шелла есть и работает (`focused_node` → `:focus`, клавиатура/IME, `EVENT_OBJECT_FOCUS`), а приватные нативы `_lumen_request_focus`/`_lumen_request_blur` заведены ради `<dialog>.showModal()`. BUG-382 (самая тяжёлая и не про focus): `getComputedStyle()` отдаёт пустую строку для каждого свойства, а `getBoundingClientRect()` — нулевой прямоугольник, примерно в трёх загрузках из четырёх — гонка выкладки снимков геометрии/стилей в JS-контекст; сериализация исправна (79 свойств в `computed_style_to_map`), карта в рантайме пуста и через 6 с не восстанавливается. BUG-383: IDL-рефлексия атрибутов почти отсутствует (`a.href`, `input.disabled/readOnly/required/maxLength/placeholder`, `select.selectedIndex/options`, `textarea.rows`) вместе с методами активации (`HTMLElement.prototype.click`, `input.select`, `form.submit`/`reset`; `form.elements` — обычный `Array`). BUG-384: named access on Window не реализован (`'input1' in window` === `false`), из-за чего 3 из 7 исполнившихся тестов умирают `ReferenceError`-ом до своего утверждения и маскируют BUG-381. Инфраструктурное замечание: `.sub.html` отдаются wptserve с HTTP 500 (подстановочный пайп роняет `AssertionError` на `{{ports[https][0]}}` при `\"https\": [null, null]` в `config.json`) — второй, серверный режим отказа HTTPS-порт-гэпа, отличный от привычного клиентского `invalid port: \"None\"`. `CAPABILITIES.md`: строка DOM переведена с ✅ на 🟡",
+       "bugs": [
+        "BUG-381",
+        "BUG-382",
+        "BUG-383",
+        "BUG-384"
+       ]
       },
       {
        "id": "WPT-VENDOR-font-access",
@@ -6505,6 +6511,34 @@
    "status": "open",
    "title": "`LumenTestharnessExecutor` не проверяет исход `browsing_context.navigate` и не очищает `window.__lumen_wpt_results` между тестами, а browsing context переисполь…",
    "component": "tests/wpt tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py:110-150` — `_run_testharness`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-381": {
+   "status": "open",
+   "title": "Весь focus-API отсутствует в JS: `Element.prototype.focus`/`blur`, `document.activeElement`, `document.hasFocus`, `window.focus`/`blur`, IDL-рефлексия `tabIndex…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: ни фабрика элементов, ни живой `document` не определяют `focus`/`blur`/`activeElement`/`hasFocus`), shell (`crates/shell/src/main.rs:8110` — состояние `focused_node`, которое в JS не отдаётся)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-382": {
+   "status": "open",
+   "title": "`getComputedStyle()` отдаёт пустую строку для КАЖДОГО свойства, а `getBoundingClientRect()` — нулевой прямоугольник, примерно в трёх загрузках из четырёх: выкла…",
+   "component": "shell (`crates/shell/src/main.rs:10321-10337`, `main.rs:11067-11071` — единственные точки, где `collect_layout_rects`/`collect_computed_styles` доезжают до JS, обе внутри пути relayout), js (`crates/js/src/dom.rs:2498`, `dom.rs:12607`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-383": {
+   "status": "open",
+   "title": "IDL-рефлексия HTML-атрибутов почти отсутствует, а с ней и методы активации. `undefined`: `a.href`, `input.disabled/readOnly/required/maxLength/placeholder/patte…",
+   "component": "js (`crates/js/src/dom.rs` — фабрика живых элементов `_lumen_make_element`: набор рефлектируемых свойств подобран вручную)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-384": {
+   "status": "open",
+   "title": "Named access on Window (HTML LS §7.3.3) не реализован: `<input id=\"input1\">` не даёт ни `window.input1`, ни голого `input1`, и `'input1' in window` === `false`.…",
+   "component": "js (`crates/js/src/dom.rs` — именованные свойства на глобале не заводятся; правильное место правки — `v8_runtime.rs`, `NamedPropertyHandlerConfiguration`)",
    "date": null,
    "debtor": false
   }
