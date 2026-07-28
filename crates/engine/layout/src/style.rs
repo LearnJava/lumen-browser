@@ -247,6 +247,98 @@ fn scrollbar_pseudo_cascades() -> u32 {
     SCROLLBAR_PSEUDO_CASCADES.with(|c| c.get())
 }
 
+/// BUG-341 S20 — per-pass tally of [`CascadeIndex`] rebuilds.
+///
+/// [`invalidate_rule_idx_cache`] is called at the top of every layout pass, so
+/// the index — which walks every rule in the sheet four times over
+/// ([`RuleIndex::build`], the `@layer`/`@media`/`@supports` blocks, the two
+/// sheet-wide predicates) — is rebuilt on the first `compute_style` of every
+/// frame, whether or not the sheet changed. The counter exists because that
+/// rebuild is invisible in output and lands *inside* `precompute_counters`'
+/// profile scope, where it reads as cascade cost.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CascadeIndexStats {
+    /// [`CascadeIndex::build`] calls since the last drain.
+    pub builds: u32,
+    /// Nanoseconds those calls took.
+    pub build_ns: u64,
+}
+
+thread_local! {
+    /// BUG-341 S20 instrumentation, see [`CascadeIndexStats`]. Always compiled:
+    /// the timer runs once per rebuild, not per node, and a rebuild already
+    /// costs orders of magnitude more than reading the clock.
+    static CASCADE_INDEX_STATS: Cell<CascadeIndexStats> =
+        const { Cell::new(CascadeIndexStats { builds: 0, build_ns: 0 }) };
+}
+
+/// Returns the accumulated [`CascadeIndexStats`] and resets the tally.
+pub fn take_cascade_index_stats() -> CascadeIndexStats {
+    CASCADE_INDEX_STATS.with(|s| s.replace(CascadeIndexStats::default()))
+}
+
+/// BUG-341 S20 — per-pass tally of [`compute_pseudo_element_style`] calls.
+///
+/// A pseudo-element cascade is a full candidate match plus, on a hit, a
+/// 302-field starting style. S10 found three of them per element at the
+/// *cascade* stage and removed them; the same shape survives at the *box-build*
+/// stage, where every flex/grid container unconditionally asks for its own
+/// `::before` and `::after`. Counted because the answer is almost always `None`
+/// and therefore invisible in the produced tree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PseudoCascadeStats {
+    /// [`compute_pseudo_element_style`] calls that got as far as matching (i.e.
+    /// the node was an element).
+    pub calls: u32,
+    /// Of those, the ones that produced a style rather than `None`.
+    pub hits: u32,
+    /// Nanoseconds those calls took.
+    pub ns: u64,
+}
+
+thread_local! {
+    /// BUG-341 S20 instrumentation, see [`PseudoCascadeStats`]. Always compiled:
+    /// one clock read against a call that walks the sheet's candidate buckets.
+    ///
+    /// Thread-local, and `build_box` fans flex/grid containers out over rayon
+    /// workers (the S15 trap), so a census reading this from the layout thread
+    /// sees only the containers built there. That is enough for attribution —
+    /// the chrome document's rebuilt spine is built on the calling thread — but
+    /// it is not a count of the whole document.
+    static PSEUDO_CASCADE_STATS: Cell<PseudoCascadeStats> =
+        const { Cell::new(PseudoCascadeStats { calls: 0, hits: 0, ns: 0 }) };
+}
+
+/// Returns the accumulated [`PseudoCascadeStats`] and resets the tally.
+pub fn take_pseudo_cascade_stats() -> PseudoCascadeStats {
+    PSEUDO_CASCADE_STATS.with(|s| s.replace(PseudoCascadeStats::default()))
+}
+
+/// Folds one [`compute_pseudo_element_style`] call into the tally.
+fn note_pseudo_cascade(ns: u64, hit: bool) {
+    PSEUDO_CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.calls += 1;
+        v.hits += u32::from(hit);
+        v.ns += ns;
+        s.set(v);
+    });
+}
+
+/// [`CascadeIndex::build`], tallied into [`CascadeIndexStats`]. Every cache
+/// refill goes through here, so the counter cannot drift from reality.
+fn build_cascade_index_timed(sheet: &Stylesheet, media_ctx: &MediaContext) -> CascadeIndex {
+    let t = std::time::Instant::now();
+    let idx = CascadeIndex::build(sheet, media_ctx);
+    CASCADE_INDEX_STATS.with(|s| {
+        let mut v = s.get();
+        v.builds += 1;
+        v.build_ns += t.elapsed().as_nanos() as u64;
+        s.set(v);
+    });
+    idx
+}
+
 /// Invalidate the thread-local rule-index cache.
 ///
 /// Must be called at the start of every layout pass (`layout_measured_hyp`).
@@ -278,7 +370,7 @@ fn with_cascade_index<R>(
         let mut cached = cell.borrow_mut();
         if cached.0 != sheet_ptr || cached.1 != sheet_rules_len || cached.2 != media_key {
             let media_ctx = media_context_from_viewport(viewport, dark_mode);
-            *cached = (sheet_ptr, sheet_rules_len, media_key, CascadeIndex::build(sheet, &media_ctx));
+            *cached = (sheet_ptr, sheet_rules_len, media_key, build_cascade_index_timed(sheet, &media_ctx));
         }
     });
     RULE_IDX_CACHE.with(|cell| f(&cell.borrow().3))
@@ -6961,7 +7053,7 @@ pub fn compute_style(
         let mut cached = cell.borrow_mut();
         if cached.0 != sheet_ptr || cached.1 != sheet_rules_len || cached.2 != media_key {
             let media_ctx = media_context_from_viewport(viewport, dark_mode);
-            *cached = (sheet_ptr, sheet_rules_len, media_key, CascadeIndex::build(sheet, &media_ctx));
+            *cached = (sheet_ptr, sheet_rules_len, media_key, build_cascade_index_timed(sheet, &media_ctx));
         }
     });
     let cands = RULE_IDX_CACHE.with(|cell| {
@@ -8067,6 +8159,25 @@ pub fn compute_pseudo_element_style(
     if !matches!(doc.get(node).data, NodeData::Element { .. }) {
         return None;
     }
+    // BUG-341 S20 census hook — see `PseudoCascadeStats`.
+    let t_pseudo = std::time::Instant::now();
+    let out = compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode);
+    note_pseudo_cascade(t_pseudo.elapsed().as_nanos() as u64, out.is_some());
+    out
+}
+
+/// The body of [`compute_pseudo_element_style`] — split out so the census hook
+/// above covers every exit path.
+#[allow(clippy::too_many_arguments)]
+fn compute_pseudo_element_style_inner(
+    doc: &Document,
+    node: NodeId,
+    pseudo: &str,
+    sheet: &Stylesheet,
+    parent: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+) -> Option<ComputedStyle> {
     let _prof = lumen_core::profile::scope_detail("pseudo_style");
 
     // Собираем matching declarations из всех правил.
@@ -8094,7 +8205,7 @@ pub fn compute_pseudo_element_style(
         let mut cached = cell.borrow_mut();
         if cached.0 != sheet_ptr || cached.1 != sheet_rules_len || cached.2 != media_key {
             let media_ctx = media_context_from_viewport(viewport, dark_mode);
-            *cached = (sheet_ptr, sheet_rules_len, media_key, CascadeIndex::build(sheet, &media_ctx));
+            *cached = (sheet_ptr, sheet_rules_len, media_key, build_cascade_index_timed(sheet, &media_ctx));
         }
     });
     let cands = RULE_IDX_CACHE.with(|cell| {

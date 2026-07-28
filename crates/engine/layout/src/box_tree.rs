@@ -87,6 +87,15 @@ pub struct BoxBuildStats {
     /// which hashed every box in it. A mechanism that regresses to the latter
     /// still produces the same output, just slowly.
     pub prev_index_visited: u32,
+    /// BUG-341 S20 — flex/grid containers this pass dispatched onto rayon
+    /// workers (the `RAYON_MIN_FLEX_CHILDREN` branch).
+    ///
+    /// The fan-out is invisible in output — it produces the identical tree —
+    /// and its cost is thread-pool overhead, which machine noise hides. Only a
+    /// counter can tell "the incremental path stopped dispatching workers for
+    /// subtrees it was about to move in O(1)" from "it still does, and the
+    /// timing run happened to be quiet".
+    pub fanouts: u32,
 }
 
 thread_local! {
@@ -96,7 +105,7 @@ thread_local! {
     /// build's output). Always compiled — two `Cell` bumps against a stage that
     /// costs microseconds per box — so a gate outside this crate can read it.
     static BOX_BUILD_STATS: Cell<BoxBuildStats> =
-        const { Cell::new(BoxBuildStats { built: 0, reused: 0, prev_index_visited: 0 }) };
+        const { Cell::new(BoxBuildStats { built: 0, reused: 0, prev_index_visited: 0, fanouts: 0 }) };
 }
 
 /// Returns the accumulated [`BoxBuildStats`] and resets the tally.
@@ -140,6 +149,47 @@ pub fn set_box_build_diagnostics(on: bool) {
 /// since the last drain, in completion order (see [`set_box_build_diagnostics`]).
 pub fn take_box_build_log() -> Vec<NodeId> {
     BOX_BUILD_LOG.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default()
+}
+
+/// BUG-341 S20 census: per-built-box **inclusive** wall-clock, paired with the
+/// `NodeId` — S18's log answers *which* boxes a cycle rebuilt, this one answers
+/// *what each of them cost*.
+///
+/// Inclusive, not self-time, because `build_box` recurses (and fans large
+/// flex/grid containers out over rayon workers, where an "elapsed" reading also
+/// covers the join wait). A census that wants self-time subtracts a node's
+/// children itself — it has the document and can tell which log entries are
+/// descendants; doing that subtraction here would need a parent link the hot
+/// path does not carry. Same `Mutex`-not-thread-local reasoning as
+/// [`BOX_BUILD_LOG`] (the S15 trap), and the same [`BOX_BUILD_LOG_ON`] gate, so
+/// production pays one relaxed load.
+static BOX_BUILD_TIME_LOG: std::sync::Mutex<Vec<(NodeId, u64)>> = std::sync::Mutex::new(Vec::new());
+
+/// Gate for [`BOX_BUILD_TIME_LOG`] — deliberately **not** the S18/S19
+/// [`BOX_BUILD_LOG_ON`] flag.
+///
+/// That flag also arms the copy census, whose `count_boxes` walks every reused
+/// subtree (299 of chrome's 318 boxes on a keystroke) from inside
+/// `build_box_or_reuse` — i.e. from inside the *parent's* `build_box` call. Run
+/// together, the copy census would land squarely in the timing census's numbers
+/// and make whichever box happens to own the largest reused subtree look like
+/// the most expensive box to build. One census must not be measuring the other.
+static BOX_TIME_LOG_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Enables/disables the BUG-341 S20 per-box timing census, clearing the log.
+///
+/// Process-wide, same constraint as [`set_box_build_diagnostics`]: a test that
+/// turns it on must not run concurrently with another layout pass.
+pub fn set_box_time_diagnostics(on: bool) {
+    if let Ok(mut log) = BOX_BUILD_TIME_LOG.lock() {
+        log.clear();
+    }
+    BOX_TIME_LOG_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Drains the BUG-341 S20 per-box timing census — see [`BOX_BUILD_TIME_LOG`].
+pub fn take_box_build_time_log() -> Vec<(NodeId, u64)> {
+    BOX_BUILD_TIME_LOG.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default()
 }
 
 /// BUG-341 S18/S19 census: what one incremental box-build pass spent on
@@ -215,6 +265,7 @@ fn add_box_build_stats(d: BoxBuildStats) {
         v.built += d.built;
         v.reused += d.reused;
         v.prev_index_visited += d.prev_index_visited;
+        v.fanouts += d.fanouts;
         s.set(v);
     });
 }
@@ -4343,8 +4394,44 @@ pub fn incremental_build_box(
     build_box_or_reuse(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, Some(&prev_index))
 }
 
+/// BUG-341 S20 — timing shim around [`build_box_inner`].
+///
+/// Off the census path (the overwhelmingly common case) this is one relaxed
+/// atomic load and a direct call. With [`set_box_build_diagnostics`] on it
+/// records the call's inclusive wall-clock into [`BOX_BUILD_TIME_LOG`]; the
+/// timer lives here rather than inside the body so it covers every one of the
+/// body's exit paths (`build_base_select_box`'s early return among them).
 #[allow(clippy::too_many_arguments)]
 fn build_box(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    prev_index: Option<&crate::incremental::ReuseIndex>,
+) -> LayoutBox {
+    if !BOX_TIME_LOG_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return build_box_inner(
+            doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev_index,
+        );
+    }
+    let t = std::time::Instant::now();
+    let out = build_box_inner(
+        doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev_index,
+    );
+    let ns = t.elapsed().as_nanos() as u64;
+    if let Ok(mut log) = BOX_BUILD_TIME_LOG.lock() {
+        log.push((id, ns));
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_box_inner(
     doc: &Document,
     sheet: &Stylesheet,
     id: NodeId,
@@ -4681,7 +4768,41 @@ fn build_box(
             // Threshold: only parallelize when the item count justifies the rayon
             // spawn overhead (~1–2 µs per closure on a warm thread pool).
             const RAYON_MIN_FLEX_CHILDREN: usize = 8;
-            if dom_children.len() >= RAYON_MIN_FLEX_CHILDREN {
+            // BUG-341 S20: the threshold counts the children this pass will
+            // really **build**, not the ones the container happens to have.
+            //
+            // M4.1 sized the threshold against a full pass, where every child
+            // costs a cascade plus a box build and eight of them comfortably
+            // outweigh the fan-out. On the incremental path since S15/S19 a
+            // child that is in `prev_index` costs a `Mutex` lock and a move —
+            // and on a chrome interaction nearly all of them are. Counting DOM
+            // children there dispatched a worker per reused subtree to do
+            // nothing: measured at ~1 ms of a 2.5 ms keystroke cycle, spread
+            // over `body`/`.main-col`/`.omnibox-wrap`, each of whose *own* work
+            // is ~4 µs (BUG-341 "S20" census). Same shape as S18 — the stage
+            // was deciding for itself something the reuse mechanism had already
+            // established.
+            //
+            // Non-element children are excluded from the estimate for the same
+            // reason: whitespace between pretty-printed markup never enters the
+            // reuse index (it holds elements only), yet it costs a `Skip` box or
+            // one small anonymous item — never the cascade the threshold was
+            // sized against. Counting it kept `body` above the threshold on a
+            // cycle where every one of its element children was a move.
+            //
+            // `None` (every full-layout entry point) leaves the decision at
+            // `dom_children.len()`, i.e. M4.1's behaviour byte for byte.
+            let children_to_build = match prev_index {
+                None => dom_children.len(),
+                Some(idx) => dom_children
+                    .iter()
+                    .filter(|&&c| {
+                        !idx.contains_key(&c)
+                            && matches!(doc.get(c).data, NodeData::Element { .. })
+                    })
+                    .count(),
+            };
+            if children_to_build >= RAYON_MIN_FLEX_CHILDREN {
                 use rayon::prelude::*;
                 let snap = crate::style::StyleEnvSnapshot::capture();
                 // BUG-341 S15: each closure drains the tally of whatever thread
@@ -4693,6 +4814,9 @@ fn build_box(
                 // items was invisible to the reuse gates.
                 let par_built = std::sync::atomic::AtomicU32::new(0);
                 let par_reused = std::sync::atomic::AtomicU32::new(0);
+                // Nested containers a worker fans out again are folded back
+                // through the same drain as `built`/`reused` below.
+                let par_fanouts = std::sync::atomic::AtomicU32::new(0);
                 children = dom_children.par_iter().filter_map(|&child_id| {
                     snap.install();
                     let out = if wrap_text_items && matches!(doc.get(child_id).data, NodeData::Text(_)) {
@@ -4709,6 +4833,7 @@ fn build_box(
                     use std::sync::atomic::Ordering::Relaxed;
                     par_built.fetch_add(d.built, Relaxed);
                     par_reused.fetch_add(d.reused, Relaxed);
+                    par_fanouts.fetch_add(d.fanouts, Relaxed);
                     out
                 }).collect();
                 {
@@ -4719,6 +4844,8 @@ fn build_box(
                         // Extraction runs once, on the thread that owns `prev`
                         // — a worker never adds to this.
                         prev_index_visited: 0,
+                        // This container's own dispatch, plus any a worker made.
+                        fanouts: par_fanouts.load(Relaxed) + 1,
                     });
                 }
             } else {
