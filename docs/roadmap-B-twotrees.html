@@ -3969,9 +3969,9 @@
         {
          "id": "CC-15-5",
          "title": "CC-15-5: Чистка неиспользуемых полей Palette",
-         "status": "planned",
+         "status": "done",
          "size": "XS",
-         "note": "Убрать из `Palette` (`panels/themes.rs`) поля `toolbar_bg`/`tab_sleep_bg`/`tab_hibernate_bg` + их DARK/LIGHT/`desaturated()`/тесты — только после CC-15-3, когда исчезнут последние читатели в `toolbar.rs`/`tabs/strip.rs` (перепроверить грепом на момент исполнения, список этой строки не источник истины). После CC-15-3"
+         "note": "Закрыто (2026-07-28, P1). Грепом по `crates/` перепроверены все 17 полей `Palette`: орфанными оказались ровно три из строки задачи — `toolbar_bg`, `tab_sleep_bg`, `tab_hibernate_bg` (0 читателей вне `themes.rs`); остальные 14 живы (`tab_bar_bg`/`tab_active_bg`/`tab_inactive_bg` читают `panels/vertical_tabs.rs`+`tree_tabs.rs`, `input_bg` — `note_viewer.rs`). Удалены поля, их инициализаторы в `DARK`/`LIGHT` и строки в `desaturated()`; тестов, адресующих именно эти три поля, не было (`palette_desaturated_converts_every_field` проверяет `tab_bar_bg`/`accent`/`text`/`overlay_border` — не тронут). Доксинк: `subsystems/shell.md` (список Lumen-only ролей DS-2 + историческая строка DS-6 про появление `toolbar_bg`). Гейт: `cargo clippy -p lumen-shell --all-targets -- -D warnings` + `cargo test -p lumen-shell`; покраска не менялась (поля были мёртвыми), display list не затронут. После CC-15-3"
         },
         {
          "id": "CC-15-6",
