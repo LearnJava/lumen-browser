@@ -10,16 +10,12 @@
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
-/// Panel width in CSS px (exported for anchor calculation in main.rs).
-pub const PANEL_W: f32 = 500.0;
 /// Panel height in CSS px (exported for anchor calculation in main.rs).
 pub const PANEL_H: f32 = 440.0;
 /// Header bar height.
 const HEADER_H: f32 = 36.0;
 /// Height of one data row.
 const ROW_H: f32 = 36.0;
-/// Width of the × close button hit zone.
-const CLOSE_W: f32 = 30.0;
 /// Visible content area height.
 const CONTENT_H: f32 = PANEL_H - HEADER_H;
 
@@ -106,29 +102,6 @@ impl CertPanel {
         self.scroll_y = (self.scroll_y + delta).clamp(0.0, max);
     }
 
-    /// Hit-test a pointer position relative to panel origin.
-    ///
-    /// Returns `CertHit` describing which element was hit.
-    pub fn hit_test(&self, lx: f32, ly: f32) -> CertHit {
-        if ly < HEADER_H {
-            if lx >= PANEL_W - CLOSE_W {
-                return CertHit::Close;
-            }
-            return CertHit::Header;
-        }
-        CertHit::Body
-    }
-}
-
-/// Result of a pointer hit test on the cert panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CertHit {
-    /// User clicked the × close button.
-    Close,
-    /// User clicked the panel header bar (drag area — future use).
-    Header,
-    /// User clicked inside the scrollable body.
-    Body,
 }
 
 // ── Rows ──────────────────────────────────────────────────────────────────────
@@ -236,26 +209,8 @@ mod tests {
         assert!(!p.visible);
     }
 
-    #[test]
-    fn cert_panel_hit_test_close() {
-        let p = CertPanel::new();
-        let hit = p.hit_test(PANEL_W - 5.0, HEADER_H * 0.5);
-        assert_eq!(hit, CertHit::Close);
-    }
 
-    #[test]
-    fn cert_panel_hit_test_header() {
-        let p = CertPanel::new();
-        let hit = p.hit_test(10.0, HEADER_H * 0.5);
-        assert_eq!(hit, CertHit::Header);
-    }
 
-    #[test]
-    fn cert_panel_hit_test_body() {
-        let p = CertPanel::new();
-        let hit = p.hit_test(50.0, HEADER_H + 10.0);
-        assert_eq!(hit, CertHit::Body);
-    }
 
     #[test]
     fn panel_cert_data_has_data() {

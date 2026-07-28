@@ -14917,13 +14917,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             }
                             self.request_redraw();
                         }
-                    // Bookmark drag-and-drop: if a bookmark drag is in progress,
-                    // resolve the drop target. Dropping on a folder re-files the
-                    // bookmark; dropping anywhere else opens it (a plain click).
-                    if let Some(id) = self.bookmark_panel.take_drag() {
-                        self.finish_bookmark_drop(id);
-                        self.request_redraw();
-                    }
+                    // CC-15-6: the bookmark drag-drop release handler lived here.
+                    // Its only drag source was the legacy overlay's press
+                    // hit-test, removed with the rollback flag — the engine
+                    // `#view-bookmarks` has no drag source yet (BUG-415).
                     // End a PiP window drag (task #21).
                     if self.pip.dragging() {
                         self.pip.end_drag();
@@ -20930,14 +20927,6 @@ impl Lumen {
         self.history_panel.set_items(items);
     }
 
-    /// Top-left corner of the history panel in window-space CSS px.
-    fn history_panel_anchor(&self) -> (f32, f32) {
-        let win_w = self.viewport_width_css();
-        let px = (win_w - panels::history_panel::PANEL_W) * 0.5;
-        let py = toolbar::CHROME_H + 4.0;
-        (px, py)
-    }
-
     /// Rebuild the command-palette item list: curated commands, every bookmark,
     /// and — when the query is non-empty — matching history pages (FTS).
     ///
@@ -21183,48 +21172,6 @@ impl Lumen {
         "AI module not enabled — rebuild with `cargo build --features ai` \
          (requires a local Ollama daemon, see ADR-019)."
             .to_owned()
-    }
-
-    /// Top-left anchor of the bookmark panel overlay (just under the tab bar).
-    fn bookmark_anchor(&self) -> (f32, f32) {
-        (8.0, toolbar::CHROME_H + 4.0)
-    }
-
-    /// Resolve a bookmark drag release: dropping on a folder re-files the
-    /// bookmark (`Bookmarks::set_folder`), dropping elsewhere opens it.
-    fn finish_bookmark_drop(&mut self, id: i64) {
-        let Some(cursor) = self.cursor_position else { return };
-        let dpr = self
-            .renderer
-            .as_ref()
-            .map_or(1.0_f32, |r| r.scale_factor() as f32)
-            .max(1e-6);
-        let x_css = (cursor.x as f32) / dpr;
-        let y_css = (cursor.y as f32) / dpr;
-        let Some(url) = self
-            .bookmark_panel
-            .entries
-            .iter()
-            .find(|e| e.id == id)
-            .map(|e| e.url.clone())
-        else {
-            return;
-        };
-        let (ax, ay) = self.bookmark_anchor();
-        match panels::bookmark_panel::hit_test(&self.bookmark_panel, x_css, y_css, ax, ay) {
-            Some(panels::bookmark_panel::BookmarkHit::SelectFolder(folder)) => {
-                // Re-file: `None` (the "All" row) moves the bookmark to root.
-                let target = folder.unwrap_or_default();
-                let _ = self.bookmarks.set_folder(&url, &target);
-                self.refresh_bookmarks();
-            }
-            _ => {
-                // Released over the same row / list / outside: treat as a click.
-                self.bookmark_panel.visible = false;
-                self.bookmark_panel.search_active = false;
-                self.navigate_to(PageSource::from_arg(Some(&url)));
-            }
-        }
     }
 
     /// Максимальный валидный scroll_y: ничего не скроллим, если контент

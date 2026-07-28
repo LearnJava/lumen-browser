@@ -1,41 +1,13 @@
-//! Print dialog panel (E-1 + W-2b).
+//! Print dialog panel (E-1 + W-2b) — state only.
 //!
-//! A centred 560×420 px modal opened by `Ctrl+P`. Exposes print settings:
+//! Opened by `Ctrl+P`; under the engine chrome the dialog itself is
+//! `#printOverlay` (`assets/chrome/chrome.html`), which owns its geometry and
+//! controls. The legacy display-list renderer was removed in CC-15-4 and the
+//! legacy hit-test in CC-15-6.
 //!
-//! - **Paper size** — A4 / Letter / Legal pill-buttons.
-//! - **Orientation** — Portrait / Landscape pill-buttons.
-//! - **Margins** — Normal / Narrow / Wide pill-buttons.
-//! - **Scale** — document zoom 50–200% (W-2b new field).
-//! - **Page range** — editable text field (`"all"` by default).
-//! - **Color mode** — Color / Grayscale pill-buttons.
-//! - **Output file** — editable text field (default `"output.pdf"`).
-//! - **Print** / **Cancel** buttons at the bottom.
-//!
-//! Hit testing: [`hit_test`]. The legacy display-list renderer was removed in
-//! CC-15-4 - under the engine chrome the dialog is `#printOverlay`.
-
-// ── Geometry ─────────────────────────────────────────────────────────────────
-
-/// Panel width in CSS px.
-pub const PANEL_W: f32 = 560.0;
-/// Panel height in CSS px (expanded for W-2b scale field + CC-8 background row).
-pub const PANEL_H: f32 = 462.0;
-/// Header bar height.
-const HEADER_H: f32 = 36.0;
-/// Content row height.
-const ROW_H: f32 = 42.0;
-/// Horizontal padding.
-const PAD_H: f32 = 16.0;
-/// Vertical padding before first row.
-const PAD_V: f32 = 6.0;
-/// Label column width.
-const LABEL_W: f32 = 96.0;
-/// Close `×` hit zone width.
-const CLOSE_W: f32 = 28.0;
-/// Button height (Print/Cancel).
-const BTN_H: f32 = 32.0;
-/// Button width.
-const BTN_W: f32 = 100.0;
+//! The settings below (paper size, orientation, margins, scale, page range,
+//! colour mode, backgrounds, output path) are **not** wired to the engine
+//! dialog yet — see BUG-413.
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -45,8 +17,10 @@ pub enum PaperSize {
     /// ISO A4 (210 × 297 mm).
     A4,
     /// US Letter (8.5 × 11 in).
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     Letter,
     /// US Legal (8.5 × 14 in).
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     Legal,
 }
 
@@ -56,6 +30,7 @@ pub enum Orientation {
     /// Taller than wide.
     Portrait,
     /// Wider than tall.
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     Landscape,
 }
 
@@ -65,8 +40,10 @@ pub enum MarginPreset {
     /// Standard ~19 mm margins.
     Normal,
     /// Small ~6 mm margins.
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     Narrow,
     /// Large ~25 mm margins.
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     Wide,
 }
 
@@ -76,6 +53,7 @@ pub enum ColorMode {
     /// Full-colour output.
     Color,
     /// Greyscale output.
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     Grayscale,
 }
 
@@ -83,8 +61,10 @@ pub enum ColorMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrintField {
     /// The page-range text field (e.g. `"all"` or `"1-3,5"`).
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     PageRange,
     /// The output-file path text field (e.g. `"output.pdf"`).
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     OutputPath,
 }
 
@@ -99,20 +79,26 @@ pub struct PrintPanel {
     /// Whether the panel is currently visible.
     pub visible: bool,
     /// Selected paper size.
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub paper: PaperSize,
     /// Selected page orientation.
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub orientation: Orientation,
     /// Selected margin preset.
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub margins: MarginPreset,
     /// Document zoom level in percent (50–200%, W-2b new field).
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub scale: i32,
     /// Page range string: `"all"` or an explicit range such as `"1-3,5"`.
     pub page_range: String,
     /// Output colour mode.
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub color_mode: ColorMode,
     /// Whether CSS background graphics are printed (CC-8). When `false`, the
     /// print pipeline strips background fills / images / gradients before
     /// rasterising each page.
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub print_backgrounds: bool,
     /// Destination file path (relative or absolute).
     pub output_path: String,
@@ -172,6 +158,7 @@ impl PrintPanel {
     /// Resolve margin values (top/bottom, left/right) in CSS px at 96 DPI.
     ///
     /// Used by the shell to build [`lumen_layout::PaginationContext`].
+    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub fn margin_px(&self) -> (f32, f32) {
         match self.margins {
             MarginPreset::Normal => (48.0, 48.0),
@@ -188,200 +175,6 @@ impl Default for PrintPanel {
 }
 
 // ── Hit testing ───────────────────────────────────────────────────────────────
-
-/// Result of a click on (or near) the print panel.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PrintHit {
-    /// The close `×` button — hide without printing.
-    Close,
-    /// A paper-size pill was clicked.
-    PaperSize(PaperSize),
-    /// An orientation pill was clicked.
-    Orientation(Orientation),
-    /// A margin preset pill was clicked.
-    Margins(MarginPreset),
-    /// The scale decrease (−) button was clicked (W-2b).
-    ScaleDecrease,
-    /// The scale increase (+) button was clicked (W-2b).
-    ScaleIncrease,
-    /// The page-range text field was clicked.
-    PageRangeField,
-    /// A colour-mode pill was clicked.
-    ColorMode(ColorMode),
-    /// A background-graphics toggle pill was clicked (CC-8); payload = new value.
-    Backgrounds(bool),
-    /// The output-path text field was clicked.
-    OutputPathField,
-    /// The **Print** button was clicked.
-    Print,
-    /// The **Cancel** button was clicked.
-    Cancel,
-    /// Click inside the panel on a non-interactive area — swallow.
-    Inside,
-    /// Click outside the panel — pass through.
-    Outside,
-}
-
-/// Top-left corner of the centred panel.
-fn panel_origin(win_w: f32, win_h: f32) -> (f32, f32) {
-    (
-        ((win_w - PANEL_W) * 0.5).max(0.0),
-        ((win_h - PANEL_H) * 0.5).max(0.0),
-    )
-}
-
-/// Row y positions (relative to panel origin).
-fn row_y(idx: usize) -> f32 {
-    HEADER_H + PAD_V + idx as f32 * ROW_H
-}
-
-/// Classify a click at `(x, y)` CSS px.
-pub fn hit_test(panel: &PrintPanel, x: f32, y: f32, win_w: f32, win_h: f32) -> PrintHit {
-    if !panel.visible {
-        return PrintHit::Outside;
-    }
-    let (px, py) = panel_origin(win_w, win_h);
-    if x < px || x > px + PANEL_W || y < py || y > py + PANEL_H {
-        return PrintHit::Outside;
-    }
-
-    // Close button: top-right of header.
-    let ly = y - py;
-    let lx = x - px;
-    if ly < HEADER_H && lx > PANEL_W - CLOSE_W {
-        return PrintHit::Close;
-    }
-
-    // Buttons row: Print / Cancel near bottom.
-    let btn_y = PANEL_H - BTN_H - PAD_V * 2.0;
-    if ly >= btn_y && ly < btn_y + BTN_H {
-        let cancel_x = PANEL_W - PAD_H - BTN_W;
-        let print_x = cancel_x - BTN_W - 8.0;
-        if lx >= print_x && lx < print_x + BTN_W {
-            return PrintHit::Print;
-        }
-        if lx >= cancel_x && lx < cancel_x + BTN_W {
-            return PrintHit::Cancel;
-        }
-    }
-
-    // Content rows.
-    let avail_w = PANEL_W - PAD_H * 2.0 - LABEL_W;
-
-    // Row 0: Paper size.
-    let r0 = row_y(0);
-    if ly >= r0 && ly < r0 + ROW_H {
-        const PAPERS: [PaperSize; 3] = [PaperSize::A4, PaperSize::Letter, PaperSize::Legal];
-        let pill_w = avail_w / 3.0;
-        let pills_x = PAD_H + LABEL_W;
-        for (i, size) in PAPERS.iter().enumerate() {
-            let bx = pills_x + i as f32 * pill_w;
-            if lx >= bx && lx < bx + pill_w - 2.0 {
-                return PrintHit::PaperSize(*size);
-            }
-        }
-        return PrintHit::Inside;
-    }
-
-    // Row 1: Orientation.
-    let r1 = row_y(1);
-    if ly >= r1 && ly < r1 + ROW_H {
-        const ORIENTS: [Orientation; 2] = [Orientation::Portrait, Orientation::Landscape];
-        let pill_w = avail_w / 2.0;
-        let pills_x = PAD_H + LABEL_W;
-        for (i, orient) in ORIENTS.iter().enumerate() {
-            let bx = pills_x + i as f32 * pill_w;
-            if lx >= bx && lx < bx + pill_w - 2.0 {
-                return PrintHit::Orientation(*orient);
-            }
-        }
-        return PrintHit::Inside;
-    }
-
-    // Row 2: Margins.
-    let r2 = row_y(2);
-    if ly >= r2 && ly < r2 + ROW_H {
-        const MARGINS: [MarginPreset; 3] = [MarginPreset::Normal, MarginPreset::Narrow, MarginPreset::Wide];
-        let pill_w = avail_w / 3.0;
-        let pills_x = PAD_H + LABEL_W;
-        for (i, preset) in MARGINS.iter().enumerate() {
-            let bx = pills_x + i as f32 * pill_w;
-            if lx >= bx && lx < bx + pill_w - 2.0 {
-                return PrintHit::Margins(*preset);
-            }
-        }
-        return PrintHit::Inside;
-    }
-
-    // Row 3: Scale +/- buttons (W-2b).
-    let r3 = row_y(3);
-    if ly >= r3 && ly < r3 + ROW_H {
-        let field_x = PAD_H + LABEL_W;
-        let btn_w = 36.0;
-        let btn_gap = 4.0;
-        let decrease_x = field_x;
-        let increase_x = field_x + btn_w + btn_gap;
-        if lx >= decrease_x && lx < decrease_x + btn_w {
-            return PrintHit::ScaleDecrease;
-        }
-        if lx >= increase_x && lx < increase_x + btn_w {
-            return PrintHit::ScaleIncrease;
-        }
-        return PrintHit::Inside;
-    }
-
-    // Row 4: Page range text field (was row 3).
-    let r4 = row_y(4);
-    if ly >= r4 && ly < r4 + ROW_H {
-        let field_x = PAD_H + LABEL_W;
-        if lx >= field_x {
-            return PrintHit::PageRangeField;
-        }
-        return PrintHit::Inside;
-    }
-
-    // Row 5: Color mode (was row 4).
-    let r5 = row_y(5);
-    if ly >= r5 && ly < r5 + ROW_H {
-        const MODES: [ColorMode; 2] = [ColorMode::Color, ColorMode::Grayscale];
-        let pill_w = avail_w / 2.0;
-        let pills_x = PAD_H + LABEL_W;
-        for (i, mode) in MODES.iter().enumerate() {
-            let bx = pills_x + i as f32 * pill_w;
-            if lx >= bx && lx < bx + pill_w - 2.0 {
-                return PrintHit::ColorMode(*mode);
-            }
-        }
-        return PrintHit::Inside;
-    }
-
-    // Row 6: Output path text field (was row 5).
-    let r6 = row_y(6);
-    if ly >= r6 && ly < r6 + ROW_H {
-        let field_x = PAD_H + LABEL_W;
-        if lx >= field_x {
-            return PrintHit::OutputPathField;
-        }
-        return PrintHit::Inside;
-    }
-
-    // Row 7: Background graphics toggle (CC-8).
-    let r7 = row_y(7);
-    if ly >= r7 && ly < r7 + ROW_H {
-        const VALUES: [bool; 2] = [true, false];
-        let pill_w = avail_w / 2.0;
-        let pills_x = PAD_H + LABEL_W;
-        for (i, on) in VALUES.iter().enumerate() {
-            let bx = pills_x + i as f32 * pill_w;
-            if lx >= bx && lx < bx + pill_w - 2.0 {
-                return PrintHit::Backgrounds(*on);
-            }
-        }
-        return PrintHit::Inside;
-    }
-
-    PrintHit::Inside
-}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -477,20 +270,6 @@ mod tests {
     }
 
     #[test]
-    fn hit_backgrounds_off_pill() {
-        let mut p = make_panel();
-        p.visible = true;
-        let (px, py) = panel_origin(800.0, 600.0);
-        let avail_w = PANEL_W - PAD_H * 2.0 - LABEL_W;
-        let pill_w = avail_w / 2.0;
-        let pills_x = px + PAD_H + LABEL_W;
-        let row_abs_y = py + row_y(7) + ROW_H / 2.0;
-        // Second pill = Off (false).
-        let hit = hit_test(&p, pills_x + pill_w * 1.5, row_abs_y, 800.0, 600.0);
-        assert_eq!(hit, PrintHit::Backgrounds(false));
-    }
-
-    #[test]
     fn scale_can_increase_decrease() {
         let mut p = make_panel();
         p.scale = 100;
@@ -499,112 +278,4 @@ mod tests {
         p.scale = (p.scale - 10).max(50);
         assert_eq!(p.scale, 100);
     }
-
-    // ── hit_test ──────────────────────────────────────────────────────────────
-
-    #[test]
-    fn hit_outside_when_hidden() {
-        let p = make_panel();
-        assert_eq!(hit_test(&p, 400.0, 300.0, 800.0, 600.0), PrintHit::Outside);
-    }
-
-    #[test]
-    fn hit_outside_when_visible_but_off_panel() {
-        let mut p = make_panel();
-        p.visible = true;
-        assert_eq!(hit_test(&p, 5.0, 5.0, 800.0, 600.0), PrintHit::Outside);
-    }
-
-    #[test]
-    fn hit_close_button() {
-        let mut p = make_panel();
-        p.visible = true;
-        let (px, py) = panel_origin(800.0, 600.0);
-        let hit = hit_test(&p, px + PANEL_W - 5.0, py + HEADER_H / 2.0, 800.0, 600.0);
-        assert_eq!(hit, PrintHit::Close);
-    }
-
-    #[test]
-    fn hit_paper_size_first_pill() {
-        let mut p = make_panel();
-        p.visible = true;
-        let (px, py) = panel_origin(800.0, 600.0);
-        let avail_w = PANEL_W - PAD_H * 2.0 - LABEL_W;
-        let pill_w = avail_w / 3.0;
-        let pills_x = px + PAD_H + LABEL_W;
-        let row_abs_y = py + row_y(0) + ROW_H / 2.0;
-        let hit = hit_test(&p, pills_x + pill_w * 0.5, row_abs_y, 800.0, 600.0);
-        assert_eq!(hit, PrintHit::PaperSize(PaperSize::A4));
-    }
-
-    #[test]
-    fn hit_orientation_landscape() {
-        let mut p = make_panel();
-        p.visible = true;
-        let (px, py) = panel_origin(800.0, 600.0);
-        let avail_w = PANEL_W - PAD_H * 2.0 - LABEL_W;
-        let pill_w = avail_w / 2.0;
-        let pills_x = px + PAD_H + LABEL_W;
-        let row_abs_y = py + row_y(1) + ROW_H / 2.0;
-        // Second pill = Landscape
-        let hit = hit_test(&p, pills_x + pill_w * 1.5, row_abs_y, 800.0, 600.0);
-        assert_eq!(hit, PrintHit::Orientation(Orientation::Landscape));
-    }
-
-    #[test]
-    fn hit_page_range_field() {
-        let mut p = make_panel();
-        p.visible = true;
-        let (px, py) = panel_origin(800.0, 600.0);
-        let field_x = px + PAD_H + LABEL_W + 10.0;
-        // Page range moved to row 4 when W-2b inserted the Scale row at row 3.
-        let row_abs_y = py + row_y(4) + ROW_H / 2.0;
-        assert_eq!(hit_test(&p, field_x, row_abs_y, 800.0, 600.0), PrintHit::PageRangeField);
-    }
-
-    #[test]
-    fn hit_print_button() {
-        let mut p = make_panel();
-        p.visible = true;
-        let (px, py) = panel_origin(800.0, 600.0);
-        let btn_y_abs = py + PANEL_H - BTN_H - PAD_V * 2.0 + BTN_H / 2.0;
-        let cancel_x = px + PANEL_W - PAD_H - BTN_W;
-        let print_x = cancel_x - BTN_W - 8.0 + BTN_W / 2.0;
-        assert_eq!(hit_test(&p, print_x, btn_y_abs, 800.0, 600.0), PrintHit::Print);
-    }
-
-    #[test]
-    fn hit_cancel_button() {
-        let mut p = make_panel();
-        p.visible = true;
-        let (px, py) = panel_origin(800.0, 600.0);
-        let btn_y_abs = py + PANEL_H - BTN_H - PAD_V * 2.0 + BTN_H / 2.0;
-        let cancel_x = px + PANEL_W - PAD_H - BTN_W + BTN_W / 2.0;
-        assert_eq!(hit_test(&p, cancel_x, btn_y_abs, 800.0, 600.0), PrintHit::Cancel);
-    }
-
-    #[test]
-    fn hit_scale_decrease_button() {
-        let mut p = make_panel();
-        p.visible = true;
-        let (px, py) = panel_origin(800.0, 600.0);
-        let row_abs_y = py + row_y(3) + ROW_H / 2.0;
-        let field_x = px + PAD_H + LABEL_W;
-        let hit = hit_test(&p, field_x + 6.0, row_abs_y, 800.0, 600.0);
-        assert_eq!(hit, PrintHit::ScaleDecrease);
-    }
-
-    #[test]
-    fn hit_scale_increase_button() {
-        let mut p = make_panel();
-        p.visible = true;
-        let (px, py) = panel_origin(800.0, 600.0);
-        let row_abs_y = py + row_y(3) + ROW_H / 2.0;
-        let field_x = px + PAD_H + LABEL_W;
-        let btn_w = 36.0;
-        let btn_gap = 4.0;
-        let hit = hit_test(&p, field_x + btn_w + btn_gap + 6.0, row_abs_y, 800.0, 600.0);
-        assert_eq!(hit, PrintHit::ScaleIncrease);
-    }
-
 }

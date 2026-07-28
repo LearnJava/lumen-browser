@@ -21,7 +21,7 @@
 //! - совпадения не пересекают границы TextFragment (одно слово / run).
 
 use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight, TextFragment, TextMeasurer};
+use lumen_layout::{Color, TextFragment, TextMeasurer};
 use lumen_paint::{DisplayCommand, DisplayList};
 
 /// Состояние find bar и текущего запроса.
@@ -346,6 +346,7 @@ pub fn build_page_with_highlights(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_layout::{FontStyle, FontWeight};
     use lumen_paint::DisplayCommand;
 
     struct Fixed8;
