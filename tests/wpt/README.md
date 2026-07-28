@@ -138,11 +138,15 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   `/etc/hosts` entries this task's "no live network" rule can't rely on) and
   disables the `wss`/`h2`/`webtransport-h3`/`dns` servers the smoke test
   doesn't need (Python 3.14's `ssl` module dropped `wrap_socket`, breaking
-  `wptserve`'s `wss` server; unrelated to Lumen). HTTP ports are `8300`/`8301`,
+  `wptserve`'s `wss` server; unrelated to Lumen). HTTP ports are `18300`/`18301`,
   not the WPT default `8000`/`8001` — the 8000-range falls inside a Windows
   dynamic excluded-port range here (`netsh interface ipv4 show
   excludedportrange protocol=tcp`), so `wptserve` failed to bind with
-  `WinError 10013`.
+  `WinError 10013`. The first replacement, `8300`/`8301`, turned out to sit
+  inside this machine's *ephemeral* range (1024-15000, `netsh int ipv4 show
+  dynamicport tcp`) and was stolen by an unrelated process on 2026-07-28,
+  costing three failed runs — hence the move above every common ephemeral
+  range. See "Troubleshooting" below.
 - `tests/wpt/metadata/` — `--metadata` root; holds the generated (gitignored)
   `MANIFEST.json` and the committed `.ini` expectations (S5 onward, under
   `metadata/dom/nodes/`).
@@ -293,6 +297,38 @@ an ad-hoc subset.)
    deeper gap: prefer excluding the test and filing the bug over pinning
    `expected: TIMEOUT`.
 4. Re-run the curated set and confirm it's still green (0 unexpected).
+
+## Troubleshooting: "Servers failed to start: http:8301"
+
+`wptserve` binds the two fixed ports from `tests/wpt/config.json`. If either is
+taken, the run dies after ~35 s of CA generation with an opaque traceback whose
+only useful line is
+
+```
+wptserve CRITICAL Failed to start HTTP server on port <N>; is something already using that port?
+[WinError 10013] (WSAEACCES — access denied, *not* "in use")
+```
+
+Two traps when diagnosing this:
+
+* **`netstat` can show nothing.** A socket merely *bound* (not listening, not
+  connected) is invisible to `netstat -ano`; `Get-NetTCPConnection -LocalPort <N>`
+  shows it with `State: Bound` and the owning PID. On 2026-07-28 that PID was a
+  VPN client holding 8301/8302/8304/8305/8307/8309 this way.
+* **The ports used to live inside this machine's ephemeral range.**
+  `netsh int ipv4 show dynamicport tcp` reported start 1024, 13977 ports — i.e.
+  1024-15000, which contained the old 8300/8301. Any outgoing connection from
+  any process could therefore be handed a WPT port. That is why the ports were
+  moved to **18300/18301** (above every common ephemeral range: Windows'
+  default 49152+, Linux' 32768+, and this machine's 1024-15000).
+
+Quick check for whether a port is usable at all:
+
+```bash
+python -c "
+import socket
+s=socket.socket(); s.bind(('127.0.0.1',18301)); s.listen(1); print('OK')"
+```
 
 ## Re-vendoring
 
