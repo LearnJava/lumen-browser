@@ -75,8 +75,8 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 103,
-  "fixed": 272,
+  "open": 102,
+  "fixed": 273,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3928,7 +3928,7 @@
       {
        "id": "CC-15",
        "title": "CC-15: Удаление legacy-хрома",
-       "status": "planned",
+       "status": "active",
        "size": "M",
        "note": "Проскоуплено 2026-07-28 (ветка p1-cc15-scoping, только доксинк, кода не менялось) — реальный масштаб шире одной строки (по образцу S12b M→XL): `toolbar.rs`/`tabs/strip.rs` — смешанные data+paint модули, файлы не удаляются целиком, нужно точечно вырезать функции покраски/hit-теста, сохранив геометрические константы (`CHROME_H`, `avatar_x()`, `TAB_BAR_HEIGHT` и т.п.), которые безусловно читают и `content_layout_viewport()`/`resumed()`, и легаси-навсегда-панели. Панельный список риска-5 при сверке с кодом оказался неполным в обе стороны: 9 доп. панелей (`note_viewer`/`focus_panel`/`read_later_panel`/`privacy_panel`/`workspace_panel`/`vertical_tabs`/`tree_tabs`/pip-группа) не гейтированы флагом и не были названы легаси-навсегда явно; `panels/profile_menu.rs`, наоборот, числился «движковым», но не мигрирован. Побочно найдены 2 живых бага флипа CC-14: BUG-403 (поповер профиля невидим под дефолтным движковым хромом — рендер остался в легаси-гейте, hit-test безусловен) и BUG-404 (`flush_pointer_moves`, живой обработчик движения мыши, использует захардкоженный `toolbar::CHROME_H`/`left_dock()` вместо `page_offset()` — тот же класс, что CC-14 исправила для automation-пути `resolve_automation_target`, здесь не тронут). Разбивка на срезы — CC-15-1..CC-15-6",
        "bugs": [
@@ -3939,9 +3939,9 @@
         {
          "id": "CC-15-1",
          "title": "CC-15-1: Фикс/скоуп profile_menu перед удалением",
-         "status": "planned",
+         "status": "done",
          "size": "XS",
-         "note": "Не удаление — фикс корректности до начала: закрыть BUG-403 (поповер профиля невидим под дефолтным хромом), либо привязав `#profileMenu` к `ChromeModel`/`bind_model` (по образцу CC-9/10), либо явно задокументировав `panels/profile_menu.rs` как легаси-навсегда и выведя его из скоупа удаления CC-15. Блокирует CC-15-3 (нужно решение о судьбе `profile_menu.rs` до вырезания toolbar.rs-функций, которые он использует — `toolbar::avatar_x()`/`CHROME_H`)",
+         "note": "Закрыто (2026-07-28, P1). Решение: `panels/profile_menu.rs` закреплён легаси-навсегда (не привязан к `ChromeModel`/`bind_model` — полная миграция шире XS и вне блокера CC-15-3). Фикс — рендер поповера (`main.rs`, был внутри `!self.focus.active && !self.css_chrome_enabled`) вынесен в безусловный блок рядом с уже-безусловным hit-test'ом; обе точки геометрии переведены с `toolbar::CHROME_H` на `self.page_offset()` (тот же приём, что CC-14 применила для `resolve_automation_target`), чтобы не завести класс бага BUG-404 в этом самом коде. `cargo check -p lumen-shell` зелёный, сигнатуры `panels::profile_menu::{build_panel,hit_test}` не менялись — существующие unit-тесты покрывают логику без изменений. Разблокировал CC-15-3",
          "bugs": [
           "BUG-403"
          ]
@@ -6758,10 +6758,10 @@
    "debtor": false
   },
   "BUG-403": {
-   "status": "open",
-   "title": "Клик по аватару движкового хрома безусловно выставляет `profile_menu.visible = true` (хит-тест тоже безусловен), но рендер поповера (`build_panel`) лежит внутри…",
+   "status": "fixed",
+   "title": "Клик по аватару движкового хрома безусловно выставляет `profile_menu.visible = true` (хит-тест тоже безусловен), но рендер поповера (`build_panel`) лежал внутри…",
    "component": "shell (`crates/shell/src/main.rs`, `panels::profile_menu`)",
-   "date": null,
+   "date": "2026-07-28",
    "debtor": false
   },
   "BUG-404": {

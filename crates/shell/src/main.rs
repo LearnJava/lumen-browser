@@ -14612,15 +14612,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
 
                     // Profile switcher dropdown (DS-14): anchored below the
-                    // toolbar avatar button.
+                    // toolbar avatar button. BUG-403/BUG-404 class: use the
+                    // measured `page_offset()` Y, not the legacy-only
+                    // `toolbar::CHROME_H` constant, so the hit-test matches
+                    // wherever the popover is actually drawn (both chromes).
                     if self.profile_menu.visible {
                         let avatar_x = toolbar::avatar_x();
+                        let (_, page_y_offset) = self.page_offset();
                         if let Some(hit) = panels::profile_menu::hit_test(
                             &self.profile_menu,
                             x_css,
                             y_css,
                             avatar_x,
-                            toolbar::CHROME_H,
+                            page_y_offset,
                         ) {
                             match hit {
                                 panels::profile_menu::ProfileMenuHit::SwitchTo(id) => {
@@ -16969,17 +16973,30 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         );
                         overlay_buf.append(&mut dropdown_cmds);
                     }
-                    // Profile switcher dropdown (DS-14) — drawn after the
-                    // toolbar so it layers on top.
-                    if self.profile_menu.visible {
-                        let mut pm_cmds = panels::profile_menu::build_panel(
-                            &self.profile_menu,
-                            toolbar::avatar_x(),
-                            toolbar::CHROME_H,
-                            &pal,
-                        );
-                        overlay_buf.append(&mut pm_cmds);
-                    }
+                }
+
+                // Profile switcher dropdown (DS-14): BUG-403 — kept as a
+                // legacy overlay always (CC-15-1, `docs/tasks/p1-css-chrome.md`
+                // §CC-15-1 decision), not migrated to `ChromeModel`/`bind_model`
+                // like the CC-9/CC-10 panels. Its hit-test (below, in the
+                // `MouseInput` handler) was already unconditional — this render
+                // call must match, or a click toggles `profile_menu.visible`
+                // with nothing ever drawn (the actual BUG-403 symptom) while
+                // the invisible popover still eats clicks under it. Anchored
+                // via `page_offset()` rather than the legacy-only
+                // `toolbar::CHROME_H` constant so the dropdown lines up with
+                // the engine-drawn toolbar's *measured* bottom edge, not an
+                // assumed one — the same class of drift BUG-404 flags for
+                // `flush_pointer_moves`.
+                if !self.focus.active && self.profile_menu.visible {
+                    let (_, page_y_offset) = self.page_offset();
+                    let mut pm_cmds = panels::profile_menu::build_panel(
+                        &self.profile_menu,
+                        toolbar::avatar_x(),
+                        page_y_offset,
+                        &pal,
+                    );
+                    overlay_buf.append(&mut pm_cmds);
                 }
 
                 // CC-4: tab context menu — drawn above the tab strip.
