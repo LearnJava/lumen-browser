@@ -25126,6 +25126,72 @@ mod tests {
         );
     }
 
+    /// BUG-341 S20 regression gate: a keystroke must not dispatch rayon workers
+    /// to carry out moves.
+    ///
+    /// ADR-016 M4.1 fans a flex/grid container's children onto rayon once there
+    /// are eight or more of them, sized against a full pass where each child
+    /// costs a cascade and a box build. On the incremental path since S15/S19 a
+    /// child that is in the reuse index costs a `Mutex` lock and a move, and on
+    /// a chrome interaction nearly every one of them is — so the threshold, read
+    /// off `dom_children.len()`, was dispatching a worker per subtree the pass
+    /// was about to move in O(1). Measured at ~1 ms of a 2.5 ms keystroke cycle
+    /// (BUG-341 "S20"), spread across `body`, `.main-col` and `.omnibox-wrap`,
+    /// whose own work is ~4 µs each.
+    ///
+    /// Both arms are asserted, and the full-pass one matters as much as the
+    /// incremental one: the cheapest way to make this test's headline number
+    /// pass is to stop parallelising altogether, which would cost the full pass
+    /// the parallel selector matching M4.1 exists for.
+    ///
+    /// A counter, not wall-clock: the fan-out produces the identical tree, so
+    /// every differential test in the track passes either way (S8's lesson), and
+    /// thread-pool overhead is exactly the kind of cost machine noise hides.
+    #[test]
+    fn bug341_s20_keystroke_moves_subtrees_without_dispatching_workers() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        let mut first_full = lumen_layout::box_tree::BoxBuildStats::default();
+        let mut last = lumen_layout::box_tree::BoxBuildStats::default();
+        for i in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let (_, bb) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut state);
+            if i == 0 {
+                first_full = bb;
+            }
+            last = bb;
+        }
+
+        assert!(
+            first_full.fanouts > 0,
+            "the first (full) cycle must still parallelise its large containers — M4.1's \
+             parallel selector matching is what the threshold exists for, and narrowing the \
+             *incremental* estimate must not have reached the full path. Census: {first_full:?}",
+        );
+        assert!(
+            last.reused >= 5,
+            "a keystroke must still take whole subtrees out of the previous tree, otherwise this \
+             test is asserting about a cycle that has no moves to skip dispatching for — {last:?}",
+        );
+        assert_eq!(
+            last.fanouts, 0,
+            "a keystroke dispatched {} rayon fan-out(s) while reusing {} whole subtrees — the \
+             threshold is counting children the pass will move rather than children it will \
+             build. Census: {last:?}. If chrome.html ever gains a container that genuinely \
+             rebuilds eight or more element children on a keystroke, record that container and \
+             its count here; do not relax this to `<= whatever the code currently does`.",
+            last.fanouts, last.reused,
+        );
+    }
+
     /// BUG-341 S14 regression gate: a hover flip no rule in the sheet can
     /// react to must re-cascade nothing at all.
     ///
@@ -26017,6 +26083,7 @@ mod tests {
                 // reused subtree from inside the parent's `build_box`, which
                 // would show up as that parent's build cost.
                 lumen_layout::box_tree::set_box_time_diagnostics(report);
+                lumen_layout::style::set_pseudo_cascade_diagnostics(report);
                 let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
                 lumen_layout::set_interactive_state(hover, None, None);
                 let _ = lumen_layout::style::take_cascade_index_stats();
@@ -26093,6 +26160,7 @@ mod tests {
                 }
 
                 lumen_layout::box_tree::set_box_time_diagnostics(false);
+                lumen_layout::style::set_pseudo_cascade_diagnostics(false);
                 state.prev_pristine_layout = Some(persisted);
                 state.prev_cascade_styles = counters.styles().clone();
                 state.prev_interactive = (hover, None, None);
@@ -26104,12 +26172,12 @@ mod tests {
     /// BUG-341 S20 census helper: the `CounterMap` a cycle produced, by size,
     /// with a replay of rebuilding its collections.
     ///
-    /// The replay reproduces exactly the inserts `counters::walk` performs — one
-    /// `Arc` clone + insert per element into `styles`, one counter-stack snapshot
-    /// + insert per element into `nodes`, one insert per clean node into
-    /// `clean_subtrees` — over the real sizes, so "the map costs X of the stage's
-    /// Y" is an honest attribution rather than a guess. `nodes` is not exposed,
-    /// but it holds one entry per element, which is `styles`' size.
+    /// The replay reproduces exactly the inserts `counters::walk` performs: an
+    /// `Arc` clone plus insert per element into `styles`, a counter-stack
+    /// snapshot plus insert per element into `nodes`, and one insert per clean
+    /// node into `clean_subtrees` — over the real sizes, so "the map costs X of
+    /// the stage's Y" is an honest attribution rather than a guess. `nodes` is
+    /// not exposed, but it holds one entry per element, which is `styles`' size.
     fn census_report_counter_map(counters: &lumen_layout::CounterMap) {
         let styles = counters.styles();
         let clean = counters.clean_subtrees();

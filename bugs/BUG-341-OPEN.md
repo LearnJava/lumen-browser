@@ -2641,6 +2641,142 @@ The census's other two items are untouched and are now the largest:
 Same shape as this slice: ask what the stage re-creates that it could carry
 over. And the same discipline — census first.
 
+## S20 — the fan-out that dispatched workers to move boxes
+
+### The census, first
+
+The queue named two items for this slice. A purpose-built stage census
+(`bug341_s20_stage_census`, `#[ignore]`d) measured them before a line was
+changed, and found neither one anywhere near the top:
+
+| item, per cycle | KEY | HOVER |
+|---|---|---|
+| pipeline's `layout.clone()` (`clone_tree`) | 0.29-0.34 ms | 0.19-0.22 ms |
+| `CounterMap` construction (replayed over the real sizes) | 0.16-0.17 ms | 0.11 ms |
+| `CascadeIndex` rebuild forced by `invalidate_rule_idx_cache` | 0.18-0.21 ms | 0.12-0.14 ms |
+| pseudo-element cascades (139 / 129 calls, 12 / 6 hits) | 0.14 ms | 0.08-0.09 ms |
+| boxes really built, Σ self-time | **1.15-1.24 ms** | 0.05 ms |
+
+The queue put `clone_tree` at 0.3-0.5 ms and the `CounterMap` at 0.55 ms; they
+are 0.3 and 0.16. The item that dominates a keystroke is the box-build stage —
+28 boxes out of 318, of which the census's per-box breakdown gave three
+containers almost all of it: `body` 0.33 ms, `.main-col` 0.27 ms,
+`.omnibox-wrap` 0.45 ms of **self** time, i.e. excluding every box built
+beneath them.
+
+Nothing in `build_box`'s body explains a third of a millisecond for one
+container. Its two `compute_pseudo_element_style` calls were the obvious
+suspect (S10 found exactly that shape at the cascade stage) — and the census
+priced the whole document's 139 pseudo cascades at 0.14 ms, so they are not it.
+
+The answer was the one thing those three containers have in common and the two
+cheap ones do not: eight or more children, hence ADR-016 M4.1's rayon fan-out.
+Setting `RAYON_MIN_FLEX_CHILDREN` to `usize::MAX` and re-running the census
+settled it — KEY pass **2.51 → 0.907 ms**, Σ self-time **1.24 → 0.28 ms**,
+`body` 0.33 → **0.004 ms**, `.main-col` 0.27 → **0.004 ms**.
+
+### What was wrong
+
+M4.1 sized that threshold against a **full** pass, where each of a container's
+children costs a selector match, a cascade and a recursive build; eight of
+those comfortably outweigh a worker dispatch. On the incremental path since
+S15/S19 a child that is in the reuse index costs a `Mutex` lock and a move. The
+threshold never learned this: it reads `dom_children.len()`, so a chrome
+interaction dispatched a worker per subtree the pass was about to relocate in
+O(1) — and chrome is built out of exactly such containers, which is the same
+sentence S15 wrote about the reuse gate and S19 about the index.
+
+This is S18's lesson at a different stage. The reuse mechanism had already
+established which children are free; the fan-out decision re-derived a *worse*
+answer from the DOM instead of asking it.
+
+### The fix, and the half-fix that came first
+
+The estimate now counts the children the pass will really **build**:
+
+```rust
+let children_to_build = match prev_index {
+    None => dom_children.len(),                       // full path, M4.1 verbatim
+    Some(idx) => dom_children.iter()
+        .filter(|&&c| !idx.contains_key(&c)
+            && matches!(doc.get(c).data, NodeData::Element { .. }))
+        .count(),
+};
+```
+
+The first version had only the `contains_key` half, and it moved nothing:
+still 2 fan-outs, still 1.08-1.24 ms of self time. `clean_subtrees` records
+elements only, so the whitespace text nodes between pretty-printed markup are
+never in the index — and `chrome.html` has enough of them per container to hold
+`body` above eight on their own. They cost a `Skip` box or one small anonymous
+item, never the cascade the threshold was sized against, so they are excluded
+from the estimate too. `prev_index: None` — every full-layout entry point —
+keeps `dom_children.len()` and M4.1's behaviour byte for byte.
+
+### Gate — by counter
+
+`BoxBuildStats::fanouts` counts containers dispatched onto rayon (workers fold
+their own nested dispatches back through the same drain as `built`/`reused`).
+`bug341_s20_keystroke_moves_subtrees_without_dispatching_workers` (lumen-shell,
+runs by default) asserts **both** arms: the first, full cycle still fans out,
+and the keystroke cycle does not. The full-pass arm is the one that matters
+most — the cheapest way to make the headline number pass is to stop
+parallelising altogether, which would cost the full pass the parallel selector
+matching M4.1 exists for.
+
+A counter and not wall-clock, for the usual reason: the fan-out produces the
+identical tree, so every differential test in this track passes either way.
+
+### Measured
+
+Census after the slice, same cycles: `fanouts` **2 → 0**, KEY pass 2.33-2.51 →
+**0.92-1.08 ms**, Σ self-time 1.15-1.24 → **0.27-0.30 ms**, `body` 0.005 ms,
+`.main-col` 0.004 ms. HOVER is untouched by construction — it builds 3 boxes,
+none of them an element, so it never reached the branch.
+
+Wall-clock, interleaved A/B ×3 against the branch point (`eb72f811a`), by min:
+`CC12_KEY` 2.20/2.16/1.99 → **1.26/1.29/1.18 ms** (≈1.7×), groups do not
+overlap; p95 4.71/5.38/4.35 → **3.39/3.10/3.47 ms**. `CC12_HOVER`
+0.97/0.97/0.91 → 1.02/0.89/0.91 — **unchanged, and no claim is made**; its p95
+3.31/3.35/3.06 → 2.46/2.97/3.05 is inside the machine's noise.
+
+One census artefact worth recording: the pseudo-cascade count went 139 → 160
+across the fix. Nothing started calling more of them — the tally is
+thread-local, and the calls that used to happen on rayon workers were invisible
+to it. That is the S15 trap for the third time, here in a census rather than in
+a gate.
+
+### Where this leaves CC-12
+
+`CC12_KEY` is inside the 2 ms budget by min (1.18-1.29) and ≈1.6-1.7× on p95
+(3.10-3.47, was ≈2.2-2.7×). `CC12_HOVER` is inside by min (0.89-1.02) and
+≈1.2-1.5× on p95. Still red on p95 only, on both scenarios.
+
+### What S21 should look at
+
+The census's own table, minus the item this slice removed. The largest is no
+longer a copy or a map:
+
+- **0.12-0.21 ms every pass, on both scenarios** — `CascadeIndex::build`. Every
+  layout pass opens with `invalidate_rule_idx_cache()`, so the sheet is
+  re-indexed from scratch (`RuleIndex` for the top level plus every
+  `@layer`/`@media`/`@supports` block, plus two full-sheet predicate scans) on
+  the first `compute_style` of the frame — on a HOVER cycle that recomputes
+  **zero** nodes, this is the single biggest item in the pass. It is paid again
+  per rayon worker that does any style work, because `StyleEnvSnapshot::install`
+  calls the same invalidation. The invalidation exists to defend a raw-pointer
+  cache key against address reuse across sessions (see its doc comment); a
+  sheet identity that is not an address would retire it. Note the counter for
+  it (`style::take_cascade_index_stats`) is thread-local and therefore reports
+  the layout thread only — the worker rebuilds are still uncounted.
+- ~0.16-0.34 ms — the pipeline's `layout.clone()`, with the design S19
+  described (make `take_content_area` restorable so the live tree can be
+  relinquished at the top of the next pass).
+- ~0.09-0.17 ms — the `CounterMap` rebuilt from scratch.
+
+Same discipline. Census first: this was the sixth slice in a row to run one,
+and the fifth where it moved the target.
+
 ## Repro
 
 ```bash
@@ -2652,4 +2788,5 @@ cargo test -p lumen-shell --profile dev-release bug341_s13_graft_reject_census -
 cargo test -p lumen-shell --profile dev-release bug341_s17_keystroke_restyle_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s18_keystroke_box_build_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s19_copy_census -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s20_stage_census -- --ignored --nocapture
 ```

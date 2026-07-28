@@ -309,6 +309,20 @@ thread_local! {
         const { Cell::new(PseudoCascadeStats { calls: 0, hits: 0, ns: 0 }) };
 }
 
+/// Gate for [`PseudoCascadeStats`]. Off by default.
+///
+/// `compute_pseudo_element_style` runs twice per element on a full pass, so an
+/// unconditional pair of clock reads here would be a per-element cost added to
+/// the very path this track exists to make cheaper — a census must not be one
+/// of the things it measures. Off, the hook costs one relaxed load.
+static PSEUDO_STATS_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Enables/disables the BUG-341 S20 pseudo-cascade census — see
+/// [`PseudoCascadeStats`]. Process-wide, like the box-build censuses.
+pub fn set_pseudo_cascade_diagnostics(on: bool) {
+    PSEUDO_STATS_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Returns the accumulated [`PseudoCascadeStats`] and resets the tally.
 pub fn take_pseudo_cascade_stats() -> PseudoCascadeStats {
     PSEUDO_CASCADE_STATS.with(|s| s.replace(PseudoCascadeStats::default()))
@@ -8160,6 +8174,9 @@ pub fn compute_pseudo_element_style(
         return None;
     }
     // BUG-341 S20 census hook — see `PseudoCascadeStats`.
+    if !PSEUDO_STATS_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode);
+    }
     let t_pseudo = std::time::Instant::now();
     let out = compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode);
     note_pseudo_cascade(t_pseudo.elapsed().as_nanos() as u64, out.is_some());
