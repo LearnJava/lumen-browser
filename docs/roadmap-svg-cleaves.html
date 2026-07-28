@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 102,
+  "open": 103,
   "fixed": 273,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 375,
+ "total_bugs": 376,
  "phases": [
   {
    "id": "P0",
@@ -841,7 +841,7 @@
      "title": "Многопоточный рендер-конвейер (ADR-016)",
      "status": "done",
      "size": "XL",
-     "note": "ADR-016 (мандат пользователя 2026-07-09): многопоточный рендер-конвейер; бриф docs/tasks/ph3-render-multithreading.md; ЗАКРЫТ 2026-07-15 (сверка с кодом): все под-задачи M0–M4.1 сделаны и влиты (последняя — M4.1 rayon, 2026-07-13), брифовый план заканчивается на M4.1 — остатка нет",
+     "note": "ADR-016 (мандат пользователя 2026-07-09): многопоточный рендер-конвейер; бриф docs/tasks/ph3-render-multithreading.md; ЗАКРЫТ 2026-07-15 (сверка с кодом): все под-задачи M0–M4.1 сделаны и влиты (последняя — M4.1 rayon, 2026-07-13), брифовый план заканчивается на M4.1 — остатка нет ФЛИП ДЕФОЛТА 2026-07-28 (ADR-023, ветка p3-engine-thread-default): движковый поток M2 включён по умолчанию, откат LUMEN_NO_ENGINE_THREAD=1 — до этого готовая M2-работа не доезжала до пользователя (relayout оставался на UI-потоке; 9 синхронных relayout до первого кадра на lenta.ru → 1-3). Скролл этим НЕ чинится, см. BUG-405.",
      "tasks": [
       {
        "id": "P3-mt-m22d",
@@ -6752,6 +6752,13 @@
    "component": "shell (`crates/shell/src/main.rs::flush_pointer_moves`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-405": {
+   "status": "open",
+   "title": "Прокрутка реальных сайтов рвано залипает: на `https://lenta.ru` (43 кадра/прогон, dev-release, дефолтный wgpu) p50 ≈9 мс, но avg ≈210 мс и max **3.1–3.6 с** — р…",
+   "component": "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7152,6 +7159,9 @@
   ],
   "paint (wgpu `renderer.rs`, `BeginStickyLayer`)": [
    "BUG-336"
+  ],
+  "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)": [
+   "BUG-405"
   ],
   "paint/cpu_raster": [
    "BUG-052"
