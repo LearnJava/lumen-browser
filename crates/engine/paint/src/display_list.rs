@@ -19,7 +19,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
-    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip,
+    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     GradientStop, ImageRendering, Isolation, Length, ListStyleType, ParsedGradient,
@@ -3981,8 +3981,14 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
     // same pair inline via `emit_push_mask`; the SC bucket path lost it before
     // (mask-image makes the box a stacking context → painted via `fill_buckets`/
     // `emit_box_self`, which never opened the mask group).
-    if emit_push_mask(&mut pre, b) {
-        post.push(DisplayCommand::PopMask);
+    // Слоёв может быть несколько (`mask-composite: intersect` — вложенные
+    // группы, см. `rendered_mask_layers`), поэтому закрываем ровно столько
+    // `PopMask`, сколько групп открылось.
+    let mask_groups = emit_push_mask(&mut pre, b);
+    if mask_groups > 0 {
+        for _ in 0..mask_groups {
+            post.push(DisplayCommand::PopMask);
+        }
         // CSS Masking L1 §4.6 — `mask-clip` restricts the masked painting to the
         // padding/content box. Pushed inside the mask group (after PushMask); the
         // clip result is identical whether the scissor sits inside or outside the
@@ -4583,13 +4589,27 @@ fn background_color_clip(b: &LayoutBox) -> BackgroundClip {
 /// clipped) — the clip would be a no-op scissor, so unmasked-default rendering
 /// stays byte-identical.
 ///
-/// Reads the top mask layer (`mask_layers[0]`): only that layer is rendered
-/// today, so its `mask-clip` is the one that bounds the painting area. Applying
-/// the per-layer clips of the remaining layers is part of the multi-layer mask
-/// composition still to be wired (`// CSS: mask-composite` in `emit_push_mask`).
+/// Covers every layer [`rendered_mask_layers`] actually emits, not just the top
+/// one: each layer's `mask-clip` bounds that layer's own contribution, and the
+/// emitted layers combine by `intersect` (alpha multiplication), so restricting
+/// each factor to its own rect is the same as restricting the product to the
+/// **intersection** of those rects. A single rect therefore expresses the whole
+/// chain exactly. Layers whose clip is a no-op (`border-box` and friends) drop
+/// out of the intersection, so the common single-layer case is unchanged.
 fn mask_clip_paint_rect(b: &LayoutBox) -> Option<Rect> {
-    let top = b.style.mask_layers.first()?;
-    match top.clip {
+    rendered_mask_layers(b)
+        .iter()
+        .filter_map(|l| mask_clip_layer_rect(b, l.clip))
+        .reduce(intersect_rects)
+}
+
+/// `mask-clip` of a single layer → the rect it restricts painting to, or `None`
+/// when that value's painting area is the element's border box (`border-box`,
+/// plus `stroke-box`/`view-box` which fall back to it for CSS boxes) or when
+/// painting is not clipped at all (`no-clip`). A `None` here means the clip
+/// would be a no-op scissor, so unmasked-default rendering stays byte-identical.
+fn mask_clip_layer_rect(b: &LayoutBox, clip: MaskClip) -> Option<Rect> {
+    match clip {
         MaskClip::PaddingBox => Some(background_clip_rect(b, BackgroundClip::PaddingBox)),
         // fill-box has no SVG geometry on a CSS box → object bounding box = content box.
         MaskClip::ContentBox | MaskClip::FillBox => {
@@ -4599,6 +4619,17 @@ fn mask_clip_paint_rect(b: &LayoutBox) -> Option<Rect> {
         // CSS box (= `b.rect`); no-clip disables the clip. All → no-op.
         MaskClip::BorderBox | MaskClip::StrokeBox | MaskClip::ViewBox | MaskClip::NoClip => None,
     }
+}
+
+/// Пересечение двух прямоугольников. Непересекающиеся дают прямоугольник
+/// нулевого размера (не отрицательного): scissor нулевой площади означает
+/// «ничего не рисуется» — верный результат для пустого пересечения.
+fn intersect_rects(a: Rect, c: Rect) -> Rect {
+    let x = a.x.max(c.x);
+    let y = a.y.max(c.y);
+    let right = (a.x + a.width).min(c.x + c.width);
+    let bottom = (a.y + a.height).min(c.y + c.height);
+    Rect::new(x, y, (right - x).max(0.0), (bottom - y).max(0.0))
 }
 
 /// Converts `background-origin` to the equivalent `BackgroundClip` for rect computation.
@@ -5152,40 +5183,93 @@ fn mask_stops_for_mode(stops: &[GradientStop], mode: lumen_layout::MaskMode) -> 
     }
 }
 
-fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
-    // Only the top mask layer is rendered so far: the display list carries one
-    // `PushMask*` per element and every backend applies exactly one mask
-    // channel.
-    // `// CSS: mask-composite` — combining `mask_layers[1..]` into that single
-    // channel needs the mask itself to be assembled off-screen first (Porter-Duff
-    // add/subtract/intersect/exclude on the mask alpha), which is a renderer-side
-    // change in all three backends; the style side (per-layer list + `mask`
-    // shorthand) is in place.
-    let Some(top) = b.style.mask_layers.first() else {
-        return false;
+/// CSS Masking L1 §4.7/§4.9 — какие слои из [`ComputedStyle::mask_layers`]
+/// реально попадают в display list.
+///
+/// Один `PushMask*` несёт ровно один mask-канал, но группы **вкладываются**, а
+/// вложение перемножает альфы: содержимое под `PushMask(A) PushMask(B) … PopMask
+/// PopMask` получает `alpha · b · a`. Умножение — это ровно Porter-Duff
+/// source-in, то есть `mask-composite: intersect`. Поэтому цепочку, где каждый
+/// слой поверх нижнего складывается через `intersect`, можно отрендерить точно,
+/// не собирая маску в отдельный офскрин и не трогая бэкенды. Порядок вложения
+/// не важен — умножение коммутативно.
+///
+/// Условия, при которых эмитятся все слои:
+/// * у каждого слоя есть рисуемый источник (`url(...)` или градиент) — слой
+///   `none` даёт прозрачную маску и в `intersect` обнулил бы результат;
+/// * у всех слоёв, кроме нижнего, `composite: intersect`;
+/// * у нижнего слоя `composite` **не** `intersect` — его оператор применяется к
+///   прозрачному фону, где `add`/`subtract`/`exclude` дают сам слой, а
+///   `intersect` (source-in с прозрачным) вычистил бы маску целиком. Реализация
+///   этого вырожденного случая расходится между браузерами, поэтому он уходит в
+///   тот же fallback, а не рендерится по букве спеки.
+///
+/// Иначе — `// CSS: mask-composite` — рендерится только верхний слой (прежнее
+/// поведение). `add`/`subtract`/`exclude` между слоями вложением не выражаются:
+/// им нужна сборка маски в отдельный офскрин во всех трёх бэкендах (femtovg,
+/// wgpu `renderer.rs`, `cpu_raster.rs`), что уже renderer-side задача, а не
+/// стилевая.
+fn rendered_mask_layers(b: &LayoutBox) -> &[MaskLayer] {
+    let layers = &b.style.mask_layers;
+    let Some((bottom, upper)) = layers.split_last() else {
+        return &[];
     };
+    let all_intersect = !upper.is_empty()
+        && upper.iter().all(|l| l.composite == MaskComposite::Intersect)
+        && bottom.composite != MaskComposite::Intersect
+        && layers.iter().all(is_renderable_mask_source);
+    if all_intersect { layers } else { &layers[..1] }
+}
+
+/// Есть ли у слоя источник, который [`emit_push_mask`] умеет превратить в
+/// `PushMask*`. `mask-image: none` и пустой `url()` — нет.
+fn is_renderable_mask_source(l: &MaskLayer) -> bool {
+    match &l.image {
+        BackgroundImage::Url(src) => !src.is_empty(),
+        BackgroundImage::Gradient(_) => true,
+        _ => false,
+    }
+}
+
+/// Эмитит mask-группы элемента. Возвращает число открытых групп — столько же
+/// `PopMask` обязан выставить вызывающий.
+fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> usize {
+    let mut opened = 0;
+    // Верхний слой идёт наружу. Для `intersect` порядок безразличен, но так
+    // display list читается в том же порядке, что и CSS-список слоёв.
+    for layer in rendered_mask_layers(b) {
+        if emit_push_mask_layer(out, b, layer) {
+            opened += 1;
+        }
+    }
+    opened
+}
+
+/// Эмитит `PushMask*` одного слоя. `false` — источник не рисуемый, группа не
+/// открыта (парный `PopMask` не нужен).
+fn emit_push_mask_layer(out: &mut Vec<DisplayCommand>, b: &LayoutBox, layer: &MaskLayer) -> bool {
     // CSS Masking L1 §4.5 — `mask-origin` sets the mask **positioning area**
     // (border/padding/content box). Reuses the background-origin geometry; for
     // the default `border-box` this equals `b.rect`, so existing behaviour is
     // unchanged.
-    let rect = background_origin_rect(b, top.origin);
-    let mode = top.mode;
+    let rect = background_origin_rect(b, layer.origin);
+    let mode = layer.mode;
     // CSS Masking L1 §4.6 — `mask-clip` restricts the masked element's painting
     // area. It is wired at the call sites by wrapping the whole mask group in a
     // `PushClipRect` / `PopClip` pair (see `mask_clip_paint_rect`), reusing the
     // existing scissor path instead of threading a clip rect through the mask
     // commands + every backend.
-    match &top.image {
+    match &layer.image {
         BackgroundImage::Url(src) if !src.is_empty() => {
             out.push(DisplayCommand::PushMaskImage {
                 rect,
                 src: src.clone(),
-                size: top.size,
+                size: layer.size,
                 // CSS Masking L1 §4.4 — `mask-position` (same syntax as
                 // background-position). Applies to image masks; gradient masks
                 // derive their geometry from `rect` above.
-                position: top.position,
-                repeat: top.repeat,
+                position: layer.position,
+                repeat: layer.repeat,
                 image_rendering: b.style.image_rendering,
             });
             true
@@ -7351,7 +7435,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
         | BoxKind::Table | BoxKind::TableRowGroup => {
             // CSS Masking L1 §4: mask-image wraps the entire element (opacity+transform+content).
             // Emitted outermost so the mask applies to the fully composited element.
-            let has_mask = emit_push_mask(out, b);
+            // `mask_groups` > 1 — вложенные группы `mask-composite: intersect`
+            // (см. `rendered_mask_layers`); закрываются столькими же PopMask.
+            let mask_groups = emit_push_mask(out, b);
+            let has_mask = mask_groups > 0;
             // CSS Masking L1 §4.6 — `mask-clip` restricts the masked painting to
             // the padding/content box. Pushed inside the mask group; popped before
             // PopMask below.
@@ -7598,7 +7685,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             if mask_clip.is_some() {
                 out.push(DisplayCommand::PopClip);
             }
-            if has_mask {
+            for _ in 0..mask_groups {
                 out.push(DisplayCommand::PopMask);
             }
         }
@@ -11331,6 +11418,97 @@ mod tests {
                 _ => None,
             })
             .expect("gradient mask must emit PushMaskLinearGradient")
+    }
+
+    // ── mask-composite: intersect через вложение групп (CSS Masking L1 §4.7) ──
+
+    /// Имена mask-команд подряд — достаточно, чтобы проверить и количество
+    /// открытых групп, и их вложенность (Push… Push… Pop Pop).
+    fn mask_group_shape(dl: &DisplayList) -> Vec<&'static str> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushMaskImage { .. } => Some("PushImage"),
+                DisplayCommand::PushMaskLinearGradient { .. } => Some("PushLinear"),
+                DisplayCommand::PopMask => Some("Pop"),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mask_composite_intersect_nests_one_group_per_layer() {
+        // Вложение перемножает альфы = Porter-Duff source-in = `intersect`.
+        // Верхний слой (url) снаружи, нижний (градиент) внутри; закрываются
+        // двумя PopMask.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: url(a.png), linear-gradient(black, transparent); \
+             mask-composite: intersect, add; }",
+        );
+        assert_eq!(
+            mask_group_shape(&dl),
+            vec!["PushImage", "PushLinear", "Pop", "Pop"]
+        );
+    }
+
+    #[test]
+    fn mask_composite_add_renders_top_layer_only() {
+        // `add` вложением не выражается (нужна сборка маски в офскрине) —
+        // остаётся прежнее поведение: рендерится только верхний слой.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: url(a.png), linear-gradient(black, transparent); }",
+        );
+        assert_eq!(mask_group_shape(&dl), vec!["PushImage", "Pop"]);
+    }
+
+    #[test]
+    fn mask_composite_intersect_on_bottom_layer_falls_back() {
+        // У нижнего слоя оператор применяется к прозрачному фону: `intersect`
+        // там вычистил бы маску целиком, и браузеры расходятся в трактовке —
+        // уходим в fallback «только верхний слой», а не гасим элемент.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: url(a.png), linear-gradient(black, transparent); \
+             mask-composite: intersect, intersect; }",
+        );
+        assert_eq!(mask_group_shape(&dl), vec!["PushImage", "Pop"]);
+    }
+
+    #[test]
+    fn mask_composite_intersect_with_none_layer_falls_back() {
+        // Слой `none` — прозрачная маска; в `intersect` он обнулил бы результат,
+        // поэтому такая цепочка не вкладывается.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: url(a.png), none; mask-composite: intersect, add; }",
+        );
+        assert_eq!(mask_group_shape(&dl), vec!["PushImage", "Pop"]);
+    }
+
+    #[test]
+    fn mask_clip_intersects_across_nested_layers() {
+        // content-box 100×60 + padding 10 + border 5 → padding-box 120×80,
+        // content-box 100×60. Клипы слоёв пересекаются → берётся content-box.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; border: 5px solid red; padding: 10px; \
+             mask-image: linear-gradient(black, transparent), linear-gradient(black, white); \
+             mask-clip: padding-box, content-box; mask-composite: intersect, add; }",
+        );
+        let clip = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushClipRect { rect } => Some(*rect),
+                _ => None,
+            })
+            .expect("mask-clip must emit PushClipRect");
+        assert!((clip.width - 100.0).abs() < 0.1, "clip.width={}", clip.width);
+        assert!((clip.height - 60.0).abs() < 0.1, "clip.height={}", clip.height);
     }
 
     #[test]
