@@ -916,7 +916,7 @@ fn run_window_mode(
         chrome_animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         chrome_transition_scheduler: TransitionScheduler::new(),
         chrome_prev_styles: HashMap::new(),
-        chrome_prev_pristine_layout: None,
+        chrome_content_area_detached: None,
         chrome_prev_cascade_styles: HashMap::new(),
         chrome_prev_interactive: (None, None, None),
         chrome_prev_viewport: None,
@@ -5839,42 +5839,149 @@ fn collect_layout_rects_rec(lb: &LayoutBox, map: &mut HashMap<u32, [f32; 4]>) {
 /// at the exact slot `#contentArea` occupied, preserving both their absolute
 /// paint rects (already resolved by the out-of-flow layout pass) and their
 /// tree-order position relative to `#contentArea`'s former siblings.
+///
+/// BUG-341 S22: the pruning is **reversible**. Every removal is recorded in the
+/// returned [`ContentAreaDetachment`], and [`restore_content_area`] puts the
+/// tree back exactly as it was — which is what lets the next pass take the
+/// live tree as its `prev` basis instead of the pipeline copying a pristine
+/// one aside on every frame (that copy was the largest single item left in an
+/// incremental chrome cycle; see the S22 census in `bugs/BUG-341-OPEN.md`).
 fn take_content_area(
     lb: &mut LayoutBox,
     node: lumen_dom::NodeId,
     salvage_ids: &[&str],
     doc: &lumen_dom::Document,
-) -> Option<Rect> {
-    if let Some(idx) = lb.children.iter().position(|c| c.node == node) {
-        let mut removed = lb.children.remove(idx);
+) -> Option<(Rect, ContentAreaDetachment)> {
+    let mut path = Vec::new();
+    take_content_area_at(lb, node, salvage_ids, doc, &mut path)
+}
+
+/// [`take_content_area`]'s recursion, carrying the child-index path walked so
+/// far so the detachment record can name `#contentArea`'s holder.
+fn take_content_area_at(
+    lb: &mut LayoutBox,
+    node: lumen_dom::NodeId,
+    salvage_ids: &[&str],
+    doc: &lumen_dom::Document,
+    path: &mut Vec<usize>,
+) -> Option<(Rect, ContentAreaDetachment)> {
+    if let Some(slot) = lb.children.iter().position(|c| c.node == node) {
+        let mut removed = lb.children.remove(slot);
         let rect = removed.rect;
         let mut salvaged = Vec::new();
-        salvage_layout_boxes(&mut removed, salvage_ids, doc, &mut salvaged);
-        for (offset, b) in salvaged.into_iter().enumerate() {
-            lb.children.insert(idx + offset, b);
+        salvage_layout_boxes(&mut removed, salvage_ids, doc, &mut Vec::new(), &mut salvaged);
+        let mut salvage_paths = Vec::with_capacity(salvaged.len());
+        for (offset, (from, b)) in salvaged.into_iter().enumerate() {
+            salvage_paths.push(from);
+            lb.children.insert(slot + offset, b);
         }
-        return Some(rect);
+        return Some((
+            rect,
+            ContentAreaDetachment { holder_path: path.clone(), slot, removed, salvage_paths },
+        ));
     }
-    lb.children.iter_mut().find_map(|child| take_content_area(child, node, salvage_ids, doc))
+    for (i, child) in lb.children.iter_mut().enumerate() {
+        path.push(i);
+        if let Some(found) = take_content_area_at(child, node, salvage_ids, doc, path) {
+            return Some(found);
+        }
+        path.pop();
+    }
+    None
+}
+
+/// BUG-341 S22: everything [`take_content_area`] removed from a chrome box
+/// tree, in enough detail for [`restore_content_area`] to undo it exactly.
+///
+/// "Exactly" is the whole point, and the cost of getting it wrong is higher
+/// than it looks. The restored tree is handed to
+/// `layout_mutation_incremental_restyle` as its `prev` basis, and
+/// `incremental_build_box` moves whole *clean* subtrees straight across from
+/// that basis — on an interaction cycle `#contentArea`'s parent is clean, so a
+/// basis missing `#contentArea` produces a document missing `#contentArea`,
+/// and the next cycle inherits that tree in turn. It is not a slow frame, it
+/// is 155 boxes where there should be 318, permanently. Measured, and gated:
+/// `bug341_s22_a_restored_basis_carries_the_whole_document_forward`.
+struct ContentAreaDetachment {
+    /// Child-index path from the tree root down to the box that held
+    /// `#contentArea` (empty when the root itself held it).
+    holder_path: Vec<usize>,
+    /// Index `#contentArea` occupied among that holder's children — also the
+    /// slot the salvaged popovers were spliced into.
+    slot: usize,
+    /// `#contentArea`'s own box, with the salvaged popovers already lifted out
+    /// of its subtree.
+    removed: LayoutBox,
+    /// For each salvaged popover, in removal order, the child-index path
+    /// inside [`Self::removed`] it was removed from — the last element is the
+    /// index within that box's children. Restoring walks these in **reverse**,
+    /// because each path was recorded against the tree state of its own
+    /// removal.
+    salvage_paths: Vec<Vec<usize>>,
+}
+
+/// BUG-341 S22: inverse of [`take_content_area`] — re-inserts the salvaged
+/// popovers into `#contentArea`'s subtree and `#contentArea` back into its
+/// former slot, reproducing the pre-pruning tree box for box.
+///
+/// Returns `false` if any recorded path no longer addresses a box (only
+/// possible if something mutated the tree between the two calls, which nothing
+/// does today — `chrome_layout` is read-only until the next pass replaces it).
+/// The caller treats that as "no usable `prev`" and takes the full-layout path,
+/// so a stale record costs a slow frame, never a wrong one.
+fn restore_content_area(root: &mut LayoutBox, detached: ContentAreaDetachment) -> bool {
+    let ContentAreaDetachment { holder_path, slot, mut removed, salvage_paths } = detached;
+    let Some(holder) = follow_box_path_mut(root, &holder_path) else { return false };
+    if slot + salvage_paths.len() > holder.children.len() {
+        return false;
+    }
+    let salvaged: Vec<LayoutBox> = holder.children.drain(slot..slot + salvage_paths.len()).collect();
+    for (from, b) in salvage_paths.into_iter().zip(salvaged).rev() {
+        let Some((&idx, head)) = from.split_last() else { return false };
+        let Some(parent) = follow_box_path_mut(&mut removed, head) else { return false };
+        if idx > parent.children.len() {
+            return false;
+        }
+        parent.children.insert(idx, b);
+    }
+    holder.children.insert(slot, removed);
+    true
+}
+
+/// Walks `path`'s child indices down from `b`. `None` if any index is out of
+/// range.
+fn follow_box_path_mut<'a>(b: &'a mut LayoutBox, path: &[usize]) -> Option<&'a mut LayoutBox> {
+    let mut cur = b;
+    for &i in path {
+        cur = cur.children.get_mut(i)?;
+    }
+    Some(cur)
 }
 
 /// Depth-first: removes every descendant of `lb` whose element id is in
-/// `salvage_ids`, appending it to `out` in tree order. Used by
-/// [`take_content_area`] to rescue specific popovers out of `#contentArea`
-/// before the rest of its subtree is discarded.
+/// `salvage_ids`, appending it to `out` in tree order together with the
+/// child-index path (relative to the box this recursion started at) it came
+/// from. Used by [`take_content_area`] to rescue specific popovers out of
+/// `#contentArea` before the rest of its subtree is discarded — and by
+/// [`restore_content_area`] to put them back.
 fn salvage_layout_boxes(
     lb: &mut LayoutBox,
     salvage_ids: &[&str],
     doc: &lumen_dom::Document,
-    out: &mut Vec<LayoutBox>,
+    prefix: &mut Vec<usize>,
+    out: &mut Vec<(Vec<usize>, LayoutBox)>,
 ) {
     let mut i = 0;
     while i < lb.children.len() {
         let matches = doc.get(lb.children[i].node).get_attr("id").is_some_and(|id| salvage_ids.contains(&id));
         if matches {
-            out.push(lb.children.remove(i));
+            let mut from = prefix.clone();
+            from.push(i);
+            out.push((from, lb.children.remove(i)));
         } else {
-            salvage_layout_boxes(&mut lb.children[i], salvage_ids, doc, out);
+            prefix.push(i);
+            salvage_layout_boxes(&mut lb.children[i], salvage_ids, doc, prefix, out);
+            prefix.pop();
             i += 1;
         }
     }
@@ -7394,15 +7501,23 @@ struct Lumen {
     /// detect which properties changed. Mirrors [`Self::prev_styles`] for the
     /// chrome tree.
     chrome_prev_styles: HashMap<NodeId, ComputedStyle>,
-    /// BUG-341 S5: the pristine (pre-[`take_content_area`]) box tree from the
-    /// previous pass — the `prev` basis for
-    /// `lumen_layout::box_tree::layout_mutation_incremental_restyle`'s graft.
-    /// Must reflect the *whole* `chrome_doc` (including `#contentArea`), not
-    /// the pruned [`Self::chrome_layout`] — `take_content_area` removes
-    /// `#contentArea` and shifts sibling indices, which would misalign
-    /// `graft_geometry`'s by-index matching for everything after it (see
-    /// BUG-341's "attempted mitigation" note, which hit the same issue).
-    chrome_prev_pristine_layout: Option<lumen_layout::LayoutBox>,
+    /// BUG-341 S5/S22: what the previous pass's [`take_content_area`] removed
+    /// from [`Self::chrome_layout`].
+    ///
+    /// The incremental graft needs the *pristine* (pre-pruning) tree of the
+    /// previous pass: it matches children **by index**, and pruning
+    /// `#contentArea` shifts every sibling after it (see BUG-341's "attempted
+    /// mitigation" note, which hit exactly that). S5 met this by keeping a
+    /// whole second copy of the tree (`chrome_prev_pristine_layout =
+    /// layout.clone()`), which the S22 census priced at 0.16-0.40 ms per
+    /// cycle — the largest item left in a chrome interaction, and ~40 % of a
+    /// hover cycle. S22 keeps the *difference* instead: the pruning is
+    /// recorded here and undone by [`restore_content_area`] at the top of the
+    /// next pass, so the live tree in [`Self::chrome_layout`] becomes the
+    /// basis and no copy is made at all. Sound because nothing mutates
+    /// `chrome_layout` between passes — it is read-only until
+    /// [`Self::relayout_chrome_host`] replaces it wholesale.
+    chrome_content_area_detached: Option<ContentAreaDetachment>,
     /// BUG-341 S5: the per-node `ComputedStyle` cascade cache
     /// ([`lumen_layout::CounterMap::styles`]) from the previous pass —
     /// `RestyleDelta::prev_styles` for the next incremental cascade. Distinct
@@ -8782,14 +8897,28 @@ impl Lumen {
         let forced_colors = lumen_layout::forced_colors_active();
         let viewport_stable = self.chrome_prev_viewport == Some(viewport);
         let forced_colors_stable = self.chrome_prev_forced_colors == forced_colors;
-        // BUG-341 S19: `take()`, not `as_ref()` — the incremental path below
-        // *moves* the reusable subtrees out of the previous tree instead of
-        // copying them, so the previous tree does not survive the call. The
-        // field is reassigned from this pass's own result a few lines further
-        // down, on both arms.
+        // BUG-341 S22: the previous pass's pristine tree is *reconstructed*
+        // from the live one, not copied out of it while it was still pristine.
+        // `chrome_layout` holds the pruned tree that pass painted, and
+        // `chrome_content_area_detached` holds exactly what the pruning took
+        // out — putting the second back into the first yields the pre-pruning
+        // tree box for box, for the price of one insert per salvaged popover
+        // instead of a whole-tree copy. Taking `chrome_layout` by value is
+        // what makes it free: the incremental path below *moves* the reusable
+        // subtrees out of the basis (S19), so the basis does not survive the
+        // call either way. Both fields are reassigned from this pass's own
+        // result further down, on both arms; the display list is dropped with
+        // the tree because this pass builds a new one.
+        let prev_pristine = match (self.chrome_layout.take(), self.chrome_content_area_detached.take()) {
+            (Some((mut lb, _stale_dl)), Some(detached)) => restore_content_area(&mut lb, detached).then_some(lb),
+            // No `#contentArea` in the chrome document (or it had no box):
+            // nothing was pruned, so the live tree *is* the pristine one.
+            (Some((lb, _stale_dl)), None) => Some(lb),
+            (None, _) => None,
+        };
         let (mut layout, cascade_styles) = match (
             viewport_stable && forced_colors_stable,
-            self.chrome_prev_pristine_layout.take(),
+            prev_pristine,
         ) {
             (true, Some(prev)) => {
                 let (prev_hover, prev_focus, prev_active) = self.chrome_prev_interactive;
@@ -8870,12 +8999,10 @@ impl Lumen {
             ),
         };
         lumen_layout::clear_interactive_state();
-        // Persist this pass's pristine (pre-`take_content_area`) tree +
-        // cascade cache as the `prev` basis for the next call's incremental
-        // path (BUG-341 S5) — must be captured before `take_content_area`
-        // below mutates `layout` (removes `#contentArea`, shifting sibling
-        // indices `graft_geometry`'s by-index matching relies on).
-        self.chrome_prev_pristine_layout = Some(layout.clone());
+        // Persist this pass's cascade cache as the `prev` basis for the next
+        // call's incremental path (BUG-341 S5). Its box-tree counterpart is no
+        // longer copied here — S22 records `take_content_area`'s removals
+        // below instead and undoes them at the top of the next pass.
         self.chrome_prev_cascade_styles = cascade_styles.styles().clone();
         self.chrome_prev_viewport = Some(viewport);
         self.chrome_prev_interactive = new_interactive;
@@ -8886,7 +9013,10 @@ impl Lumen {
         // and cert/print modals — all three are `position:absolute` direct
         // children of `#contentArea` too, same reasoning as `#findBar`/
         // `#downloadsPanel`.
-        self.chrome_page_host_rect = doc.find_by_id(lumen_chrome::ids::CONTENT_AREA).and_then(|id| {
+        // BUG-341 S22: the detachment record is kept, not discarded — it is
+        // what lets the next pass rebuild this tree's pristine form instead of
+        // this pass copying one aside.
+        let pruned = doc.find_by_id(lumen_chrome::ids::CONTENT_AREA).and_then(|id| {
             take_content_area(
                 &mut layout,
                 id,
@@ -8900,6 +9030,12 @@ impl Lumen {
                 doc,
             )
         });
+        let (page_host_rect, detached) = match pruned {
+            Some((rect, detached)) => (Some(rect), Some(detached)),
+            None => (None, None),
+        };
+        self.chrome_page_host_rect = page_host_rect;
+        self.chrome_content_area_detached = detached;
         // CC-7/CC-9: captured non-destructively (unlike `#contentArea`
         // above) — these nodes stay in the tree and paint normally.
         self.chrome_omni_input_rect = omni_input
@@ -24496,8 +24632,8 @@ mod tests {
         let mut layout = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
         let content_area = doc.find_by_id("contentArea").expect("fixture has #contentArea");
 
-        let rect = take_content_area(&mut layout, content_area, &["findBar", "downloadsPanel"], &doc);
-        assert!(rect.is_some(), "must return #contentArea's own rect");
+        let pruned = take_content_area(&mut layout, content_area, &["findBar", "downloadsPanel"], &doc);
+        assert!(pruned.is_some(), "must return #contentArea's own rect");
 
         assert!(
             lumen_layout::find_box_by_node(&layout, content_area).is_none(),
@@ -24635,9 +24771,10 @@ mod tests {
     /// bit-identical (S5's limit — that's what kept `CC12_KEY`'s per-cycle
     /// omnibox-text change on the full-layout path). Falls back to
     /// `layout_measured_hyp_with_counters` only on the first cycle. `state`'s
-    /// clone of the fresh tree/cascade cache is deliberately inside the timed
-    /// region — that per-cycle persist cost is real production overhead, not
-    /// a benchmark artifact.
+    /// persist of the fresh tree/cascade cache is deliberately inside the timed
+    /// region — that per-cycle cost is real production overhead, not a
+    /// benchmark artifact. BUG-341 S22 turned the tree half of it from a
+    /// whole-tree `clone()` into a move.
     #[allow(clippy::too_many_arguments)]
     fn cc12_bench_cycle(
         doc: &mut lumen_dom::Document,
@@ -24698,19 +24835,26 @@ mod tests {
         // the S8 re-analysis found that bookkeeping to be ~12-13ms of the
         // cycle, which no stage profile inside `lumen-layout` can show.
         let t_layout = t0.elapsed().as_secs_f64() * 1000.0;
-        let t1 = std::time::Instant::now();
-        state.prev_pristine_layout = Some(layout.clone());
-        let t_clone_tree = t1.elapsed().as_secs_f64() * 1000.0;
         let t2 = std::time::Instant::now();
         state.prev_cascade_styles = counters.styles().clone();
         let t_clone_styles = t2.elapsed().as_secs_f64() * 1000.0;
         let t3 = std::time::Instant::now();
         let _dl = paint_ordered(&layout);
         let t_paint = t3.elapsed().as_secs_f64() * 1000.0;
+        // BUG-341 S22: a **move**, not a `clone()`. Production stopped copying
+        // the tree here too — `relayout_chrome_host` hands the next pass its
+        // own live tree with `take_content_area`'s removals undone
+        // (`restore_content_area`). This bench has never modelled the pruning,
+        // so the move is the whole of the change here; production additionally
+        // pays the restore, which is one insert per salvaged popover plus a
+        // path walk and does not scale with the tree.
+        let t1 = std::time::Instant::now();
+        state.prev_pristine_layout = Some(layout);
+        let t_persist_tree = t1.elapsed().as_secs_f64() * 1000.0;
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         let bb = lumen_layout::box_tree::take_box_build_stats();
         eprintln!(
-            "[cc12-split] total={ms:.2} layout={t_layout:.2} clone_tree={t_clone_tree:.2} \
+            "[cc12-split] total={ms:.2} layout={t_layout:.2} persist_tree={t_persist_tree:.2} \
              clone_styles={t_clone_styles:.2} paint={t_paint:.2} \
              boxes_built={} boxes_reused={}",
             bb.built, bb.reused
@@ -26830,6 +26974,244 @@ mod tests {
         assert!(lumen_layout::find_box_by_node(&layout, content_area).is_none());
         let placeholder = doc.find_by_id("placeholder").expect("fixture has #placeholder");
         assert!(lumen_layout::find_box_by_node(&layout, placeholder).is_none());
+    }
+
+    // ── BUG-341 S22: the pruning is reversible ──────────────────────────────
+
+    /// The salvage list `relayout_chrome_host` passes to `take_content_area`.
+    const S22_SALVAGE_IDS: [&str; 5] = [
+        lumen_chrome::ids::FIND_BAR,
+        lumen_chrome::ids::DOWNLOADS_PANEL,
+        lumen_chrome::ids::CP_OVERLAY,
+        lumen_chrome::ids::CERT_OVERLAY,
+        lumen_chrome::ids::PRINT_OVERLAY,
+    ];
+
+    /// Box-for-box identity of two chrome trees, for BUG-341 S22's round-trip
+    /// gate. Style is compared by `Arc` **identity**, not by value: the
+    /// restored tree must hold the very boxes that were detached, not
+    /// equivalent ones.
+    fn s22_assert_identical(
+        a: &lumen_layout::LayoutBox,
+        b: &lumen_layout::LayoutBox,
+        path: &mut Vec<String>,
+    ) {
+        let at = || path.join(">");
+        assert_eq!(a.node, b.node, "{}: node id", at());
+        assert_eq!(a.rect, b.rect, "{}: rect", at());
+        assert_eq!(
+            std::mem::discriminant(&a.kind),
+            std::mem::discriminant(&b.kind),
+            "{}: BoxKind discriminant",
+            at(),
+        );
+        assert!(std::sync::Arc::ptr_eq(&a.style, &b.style), "{}: style is a different Arc", at());
+        assert_eq!(a.children.len(), b.children.len(), "{}: children.len()", at());
+        for (i, (ca, cb)) in a.children.iter().zip(b.children.iter()).enumerate() {
+            path.push(format!("child[{i}] node={:?}", ca.node));
+            s22_assert_identical(ca, cb, path);
+            path.pop();
+        }
+    }
+
+    /// BUG-341 S22 soundness gate: `restore_content_area` reproduces the
+    /// pre-pruning tree exactly, on the real chrome document.
+    ///
+    /// Exactness is the contract, not a nicety. The restored tree becomes the
+    /// next pass's `prev` basis, and `incremental_build_box` moves whole clean
+    /// subtrees across from it — so whatever the basis is missing or has in the
+    /// wrong slot, the produced document is missing or has in the wrong slot
+    /// too (`bug341_s22_a_restored_basis_carries_the_whole_document_forward`
+    /// measures exactly that failure). Comparing `style` by `Arc` identity is
+    /// part of the point: the restore must hand back the boxes it took, not
+    /// equivalent ones.
+    ///
+    /// The box-count assert is the other arm: without it the test would pass
+    /// just as well if `take_content_area` had quietly stopped pruning.
+    #[test]
+    fn bug341_s22_restoring_a_detachment_reproduces_the_pristine_tree() {
+        let (doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let (mut layout, _counters) = lumen_layout::layout_measured_hyp_with_counters(
+            &doc, &sheet, viewport, &measurer, &hyp, false,
+        );
+        let pristine = layout.clone();
+        let content_area = doc
+            .find_by_id(lumen_chrome::ids::CONTENT_AREA)
+            .expect("chrome document has #contentArea");
+
+        let (_rect, detached) = take_content_area(&mut layout, content_area, &S22_SALVAGE_IDS, &doc)
+            .expect("#contentArea has a layout box");
+        assert!(
+            census_count_boxes(&layout) < census_count_boxes(&pristine),
+            "pruning must actually remove boxes, otherwise the round-trip below is a no-op",
+        );
+
+        assert!(restore_content_area(&mut layout, detached), "restore must find every recorded path");
+        s22_assert_identical(&layout, &pristine, &mut vec!["root".to_owned()]);
+    }
+
+    /// BUG-341 S22: the same round-trip over the salvage path, which the real
+    /// chrome document cannot exercise at rest.
+    ///
+    /// Every salvageable popover (`#findBar`, `#downloadsPanel`, the CC-10
+    /// modals) is `display:none` until opened, so it has no box and
+    /// `take_content_area` salvages nothing — the gate above therefore runs
+    /// with an empty `salvage_paths` and would not notice if the salvage half
+    /// of the restore were broken. This fixture nests one popover inside
+    /// another element so the recorded paths are more than one level deep and
+    /// their removal order matters: restoring in the wrong order, or against
+    /// the wrong parent, misplaces a box and `s22_assert_identical` says so.
+    #[test]
+    fn bug341_s22_restoring_puts_salvaged_popovers_back_where_they_came_from() {
+        let html = concat!(
+            "<html><body>",
+            "<div id=\"before\"></div>",
+            "<div id=\"contentArea\">",
+            "<div id=\"placeholder\">demo<div id=\"downloadsPanel\">downloads</div></div>",
+            "<div id=\"findBar\">find</div>",
+            "</div>",
+            "<div id=\"after\"></div>",
+            "</body></html>",
+        );
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let mut layout = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let pristine = layout.clone();
+        let content_area = doc.find_by_id("contentArea").expect("fixture has #contentArea");
+
+        let (_rect, detached) =
+            take_content_area(&mut layout, content_area, &["findBar", "downloadsPanel"], &doc)
+                .expect("#contentArea has a layout box");
+        assert_eq!(detached.salvage_paths.len(), 2, "both popovers must be salvaged");
+        assert!(
+            detached.salvage_paths.iter().any(|p| p.len() > 1),
+            "the nested popover's path must be deeper than one level, or this fixture is not \
+             exercising what it was written for",
+        );
+
+        assert!(restore_content_area(&mut layout, detached), "restore must find every recorded path");
+        s22_assert_identical(&layout, &pristine, &mut vec!["root".to_owned()]);
+    }
+
+    /// BUG-341 S22 counter gate: three production-shaped chrome cycles,
+    /// returning the last cycle's `(built, reused, boxes_produced)`.
+    ///
+    /// `restore` picks the arm: `true` is production (undo the pruning, hand
+    /// the pristine tree on), `false` feeds the pruned tree straight back as
+    /// the basis — the mistake this slice's design makes possible.
+    fn s22_pipeline_cycles(restore: bool) -> (u32, u32, u64) {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut live: Option<(lumen_layout::LayoutBox, Option<ContentAreaDetachment>)> = None;
+        let mut prev_cascade_styles: HashMap<
+            lumen_dom::NodeId,
+            std::sync::Arc<lumen_layout::style::ComputedStyle>,
+        > = HashMap::new();
+        let mut typed = String::new();
+        let mut last = (0, 0);
+        let mut last_boxes = 0;
+        for _ in 0..3 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+            lumen_layout::set_interactive_state(None, None, None);
+            let basis = live.take().and_then(|(mut lb, detached)| match detached {
+                Some(d) if restore => restore_content_area(&mut lb, d).then_some(lb),
+                _ => Some(lb),
+            });
+            let (mut layout, counters) = match basis {
+                Some(prev) => {
+                    let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                    let dirty_roots: std::collections::HashSet<_> =
+                        lumen_layout::style::restyle_root_set_for_node_change(
+                            &doc,
+                            chrome_node_changes(&touched),
+                            &node_index,
+                        )
+                        .into_iter()
+                        .collect();
+                    let delta = lumen_layout::counters::RestyleDelta {
+                        prev_styles: &prev_cascade_styles,
+                        dirty_roots,
+                        content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                    };
+                    lumen_layout::counters::set_incremental_restyle(true);
+                    lumen_layout::box_tree::set_incremental_box_build(true);
+                    let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                    );
+                    lumen_layout::box_tree::set_incremental_box_build(false);
+                    lumen_layout::counters::set_incremental_restyle(false);
+                    result
+                }
+                None => lumen_layout::layout_measured_hyp_with_counters(
+                    &doc, &sheet, viewport, &measurer, &hyp, false,
+                ),
+            };
+            let bb = lumen_layout::box_tree::take_box_build_stats();
+            last = (bb.built, bb.reused);
+            last_boxes = census_count_boxes(&layout);
+            let detached = doc
+                .find_by_id(lumen_chrome::ids::CONTENT_AREA)
+                .and_then(|id| take_content_area(&mut layout, id, &S22_SALVAGE_IDS, &doc))
+                .map(|(_rect, d)| d);
+            live = Some((layout, detached));
+            prev_cascade_styles = counters.styles().clone();
+            lumen_layout::clear_interactive_state();
+        }
+        (last.0, last.1, last_boxes)
+    }
+
+    /// BUG-341 S22 gate, both arms: what a chrome cycle produces when its
+    /// basis was restored, versus when the pruned tree is fed straight back.
+    ///
+    /// The measured answer, and the reason this slice needs a gate of its own:
+    /// a pruned basis does not merely cost a rebuild, it produces a **wrong
+    /// tree**. `#contentArea`'s parent is clean on an interaction cycle, so
+    /// `incremental_build_box` moves that whole subtree over from `prev` in
+    /// O(1) — and a `prev` missing `#contentArea` therefore yields a document
+    /// missing `#contentArea`, permanently, 155 boxes instead of 318. It never
+    /// recovers, because the next cycle's basis is that same tree.
+    ///
+    /// Wall-clock cannot gate this and neither can the differential suite: the
+    /// chrome host paints the real page over `#contentArea`'s rect anyway, so
+    /// the visible frame of a wrong-basis run is very nearly the right one.
+    /// Box counts are the observable, which is the lesson S8 wrote for the
+    /// whole track.
+    #[test]
+    fn bug341_s22_a_restored_basis_carries_the_whole_document_forward() {
+        let (built_restored, reused_restored, boxes_restored) = s22_pipeline_cycles(true);
+        let (built_pruned, reused_pruned, boxes_pruned) = s22_pipeline_cycles(false);
+        eprintln!(
+            "[s22-gate] restored built={built_restored} reused={reused_restored} \
+             boxes={boxes_restored} | pruned-basis built={built_pruned} \
+             reused={reused_pruned} boxes={boxes_pruned}"
+        );
+        assert!(
+            boxes_restored > boxes_pruned,
+            "a restored basis must carry the whole document forward, a pruned one must not \
+             ({boxes_restored} vs {boxes_pruned}) — equal counts mean either the restore is a \
+             no-op or the pruning is, and this gate is then measuring nothing",
+        );
+        // The steady-state cycle of the production arm must still be an
+        // *incremental* one: a restore that quietly failed would fall back to
+        // a full layout, which also yields the whole document — and would be
+        // the slow frame this slice exists to avoid.
+        assert!(
+            built_restored < 100 && reused_restored > 0,
+            "the restored arm's steady-state cycle must stay incremental \
+             (built={built_restored} reused={reused_restored}) — a full-layout fallback \
+             builds every one of the document's boxes",
+        );
     }
 
     // ── Ph3 P3-bfcache: Cache-Control: no-store eligibility filter ──────────
