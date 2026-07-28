@@ -2358,9 +2358,12 @@
       {
        "id": "WPT-VENDOR-graphics-aria",
        "title": "WPT: вендорить + прогнать категорию `graphics-aria`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/graphics-aria/`, 3 файла: `META.yml`, `graphics-roles.html`, `LICENSE-WPT.md` — `WEB_FEATURES.yml` у категории нет), скоуп ⬜ (кандидат). В отличие от `graphics-aam` (ATTAcomm `*-manual.html`), единственный тест здесь — автоматический `testharness`, проверяющий те же три роли (`graphics-document`/`graphics-object`/`graphics-symbol`) через `AriaUtils.verifyRolesBySelector`. Хелпер `/wai-aria/scripts/aria-utils.js` не довендорен (категория `wai-aria` сама не вендорена), та же методология, что `core-aam`/`dpub-aam`/`graphics-aam`. `run_report.py --all --root graphics-aria --recursive` — ~24 с, 0/1 harness OK, 0/0 сабтестов (SKIP, `Executor does not support testdriver.js`). Новой находки нет — тест бьёт в уже заведённый BUG-398 (три роли Graphics ARIA отсутствуют в `AXRole::parse`, откат к `Generic`), найденный Rust-пробой при вендоринге `graphics-aam`; повторная проба не потребовалась",
+       "bugs": [
+        "BUG-398"
+       ]
       },
       {
        "id": "WPT-VENDOR-gyroscope",
