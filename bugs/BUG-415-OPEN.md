@@ -55,7 +55,7 @@ document-metadata-атрибутов (`characterSet`/`compatMode`/`URL`/…), к
 
 `createHTMLDocument` строит скелет `html>head,body` через `_lumen_create_element`, то есть
 узлы отсоединённого документа выделяются из **той же общей арены**, что и живое дерево
-(`MAX_DOM_NODES`, см. [BUG-411](BUG-411-OPEN.md)). Отдельного `Document`-арены у
+(`MAX_DOM_NODES`, см. [BUG-418](BUG-418-OPEN.md)). Отдельного `Document`-арены у
 отсоединённых документов нет — это уже задокументировано в doc-комментарии над
 `_lumen_build_detached_document` («has no per-node document tag — a known simplification»),
 но стоит держать в виду при починке: добавление `removeChild` без владельца-арены даст

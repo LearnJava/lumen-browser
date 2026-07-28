@@ -349,6 +349,23 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   row type tag lost). `strip::hit_test`/`TabHit` deliberately kept — the live, ungated right-click
   tab-context-menu path still uses them, which is itself a second BUG-404 site.
 
+- **CC-15-4: legacy paint of ten gated `panels/*` removed** (`crates/shell/src/panels/{bookmark,
+  print,settings,cert,history,ai,sidebar,shields,permission}_panel.rs`, `command_palette.rs`,
+  `main.rs`): each module's `build_panel` (plus `settings_panel`'s `tooltip_for`/`build_tooltip`),
+  every paint-only helper that fell dead with it (`emit_*`/`push_*`/`render_*`/`tt_*`/`txt`/
+  `truncate*`/`uniform_radii`), the paint-only colour/metric constants, the tests of the removed
+  builders, and the gated paint call sites in `main.rs` — ~3.5k lines. Panel *state* and `hit_test`
+  stay: `chrome_model_snapshot` reads the state, and the still-gated `MouseInput` branches read the
+  hit-tests. Two follow-ons this cut-out surfaced: the `settings_hover` field plus its `CursorMoved`
+  writer were dead work (they fed only the removed tooltip — every mouse move with the settings panel
+  open recomputed hover and forced a redraw for nothing; removed), and the three *ungated* hit-tests
+  (`command_palette`, `shields_panel`, `permission_panel`) are live BUG-404 sites — while the engine
+  chrome's own overlay is open, a click inside the panel's legacy rectangle is swallowed by an
+  invisible hit-test (appended to `bugs/BUG-404-OPEN.md` as sites 3-5, which is why those three
+  `hit_test`s were kept). One parity gap filed: BUG-411 (`#permPopover` carries neither the current
+  domain nor the shields on/off indicator, and has rows only for Camera/Microphone — Notifications
+  and Clipboard are unreachable from the UI).
+
 ## Deferred
 
 - **`<template>` markup + `templates::IDS` population**: the frozen design reference has none —
