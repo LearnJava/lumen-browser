@@ -2917,6 +2917,130 @@ Neither has been re-measured since S20's census, and every slice that trusted an
 un-remeasured note has paid for it (S19's `index_by_node`, S20's `clone_tree`).
 Census first.
 
+## S22 — the copy that existed to hold a difference
+
+### The census, first
+
+`bug341_s20_stage_census`, re-run unchanged on the branch point — the eighth
+census in a row, and the second (after S21) to **confirm** the queue's premise
+rather than move it:
+
+| item, per cycle | KEY | HOVER |
+|---|---:|---:|
+| whole pass | 0.75-1.13 ms | 0.44 ms |
+| pipeline's `layout.clone()` (`clone_tree`) | **0.16-0.40 ms** | **0.17 ms** |
+| pseudo-element cascades (160 / 129 calls) | 0.17-0.21 ms | 0.09-0.10 ms |
+| `CounterMap` construction (replayed) | 0.11 ms | 0.10 ms |
+| `CascadeIndex` rebuilds | **0** (S21) | **0** (S21) |
+| boxes really built, Σ self-time | 0.30 ms | 0.05 ms |
+
+`clone_tree` is the largest item on both scenarios and ~40 % of a hover cycle,
+which since S14 recomputes zero nodes. The other item the queue named — the
+`CounterMap` — is 0.10-0.11 ms, i.e. below the pseudo-element cascades nobody
+had queued.
+
+### What was wrong
+
+The copy existed to hold a **difference**, not a tree. `relayout_chrome_host`
+lays out the whole chrome document, then immediately prunes `#contentArea` out
+of the live tree (`take_content_area`, CC-4/CC-9) because the real page is
+painted separately at that rect. The next pass needs the *pre*-pruning tree as
+its incremental basis, so S5 kept a whole second copy of it — 318 boxes copied
+every frame to preserve the 163 that were about to be removed, plus their slot.
+
+### The fix
+
+The pruning became **reversible**. `take_content_area` now returns a
+`ContentAreaDetachment` — the holder's child-index path, the slot,
+`#contentArea`'s own subtree, and the path each salvaged popover was lifted
+from — and `restore_content_area` undoes it at the top of the next pass, on the
+tree the previous pass left in `chrome_layout`. The basis is reconstructed for
+the price of one insert per salvaged popover; `chrome_prev_pristine_layout` is
+gone. Sound because nothing mutates `chrome_layout` between passes: it is
+read-only from the moment it is assigned until the next pass replaces it
+wholesale (checked — every other reference is `as_ref`).
+
+Salvaged paths are replayed in **reverse** order, because each was recorded
+against the tree state of its own removal.
+
+### What the wrong basis actually costs — measured, not assumed
+
+The first draft of the gate assumed a misaligned basis would merely make the
+pass rebuild the region. It does not. `#contentArea`'s parent is clean on an
+interaction cycle, so `incremental_build_box` moves that whole subtree across
+from the basis in O(1) — a basis missing `#contentArea` therefore yields a
+**document** missing `#contentArea`, 155 boxes instead of 318, and the next
+cycle inherits that tree in turn. It never recovers. And no differential test
+in this track can see it, because the chrome host paints the real page over
+that rect anyway.
+
+So the failure mode here is a wrong tree, not a slow frame — which is why the
+restore is gated on exact identity rather than on a count. The one genuinely
+soft failure is `restore_content_area` returning `false` (a recorded path no
+longer addresses a box): the caller drops the basis and takes the full-layout
+path, so a stale record costs a slow frame.
+
+### Gates — each on both arms
+
+- `bug341_s22_restoring_a_detachment_reproduces_the_pristine_tree` — the
+  restored chrome tree equals the copy box for box, comparing `node`, `rect`,
+  `BoxKind` discriminant and `style` by **`Arc` identity**. Other arm: the
+  pruning must actually remove boxes.
+- `bug341_s22_restoring_puts_salvaged_popovers_back_where_they_came_from` —
+  the salvage half, which the real document cannot exercise: every salvageable
+  popover is `display:none` until opened, so at rest `salvage_paths` is empty
+  and a broken salvage restore would go unnoticed. The fixture nests one
+  popover inside another element so the paths are deeper than one level and
+  their order matters.
+- `bug341_s22_a_restored_basis_carries_the_whole_document_forward` — three
+  production-shaped cycles per arm: restored basis 318 boxes, pruned basis 155.
+  Second arm: the production arm's steady-state cycle must stay *incremental*
+  (`built` small, `reused > 0`), or a restore that silently failed would pass
+  the box-count assert via a full-layout fallback.
+
+All three run by default.
+
+### Measured
+
+Interleaved A/B ×3 against the branch point (`1b6d84df2`), by min:
+
+| scenario | main | S22 |
+|---|---|---|
+| `CC12_HOVER` | 0.73 / 0.78 / 0.83 ms | **0.58 / 0.59 / 0.56 ms** |
+| `CC12_KEY` | 1.11 / 1.18 / 1.10 ms | **0.93 / 0.92 / 0.97 ms** |
+
+Groups do not overlap on either scenario (≈24-33 % and ≈12-18 %). p95:
+`CC12_HOVER` 2.40/2.53/2.37 → **1.68/1.91/2.09**, `CC12_KEY` 3.54/3.25/2.93 →
+**3.00/2.59/2.83**.
+
+`cc12_bench_cycle` persists the tree by move instead of `clone()`. That bench
+has never modelled the pruning, so the move is the whole of the change there;
+production additionally pays the restore, which is one insert per salvaged
+popover plus a path walk and does not scale with the tree.
+
+### Where this leaves CC-12
+
+`CC12_HOVER` is inside the 2 ms budget by min (0.56-0.59) and **inside it on
+p95 in two of three runs** (1.68/1.91/2.09) — the first time either scenario
+has come this close on p95. `CC12_KEY` is inside by min (0.92-0.97) and
+≈1.3-1.5× on p95 (2.59-3.00, was ≈1.5-1.8×). Still formally red on p95, on
+`CC12_KEY` clearly and on `CC12_HOVER` marginally.
+
+### What S23 should look at
+
+The census table minus this slice's item. The queue's own remaining entry is no
+longer the largest:
+
+- **0.09-0.21 ms** — pseudo-element cascades: 160 calls on a KEY cycle, 129 on
+  a HOVER cycle, 19 / 6 of them hits. Never queued; it has simply outlived
+  everything above it. A HOVER cycle recomputes zero nodes and still runs 129
+  of these.
+- ~0.10-0.11 ms — the `CounterMap` rebuilt from scratch, the last of S20's
+  original pair.
+
+Census first, and re-measure the note before trusting it — S22 is the second
+slice running where the queue was right, after five where it was not.
+
 ## Repro
 
 ```bash
@@ -2931,3 +3055,6 @@ cargo test -p lumen-shell --profile dev-release bug341_s19_copy_census -- --igno
 cargo test -p lumen-shell --profile dev-release bug341_s20_stage_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census -- --ignored --nocapture
 ```
+
+S22 re-used `bug341_s20_stage_census` unchanged — it already prints both items
+the queue named.
