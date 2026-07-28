@@ -26,16 +26,13 @@ Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 
 |---|---|
 | `CAPABILITIES.md` | **Source of truth for "what the browser can do right now"** (per-subsystem, ✅/🟡/⬜, verified against code). Read ONLY this for capability questions — not `docs/plan/*` or `STATUS-PN.md`. Update in the same commit as a feature merge. |
 | `README.md` | User-facing: install, commands, what to expect. |
-| `STATUS-P1.md` | P1 sprint: in-progress task, next items, recent merge. Read at session start if you are P1. |
-| `STATUS-P2.md` | P2 — **реактивирована 2026-07-13** для задачи P2-wpt (WPT-интеграция через wptrunner+BiDi, `docs/tasks/p2-wpt-integration.md`, срезы S1–S8). Read at session start if you are P2. |
-| `STATUS-P3.md` | P3 sprint: in-progress task, next items, recent merge. Read at session start if you are P3. |
-| `STATUS-P4.md` | P4 sprint: CSS spec compliance. Read at session start if you are P4. |
-| `STATUS-P5.md` | P5 maintenance: code-health aliases + sweep workflow. Read at session start if you are P5. |
+| `STATUS-PN.md` | **Bare pointer lines `<source>:NN` and nothing else** — one line per open task, priority top→bottom, no headers/prose/completed tasks (schema: `docs/dev-roles.md` §Task tracking schema). `<source>` = ROADMAP.md (P1/P2) · BUGS.md (P3) · CSS-SPECS.md (P4) · a code `file:line` for a `// CSS:` / `// BUG-NNN` handoff. Read yours at session start. Detail belongs in the source row, `docs/tasks/<id>.md`, or `bugs/BUG-NNN-*.md` — never here. Exception: `STATUS-P5.md`, whose source is a health sweep rather than a row list (alias→action table, format still provisional). |
 | `lumen-plan.md` | TOC index: links to 11 section files in `docs/plan/`. Read for architecture; for daily status use `STATUS-PN.md` instead. |
 | `docs/plan/` | Design doc split into 11 files: architecture, tech-stack, engine, web-apis-shell, privacy, features, knowledge, security-performance, testing, phases, meta. (The former `roadmap.md`/`history.md` were deleted 2026-07-02 — task status lives in `ROADMAP.md`, chronology in `git log`.) |
 | `CSS-SPECS.md` | Complete CSS property & spec roadmap: all W3C modules, per-property status (✅🟡⬜🚫), P4 priority queue. |
 | `docs/wpt-status.md` | WPT readiness: all 277 upstream top-level categories (scope ⬜/🚫, vendored status), plus a per-test detail table for the one vendored category (`dom/nodes`, 168 tests) with pass/fail and an assignable Владелец/Баг column. Regenerate the detail table with `tests/wpt/gen_status_md.py` after a fresh `run_report.py --all` run — read the file's own "Как обновить" section, not this line, for the exact commands. |
 | `docs/build-speed.md` | Compile-time optimization plan: current baseline, measurement protocol (S1–S5), ranked measures (stable / nightly / rejected), benchmark journal. Read before changing build config (profiles, `.cargo/config.toml`, sccache). |
+| `docs/perf-method.md` | **How to measure, gate and accept a performance change** (census before the fix, profile the path you change, gate by counter/identity not wall-clock, interleaved A/B compared on min, instrumentation traps). Distilled from the 27 slices of BUG-341. Read before a perf task; the numbers themselves stay in `bugs/BUG-NNN-*.md`. |
 | `docs/automation.md` | **All automation/introspection surfaces of the browser and when to apply them** (dump modes, `--deterministic`, MCP tools/resources, BiDi, IPC, driver-API, `LUMEN_NO_*` paint-bisect flags, known stubs). Read before writing a debugging script or a new test harness — the capability usually already exists. |
 | `docs/roadmap-trees.md` | **How to use the interactive roadmap trees** (`docs/roadmap-*.html`): open in a browser, filters/search, and how to keep them current (`ROADMAP.md` + `python scripts/gen_roadmap.py`, auto-pulls bug status from `BUGS.md`). |
 | `ROADMAP.md` | Flat, grep-friendly source of the phase/task tree (two markdown tables: phases + tasks, one task per line). Feeds `gen_roadmap.py`; replaced the old nested `docs/roadmap.json`. Bug↔task links live in its `bugs` column; CSS-module status is live-aggregated from `CSS-SPECS.md` into rows `css-specs-t0`…`t4` (note = `AUTO:CSS-SPECS:T<N>`, do not hand-edit that note). |
@@ -65,7 +62,7 @@ Full role definitions, workflows, collaboration rules, task tracking schema — 
 
 | Developer | Domain | Crates |
 |---|---|---|
-| **P1** | **Since 2026-07-22**: leads the DS track — implementing design system v3.3 in the browser chrome (`docs/tasks/p1-design-v3.md`, ROADMAP.md DS-1…DS-19; visual reference `docs/design/lumen-v3_3.html`). General feature development otherwise (source → layout → paint → shell) | All crates (coordinated with P2/P4) |
+| **P1** | General feature development (source → layout → paint → shell), taken top-down off `STATUS-P1.md`. Finished tracks: DS (design system v3.3, DS-1…DS-19, `docs/design/lumen-v3_3.html`). Current: the CC track (engine chrome, CC-14/CC-15); BUG-341 (incremental restyle) is paused by user decision 2026-07-28 — resume only on explicit request | All crates (coordinated with P2/P4) |
 | **P2** | **Reactivated 2026-07-13**: leads P2-wpt (WPT via `wptrunner` + WebDriver BiDi, `docs/tasks/p2-wpt-integration.md`) and the DEVX track (dev-tooling on existing automation surfaces, `docs/automation.md`, ROADMAP.md DEVX-1…6, assigned 2026-07-16). Was reserve (since 2026-06-18). | `lumen-bidi-server`, `lumen-driver`/`lumen-mcp` (DEVX-5), Python tooling `tests/wpt/` + `graphic_tests/run.py` (DEVX-1/4) |
 | **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
@@ -249,6 +246,7 @@ Update docs **in the same commit** as the code change. Use `grep -n` to find the
 | New dependency | `docs/plan/tech-stack.md` | append row |
 | Architectural decision | `docs/decisions/ADR-NNN.md` | new file from TEMPLATE.md; update index |
 | Known gotcha found/fixed | `CLAUDE.md` → "Known gotchas" | append/remove bullet |
+| Perf slice merged with a transferable lesson | `docs/perf-method.md` | append the rule (one paragraph, slice ref in brackets); per-slice numbers stay in `bugs/BUG-NNN-*.md` |
 | New public API | `SYMBOLS.md` | `python scripts/gen_symbols.py` |
 | Roadmap/bug/CSS-module status change | `ROADMAP.md` → `python scripts/gen_roadmap.py` | edit ROADMAP.md if structure changed; CSS-module status alone needs no edit — the script re-pulls it from CSS-SPECS.md |
 
