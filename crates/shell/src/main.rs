@@ -1425,7 +1425,11 @@ fn render_source_to_png(
         None,
         None,
         &NullHyphenationProvider,
-        false, // headless: no interactive JS
+        // BUG-428: this slot is `cookie_banner_dismiss`, not a JS gate — the
+        // former "headless: no interactive JS" label was wrong. Page scripts DO
+        // run here (`parse_and_layout` → `run_scripts_with_dom`); only the live
+        // event loop's per-frame pumps (timers/rAF) are absent.
+        false, // cookie_banner_dismiss: leave banners as authored
         true,  // deterministic: reproducible pixels across runs/OS
         false, // dark_mode: light
         None,  // cookie_jar
@@ -1445,16 +1449,59 @@ fn render_source_to_png(
     let width = SCREENSHOT_VP_W as u32;
     let height = content_h.ceil() as u32;
 
+    // BUG-428: Canvas 2D pixels live in per-node CPU buffers inside the JS runtime
+    // and only reach paint through a drain (`flush_canvas_updates` → an image
+    // registered under `canvas:{nid}`). The live event loop does that drain every
+    // frame; this headless path never did, so `DrawImage { src: "canvas:{nid}" }`
+    // always resolved to an unregistered key and painted transparent. Drain once —
+    // the page scripts have already run inside `parse_and_layout` — and append the
+    // bitmaps to the image set handed to the CPU rasterizer.
+    let mut images = parsed.images;
+    images.extend(canvas_updates_as_images(
+        parsed
+            .js_ctx
+            .as_ref()
+            .map(|js| js.flush_canvas_updates())
+            .unwrap_or_default(),
+    ));
+
     let (png, width, height) = {
         let _s = lumen_core::trace::span("paint", "paint");
         let dl = paint_ordered(&parsed.layout);
-        let image = Renderer::render_to_image_cpu(width, height, &dl, &parsed.images, 0.0, 0.0)?;
+        let image = Renderer::render_to_image_cpu(width, height, &dl, &images, 0.0, 0.0)?;
         let png = lumen_image::encode_png_rgba8(&image)?;
         (png, width, height)
     };
     // Pixels are ready — mark the moment the page is first fully rendered.
     lumen_core::trace::instant("first-paint", "paint");
     Ok((png, width, height))
+}
+
+/// Convert a `PersistentJs::flush_canvas_updates` drain into renderer image
+/// entries keyed exactly the way the display list refers to them.
+///
+/// Each drained tuple is `(node_index, width, height, rgba)`; the key is
+/// `canvas:{node_index}` — the same string `display_list.rs` puts into
+/// `DisplayCommand::DrawImage.src` for a `<canvas>` box. Both consumers of the
+/// drain go through here (the live event loop registers the entries with the
+/// renderer, the headless CPU path appends them to its image set), so the key
+/// format has a single definition on the shell side (BUG-428).
+fn canvas_updates_as_images(
+    updates: Vec<(u32, u32, u32, Vec<u8>)>,
+) -> Vec<(String, Arc<lumen_image::Image>)> {
+    updates
+        .into_iter()
+        .map(|(nid, width, height, rgba)| {
+            let image = lumen_image::Image {
+                width,
+                height,
+                format: lumen_image::PixelFormat::Rgba8,
+                data: rgba,
+                icc_profile: None,
+            };
+            (format!("canvas:{nid}"), Arc::new(image))
+        })
+        .collect()
 }
 
 /// Запустить headless IPC-сервер таб-команд (TAB-5).
@@ -12569,16 +12616,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         let canvas_updates = self.drain_query_js(|j| j.flush_canvas_updates()).unwrap_or_default();
         if !canvas_updates.is_empty() {
             if let Some(r) = self.renderer.as_mut() {
-                for (nid, w, h, rgba) in &canvas_updates {
-                    let image = lumen_image::Image {
-                        width: *w,
-                        height: *h,
-                        format: lumen_image::PixelFormat::Rgba8,
-                        data: rgba.clone(),
-                        icc_profile: None,
-                    };
-                    if let Err(e) = r.register_image(format!("canvas:{nid}"), Arc::new(image)) {
-                        eprintln!("Canvas: не зарегистрирован canvas:{nid}: {e}");
+                // BUG-428: ключ `canvas:{nid}` строит общий с headless-путём
+                // `canvas_updates_as_images` — один источник истины формата.
+                for (key, image) in canvas_updates_as_images(canvas_updates) {
+                    if let Err(e) = r.register_image(key.clone(), image) {
+                        eprintln!("Canvas: не зарегистрирован {key}: {e}");
                     }
                 }
             }
@@ -27331,6 +27373,33 @@ mod tests {
         assert!(hist_url.is_empty());
         let hist_go = route_query_js(None, None, |j| j.take_history_traversals()).unwrap_or_default();
         assert!(hist_go.is_empty());
+    }
+
+    #[test]
+    fn bug428_canvas_updates_keyed_as_display_list_expects() {
+        // BUG-428: headless CPU-рендер получил тот же дренаж канваса, что живой цикл.
+        // Оба сайта строят ключ через `canvas_updates_as_images`, и он обязан совпасть
+        // с тем, что кладёт в `DrawImage.src` эмиттер (`display_list.rs`:
+        // `format!("canvas:{}", b.node.index())`) — иначе картинка не найдётся и
+        // канвас снова нарисуется прозрачным.
+        let updates = vec![
+            (7_u32, 2_u32, 1_u32, vec![1, 2, 3, 4, 5, 6, 7, 8]),
+            (12_u32, 1_u32, 1_u32, vec![9, 9, 9, 9]),
+        ];
+        let images = canvas_updates_as_images(updates);
+        let keys: Vec<&str> = images.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["canvas:7", "canvas:12"]);
+        let (_, first) = &images[0];
+        assert_eq!((first.width, first.height), (2, 1));
+        assert_eq!(first.format, lumen_image::PixelFormat::Rgba8);
+        assert_eq!(first.data, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn bug428_empty_canvas_drain_adds_no_images() {
+        // Страница без канваса (или без JS-контекста) не должна подмешивать записи
+        // в набор картинок CPU-растеризатора — дренаж пуст, набор не меняется.
+        assert!(canvas_updates_as_images(Vec::new()).is_empty());
     }
 
     #[test]
