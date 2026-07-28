@@ -94,12 +94,17 @@ pub struct CascadeStyles {
     /// Elements the current pass has visited so far — the reference
     /// [`Self::finish_pass`] compares `entries.len()` against.
     visited: usize,
+    /// Whether the last [`Self::finish_pass`] had to sweep. Observable so a
+    /// gate can assert the steady state never does: a sweep every pass would
+    /// put the O(document) cost this slice removes straight back, while
+    /// producing byte-identical output — the S8 failure mode exactly.
+    swept: bool,
 }
 
 impl CascadeStyles {
     /// An empty cache sized for a document of `elements` styled elements.
     fn with_capacity(elements: usize) -> Self {
-        Self { entries: HashMap::with_capacity(elements), pass: 0, visited: 0 }
+        Self { entries: HashMap::with_capacity(elements), pass: 0, visited: 0, swept: false }
     }
 
     /// Start writing a new pass into this carried cache.
@@ -147,11 +152,28 @@ impl CascadeStyles {
     /// disagree the sweep is O(entries), i.e. exactly what rebuilding the map
     /// used to cost unconditionally.
     fn finish_pass(&mut self) {
-        if self.entries.len() == self.visited {
+        self.swept = self.entries.len() != self.visited;
+        if !self.swept {
             return;
         }
         let pass = self.pass;
         self.entries.retain(|_, (_, stamp)| *stamp == pass);
+    }
+
+    /// How many passes have written into this cache — 0 for one that has only
+    /// ever been filled by a full cascade.
+    ///
+    /// The counter that tells a carried map from a rebuilt one. A pipeline that
+    /// goes back to handing each pass a fresh map produces byte-identical
+    /// styles, just at the cost this slice removed (the S8 lesson), so the gate
+    /// on the carry has to be this and not the cascade output.
+    pub fn passes_lived(&self) -> u32 {
+        self.pass
+    }
+
+    /// Whether the pass that just finished had to evict — see the `swept` field.
+    pub fn swept_last_pass(&self) -> bool {
+        self.swept
     }
 
     /// The style this cache holds for `id`, if any.
@@ -202,6 +224,7 @@ impl CascadeStyles {
             entries: styles.into_iter().map(|(id, style)| (id, (style, 0))).collect(),
             pass: 0,
             visited: 0,
+            swept: false,
         }
     }
 }
