@@ -25522,6 +25522,92 @@ mod tests {
         }
     }
 
+    /// BUG-341 S25 regression gate: the box-build stage must read a child's
+    /// `display` off the cascade cache, not cascade the child again.
+    ///
+    /// Deciding which formatting context a child joins asked `compute_style`
+    /// up to three times per element child — `is_inline_content`,
+    /// `is_inline_block` and the `display:none` re-probe inside the
+    /// inline-collect loop each ran a full cascade. `precompute_counters` had
+    /// already cascaded every one of those nodes against the same parent style,
+    /// and `build_box_inner` builds the child's box out of *that* entry
+    /// whatever the probe answers, so the probes were pure re-derivation: 14
+    /// per keystroke cycle and 2 per hover cycle, 0.21-0.25 ms of a 0.63 ms
+    /// keystroke and 0.07-0.08 ms of a 0.29 ms hover. Two of chrome's most
+    /// expensive cascades sat in that count — `<html>`, which carries the
+    /// whole design system's custom properties, was re-cascaded on every hover
+    /// frame purely to be told it is not inline.
+    ///
+    /// A counter, not wall-clock: the answer is identical either way, so no
+    /// differential test in this track can see it (the S8 lesson).
+    ///
+    /// Both arms, and the second is load-bearing: the cheapest way to drive
+    /// "cascades" to zero is to stop asking about `display` at all, which puts
+    /// every child in the wrong formatting context — a wrong tree, not a slow
+    /// frame. `display_probes` is the count of questions asked, and it must
+    /// stay above zero. What the answers must *be* is gated in `lumen-layout`
+    /// (`bug341_s25_display_probes_read_the_cascade_instead_of_re_running_it`),
+    /// on a fixture that exercises all three probes at once.
+    #[test]
+    fn bug341_s25_the_box_build_stage_reads_display_off_the_cascade_cache() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        // Cold pass: a full cascade populates the cache for the whole document,
+        // so even here no probe has an excuse to run one of its own.
+        let (_, cold) = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
+        );
+        assert!(
+            cold.display_probes > 0,
+            "the full pass must still ask which formatting context each element child joins. \
+             Census: {cold:?}",
+        );
+        assert_eq!(
+            cold.display_probe_cascades, 0,
+            "the full pass re-cascaded {} node(s) only to read their `display`, although \
+             `precompute_counters` had just cascaded every one of them. Census: {cold:?}",
+            cold.display_probe_cascades,
+        );
+
+        // Both interaction shapes CC-12 measures: a keystroke (DOM mutation)
+        // and a hover flip.
+        for i in 0..4 {
+            typed.push('a');
+            let (_, key) = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None,
+                &mut state,
+            );
+            assert_eq!(
+                key.display_probe_cascades, 0,
+                "keystroke cycle {i} re-cascaded {} node(s) to read their `display`. The \
+                 incremental pass carries the cascade cache (S24), so every element the box \
+                 build walks has an entry in it; a non-zero count means either the probe stopped \
+                 consulting the cache or the carried map lost entries the pass still needs. \
+                 Census: {key:?}",
+                key.display_probe_cascades,
+            );
+            assert!(key.display_probes > 0, "cycle {i} asked nothing. Census: {key:?}");
+
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let (_, hov) = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, hover,
+                &mut state,
+            );
+            assert_eq!(
+                hov.display_probe_cascades, 0,
+                "hover cycle {i} — see the keystroke assertion above. Census: {hov:?}",
+            );
+            assert!(hov.display_probes > 0, "hover cycle {i} asked nothing. Census: {hov:?}");
+        }
+    }
+
     /// BUG-341 S14 regression gate: a hover flip no rule in the sheet can
     /// react to must re-cascade nothing at all.
     ///
@@ -26475,6 +26561,7 @@ mod tests {
                 let ps_sites = lumen_layout::style::take_pseudo_cascade_sites();
                 let cs = lumen_layout::counters::take_cascade_stats();
                 let bb = lumen_layout::box_tree::take_box_build_stats();
+                let (probe_ns, miss_ns) = lumen_layout::box_tree::take_box_probe_ns();
                 let times = lumen_layout::box_tree::take_box_build_time_log();
                 let t = std::time::Instant::now();
                 let persisted = layout.clone();
@@ -26484,7 +26571,8 @@ mod tests {
                     eprintln!(
                         "[s20-census] {scenario} cycle={i} pass={:.3}ms clone_tree={:.3}ms | \
                          cascade_index rebuilds={} {:.3}ms | pseudo={} hits={} {:.3}ms | \
-                         cascade recomputed={} reused={} | boxes built={} reused={} fanouts={}",
+                         cascade recomputed={} reused={} | boxes built={} reused={} fanouts={} | \
+                         display_probes={} cascaded={} {:.3}ms style_misses={} {:.3}ms",
                         pass_ns as f64 / 1e6,
                         clone_tree_ns as f64 / 1e6,
                         idx_stats.builds,
@@ -26497,6 +26585,11 @@ mod tests {
                         bb.built,
                         bb.reused,
                         bb.fanouts,
+                        bb.display_probes,
+                        bb.display_probe_cascades,
+                        probe_ns as f64 / 1e6,
+                        bb.style_misses,
+                        miss_ns as f64 / 1e6,
                     );
                     let mut sites: Vec<_> = ps_sites.into_iter().collect();
                     sites.sort_by_key(|(_, st)| std::cmp::Reverse(st.ns));
