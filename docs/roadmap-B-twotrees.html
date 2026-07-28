@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 112,
+  "open": 119,
   "fixed": 273,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 385,
+ "total_bugs": 392,
  "phases": [
   {
    "id": "P0",
@@ -2418,9 +2418,74 @@
       {
        "id": "WPT-VENDOR-html",
        "title": "WPT: вендорить + прогнать категорию `html`",
+       "status": "done",
+       "size": "XL",
+       "note": "DONE 2026-07-28 (вендоринг + первые два среза): вендорена целиком (`tests/wpt/html/`, 14161 файл, 26 подкаталогов верхнего уровня; 10263 `.html`, 1813 `.js`, 523 `.xhtml`, 298 `.png`, 241 `.headers`, 207 `.htm`, 97 Python-эндпоинтов `wptserve`), скоуп ⬜ (кандидат). **Крупнейшая категория backlog-а на два порядка**: по `MANIFEST.json` — 8399 `testharness`-id (из них 701 с флагом `testdriver`), плюс 1382 `reftest`, 183 `crashtest`, 357 `manual`; для сравнения `fetch`, самая большая ранее прогнанная, — 481 id за 1 ч 22 мин. Полный прогон оценивается в 40+ часов и в одну сессию не помещается, поэтому вендоринг (разовый, целиком) и обследование (по подкаталогам) разделены; остаток разложен на строки `WPT-VENDOR-html-*` ниже — **ни один подкаталог не выброшен молча**. Прогнано в этой задаче: `html/dom` — 12 мин 39 с, **192/249 harness OK, 253/4784 сабтестов**, лучшая доля harness OK во всём backlog-е (77 % против 37 % у `fetch`), потому что подкаталог самодостаточен (2 `testdriver`-файла и 2 `.https.` на 478 файлов); `html/syntax` — 53 мин 16 с, **69/379 harness OK, 30/675 сабтестов**, зелёных целиком 2: контраст со срезом `html/dom` (77 % против 18 % harness OK) объясняется не исполнителем, а движком — 307 из 379 id упёрлись в TIMEOUT, из них 61 сообщение `Cannot read properties of null (reading 'document')` (задокументированный предел «`<iframe>` без browsing context»), 76 — `Cannot set properties of undefined (setting 'innerHTML')` (`doc.body` у документов из `createHTMLDocument()`, то есть BUG-415). Два новых бага: BUG-416 (`Element.prototype.getElementsByTagName` и `getElementsByTagNameNS` отсутствуют — незакрытый остаток закрытого BUG-279) и BUG-417 (`<template>` до появления `<body>` не даёт парсеру создать `<body>` вовсе: `document.body` === `null`, страница может отрендериться пустой; найден пробой, не прогоном). Пять новых багов, все подтверждены пробой `--dump-layout` вне WPT: BUG-418 (сторож переполнения DOM-арены мёртв на дефолтном V8 — страница на 50 000+ узлов роняет процесс целиком вместо `QuotaExceededError`; из-за этого 9 из 9 `html/dom/reflection-*.html`, ~72 000 сабтестов, недостижимы), BUG-412 (`document.getElementsByName` отсутствует), BUG-413 (`innerText`/`outerText` отсутствуют), BUG-414 (`dataset`/`DOMStringMap` отсутствуют), BUG-415 (отсоединённый документ без методов `Node` и без `head`/`body` — обратная сторона BUG-358)",
+       "bugs": [
+        "BUG-412",
+        "BUG-413",
+        "BUG-414",
+        "BUG-415",
+        "BUG-416",
+        "BUG-417",
+        "BUG-418"
+       ]
+      },
+      {
+       "id": "WPT-VENDOR-html-canvas",
+       "title": "WPT: прогнать срез `html/canvas`",
+       "status": "planned",
+       "size": "L",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 3308 `testharness`-id (5 `testdriver`), крупнейший подкаталог. Дерево уже вендорено строкой `WPT-VENDOR-html`. Внимание: `canvas.getContext('2d')` на дефолтном V8 сломан целиком (BUG-348), поэтому до его починки прогон почти наверняка даст стену одинаковых FAIL с одной первопричиной — сначала оценить смысл прогона"
+      },
+      {
+       "id": "WPT-VENDOR-html-semantics",
+       "title": "WPT: прогнать срез `html/semantics`",
+       "status": "planned",
+       "size": "L",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 2223 `testharness`-id (314 `testdriver`), второй по размеру. Дерево уже вендорено. Самая широкая движковая поверхность после `canvas`: формы, встроенный контент, табличная модель, скриптинг"
+      },
+      {
+       "id": "WPT-VENDOR-html-browsers",
+       "title": "WPT: прогнать срез `html/browsers`",
+       "status": "planned",
+       "size": "M",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 759 `testharness`-id (15 `testdriver`). Дерево уже вендорено. Ожидаемо упрётся в задокументированный предел «`<iframe>` без browsing context» и в BUG-359 (`window.open` не резолвит относительный URL) — оценить долю до прогона"
+      },
+      {
+       "id": "WPT-VENDOR-html-webappapis",
+       "title": "WPT: прогнать срез `html/webappapis`",
+       "status": "planned",
+       "size": "M",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 353 `testharness`-id (7 `testdriver`, 13 `.https.`). Дерево уже вендорено. Таймеры, structured clone, обработка ошибок, `navigator`"
+      },
+      {
+       "id": "WPT-VENDOR-html-editing",
+       "title": "WPT: прогнать срез `html/editing`",
        "status": "planned",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 216 `testharness`-id, из них 181 с `testdriver` — по предсказателю доли ожидается стена SKIP; сверить флаг по `MANIFEST.json`, а не грепом (готча `fledge`). Дерево уже вендорено"
+      },
+      {
+       "id": "WPT-VENDOR-html-interaction",
+       "title": "WPT: прогнать срез `html/interaction`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 192 `testharness`-id, из них 144 с `testdriver` — та же оговорка про предсказатель. Дерево уже вендорено. Профильная категория для BUG-381 (focus API отсутствует целиком)"
+      },
+      {
+       "id": "WPT-VENDOR-html-rendering",
+       "title": "WPT: прогнать срез `html/rendering`",
+       "status": "planned",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 150 `testharness`-id (6 `testdriver`) плюс 296 `reftest`, которые минимальный исполнитель не поддерживает (S8). Дерево уже вендорено"
+      },
+      {
+       "id": "WPT-VENDOR-html-misc",
+       "title": "WPT: прогнать срез `html/misc`",
+       "status": "planned",
+       "size": "M",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). Остаток из 14 мелких подкаталогов, 556 `testharness`-id суммарно: `cross-origin-opener-policy` 160, `infrastructure` 155, `cross-origin-embedder-policy` 103, `document-isolation-policy` 38, `anonymous-iframe` 35, `user-activation` 21, `obsolete` 14, `the-xhtml-syntax` 13, `links` 6, `capability-delegation` 6, `scripting` 2, `select` 1, `embedded-content` 1, `meta` 1. Дерево уже вендорено"
       },
       {
        "id": "WPT-VENDOR-html-aam",
@@ -6815,6 +6880,55 @@
    "status": "open",
    "title": "Движковый поповер переносит из легаси-панелей щитов/разрешений только счётчик заблокированных и первые две строки разрешений: домен текущей страницы и индикатор…",
    "component": "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-412": {
+   "status": "open",
+   "title": "`document.getElementsByName()` отсутствует в шиме целиком (`'getElementsByName' in document` === `false`), при том что соседние аксессоры того же раздела HTML L…",
+   "component": "js (`crates/js/src/dom.rs:7048-7062`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-413": {
+   "status": "open",
+   "title": "`HTMLElement.innerText`/`outerText` отсутствуют целиком — ни геттера, ни сеттера, ни на инстансе, ни на `Element.prototype` (проба: `el.innerText=undefined`, `i…",
+   "component": "js (`crates/js/src/dom.rs:5516-5880` — `_lumen_build_element`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-414": {
+   "status": "open",
+   "title": "`element.dataset` и глобальный `DOMStringMap` отсутствуют (`data-*` при этом читаются через `getAttribute`). У SVG-элементов есть заглушка `get dataset() { retu…",
+   "component": "js (`crates/js/src/dom.rs:5516-5880`; заглушка — `crates/js/src/svg.rs:265`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-415": {
+   "status": "open",
+   "title": "Отсоединённый документ (`createHTMLDocument`/`createDocument`/`new Document()`) не имеет ни методов `Node` (`removeChild`/`insertBefore`/`replaceChild`/`cloneNo…",
+   "component": "js (`crates/js/src/dom.rs:4728-4850` — `_lumen_build_detached_document`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-416": {
+   "status": "open",
+   "title": "`Element.prototype.getElementsByTagName` отсутствует, `getElementsByTagNameNS` отсутствует и на элементе, и на документе (проба: `el.getElementsByTagName=undefi…",
+   "component": "js (`crates/js/src/dom.rs:5516-5880` — `_lumen_build_element`; документный аналог `dom.rs:7045-7062`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-417": {
+   "status": "open",
+   "title": "`<template>`, встреченный до появления `<body>` (парсер в режиме «in head»), **не даёт создать `<body>` вообще**: `document.body` === `null`, продолжение докуме…",
+   "component": "html-parser (`crates/engine/html-parser/src/tree_builder.rs:1129-1136` — `process_template_end_tag`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-418": {
+   "status": "open",
+   "title": "**Страница, создающая скриптом >50 000 узлов, убивает процесс браузера целиком** (abort, exit 127), вместо спекового `QuotaExceededError`. Нативы `_lumen_create…",
+   "component": "js (`crates/js/src/dom.rs:7065`/`:7082`/`:4773`/`:4779`/`:4837` — сторож `if (nid < 0)`; нативы-источники сентинела `dom.rs:946-968`, `v8_runtime.rs:1454-1478`) + dom (`crates/engine/dom/src/lib.rs:1106` `Document::get`)",
    "date": null,
    "debtor": false
   },
