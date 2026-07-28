@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 88,
+  "open": 90,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 360,
+ "total_bugs": 362,
  "phases": [
   {
    "id": "P0",
@@ -2307,9 +2307,13 @@
       {
        "id": "WPT-VENDOR-fullscreen",
        "title": "WPT: вендорить + прогнать категорию `fullscreen`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/fullscreen/`, 111 файлов: `META.yml`, `WEB_FEATURES.yml`, 64 `api/`, 19 `rendering/` (6 reftest-пар `rel=match`), 11 `model/`, 6 `crashtests/`, `LICENSE-WPT.md`), скоуп ⬜ (кандидат). `run_report.py --all --root fullscreen --recursive` — **1 мин 37 с, 12/83 harness OK, 85/112 сабтестов** (64 SKIP по testdriver.js, 7 TIMEOUT, 1 не-исполнившийся `.https.`) — на два порядка лучше стандартного для backlog'а ценника: 73% файлов (80/110) тянут testdriver, и здесь, в отличие от `.window.js`/`.any.js` из `fledge`/`font-access`, флаг `testdriver: true` в MANIFEST.json совпадает с грепом почти везде, потому что категория почти целиком `.html` (testdriver.js подключается тегом `<script src>`, который манифест видит) — SKIP срабатывает как положено, а не платит полный TIMEOUT. Единственное исключение — 6 файлов, где реальный `.window.js`-код всё же не получает флаг (`document-fullscreen-keyboard-lock-*.window.js` ×5 и, неожиданно, чистый `.html` `rendering/fullscreen-pseudo-class-support.html`, который сам подключает keyboard-lock тест inline) — эти шесть исполнились и упали `ReferenceError: test_driver is not defined`, не новая находка, а известный класс инверсии предсказателя. Полезный сигнал дали 12 реально исполнившихся тестов: BUG-390 (`requestFullscreen()` реализует только happy path — `document.fullscreenEnabled` захардкожен `true`, ветка reject мертва, отсоединённость элемента и user activation не проверяются, промис всегда резолвится, `fullscreenerror` нигде не диспатчится — 3 теста, `document-onfullscreenerror.html`/`element-request-fullscreen-not-allowed.html`/`promises-reject.html`) и BUG-391 (`matches()`/`querySelector(All)`/`closest()` по дизайну никогда не бросают `SyntaxError` на невалидный/неизвестный селектор — `document.body.matches(':halfscreen')` тихо `false` вместо исключения, ломая стандартный WPT-паттерн feature-detection — `rendering/fullscreen-pseudo-class-support.html`). Один тест (`document-fullscreen-enabled.html`, «same-origin iframe») упал на уже документированный (не отдельным багом) Phase-0 предел `<iframe>` без browsing context (`contentDocument === null`, `CAPABILITIES.md` строка DOM). `idlharness.window.html` — известный инфраструктурный пробел: `/resources/idlharness.js`+`/resources/WebIDLParser.js` не вендорены (см. `tests/wpt/VENDOR.md`), не Lumen-баг. `rendering/` (19 файлов, 6 reftest-пар) исполнитель отобрал только testharness-тип — reftest не выбираются, ожидаемо (класс `forced-colors-mode`)",
+       "bugs": [
+        "BUG-390",
+        "BUG-391"
+       ]
       },
       {
        "id": "WPT-VENDOR-gamepad",
@@ -6585,6 +6589,20 @@
    "status": "open",
    "title": "`FileSystemSyncAccessHandle`, `FileSystemObserver`, общий базовый `FileSystemHandle`, `FileSystemHandle.prototype.move()` — не реализованы вовсе (`typeof` = `un…",
    "component": "js (`crates/js/src/filesystem_access.rs`, `crates/js/src/storage_manager.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-390": {
+   "status": "open",
+   "title": "`requestFullscreen()` реализует только happy path: единственная проверка — захардкоженный `fullscreenEnabled` (`return true` всегда), ветка `reject` мертва; ни…",
+   "component": "js (`crates/js/src/dom.rs:5650-5671` — `requestFullscreen`, `crates/js/src/dom.rs:7171` — `document.fullscreenEnabled`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-391": {
+   "status": "open",
+   "title": "`Element.matches()`/`querySelector(All)`/`closest()` никогда не бросают `SyntaxError` DOMException на невалидный или неподдерживаемый селектор (`:halfscreen` и…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs:335-422` — `query_all`/`query_all_within`/`query_all_scoped`/`matches_selector`)",
    "date": null,
    "debtor": false
   }
