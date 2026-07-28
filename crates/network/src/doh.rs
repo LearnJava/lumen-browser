@@ -383,6 +383,12 @@ impl DnsResolver for DohResolver {
             }
         }
 
+        // Sinkhole-ответ блокировщика (`0.0.0.0`/`::`) — не адрес для
+        // соединения: connect по нему уходит на локальную машину. Системный
+        // резолвер такие ответы отсеивает сам (на Windows), DoH разбирает
+        // записи самостоятельно и должен отсеять их явно (BUG-304).
+        let addrs = crate::dns::reject_sinkhole_addrs(hostname, addrs)?;
+
         if addrs.is_empty() {
             return Err(last_err.unwrap_or_else(|| {
                 Error::Network(format!(
@@ -842,6 +848,45 @@ mod tests {
         let (resolver, _t) = mock_doh(vec![Ok(aaaa_empty), Ok(a_empty)]);
         let err = resolver.resolve("nodata.test", 80).unwrap_err();
         assert!(format!("{err}").contains("no addresses"));
+    }
+
+    #[test]
+    fn resolve_sinkhole_only_returns_err() {
+        // Блокирующий DNS (AdGuard-подобный, hosts-лист `0.0.0.0 tracker`)
+        // отвечает unspecified-адресом. Он не пригоден как цель соединения —
+        // connect по нему ушёл бы на локальную машину (BUG-304).
+        let aaaa_resp = build_response(0x8180, 1, &aaaa_record_via_pointer([0; 16]));
+        let a_resp = build_response(0x8180, 1, &a_record_via_pointer([0, 0, 0, 0]));
+        let (resolver, _t) = mock_doh(vec![Ok(aaaa_resp), Ok(a_resp)]);
+        let err = resolver.resolve("blocked.test", 443).unwrap_err();
+        assert!(
+            format!("{err}").contains("sinkhole"),
+            "ожидалась явная причина блокировки, получено: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_sinkhole_plus_real_keeps_real() {
+        // Частичный sinkhole (AAAA заблокирован, A настоящий) — рабочий адрес
+        // остаётся, ошибки нет.
+        let aaaa_resp = build_response(0x8180, 1, &aaaa_record_via_pointer([0; 16]));
+        let a_resp = build_response(0x8180, 1, &a_record_via_pointer([93, 184, 216, 34]));
+        let (resolver, _t) = mock_doh(vec![Ok(aaaa_resp), Ok(a_resp)]);
+        let addrs = resolver.resolve("partly-blocked.test", 443).unwrap();
+        assert_eq!(addrs.len(), 1);
+        assert_eq!(addrs[0].ip(), IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)));
+    }
+
+    #[test]
+    fn resolve_unspecified_literal_is_not_filtered() {
+        // `http://0.0.0.0:8080/` — явное намерение (локальный dev-сервер),
+        // литерал обходит и DoH, и sinkhole-фильтр.
+        let (resolver, _t) = mock_doh(vec![]);
+        let addrs = resolver.resolve("0.0.0.0", 8080).unwrap();
+        assert_eq!(
+            addrs,
+            vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 8080)]
+        );
     }
 
     #[test]

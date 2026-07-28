@@ -237,6 +237,10 @@ impl DnsResolver for DotResolver {
             }
         }
 
+        // Sinkhole-ответ блокировщика (`0.0.0.0`/`::`) — не адрес для
+        // соединения (см. `dns::reject_sinkhole_addrs`, BUG-304).
+        let addrs = crate::dns::reject_sinkhole_addrs(hostname, addrs)?;
+
         if addrs.is_empty() {
             return Err(last_err.unwrap_or_else(|| {
                 Error::Network(format!(
