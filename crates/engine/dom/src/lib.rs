@@ -2371,6 +2371,19 @@ impl FlatTree {
             .map(Vec::as_slice)
             .unwrap_or_else(|| doc.get(id).children.as_slice())
     }
+
+    /// Whether the composed tree *is* the DOM tree — no shadow host or slot
+    /// moves a node away from its DOM parent.
+    ///
+    /// BUG-341 S27: a traversal that wants to ask "does this subtree contain
+    /// any of these nodes" cheaply does it by walking each of those nodes up to
+    /// the root, and `Node::parent` is the DOM parent. That answer is the
+    /// composed-tree answer exactly when this holds; a document with shadow
+    /// trees keeps the pre-S27 traversal instead of growing a composed-tree
+    /// parent index for a case Lumen's own chrome does not have.
+    pub fn is_plain(&self) -> bool {
+        self.overrides.is_empty()
+    }
 }
 
 /// Build the composed (flat) tree for the document.

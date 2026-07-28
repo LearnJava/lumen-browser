@@ -2282,6 +2282,114 @@ mod tests {
         }
     }
 
+    /// BUG-341 S27 — the differential half of the spine walk: a pass that
+    /// really did decline to enter part of the document must still produce the
+    /// full cascade and the full geometry.
+    ///
+    /// The counter gates in `counters.rs` prove the traversal shrank; this
+    /// proves the shrinking was equivalent. It asserts `skipped_subtrees > 0`
+    /// first, because a differential test over a mechanism that skipped nothing
+    /// passes trivially and would keep passing after the licence was widened to
+    /// something wrong — the S8 lesson in reverse.
+    ///
+    /// The fixture is the shape the licence is most exposed to: a descendant
+    /// rule (`#menu .item span`) whose subject is two levels below the changed
+    /// node, an untouched sibling branch that must be skipped, and a rule
+    /// (`.other + .item`) that exists only so S17's narrowing has something to
+    /// reject.
+    #[test]
+    fn mutation_incremental_restyle_spine_skip_matches_full() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use lumen_dom::{build_flat_tree, NodeData};
+        use crate::box_tree::{
+            layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental_restyle,
+        };
+        use crate::counters::{
+            precompute_counters, set_incremental_restyle, take_cascade_stats, ContentDirty, RestyleDelta,
+        };
+        use crate::style::{restyle_node_index, restyle_root_set_for_node_change, NodeChange};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = r#"<ul id="menu">
+            <li id="a" class="item" data-x="1"><span id="as">a</span></li>
+            <li id="b" class="item"><span id="bs">b</span></li>
+        </ul>
+        <div id="unrelated"><p>x</p><p>y</p><section><p>z</p></section></div>"#;
+        let css = r#"
+            .item { color: black; padding: 4px; height: 20px; }
+            [data-x="2"] { color: blue; height: 40px; }
+            #menu .item span { color: red; }
+            [data-x="2"] span { color: teal; }
+            .other + .item { color: green; }
+            p { height: 12px; }
+        "#;
+        let mut doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+
+        let a = doc.find_by_id("a").expect("#a must exist");
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(a).data {
+            for attr in attrs.iter_mut() {
+                if attr.name.local == "data-x" {
+                    attr.value = "2".to_string();
+                }
+            }
+        }
+
+        let node_index = restyle_node_index(&doc, &sheet);
+        let dirty_roots =
+            restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("data-x"))], &node_index);
+        // The complete content record a tracked mutation source hands over: the
+        // attribute write touched #a's content and nothing else.
+        let content: std::collections::HashSet<lumen_dom::NodeId> = [a].into_iter().collect();
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.styles().clone(),
+            dirty_roots,
+            content_dirty: ContentDirty::Nodes(&content),
+        };
+        set_incremental_restyle(true);
+        let _ = take_cascade_stats();
+        let (incr, incr_counters) = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
+        );
+        let stats = take_cascade_stats();
+        set_incremental_restyle(false);
+
+        assert!(
+            stats.skipped_subtrees > 0,
+            "this pass entered every node, so the comparison below says nothing about the spine \
+             walk — it would pass just as well with the mechanism switched off",
+        );
+        assert_eq!(stats.confirm_misses, 0, "a skipped subtree held an element with no entry");
+
+        let flat = build_flat_tree(&doc);
+        let full_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        assert_eq!(
+            incr_counters.styles(),
+            full_counters.styles(),
+            "a pass that skipped part of the document must still hand back the cascade a full \
+             pass would have produced — for the skipped nodes as much as for the walked ones",
+        );
+
+        let full = layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+        let mut ia = Vec::new();
+        let mut fb = Vec::new();
+        collect_rects(&incr, &mut ia);
+        collect_rects(&full, &mut fb);
+        assert_eq!(ia.len(), fb.len(), "box count must match full layout");
+        for ((na, ra), (nb, rb)) in ia.iter().zip(fb.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+    }
+
     #[test]
     fn mutation_incremental_restyle_structural_change_matches_full() {
         // BUG-341 S6: a structural DOM change (a new sibling `<li>` appended,

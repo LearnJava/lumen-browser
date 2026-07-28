@@ -26991,6 +26991,192 @@ mod tests {
         );
     }
 
+    /// BUG-341 S27 census: the nodes a walk would have to enter if it only
+    /// followed the *spine* — every ancestor of a dirty root or a
+    /// content-mutated node, plus those nodes' own subtrees.
+    ///
+    /// This is the exact size of the traversal the slice proposes, computed
+    /// from the same two inputs the delta carries, so the census can say what
+    /// fraction of the real traversal is removable before a line of it is
+    /// written (the S17/S19 rule: measure the note, do not trust it).
+    fn census_spine_size(
+        doc: &lumen_dom::Document,
+        dirty_roots: &std::collections::HashSet<lumen_dom::NodeId>,
+        content: &std::collections::HashSet<lumen_dom::NodeId>,
+    ) -> (usize, usize) {
+        let mut spine: std::collections::HashSet<lumen_dom::NodeId> = std::collections::HashSet::new();
+        for &seed in dirty_roots.iter().chain(content.iter()) {
+            let mut cur = Some(seed);
+            while let Some(id) = cur {
+                if !spine.insert(id) {
+                    break;
+                }
+                cur = doc.get(id).parent;
+            }
+        }
+        // A dirty root re-cascades its whole subtree, so those nodes are
+        // entered too — they are the part of the walk the slice cannot remove.
+        let mut forced = 0usize;
+        for &root in dirty_roots {
+            forced += census_subtree_nodes(doc, root);
+        }
+        (spine.len(), forced)
+    }
+
+    /// Number of nodes (of any kind) in `id`'s subtree, inclusive.
+    fn census_subtree_nodes(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> usize {
+        1 + doc.get(id).children.iter().map(|&c| census_subtree_nodes(doc, c)).sum::<usize>()
+    }
+
+    /// BUG-341 S27 census replay: the recursion alone, with no per-node work.
+    /// The floor under any shape that still visits the document.
+    fn census_bare_traversal(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> usize {
+        let mut n = 1;
+        for &c in &doc.get(id).children {
+            n += census_bare_traversal(doc, c);
+        }
+        n
+    }
+
+    /// BUG-341 S27 census replay: the recursion plus one map restamp per
+    /// element — the cheapest traversal that can still keep the S24 pass
+    /// ordinal exact, and therefore the candidate that changes no invariant.
+    fn census_restamp_traversal(
+        doc: &lumen_dom::Document,
+        id: lumen_dom::NodeId,
+        map: &mut HashMap<lumen_dom::NodeId, (std::sync::Arc<lumen_layout::style::ComputedStyle>, u64)>,
+        pass: u64,
+    ) -> usize {
+        let mut n = 0;
+        if let Some(e) = map.get_mut(&id) {
+            e.1 = pass;
+            n += 1;
+        }
+        for &c in &doc.get(id).children {
+            n += census_restamp_traversal(doc, c, map, pass);
+        }
+        n
+    }
+
+    /// BUG-341 S27 census: how much of the cascade stage is the traversal
+    /// itself, and how much of that traversal the spine would keep.
+    ///
+    /// S26 proved the traversal is the stage (50-70% of the pass) and removed
+    /// it for the cycle whose delta names nobody. This asks the general
+    /// question — on a cycle that *does* name somebody, how many of the nodes
+    /// it enters could no dirty root and no content mutation possibly reach.
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s27_walk_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual census (BUG-341 S27) — see doc comment for run command"]
+    fn bug341_s27_walk_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        for scenario in ["KEY", "HOVER"] {
+            let mut state = Cc12IncrementalState::default();
+            let mut typed = String::new();
+            for i in 0..6 {
+                let (model, hover) = if scenario == "KEY" {
+                    typed.push('a');
+                    (cc12_bench_model(&typed), None)
+                } else {
+                    (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+                };
+                let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+                lumen_layout::set_interactive_state(hover, None, None);
+                let structural = touched.selector.values().filter(|t| t.structural).count();
+                let t_pass = std::time::Instant::now();
+                let (layout, counters) = match state.prev_pristine_layout.take() {
+                    Some(prev) => {
+                        let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
+                        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+                        let mut dirty_roots = std::collections::HashSet::new();
+                        for (was, now) in [(prev_hover, hover), (prev_focus, None), (prev_active, None)] {
+                            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                                &doc, was, now, &state_index,
+                            ));
+                        }
+                        let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                            &doc,
+                            chrome_node_changes(&touched),
+                            &node_index,
+                        ));
+                        let (spine, forced) = census_spine_size(&doc, &dirty_roots, &touched.content);
+                        eprintln!(
+                            "[s27-census] {scenario} cycle={i} dirty_roots={} content={} \
+                             structural={structural} spine={spine} forced_subtrees={forced}",
+                            dirty_roots.len(),
+                            touched.content.len(),
+                        );
+                        let delta = lumen_layout::counters::RestyleDelta {
+                            prev_styles: std::mem::take(&mut state.prev_cascade_styles),
+                            dirty_roots,
+                            content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        };
+                        lumen_layout::counters::set_incremental_restyle(true);
+                        lumen_layout::box_tree::set_incremental_box_build(true);
+                        let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
+                        );
+                        lumen_layout::box_tree::set_incremental_box_build(false);
+                        lumen_layout::counters::set_incremental_restyle(false);
+                        result
+                    }
+                    None => lumen_layout::layout_measured_hyp_with_counters(
+                        &doc, &sheet, viewport, &measurer, &hyp, false,
+                    ),
+                };
+                let pass_ns = t_pass.elapsed().as_nanos() as u64;
+                let cs = lumen_layout::counters::take_cascade_stats();
+                // The two candidate shapes for the traversal, replayed over the
+                // real document and a map of the real size. Split by operation
+                // (the S26 lesson): a replay that times the recursion together
+                // with the restamp cannot tell "walking the document is the
+                // cost" from "touching the map is".
+                let mut replay: HashMap<lumen_dom::NodeId, (std::sync::Arc<lumen_layout::style::ComputedStyle>, u64)> =
+                    HashMap::with_capacity(counters.styles().len());
+                for (nid, style) in counters.styles().iter() {
+                    replay.insert(*nid, (std::sync::Arc::clone(style), 0));
+                }
+                let t = std::time::Instant::now();
+                let bare = census_bare_traversal(&doc, doc.root());
+                let bare_ns = t.elapsed().as_nanos() as u64;
+                let t = std::time::Instant::now();
+                let stamped = census_restamp_traversal(&doc, doc.root(), &mut replay, 1);
+                let restamp_ns = t.elapsed().as_nanos() as u64;
+                eprintln!(
+                    "[s27-census] {scenario} cycle={i} replay bare={:.3}ms ({bare} nodes) \
+                     restamp={:.3}ms ({stamped} entries)",
+                    bare_ns as f64 / 1e6,
+                    restamp_ns as f64 / 1e6,
+                );
+                eprintln!(
+                    "[s27-census] {scenario} cycle={i} pass={:.3}ms walk={:.3}ms ({:.0}%) \
+                     visited={} recomputed={} reused={} clean_inserts={} skipped={} entries={}",
+                    pass_ns as f64 / 1e6,
+                    cs.walk_ns as f64 / 1e6,
+                    100.0 * cs.walk_ns as f64 / pass_ns as f64,
+                    cs.visited,
+                    cs.recomputed,
+                    cs.reused,
+                    cs.clean_inserts,
+                    cs.skipped_subtrees,
+                    counters.styles().len(),
+                );
+                state.prev_pristine_layout = Some(layout.clone());
+                state.prev_cascade_styles = counters.into_styles();
+                state.prev_interactive = (hover, None, None);
+                lumen_layout::clear_interactive_state();
+            }
+        }
+    }
+
     /// Number of element nodes in `id`'s subtree, inclusive — the "how wide is
     /// this dirty root" column of the S17 census.
     fn census_subtree_elements(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> usize {
