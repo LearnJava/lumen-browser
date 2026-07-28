@@ -119,11 +119,14 @@ pub(crate) fn install_pip_bindings_v8(
 /// Shared beyond this module: `document_pip.rs`'s tests also enqueue through
 /// `_lumen_pip_request_window` and would otherwise race with the tests below
 /// when `cargo test` runs both files' test threads in parallel.
-#[cfg(test)]
+///
+/// Gated exactly like the only test module that uses it — with `v8-backend` off
+/// (the crate's default feature set) it would otherwise be dead code.
+#[cfg(all(test, feature = "v8-backend"))]
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Acquire the serialization lock and drain any leftover queue state.
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
     let g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _ = take_pip_requests();
