@@ -657,8 +657,49 @@ fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
 /// загрузки `get()` возвращает `None` и спелл-чек молчит.
 static SPELL_DICTS: std::sync::OnceLock<spellcheck::MultiDictionary> = std::sync::OnceLock::new();
 
-/// ADR-016 M2.2: поднимает движковый поток, только если задан
-/// `LUMEN_ENGINE_THREAD=1` (по умолчанию `None` → поведение shell неизменно). В
+/// Whether the ADR-016 engine thread should be spawned.
+///
+/// **ADR-023 (default flip 2026-07-28): now enabled by default.** ADR-016's
+/// M0–M4.1 stages all landed behind `LUMEN_ENGINE_THREAD=1` and each one was
+/// accepted as byte-identical with the flag off, so the flag had become a
+/// finished-but-unused feature. Leaving it off kept every `relayout()` on the
+/// UI thread, which is what makes real sites hang on load: a page with N
+/// `@font-face` files pays N serialized full relayouts before its first frame
+/// (measured on lenta.ru — 9 fonts, ~300–700 ms each, first frame ~6.7 s → ~3.6 s
+/// with the thread on; see `bugs/BUG-274-OPEN.md`, срез 2026-07-28).
+///
+/// Rollback (same flag-strategy idiom as ADR-018's V8 cutover and ADR-021's
+/// chrome flip): `LUMEN_NO_ENGINE_THREAD=1` — or `LUMEN_ENGINE_THREAD=0` for
+/// callers already setting the historical variable — restores the fully
+/// synchronous UI-thread behaviour.
+///
+/// Deliberately **not** tied to `--deterministic`: `graphic_tests/run.py`
+/// launches with `--deterministic --viewport 1024x720`, so forcing the thread
+/// off there would mean the pixel gate never exercises the shipped default.
+fn engine_thread_enabled() -> bool {
+    let opt_out = std::env::var("LUMEN_NO_ENGINE_THREAD").ok();
+    let legacy = std::env::var("LUMEN_ENGINE_THREAD").ok();
+    engine_thread_enabled_from(opt_out.as_deref(), legacy.as_deref())
+}
+
+/// Pure decision behind [`engine_thread_enabled`], split out so the precedence
+/// rules are unit-testable: reading the real environment from a test is
+/// process-global and races the rest of the (parallel) test binary.
+///
+/// `opt_out` is `LUMEN_NO_ENGINE_THREAD`, `legacy` is the historical
+/// `LUMEN_ENGINE_THREAD`. The opt-out wins over everything; otherwise only an
+/// explicit `LUMEN_ENGINE_THREAD=0` disables the thread. A leftover
+/// `LUMEN_ENGINE_THREAD=1` from before the ADR-023 flip keeps working and now
+/// simply agrees with the default.
+fn engine_thread_enabled_from(opt_out: Option<&str>, legacy: Option<&str>) -> bool {
+    if opt_out == Some("1") {
+        return false;
+    }
+    legacy != Some("0")
+}
+
+/// ADR-016 M2.2: поднимает движковый поток, если он не отключён явно
+/// ([`engine_thread_enabled`] — с ADR-023 включён по умолчанию). В
 /// M2.2 через поток маршрутизируется off-thread layout для async-триггеров
 /// (пока — debounce-зум): [`Lumen::submit_relayout_job`] шлёт задание, поток
 /// считает [`EngineCommit`] и кладёт в latest-wins слот, откуда его забирает
@@ -666,7 +707,7 @@ static SPELL_DICTS: std::sync::OnceLock<spellcheck::MultiDictionary> = std::sync
 /// на `None` (как обычно, без движкового потока — синхронный `relayout()`).
 fn spawn_engine_thread_if_enabled()
 -> Option<engine_thread::EngineThread<EngineCommit, EngineJsState>> {
-    if std::env::var("LUMEN_ENGINE_THREAD").as_deref() != Ok("1") {
+    if !engine_thread_enabled() {
         return None;
     }
     // ADR-016 M2.2c-2b: поток владеет `EngineJsState` (будущее сиденье `Document`
@@ -674,7 +715,10 @@ fn spawn_engine_thread_if_enabled()
     // заполняется `sync_engine_js_state` при первой загрузке страницы.
     match engine_thread::EngineThread::<EngineCommit, EngineJsState>::spawn() {
         Ok(engine) => {
-            eprintln!("[engine-thread] запущен (LUMEN_ENGINE_THREAD=1, M2.2 off-thread layout)");
+            eprintln!(
+                "[engine-thread] запущен (ADR-023 дефолт, M2.2 off-thread layout; \
+                 откат — LUMEN_NO_ENGINE_THREAD=1)"
+            );
             Some(engine)
         }
         Err(e) => {
@@ -24601,6 +24645,40 @@ fn escape_js_string_char(ch: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── ADR-023: engine-thread default flip + rollback precedence ────────────
+
+    #[test]
+    fn engine_thread_on_by_default_when_no_vars_set() {
+        assert!(engine_thread_enabled_from(None, None));
+    }
+
+    #[test]
+    fn engine_thread_opt_out_disables() {
+        assert!(!engine_thread_enabled_from(Some("1"), None));
+    }
+
+    #[test]
+    fn engine_thread_opt_out_beats_explicit_legacy_on() {
+        assert!(!engine_thread_enabled_from(Some("1"), Some("1")));
+    }
+
+    #[test]
+    fn engine_thread_legacy_zero_disables() {
+        assert!(!engine_thread_enabled_from(None, Some("0")));
+    }
+
+    #[test]
+    fn engine_thread_legacy_one_still_enables() {
+        assert!(engine_thread_enabled_from(None, Some("1")));
+    }
+
+    #[test]
+    fn engine_thread_opt_out_only_honours_exact_one() {
+        // Anything other than "1" is not the documented opt-out spelling.
+        assert!(engine_thread_enabled_from(Some("0"), None));
+        assert!(engine_thread_enabled_from(Some(""), None));
+    }
 
     // ── DS-1: design-token generator output sanity ───────────────────────────
 

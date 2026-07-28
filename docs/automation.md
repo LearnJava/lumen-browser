@@ -83,7 +83,7 @@ Snapshot-test env vars: `SNAPSHOT_VS_EDGE_STRICT=1` (hard-gate `crates/driver/te
 |---|---|
 | `LUMEN_BACKEND` | Renderer: empty = probe (wgpu first), `femtovg`, `wgpu` |
 | `WGPU_BACKEND` / `LUMEN_NO_BACKEND_PROBE` | Force / skip GPU backend probe |
-| `LUMEN_ENGINE_THREAD=1` | Off-thread layout (ADR-016 M2.2) |
+| `LUMEN_NO_ENGINE_THREAD=1` | **Rollback** for the off-thread layout engine thread, which is **on by default since ADR-023** (was opt-in `LUMEN_ENGINE_THREAD=1`, ADR-016 M2.2). `LUMEN_ENGINE_THREAD=0` also disables it; a leftover `=1` still works and now just agrees with the default |
 | `LUMEN_RENDER_THREAD` | Render thread on/off |
 | `LUMEN_PRESENT` | Present mode override |
 | `LUMEN_NO_FRAME_SKIP` / `LUMEN_NO_SCROLL_COMPOSITOR` / `LUMEN_NO_ANIM_SPLIT` / `LUMEN_NO_BBOX_SCISSOR` / `LUMEN_NO_BBOX_BACKDROP` / `LUMEN_NO_IMAGE_MIPS` / `LUMEN_NO_BAND_BIAS` | Disable one paint optimization each — **the paint-regression bisection kit** (crates/engine/paint/src/renderer.rs), driven automatically by `run.py --paint-bisect NN` (DEVX-4) |

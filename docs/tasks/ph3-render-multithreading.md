@@ -4,6 +4,7 @@
 
 Decision record: [ADR-016](../decisions/ADR-016-multithreaded-render-pipeline.md).
 User decision 2026-07-09: multithreading is **mandatory and urgent**.
+**Default flip 2026-07-28 ([ADR-023](../decisions/ADR-023-engine-thread-default.md)):** the M2 engine thread now runs **by default**; `LUMEN_NO_ENGINE_THREAD=1` is the rollback. The per-slice "flag off is byte-identical" invariant below is therefore historical — it describes the rollback path, no longer the default one. `LUMEN_RENDER_THREAD` (M1) stays opt-in.
 
 ---
 
