@@ -96,6 +96,32 @@ pub struct BoxBuildStats {
     /// subtrees it was about to move in O(1)" from "it still does, and the
     /// timing run happened to be quiet".
     pub fanouts: u32,
+    /// BUG-341 S25 — times the box-build stage asked what a child's `display`
+    /// is (`is_inline_content` / `is_inline_block` and the `display:none`
+    /// re-probe inside the inline-collect loop).
+    ///
+    /// Paired with [`Self::display_probe_cascades`] on purpose: the question has
+    /// to keep being asked — it decides which formatting context each child
+    /// joins — so a gate that only watched the expensive half could be passed by
+    /// deleting the probes outright.
+    pub display_probes: u32,
+    /// BUG-341 S25 — of those probes, the ones that had to run a full
+    /// `compute_style` because the cascade cache had no entry for the node.
+    ///
+    /// Pure re-derivation when it is not a genuine miss: `precompute_counters`
+    /// already cascaded the same node against the same parent style, and
+    /// `build_box_inner` builds the child's box out of *that* entry whatever the
+    /// probe says. A probe that re-runs the cascade returns the same answer, so
+    /// it is invisible in output and only a counter can hold it at zero.
+    pub display_probe_cascades: u32,
+    /// BUG-341 S25 — `CounterMap::style_arc` misses at the top of
+    /// `build_box_inner`, each of which pays a full `compute_style`.
+    ///
+    /// The cascade records elements only, so every non-element box (whitespace
+    /// text between pretty-printed tags, comments) misses by construction. Kept
+    /// alongside [`Self::display_probes`] so the two can be told apart: they are
+    /// the same cost with different causes, and only one of them is removable.
+    pub style_misses: u32,
 }
 
 thread_local! {
@@ -104,8 +130,17 @@ thread_local! {
     /// incremental path actually skips work (not just that it matches a full
     /// build's output). Always compiled — two `Cell` bumps against a stage that
     /// costs microseconds per box — so a gate outside this crate can read it.
-    static BOX_BUILD_STATS: Cell<BoxBuildStats> =
-        const { Cell::new(BoxBuildStats { built: 0, reused: 0, prev_index_visited: 0, fanouts: 0 }) };
+    static BOX_BUILD_STATS: Cell<BoxBuildStats> = const {
+        Cell::new(BoxBuildStats {
+            built: 0,
+            reused: 0,
+            prev_index_visited: 0,
+            fanouts: 0,
+            display_probes: 0,
+            display_probe_cascades: 0,
+            style_misses: 0,
+        })
+    };
 }
 
 /// Returns the accumulated [`BoxBuildStats`] and resets the tally.
@@ -249,6 +284,60 @@ fn count_boxes(b: &LayoutBox) -> u64 {
     1 + b.children.iter().map(count_boxes).sum::<u64>()
 }
 
+/// BUG-341 S25 census: nanoseconds the box-build stage spent inside the
+/// `compute_style` calls tallied by [`BoxBuildStats::display_probes`] and
+/// [`BoxBuildStats::style_misses`], respectively.
+///
+/// Counted only while the S20 timing census is armed ([`BOX_TIME_LOG_ON`]) —
+/// the counts themselves are always compiled, because the S25 gate asserts on
+/// them, but a timer per probe has no business on the production path.
+/// Process-wide atomics rather than thread-locals: the probes run on rayon
+/// workers too (the S15 trap).
+static PROBE_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static STYLE_MISS_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Drains the BUG-341 S25 probe timers — see [`PROBE_NS`] / [`STYLE_MISS_NS`].
+pub fn take_box_probe_ns() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (PROBE_NS.swap(0, Relaxed), STYLE_MISS_NS.swap(0, Relaxed))
+}
+
+/// Runs `f` as the `compute_style` fallback of a `display` probe, tallying it
+/// (see [`BoxBuildStats::display_probe_cascades`]) and, when the S20 timing
+/// census is armed, timing it.
+fn note_display_probe<T>(f: impl FnOnce() -> T) -> T {
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.display_probe_cascades += 1;
+        s.set(v);
+    });
+    if !BOX_TIME_LOG_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return f();
+    }
+    let t = std::time::Instant::now();
+    let out = f();
+    PROBE_NS.fetch_add(t.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    out
+}
+
+/// Runs `f` as the `compute_style` fallback of a [`CounterMap::style_arc`] miss,
+/// tallying it (see [`BoxBuildStats::style_misses`]) and timing it under the S20
+/// census, exactly like [`note_display_probe`].
+fn note_style_miss<T>(f: impl FnOnce() -> T) -> T {
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.style_misses += 1;
+        s.set(v);
+    });
+    if !BOX_TIME_LOG_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return f();
+    }
+    let t = std::time::Instant::now();
+    let out = f();
+    STYLE_MISS_NS.fetch_add(t.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    out
+}
+
 /// Records `id` in the census log when [`set_box_build_diagnostics`] is on.
 fn note_box_built(id: NodeId) {
     if BOX_BUILD_LOG_ON.load(std::sync::atomic::Ordering::Relaxed)
@@ -266,6 +355,9 @@ fn add_box_build_stats(d: BoxBuildStats) {
         v.reused += d.reused;
         v.prev_index_visited += d.prev_index_visited;
         v.fanouts += d.fanouts;
+        v.display_probes += d.display_probes;
+        v.display_probe_cascades += d.display_probe_cascades;
+        v.style_misses += d.style_misses;
         s.set(v);
     });
 }
@@ -3375,10 +3467,49 @@ fn strip_invisible_controls(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// The computed `display` of `id`, as the box-build stage will see it.
+///
+/// BUG-341 S25. Every caller of this asks the same question — *which formatting
+/// context does this child join* — about a node whose style
+/// [`precompute_counters`] has already cascaded against this very `inherited`,
+/// and which `build_box_inner` will build out of that cached entry regardless
+/// of what a probe says. Re-running `compute_style` here therefore did not just
+/// cost a second cascade per element child (14 of them on a chrome keystroke,
+/// 0.21-0.25 ms of a 0.63 ms cycle): it let the probe and the box disagree.
+/// Reading the cache makes the two answers the same one by construction.
+///
+/// The `compute_style` fallback stays for the genuine misses — a full pass over
+/// a node the cascade did not visit, and any caller holding a `CounterMap` that
+/// predates the node. It is not a performance path: on chrome it never fires
+/// for an element.
+fn probe_display(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+    counters: &CounterMap,
+) -> Display {
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.display_probes += 1;
+        s.set(v);
+    });
+    match counters.style_arc(id) {
+        Some(s) => s.display,
+        None => {
+            note_display_probe(|| compute_style(doc, id, sheet, inherited, viewport, dark_mode))
+                .display
+        }
+    }
+}
+
 /// `<img>` в Phase 0 — block-level replaced element, не inline-контент:
 /// он порождает собственный `BoxKind::Image`, а не вливается в `InlineRun`.
 /// Inline-replaced (картинка внутри строки текста) — отдельная задача;
 /// до неё `<img>` всегда занимает свою строку, как `<div>`.
+#[allow(clippy::too_many_arguments)]
 fn is_inline_content(
     doc: &Document,
     sheet: &Stylesheet,
@@ -3386,6 +3517,7 @@ fn is_inline_content(
     inherited: &ComputedStyle,
     viewport: Size,
     dark_mode: bool,
+    counters: &CounterMap,
 ) -> bool {
     match &doc.get(id).data {
         // Control-only text (after BUG-120 stripping) is no more inline content
@@ -3399,7 +3531,7 @@ fn is_inline_content(
             // Phase 0 layout не делает реального flex/grid — флэт-семантика
             // блока для outer-display, но inline-family остаётся inline.
             matches!(
-                compute_style(doc, id, sheet, inherited, viewport, dark_mode).display,
+                probe_display(doc, sheet, id, inherited, viewport, dark_mode, counters),
                 Display::Inline | Display::InlineFlex | Display::InlineGrid
             )
         }
@@ -3416,6 +3548,7 @@ fn is_inline_content(
 /// FormControl`) собирается в `InlineBlockRow` и течёт горизонтально рядом с
 /// текстом и соседними контролами. Author `display:block` поверх → обычный
 /// block-бокс (эта функция вернёт false).
+#[allow(clippy::too_many_arguments)]
 fn is_inline_block(
     doc: &Document,
     sheet: &Stylesheet,
@@ -3423,12 +3556,13 @@ fn is_inline_block(
     inherited: &ComputedStyle,
     viewport: Size,
     dark_mode: bool,
+    counters: &CounterMap,
 ) -> bool {
     matches!(
         &doc.get(id).data,
         NodeData::Element { .. }
         if !is_image_element(doc, id)
-            && compute_style(doc, id, sheet, inherited, viewport, dark_mode).display
+            && probe_display(doc, sheet, id, inherited, viewport, dark_mode, counters)
                 == Display::InlineBlock
     )
 }
@@ -4478,9 +4612,11 @@ fn build_box_inner(
     // pass over this exact tree (same `inherited` chain, same sheet/viewport/
     // dark_mode) to resolve counter-reset/increment/set — reuse its cached
     // result instead of paying for an identical `compute_style` call again.
-    let mut style = counters
-        .style_arc(id)
-        .unwrap_or_else(|| Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode)));
+    let mut style = counters.style_arc(id).unwrap_or_else(|| {
+        note_style_miss(|| {
+            Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode))
+        })
+    });
 
     // HTML/CSS «Customizable Select»: a `<select appearance:base-select>` renders
     // as an author-styleable widget tree instead of the opaque native control.
@@ -4838,6 +4974,11 @@ fn build_box_inner(
                 // Nested containers a worker fans out again are folded back
                 // through the same drain as `built`/`reused` below.
                 let par_fanouts = std::sync::atomic::AtomicU32::new(0);
+                // BUG-341 S25: same drain for the display-probe / style-miss
+                // tallies, for the same reason as `built`/`reused` above.
+                let par_probes = std::sync::atomic::AtomicU32::new(0);
+                let par_probe_cascades = std::sync::atomic::AtomicU32::new(0);
+                let par_misses = std::sync::atomic::AtomicU32::new(0);
                 // BUG-341 S21: the cascade's rule index is per-thread too, so a
                 // worker that has not seen this sheet builds its own. Drained
                 // through the same fold as the box tallies, for the same reason
@@ -4869,6 +5010,9 @@ fn build_box_inner(
                     par_built.fetch_add(d.built, Relaxed);
                     par_reused.fetch_add(d.reused, Relaxed);
                     par_fanouts.fetch_add(d.fanouts, Relaxed);
+                    par_probes.fetch_add(d.display_probes, Relaxed);
+                    par_probe_cascades.fetch_add(d.display_probe_cascades, Relaxed);
+                    par_misses.fetch_add(d.style_misses, Relaxed);
                     let idx_stats = crate::style::take_cascade_index_stats();
                     par_index_stats
                         .lock()
@@ -4907,6 +5051,9 @@ fn build_box_inner(
                         prev_index_visited: 0,
                         // This container's own dispatch, plus any a worker made.
                         fanouts: par_fanouts.load(Relaxed) + 1,
+                        display_probes: par_probes.load(Relaxed),
+                        display_probe_cascades: par_probe_cascades.load(Relaxed),
+                        style_misses: par_misses.load(Relaxed),
                     });
                 }
             } else {
@@ -4950,8 +5097,10 @@ fn build_box_inner(
         let mut i = 0;
         while i < dom_children.len() {
             let child_id = dom_children[i];
-            let is_inl = is_inline_content(doc, sheet, child_id, &style, viewport, dark_mode);
-            let is_ib = !is_inl && is_inline_block(doc, sheet, child_id, &style, viewport, dark_mode);
+            let is_inl =
+                is_inline_content(doc, sheet, child_id, &style, viewport, dark_mode, counters);
+            let is_ib = !is_inl
+                && is_inline_block(doc, sheet, child_id, &style, viewport, dark_mode, counters);
 
             if is_inl || is_ib {
                 // Унифицированный сбор inline-уровневого контента: inline-элементы
@@ -5001,7 +5150,7 @@ fn build_box_inner(
                         }
                         _ => {}
                     }
-                    if is_inline_content(doc, sheet, cid, &style, viewport, dark_mode) {
+                    if is_inline_content(doc, sheet, cid, &style, viewport, dark_mode, counters) {
                         // CSS §4.1.1 — collapsed whitespace between inline-level
                         // siblings becomes a single inter-word gap. Record it as a
                         // trailing space on the previous segment so wrap_inline_run
@@ -5018,7 +5167,8 @@ fn build_box_inner(
                         collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters, registry, &mut need_first_letter, dark_mode);
                         had_ws = false;
                         i += 1;
-                    } else if is_inline_block(doc, sheet, cid, &style, viewport, dark_mode) {
+                    } else if is_inline_block(doc, sheet, cid, &style, viewport, dark_mode, counters)
+                    {
                         if !pending.is_empty() {
                             let mut segs = std::mem::take(&mut pending);
                             apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport, dark_mode);
@@ -5047,7 +5197,7 @@ fn build_box_inner(
                         had_ws = false;
                         i += 1;
                     } else if matches!(doc.get(cid).data, NodeData::Element { .. })
-                        && compute_style(doc, cid, sheet, &style, viewport, dark_mode).display
+                        && probe_display(doc, sheet, cid, &style, viewport, dark_mode, counters)
                             == Display::None
                     {
                         // display:none не прерывает inline-контекст — CSS §9.2.4.
@@ -13275,6 +13425,156 @@ mod tests {
         assert!(
             lines[0].iter().all(|f| f.style.color == green),
             "::first-line style must still reach the first line's frags",
+        );
+    }
+
+    /// BUG-341 S25 gate — **by counter, on both arms**.
+    ///
+    /// Deciding which formatting context a child joins used to run a full
+    /// `compute_style` per element child — up to three of them, since
+    /// `is_inline_content`, `is_inline_block` and the `display:none` re-probe
+    /// each cascaded the node again. `precompute_counters` had already cascaded
+    /// every one of them, and `build_box_inner` builds the child's box out of
+    /// *that* entry, so the probes were pure re-derivation: invisible in the
+    /// tree, and 0.21-0.25 ms of a 0.63 ms chrome keystroke. Arm 1 is therefore
+    /// a count, which no output diff can see.
+    ///
+    /// Arm 2 is what makes arm 1 mean anything: the cheapest way to drive the
+    /// probe count to zero is to stop asking about `display` at all, and each
+    /// of the three questions decides the shape of the tree — so the fixture
+    /// exercises all three at once. An inline and an inline-block child share
+    /// one inline context (probes 1 and 2), a `display:none` child between them
+    /// does **not** close it (probe 3, CSS 2.1 §9.2.4), and a block child does.
+    #[test]
+    fn bug341_s25_display_probes_read_the_cascade_instead_of_re_running_it() {
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let doc = lumen_html_parser::parse(
+            "<div id=host>text <span>inline</span> <b>ib</b> <i>gone</i> <span>after</span>\
+             <p>block</p></div>",
+        );
+        let sheet = lumen_css_parser::parse(
+            "span { display: inline; } b { display: inline-block; } \
+             i { display: none; } p { display: block; }",
+        );
+        let vp = lumen_core::geom::Size::new(600.0, 600.0);
+
+        let _ = super::take_box_build_stats();
+        let root = super::layout_measured(&doc, &sheet, vp, &Fixed8);
+        let stats = super::take_box_build_stats();
+
+        // Arm 1 — every element the probes asked about is in the cascade cache,
+        // so not one of them re-ran the cascade...
+        assert_eq!(
+            stats.display_probe_cascades, 0,
+            "the box-build stage must read `display` off the cascade cache, \
+             not re-run `compute_style` for it. Census: {stats:?}",
+        );
+        // ...and the questions are still being asked, which is the only reason
+        // arm 1 can be satisfied honestly.
+        assert!(
+            stats.display_probes > 0,
+            "the stage must still ask what each element child's `display` is.              Census: {stats:?}",
+        );
+        // The non-elements still miss (the cascade records elements only) —
+        // asserted so a change that empties the cache entirely cannot pass arm 1
+        // by making `style_arc` return `Some` for everything.
+        assert!(
+            stats.style_misses > 0,
+            "whitespace text nodes have no cascade entry and must still fall back",
+        );
+
+        // Arm 2 — the three decisions those probes make, on the same document.
+        fn kind_name(k: &super::BoxKind) -> &'static str {
+            match k {
+                super::BoxKind::InlineBlockRow => "InlineBlockRow",
+                super::BoxKind::InlineRun { .. } => "InlineRun",
+                super::BoxKind::Block => "Block",
+                super::BoxKind::Skip => "Skip",
+                _ => "other",
+            }
+        }
+        fn find<'a>(b: &'a super::LayoutBox, doc: &lumen_dom::Document, id: &str)
+            -> Option<&'a super::LayoutBox>
+        {
+            if doc.get(b.node).get_attr("id") == Some(id) {
+                return Some(b);
+            }
+            b.children.iter().find_map(|c| find(c, doc, id))
+        }
+        let host = find(&root, &doc, "host").expect("#host must have a box");
+        // Discriminant names only: a `BoxKind` `Debug` carries a full
+        // `ComputedStyle` per inline fragment, which buries the assertion.
+        let kinds: Vec<&'static str> = host.children.iter().map(|c| kind_name(&c.kind)).collect();
+        assert_eq!(
+            kinds.len(),
+            2,
+            "one inline context (probes 1-3) plus the block child, got {kinds:?}",
+        );
+        assert_eq!(
+            kinds[0], "InlineBlockRow",
+            "the inline and inline-block children share one row, got {kinds:?}",
+        );
+        assert_eq!(
+            kinds[1], "Block",
+            "the block child opens its own box, got {kinds:?}",
+        );
+        // `display:none` did not close the inline context: the text after it is
+        // in the same row as the text before it.
+        let texts = {
+            fn runs(b: &super::LayoutBox, out: &mut Vec<String>) {
+                if let super::BoxKind::InlineRun { segments, .. } = &b.kind {
+                    out.extend(segments.iter().map(|s| s.text.clone()));
+                }
+                for c in &b.children {
+                    runs(c, out);
+                }
+            }
+            let mut out = Vec::new();
+            runs(&host.children[0], &mut out);
+            out.concat()
+        };
+        assert!(
+            texts.contains("inline") && texts.contains("after"),
+            "a display:none sibling must not split the inline context, got {texts:?}",
+        );
+        assert!(
+            !texts.contains("gone"),
+            "the display:none child must not contribute text, got {texts:?}",
+        );
+    }
+
+    /// BUG-341 S25 — the `compute_style` fallback in `probe_display` still
+    /// answers when the cascade cache has no entry for the node.
+    ///
+    /// The cache is populated by `precompute_counters`, which every entry point
+    /// runs; a miss means a caller holding a map that predates the node. That
+    /// path has no fixture in the pipeline, so it gets one here — otherwise
+    /// deleting it would be invisible until a real document hit it.
+    #[test]
+    fn bug341_s25_display_probe_falls_back_to_the_cascade_on_a_cache_miss() {
+        let doc = lumen_html_parser::parse("<span id=s>x</span>");
+        let sheet = lumen_css_parser::parse("span { display: inline-block; }");
+        let vp = lumen_core::geom::Size::new(600.0, 600.0);
+        let span = doc.find_by_id("s").expect("fixture has a <span id=s>");
+        let empty = crate::counters::CounterMap::default();
+        let inherited = crate::style::ComputedStyle::root();
+
+        let _ = super::take_box_build_stats();
+        assert_eq!(
+            super::probe_display(&doc, &sheet, span, &inherited, vp, false, &empty),
+            super::Display::InlineBlock,
+            "an empty cache must fall back to a real cascade",
+        );
+        assert_eq!(
+            {
+                let st = super::take_box_build_stats();
+                (st.display_probes, st.display_probe_cascades)
+            },
+            (1, 1),
+            "one question asked, and with an empty cache it cost one cascade",
         );
     }
 
