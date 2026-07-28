@@ -89,8 +89,8 @@ LUMEN_MODEL=haiku python scripts/orchestrator.py P1 P2
 | Alias    | Полный model ID       |
 |----------|-----------------------|
 | `haiku`  | `claude-haiku-4-5`    |
-| `sonnet` | `claude-sonnet-4-6`   |
-| `opus`   | `claude-opus-4-8`     |
+| `sonnet` | `claude-sonnet-5`     |
+| `opus`   | `claude-opus-5`       |
 | `fable`  | `claude-fable-5`      |
 
 Алиасы разворачиваются при разборе командной строки. В логах и в вызовах `claude --model <id>` всегда идёт полный ID — чтобы было видно, какая модель реально запущена. Любое другое значение (не из таблицы) передаётся в `claude` как есть.
@@ -549,10 +549,10 @@ python scripts/orchestrator.py P1 P2 P3 P4 --new   # пробрасываетс�
 
 ```
 [14:32:01] [P1] Старт. Проект: D:\RustProjects\lumen-browser
-[14:32:01] [P1] Стартовая модель: claude-sonnet-4-6
+[14:32:01] [P1] Стартовая модель: claude-sonnet-5
 [14:32:01] [P1] === Задача #1 ===
 [14:32:01] [P1] Запуск claude...
-[14:32:01] [P1]   Модель: claude-sonnet-4-6
+[14:32:01] [P1]   Модель: claude-sonnet-5
 [14:45:18] [P1] Задача #1 завершена.
 [14:45:18] [P1] === Задача #2 ===
 [15:02:44] [P1] Найден стоп-файл. Останавливаюсь.
