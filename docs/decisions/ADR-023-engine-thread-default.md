@@ -89,7 +89,7 @@ construction.
   the same session and are dominated by frames that repaint a newly exposed band
   (`band blit+expose`, 1–3 s against ~7 ms for an ordinary scroll frame), which
   perform no layout at all — an interleaved A/B showed the flag makes no
-  difference there. Filed separately as BUG-400.
+  difference there. Filed separately as BUG-405.
 - This does not touch `LUMEN_RENDER_THREAD` (ADR-016 M1, the *render* thread),
   which remains opt-in. The brief's risk note "wgpu backend (BUG-274) stays off
   the threaded default until fixed" refers to that flag, not this one.
@@ -111,5 +111,5 @@ construction.
 - ADR-016 — multithreaded render pipeline (the mandate and M0–M4 staging)
 - `docs/tasks/ph3-render-multithreading.md` — per-slice history, M2 acceptance
 - `bugs/BUG-274-OPEN.md` — cold-start investigation that produced the measurement
-- `bugs/BUG-400-OPEN.md` — scroll expose-band stalls, explicitly not fixed here
+- `bugs/BUG-405-OPEN.md` — scroll expose-band stalls, explicitly not fixed here
 - `docs/perf-method.md` — counter-over-wall-clock acceptance rule

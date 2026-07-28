@@ -1,100 +1,73 @@
-# BUG-400 — скролл реальных сайтов: кадр с «выездом» новой полосы (`band blit+expose`) стоит 1–3 с при ~7 мс у обычного кадра прокрутки
+# BUG-400 — `performance` не реализует интерфейс `Performance` целиком: не наследует `EventTarget`, нет `toJSON()`
 
 **Статус:** OPEN
-**Компонент:** paint (`Renderer`/wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit,
-`crates/engine/paint/src/renderer.rs`) — точное место внутри expose-пути не локализовано
-**Найден:** 2026-07-28 (P3), замер прокрутки `https://lenta.ru` по запросу пользователя
-(«скролл очень плохо работает») во время приёмки ADR-023 (флип `LUMEN_ENGINE_THREAD`)
+**Компонент:** js (`crates/js/src/dom.rs:10987-11048` — `var performance = {...}`, объектный литерал)
+**Найден:** P2, WPT-VENDOR-hr-time (2026-07-28), прогон `run_report.py --all --root hr-time --recursive`
 
 ## Симптом
 
-Прокрутка реального сайта рвано «залипает»: большинство кадров укладывается в ~7 мс, но
-отдельные кадры занимают **секунды**, и именно они видны пользователю как зависание прокрутки.
-
-Замер (`scripts/scroll_perf.py https://lenta.ru --ticks 20 --delta 300`, dev-release,
-дефолтный wgpu-бэкенд, `LUMEN_FRAME_LOG=1`), 43 кадра на прогон:
-
-| Прогон | p50 | avg | p95 | max |
-|---|---|---|---|---|
-| A | 8.44 мс | 202.08 мс | 611.86 мс | **3589.44 мс** |
-| B | 17.64 мс | 213.32 мс | 870.29 мс | **3327.37 мс** |
-| C | 11.67 мс | 208.82 мс | 753.07 мс | **3504.07 мс** |
-| D | 8.93 мс | 214.77 мс | 881.90 мс | **3098.14 мс** |
-
-Огромный разрыв p50 (≈9 мс) против avg (≈210 мс) — это не «равномерно медленно», а редкие
-катастрофические кадры, растягивающие среднее.
-
-## Локализация: дорогие кадры — ровно те, где полоса «выезжает»
-
-Из `LUMEN_FRAME_LOG=1` (фрагмент прогона D, порядок строк как в логе):
+`tests/wpt/hr-time/basic.any.js`, подтест «Performance interface extends
+EventTarget»:
 
 ```
-[frame] delta OffsetOnly / [frame] band blit          → [frame] total    8.09ms  (scroll_y 600)
-[frame] delta OffsetOnly / [frame] band blit          → [frame] total    7.37ms  (scroll_y 900)
-[frame] delta OffsetOnly / [frame] band blit          → [frame] total    6.85ms  (scroll_y 1200)
-[frame] delta OffsetOnly / [frame] band blit+expose   → [frame] total 3098.14ms  (scroll_y 1500)
-[frame] delta OffsetOnly / [frame] band blit          → [frame] total    7.74ms  (scroll_y 1800)
+FAIL Performance interface extends EventTarget. - self.performance.addEventListener is not a function
 ```
 
-Что это исключает:
+`tests/wpt/hr-time/performance-tojson.html`:
 
-- **не layout и не рестайл** — `delta OffsetOnly` означает, что display list не менялся
-  (`dl 1843 cmds` константа во всех этих кадрах), и ни одной строки `[engine] relayout` внутри
-  дорогих кадров нет;
-- **не сам scroll-blit** — соседние кадры `band blit` с тем же display list стоят ~7 мс;
-- **не движковый поток** — числа получены интерливед-A/B (см. ниже), флаг на исход не влияет.
-
-Остаётся стоимость отрисовки **вновь открывшейся полосы** (`expose`): всё, что впервые попадает
-в кадр при прокрутке. Правдоподобные (непроверенные) кандидаты: растеризация глифов в атлас для
-впервые показанного текста (у lenta.ru 9 подгружаемых `@font-face`), декод/загрузка в GPU
-впервые показанных картинок, либо перекодирование команд полосы. **Разбивки нет** — см.
-«Помеха измерению» ниже.
-
-## Отдельно от ADR-023 (движковый поток) — проверено, не связано
-
-Найдено при приёмке флипа `LUMEN_ENGINE_THREAD` (ADR-023). Интерливед A/B на одной сборке,
-2 раунда, `LUMEN_NO_ENGINE_THREAD=1` против дефолта: ON `p50` 11.67/8.93 мс, `max` 3504/3098 мс
-против OFF `p50` 8.44/17.64 мс, `max` 3589/3327 мс — **различий нет**, разброс между
-одноимёнными прогонами не меньше разницы между режимами. Это ожидаемо и согласуется с
-локализацией выше: движковый поток снимает с UI-потока layout/каскад, а дорогие кадры здесь
-layout не выполняют вовсе. Флип ADR-023 чинит долгий **старт**, но не эту прокрутку.
-
-Также **не** BUG-286 (`content-visibility:auto` → синхронный `relayout` посреди скролла): там
-симптом сопровождается строкой `[engine] relayout …` внутри тормозящего кадра, здесь её нет.
-
-## Помеха измерению (мешает следующему срезу)
-
-`scripts/scroll_perf.py` **падает до печати любой статистики** на дефолтном бэкенде: wgpu не
-пишет строк `[frame] paint …` (их формат — femtovg'шный, регексп `PAINT_RE`), поэтому список
-`paints` пуст, и строка `print(f'display list: {min(cmds)}…')` (`scripts/scroll_perf.py:179`)
-роняет скрипт на `ValueError: min() iterable argument is empty` — **раньше**, чем
-`stats('total', tot)` на строке 180. Ниже, на строке 181, для paint-статистик guard `if pt:`
-уже есть — на строке 179 такого guard'а не хватает. Числа в этом файле получены разбором
-`.tmp/scroll_perf_stderr.log` вручную по строкам `[frame] total`.
-
-Следствие: **на дефолтном бэкенде нет per-фазной разбивки кадра** (`content`/`flush`/`swap`
-печатает только femtovg), поэтому «что именно внутри expose стоит секунды» этим инструментом
-сейчас не разложить. Починка guard'а (1 строка) — необходимое, но не достаточное условие;
-для разбивки нужен `[frame] paint`-лог и в wgpu-пути. Тулинг принадлежит P2
-(`scripts/`+`graphic_tests/` по таблице ролей), поэтому в этом срезе не тронут.
-
-## Как воспроизвести
-
-```bash
-python scripts/scroll_perf.py https://lenta.ru --ticks 20 --delta 300   # упадёт на строке 179
-python - <<'EOF'                                                        # числа — из лога
-import re, statistics
-R = re.compile(r'\[frame\] total\s+([\d.]+)ms')
-t = [float(m.group(1)) for m in map(R.search, open('.tmp/scroll_perf_stderr.log',
-     encoding='utf-8', errors='replace')) if m]
-print(len(t), statistics.median(t), statistics.mean(t), max(t))
-EOF
+```
+FAIL Test performance.toJSON() - assert_equals: expected "function" but got "undefined"
 ```
 
-## Что дальше
+## Причина
 
-1. Починить guard в `scroll_perf.py:179` (P2) и добавить `[frame] paint`-разбивку в wgpu-путь —
-   без них следующий срез снова будет мерить вслепую.
-2. Разложить expose-кадр по фазам и подтвердить/опровергнуть кандидатов (glyph-атлас,
-   декод/upload картинок, перекодирование команд полосы).
-3. Только после этого — фикс.
+`performance` (`dom.rs:10987`) — обычный объектный литерал `var performance
+= { timeOrigin, now, mark, measure, getEntriesByName, getEntriesByType,
+getEntries, clearMarks, clearMeasures, clearResourceTimings,
+setResourceTimingBufferSize }`. Спека (W3C HR Time L3 §4,
+https://w3c.github.io/hr-time/#the-performance-interface) требует:
+
+```webidl
+[Exposed=(Window,Worker)]
+interface Performance : EventTarget {
+  ...
+  [Default] object toJSON();
+};
+```
+
+— `Performance` обязан наследовать `EventTarget` (реально используется
+контентом: `performance.addEventListener('resourcetimingbufferfull', …)`
+из Resource Timing L2 §4.4) и иметь метод `toJSON()`, сериализующий
+собственные перечислимые свойства (обычно используется `JSON.stringify`
+на телеметрии перфоманса).
+
+Оба отсутствуют, потому что `performance` никогда не был построен через
+`EventTarget`-конструктор/прототип — в отличие от `PerformanceObserver`
+(`dom.rs:11061`, тоже не EventTarget, но спекой и не требуется) объект
+`performance` — синглтон, а не класс, что и упростили до плоского
+литерала.
+
+## Что нужно сделать
+
+1. Сделать `performance` экземпляром (или прототипно связанным с)
+   `EventTarget` — переиспользовать существующий глобальный
+   `EventTarget`/`Event` из `WEB_API_SHIM` (см. `dom.rs:27527`,
+   комментарий про `BUG-067/070`), чтобы `addEventListener`/
+   `removeEventListener`/`dispatchEvent` появились честно, не
+   заглушками.
+2. Добавить `performance.toJSON()` — типовая реализация: копия
+   перечислимых собственных свойств (`timeOrigin`) в новый объект
+   (методы toJSON не включает).
+3. `resourcetimingbufferfull`-событие (Resource Timing L2 §4.4) можно
+   не реализовывать в этом фиксе — сам факт наличия
+   `addEventListener`/`dispatchEvent` уже закрывает подтест; диспатч
+   реального события — отдельный объём работы, если понадобится.
+
+## Связанные
+
+* `PerformanceObserver` (`dom.rs:11061`) — соседний класс той же секции,
+  не требует EventTarget по спеке, не путать.
+* Найдено вместе с [BUG-401](bugs/BUG-401-OPEN.md) (`performance`
+  отсутствует в Worker global scope целиком) — тот же API, разные
+  root cause и файлы (`dom.rs` vs `worker.rs`), поэтому заведены
+  отдельно.

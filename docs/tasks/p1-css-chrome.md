@@ -439,8 +439,10 @@ BUG-341 — жёсткий блокер для CC-14 (флип дефолта) �
 | Навигация | back/forward/reload | не хром-специфично (тулбар-кнопки те же `ChromeAction`, не завязаны на конкретный рендер-путь страницы) | `cargo test -p lumen-chrome` (`ChromeAction` dispatch) |
 | Вкладки | верт. `#sbTabs` / гориз. `#hbarTabs`, переключение layout, tree-line отступ, container/workspace цвет | движковый (CC-6/CC-8) | `cargo test -p lumen-chrome` 61/61 |
 | Вкладки | drag-переупорядочивание | вне DoD CC-8 (задокументированный пробел, не регрессия этого среза) | CC-8 closure note в этом файле |
-| Панели | bookmarks/history/settings views, downloads, permission popover, AI/Web `#rightSidebar`, find bar, command palette `#cpOverlay`, print `#printOverlay`, cert `#certOverlay`, profile menu | движковый (CC-9/CC-10/CC-10b) | per-срез `cargo test -p lumen-chrome`/`-p lumen-shell`; `!self.css_chrome_enabled`-гейт на каждый legacy-путь подтверждён построчным greп'ом `main.rs` в этом срезе |
-| Панели | DevTools console/inspector/network/sources, a11y-панель, shortcuts-панель, reader view, source view, split view, ~30 не покрытых макетом панелей (риск 5) | legacy-оверлей навсегда | их код не содержит `css_chrome_enabled`-условия вообще — флип структурно не может их затронуть |
+| Панели | bookmarks/history/settings views, downloads, permission popover, AI/Web `#rightSidebar`, find bar, command palette `#cpOverlay`, print `#printOverlay`, cert `#certOverlay` | движковый (CC-9/CC-10/CC-10b) | per-срез `cargo test -p lumen-chrome`/`-p lumen-shell`; `!self.css_chrome_enabled`-гейт на каждый legacy-путь подтверждён построчным greп'ом `main.rs` в этом срезе |
+| Панели | DevTools console/inspector/network/sources, a11y-панель, shortcuts-панель, reader view, source view, split view, `note_viewer`/`focus_panel`/`read_later_panel`/`privacy_panel`/`workspace_panel`(switcher-оверлей)/`vertical_tabs`/`tree_tabs`/PiP-группа, **profile menu**, ~30 не покрытых макетом панелей (риск 5) | legacy-оверлей навсегда | их код не содержит `css_chrome_enabled`-условия вообще — флип структурно не может их затронуть |
+
+**Исправление после скоупинга CC-15 (2026-07-28):** эта таблица (составлена в CC-14) ошибочно числила `profile menu` мигрированной панелью — на деле хит-тест (`main.rs:14616`) безусловен, но рендер (`main.rs:16975`) остался внутри легаси-only ветки, т.е. поповер профиля никогда не рисуется под дефолтным хромом (см. [BUG-403](../../bugs/BUG-403-FIXED.md)). Строка выше поправлена — `profile menu` перенесён в «legacy-оверлей навсегда», финализировано CC-15-1 (2026-07-28): рендер/hit-test теперь безусловны и используют `page_offset()`, без миграции на `ChromeModel`. Также риск-5 список изначально не называл явно 9 панелей, которые де-факто уже безусловны (`note_viewer`, `focus_panel`, `read_later_panel`, `privacy_panel`, `workspace_panel`, `vertical_tabs`, `tree_tabs`, PiP/restore-spinner/sleep-hint-группа) — добавлены выше для полноты, статус (legacy-навсегда) не меняется.
 | Темы | light/dark (`i-moon`/`i-sun`), профильные акценты (`body[data-profile]`), `--ws-color` workspaces | движковый, `:root`/custom-properties из эталона | §2 этого брифа: CSS-покрытие ~87 свойств мокапа, все критичные реализованы |
 | DPI/zoom | resize окна, `--viewport WxH` | движковый через `chrome_page_host_rect`, пересчитывается в `relayout_chrome_host` каждый кадр | `graphic_tests/run.py` TEST-00 калибрует crop offset заново на каждый прогон — некорректная геометрия хром-контента проявилась бы как провал калибровки, не только визуально |
 | Split view | `Ctrl+\` | вообще не гейтится флагом (фича контент-области, не хрома) | `page_offset()`/`chrome_page_host_rect` — единый источник смещения страницы с CC-5, split view делит уже смещённую контент-область |
@@ -451,8 +453,43 @@ BUG-341 — жёсткий блокер для CC-14 (флип дефолта) �
 
 `cargo test -p lumen-chrome` 61/61, `cargo test -p lumen-shell` (полный прогон, дефолт — движковый хром), `cargo test -p lumen-a11y` — все зелёные; `cargo clippy -p lumen-shell --all-targets -- -D warnings` зелёный; `python graphic_tests/run.py --continue-on-fail` (мандатно — флип может двигать пиксели: TEST-00 калибруется по новой геометрии хрома каждый прогон). **DoD:** дефолтная сборка — движковый хром; `LUMEN_LEGACY_CHROME=1` откатывает к legacy побайтово (тот же код-путь, что раньше был дефолтом).
 
-### CC-15…(серия S): Удаление legacy
-По образцу S12b (V8-миграция): слайсами удалить `toolbar.rs`-билдер, `tabs/strip.rs`-рендер, DisplayList-код `panels/*`, `Palette`-константы (остаётся только то, что не покрыто макетом — см. риск №5). Финал — удалить rollback-флаг.
+### CC-15 (серия): Удаление legacy
+
+**Скоупинг (2026-07-28, ветка `p1-cc15-scoping`, только доксинк — кода не менялось).** Исходная
+однострочная формулировка ROADMAP («toolbar.rs-билдер, tabs/strip.rs-рендер, DisplayList-код panels/*,
+Palette-константы») недооценивала масштаб — тот же паттерн, что S12b (M→XL после скоупинга). Ключевые
+находки:
+
+1. **`toolbar.rs`/`tabs/strip.rs` — смешанные data+paint модули, файлы не удаляются целиком.**
+   `toolbar::CHROME_H` и `tabs::strip::{TabStrip, TabEntry, TabDragState, TabLayout, TAB_BAR_HEIGHT,
+   DRAG_THRESHOLD, LAYOUT_BTN_W, SETTINGS_BTN_W}` читаются безусловно (`content_layout_viewport()`,
+   `resumed()`-сайзинг окна, `flush_pointer_moves()`, keep-forever-панели) — только функции покраски/
+   hit-теста (`build_toolbar`/`hit_test`/`ToolbarHit`/`build_tab_bar`/`build_tab_tooltip`/`TabHit`/…)
+   реально гейтированы `!css_chrome_enabled` и удаляемы.
+2. **Панельный список риска-5 был неточным в обе стороны** — см. исправленную таблицу паритета выше:
+   9 доп. панелей де-факто безусловны и не были названы явно; `panels/profile_menu.rs`, наоборот,
+   числился движковым, но не мигрирован ([BUG-403](../../bugs/BUG-403-FIXED.md)).
+3. **`Palette` (`panels/themes.rs`)** — общая тема-структура для всех легаси-оверлеев (23 из 27
+   `panels/*.rs`, включая keep-forever), не кандидат на удаление целиком. Только 3 поля
+   (`toolbar_bg`, `tab_sleep_bg`, `tab_hibernate_bg`) читаются исключительно из `toolbar.rs`/
+   `tabs/strip.rs` — единственная безопасная часть «Palette-констант» из формулировки ROADMAP.
+4. Побочно найдены 2 живых бага флипа CC-14, не пойманных чек-листом паритета: [BUG-403](../../bugs/BUG-403-FIXED.md)
+   (профиль-поповер невидим под дефолтным хромом) и [BUG-404](../../bugs/BUG-404-OPEN.md)
+   (`flush_pointer_moves` — тот же класс, что этот же срез исправил для `resolve_automation_target`,
+   но живой мышиный путь остался нетронутым).
+
+**Разбивка на срезы** (ROADMAP.md, каждый — своя ветка `p1-cc15-N-<slug>`, по образцу S12b-N):
+
+| Срез | Размер | Что делает |
+|---|---|---|
+| CC-15-1 | XS | done (2026-07-28, P1) — закрыл [BUG-403](../../bugs/BUG-403-FIXED.md): `profile_menu.rs` закреплён легаси-навсегда (не привязан к `ChromeModel`), рендер поповера вынесен из легаси-only ветки в безусловный блок, обе точки геометрии (рендер + hit-test) переведены с `toolbar::CHROME_H` на `self.page_offset()`. Разблокировал CC-15-3 |
+| CC-15-2 | S | Убрать безусловный расчёт `hovered_tab_idx` (`main.rs:13880-13902`), потребитель которого уже гейтирован |
+| CC-15-3 | M | Вырезать функции покраски/hit-теста из `toolbar.rs`/`tabs/strip.rs` + их гейтированные вызовы в `main.rs`; геометрические константы/data-типы остаются на месте |
+| CC-15-4 | S | Удалить 10 подтверждённо-гейтированных `panels/*`-билдеров (bookmark/print/settings/cert/history/command_palette/ai/sidebar/shields/permission) |
+| CC-15-5 | XS | Убрать 3 орфанных поля `Palette` (`toolbar_bg`/`tab_sleep_bg`/`tab_hibernate_bg`) — перепроверить грепом на момент исполнения, не по этому списку |
+| CC-15-6 | M | Финал: удалить rollback-флаг `LUMEN_LEGACY_CHROME`/`css_chrome_enabled` целиком — самый рискованный срез |
+
+Полные формулировки со ссылками на строки — в ROADMAP.md, строки CC-15/CC-15-1…CC-15-6.
 
 ## Этап E — компайл-тайм оптимизации (опционально, после флипа)
 
