@@ -838,8 +838,47 @@ pub struct PropertyRule {
     pub initial_value: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Process-unique identity of one `Stylesheet`'s **content**.
+///
+/// Exists so that a consumer caching something derived from a sheet (the
+/// cascade's rule index, `lumen_layout::style`) can key that cache by
+/// identity instead of by the sheet's address. An address is not an identity:
+/// a freed sheet's address is handed straight back to the next allocation, so
+/// an address-keyed cache has to be invalidated on every use to stay honest —
+/// which is the same as having no cache across passes at all (BUG-341 S21).
+///
+/// A revision is minted fresh for every `Stylesheet` that comes into existence
+/// (parse, `Default`, `Clone`) and is never reused, so two sheets can share one
+/// only by one being a snapshot of the other before either was mutated. The
+/// counter is `u64`: at one sheet per nanosecond it wraps in 584 years.
+///
+/// **The invariant a cache relies on**: while a sheet's revision is unchanged,
+/// its rules are unchanged. Every in-place mutation must therefore go through
+/// [`Stylesheet::merge_from`] or announce itself with
+/// [`Stylesheet::mark_mutated`]. This is not left to review — the test
+/// `every_stylesheet_mutation_in_the_workspace_announces_itself` scans the
+/// workspace sources and fails the build on a direct `push`/`extend`/… into any
+/// rule container outside this file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StylesheetRevision(u64);
+
+/// Source of [`StylesheetRevision`] values. Starts at 1 so that 0 is available
+/// to consumers as a "no sheet seen yet" sentinel.
+static NEXT_STYLESHEET_REVISION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+impl StylesheetRevision {
+    /// Mints a revision no other `Stylesheet` has held or will hold.
+    fn fresh() -> Self {
+        Self(NEXT_STYLESHEET_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+#[derive(Debug)]
 pub struct Stylesheet {
+    /// Content identity — see [`StylesheetRevision`]. Private: it is minted,
+    /// never chosen, and a hand-set value would silently license a stale cache.
+    revision: StylesheetRevision,
     pub rules: Vec<Rule>,
     /// Зарегистрированные `@property`-правила. Порядок соответствует
     /// исходному CSS; повтор имени — последнее объявление побеждает (по
@@ -920,6 +959,158 @@ pub struct Stylesheet {
     /// layout (`expand_custom_functions`, style.rs). Conditional group rules
     /// inside the body (`@media`, `@container`) are not yet supported.
     pub function_rules: Vec<FunctionRule>,
+}
+
+impl Default for Stylesheet {
+    /// An empty sheet — with its own revision, like any other sheet. Two
+    /// `Stylesheet::default()` values are `==` but not the same sheet, and a
+    /// cache keyed by revision must not confuse them: the first may be filled
+    /// in afterwards through its public fields (which is what the workspace
+    /// gate makes visible).
+    fn default() -> Self {
+        Self {
+            revision: StylesheetRevision::fresh(),
+            rules: Vec::new(),
+            properties: Vec::new(),
+            media_rules: Vec::new(),
+            imports: Vec::new(),
+            font_faces: Vec::new(),
+            layer_order: Vec::new(),
+            layers: Vec::new(),
+            supports_rules: Vec::new(),
+            keyframes: Vec::new(),
+            counter_styles: Vec::new(),
+            page_rules: Vec::new(),
+            scope_rules: Vec::new(),
+            starting_style_rules: Vec::new(),
+            container_rules: Vec::new(),
+            font_palette_values: Vec::new(),
+            color_profiles: Vec::new(),
+            function_rules: Vec::new(),
+        }
+    }
+}
+
+impl Clone for Stylesheet {
+    /// Copies the content and mints a **new** revision.
+    ///
+    /// Hand-written rather than derived on purpose: the clone is a separate
+    /// sheet that its owner may mutate independently, so letting it inherit the
+    /// original's revision would let a mutation of one silently authorise a
+    /// cached index for the other. Sharing a revision is only sound while both
+    /// are frozen, and nothing here can promise that.
+    fn clone(&self) -> Self {
+        Self {
+            revision: StylesheetRevision::fresh(),
+            rules: self.rules.clone(),
+            properties: self.properties.clone(),
+            media_rules: self.media_rules.clone(),
+            imports: self.imports.clone(),
+            font_faces: self.font_faces.clone(),
+            layer_order: self.layer_order.clone(),
+            layers: self.layers.clone(),
+            supports_rules: self.supports_rules.clone(),
+            keyframes: self.keyframes.clone(),
+            counter_styles: self.counter_styles.clone(),
+            page_rules: self.page_rules.clone(),
+            scope_rules: self.scope_rules.clone(),
+            starting_style_rules: self.starting_style_rules.clone(),
+            container_rules: self.container_rules.clone(),
+            font_palette_values: self.font_palette_values.clone(),
+            color_profiles: self.color_profiles.clone(),
+            function_rules: self.function_rules.clone(),
+        }
+    }
+}
+
+impl PartialEq for Stylesheet {
+    /// Content equality. The revision is identity, not content, and two sheets
+    /// parsed from the same CSS must compare equal.
+    fn eq(&self, other: &Self) -> bool {
+        self.rules == other.rules
+            && self.properties == other.properties
+            && self.media_rules == other.media_rules
+            && self.imports == other.imports
+            && self.font_faces == other.font_faces
+            && self.layer_order == other.layer_order
+            && self.layers == other.layers
+            && self.supports_rules == other.supports_rules
+            && self.keyframes == other.keyframes
+            && self.counter_styles == other.counter_styles
+            && self.page_rules == other.page_rules
+            && self.scope_rules == other.scope_rules
+            && self.starting_style_rules == other.starting_style_rules
+            && self.container_rules == other.container_rules
+            && self.font_palette_values == other.font_palette_values
+            && self.color_profiles == other.color_profiles
+            && self.function_rules == other.function_rules
+    }
+}
+
+impl Stylesheet {
+    /// This sheet's content identity — see [`StylesheetRevision`].
+    pub fn revision(&self) -> StylesheetRevision {
+        self.revision
+    }
+
+    /// Declares that this sheet's rules were changed in place, invalidating
+    /// every cache keyed by [`Stylesheet::revision`].
+    ///
+    /// Needed only when rules are reached through the public fields directly;
+    /// [`Stylesheet::merge_from`] already does it.
+    pub fn mark_mutated(&mut self) {
+        self.revision = StylesheetRevision::fresh();
+    }
+
+    /// Appends every rule of `other` to this sheet and mints a new revision.
+    ///
+    /// This is how a sheet grows while it is being streamed in
+    /// (`LoadEvent::CssLoaded`): each `<link>`/`<style>` that finishes loading
+    /// is merged into the sheet the next paint uses. Written here, beside the
+    /// field list, because the previous hand-rolled version at the call site
+    /// listed the fields it knew about and had fallen two behind
+    /// (`color_profiles`, `function_rules` — so a streamed `@color-profile` or
+    /// `@function` was silently dropped).
+    pub fn merge_from(&mut self, other: Stylesheet) {
+        let Stylesheet {
+            revision: _,
+            rules,
+            properties,
+            media_rules,
+            imports,
+            font_faces,
+            layer_order,
+            layers,
+            supports_rules,
+            keyframes,
+            counter_styles,
+            page_rules,
+            scope_rules,
+            starting_style_rules,
+            container_rules,
+            font_palette_values,
+            color_profiles,
+            function_rules,
+        } = other;
+        self.rules.extend(rules);
+        self.properties.extend(properties);
+        self.media_rules.extend(media_rules);
+        self.imports.extend(imports);
+        self.font_faces.extend(font_faces);
+        self.layer_order.extend(layer_order);
+        self.layers.extend(layers);
+        self.supports_rules.extend(supports_rules);
+        self.keyframes.extend(keyframes);
+        self.counter_styles.extend(counter_styles);
+        self.page_rules.extend(page_rules);
+        self.scope_rules.extend(scope_rules);
+        self.starting_style_rules.extend(starting_style_rules);
+        self.container_rules.extend(container_rules);
+        self.font_palette_values.extend(font_palette_values);
+        self.color_profiles.extend(color_profiles);
+        self.function_rules.extend(function_rules);
+        self.mark_mutated();
+    }
 }
 
 /// `@function <name>(<params>) [returns <type>]? { declarations }` — CSS
@@ -2387,6 +2578,7 @@ impl<'a> Parser<'a> {
             }
         }
         Stylesheet {
+            revision: StylesheetRevision::fresh(),
             rules,
             properties,
             media_rules,
@@ -4687,6 +4879,160 @@ fn expand_nesting(
         }
     }
     result
+}
+
+#[cfg(test)]
+mod revision_tests {
+    use super::*;
+
+    #[test]
+    fn every_sheet_that_comes_into_existence_gets_its_own_revision() {
+        let a = parse("p { color: red }");
+        let b = parse("p { color: red }");
+        let c = a.clone();
+        let d = Stylesheet::default();
+        let e = Stylesheet::default();
+
+        let revs = [a.revision(), b.revision(), c.revision(), d.revision(), e.revision()];
+        for (i, x) in revs.iter().enumerate() {
+            for (j, y) in revs.iter().enumerate() {
+                assert!(
+                    i == j || x != y,
+                    "revisions must be unique: sheet {i} and {j} share {x:?}"
+                );
+            }
+        }
+        // Identity is not content: same CSS, and a clone, still compare equal.
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_eq!(d, e);
+    }
+
+    #[test]
+    fn merging_rules_in_changes_the_revision_and_carries_every_field() {
+        let mut sheet = parse("p { color: red }");
+        let before = sheet.revision();
+        sheet.merge_from(parse(
+            "@media print { p { color: blue } } \
+             @color-profile --p { src: url(a.icc) } \
+             @function --double(--x) { result: 2 } \
+             div { color: green }",
+        ));
+
+        assert_ne!(before, sheet.revision(), "a mutated sheet is a different sheet");
+        assert_eq!(sheet.rules.len(), 2, "the merged top-level rule must be there");
+        assert_eq!(sheet.media_rules.len(), 1);
+        // The two fields the hand-rolled merge at the old call site had missed.
+        assert_eq!(sheet.color_profiles.len(), 1, "@color-profile must survive a merge");
+        assert_eq!(sheet.function_rules.len(), 1, "@function must survive a merge");
+    }
+
+    #[test]
+    fn mark_mutated_mints_a_new_revision() {
+        let mut sheet = parse("p { color: red }");
+        let before = sheet.revision();
+        sheet.rules.push(Rule { selectors: Vec::new(), declarations: Vec::new() });
+        sheet.mark_mutated();
+        assert_ne!(before, sheet.revision());
+    }
+
+    /// The structural half of [`StylesheetRevision`]'s invariant: a cache keyed
+    /// by revision is only sound while every in-place mutation announces itself.
+    ///
+    /// A promise of that shape breaks as *visibly wrong styles*, not as a slow
+    /// frame, and it breaks the day someone adds an innocuous `sheet.rules.
+    /// push(..)` three crates away — so it is guarded by scanning the sources
+    /// rather than by review (same reasoning, and the same shape, as
+    /// `lumen_chrome`'s `every_dom_mutation_in_model_rs_goes_through_a_tracked_
+    /// primitive`).
+    ///
+    /// Only files that name `Stylesheet` are scanned: the container field names
+    /// are ordinary words (`rules`, `imports`, `properties`) that unrelated
+    /// types in the workspace also use, and a file that never mentions the type
+    /// cannot name a binding of it.
+    #[test]
+    fn every_stylesheet_mutation_in_the_workspace_announces_itself() {
+        const FIELDS: &[&str] = &[
+            "rules", "properties", "media_rules", "imports", "font_faces", "layer_order",
+            "layers", "supports_rules", "keyframes", "counter_styles", "page_rules",
+            "scope_rules", "starting_style_rules", "container_rules", "font_palette_values",
+            "color_profiles", "function_rules",
+        ];
+        const MUTATORS: &[&str] = &[
+            "push(", "extend(", "append(", "insert(", "clear(", "remove(", "retain(",
+            "truncate(", "pop(", "sort(", "sort_by(", "sort_by_key(", "dedup(",
+            "swap_remove(", "drain(", "resize(", "split_off(",
+        ];
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .join("crates");
+        let root = root.canonicalize().unwrap_or(root);
+        assert!(
+            root.is_dir(),
+            "the gate must scan real sources; {} is not a directory",
+            root.display(),
+        );
+        // This file is where the sanctioned mutators live.
+        let exempt = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/parser.rs");
+        let exempt = exempt.canonicalize().unwrap_or(exempt);
+
+        let mut files = Vec::new();
+        collect_rs_files(&root, &mut files);
+        assert!(files.len() > 20, "only {} .rs files found — the walk is broken", files.len());
+
+        let mut offenders = Vec::new();
+        for path in &files {
+            if path.canonicalize().unwrap_or_else(|_| path.clone()) == exempt {
+                continue;
+            }
+            let Ok(src) = std::fs::read_to_string(path) else { continue };
+            if !src.contains("Stylesheet") {
+                continue;
+            }
+            for (n, line) in src.lines().enumerate() {
+                for field in FIELDS {
+                    for mutator in MUTATORS {
+                        let needle = format!(".{field}.{mutator}");
+                        if line.contains(&needle) {
+                            offenders.push(format!(
+                                "{}:{}: {}",
+                                path.display(),
+                                n + 1,
+                                line.trim()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "a `Stylesheet`'s rules were changed in place without minting a new \
+             revision, which leaves every revision-keyed cache (the cascade's \
+             `CascadeIndex`) serving the pre-change index. Use \
+             `Stylesheet::merge_from`, or call `Stylesheet::mark_mutated` right \
+             after:\n  {}",
+            offenders.join("\n  "),
+        );
+    }
+
+    /// Every `.rs` file under `dir`, skipping build output.
+    fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n == "target") {
+                    continue;
+                }
+                collect_rs_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

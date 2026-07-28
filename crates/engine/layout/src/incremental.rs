@@ -1664,7 +1664,6 @@ mod tests {
             content_dirty: crate::counters::ContentDirty::Nothing,
         };
         let flat = build_flat_tree(&doc);
-        crate::style::invalidate_rule_idx_cache();
         set_incremental_restyle(true);
         let counters =
             incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
@@ -2126,14 +2125,12 @@ mod tests {
             content_dirty: crate::counters::ContentDirty::Untracked,
         };
         set_incremental_restyle(true);
-        crate::style::invalidate_rule_idx_cache();
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
         );
         set_incremental_restyle(false);
 
         let flat = build_flat_tree(&doc);
-        crate::style::invalidate_rule_idx_cache();
         let full_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
         assert_eq!(
             incr_counters.styles(),
@@ -2379,11 +2376,9 @@ mod tests {
         let vp = Size::new(800.0, 600.0);
         let flat = build_flat_tree(&doc);
 
-        crate::style::invalidate_rule_idx_cache();
         let prev = precompute_counters(&doc, &sheet, vp, &flat, false);
 
         set_incremental_restyle(true);
-        crate::style::invalidate_rule_idx_cache();
         let delta = RestyleDelta {
             prev_styles: prev.styles(),
             dirty_roots: Default::default(),
@@ -2437,7 +2432,6 @@ mod tests {
         let vp = Size::new(800.0, 600.0);
         let flat = build_flat_tree(&doc);
 
-        crate::style::invalidate_rule_idx_cache();
         let prev = precompute_counters(&doc, &sheet, vp, &flat, false);
 
         // Dirty exactly one subtree root; everything else must be reused.
@@ -2446,7 +2440,6 @@ mod tests {
         dirty_roots.insert(dirty_root);
 
         set_incremental_restyle(true);
-        crate::style::invalidate_rule_idx_cache();
         let delta = RestyleDelta {
             prev_styles: prev.styles(),
             dirty_roots,
@@ -2498,7 +2491,6 @@ mod tests {
         let sheet = parse_css("div { color: red; } p { font-weight: bold; }");
         let vp = Size::new(800.0, 600.0);
 
-        crate::style::invalidate_rule_idx_cache();
         let (tree, counters) = layout_measured_hyp_with_counters(
             &doc,
             &sheet,
@@ -2552,7 +2544,6 @@ mod tests {
         );
         let vp = Size::new(800.0, 600.0);
 
-        crate::style::invalidate_rule_idx_cache();
         let (tree, counters) = layout_measured_hyp_with_counters(
             &doc,
             &sheet,
@@ -2643,13 +2634,11 @@ mod tests {
 
         // Baseline: #a hovered.
         set_interactive_state(Some(a), None, None);
-        crate::style::invalidate_rule_idx_cache();
         let baseline = precompute_counters(&doc, &sheet, vp, &flat, false);
         let total_nodes = baseline.styles().len();
 
         // Reference: full recompute with hover moved to #b.
         set_interactive_state(Some(b), None, None);
-        crate::style::invalidate_rule_idx_cache();
         let full_after = precompute_counters(&doc, &sheet, vp, &flat, false);
 
         // Incremental: same transition, conservative root-set derived from it.
@@ -2658,7 +2647,6 @@ mod tests {
         let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         take_cascade_stats();
-        crate::style::invalidate_rule_idx_cache();
         let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
         let recomputed = take_cascade_stats().recomputed as usize;
         set_incremental_restyle(false);
@@ -2707,7 +2695,6 @@ mod tests {
         let vp = Size::new(800.0, 600.0);
         let flat = build_flat_tree(&doc);
 
-        crate::style::invalidate_rule_idx_cache();
         let baseline = precompute_counters(&doc, &sheet, vp, &flat, false);
         let total_nodes = baseline.styles().len();
 
@@ -2720,7 +2707,6 @@ mod tests {
             }
         }
 
-        crate::style::invalidate_rule_idx_cache();
         let full_after = precompute_counters(&doc, &sheet, vp, &flat, false);
 
         let node_index = restyle_node_index(&doc, &sheet);
@@ -2731,7 +2717,6 @@ mod tests {
         let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
         set_incremental_restyle(true);
         take_cascade_stats();
-        crate::style::invalidate_rule_idx_cache();
         let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
         let recomputed = take_cascade_stats().recomputed as usize;
         set_incremental_restyle(false);

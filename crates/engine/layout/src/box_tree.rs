@@ -2813,7 +2813,6 @@ fn collect_shadow_style_css(doc: &Document, id: NodeId, out: &mut String) {
 /// Invalidates the rule-index cache before the cascade so stale hits are impossible.
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     // Prevent stale RULE_IDX_CACHE hits when a new sheet lands at the same address as a freed one.
-    crate::style::invalidate_rule_idx_cache();
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
@@ -2884,7 +2883,6 @@ pub fn layout_measured_hyp_with_counters(
     lumen_core::tracy_zone!("layout_measured_hyp");
     // Invalidate the rule-index cache before each layout pass to prevent
     // stale hits when a new stylesheet lands at the same pointer as a freed one.
-    crate::style::invalidate_rule_idx_cache();
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
@@ -2984,7 +2982,6 @@ pub fn layout_streaming_incremental(
     dark_mode: bool,
     prev: &LayoutBox,
 ) -> LayoutBox {
-    crate::style::invalidate_rule_idx_cache();
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
@@ -3094,7 +3091,6 @@ pub fn layout_mutation_incremental_restyle(
     // the *incremental* path — BUG-341 §1's profile only ever described the
     // full pass, and every slice since S3 has been reasoning from it.
     let _prof = lumen_core::profile::scope("layout_mutation_incremental_restyle");
-    crate::style::invalidate_rule_idx_cache();
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = {
@@ -4817,6 +4813,12 @@ fn build_box_inner(
                 // Nested containers a worker fans out again are folded back
                 // through the same drain as `built`/`reused` below.
                 let par_fanouts = std::sync::atomic::AtomicU32::new(0);
+                // BUG-341 S21: the cascade's rule index is per-thread too, so a
+                // worker that has not seen this sheet builds its own. Drained
+                // through the same fold as the box tallies, for the same reason
+                // — otherwise the gate that asserts a pass rebuilds no index
+                // would be blind to every rebuild a worker made.
+                let par_index_stats = std::sync::Mutex::new(crate::style::CascadeIndexStats::default());
                 children = dom_children.par_iter().filter_map(|&child_id| {
                     snap.install();
                     let out = if wrap_text_items && matches!(doc.get(child_id).data, NodeData::Text(_)) {
@@ -4834,8 +4836,16 @@ fn build_box_inner(
                     par_built.fetch_add(d.built, Relaxed);
                     par_reused.fetch_add(d.reused, Relaxed);
                     par_fanouts.fetch_add(d.fanouts, Relaxed);
+                    let idx_stats = crate::style::take_cascade_index_stats();
+                    par_index_stats
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .add(idx_stats);
                     out
                 }).collect();
+                crate::style::add_cascade_index_stats(
+                    *par_index_stats.lock().unwrap_or_else(|e| e.into_inner()),
+                );
                 {
                     use std::sync::atomic::Ordering::Relaxed;
                     add_box_build_stats(BoxBuildStats {
@@ -17545,7 +17555,6 @@ mod tests {
 
         // Baseline (state a hovered) — the "prev" tree for reuse, built in full.
         set_interactive_state(Some(a), None, None);
-        crate::style::invalidate_rule_idx_cache();
         let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
         let mut prev_tree = super::build_box(
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
@@ -17553,7 +17562,6 @@ mod tests {
 
         // Reference: full rebuild after the transition (no reuse at all).
         set_interactive_state(Some(b), None, None);
-        crate::style::invalidate_rule_idx_cache();
         let full_after_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
         let full_after_tree = super::build_box(
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &full_after_counters, &registry, false, None,
@@ -17568,7 +17576,6 @@ mod tests {
             content_dirty: crate::counters::ContentDirty::Nothing,
         };
         set_incremental_restyle(true);
-        crate::style::invalidate_rule_idx_cache();
         let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
         set_incremental_restyle(false);
 
@@ -17647,7 +17654,6 @@ mod tests {
         let root_style = ComputedStyle::root();
         let registry = build_counter_style_registry(&sheet);
 
-        crate::style::invalidate_rule_idx_cache();
         let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
         let mut prev_tree = super::build_box(
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
@@ -17662,7 +17668,6 @@ mod tests {
             }
         }
 
-        crate::style::invalidate_rule_idx_cache();
         let full_after_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
         let full_after_tree = super::build_box(
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &full_after_counters, &registry, false, None,
@@ -17677,7 +17682,6 @@ mod tests {
             content_dirty: crate::counters::ContentDirty::Untracked,
         };
         set_incremental_restyle(true);
-        crate::style::invalidate_rule_idx_cache();
         let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
         set_incremental_restyle(false);
 
@@ -17758,7 +17762,6 @@ mod tests {
         let root_style = ComputedStyle::root();
         let registry = build_counter_style_registry(&sheet);
 
-        crate::style::invalidate_rule_idx_cache();
         let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
         let mut prev_tree = super::build_box(
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
@@ -17777,7 +17780,6 @@ mod tests {
             other => panic!("expected a text node, got {other:?}"),
         }
 
-        crate::style::invalidate_rule_idx_cache();
         let full_after_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
         let full_after_tree = super::build_box(
             &doc, &sheet, doc.root(), &root_style, vp, &flat, &full_after_counters, &registry, false, None,
@@ -17792,7 +17794,6 @@ mod tests {
             content_dirty: ContentDirty::Nodes(&content),
         };
         set_incremental_restyle(true);
-        crate::style::invalidate_rule_idx_cache();
         let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
         set_incremental_restyle(false);
 
