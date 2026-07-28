@@ -2018,6 +2018,11 @@ impl Renderer {
             .into_iter()
             .chain(static_prefs.iter().copied().filter(|b| Some(*b) != probed))
             .collect();
+        // BUG-274 cold-start census: bracket adapter/device acquisition and
+        // pipeline compilation separately from the probe (already logged by
+        // `backend_probe::pick_backend`) to find where the ~9s launch->first-frame
+        // gap actually goes.
+        let t_adapter0 = std::time::Instant::now();
         let mut picked = None;
         for backends in backend_prefs {
             let instance = wgpu::Instance::new(
@@ -2093,8 +2098,15 @@ impl Renderer {
             );
         }
         let gpu_fingerprint = GpuFingerprint::from_adapter_info(&adapter_info);
+        if crate::frame_log_enabled() {
+            eprintln!(
+                "[wgpu] adapter+device acquired: {:.0}ms",
+                t_adapter0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
 
-        Self::init_pipelines(
+        let t_pipelines0 = std::time::Instant::now();
+        let result = Self::init_pipelines(
             device,
             queue,
             format,
@@ -2106,7 +2118,14 @@ impl Renderer {
             scale_factor,
             target_color_space,
             gpu_fingerprint,
-        )
+        );
+        if crate::frame_log_enabled() {
+            eprintln!(
+                "[wgpu] init_pipelines: {:.0}ms",
+                t_pipelines0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        result
     }
 
     /// Creates a headless `Renderer` for off-screen rendering without a winit window.
