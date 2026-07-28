@@ -132,7 +132,7 @@ pub use style::{
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
     FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
-    MaskClip, MaskMode, MasonryAutoFlow,
+    MaskClip, MaskComposite, MaskLayer, MaskMode, MasonryAutoFlow,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient, Resize,
@@ -10541,11 +10541,21 @@ mod tests {
 
     // ──────── mask-* + scrollbar-* ────────
 
+    /// Топовый (первый) слой маски `<p>` — все mask-longhand-ы теперь живут
+    /// в `mask_layers` (CSS Masking L1 §4.9).
+    fn first_p_mask(root: &LayoutBox) -> MaskLayer {
+        first_p_style(root)
+            .mask_layers
+            .first()
+            .cloned()
+            .expect("mask layer")
+    }
+
     #[test]
     fn mask_image_url() {
         let root = lay("<p>x</p>", "p { mask-image: url(\"mask.png\"); }");
         assert_eq!(
-            first_p_style(&root).mask_image,
+            first_p_mask(&root).image,
             BackgroundImage::Url("mask.png".into())
         );
     }
@@ -10553,49 +10563,49 @@ mod tests {
     #[test]
     fn mask_image_none_clears() {
         let root = lay("<p>x</p>", "p { mask-image: url(m.png); mask-image: none; }");
-        assert_eq!(first_p_style(&root).mask_image, BackgroundImage::None);
+        assert_eq!(first_p_mask(&root).image, BackgroundImage::None);
     }
 
     #[test]
     fn mask_repeat_no_repeat() {
         let root = lay("<p>x</p>", "p { mask-repeat: no-repeat; }");
-        assert_eq!(first_p_style(&root).mask_repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(first_p_mask(&root).repeat, BackgroundRepeat::NoRepeat);
     }
 
     #[test]
     fn mask_size_cover() {
         let root = lay("<p>x</p>", "p { mask-size: cover; }");
-        assert_eq!(first_p_style(&root).mask_size, BackgroundSize::Cover);
+        assert_eq!(first_p_mask(&root).size, BackgroundSize::Cover);
     }
 
     #[test]
     fn mask_mode_default_is_alpha() {
         let root = lay("<p>x</p>", "p { mask-image: linear-gradient(black, white); }");
-        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Alpha);
+        assert_eq!(first_p_mask(&root).mode, MaskMode::Alpha);
     }
 
     #[test]
     fn mask_mode_luminance() {
         let root = lay("<p>x</p>", "p { mask-mode: luminance; }");
-        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Luminance);
+        assert_eq!(first_p_mask(&root).mode, MaskMode::Luminance);
     }
 
     #[test]
     fn mask_mode_alpha_keyword() {
         let root = lay("<p>x</p>", "p { mask-mode: luminance; mask-mode: alpha; }");
-        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Alpha);
+        assert_eq!(first_p_mask(&root).mode, MaskMode::Alpha);
     }
 
     #[test]
     fn mask_mode_match_source_resolves_to_alpha() {
         let root = lay("<p>x</p>", "p { mask-mode: luminance; mask-mode: match-source; }");
-        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Alpha);
+        assert_eq!(first_p_mask(&root).mode, MaskMode::Alpha);
     }
 
     #[test]
     fn mask_mode_invalid_keeps_previous() {
         let root = lay("<p>x</p>", "p { mask-mode: luminance; mask-mode: bogus; }");
-        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Luminance);
+        assert_eq!(first_p_mask(&root).mode, MaskMode::Luminance);
     }
 
     #[test]
@@ -10607,13 +10617,153 @@ mod tests {
             .iter()
             .find(|c| matches!(&c.kind, BoxKind::Block))
             .expect("div block");
-        assert_eq!(div.style.mask_mode, MaskMode::Luminance, "div carries the rule");
+        assert_eq!(
+            div.style.mask_layers.first().expect("div mask layer").mode,
+            MaskMode::Luminance,
+            "div carries the rule"
+        );
         let p = div
             .children
             .iter()
             .find(|c| matches!(&c.kind, BoxKind::Block))
             .expect("p block");
-        assert_eq!(p.style.mask_mode, MaskMode::Alpha, "child does not inherit");
+        assert!(
+            p.style.mask_layers.is_empty(),
+            "child does not inherit the mask"
+        );
+    }
+
+    // ──────── CSS Masking L1 §4.9 — multi-layer masks + `mask` shorthand ────────
+
+    #[test]
+    fn mask_image_list_creates_one_layer_per_image() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask-image: url(a.png), linear-gradient(black, white), none; }",
+        );
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers.len(), 3);
+        assert_eq!(layers[0].image, BackgroundImage::Url("a.png".into()));
+        assert!(matches!(layers[1].image, BackgroundImage::Gradient(_)));
+        assert_eq!(layers[2].image, BackgroundImage::None);
+    }
+
+    #[test]
+    fn mask_longhands_cycle_over_layers() {
+        // 3 слоя, 2 значения repeat → cycling: no-repeat, repeat-x, no-repeat.
+        let root = lay(
+            "<p>x</p>",
+            "p { mask-image: url(a.png), url(b.png), url(c.png);
+                 mask-repeat: no-repeat, repeat-x; }",
+        );
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers.len(), 3);
+        assert_eq!(layers[0].repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(layers[1].repeat, BackgroundRepeat::RepeatX);
+        assert_eq!(layers[2].repeat, BackgroundRepeat::NoRepeat);
+    }
+
+    #[test]
+    fn mask_composite_list_per_layer() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask-image: url(a.png), url(b.png);
+                 mask-composite: intersect, subtract; }",
+        );
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers[0].composite, MaskComposite::Intersect);
+        assert_eq!(layers[1].composite, MaskComposite::Subtract);
+    }
+
+    #[test]
+    fn mask_composite_default_is_add() {
+        let root = lay("<p>x</p>", "p { mask-image: url(a.png); }");
+        assert_eq!(first_p_mask(&root).composite, MaskComposite::Add);
+    }
+
+    #[test]
+    fn mask_clip_and_origin_lists() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask-image: url(a.png), url(b.png);
+                 mask-origin: content-box, padding-box;
+                 mask-clip: no-clip, fill-box; }",
+        );
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers[0].origin, BackgroundOrigin::ContentBox);
+        assert_eq!(layers[1].origin, BackgroundOrigin::PaddingBox);
+        assert_eq!(layers[0].clip, MaskClip::NoClip);
+        assert_eq!(layers[1].clip, MaskClip::FillBox);
+    }
+
+    #[test]
+    fn mask_longhand_without_image_creates_a_layer() {
+        // Longhand без `mask-image` не должен теряться: создаётся один слой
+        // с initial-значениями и применённым longhand-ом.
+        let root = lay("<p>x</p>", "p { mask-repeat: no-repeat; }");
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].image, BackgroundImage::None);
+        assert_eq!(layers[0].repeat, BackgroundRepeat::NoRepeat);
+    }
+
+    #[test]
+    fn mask_shorthand_single_layer() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask: url(m.png) center / cover no-repeat content-box luminance intersect; }",
+        );
+        let m = first_p_mask(&root);
+        assert_eq!(m.image, BackgroundImage::Url("m.png".into()));
+        assert_eq!(m.size, BackgroundSize::Cover);
+        assert_eq!(m.repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(m.origin, BackgroundOrigin::ContentBox);
+        // Один <geometry-box> задаёт и origin, и clip.
+        assert_eq!(m.clip, MaskClip::ContentBox);
+        assert_eq!(m.mode, MaskMode::Luminance);
+        assert_eq!(m.composite, MaskComposite::Intersect);
+    }
+
+    #[test]
+    fn mask_shorthand_two_geometry_boxes() {
+        let root = lay("<p>x</p>", "p { mask: url(m.png) padding-box no-clip; }");
+        let m = first_p_mask(&root);
+        assert_eq!(m.origin, BackgroundOrigin::PaddingBox);
+        assert_eq!(m.clip, MaskClip::NoClip);
+    }
+
+    #[test]
+    fn mask_shorthand_resets_unspecified_longhands() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask-repeat: no-repeat; mask-mode: luminance; mask: url(m.png); }",
+        );
+        let m = first_p_mask(&root);
+        assert_eq!(m.repeat, BackgroundRepeat::Repeat, "reset to initial");
+        assert_eq!(m.mode, MaskMode::Alpha, "reset to initial");
+    }
+
+    #[test]
+    fn mask_shorthand_multi_layer() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask: url(a.png) no-repeat, linear-gradient(black, white) subtract; }",
+        );
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0].image, BackgroundImage::Url("a.png".into()));
+        assert_eq!(layers[0].repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(layers[0].composite, MaskComposite::Add);
+        assert!(matches!(layers[1].image, BackgroundImage::Gradient(_)));
+        assert_eq!(layers[1].composite, MaskComposite::Subtract);
+    }
+
+    #[test]
+    fn mask_shorthand_none_clears_the_image() {
+        let root = lay("<p>x</p>", "p { mask-image: url(a.png); mask: none; }");
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].image, BackgroundImage::None);
     }
 
     #[test]

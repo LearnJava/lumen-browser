@@ -4582,8 +4582,14 @@ fn background_color_clip(b: &LayoutBox) -> BackgroundClip {
 /// back to the border box for CSS boxes) and for `no-clip` (painting is not
 /// clipped) — the clip would be a no-op scissor, so unmasked-default rendering
 /// stays byte-identical.
+///
+/// Reads the top mask layer (`mask_layers[0]`): only that layer is rendered
+/// today, so its `mask-clip` is the one that bounds the painting area. Applying
+/// the per-layer clips of the remaining layers is part of the multi-layer mask
+/// composition still to be wired (`// CSS: mask-composite` in `emit_push_mask`).
 fn mask_clip_paint_rect(b: &LayoutBox) -> Option<Rect> {
-    match b.style.mask_clip {
+    let top = b.style.mask_layers.first()?;
+    match top.clip {
         MaskClip::PaddingBox => Some(background_clip_rect(b, BackgroundClip::PaddingBox)),
         // fill-box has no SVG geometry on a CSS box → object bounding box = content box.
         MaskClip::ContentBox | MaskClip::FillBox => {
@@ -5147,30 +5153,39 @@ fn mask_stops_for_mode(stops: &[GradientStop], mode: lumen_layout::MaskMode) -> 
 }
 
 fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
+    // Only the top mask layer is rendered so far: the display list carries one
+    // `PushMask*` per element and every backend applies exactly one mask
+    // channel.
+    // `// CSS: mask-composite` — combining `mask_layers[1..]` into that single
+    // channel needs the mask itself to be assembled off-screen first (Porter-Duff
+    // add/subtract/intersect/exclude on the mask alpha), which is a renderer-side
+    // change in all three backends; the style side (per-layer list + `mask`
+    // shorthand) is in place.
+    let Some(top) = b.style.mask_layers.first() else {
+        return false;
+    };
     // CSS Masking L1 §4.5 — `mask-origin` sets the mask **positioning area**
     // (border/padding/content box). Reuses the background-origin geometry; for
     // the default `border-box` this equals `b.rect`, so existing behaviour is
     // unchanged.
-    let rect = background_origin_rect(b, b.style.mask_origin);
-    let mode = b.style.mask_mode;
+    let rect = background_origin_rect(b, top.origin);
+    let mode = top.mode;
     // CSS Masking L1 §4.6 — `mask-clip` restricts the masked element's painting
     // area. It is wired at the call sites by wrapping the whole mask group in a
     // `PushClipRect` / `PopClip` pair (see `mask_clip_paint_rect`), reusing the
     // existing scissor path instead of threading a clip rect through the mask
     // commands + every backend.
-    // CSS: mask-composite — needs the multi-layer mask infrastructure (mask-image
-    // as a layer list) before add/subtract/intersect/exclude can be applied.
-    match &b.style.mask_image {
+    match &top.image {
         BackgroundImage::Url(src) if !src.is_empty() => {
             out.push(DisplayCommand::PushMaskImage {
                 rect,
                 src: src.clone(),
-                size: b.style.mask_size,
+                size: top.size,
                 // CSS Masking L1 §4.4 — `mask-position` (same syntax as
                 // background-position). Applies to image masks; gradient masks
                 // derive their geometry from `rect` above.
-                position: b.style.mask_position,
-                repeat: b.style.mask_repeat,
+                position: top.position,
+                repeat: top.repeat,
                 image_rendering: b.style.image_rendering,
             });
             true

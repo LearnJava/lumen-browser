@@ -3575,27 +3575,11 @@ pub struct ComputedStyle {
     /// CSS Scroll-Driven Animations L1 §3.4 — `view-timeline-axis: block | inline | x | y`.
     /// Non-inherited. Which axis drives the named view timeline. Default `Block`.
     pub view_timeline_axis: ScrollAxis,
-    /// CSS Masking L1 §4 — `mask-image: url(...) | linear-gradient(...) | none`.
-    /// `BackgroundImage` переиспользуется как тип (same structure: None/Url/Gradient).
-    pub mask_image: BackgroundImage,
-    /// CSS Masking L1 §4 — `mask-repeat`. Те же значения, что у background-repeat.
-    pub mask_repeat: BackgroundRepeat,
-    /// CSS Masking L1 §4 — `mask-size`.
-    pub mask_size: BackgroundSize,
-    /// CSS Masking L1 §6.4 — `mask-mode: alpha | luminance | match-source`.
-    /// Non-inherited. `match-source` resolves to `Alpha` for `<image>` sources.
-    pub mask_mode: MaskMode,
-    /// CSS Masking L1 §4.4 — `mask-position`. Default `50% 50%`. Non-inherited.
-    pub mask_position: ObjectPosition,
-    /// CSS Masking L1 §4.5 — `mask-origin: border-box | padding-box | content-box`.
-    /// Default `BorderBox`. Non-inherited.
-    pub mask_origin: BackgroundOrigin,
-    /// CSS Masking L1 §4.6 — `mask-clip`. Superset of background-clip keywords
-    /// (`<coord-box> | no-clip`). Default `BorderBox`. Non-inherited.
-    pub mask_clip: MaskClip,
-    /// CSS Masking L1 §4.7 — `mask-composite: add | subtract | intersect | exclude`.
-    /// Non-inherited. Default `Add`.
-    pub mask_composite: MaskComposite,
+    /// CSS Masking L1 §4.9 — список слоёв маски (`mask-image` и все
+    /// сопутствующие per-layer longhand-ы). Первый элемент = верхний слой,
+    /// последний = нижний (тот же порядок, что у [`Self::background_layers`]).
+    /// Пустой Vec = `mask: none`, маска не применяется. Не наследуется.
+    pub mask_layers: Vec<MaskLayer>,
     /// CSS Scrollbars 1 — `scrollbar-width: auto | thin | none`.
     pub scrollbar_width: ScrollbarWidth,
     /// CSS Scrollbars 1 — `scrollbar-color: auto | <color> <color>`
@@ -6346,18 +6330,27 @@ pub enum MaskMode {
     Luminance,
 }
 
-/// CSS Masking L1 §4.7 — `mask-composite`. Controls how multiple mask layers
-/// are composited together. Single value for now; multi-layer cycling deferred.
+/// CSS Masking L1 §4.7 — `mask-composite`. Determines how a mask layer is
+/// combined with the mask already assembled from the layers **below** it
+/// (Porter-Duff on the mask channel: `add` = source-over, `subtract` =
+/// source-out, `intersect` = source-in, `exclude` = xor).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MaskComposite {
+    /// `add` (initial) — Porter-Duff source-over on the mask channel.
     #[default]
     Add,
+    /// `subtract` — Porter-Duff source-out: the layer below is removed where
+    /// this layer paints.
     Subtract,
+    /// `intersect` — Porter-Duff source-in: only the overlap survives.
     Intersect,
+    /// `exclude` — Porter-Duff xor: the overlap is removed.
     Exclude,
 }
 
 impl MaskComposite {
+    /// Parses a single `mask-composite` keyword (CSS Masking L1 §4.7).
+    /// Case-insensitive; returns `None` on an unrecognised keyword.
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "add" => Some(Self::Add),
@@ -6365,6 +6358,55 @@ impl MaskComposite {
             "intersect" => Some(Self::Intersect),
             "exclude" => Some(Self::Exclude),
             _ => None,
+        }
+    }
+}
+
+/// CSS Masking L1 §4.9 — один слой маски.
+///
+/// `mask-image` задаёт количество слоёв; остальные longhand-ы циклически
+/// повторяются по этому количеству («Layering Multiple Mask Layers»). Тот же
+/// приём, что и у [`BackgroundLayer`], поэтому типы значений переиспользуются
+/// из background (`mask-repeat` / `mask-size` / `mask-position` имеют ту же
+/// грамматику, `mask-clip` — надмножество `background-clip`).
+///
+/// Порядок в [`ComputedStyle::mask_layers`]: первый = верхний слой. Слои
+/// собираются в одну маску снизу вверх, каждый — оператором своего
+/// [`MaskLayer::composite`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaskLayer {
+    /// `mask-image` этого слоя. `BackgroundImage` переиспользуется как тип
+    /// (та же структура: None / Url / Gradient).
+    pub image: BackgroundImage,
+    /// `mask-repeat` этого слоя (§4.3). Initial `repeat`.
+    pub repeat: BackgroundRepeat,
+    /// `mask-size` этого слоя (§4.2). Initial `auto`.
+    pub size: BackgroundSize,
+    /// `mask-position` этого слоя (§4.4). Initial `center`.
+    pub position: ObjectPosition,
+    /// `mask-origin` этого слоя (§4.5). Initial `border-box`.
+    pub origin: BackgroundOrigin,
+    /// `mask-clip` этого слоя (§4.6). Initial `border-box`.
+    pub clip: MaskClip,
+    /// `mask-mode` этого слоя (§6.4). Initial `match-source`, который для
+    /// поддерживаемых `<image>`-источников резолвится в `alpha`.
+    pub mode: MaskMode,
+    /// `mask-composite` этого слоя (§4.7) — оператор смешивания с уже
+    /// собранными слоями ниже. Initial `add`.
+    pub composite: MaskComposite,
+}
+
+impl Default for MaskLayer {
+    fn default() -> Self {
+        Self {
+            image: BackgroundImage::None,
+            repeat: BackgroundRepeat::Repeat,
+            size: BackgroundSize::Auto,
+            position: ObjectPosition::default(),
+            origin: BackgroundOrigin::BorderBox,
+            clip: MaskClip::BorderBox,
+            mode: MaskMode::Alpha,
+            composite: MaskComposite::Add,
         }
     }
 }
@@ -6597,14 +6639,7 @@ impl ComputedStyle {
             scroll_timeline_axis: ScrollAxis::Block,
             view_timeline_name: None,
             view_timeline_axis: ScrollAxis::Block,
-            mask_image: BackgroundImage::None,
-            mask_repeat: BackgroundRepeat::Repeat,
-            mask_size: BackgroundSize::Auto,
-            mask_mode: MaskMode::Alpha,
-            mask_position: ObjectPosition::default(),
-            mask_origin: BackgroundOrigin::BorderBox,
-            mask_clip: MaskClip::BorderBox,
-            mask_composite: MaskComposite::Add,
+            mask_layers: Vec::new(),
             scrollbar_width: ScrollbarWidth::Auto,
             scrollbar_color: None,
             scrollbar_gutter: ScrollbarGutter::Auto,
@@ -6972,14 +7007,7 @@ pub fn compute_style(
         view_timeline_name: None,
         view_timeline_axis: ScrollAxis::Block,
         // CSS Masking — не наследуется.
-        mask_image: BackgroundImage::None,
-        mask_repeat: BackgroundRepeat::Repeat,
-        mask_size: BackgroundSize::Auto,
-        mask_mode: MaskMode::Alpha,
-        mask_position: ObjectPosition::default(),
-        mask_origin: BackgroundOrigin::BorderBox,
-        mask_clip: MaskClip::BorderBox,
-        mask_composite: MaskComposite::Add,
+        mask_layers: Vec::new(),
         // CSS Scrollbars — scrollbar-width/-color inherited;
         // scrollbar-gutter не наследуется.
         scrollbar_width: inherited.scrollbar_width,
@@ -16326,61 +16354,121 @@ fn apply_declaration(
         "view-timeline" => {
             apply_view_timeline_shorthand(style, val);
         }
-        "mask-image" => {
-            let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("none") {
-                style.mask_image = BackgroundImage::None;
-            } else if let Some(u) = parse_url_value(trimmed) {
-                style.mask_image = BackgroundImage::Url(u);
-            } else if is_gradient_function(trimmed) {
-                style.mask_image = BackgroundImage::Gradient(parse_background_gradient(trimmed));
+        "mask" => {
+            // CSS Masking L1 §4.8 shorthand: comma-separated list of layers.
+            // Each layer: <mask-reference> || <position> [/ <size>]? ||
+            //             <repeat-style> || <geometry-box> ||
+            //             [<geometry-box> | no-clip] || <compositing-operator> ||
+            //             <masking-mode>.
+            // Шортхенд всегда переписывает список целиком — свойства, не
+            // указанные в слое, сбрасываются к initial (per-layer default).
+            let layer_strs = split_top_level_commas(val.trim());
+            if layer_strs.is_empty() {
+                return;
             }
+            style.mask_layers = layer_strs
+                .iter()
+                .map(|ls| parse_single_mask_layer(ls.trim(), em_basis, viewport, is_quirks))
+                .collect();
+        }
+        "mask-image" => {
+            // CSS Masking L1 §4.1 — comma-separated list of images; задаёт
+            // количество слоёв. Прочие per-layer свойства переносятся из
+            // прежних слоёв циклически (как у `background-image`).
+            let pieces = split_top_level_commas(val.trim());
+            let old_layers = std::mem::take(&mut style.mask_layers);
+            style.mask_layers = pieces
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let s = s.trim();
+                    let image = if s.eq_ignore_ascii_case("none") {
+                        BackgroundImage::None
+                    } else if let Some(u) = parse_url_value(s) {
+                        BackgroundImage::Url(u)
+                    } else if is_gradient_function(s) {
+                        BackgroundImage::Gradient(parse_background_gradient(s))
+                    } else {
+                        BackgroundImage::None
+                    };
+                    let old = old_layers
+                        .get(i % old_layers.len().max(1))
+                        .cloned()
+                        .unwrap_or_default();
+                    MaskLayer { image, ..old }
+                })
+                .collect();
         }
         "mask-repeat" => {
-            if let Some(v) = BackgroundRepeat::parse(val) {
-                style.mask_repeat = v;
-            }
+            // CSS Masking L1 §4.3 — comma-separated list (cycling).
+            let values: Vec<BackgroundRepeat> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| BackgroundRepeat::parse(s.trim()))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.repeat = v);
         }
         "mask-mode" => {
-            // CSS Masking L1 §6.4. `match-source` resolves to `Alpha` for the
-            // `<image>` sources we support (gradients / raster URLs).
-            let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("luminance") {
-                style.mask_mode = MaskMode::Luminance;
-            } else if trimmed.eq_ignore_ascii_case("alpha")
-                || trimmed.eq_ignore_ascii_case("match-source")
-            {
-                style.mask_mode = MaskMode::Alpha;
-            }
+            // CSS Masking L1 §6.4 — comma-separated list (cycling).
+            // `match-source` resolves to `Alpha` for the `<image>` sources we
+            // support (gradients / raster URLs).
+            let values: Vec<MaskMode> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| {
+                    let s = s.trim();
+                    if s.eq_ignore_ascii_case("luminance") {
+                        Some(MaskMode::Luminance)
+                    } else if s.eq_ignore_ascii_case("alpha")
+                        || s.eq_ignore_ascii_case("match-source")
+                    {
+                        Some(MaskMode::Alpha)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.mode = v);
         }
         "mask-position" => {
-            // CSS Masking L1 §4.4 — `<position>` same as background-position.
-            if let Some(pos) = ObjectPosition::parse(val.trim(), em_basis, viewport) {
-                style.mask_position = pos;
-            }
+            // CSS Masking L1 §4.4 — `<position>#`, same grammar as
+            // background-position.
+            let values: Vec<ObjectPosition> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| ObjectPosition::parse(s.trim(), em_basis, viewport))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.position = v);
         }
         "mask-origin" => {
-            // CSS Masking L1 §4.5 — `border-box | padding-box | content-box`.
-            if let Some(o) = BackgroundOrigin::parse(val.trim()) {
-                style.mask_origin = o;
-            }
+            // CSS Masking L1 §4.5 — `<geometry-box>#`.
+            let values: Vec<BackgroundOrigin> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| BackgroundOrigin::parse(s.trim()))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.origin = v);
         }
         "mask-clip" => {
-            // CSS Masking L1 §4.6 — `<coord-box> | no-clip` (superset of
+            // CSS Masking L1 §4.6 — `[<coord-box> | no-clip]#` (superset of
             // background-clip: adds fill-box/stroke-box/view-box and no-clip).
-            if let Some(c) = MaskClip::parse(val.trim()) {
-                style.mask_clip = c;
-            }
+            let values: Vec<MaskClip> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| MaskClip::parse(s.trim()))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.clip = v);
         }
         "mask-composite" => {
-            // CSS Masking L1 §4.7 — `add | subtract | intersect | exclude`.
-            // Phase 0: store single value; multi-layer cycling deferred.
-            if let Some(c) = MaskComposite::parse(val.trim()) {
-                style.mask_composite = c;
-            }
+            // CSS Masking L1 §4.7 — `<compositing-operator>#`.
+            let values: Vec<MaskComposite> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| MaskComposite::parse(s.trim()))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.composite = v);
         }
         "mask-size" => {
-            style.mask_size = parse_background_size_value(val, em_basis, viewport, is_quirks);
+            // CSS Masking L1 §4.2 — `<bg-size>#`.
+            let values: Vec<BackgroundSize> = split_top_level_commas(val.trim())
+                .iter()
+                .map(|s| parse_background_size_value(s, em_basis, viewport, is_quirks))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.size = v);
         }
         "scrollbar-width" => {
             if let Some(v) = ScrollbarWidth::parse(val) {
@@ -20371,6 +20459,177 @@ fn parse_single_bg_layer(
     }
 
     (layer, color)
+}
+
+/// CSS Masking L1 §4.9 — раскладывает значения одного mask-longhand-а по
+/// слоям [`ComputedStyle::mask_layers`] с циклическим повторением.
+///
+/// Количество слоёв задаёт `mask-image`. Если слоёв ещё нет (longhand объявлен
+/// без `mask-image` или раньше него в том же блоке), создаётся один слой с
+/// initial-значениями — иначе объявление молча потерялось бы; тот же приём, что
+/// у `background-*`. Пустой `values` (все элементы невалидны) — no-op:
+/// невалидное объявление не должно затирать уже применённое.
+fn apply_mask_longhand<T: Copy>(
+    style: &mut ComputedStyle,
+    values: &[T],
+    set: impl Fn(&mut MaskLayer, T),
+) {
+    if values.is_empty() {
+        return;
+    }
+    if style.mask_layers.is_empty() {
+        style.mask_layers.push(MaskLayer::default());
+    }
+    let n = values.len();
+    for (i, layer) in style.mask_layers.iter_mut().enumerate() {
+        set(layer, values[i % n]);
+    }
+}
+
+/// CSS Masking L1 §4.8 — разбирает один слой шортхенда `mask`.
+///
+/// Компоненты идут в любом порядке (`||` в грамматике), поэтому каждый токен
+/// классифицируется по своему множеству ключевых слов. Незаданные компоненты
+/// остаются initial-значениями [`MaskLayer::default`] — это и есть reset-часть
+/// семантики шортхенда.
+///
+/// `<geometry-box>`: первое вхождение задаёт **и** `mask-origin`, **и**
+/// `mask-clip`; второе — только `mask-clip` (§4.8, как у `background`).
+/// Ключевые слова `fill-box` / `stroke-box` / `view-box` в позиции origin
+/// схлопываются до `border-box`-семантики (`mask-origin` в нашей модели —
+/// [`BackgroundOrigin`] из трёх CSS-боксов), но в позиции clip сохраняются
+/// точно — это ровно та же аппроксимация, что и у longhand `mask-origin`.
+fn parse_single_mask_layer(
+    layer_str: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) -> MaskLayer {
+    let mut layer = MaskLayer::default();
+    let tokens = tokenize_bg_layer(layer_str);
+    let n = tokens.len();
+    let mut idx = 0;
+    // Сколько `<geometry-box>` уже встретилось: первое → origin + clip,
+    // второе → только clip.
+    let mut geometry_boxes = 0u8;
+
+    while idx < n {
+        let t = tokens[idx];
+
+        // <mask-reference>: none | url(...) | <gradient>
+        if t.eq_ignore_ascii_case("none") {
+            layer.image = BackgroundImage::None;
+            idx += 1;
+            continue;
+        }
+        if is_gradient_function(t) {
+            layer.image = BackgroundImage::Gradient(parse_background_gradient(t));
+            idx += 1;
+            continue;
+        }
+        if t.to_ascii_lowercase().starts_with("url(") {
+            if let Some(url) = parse_url_value(t) {
+                layer.image = BackgroundImage::Url(url);
+            }
+            idx += 1;
+            continue;
+        }
+
+        // <masking-mode> — до <repeat-style>/<geometry-box>, множества не
+        // пересекаются, порядок здесь только для читаемости.
+        if t.eq_ignore_ascii_case("luminance") {
+            layer.mode = MaskMode::Luminance;
+            idx += 1;
+            continue;
+        }
+        if t.eq_ignore_ascii_case("alpha") || t.eq_ignore_ascii_case("match-source") {
+            layer.mode = MaskMode::Alpha;
+            idx += 1;
+            continue;
+        }
+
+        // <compositing-operator>
+        if let Some(c) = MaskComposite::parse(t) {
+            layer.composite = c;
+            idx += 1;
+            continue;
+        }
+
+        // <repeat-style>
+        if let Some(r) = BackgroundRepeat::parse(t) {
+            layer.repeat = r;
+            idx += 1;
+            continue;
+        }
+
+        // <geometry-box> | no-clip
+        if let Some(c) = MaskClip::parse(t) {
+            if geometry_boxes == 0 && !t.eq_ignore_ascii_case("no-clip") {
+                // Первый бокс задаёт origin и clip сразу.
+                if let Some(o) = BackgroundOrigin::parse(t) {
+                    layer.origin = o;
+                }
+                layer.clip = c;
+            } else {
+                layer.clip = c;
+            }
+            geometry_boxes = geometry_boxes.saturating_add(1);
+            idx += 1;
+            continue;
+        }
+
+        // <position> [ / <bg-size> ]?
+        if t != "/" && is_bg_position_token(t) {
+            let mut pos_parts = vec![t];
+            if idx + 1 < n && tokens[idx + 1] != "/" && is_bg_position_token(tokens[idx + 1]) {
+                pos_parts.push(tokens[idx + 1]);
+                idx += 1;
+            }
+            if let Some(p) = ObjectPosition::parse(&pos_parts.join(" "), em_basis, viewport) {
+                layer.position = p;
+            }
+            idx += 1;
+
+            if idx < n && tokens[idx] == "/" {
+                idx += 1; // пропустить `/`
+                if idx < n {
+                    let mut size =
+                        parse_background_size_single(tokens[idx], em_basis, viewport, is_quirks);
+                    idx += 1;
+                    // Второй токен size (`<width> <height>`) — только если он не
+                    // начало следующей компоненты слоя.
+                    if idx < n
+                        && tokens[idx] != "/"
+                        && !is_gradient_function(tokens[idx])
+                        && BackgroundRepeat::parse(tokens[idx]).is_none()
+                        && MaskClip::parse(tokens[idx]).is_none()
+                        && MaskComposite::parse(tokens[idx]).is_none()
+                        && let Some(h) = parse_bg_size_axis(tokens[idx], em_basis, viewport, is_quirks)
+                    {
+                        match size {
+                            BackgroundSize::Length(w, BgSizeAxis::Auto) => {
+                                size = BackgroundSize::Length(w, h);
+                                idx += 1;
+                            }
+                            BackgroundSize::Auto => {
+                                if h != BgSizeAxis::Auto {
+                                    size = BackgroundSize::Length(BgSizeAxis::Auto, h);
+                                }
+                                idx += 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                    layer.size = size;
+                }
+            }
+            continue;
+        }
+
+        idx += 1; // неизвестный токен — пропустить
+    }
+
+    layer
 }
 
 /// CSS Grid L1 §7.3 — parse `grid-template-areas` value.
