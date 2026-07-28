@@ -18,6 +18,7 @@ use lumen_core::geom::Rect;
 use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 use lumen_storage::{A11yPrefsSnapshot, CursorSize};
+use crate::theme_tokens::radius;
 
 use crate::panels::themes::Palette;
 
@@ -238,21 +239,21 @@ pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32), pal: &Pal
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         color: pal.overlay_bg,
-        radii: uniform_radii(6.0),
+        radii: uniform_radii(radius::LG),
     });
     out.push(DisplayCommand::DrawBorder {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         widths: [1.0; 4],
         colors: [pal.overlay_border; 4],
         styles: [BorderStyle::Solid; 4],
-        radii: uniform_radii(6.0),
+        radii: uniform_radii(radius::LG),
     });
 
     // Header.
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, HEADER_H),
         color: pal.header_bg,
-        radii: CornerRadii { tl: 6.0, tl_y: 6.0, tr: 6.0, tr_y: 6.0, br: 0.0, br_y: 0.0, bl: 0.0, bl_y: 0.0 },
+        radii: CornerRadii { tl: radius::LG, tl_y: radius::LG, tr: radius::LG, tr_y: radius::LG, br: 0.0, br_y: 0.0, bl: 0.0, bl_y: 0.0 },
     });
     out.push(make_text(
         "Accessibility".to_string(),
@@ -373,7 +374,7 @@ fn emit_font_multiplier_pills(out: &mut DisplayList, px: f32, row_y: f32, curren
         out.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(bx, pill_y, pill_w - 3.0, PILL_H),
             color: bg,
-            radii: uniform_radii(4.0),
+            radii: uniform_radii(radius::MD),
         });
         let label = format_multiplier(val);
         out.push(make_text(
@@ -406,7 +407,7 @@ fn emit_cursor_size_pills(out: &mut DisplayList, px: f32, row_y: f32, current: C
         out.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(bx, pill_y, pill_w - 3.0, PILL_H),
             color: bg,
-            radii: uniform_radii(4.0),
+            radii: uniform_radii(radius::MD),
         });
         out.push(make_text(
             (*label).to_string(),
@@ -425,14 +426,14 @@ fn emit_toggle(out: &mut DisplayList, x: f32, y: f32, on: bool) {
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(x, y, 44.0, 20.0),
         color: bg,
-        radii: uniform_radii(10.0),
+        radii: uniform_radii(radius::LG),
     });
     // Thumb.
     let thumb_x = if on { x + 26.0 } else { x + 2.0 };
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(thumb_x, y + 2.0, 16.0, 16.0),
         color: TOGGLE_TEXT,
-        radii: uniform_radii(8.0),
+        radii: uniform_radii(radius::LG),
     });
 }
 

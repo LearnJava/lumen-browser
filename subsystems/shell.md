@@ -1,5 +1,477 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Done (DS-1 design-token generator, 2026-07-22):**
+  [`scripts/gen_tokens.py`](../scripts/gen_tokens.py) parses the four CSS
+  custom-property blocks of the design-system prototype
+  (`docs/design/lumen-v3_3.html`: `:root`, `body[data-theme="light"]`,
+  `body[data-theme="dark"]`, `body[data-profile=*]`) and generates
+  [`crates/shell/src/theme_tokens.rs`](../crates/shell/src/theme_tokens.rs) —
+  typed `radius`/`space`/`size`/`badge`/`light`/`dark`/`profile` modules of
+  `f32`/`lumen_layout::Color` constants, replacing scattered magic literals.
+  `--check` mode diffs against the committed file (exit 1 on drift, no write).
+  DS-1 only wires the module (`mod theme_tokens;` in `main.rs`, currently
+  unconsumed — `#![allow(dead_code)]` on the generated file) — consumers land
+  slice by slice per `docs/tasks/p1-design-v3.md` (DS-2 onward).
+- **Done (DS-2 `Palette`/tab-strip/address-bar on tokens, 2026-07-22):**
+  `panels::themes::Palette::DARK`/`LIGHT` are now built field-by-field from
+  `theme_tokens::{dark,light}` instead of bespoke hex literals — the 7
+  design-system-named roles map 1:1 (`tab_bar_bg`←`SURFACE_1`,
+  `tab_active_bg`←`SURFACE_2`, `input_bg`←`SURFACE_1`, `text`←`TEXT_PRIMARY`,
+  `text_dim`←`TEXT_SECONDARY`, `divider`←`STROKE`,
+  `accent`←`theme_tokens::profile::PERSONAL`); the remaining Lumen-only roles
+  (`header_bg`, `row_alt_bg`, `item_bg`, `item_selected_bg`, `overlay_border`,
+  `tab_inactive_bg`) are pinned to the nearest surface tier with the mapping
+  decision documented per field in `themes.rs`. One deliberate deviation from the DS-2 brief's literal
+  `overlay_bg←OVERLAY_BG` instruction: `Palette::overlay_bg` is the *opaque*
+  floating-panel/dropdown surface used by ~20 panels (the prototype's
+  `.dropdown`/`.popover`/`.modal` all use `--surface-0`), not the translucent
+  full-screen modal scrim the prototype's `--overlay-bg` custom property
+  actually names — mapping it to the scrim token would have made every panel
+  in the chrome render half-transparent over page content. `tabs/strip.rs`'s
+  layout-toggle and settings-gear buttons now take `&Palette` and are
+  theme-aware (`BAR_BG` constant removed); `address_bar.rs`'s omnibox focus
+  ring and caret now read `pal.accent` instead of a fixed blue (matches the
+  prototype's `.omnibox:focus-within{ border-color:var(--accent) }`) — the
+  `HistoryFts` result-tag colour, which used to reuse the same constant by
+  coincidence, is now its own `HISTORY_TAG` constant so the tag legend's
+  fixed colour-per-category scheme (unrelated to theming) is unaffected.
+- **Done (DS-3 chrome corner radii on `radius::{SM,MD,LG}` tokens, 2026-07-22):**
+  every literal chrome corner radius across ~20 panel/tab-strip modules
+  (`FillRoundedRect`/`DrawBorder` `radii` fields, `uniform_radii(r)`/`radii(r)`/
+  `corners(r)` call sites, and local `RADIUS`/`PANEL_RADIUS`/`BTN_RADIUS`/
+  `CARD_RADIUS`/`CHIP_RADIUS` constants) now reads `theme_tokens::radius::{SM,MD,LG}`
+  (2/4/6 px) instead of ad-hoc literals. Values outside the three-step scale
+  were re-quantised: `>6` (pill-shaped controls) clamp down to `LG` per the
+  design-system rule (no pills in chrome — cheaper fillrate, denser UI), and
+  in-between literals (3, 5, 7…) round to the nearest token. Nested "border +
+  1px-inset content" pairs (nine panels: `cert_panel`, `history_panel`,
+  `permission_panel`, `print_panel`(tooltip), `read_later_panel`,
+  `settings_panel`(panel + tooltip), `shields_panel`, `shortcuts_panel`) keep
+  their concentric-radius relationship via `radius::LG - 1.0` / `radius::MD -
+  1.0` rather than being flattened to a single token, since that inset is a
+  border-width derivation, not an independent design choice. Left untouched,
+  deliberately: true circles/dots (`radius = size / 2.0` — status dots, avatar
+  swatches, spinner/badge circles) since they are not a corner-radius-scale
+  choice; `surface/theme.rs`'s `Theme::radius_{sm,md,lg}` (ADR-009
+  `SurfaceManager` token set — ADR-009 migration is out of DS-track scope per
+  `docs/tasks/p1-design-v3.md`); and `newtab.rs`/`reader_view.rs`'s embedded
+  page-content CSS strings (New Tab tile grid, reader-mode article body — not
+  yet on the design-token system at all at the time of this bullet;
+  `newtab.rs` picked up `radius::LG` for its tile/badge radii in DS-11,
+  `reader_view.rs` remains deferred, not chrome paint radii). Verified:
+  `cargo test -p lumen-shell` (1620
+  tests, unaffected `theme_tokens_radius_lg_matches_prototype` still pins
+  `radius::LG == 6.0`); `cargo clippy -p lumen-shell --all-targets -- -D
+  warnings` clean; headless `--screenshot` smoke-tested (no crash). Live
+  per-panel before/after screenshots were not captured for every one of the
+  ~20 touched overlays — the change is a value substitution onto an already
+  spec'd 2/4/6 scale, not new geometry.
+- **Done (DS-4 bundled Golos Text + JetBrains Mono chrome fonts, 2026-07-22):**
+  [`crates/engine/paint/src/chrome_fonts.rs`](../crates/engine/paint/src/chrome_fonts.rs)
+  bundles `GolosText-Regular.ttf`/`GolosText-Medium.ttf` (default chrome UI
+  font) and `JetBrainsMono-Regular.ttf` (omnibox URL field + DevTools
+  console/inspector/network panels), all SIL OFL 1.1 (`assets/fonts/OFL-*.txt`).
+  Fonts arrive as static instances (Golos Text upstream ships only a variable
+  `[wght]` font; `fonttools varLib.instancer` pinned `wght=400`/`500` — no
+  variable-font runtime support needed in either render path). Wired as
+  reserved `DrawText.font_family` names — `"Golos Text"`/`"Golos Text
+  Medium"`/`"JetBrains Mono"` — in **both** live-window backends: femtovg
+  (`FemtovgBackend::resolve_font_chain`, new `chrome_font_id`/
+  `chrome_font_medium_id`/`mono_font_id` fields loaded via `add_font_mem`
+  alongside bundled Inter) and the wgpu default (`Renderer::resolve_face_id`,
+  mirrored `chrome_face_id`/`chrome_face_medium_id`/`mono_face_id` `usize`
+  indices into `self.faces`, pushed right after the default Inter face at
+  construction) — ADR-017 can probe either backend as the live default, so
+  both must agree. An **empty** `font_family` — every chrome `DrawText` call
+  site in `crates/shell/src` passes one, confirmed by grep audit, since
+  content DrawText commands always carry a non-empty family from the CSS
+  cascade — now defaults to bundled Golos instead of falling straight to
+  Inter; Inter still backstops the chain for any glyph missing from Golos/
+  Mono. Explicit opt-in to `"JetBrains Mono"` at 4 call sites: the omnibox URL
+  input (`address_bar.rs`, dropdown suggestion labels/tags stay Golos-default)
+  and the DevTools console/inspector/network panel `make_text` helpers.
+  **Known caveat:** the reserved-name match is a plain string equality on
+  `font_family`, not a chrome/content flag — page content that explicitly sets
+  `font-family: "JetBrains Mono"` (a real, commonly-installed developer font,
+  e.g. a syntax-highlighted code block on a blog) will render with the
+  bundled copy rather than consulting the system `FontProvider`. Accepted:
+  same glyphs, same family, just always our bundled build instead of
+  deferring to the OS — no rendering break, only a minor loss of "use
+  whatever the OS has" purity that would require a non-string signal
+  (e.g. a dedicated `DisplayCommand::DrawText` field) to fully close, out of
+  scope for this slice. Headless/CPU rendering (`--screenshot`, WPT, graphic
+  tests) never draws chrome — only page content — so this default cannot
+  affect it; verified `cargo test -p lumen-shell` green and a headless
+  `--screenshot` smoke run does not panic. `cargo clippy -p lumen-paint
+  --all-features --all-targets` and `cargo clippy -p lumen-shell --all-targets`
+  both clean.
+- **Done (DS-6 omnibox punycode-guard, 2026-07-23):**
+  [`crates/shell/src/address_bar.rs`](../crates/shell/src/address_bar.rs) wires
+  `lumen_core::idn::display_host()` (DS-5) into the omnibox. New
+  `guard_display_text(text)` helper: parses `text` as a `Url`, and if its host
+  is a spoof risk (`HostDisplay::Punycode`), replaces the host substring with
+  its Punycode ASCII form and returns the `SpoofReason`; text without a
+  parseable URL or with an empty host (search query, `@`-prefix commands,
+  internal sentinels like `switch-tab:<id>`) passes through unchanged. Applied
+  at three sites: the input-field/selected-suggestion display text in
+  `build_bar_overlay`, dropdown suggestion `label()`/`sub_label()` (history/
+  tabs/bookmarks rows can carry a spoofed URL), and `AddressBarState::commit()`
+  (`pending_commit` is guarded so Enter navigates to the Punycode form, not the
+  visually-spoofed Unicode one). A fixed-red warning strip (`SPOOF_WARNING_BG`,
+  `WARN_H` = 22px, theme-invariant per the DS-6 brief — a security signal must
+  read the same in both palettes) renders under the input field when the
+  current display text is a spoof risk, pushing the dropdown down by `warn_h`.
+  9 new tests (`guard_*`, `commit_normalizes_*`, `overlay_*`,
+  `dropdown_suggestion_url_is_punycode_guarded`). `cargo test -p lumen-shell`
+  and `cargo clippy -p lumen-shell --all-targets -- -D warnings` both clean.
+- **Done (DS-7 settings toggle honesty, 2026-07-23):**
+  [`crates/shell/src/panels/settings_panel.rs`](../crates/shell/src/panels/settings_panel.rs)
+  gained `toggle_state_suffix(on)` (`": Вкл"`/`": Выкл"`), appended to the row
+  label wherever `push_toggle` is used — shields, DoH (Privacy), HTTP/3
+  (Network), and each Adblock subscription row — so every binary toggle's
+  state is legible from the label text alone, not just the toggle's colour.
+  Fingerprint-mode (3-way options row, not a toggle) and the design brief's
+  aspirational "HTTPS-upgrade" toggle (no such setting exists in code) are out
+  of scope. 1 new regression test (`toggle_labels_report_current_state`,
+  asserts the label flips with the underlying `bool`). `cargo test -p
+  lumen-shell` and `cargo clippy -p lumen-shell --all-targets -- -D warnings`
+  both clean.
+- **Done (DS-8 permission popover session-only disclaimer, 2026-07-23):**
+  [`crates/shell/src/panels/permission_panel.rs`](../crates/shell/src/panels/permission_panel.rs)
+  gained a fine-print line below the four permission rows ("Разрешение
+  действует только для этого сеанса. Навсегда — about:settings/privacy."),
+  wrapped via the shared `settings_panel::wrap_text` helper (promoted from
+  private to `pub(crate)` for reuse) and rendered under a new divider; `PANEL_H`
+  now derives from `HEADER_H + 4×ROW_H + FINE_PRINT_H` instead of a bare
+  literal. The panel was already in-memory/session-only — no persistence was
+  added, matching the design-system rule against a "remember" checkbox in
+  popovers. `about:settings` has no permissions table yet, so the DoD's
+  "don't render an empty table" clause needed no code. `cargo test -p
+  lumen-shell` and `cargo clippy -p lumen-shell --all-targets -- -D warnings`
+  both clean.
+- **Done (DS-9 permanent toolbar, 2026-07-23):** new module
+  [`crates/shell/src/toolbar.rs`](../crates/shell/src/toolbar.rs), modeled on
+  `tabs/strip.rs`'s build/hit_test pattern. `build_toolbar` renders a 36 px row
+  (`theme_tokens::size::TOOLBAR_H`) below the tab strip: a left nav cluster
+  (back/forward/reload, 26×26 buttons) and a right action cluster (find,
+  web-sidebar, AI-sidebar, downloads, DevTools, settings) — the omnibox centre
+  is intentionally empty, landing in DS-10. Buttons whose panel is open render
+  lit (`Palette::item_selected_bg` + `accent` icon via a new `FillRoundedRect`
+  highlight); `Palette` gained a `toolbar_bg` field (`SURFACE_0`, one tier
+  darker than `tab_bar_bg`) — removed again in CC-15-5 once the engine chrome
+  became the only toolbar renderer and the legacy painter was cut out.
+  `hit_test` is dispatched in `main.rs`'s mouse
+  handler right after the tab-bar block, calling the same handler bodies as
+  the corresponding `KeyCommand` arms (Reload queues via
+  `TaskSource::UserInteraction` like `KeyCommand::Reload`; toggles call
+  `request_redraw`/`relayout_chrome` where their `KeyCommand` counterpart
+  does).
+
+  **Geometry:** `toolbar::CHROME_H = TAB_BAR_HEIGHT + TOOLBAR_H` (72 px)
+  replaces every `tabs::strip::TAB_BAR_HEIGHT` reference in `main.rs` that
+  meant "where does chrome end / page content begin" — `content_layout_viewport`,
+  `viewport_height_css`, `resumed()`'s window sizing, all screen↔page
+  coordinate conversions (`page_point`, `handle_click_at`, pointer-move/hover
+  gating, `update_cursor_icon`), every floating panel's top-anchor (shields,
+  privacy, permission, AI, sidebar, vertical/tree tabs, workspace switcher,
+  history/bookmark/read-later anchors, archive dropdown, tab tooltip, command
+  palette, restore spinner, DOM inspector), and `resolve_automation_target`'s
+  `Target::Point` correction (BiDi/MCP click coordinates) — see the doc
+  comment there, "off by exactly `TAB_BAR_HEIGHT`" is now "off by exactly
+  `toolbar::CHROME_H`". Sites that mean "height of the tab-bar row itself"
+  (the tab-bar click-dispatch gate, the archive button's own row geometry,
+  the tab-hover gate) correctly keep `TAB_BAR_HEIGHT` unchanged — a full
+  `git grep TAB_BAR_HEIGHT crates/shell/src/main.rs` audit classified every
+  site by hand, not a blind find/replace. The `find.rs` overlay bar (floated
+  from a fixed `BAR_PAD` off the raw window top, independent of
+  `TAB_BAR_HEIGHT`) also moved to `toolbar::CHROME_H + BAR_PAD` so it no
+  longer overlaps the new row; `address_bar.rs`'s Ctrl+L overlay was left
+  untouched here — DS-10 replaced it with the inline omnibox.
+- **Done (DS-10 inline omnibox, 2026-07-23):** the omnibox moved from a
+  Ctrl+L full-window overlay into a permanent field in the centre of the
+  toolbar. `toolbar.rs` gained `omnibox_rects(window_w) ->
+  address_bar::FieldRects` — the field itself (centred between the nav and
+  action clusters, capped at `OMNIBOX_MAX_W = 680`, `OMNIBOX_H = 32` within
+  the 36 px row) plus lock/star/shield icon-button sub-rects and the text
+  area between them; `hit_test` gained `ToolbarHit::{Omnibox,Lock,Star,
+  Shield}` checked before the existing nav/action buttons. `address_bar.rs`
+  no longer owns any layout — its `build_bar_overlay`/`BarOverlay` (fixed
+  `BAR_W`/`BAR_H`/`PAD` floating-bar geometry) were replaced by two pure
+  render functions that take caller-supplied `Rect`s: `build_inline_field`
+  (always drawn — not focused shows `current_url` via `idn::display_host`
+  DS-6 guard, focused shows the live editable input/caret/selected-suggestion,
+  same state machine as before) and `build_dropdown` (only drawn while
+  `AddressBarState::is_open()`, anchored at `toolbar::CHROME_H` — i.e. below
+  the whole toolbar row, not directly under the field, per the DS-10 brief —
+  rather than a fixed offset from the field). `main.rs` calls
+  `build_inline_field` unconditionally from inside `toolbar::build_toolbar`
+  (so the field/host text/icons render every frame) and `build_dropdown`
+  separately, right after, only while focused. Clicking the field when not
+  yet focused calls the same `address_bar.open(current_url)` path as
+  Ctrl+L/F6 (guarded so clicking an *already*-focused field is a no-op —
+  otherwise it would reset in-progress typed input); lock opens the existing
+  `cert_panel` (same call as `KeyCommand::ToggleCert`), star calls the
+  existing `bookmark_current_page()` (same as Ctrl+D), shield calls
+  `self.shields.toggle()` (same as `KeyCommand::ToggleShields`) — no new
+  backend logic, only new click entry points onto handlers DS-9/pre-existing
+  code already had. Mouse click support for the omnibox/dropdown did not
+  exist at all before this task (it was Ctrl+L-keyboard-only); DS-10 adds
+  hit-testing for the field/icons but the dropdown rows themselves remain
+  keyboard-only (Up/Down + Enter), matching the pre-existing DoD scope.
+
+  DoD: Ctrl+L/F6/click-on-field focus the inline field; typed input,
+  Enter-to-navigate, and `@history`/`@notes`/etc. prefixes all still route
+  through the unchanged `AddressBarState`/`handle_omnibox_commit` machinery;
+  lock/star/shield are independently clickable via `toolbar::hit_test`.
+  `cargo test -p lumen-shell` (`address_bar::tests::*`, `toolbar::tests::*`)
+  and `cargo clippy -p lumen-shell --all-targets -- -D warnings` both clean.
+
+  **Graphic-tests fallout:** the window grew 36 px taller
+  (`resumed()`: `720.0 + toolbar::CHROME_H` instead of `+ TAB_BAR_HEIGHT`);
+  TEST-00/03 (magenta-marker crop calibration) pass at exactly 0.00%,
+  confirming the viewport geometry itself is correct. Five pre-existing
+  `KNOWN_DEBTORS` entries (TEST-26/51/53/62/104, `graphic_tests/run.py`) that
+  compose masks/gradients/scroll-snap/scrollbars shifted upward — reproduced
+  identically on a freshly-built, unmodified `main` binary at the *old*
+  window height (their pre-DS-9 baseline held exactly), and identically
+  again across repeated DS-9 runs, ruling out both a pre-existing regression
+  and gdigrab flake. Root cause: moving the content's absolute on-screen Y
+  origin by another 36 px shifts the fractional/sub-pixel remainder that
+  drives anti-aliasing at rounded corners and gradient/mask edges — the same
+  `BUG-124`/"PS-1" pixel-snapping class already tracked for these tests, not
+  a new defect. Their `KNOWN_DEBTORS` baselines were ratcheted to the new
+  measured numbers with a comment recording the before/after and the
+  reasoning (mirrors the precedent set by the `P1-wgpu-flip` ratchet for the
+  same table). TEST-147 (`background-repeat: space`) also fails on this
+  branch, but reproduces byte-for-byte on unmodified `main` too — unrelated
+  pre-existing gap, filed as [BUG-330](../bugs/BUG-330-OPEN.md) for P3, not
+  ratcheted (it was never a `KNOWN_DEBTORS` entry).
+
+  DoD: MCP live-window click (`--mcp-live-port`) on the reload button
+  triggered a real page reload and the settings button returned success;
+  `graphic_tests/run.py --continue-on-fail` — 147/148 pass or known-debtor,
+  the one remaining FAIL is the pre-existing BUG-330. `cargo test -p
+  lumen-shell` (incl. new `toolbar::tests::*`) and `cargo clippy -p
+  lumen-shell --all-targets -- -D warnings` both clean.
+- **Done (DS-11 newtab — 8 pinnable tiles + restore closed, 2026-07-23):**
+  [`crates/shell/src/newtab.rs`](../crates/shell/src/newtab.rs) grid grew from
+  `MAX_TILES=5` to `MAX_TILES=8` (7 site slots + a "+" tile shown whenever
+  fewer than 8 are pinned). New portable-data store
+  [`crates/storage/src/newtab_tiles.rs`](../crates/storage/src/newtab_tiles.rs)
+  (`NewtabTiles`, SQLite `pinned_tiles(position, url, title)`, modelled on
+  `omnibox_aliases.rs`) opened at `<exe_dir>/data/newtab_tiles.db` via
+  `adblock::browser_data_dir()`, falling back to in-memory on open failure
+  (same pattern as `settings_store`). `TopSite` gained a `pinned: bool` field;
+  `newtab::merge_tiles(pinned, top_sites)` puts pinned tiles first (in stored
+  position order) and fills remaining slots from `History::most_visited`,
+  deduping by URL. Pin/unpin/"+"/"Restore closed" are plain `<a href>` special
+  links (`about:newtab?pin=<url>&title=<title>` /
+  `?unpin=<url>` / `?pin-current` / `?restore-closed`, percent-encoded via the
+  existing `lumen_core::form::{encode_form_urlencoded, decode_form_value}`
+  helpers — no new encoder) rather than JS or a right-click menu:
+  `page_context_menu.rs` turned out to be spell-check-suggestion-specific, not
+  a generic context menu, so the special-link route from the DS-11 brief was
+  the cheaper path. `newtab::parse_action` recovers a `NewtabAction` from a
+  clicked link's resolved URL; `Lumen::apply_newtab_action` (new in
+  `main.rs`) is the single handler wired at all three points a link can
+  commit — the mouse link-click path, the keyboard-activation link path, and
+  `handle_omnibox_commit` (pasting/typing a tile link) — so a special link
+  never reaches real navigation. `PinCurrent` (the "+" tile) pins
+  `self.nav_back.last()` (the page navigated *from*, since by the time "+" is
+  clicked the current page is newtab itself), looking up its title via
+  `history_store.get(url)` with a URL fallback. `RestoreClosed` calls the
+  existing cross-restart `restore_session()` (`session_store`) — Lumen has no
+  separate per-tab "closed tabs" stack, so this reopens the last persisted
+  session wholesale rather than undoing a single tab close (documented as a
+  known semantic gap, not silently pretended otherwise). Tile radius (56×56
+  icon, tile corners) now reads `theme_tokens::radius::LG` instead of a local
+  literal — the first `newtab.rs` consumer of the token module (previously
+  deferred, see the DS-3 bullet above).
+
+  DoD: `cargo test -p lumen-shell` (new `newtab::tests::*`: merge/parse/html
+  coverage) and `cargo test -p lumen-storage` (new `newtab_tiles::tests::*`:
+  pin/unpin/cap-at-8/reuse-freed-slot) both green; `cargo clippy -p
+  lumen-shell --all-targets -- -D warnings` and `cargo clippy -p
+  lumen-storage --all-targets -- -D warnings` clean. Not in `graphic_tests/`
+  (newtab isn't one of the 70 magenta-frame pages), so no CPU-snapshot
+  regeneration needed.
+- **Done (DS-12 workspace colour → level-1 hierarchy marker, 2026-07-23):**
+  the active workspace's colour now marks the active tab, not just the
+  workspace-switcher chip. Turned out most of the DS-12 brief already
+  existed: [`panels/workspace_panel.rs`](../crates/shell/src/panels/workspace_panel.rs)
+  already coloured its active chip's bottom bar from `entry.accent`, and
+  `parse_ws_color` (hex/named → `Color`, with tests) already existed — no
+  duplicate helper added. What was missing: `WorkspacePanel::active_accent()`
+  (new — looks up the `WsEntry` matching `active_id`, `None` when no
+  workspace selected or the id is stale) and threading that colour into the
+  two tab-render call sites. `tabs::strip::build_tab_bar` and
+  `panels::vertical_tabs::build_tab_bar_vertical` both gained a trailing
+  `ws_accent: Option<Color>` parameter — `Some` overrides the bottom/left 2 px
+  active-tab accent bar that previously always used `pal.accent`; `None`
+  keeps the old fallback. Both call sites in `main.rs` now pass
+  `self.workspace_panel.active_accent()`. Also fixed a stale doc comment on
+  `build_tab_bar` that referenced a nonexistent `accent` parameter. Separately,
+  new-workspace creation (`WorkspaceHit::NewWorkspace`) stopped hard-coding
+  `"#6482dc"` for every workspace — it now cycles through the reference
+  palette (`panels::workspace_panel::default_color_for_index`, new:
+  `#0066FF`/`#8B5CF6`/`#1F9D55`, `docs/design/lumen-v3_3.html:851-859`) by
+  creation order.
+
+  DoD: 6 new unit tests (`strip::tests::build_tab_bar_ws_accent_overrides_pal_accent`,
+  `vertical_tabs::tests::build_tab_bar_vertical_ws_accent_overrides_pal_accent`,
+  `workspace_panel::tests::active_accent_*` ×3,
+  `workspace_panel::tests::default_color_for_index_cycles_reference_palette`)
+  plus all 120 pre-existing `lumen-shell` tests touching these three modules
+  green; `cargo clippy -p lumen-shell --all-targets -- -D warnings` clean.
+  Live verification was limited to a smoke run (window launches, default
+  single-tab/no-workspace state renders unchanged, `Ctrl+B` vertical-tabs
+  toggle confirmed reachable) — `Ctrl+Shift+W` (workspace-switcher toggle)
+  could not be driven via synthetic `SendInput`/`keybd_event` in this
+  environment (suspected OS-level hotkey conflict unrelated to Lumen; `Ctrl+B`
+  using the identical injection method worked, ruling out a focus/injection
+  problem), so the two-workspace-colour-switch screenshot from the DoD was not
+  captured interactively. The colour-override logic itself is deterministic
+  and fully covered by the unit tests above.
+- **Done (DS-14 profile switcher UI, 2026-07-23):** new
+  [`panels::profile_menu`](../crates/shell/src/panels/profile_menu.rs) —
+  profile-dropdown state (`ProfileMenuPanel`), hit-testing, and rendering
+  (colour dot + name per row, active row highlighted). A new 26×26 circular
+  avatar button (`toolbar::push_avatar`, the one chrome element the design
+  system exempts from the squircle-only rule) leads the toolbar's left
+  cluster before back/forward/reload (`toolbar::avatar_x()`,
+  `ToolbarHit::Profile`); clicking it toggles the dropdown, anchored below
+  the toolbar. First run seeds 4 default profiles (Личный/Рабочий/Анонимный/Гость,
+  colours from `theme_tokens::profile`) into the already-existing
+  `lumen_storage::ProfileRegistry` (`<exe_dir>/data/profiles.db`); clicking a
+  row calls `ProfileRegistry::set_active` (persists across restart) and
+  updates the avatar badge (colour + initial letter) and `Palette::accent`
+  for the whole chrome. Scope is deliberately narrow per the DS-14 brief:
+  only the active-profile pointer and the visual signature change — per-profile
+  data isolation (separate history/cookies/bookmarks) is out of scope, deferred
+  to DS-16.
+
+  DoD: 16 new `panels::profile_menu` tests + 2 new `toolbar` tests
+  (`hit_test_avatar`, avatar-aware `build_toolbar_*` assertions) — all green;
+  `cargo clippy -p lumen-shell --all-targets -- -D warnings` clean.
+- **Done (DS-15 Anonymous/Guest visual signatures, 2026-07-23):** nested-frame
+  rule, level 0. `panels::profile_menu::is_anonymous`/`is_guest` match the
+  active profile's name against the seeded `DEFAULT_PROFILES` slugs (same
+  exact-match convention as `color_for_profile`). Anonymous:
+  `panels::themes::anonymous_border(win_w, win_h, color)` builds 4
+  `FillRect`s (2 px, `theme_tokens::profile::ANONYMOUS`) along the window
+  perimeter, appended last to `overlay_buf` (after every other chrome
+  panel/modal, main.rs — right before the split-view assembly) so it sits on
+  top of everything; web content is never touched, only the chrome overlay
+  layer. Guest: `panels::themes::desaturate(Color) -> Color` (Rec. 601 luma,
+  alpha preserved) and `Palette::desaturated(&self) -> Palette` (converts
+  every field) are applied to the resolved chrome palette *before* the
+  existing DS-14 `pal.accent = entry.color` override, so the profile accent
+  (`theme_tokens::profile::GUEST`, already near-gray) lands on top rather than
+  being double-converted. Verified live: built `dev-release`, drove the real
+  window with synthetic OS clicks (`ctypes`/`SetCursorPos`+`mouse_event` —
+  `AutomationCommand::Click`/MCP `click` cannot reach chrome; it only calls
+  `handle_click_at`, the page-content path, while toolbar/tab-strip/profile-menu
+  hit-testing lives in `window_event`'s real `WindowEvent::MouseInput` arm),
+  captured via `ffmpeg gdigrab` + crop to the client area (offset (8,39),
+  1024×792) — screenshots confirm the red inset frame around the whole
+  window (Anonymous) and the gray avatar/accent with the page content still
+  fully colourful (Guest). 6 new `panels::themes` tests + 2 new
+  `panels::profile_menu` tests — all green; `cargo clippy -p lumen-shell
+  --all-targets -- -D warnings` clean.
+- **Done (DS-13 container accent strip: top → left, 2026-07-23):** the
+  per-tab container marker (7D.2, [`tabs::containers::ContainerKind`](../crates/shell/src/tabs/containers.rs))
+  moved from a horizontal strip at the top of the tab button to a rounded
+  vertical bar along its left edge — 3 px wide, inset 2 px from the top/bottom
+  edge, `theme_tokens::radius::SM` corners, drawn with `FillRoundedRect`
+  instead of the old top-edge `FillRect`. `ContainerKind::border_color()`
+  colours are unchanged. [`tabs::strip::build_tab_bar`](../crates/shell/src/tabs/strip.rs)
+  draws it at the left edge of each tab (`CONTAINER_STRIP_WIDTH`/`_INSET`
+  constants). [`panels::vertical_tabs::build_tab_bar_vertical`](../crates/shell/src/panels/vertical_tabs.rs)
+  previously drew **no** container marker at all — DS-13 added the same strip
+  there too, positioned at `CONTAINER_STRIP_LEFT = 6.0` so it sits between the
+  active-tab accent bar (`x = 0..2`) and the favicon square (`x = 12`) without
+  overlapping either.
+
+  DoD: `tabs::strip` tests updated to assert `FillRoundedRect` geometry
+  instead of the old `FillRect` (helper `count_container_strips` rewritten);
+  2 new `panels::vertical_tabs` tests (`build_panel_no_strip_for_none_container`,
+  `build_panel_renders_strip_for_work_container`). 80 `tabs::strip` + 21
+  `panels::vertical_tabs` tests green; `cargo clippy -p lumen-shell
+  --all-targets -- -D warnings` clean. Live/screenshot verification was not
+  possible: `KeyCommand::SetTabContainer` still has no UI trigger (no
+  omnibox/context-menu wiring) — a pre-existing 7D.2 gap noted in
+  `containers.rs`, not introduced or closed by this slice.
+- **Done (DS-19 downloads popover, 2026-07-23, closes the DS track DS-1…DS-19):**
+  [`crates/shell/src/download.rs`](../crates/shell/src/download.rs)'s panel
+  rendering was rebuilt to match `.downloads-panel` in the design reference
+  (lines 517-538/1320-1342): a fixed 320px popover anchored bottom-right
+  (`PANEL_MARGIN = 14.0`, capped at `PANEL_MAX_H = 400.0`, replacing the old
+  window-fraction-width bottom bar). Each card (`append_entry`) shows an
+  extension-badge icon (`extension_label`, uppercased file extension), the
+  filename, a size/status meta line, a 2px `Palette::accent`-filled progress
+  track while `DownloadStatus::InProgress`, and a left-aligned action row
+  (`entry_buttons`: Open+Reveal when `Done`, Cancel when in flight) — all
+  surface colours now come from `&Palette` (threaded through
+  `build_download_bar`'s new parameter) instead of the old hardcoded
+  dark-only constants; only the status colours (`STATUS_OK/ERR/CANCEL`) stay
+  theme-invariant, matching `shields_panel`'s convention. `toolbar.rs` gained
+  a `ToolbarActive::downloads_has_active` flag (`self.downloads.active_count()
+  > 0` in `main.rs`) — `push_btn` draws a small green ring+dot (`.tb-dot`,
+  `theme_tokens::badge::GREEN`) in the downloads button's top-right corner
+  whenever it's true, independent of `ToolbarActive::downloads` (which only
+  lights the button while the popover itself is open). 34 `download` + 12
+  `toolbar` tests green (2 new in each); `cargo clippy -p lumen-shell
+  --all-targets -- -D warnings` clean.
+- **Done (PERF-6 session-health journal, 2026-07-18):** new module
+  [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
+  `--activity-log` surface with a privacy-first, local-only journal of *problems*
+  (`health.log`, JSON Lines, truncated per session). Enabled by `--health-log`,
+  `--activity-log`/`--click-log`, or `LUMEN_HEALTH_LOG=1` (`extract_health_log`,
+  `health_log::init`). Four record kinds: `panic` (a chained `std::panic::set_hook`
+  captures message + location + `Backtrace::force_capture` + the page open at panic
+  time via `set_current_url`, fires in **any** run mode), `console_error` (the two
+  console-drain sites in the winit/automation loop record every `level==2` message
+  with the current page URL — each message drains exactly once, so no double count),
+  `load_error` (mirrored at all three navigation-error sites next to
+  `click_log::log_load_err`), and `broken_render` (white-screen heuristic in
+  `record_render_health`, called after `log_page_ready`: fires only when
+  `Document::node_count() >= 20` **and** `count_rendered_units(layout_box) == 0` —
+  no printable inline text and no replaced `<img>/<canvas>/<video>/<iframe>` box).
+  Aggregated by [`scripts/health_report.py`](../scripts/health_report.py) (0 engine
+  code) into frequency-ranked P3 fix priorities. **Gotcha:** console/render signals
+  ride the *live-window* event loop only — headless `--screenshot` uses the separate
+  `render_source_to_png` path and won't emit them (panic capture and the startup
+  `session_start` record still work headless). Journal:
+  [`docs/perf/health.md`](../docs/perf/health.md).
+- **Done (PERF-1 `--trace-nav`, 2026-07-18):** `lumen --trace-nav <out.json> <url>`
+  (`run_trace_nav` + `extract_trace_nav`, mirrors `--screenshot`) runs one navigation
+  through the shared headless CPU path (`render_source_to_png`) with the
+  `lumen_core::trace` tracer enabled, then writes the collected timeline as Chrome
+  Trace Event Format JSON (open in Perfetto / chrome://tracing). Phase spans live on
+  the shared path (`render_source_to_png`: `fetch-document`/`paint` + `first-paint`
+  instant; `parse_and_layout`: `parse-html`/`fetch-scripts`/`run-scripts`/`fetch-images`/
+  `fetch-css`/`parse-css`/`layout`/`fetch-bg-images`) and per-resource fetch spans with
+  a `size` arg on the fetch choke points (`load_bytes` main doc, `fetch_image_bytes`,
+  `fetch_stylesheet_text`, `resolve_script_sources`). All `trace::span` calls are no-ops
+  unless the tracer is enabled, so `--screenshot`/`--ipc-server` pay nothing. The PNG
+  the path produces is discarded — only the timeline matters. Verified on
+  `samples/page.html`: `paint` dominates (~150 ms, CPU raster) — the known bottleneck
+  the tool exists to surface. Deferred: DNS/TLS/TTFB sub-split (network layer exposes no
+  sub-timings), cascade split out from layout.
+- **Done (Document Picture-in-Picture OS window — [P1] P3-pip, 2026-07-17):** the PiP request
+  drain (`about_to_wait`, ~`main.rs:10663`) now handles a third `PipRequest::OpenDocument
+  { width, height }` variant (Document PiP) alongside `Enter`/`Exit` (video PiP). It calls the
+  new `open_pip_os_document`, which reuses the `pip_os_window.rs` infra
+  (`PipOsConfig::sized(w,h)` — requested size, `DEFAULT`'s 192×108 floor) to create a real
+  always-on-top borderless winit window with its own `RenderBackend`, rendered via the existing
+  `PipOsWindow`/`render_pip_os` path (empty `poster_url` → `build_pip_content` draws just the
+  background fill at the time; forwarding real page DOM content followed in later slices,
+  `p1-docpip-content`/`p1-docpip-authorcss` — see `ROADMAP.md` P3-pip, `document_pip.rs`).
+  `deliver_pip_resize` calls `_lumen_pip_deliver_resize(w,h)` in JS on the PiP window's
+  `Resized`/`ScaleFactorChanged` events, and the PiP `CloseRequested` handler now also closes a
+  Document-PiP window (`documentPictureInPicture._activeWindow.close()`) in addition to video
+  PiP's `exitPictureInPicture()`. Unlike video PiP there is no overlay fallback for the document
+  path (Phase 0: logs and gives up on window/backend failure).
 - **Done (P3-navapi cross-document unification for multi-step traversal, 2026-07-17):**
   a multi-step `history.go(n)`/`navigation.traverseTo(key)` (`Lumen::navigate_by`) that
   silently shuttles through a full-document `NavEntry` before landing on a same-document
@@ -128,6 +600,7 @@
 - **Done (value-returning UI→JS reads shimmed to `query()` — M2.2c-2c first sub-slice, ADR-016, 2026-07-11):** added the free function `route_query_js(engine, js, read) -> Option<R>` — the value-returning counterpart of `route_eval_js` (still a free function so it disjoint-borrows the `engine_thread`/`js_ctx` fields). With `LUMEN_ENGINE_THREAD` on it routes the read through `EngineThread::query` (blocking request/reply over `EngineMsg::Task`), which orders the read **after** any already-queued `task` (e.g. a routed `eval_js`) — restoring the read-after-eval ordering M2.2c-2b intentionally left synchronous; with the flag off (`engine = None`) it is `js.map(read)`, **byte-identical** to the prior direct call. `query` returning `None` (handle not yet mirrored into `EngineJsState`, or thread gone at shutdown) makes the caller fall back to its no-JS branch (`unwrap_or(false)` / "JS context not available"). Three read classes converted: `take_dom_dirty` (2 sites — the `about_to_wait` rAF pump and `RedrawRequested` Step 4), `take_raf_pending` (2 sites — result discarded, but the flag-clear must land **before** the synchronous `run_animation_frame`, which the blocking `query` guarantees), and `eval_js_value` (`AutomationCommand::Eval`). Removed `#[allow(dead_code)]` from `EngineThread::query` (now has live callers). 3 new tests (`route_query_js(None, None)` → `None`; flag-on-but-unsynced `route_query_js(Some(engine), None)` → `None` without running `read`). **Remaining 2c** (next sub-slice): the `take_timer_wakeup` + `take_navigate_request`/`take_nav_updates` drains (trickier return types + control flow). No new deps, no `unsafe`.
 - **Done (per-tick pump batch routed off-thread — M2.2c-2d first sub-slice, ADR-016, 2026-07-11):** generalized `route_eval_js` (special case `|js| js.eval_js(&script)`) with a new free function `route_task_js(engine, js, action)` — a router for **any** fire-and-forget void action over `&Arc<dyn PersistentJs>`; `route_eval_js` now delegates to it (byte-identical, dedups the branch). Converted the `about_to_wait` per-tick pump batch (`tick_timers` + `pump_websockets` + `pump_sse` + `pump_workers` + `pump_broadcast_channels` + `pump_shared_workers`, `main.rs` ~:8801) from direct `js.<method>()` calls to `route_task_js`. With `LUMEN_ENGINE_THREAD` on the batch goes off the UI thread as one `task` (call order preserved inside), and the following `route_query_js` nav/timer reads queue **after** it — restoring the read-after-write ordering exactly as routed `eval_js` did in 2b/2c; flag off (default) → the previous synchronous calls, byte-identical. 2 new tests (`route_task_js` without a handle is a no-op; flag-on-but-unsynced skips the action, a barrier `query` confirming the `task` executed). Remaining 2d sub-slices: `take_nav_intercept_result`, canvas/worker drains, then retiring the `js_ctx` field itself. No new deps, no `unsafe`.
 - **Done (rAF DOM-dirty flush off-thread + readback goes live — M2.2c-3 close, ADR-016, 2026-07-12):** routed both rAF DOM-dirty flush relayout sites off the UI thread under `LUMEN_ENGINE_THREAD`, closing M2.2c-3. The two sites differ by whether a layout product is read synchronously afterward: the `about_to_wait` rAF pump (only `request_redraw` follows → Bucket A) uses the new async `relayout_raf_dirty()` (`submit_relayout_job`, reflow lands later via `poll_engine_commit`); the `RedrawRequested` Step 4 site — whose Step 5 reads `self.display_list.is_empty()` for PerformancePaintTiming (Bucket B) — uses the new `relayout_raf_dirty_readback()`, which computes layout **on the engine thread** but **blocks** for that one commit via `EngineThread::readback` (M2.2c-1 mechanism, now with its first live caller) and applies it synchronously so Step 5 sees the fresh display list. Ordering holds because Step 3.1's `run_animation_frame` (`task`) and Step 4's `take_dom_dirty` (blocking `query`) already land the DOM mutation in the shared `Arc<Mutex<Document>>` before the readback is queued (FIFO). The job build was extracted into a shared `make_relayout_job()` used by both `submit_relayout_job` (fire-and-forget) and `readback_relayout_job` (blocking) → byte-identical `EngineCommit` for one DOM state; `readback_relayout_job` is authoritative like `relayout()` (advances `engine_applied_generation`, dropping stale in-flight async commits). Removed `#[allow(dead_code)]` from `EngineMsg::Readback` / `EngineThread::readback`. Flag off (default) → synchronous `relayout()`, byte-identical. The helpers are pure delegation (no own unit tests); the readback path is covered by the existing `readback_*`/`run_batch_*` executor tests. No new deps, no `unsafe`.
+- **Done (engine thread ON by default — ADR-023, 2026-07-28, branch `p3-engine-thread-default`):** `spawn_engine_thread_if_enabled()` no longer requires `LUMEN_ENGINE_THREAD=1`. The decision moved into `engine_thread_enabled()` → pure `engine_thread_enabled_from(opt_out, legacy)` (unit-tested directly, because reading the real environment from a test is process-global and races the parallel test binary): `LUMEN_NO_ENGINE_THREAD=1` wins over everything, otherwise only an explicit `LUMEN_ENGINE_THREAD=0` disables the thread, and a leftover `=1` keeps working. **Why now:** every M2 slice was accepted on a "flag off is byte-identical" invariant, which shipped the finished work switched off — so by default every `relayout()` still ran on the thread that pumps the OS message queue, and a font-heavy real page paid one full synchronous relayout per arriving `@font-face` before its first frame (lenta.ru, 9 fonts: **9 synchronous relayouts → 1–3**, `bugs/BUG-274-OPEN.md`). Deliberately **not** gated on `--deterministic`: `graphic_tests/run.py` launches with `--deterministic --viewport 1024x720`, so excluding deterministic runs would mean the pixel gate never exercises the shipped default. Does **not** improve scroll — the stalls there are expose-band repaints that run no layout at all (interleaved A/B showed no difference), filed as BUG-405. 6 unit tests. No new deps, no `unsafe`.
 - **Done (async rAF/JS pump + screenshot-readback audit — M2.3 close, ADR-016, 2026-07-12):** made the `LUMEN_ENGINE_THREAD` path keep scroll/input responsive through a long JS turn, the M2 interactive acceptance. **Readback audit:** every screenshot surface (`--screenshot`, live SDC-1b `render_current_page_to_png`, CDP `Page.captureScreenshot`) already renders UI-side `self.display_list` via `render_to_image_cpu` — never the windowed GL backend — so the brief's `Request::Readback` wiring is moot (confirms M1.1); no code needed. **Root cause of the freeze under the flag:** not the busy `lumen-js` thread but the UI thread issuing blocking engine `query`s (rAF scheduling reads + ~13 value-returning `about_to_wait` drains, all reading *shared* state so slow only via the FIFO) and the Step 4 blocking `readback`, each serialized behind the in-flight 200 ms `run_animation_frame` **task**. **Fix (flag-on only; single-thread path unchanged → byte-identical off the flag):** (1) lock-free UI clones of the JS `raf_pending`/`dom_dirty` `Arc<AtomicBool>` (`QuickJsRuntime::raf_pending_flag`/`dom_dirty_flag`, cached in `set_js_ctx`) so scheduling reads never round-trip the engine; (2) `raf_task_inflight` guard — `run_animation_frame` fired fire-and-forget via `fire_raf_turn_async`, at most one 200 ms turn queued regardless of scroll cadence, and the dom-dirty relayout is **async** (`relayout_raf_dirty` submit, not blocking `readback`); both `RedrawRequested` Step 3.1/4 and the `about_to_wait` pump funnel through `pump_raf_engine_thread`; (3) `drain_query_js` defers every value-returning `about_to_wait` drain while a turn is inflight, and `raf_drain_gate` reserves the first post-turn pass to flush them so a continuous rAF loop can't starve notifications/popups/console. **Acceptance** (`mt_stall_bench`, `samples/mt-busy-loop.html`, `LUMEN_ENGINE_THREAD=1 LUMEN_RENDER_THREAD=1`): **25.8 fps / gap p50 34.6 ms / scroll 46 200 px** vs frozen baseline **2.4 fps / 404 ms / 4 200 px** (≈ the non-stalled control ~28 fps); flag off re-measured identical baseline (2.3 fps). Idle CPU unaffected (no new polling — the parked-loop wakeup is unchanged for the no-rAF case, BUG-271); no `unsafe`. 2 new `lumen-js` tests (`raf_pending_flag`/`dom_dirty_flag` clone observes mark+clear). Remaining: the parked loop still iterates (WaitUntil ~16 ms) while a turn runs rather than sleeping until commit — an `EventLoopProxy` wake is a later slice.
 - **Done (incremental layout wiring for rAF JS mutations — M4.0, ADR-016, 2026-07-13):** wired `layout_mutation_incremental` (added to `lumen-layout::box_tree`) into the single-thread rAF DOM-dirty flush path. `layout_mutation_incremental` = full cascade via `layout_streaming_incremental` (which runs `graft_geometry` to copy geometry for unchanged-style subtrees, marking them `DirtyBits::CLEAN`) + all post-layout passes in the same order as `layout_measured_hyp` (`apply_first_line_pseudo_styles`, `apply_container_styles`, `apply_anchor_positions`, `split_first_line_boxes`). Shell: `relayout_page_incremental`/`compute_layout_incremental` mirror the full-layout helpers; `try_relayout_raf_incremental` moves `self.layout_box` out (no clone), calls `relayout_page_incremental`, calls `apply_relayout_result`. `relayout_raf_dirty` and `relayout_raf_dirty_readback` now try `try_relayout_raf_incremental` before the full `relayout()` in their single-thread fallback path; the engine-thread path (`submit_relayout_job`/`readback_relayout_job`) is unchanged. 2 new tests in `incremental.rs` (`mutation_incremental_style_change_matches_full`, `mutation_incremental_unchanged_dom_matches_full`); 21 incremental tests total. Remaining: M4.1 — rayon over independent dirty subtrees (separate ROADMAP entry `P3-mt-m4-rayon`).
 - **Done (scroll state):** `Lumen { scroll_y: f32, content_height: f32 }`. `Renderer::render(content, overlay, scroll_y)` — page portion of display list gets Y-translate `-scroll_y`, overlay portion rendered without offset (viewport-locked). `content_height_of(&dl)` — `max(rect.y + rect.height)` across all rect-bearing commands. **Input:** `WindowEvent::MouseWheel` via `MouseScrollDelta` — `LineDelta(_, lines)` → `lines × 40 CSS px`, `PixelDelta(p)` → `p.y / DPR`. Keyboard: `ArrowDown/Up` (40 px line-step), `PageDown/PageUp/Space/Shift+Space` (90% viewport), `Home/End` (to `0.0` / `f32::INFINITY` → clamp to max_scroll). `scroll_by(delta)` / `scroll_to(target)` via `clamp_scroll`. 9 unit tests.
@@ -159,7 +632,7 @@
 - **Done (`@import` file loading — CSS Cascade L4 §6.5, 2026-07-18):** `inline_css_imports(css_text, base, sink, cookie_jar, media_ctx, seen, depth)` recursively resolves `@import` rules. Applied per-sheet in `parse_and_layout`: inline `<style>` imports resolve against the document `base`; each external `<link>` sheet resolves its own imports against its own URL (`fetch_stylesheet_text` returns the fetched text **and** its resolved `ResourceBase`, so nested `@import`s in `/css/a.css` point at `/css/`, not `/`). Imported content is **prepended** to the importing sheet's text (imported rules precede in the cascade). A `MediaQuery` gate (`imp.media.matches(media_ctx)`) skips imports whose media doesn't match the render context (same `screen`/`print` contexts as `<link media>` from BUG-268). `seen: HashSet<resolved-url>` guards cycles + duplicate loads; `MAX_CSS_IMPORT_DEPTH = 16` caps nesting. Fetch is shared with `<link>` via `fetch_stylesheet_text` (local file or http through `PREFETCH_CACHE`, extracted from `load_linked_stylesheets`). A fast `contains_ignore_ascii_case(b"@import")` gate skips the extra parse for import-free sheets (the common case). The `@import …;` directive lines stay in the text — the cascade parser collects them into `Stylesheet::imports` and ignores them, so no double-application. Deferred: streaming progressive frames don't inline imports (they apply on the final `parse_and_layout` pass). 7 unit tests (`inline_css_imports_*`, `contains_ignore_ascii_case_matches`).
 - **Done (off-UI-thread final pipeline — BUG-171 этап 2, 2026-06-19):** the heavy final render no longer runs synchronously on the winit event-loop thread. The `LoadEvent::LoadDone` handler now reads UI-only inputs (viewport, storage handles via `&mut self.ls_storage`), clones the `Send` rest (`event_sink`, `cookie_jar`, `sw_worker_store`, `cache_store`, `hyp_provider`, `load_proxy`), `std::mem::take`s `preload_dispatched`, and spawns a `std::thread` that calls `render_bytes` (fetch scripts → QuickJS → fetch+decode images/CSS/fonts → layout). The worker posts the result back as a new `LoadEvent::RenderDone(Box<RenderOutcome>, generation)`; the UI thread applies it via `apply_loaded_page` (+ Navigation Timing delivery) exactly as `LoadDone` used to. While the worker runs, the event loop keeps spinning — the window repaints the last streaming frame and stays responsive instead of freezing for the ~1.9 s JS + layout CPU phase. Unblocked by **B-1/ADR-014**: `QuickJsRuntime` is now a `Send` handle (the runtime lives on its own thread), so the JS context is created on the worker and shipped to the UI thread inside `RenderDone`. Supporting changes: `PersistentJs: Send` supertrait (so `Box<dyn PersistentJs>` crosses the thread boundary); `hyp_provider: Arc<KnuthLiangHyphenation>` (shared with the worker without losing the warmed dictionary cache); type alias `RenderedPage = (LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>)`. The U-1 **generation guard** drops a `RenderDone` from a superseded navigation (its page + JS handle drop, joining the JS thread); a current-generation `RenderDone` restores the taken `preload_dispatched`. `render_bytes`/`parse_and_layout` were already pure free fns taking only `Send`/`Arc` inputs, so no behavioural change to the pipeline itself — only *where* it runs. Compile-time regression guard: `render_pipeline_payload_is_send` asserts `RenderOutcome`/`LoadEvent`/`Box<dyn PersistentJs>`/`RawPage` are `Send`.
 - **Done (decoded-image cache — BUG-172, 2026-06-19):** module `lumen-shell::image_cache`. Process-global `IMAGE_CACHE: LazyLock<DecodedImageCache>` makes the two `<img>` loaders share one fetch+decode per image per navigation. Before this, `spawn_stream_image_loads` (PH1-2c progressive streaming) and the final `fetch_and_decode_images` (in `parse_and_layout`) independently took `collect_image_requests` and re-downloaded+re-decoded the same `src`s. The cache mirrors `prefetch::PrefetchCache`: generation-scoped, in-flight dedup via `Condvar` (first caller decodes, concurrent callers block and share the result), caches success *and* failure (`Option<DecodedImage>`), stale generation bypasses. Value is `DecodedImage::{Static, Animated}` behind `Arc`, so a hit clones a pointer not the pixels (the consumer makes the owned copy). The shared fetch+decode logic of both paths was extracted into the free fn `decode_image()` (single source of truth, original logging preserved). Streaming threads call `get_or_decode(self.load_generation, …)` then emit `LoadEvent::ImageDecoded`; the final pass calls `get_or_decode_current(…)` in `parallel_map`, skipping network+decode on a hit and only computing `wants_intrinsic`/`is_lazy` + cloning pixels. Reset: `IMAGE_CACHE.reset(generation)` at navigation start (next to `PREFETCH_CACHE.reset` in `start_streaming_load`) and `reset_new()` per render in headless `render_source_to_png` (`--screenshot` / `--ipc-server` Screenshot) — bounds memory in the long-lived IPC server and prevents stale cross-page reuse. Lazy `<img>` (on-scroll) and `background-image` are separate paths, never part of the double-load, and untouched. 6 unit tests in `image_cache`.
-- **Done (chrome theme palette — F2-6 stage 1, 2026-06-22):** `panels::themes::Palette` is a flat struct of role-named chrome colour tokens (tab-strip backgrounds, overlay/input/item surfaces, text/dim/divider, accent) with two const variants `Palette::DARK` / `Palette::LIGHT`; `ShellTheme::palette(os_dark) -> Palette` resolves the variant (honouring `ThemeBase::System` vs explicit Light/Dark) and overrides `accent` with the selected preset. `Palette::DARK` reproduces the previous hard-coded dark constants of `tabs/strip.rs` + `address_bar.rs` exactly, so the dark theme is pixel-identical; `LIGHT` is a soft neutral-grey set with dark text. `build_tab_bar(strip, w, pal, drag)` and `build_bar_overlay(state, bar, pal)` now take `&Palette` instead of a bare accent `Color`; the two call sites in `main.rs` pass `&self.shell_theme.palette(self.dark_mode)` so picking Light in the Appearance settings actually recolours the tab strip and the Ctrl+L omnibox. Theme-invariant indicator colours (ad-block checkbox, lifecycle Z-badges, container strips, group bars, focus ring, caret, result-tag) intentionally stay constant. 5 palette tests in `themes`.
+- **Done (chrome theme palette — F2-6 stage 1, 2026-06-22):** `panels::themes::Palette` is a flat struct of role-named chrome colour tokens (tab-strip backgrounds, overlay/input/item surfaces, text/dim/divider, accent) with two const variants `Palette::DARK` / `Palette::LIGHT`; `ShellTheme::palette(os_dark) -> Palette` resolves the variant (honouring `ThemeBase::System` vs explicit Light/Dark) and overrides `accent` with the selected preset. `Palette::DARK` reproduces the previous hard-coded dark constants of `tabs/strip.rs` + `address_bar.rs` exactly, so the dark theme is pixel-identical; `LIGHT` is a soft neutral-grey set with dark text. `build_tab_bar(strip, w, pal, drag)` and `build_bar_overlay(state, bar, pal)` now take `&Palette` instead of a bare accent `Color`; the two call sites in `main.rs` pass `&self.shell_theme.palette(self.dark_mode)` so picking Light in the Appearance settings actually recolours the tab strip and the Ctrl+L omnibox. Theme-invariant indicator colours (ad-block checkbox, lifecycle Z-badges, container strips, group bars, result-tag) intentionally stay constant. 5 palette tests in `themes`. **Superseded by DS-2 (2026-07-22, see above):** `Palette::DARK`/`LIGHT` are no longer a literal reproduction of the old hard-coded constants — they are generated-token-derived and visually match `docs/design/lumen-v3_3.html` instead; the omnibox focus ring and caret are no longer theme-invariant either (`pal.accent`).
 - **Done (per-panel theming — F2-6 stage 2 part 1, 2026-06-22):** all ~22 secondary panels now follow the active theme. `Palette` gained two role tokens — `header_bg` (panel title/toolbar bar) and `row_alt_bg` (zebra rows) — with DARK/LIGHT values. Every panel render fn (`privacy_panel`, `settings_panel`, `history_panel`, `workspace_panel`, `print_panel`, `a11y_panel`, `read_later_panel`, `note_viewer`, `bookmark_panel`, `shortcuts_panel`, `command_palette`, `tree_tabs`, `cert_panel`, `vertical_tabs`, `permission_panel`, `ai_panel`, `shields_panel`, `focus_panel`, `sidebar_panel`, `pip_window`, `split_view`) takes a trailing `pal: &Palette` and maps its former hard-coded surface constants to palette tokens (bg→`overlay_bg`, header→`header_bg`, zebra→`row_alt_bg`, item→`item_bg`, selection→`item_selected_bg`, input→`input_bg`, outer border→`overlay_border`, separators→`divider`, text→`text`/`text_dim`, accent→`accent`). **Semantic colours stay constant** (status red/green/amber, container/group/category identity colours, the PiP video letterbox, modal scrims). The redraw path computes `let pal = self.shell_theme.palette(self.dark_mode)` once and passes `&pal` to every panel call site. Dark theme is close to before (per-panel bespoke shades are now unified onto the shared palette tokens — a small intentional change, not pixel-identity). **Pending (F2-6 stage 2 part 2):** user-rearrangeable panel drag&drop / docking (ADR-009 `Surface`/`SurfaceManager` + layout persistence).
 - **Done (OS PiP window real size delivery, 2026-07-17):** `PipController`/`PipOsWindow` (CC-7) previously never told JS the floating window's real dimensions — `HTMLVideoElement.requestPictureInPicture()` always resolved a `PictureInPictureWindow` stuck at `(0, 0)`, and the `resize` event never fired even though the OS window is fully resizable. `panels::pip_os_window::physical_to_logical(width, height, scale_factor)` (pure, unit-tested) converts the winit physical size to CSS logical px; `Lumen::notify_pip_window_resized` pushes it into JS via `_lumen_pip_deliver_resize` (the native binding `video_pip.rs` already exposed but nothing called) — once right after `open_pip_os` creates the window, and again on every `WindowEvent::Resized` for the PiP window id. `render_pip_os` now shares the same helper instead of duplicating the physical→logical math.
 - **Done (Document PiP real OS window, slice 1, 2026-07-17):** `documentPictureInPicture.requestWindow()`/`PictureInPictureWindow.close()` (`crates/js/src/document_pip.rs`) previously called an unbound native (`_lumen_pip_request_window`) — the JS API never touched a real window. Now `_lumen_docpip_request_window(width, height)` / `_lumen_docpip_close()` (`crates/js/src/documentpip_bindings.rs`, a process-global queue mirroring `pip_bindings.rs`) reach `Lumen::doc_pip_controller: panels::doc_pip_os_window::DocPipController` (pure open/closed state, no re-target case since JS already rejects a second `requestWindow()` while active) and `Lumen::doc_pip_os: Option<DocPipOsWindow>` (a second always-on-top borderless `winit::Window` + its own `RenderBackend`, reusing `pip_os_window::{PipOsConfig, pip_window_attributes, physical_to_logical}` verbatim — they carry no video-specific state). Real size round-trips back via `_lumen_docpip_deliver_resize` (mirrors `_lumen_pip_deliver_resize`), and closing via the OS window's own close button calls `_lumen_docpip_deliver_close()` so `.pictureInPictureElement`/`_closed` stay truthful.
@@ -183,8 +656,11 @@
 - **Done (automation channel request/reply + protocol fronts — SDC-2, 2026-07-01):** SDC-1b wired command *execution* but not replies — every `AutomationReply` was sent to a `Sender` whose `Receiver` was immediately discarded (`let (automation_reply_tx, _) = channel()`), so no caller outside the shell process could ever read a result. Fixed: the channel now carries `lumen_driver::AutomationRequest = (AutomationCommand, Sender<AutomationReply>)` — each request brings its own one-shot reply channel — and `main()` builds it *before* dispatching to any `CliMode` (not inside `run_window_mode`), so `--bidi-port`/new `--mcp-live-port <N>` (spawned right after, alongside `--devtools-port`) already hold a valid `AutomationHandle` once the window's event loop starts draining it. Two new automation commands: `Query(selector)` (`query_automation_nodes` — reuses `lumen_layout::selector_query::find_all_by_selector` against `layout_box`/`layout_source.document`, same pattern as `resolve_automation_target`) and `A11yTree` (`automation_a11y_tree` — reuses `lumen_a11y::build_ax_tree` + a local `automation_ax_node` converter, same shape as `update_platform_ax_tree`). `lumen_driver::LiveWindowSession` (new, in `lumen-driver`) adapts this channel to the full `BrowserSession` trait; `lumen-bidi-server`'s `BidiState::with_live_session` and `lumen-mcp`'s new `spawn_live`/`--mcp-live-port` both drive a real window through it — see `subsystems/driver.md` for what's real vs. stubbed. `BrowserSession::current_url` changed from `&str` to owned `String` (all four implementors + the MCP test mock updated) to avoid `LiveWindowSession` having to leak memory to satisfy the old borrow. `automation_sender()` renamed `automation_handle()` (unused today — kept for a future in-process caller, e.g. `--ipc-server` mode).
 - **Done (settings-page expansion + gear button + hover tooltips, 2026-07-15):** `panels::settings_panel` grew from 4 to 7 sections (`SettingsSection`: General/Privacy/Appearance/Downloads/**Network**/**Adblock**/**Language**) and gained a `tabs::strip::build_settings_btn`/`hit_test_settings_btn` gear button (rendered between the tab area and the layout-toggle button, `SETTINGS_BTN_W = 28.0`), so the page no longer requires knowing `Ctrl+,` or `about:settings`. Every row that has an action or informational value now has a hover tooltip (`tooltip_for` + `build_tooltip`, immediate — no delay, same pattern as the tab-strip tier tooltip) driven by a new `Lumen.settings_hover: Option<(f32, f32)>` updated on `CursorMoved` while the panel is visible. New sections read/write stores other than `BrowserSettings`: Network's HTTP/3 toggle round-trips through `config::set_http3`/`config::global().http3` (rewrites the `http3` key in `fingerprint.toml`, preserving other lines — effective on next launch only, since the process-global `FingerprintProfile` is a `OnceLock`); Adblock lists+toggles+refreshes `lumen_storage::adblock::Subscription`s via the shell's own `adblock_store: Arc<AdblockStore>` (now a `Lumen` field, previously only a local `main()` variable) and hot-swaps the live filter (`adblock::load_and_install`) on every toggle/manual refresh; Language shows the `SPELL_DICTS` static's loaded locale read-only. Privacy gained a read-only Tor-mode status line (Tor is `--tor`-CLI-only, not toggleable). Appearance gained a tab-strip layout options row (`draft.tab_layout`, already a `BrowserSettingsSnapshot` field but previously only settable via the tab-strip's own layout button) — `close_settings_panel` now live-syncs `self.vertical_tabs.visible` so the change takes effect without waiting for the next click of that other button. Two new `Lumen` helper methods, `open_settings_panel`/`close_settings_panel`, replace 6 duplicated inline open/close call sites (× button, click-outside, `Ctrl+,` toggle, `Escape`, `about:settings`) — as a side effect this also fixed a latent inconsistency where only the × button synced `dark_mode`/triggered `relayout_chrome()` on an explicit theme lock (click-outside/`Escape`/`Ctrl+,` silently skipped it). **Bug fix bundled in the same commit:** every section's hit-test function was off by `HEADER_GAP` (26 px, the section-header label's height) relative to where `render_*` actually drew each row — e.g. clicking the bottom ~60% of the Privacy shields toggle silently fell through to the fingerprint-mode-options branch instead of toggling shields. Fixed by introducing the `HEADER_GAP` constant in both hit-test and render, with regression tests asserting hit-test zones at the *exact* render-computed row boundaries (`hit_*_matches_render_offset` tests). **Also fixed:** `settings_store` was `BrowserSettings::open_in_memory()` — every setting was silently lost on restart; now persists to `<exe_dir>/data/settings.db` (falls back to in-memory if the file can't be opened, matching the `AdblockStore` pattern). Panel widened `640×480` → `760×520` and `TAB_W` made dynamic (`PANEL_W / SettingsSection::ALL.len()`) to fit 7 tabs. +19 `settings_panel` tests (hit-test/tooltip/setters), +3 `tabs::strip` tests (gear button), +3 `config` tests (`set_http3_at`).
 - **Done (P2-wpt S1 — real `DocumentReady`/`NetworkIdle` signal, 2026-07-13):** `check_wait_condition`'s `DocumentReady`/`NetworkIdle` arm no longer approximates "loaded" as `self.layout_box.is_some()` (line 91's bullet — that was `true` immediately on repeat navigations, since `layout_box` is only reset by `reset_to_blank_tab`, not by ordinary `reload()`/`navigate_to()`). It now reads the JS runtime's real `document.readyState` via `route_query_js(|j| j.eval_js_value("document.readyState"))`, requiring `"complete"`. Gated on `self.nav_start.is_none()`: on the non-blocking streaming navigation path, `self.js_ctx` still holds the *previous* page's context until `apply_loaded_page` installs the new one (and `nav_start` is exactly the flag that's `Some` for that whole window — set at navigation start, cleared only after `apply_loaded_page` runs, see `RenderDone`), so without the gate a stale-but-`"complete"` old context would report ready immediately, reproducing the same bug. Falls back to `self.layout_box.is_some()` when there is no JS context at all (quickjs disabled, or a JS-less blank tab) — unchanged behavior there. `lumen-bidi-server`'s `bc_navigate` now blocks on `LiveWindowSession::wait(WaitCondition::DocumentReady, …)` before emitting `browsingContext.load`, with a real Unix-ms timestamp instead of the old hardcoded `0.0`; a wait timeout fails the navigate command with `unknown error`. See `docs/tasks/p2-wpt-integration.md` S1.
+- **Done (BUG-308 — settled navigation error resolves `DocumentReady`, 2026-07-20):** a navigation that ends in `LoadEvent::LoadError` (network/HTTP failure before render) or `RenderDone(Err)` (final-render failure) now sets a new per-tab `load_failed: bool` flag (mirrored in `Lumen` and `PageSnapshot`). `check_wait_condition`'s `DocumentReady`/`NetworkIdle` arm short-circuits to `true` when `self.nav_start.is_none() && self.load_failed`, because a settled error IS "done loading". Before this, a nav from `about:blank` (no JS context, no `layout_box`) to an anti-bot 403 satisfied neither the `readyState == "complete"` branch nor the `layout_box.is_some()` fallback, so `wait{document_ready}` blocked until the client's own deadline (observed 128–205 s = the MCP-wait timeout, not retries) while `--dump-source` returned the same 403 in 0.75 s. The flag is cleared at every navigation start (`reload`, initial streaming load), on a successful `apply_loaded_page`, and in `reset_to_blank`; the `nav_start.is_none()` gate prevents a stale flag from a superseded nav winning a race. Verified with a live-MCP repro against a connection-refused URL (Ack ~2 s vs a 20 s timeout).
 - **Done (P2-wpt S4 — `clientWindow` field in `BrowsingContextInfo`, 2026-07-13):** `lumen-bidi-server`'s `context_info_flat`/`context_info_tree` now emit a `clientWindow` string (BiDi spec field, distinct from `context`: identifies the OS-level window a context renders in). `wptrunner`'s `webdriver.bidi.modules.browsing_context._assert_browsing_context_info` asserts it's present, so omitting it broke any BiDi client using that module. Lumen runs one native window per process, so a single constant (`CLIENT_WINDOW_ID`) is correct until multi-window support exists. Found running the vendored WPT harness over BiDi (`docs/tasks/p2-wpt-integration.md` S4).
 - **Done (two automation live-window bugs found validating SDC-3 — 2026-07-01):** (1) `AutomationCommand::Navigate` always built `PageSource::Url(url)`, which — regardless of scheme — goes through the network `HttpClient`; a `file://` URL (what graphic_tests and most BiDi/MCP test clients actually send) failed with "unsupported scheme: file". New `page_source_for_automation_url(url)` parses `http(s)://` → `PageSource::Url`, `about:blank` → `PageSource::AboutBlank`, and `file://`/bare strings → `PageSource::File` (stripping a Windows drive-letter's extra leading slash — `file:///D:/foo` → `D:/foo`, not `/D:/foo` which doesn't resolve — while leaving a POSIX `file:///home/x`'s slash alone). (2) A command enqueued from a BiDi/MCP thread had no way to interrupt a parked `ControlFlow::Wait` event loop — an `mpsc` send from an unrelated thread is not an OS event, a scheduled timer, or a redraw request, so a `wait`/`navigate` call from an idle window (the common case for unattended automation, i.e. always) could sit undrained until *something else* happened to pump the loop. Fixed with a new no-op `LoadEvent::AutomationWake` variant: `AutomationHandle` (SDC-2) now carries a `set_wake` callback (`Arc<Mutex<Option<WakeFn>>>>` — shared so handles cloned out to `bidi_spawn`/`lumen_mcp::spawn_live` *before* the window exists still pick it up once `run_window_mode` calls `automation_handle.set_wake(move || { let _ = load_proxy.send_event(LoadEvent::AutomationWake); })` right after creating `load_proxy`); `execute()` calls it after every enqueue. Found and fixed by manually driving a live `--mcp-live-port` window end-to-end (not caught by unit tests — none of them run the real winit event loop).
 - **Done (third automation live-window bug — `Click`/`Type` clicked the wrong point — 2026-07-01):** `resolve_automation_target()` returned a resolved element's box center in *page* (document) space straight from the layout tree, but `handle_click_at(x_css, y_css)` expects *viewport* space (what a real OS mouse event reports) and converts it to page space itself via `page_point()` (subtracts tab-bar height / left-docked-panel width, adds scroll). Feeding page coordinates into a function expecting viewport coordinates meant a click landed wherever page-space coordinates happened to fall in viewport space — silently "worked" only by coincidence at zero scroll with a target inside the tab-bar-height band. Found manually: clicking a real `<a href>` via MCP (`--mcp-live-port`) returned `success` but never navigated (verified via `resources://a11y_tree` + `query()` showing the old page still loaded). Fixed by applying the inverse of `page_point()` (add tab-bar height/panel offset, subtract scroll) to the `NodeId`/`Selector` branches before returning.
 - **Done (fourth automation live-window bug — `Target::Point` clicked the wrong point too — 2026-07-01):** the previous fix assumed `Target::Point` was already OS-window-space (matching BiDi's `input.performActions` pointer coordinates as originally documented) — wrong. Manually testing a BiDi click at coordinates read straight off a `captureScreenshot` PNG (the natural thing a tester does — "click at the pixel where I see the button") missed by exactly `TAB_BAR_HEIGHT` (36px): `Target::Point` coordinates are in *content-viewport* space (same space the screenshot renders — no tab bar, no chrome), not OS-window space. Fixed: `resolve_automation_target` now adds the tab-bar-height/panel offset to `Target::Point` too, but *not* a scroll subtraction (unlike `NodeId`/`Selector`, which come from absolute document position) since pointer coordinates are already relative to the current, already-scrolled visible viewport.
 - **Open gap found while writing tester docs (2026-07-01, not yet fixed):** `eval`/`script.evaluate` over the automation channel only works against the page the window was **launched with** (`lumen --mcp-live-port N somepage.html`) — after any `AutomationCommand::Navigate`-driven reload (i.e. any `navigate` tool call / `browsingContext.navigate`), `self.js_ctx` is `None` and eval fails with `"JS context not available"`, even in a `--features quickjs` build. Root cause not yet traced (candidates: the streaming/background-thread reload path in `start_streaming_load`/`apply_loaded_page` not wiring up `PersistentJs` the same way the initial `resumed()` load does, or a thread-affinity issue). Repro: launch with a real page, `eval` works; call the `navigate` tool once (even to the same URL), `eval` then fails for the rest of the session. Workaround for testers: avoid `eval`/`script.evaluate` after the first navigation — use `click`/`type`/`query`/`wait`/`screenshot` instead (all verified working post-navigate).
+- **Done (BUG-315 — automation sessions must not share the persistent disk HTTP cache, 2026-07-17):** the BUG-234 disk cache (`<exe_dir>/data/cache/http_cache.db`, keyed by URL, honors `Cache-Control`) silently poisoned `tests/wpt/run_smoke.py`: `wptserve` always binds fixed ports 8000/8001 and sends `Cache-Control: max-age=3600` on its `/resources/testharnessreport.js` static route, so the *first* automation run's response — even a since-fixed *wrong* one (see [BUG-315](../bugs/BUG-315-FIXED.md) fault #1) — stayed cached for an hour and every later `lumen.exe` process (fresh PID, same DB) kept replaying it from disk, making a genuine code fix look like it wasn't taking effect. Fixed in `main()`: when any of `--bidi-port`/`--mcp-live-port`/`--mcp`/`--mcp-port` is present, `startup_profile.no_persistent_state = true` is set **before** the one and only `config::init_global` call (the profile lives in a set-once `OnceLock` — a later `init_global` would be a no-op, which is why this is a raw `std::env::args()` scan right at that call site rather than reusing the `extract_*` parsers that run later in `main()`) — `build_http_cache` (BUG-234 bullet above) then selects the in-memory `HttpCache` instead of `DiskHttpCache`, so every automation process starts with an empty cache. Regular browsing sessions are unaffected. Verified via `tests/wpt/run_smoke.py` reaching a real `TEST_END` (was an unconditional TIMEOUT) reproducibly across repeated runs without clearing the cache DB.
+- **Invariant (BUG-341 S22, 2026-07-28): `Lumen::chrome_layout` is read-only between chrome layout passes, and `relayout_chrome_host` now depends on that.** The pass needs the *previous* pass's pre-pruning tree as its incremental basis, but it prunes `#contentArea` out of the live tree right after layout (`take_content_area`, CC-4/CC-9 — the real page is painted separately at that rect). S5 met this by keeping a whole second copy (`chrome_prev_pristine_layout = layout.clone()`), which the S22 census priced at 0.16-0.40 ms per cycle — 318 boxes copied to preserve the 163 about to be removed. S22 keeps the *difference* instead: `take_content_area` returns a `ContentAreaDetachment` (holder path, slot, the removed subtree, and the path each salvaged popover was lifted from), and `restore_content_area` undoes it at the top of the next pass on the tree left in `chrome_layout`, which is then moved into the basis. **Anything that mutates `chrome_layout`'s box tree in place between passes silently corrupts the next pass's basis** — and the cost is not a slow frame: `#contentArea`'s parent is clean on an interaction cycle, so `incremental_build_box` moves that whole subtree across from the basis, meaning a basis missing `#contentArea` produces a *document* missing `#contentArea` (155 boxes instead of 318), permanently, since the next cycle inherits that tree. Gated by `bug341_s22_a_restored_basis_carries_the_whole_document_forward` plus two exact round-trip gates; the salvage half needs its own synthetic fixture because every salvageable popover is `display:none` until opened, so the real document salvages nothing at rest.

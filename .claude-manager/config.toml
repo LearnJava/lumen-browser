@@ -1,0 +1,97 @@
+default_permission_mode = ""
+
+[[session]]
+  name = "S1"
+  prompt = "Программист 1, который работает над разработкой дизайна."
+  auto_restart = true
+  max_tasks = 0
+  stop_when_no_tasks = true
+  task_source = "STATUS-P1.md"
+  model = "opus"
+  fallback_model = ""
+  fallback_model_on_rate_limit = false
+  effort = "high"
+  permission_mode = "bypassPermissions"
+  allowed_tools = []
+  disallowed_tools = []
+  permission_rule = []
+  max_budget_usd = 0.0
+  use_worktree = false
+  worktree_name = ""
+  system_prompt_append = ""
+  add_dirs = []
+  preflight = "auto"
+  pre_task_hook = ""
+  post_task_hook = ""
+  crash_recovery_prompt = ""
+
+[[session]]
+  name = "S2"
+  prompt = "Программист 2, который разрабатывает wpt тесты."
+  auto_restart = true
+  max_tasks = 0
+  stop_when_no_tasks = true
+  task_source = "STATUS-P2.md"
+  model = "opus"
+  fallback_model = ""
+  fallback_model_on_rate_limit = false
+  effort = "high"
+  permission_mode = "bypassPermissions"
+  allowed_tools = []
+  disallowed_tools = []
+  permission_rule = []
+  max_budget_usd = 0.0
+  use_worktree = false
+  worktree_name = ""
+  system_prompt_append = ""
+  add_dirs = []
+  preflight = "auto"
+  pre_task_hook = ""
+  post_task_hook = ""
+  crash_recovery_prompt = ""
+
+[[session]]
+  name = "S3"
+  prompt = "Ты программист 3, который исправляет баги."
+  auto_restart = false
+  max_tasks = 0
+  stop_when_no_tasks = false
+  task_source = "STATUS-P3.MD"
+  model = "sonnet"
+  fallback_model = ""
+  fallback_model_on_rate_limit = false
+  effort = "high"
+  permission_mode = "bypassPermissions"
+  allowed_tools = []
+  disallowed_tools = []
+  permission_rule = []
+  max_budget_usd = 0.0
+  use_worktree = false
+  worktree_name = ""
+  system_prompt_append = ""
+  add_dirs = []
+  preflight = "auto"
+  pre_task_hook = ""
+  post_task_hook = ""
+  crash_recovery_prompt = ""
+
+[[session]]
+  name = "Chat"
+  prompt = ""
+  auto_restart = false
+  max_tasks = 0
+  stop_when_no_tasks = false
+  task_source = ""
+  model = "sonnet"
+  fallback_model = ""
+  fallback_model_on_rate_limit = false
+  effort = "high"
+  permission_mode = "bypassPermissions"
+  max_budget_usd = 0.0
+  use_worktree = false
+  worktree_name = ""
+  system_prompt_append = ""
+  preflight = "auto"
+  pre_task_hook = ""
+  post_task_hook = ""
+  crash_recovery_prompt = ""

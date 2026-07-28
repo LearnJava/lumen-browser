@@ -20,6 +20,7 @@ use lumen_layout::{Color, FontStyle, FontWeight, ImageRendering, ObjectFit, Obje
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 
 // ── Visual constants ─────────────────────────────────────────────────────────
 
@@ -42,7 +43,7 @@ const CLOSE_W: f32 = 26.0;
 const PLAY_R: f32 = 24.0;
 
 /// Corner radius of the card in CSS px.
-const CARD_RADIUS: f32 = 10.0;
+const CARD_RADIUS: f32 = radius::LG;
 
 /// Dark background for the video frame / letterbox — stays dark in both themes.
 const VIDEO_BG: Color = Color { r: 24, g: 24, b: 30, a: 255 };

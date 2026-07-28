@@ -55,7 +55,13 @@ impl GroupColor {
     ];
 
     /// Fully-opaque RGB for the strip label and the per-tab accent bar.
+    ///
+    /// BUG-409: the legacy tab-strip painter was the only reader —
+    /// `ChromeTabModel` carries a container stripe but no group accent, so
+    /// the engine chrome draws no group colour yet. The palette is kept as
+    /// the source of truth for that migration.
     #[must_use]
+    #[allow(dead_code, reason = "BUG-409: цвета групп вкладок ещё не перенесены в движковый хром")]
     pub fn color(self) -> Color {
         match self {
             GroupColor::Grey => Color { r: 0x9C, g: 0xA3, b: 0xAF, a: 255 },

@@ -4,11 +4,16 @@ P2-wpt (`docs/tasks/p2-wpt-integration.md`, slices S1–S8). Runs the real, unmo
 `wptrunner` against Lumen over WebDriver BiDi (`lumen --bidi-port N`) — not a
 bespoke test runner. See the task doc for the full architecture and slice plan.
 
-**Status:** S1–S3 done. S4 (`LumenTestharnessExecutor.do_test`, `testharnessreport.js`
-shim, smoke driver) is **implemented but blocked**: `tests/wpt/run_smoke.py` drives
-a real `lumen --bidi-port` through navigate + eval end to end, but the smoke test
-(`dom/nodes/Element-hasAttribute.html`) still doesn't PASS. Eight real engine/shell
-gaps surfaced and were fixed while proving this path: [BUG-278](../../bugs/BUG-278-FIXED.md)
+**Status:** S1–S7 done (this task complete; S8 reftests is a separate
+follow-up). `tests/wpt/run_smoke.py` drives the real, unmodified `wptrunner`
+against `lumen --bidi-port` (navigate + eval) end to end; `tests/wpt/run_suite.py`
+(S7) runs the **whole curated subset** — the 18 synchronous `dom/nodes/` tests
+(S5) plus the 3 async `MutationObserver-*` tests (S6), 21 tests / 64 checks —
+as one pass/fail gate against its committed `.ini` expectations, **green**
+(0 unexpected), fully offline. See "The curated subset" and "Running the whole
+suite" below. Nine real engine/shell gaps surfaced and were fixed while
+proving the S4 path (the last blocker, [BUG-301](../../bugs/BUG-301-FIXED.md),
+was fixed 2026-07-18): [BUG-278](../../bugs/BUG-278-FIXED.md)
 (HTTP client rejected `wptserve`'s close-delimited responses), [BUG-279](../../bugs/BUG-279-FIXED.md)
 (`document.getElementsByTagName` was missing entirely — broke `testharness.js`'s
 own module-level setup), [BUG-280](../../bugs/BUG-280-FIXED.md) (`window` wasn't
@@ -24,17 +29,18 @@ launches now skip session restore), [BUG-298](../../bugs/BUG-298-FIXED.md)
 document instead of the calling node's subtree — `Output.show_results` builds a
 detached results tree and queries into it, always getting nothing),
 [BUG-299](../../bugs/BUG-299-FIXED.md) (`Element.prototype.insertAdjacentText` was
-missing entirely, thrown from the same code path), and [BUG-300](../../bugs/BUG-300-FIXED.md)
+missing entirely, thrown from the same code path), [BUG-300](../../bugs/BUG-300-FIXED.md)
 (`browsingContext.navigate`'s `DocumentReady` wait could ACK using the *previous*
-page's stale `layout_box` before the new page had even started loading). Together
-BUG-298/299/300 fully explain (and disprove as environment-flaky) the
-"`script.evaluate`-install race" theory previously in `CLAUDE.md` → "Known gotchas" —
-a manual BiDi driver hitting the fixed binary through a plain HTTP server now
-completes the harness correctly end to end. `run_smoke.py` itself (driven through
-the vendored `wptrunner` + `wptserve`) still times out on a narrower, distinct gap
-only reproducing under that specific combination — see [BUG-301](../../bugs/BUG-301-OPEN.md).
-See those bug files and the task doc's S4 section for the full diagnosis trail
-(BiDi-eval-based bisection of `testharness.js`'s execution).
+page's stale `layout_box` before the new page had even started loading), and
+[BUG-301](../../bugs/BUG-301-FIXED.md) (`wptrunner`'s vendored harness registers its
+own static route for `/resources/testharnessreport.js`, winning over Lumen's
+vendored file that sets `window.__lumen_wpt_results` — plus a related, independently
+found persistent-on-disk-HTTP-cache angle on the same symptom, see
+[BUG-315](../../bugs/BUG-315-FIXED.md)). Together BUG-298/299/300 fully explain (and
+disprove as environment-flaky) the "`script.evaluate`-install race" theory
+previously in `CLAUDE.md` → "Known gotchas". See those bug files and the task doc's
+S4 section for the full diagnosis trail (BiDi-eval-based bisection of
+`testharness.js`'s execution).
 
 ## What's here
 
@@ -94,7 +100,15 @@ See those bug files and the task doc's S4 section for the full diagnosis trail
 
 - `tests/wpt/run_smoke.py` — **ours** (S4) — minimal driver that calls
   `wptcommandline`/`wptrunner.run_tests` directly against the smoke test (see
-  its own docstring for why this isn't `tools/wpt/wpt`). Run with:
+  its own docstring for why this isn't `tools/wpt/wpt`). Passes
+  `--no-restart-on-unexpected`: wptrunner's own default respawns the browser
+  process after every test whose result doesn't match its expectation, which
+  under `--all` (no committed `.ini` for most tests) meant a fresh `lumen.exe`
+  per failing test. One `lumen.exe` process now runs the whole selected test
+  set, reusing a single browsing context (`LumenBidiProtocol.context_id`,
+  `executorlumen.py`) that gets a fresh `browsingContext.navigate` per test —
+  still test-isolated, just not process-isolated. The browser still restarts
+  on an actual crash/hang. Run with:
 
   ```bash
   LUMEN_PROFILE=dev-release <venv>/python tests/wpt/run_smoke.py
@@ -102,15 +116,40 @@ See those bug files and the task doc's S4 section for the full diagnosis trail
 
   Both scripts default to `target/<LUMEN_PROFILE>/lumen.exe` (`LUMEN_PROFILE`
   env var, default `release`), same convention as `graphic_tests/run.py`.
-  `run_smoke.py` currently exits non-zero — see Status above.
+- `tests/wpt/run_suite.py` — **ours** (S7) — the CI wrapper: discovers the
+  curated subset from the committed `metadata/dom/nodes/*.ini` expectations
+  (one test id per `.ini`) and runs them all through `run_smoke.run()` as a
+  single pass/fail gate — exit 0 iff 0 unexpected results. This is the
+  repeatable local/CI invocation (see "Running the whole suite" below). Adding
+  an `.ini` grows the gate; there is no separate list to maintain.
+- `tests/wpt/run_report.py` — **ours** — HTML report, not a gate: always runs
+  and always exits 0 (unless the run itself couldn't start), writing a
+  self-contained `.tmp/wpt-report.html` (test/subtest counts, pass/fail per
+  test, expandable per-subtest detail with the failure message, and whether
+  each result matched its `.ini` expectation). Defaults to the same curated
+  subset as `run_suite.py`; `--all` instead runs every vendored `.html` under
+  `dom/nodes/` (168 files, not just the 20 curated ones) — most of those were
+  never vetted for this minimal BiDi-only executor (no `test_driver.*`,
+  multi-window, iframes), so expect ERROR/TIMEOUT/FAIL noise there, not bugs
+  worth filing without individually checking first; use it to survey, not to
+  gate. See "HTML report" below.
 - `tests/wpt/config.json` — **ours** (S4) — `wptserve` config override: pins
   `browser_host` to `127.0.0.1` (the default, `web-platform.test`, needs
   `/etc/hosts` entries this task's "no live network" rule can't rely on) and
   disables the `wss`/`h2`/`webtransport-h3`/`dns` servers the smoke test
   doesn't need (Python 3.14's `ssl` module dropped `wrap_socket`, breaking
-  `wptserve`'s `wss` server; unrelated to Lumen).
+  `wptserve`'s `wss` server; unrelated to Lumen). HTTP ports are `18300`/`18301`,
+  not the WPT default `8000`/`8001` — the 8000-range falls inside a Windows
+  dynamic excluded-port range here (`netsh interface ipv4 show
+  excludedportrange protocol=tcp`), so `wptserve` failed to bind with
+  `WinError 10013`. The first replacement, `8300`/`8301`, turned out to sit
+  inside this machine's *ephemeral* range (1024-15000, `netsh int ipv4 show
+  dynamicport tcp`) and was stolen by an unrelated process on 2026-07-28,
+  costing three failed runs — hence the move above every common ephemeral
+  range. See "Troubleshooting" below.
 - `tests/wpt/metadata/` — `--metadata` root; holds the generated (gitignored)
-  `MANIFEST.json` and will hold `.ini` expectations from S5 onward.
+  `MANIFEST.json` and the committed `.ini` expectations (S5 onward, under
+  `metadata/dom/nodes/`).
 
 ## Python setup
 
@@ -160,11 +199,136 @@ Once `pip install -r tests/wpt/requirements.txt` has populated the venv, nothing
 above touches the network — the vendored tree in `tools/`/`tests/wpt/` is a
 committed snapshot (`tests/wpt/VENDOR.md`), not a submodule or a runtime clone.
 
+## The curated subset (S5 + S6)
+
+`metadata/dom/nodes/*.html.ini` pins the expected result of a curated set of
+**21 `dom/nodes/` tests** — 18 fully-synchronous ones (S5; no iframes / XHR /
+`testdriver` / `async_test`) plus 3 async `MutationObserver-*` tests (S6;
+`promise_test`/`async_test`, the only self-contained async tests in the
+vendored `dom/` corpus). Every genuine failure is recorded as `expected: FAIL`
+(and one whole-harness `expected: TIMEOUT`, `MutationObserver-disconnect.html`),
+so the whole set runs **green** (0 unexpected) and acts as a regression ratchet
+— same idea as `KNOWN_DEBTORS` in `graphic_tests/`, but tool-native. Each `.ini`
+is header-commented with the engine bug it tracks (BUG-302/309/310/311/312/
+313/314 for S5; BUG-317/318/319 for S6); flip a `FAIL` to `PASS` in the same
+commit that lands the fix.
+
+## Running the whole suite (S7 gate)
+
+`tests/wpt/run_suite.py` is the repeatable local/CI invocation: it discovers
+the curated subset from the committed `.ini` files (no hand-kept test list) and
+runs it as one pass/fail gate. On Windows Git Bash set
+`MSYS2_ARG_CONV_EXCL='/dom'` so the leading-slash test IDs the runner emits
+aren't mangled into Windows paths:
+
+```bash
+export LUMEN_PROFILE=dev-release MSYS2_ARG_CONV_EXCL='/dom'
+BIN=$(cygpath -w "$PWD/target/dev-release/lumen.exe")
+tests/wpt/.venv/Scripts/python.exe tests/wpt/run_suite.py --binary "$BIN"
+# → "running 20 curated WPT tests" then
+#   "Ran 61 checks (41 subtests, 20 tests) ... Unexpected results: 0", exit 0
+```
+
+The curated-subset size drifts as tests are added/excluded (see "Adding a test"
+below) — don't hardcode it elsewhere; `run_suite.py --binary "$BIN"` always
+prints the current count.
+
+## HTML report
+
+`tests/wpt/run_report.py` runs the same curated subset (or, with `--all`,
+every vendored `dom/nodes/*.html` test) and writes a self-contained HTML file
+— open it in any browser, no server needed. Unlike `run_suite.py` it's not a
+gate: it always writes the report and exits 0 regardless of how many tests
+failed, so use it to *look at* results rather than to fail a build.
+
+```bash
+export LUMEN_PROFILE=dev-release MSYS2_ARG_CONV_EXCL='/dom'
+BIN=$(cygpath -w "$PWD/target/dev-release/lumen.exe")
+tests/wpt/.venv/Scripts/python.exe tests/wpt/run_report.py --binary "$BIN" --out .tmp/wpt-report.html
+# → "tests: 20/20 harness OK; subtests: 35/41 passed"
+#   "report written to .tmp/wpt-report.html"
+```
+
+The report shows, per test: harness status (`OK`/`ERROR`/`TIMEOUT`/`CRASH`),
+subtests passed/total, and duration; expand a row for the per-subtest
+breakdown with failure messages. Summary cards at the top separate "raw"
+pass/fail counts from "unexpected (vs `.ini`)" — a subtest can legitimately
+`FAIL` while still being 0 unexpected, if that failure is pinned as
+`expected: FAIL` (a tracked, known gap) rather than a surprise regression.
+
+`--all` runs every vendored/generatable test under `--root` (default
+`dom/nodes`, 168 files) instead of just the 20 curated ones — most were never
+vetted for this project's minimal BiDi-only executor (no `test_driver.*`,
+multi-window, iframes), so expect a lot of ERROR/TIMEOUT/FAIL noise there.
+Useful to survey what else might be worth curating next; don't file bugs off
+it without checking each failure individually first (same discipline as
+"Adding a test" below) — and budget more time for it (no per-test
+parallelism). Pass `--root FileAPI` (or any other vendored category under
+`tests/wpt/`) plus `--recursive` to survey a category organized into
+subdirectories — `--recursive` walks the directory tree and expands
+`.any.js`/`.window.js` templates into their `.any.html`/`.window.html` ids
+the way `wptserve`'s `AnyHtmlHandler`/`WindowHandler` do at request time,
+skipping `support`/`resources` fixture dirs and `-manual.html` tests.
+Without `--recursive`, `--root` still just globs `*.html` at that
+directory's top level (the `dom/nodes` default's original, deliberately
+non-recursive behavior — its own subdirectories are crashtests/other
+never-vetted sub-suites, not part of the 168-file count).
+
+(Omit `--binary` and it defaults to `target/$LUMEN_PROFILE/lumen.exe`; pass it
+explicitly when running the script from a `git worktree`, whose own `target/`
+is empty. Use `run_smoke.py` with an explicit test-id list instead only to run
+an ad-hoc subset.)
+
 ## Adding a test / growing the suite
 
-Not yet applicable — S5 ("Expectations + curated subset") is where the included
-test set grows past the single vendored `dom/nodes/` category and `.ini`
-expectations get introduced. This section will be filled in then.
+1. Pick a **synchronous** `test()`-based test (grep the candidate for
+   `async_test`/`promise_test`/`test_driver`/`<iframe>`/`XMLHttpRequest` — skip
+   if any match; those wait on machinery the BiDi-only executor doesn't drive
+   yet). Confirm any `<script src=...>` helpers it pulls are vendored under
+   `tests/wpt/` (a missing helper makes the test error, not fail cleanly).
+2. Run it through `run_smoke.py` (above) with an **empty** `--metadata` dir to
+   see the raw per-subtest result (all results show as "unexpected"), or read a
+   `--log-wptreport=out.json` dump.
+3. For each genuinely-failing subtest, add an `[<subtest name>]` /
+   `expected: FAIL` block to `metadata/dom/nodes/<test>.html.ini` (escape `\`,
+   `[`, `]` in the heading). File a `BUG-NNN` for the underlying engine gap and
+   name it in the `.ini` header comment — **never edit the vendored test to
+   make it pass.** A whole-test `TIMEOUT`/`ERROR` (harness never completed) is a
+   deeper gap: prefer excluding the test and filing the bug over pinning
+   `expected: TIMEOUT`.
+4. Re-run the curated set and confirm it's still green (0 unexpected).
+
+## Troubleshooting: "Servers failed to start: http:8301"
+
+`wptserve` binds the two fixed ports from `tests/wpt/config.json`. If either is
+taken, the run dies after ~35 s of CA generation with an opaque traceback whose
+only useful line is
+
+```
+wptserve CRITICAL Failed to start HTTP server on port <N>; is something already using that port?
+[WinError 10013] (WSAEACCES — access denied, *not* "in use")
+```
+
+Two traps when diagnosing this:
+
+* **`netstat` can show nothing.** A socket merely *bound* (not listening, not
+  connected) is invisible to `netstat -ano`; `Get-NetTCPConnection -LocalPort <N>`
+  shows it with `State: Bound` and the owning PID. On 2026-07-28 that PID was a
+  VPN client holding 8301/8302/8304/8305/8307/8309 this way.
+* **The ports used to live inside this machine's ephemeral range.**
+  `netsh int ipv4 show dynamicport tcp` reported start 1024, 13977 ports — i.e.
+  1024-15000, which contained the old 8300/8301. Any outgoing connection from
+  any process could therefore be handed a WPT port. That is why the ports were
+  moved to **18300/18301** (above every common ephemeral range: Windows'
+  default 49152+, Linux' 32768+, and this machine's 1024-15000).
+
+Quick check for whether a port is usable at all:
+
+```bash
+python -c "
+import socket
+s=socket.socket(); s.bind(('127.0.0.1',18301)); s.listen(1); print('OK')"
+```
 
 ## Re-vendoring
 

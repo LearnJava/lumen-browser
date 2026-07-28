@@ -128,8 +128,9 @@ enum RenderMsg {
     SetPreviewScale(f32),
     /// Фиксированное смещение страницы (ADR-016 M0.4).
     SetPageOffset { x: f32, y: f32 },
-    /// Регистрация изображения под ключом.
-    RegisterImage { src: String, image: Image },
+    /// Регистрация изображения под ключом. `Arc<Image>` (BUG-272 срез 17):
+    /// пересылка в render-поток клонирует указатель, а не пиксельный буфер.
+    RegisterImage { src: String, image: Arc<Image> },
     /// Сброс всех зарегистрированных изображений.
     ClearImages,
     /// Регистрация offscreen-снимка слоя (View Transitions).
@@ -299,9 +300,10 @@ impl RenderBackend for ThreadedRenderBackend {
         self.send(RenderMsg::SetScaleFactor(scale));
     }
 
-    fn register_image(&mut self, src: String, image: &Image) -> Result<(), String> {
+    fn register_image(&mut self, src: String, image: Arc<Image>) -> Result<(), String> {
         // Fire-and-forget: результат загрузки в GPU не возвращается синхронно.
-        self.send(RenderMsg::RegisterImage { src, image: image.clone() });
+        // `image` — уже `Arc`, пересылаем указатель (BUG-272 срез 17).
+        self.send(RenderMsg::RegisterImage { src, image });
         Ok(())
     }
 
@@ -640,7 +642,7 @@ fn process_batch(
             RenderMsg::SetPreviewScale(s) => backend.set_preview_scale(s),
             RenderMsg::SetPageOffset { x, y } => backend.set_page_offset(x, y),
             RenderMsg::RegisterImage { src, image } => {
-                if let Err(e) = backend.register_image(src, &image) {
+                if let Err(e) = backend.register_image(src, image) {
                     eprintln!("[render-thread] register_image: {e}");
                 }
             }

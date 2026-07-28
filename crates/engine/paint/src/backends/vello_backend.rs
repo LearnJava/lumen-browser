@@ -87,7 +87,7 @@ impl RenderBackend for VelloBackend {
         self.scale = scale;
     }
 
-    fn register_image(&mut self, src: String, _image: &Image) -> Result<(), String> {
+    fn register_image(&mut self, src: String, _image: Arc<Image>) -> Result<(), String> {
         eprintln!("VelloBackend::register_image({src:?}) — no-op");
         Ok(())
     }
@@ -208,7 +208,7 @@ mod tests {
             data: vec![0u8; 16],
             icc_profile: None,
         };
-        assert!(b.register_image("test.png".into(), &img).is_ok());
+        assert!(b.register_image("test.png".into(), Arc::new(img)).is_ok());
     }
 
     #[test]

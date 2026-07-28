@@ -1,0 +1,24 @@
+[package]
+name = "lumen-chrome"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: compile-time bridge from the CC design asset (assets/chrome/chrome.html) to typed Rust — element-id resolver, ChromeAction enum, template registry."
+build = "build.rs"
+
+[dependencies]
+lumen-html-parser = { workspace = true }
+lumen-css-parser = { workspace = true }
+lumen-dom = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[build-dependencies]
+lumen-html-parser = { workspace = true }
+lumen-css-parser = { workspace = true }
+lumen-dom = { workspace = true }
+
+[dev-dependencies]
+lumen-layout = { workspace = true }
+lumen-core = { workspace = true }

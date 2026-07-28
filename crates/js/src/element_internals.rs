@@ -6,7 +6,9 @@
 /// `data-lumen-state-<name>` attribute on the host element via `_lumen_set_attr`/
 /// `_lumen_remove_attr`, which `:state(<name>)` (`crates/engine/css-parser`,
 /// `crates/engine/layout/src/style.rs`) matches directly — layout never calls
-/// into the JS engine during selector matching.
+/// into the JS engine during selector matching. Native binding
+/// `_lumen_element_internals_get_states(nid)` additionally exposes the active
+/// states of a given node id back to Rust for debugging/introspection.
 use rquickjs::Ctx;
 
 /// Install ElementInternals and CustomStateSet bindings into the JS context.
@@ -193,6 +195,20 @@ const ELEMENT_INTERNALS_SHIM: &str = r#"
     };
   }
 
+  // Native binding: returns JSON array of active states for a given node id.
+  // Debugging/introspection only — the `:state()` selector itself matches the
+  // `data-lumen-state-<name>` sentinel attribute directly (see the reflection
+  // in `add`/`delete`/`clear` above), so layout never needs to call into the
+  // JS engine during style computation.
+  globalThis._lumen_element_internals_get_states = function _lumen_element_internals_get_states(nid) {
+    // Walk registered internals by nid — Phase 0: linear scan via __nid property.
+    // Phase 1: replace with a WeakMap keyed on element objects.
+    const el = typeof _lumen_get_element_by_nid === 'function'
+      ? _lumen_get_element_by_nid(nid)
+      : null;
+    if (!el || !el._elementInternals) return '[]';
+    return JSON.stringify([...el._elementInternals.states]);
+  };
 })();
 "#;
 
@@ -286,6 +302,23 @@ mod tests {
                     internals.states.clear();
                     var s2 = internals.states.size;
                     h1 && h2 && s1 === 2 && !h3 && s2 === 0
+                    "#,
+                )
+                .unwrap();
+            assert!(ok);
+        });
+    }
+
+    #[test]
+    fn custom_state_set_delete_of_absent_state_does_not_touch_attr() {
+        with_element_internals_api(|ctx| {
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var el = makeEl(7);
+                    var internals = el.attachInternals();
+                    var had = internals.states.delete('never-added');
+                    !had && window.__attrs['7:data-lumen-state-never-added'] === undefined
                     "#,
                 )
                 .unwrap();

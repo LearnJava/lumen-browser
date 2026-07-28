@@ -8,6 +8,7 @@
 //! provides [`hit_test`] + [`build_panel`].
 
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 use lumen_core::geom::Rect;
 use lumen_knowledge::{ReadLaterEntry, ReadStatus};
 use lumen_layout::{Color, FontStyle, FontWeight};
@@ -164,22 +165,25 @@ pub fn build_panel(
     let py = tab_bar_h + 4.0;
 
     // ── Background + border ──────────────────────────────────────────────────
-    let border_radii = uniform_radii(6.0);
+    let border_radii = uniform_radii(radius::LG);
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         radii: border_radii,
         color: pal.overlay_border,
     });
+    // Inner content is inset 1px from the border, so its radius is the panel
+    // radius minus that inset to stay visually concentric with the outer edge.
+    let inner_radius = radius::LG - 1.0;
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
-        radii: uniform_radii(5.0),
+        radii: uniform_radii(inner_radius),
         color: pal.overlay_bg,
     });
 
     // ── Header ───────────────────────────────────────────────────────────────
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, HEADER_H),
-        radii: CornerRadii { tl: 5.0, tl_y: 5.0, tr: 5.0, tr_y: 5.0, bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
+        radii: CornerRadii { tl: inner_radius, tl_y: inner_radius, tr: inner_radius, tr_y: inner_radius, bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
         color: pal.header_bg,
     });
     let count = panel.entries.len();
@@ -252,7 +256,7 @@ pub fn build_panel(
             let badge_x = px + PANEL_W - DELETE_W - PAD - 54.0;
             dl.push(DisplayCommand::FillRoundedRect {
                 rect: Rect::new(badge_x, row_y + 10.0, 46.0, 14.0),
-                radii: uniform_radii(3.0),
+                radii: uniform_radii(radius::MD),
                 color: badge_color,
             });
             dl.push(make_text(badge_text.to_owned(), badge_x + 4.0, row_y + 12.0, 40.0, 9.0, FontWeight::BOLD, BADGE_TEXT));

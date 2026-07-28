@@ -20,7 +20,7 @@ use lumen_dom::{
     Selection,
     ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
-use lumen_layout::{matches_selector, query_all, query_all_within};
+use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
 use lumen_core::WebStorage;
@@ -657,6 +657,32 @@ fn install_primitives(
                     .collect()
             }
         );
+        // BUG-291: Element/DocumentFragment/ShadowRoot.querySelector(All) must be
+        // scoped to descendants of the calling node, not the whole document —
+        // the unscoped `_lumen_query_selector(_all)` above silently found nothing
+        // for subtrees not yet attached to the document (`testharness.js` builds
+        // its results table off-document before appending it).
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_scoped",
+            move |node_id: u32, sel: String| -> Option<u32> {
+                let doc = d.lock().unwrap();
+                let scope = NodeId::from_index(node_id as usize);
+                query_all_scoped(&doc, scope, &sel).into_iter().next().map(|n| n.index() as u32)
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_query_selector_all_scoped",
+            move |node_id: u32, sel: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let scope = NodeId::from_index(node_id as usize);
+                query_all_scoped(&doc, scope, &sel)
+                    .into_iter()
+                    .map(|n| n.index() as u32)
+                    .collect()
+            }
+        );
         let d = Arc::clone(&doc);
         reg!(
             "_lumen_node_matches_selector",
@@ -715,6 +741,64 @@ fn install_primitives(
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 matches!(doc.get(nid).data, NodeData::Text(_))
+            }
+        );
+        // Mirrors the V8 registration in `v8_runtime.rs` — needed so
+        // `document.createComment`/`CharacterData.prototype` (shared
+        // WEB_API_SHIM) don't crash with `is not a function` under the
+        // rquickjs rollback build (`--features quickjs`).
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_is_comment_node",
+            move |node_id: u32| -> bool {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                matches!(doc.get(nid).data, NodeData::Comment(_))
+            }
+        );
+        // BUG-321: DocumentType support. `_lumen_is_doctype` classifies a node so
+        // `document.childNodes` can wrap the doctype child as a DocumentType;
+        // `_lumen_get_document_doctype` returns the document's doctype child (the
+        // `document.doctype` property); `_lumen_get_doctype_field` reads the
+        // `name`/`publicId`/`systemId` of a DocumentType node.
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_is_doctype",
+            move |node_id: u32| -> bool {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                matches!(doc.get(nid).data, NodeData::Doctype { .. })
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_document_doctype", move || -> Option<u32> {
+            let doc = d.lock().unwrap();
+            let root = doc.root();
+            doc.get(root)
+                .children
+                .iter()
+                .copied()
+                .find(|&c| matches!(doc.get(c).data, NodeData::Doctype { .. }))
+                .map(|n| n.index() as u32)
+        });
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_get_doctype_field",
+            move |node_id: u32, which: String| -> Option<String> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                match &doc.get(nid).data {
+                    NodeData::Doctype {
+                        name,
+                        public_id,
+                        system_id,
+                    } => Some(match which.as_str() {
+                        "public" => public_id.clone(),
+                        "system" => system_id.clone(),
+                        _ => name.clone(),
+                    }),
+                    _ => None,
+                }
             }
         );
         let d = Arc::clone(&doc);
@@ -891,6 +975,15 @@ fn install_primitives(
             move |text: String| -> u32 {
                 let mut doc = d.lock().unwrap();
                 let nid = doc.create_text(text);
+                nid.index() as u32
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_create_comment",
+            move |text: String| -> u32 {
+                let mut doc = d.lock().unwrap();
+                let nid = doc.create_comment(text);
                 nid.index() as u32
             }
         );
@@ -3121,7 +3214,14 @@ fn find_first_matching(
     None
 }
 
+// Mirrors `v8_runtime::collect_text_content` — see there for the CharacterData
+// rationale (a Comment's own data isn't recursed into via `collect_text_inner`,
+// which intentionally only concatenates Text descendants for element
+// `.textContent`).
 fn collect_text_content(doc: &Document, id: NodeId) -> String {
+    if let NodeData::Comment(s) = &doc.get(id).data {
+        return s.clone();
+    }
     let mut out = String::new();
     collect_text_inner(doc, id, &mut out);
     out
@@ -3137,7 +3237,17 @@ fn collect_text_inner(doc: &Document, id: NodeId, out: &mut String) {
     }
 }
 
+// Mirrors `v8_runtime::set_text_content` — see there for why a leaf Text/Comment
+// receiver must be mutated in place instead of getting Element/Document
+// "replace all children" semantics.
 fn set_text_content(doc: &mut Document, id: NodeId, text: &str) {
+    match &mut doc.get_mut(id).data {
+        NodeData::Text(s) | NodeData::Comment(s) => {
+            *s = text.to_string();
+            return;
+        }
+        _ => {}
+    }
     let children: Vec<NodeId> = doc.get(id).children.clone();
     for child in children {
         doc.detach(child);
@@ -3189,6 +3299,18 @@ fn remove_attribute(doc: &mut Document, id: NodeId, name: &str) {
 /// recursion when `from_rq` serializes the returned object (parent↔child cycles).
 pub(crate) const WEB_API_SHIM: &str = "
 function _lumen_u2n(v) { return v !== undefined ? v : null; }
+
+// DOM LS §4.5/§4.9: getElementsByClassName(names) matches elements carrying
+// EVERY whitespace-separated class token. Build a compound CSS class selector
+// ('.a.b') and reuse the native query the CSS engine already runs — same
+// static-array simplification `getElementsByTagName` makes (BUG-302). Returns
+// null for an empty token list so callers can short-circuit to an empty array
+// (a '' selector would otherwise throw in the query engine).
+function _lumen_class_selector(names) {
+    var parts = String(names).split(/\\s+/).filter(function (s) { return s.length > 0; });
+    if (parts.length === 0) return null;
+    return parts.map(function (c) { return '.' + c; }).join('');
+}
 
 // ── Event / CustomEvent constructors ─────────────────────────────────────────
 
@@ -3828,11 +3950,61 @@ function _lumen_dispatch_locked_mousemove(nid, clientX, clientY, dx, dy, mod) {
     _lumen_dispatch_rich(nid, pev);
 }
 
-// Called from shell for pointer events (W3C Pointer Events Level 2).
+// Build a non-dispatched PointerEvent representing one buffered intermediate
+// sample for _lumen_dispatch_pointer_event's getCoalescedEvents()/
+// getPredictedEvents() arrays (Pointer Events L3 §4.1). Mirrors the main
+// event's fields except position.
+function _lumen_make_coalesced_pointer_event(type, cx, cy, button, buttons, mod, bubbles) {
+    var cev = new PointerEvent(type, {
+        bubbles: bubbles, cancelable: bubbles, isTrusted: true,
+        clientX: cx, clientY: cy,
+        screenX: cx, screenY: cy,
+        pageX:   cx, pageY:   cy,
+        button: button, buttons: buttons,
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
+        pointerId: 1, pointerType: 'mouse', isPrimary: true,
+        pressure: buttons ? 0.5 : 0.0,
+        altitudeAngle: Math.PI / 2, azimuthAngle: 0,
+        width: 1, height: 1,
+        tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
+    });
+    cev.getCoalescedEvents = function() { return [cev]; };
+    cev.getPredictedEvents = function() { return []; };
+    return cev;
+}
+
+// Pointer Events L3 §4.1: linearly extrapolate up to 2 future positions from
+// the last two entries of `coalesced` (oldest..newest, main event last).
+// Returns [] when fewer than 2 points are available (no velocity to derive).
+// Not a spec-mandated algorithm — linear extrapolation is an accepted default.
+function _lumen_predict_pointer_events(coalesced) {
+    var n = coalesced.length;
+    if (n < 2) return [];
+    var last = coalesced[n - 1];
+    var prev = coalesced[n - 2];
+    var dx = last.clientX - prev.clientX;
+    var dy = last.clientY - prev.clientY;
+    var mod = (last.ctrlKey ? 1 : 0) | (last.shiftKey ? 2 : 0) |
+              (last.altKey  ? 4 : 0) | (last.metaKey  ? 8 : 0);
+    var out = [];
+    for (var i = 1; i <= 2; i++) {
+        out.push(_lumen_make_coalesced_pointer_event(
+            last.type, last.clientX + dx * i, last.clientY + dy * i,
+            last.button, last.buttons, mod, last.bubbles
+        ));
+    }
+    return out;
+}
+
+// Called from shell for pointer events (W3C Pointer Events Level 2/3).
 // Mirrors _lumen_dispatch_mouse_event but creates a PointerEvent (extends MouseEvent).
 // Non-bubbling types (pointerenter / pointerleave) set bubbles:false per spec.
 // mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
-function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod) {
+// coalesced: optional array of [x,y] CSS-pixel positions buffered since the
+// last dispatch (Level 3 §4.1), oldest first, NOT including this event's own
+// (clientX, clientY). Omitted/empty for non-move event types.
+function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod, coalesced) {
     var bubbles = (type !== 'pointerenter' && type !== 'pointerleave');
     var ev = new PointerEvent(type, {
         bubbles: bubbles, cancelable: bubbles, isTrusted: true,
@@ -3849,13 +4021,22 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
         width: 1, height: 1,
         tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
-    // Level 3 §4.1: this dispatcher is for non-move pointer types (down/up/
-    // enter/leave/over/out) plus one-off synthetic pointermove (pointer-lock,
-    // automation single-step) — these never coalesce, so a sequence
-    // containing only this event is the spec-correct answer, not a stub.
-    // Real batched pointermove goes through `_lumen_dispatch_pointer_move_coalesced`.
-    ev.getCoalescedEvents = function() { return [ev]; };
-    ev.getPredictedEvents = function() { return []; };
+    // Level 3 §4.1: intermediate samples buffered since the last dispatch,
+    // then this event appended last (spec order: oldest..newest, main event
+    // last). Without `coalesced` (non-move event types, or callers using the
+    // dedicated `_lumen_dispatch_pointer_move_coalesced` instead) this is
+    // just [ev], with no predicted events — same as the non-coalescing case.
+    var coalescedEvents = [];
+    if (Array.isArray(coalesced)) {
+        for (var i = 0; i < coalesced.length; i++) {
+            coalescedEvents.push(_lumen_make_coalesced_pointer_event(
+                type, coalesced[i][0], coalesced[i][1], button, buttons, mod, bubbles
+            ));
+        }
+    }
+    coalescedEvents.push(ev);
+    ev.getCoalescedEvents = function() { return coalescedEvents; };
+    ev.getPredictedEvents = function() { return _lumen_predict_pointer_events(coalescedEvents); };
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
@@ -4076,6 +4257,7 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
         get textContent() { return _lumen_get_text_content(nid); },
         set textContent(v){ _lumen_set_text_content(nid, String(v)); },
         get style()       { return _style; },
+        // Scoped to this shadow tree's descendants — see BUG-291.
         querySelector:    function(sel) {
             var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
@@ -4127,10 +4309,19 @@ function _lumen_make_document_fragment(nid) {
         __isDocumentFragment__: true,
         get nodeType()        { return 11; }, // Node.DOCUMENT_FRAGMENT_NODE
         get nodeName()        { return '#document-fragment'; },
+        // BUG-314: `new DocumentFragment()` is owned by the current document;
+        // `firstChild` returns the first inserted child (cached wrapper, so it
+        // compares === with the node handed to appendChild).
+        get ownerDocument()   { return document; },
+        get firstChild()      {
+            var ch = _lumen_get_children(nid);
+            return ch.length ? _lumen_make_element(ch[0]) : null;
+        },
         get textContent()     { return _lumen_get_text_content(nid); },
         set textContent(v)    { _lumen_set_text_content(nid, String(v)); },
         get innerHTML()       { return _lumen_get_inner_html(nid); },
         set innerHTML(v)      { _lumen_set_inner_html(nid, String(v)); },
+        // Scoped to this fragment's descendants — see BUG-291.
         querySelector:        function(sel) {
             var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
@@ -4156,8 +4347,9 @@ function _lumen_make_document_fragment(nid) {
             return _lumen_make_document_fragment(clone_nid);
         },
     };
+    // DOM §4.2.6 ParentNode.children — element-only live HTMLCollection (BUG-310).
     Object.defineProperty(frag, 'children', {
-        get: function() { return _lumen_get_children(nid).map(_lumen_make_element); },
+        get: function() { return _lumen_make_html_collection(nid); },
         enumerable: false, configurable: true,
     });
     Object.defineProperty(frag, 'childNodes', {
@@ -4165,6 +4357,515 @@ function _lumen_make_document_fragment(nid) {
         enumerable: false, configurable: true,
     });
     return frag;
+}
+
+// XML 1.0 Name production (https://www.w3.org/TR/xml/#NT-Name), used by
+// `document.createProcessingInstruction` to validate the `target` (DOM §4.5).
+// BMP-only: the astral NameStartChar range #x10000-#xEFFFF is omitted (no WPT
+// subtest exercises it and surrogate handling would add noise). Combining/
+// punctuation ranges are split so that e.g. U+00D7 (×) and U+00B7 (·, middle
+// dot) are excluded from NameStartChar but the latter is a valid NameChar.
+var _LUMEN_XML_NAME_START =
+    '\\u003A\\u0041-\\u005A\\u005F\\u0061-\\u007A' +
+    '\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D' +
+    '\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF' +
+    '\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD';
+var _LUMEN_XML_NAME_CHAR = _LUMEN_XML_NAME_START +
+    '\\u002D\\u002E\\u0030-\\u0039\\u00B7\\u0300-\\u036F\\u203F-\\u2040';
+var _LUMEN_XML_NAME_RE = new RegExp(
+    '^[' + _LUMEN_XML_NAME_START + '][' + _LUMEN_XML_NAME_CHAR + ']*$');
+
+// True if `s` matches the XML Name production. Empty string is not a Name.
+function _lumen_is_xml_name(s) {
+    return _LUMEN_XML_NAME_RE.test(s);
+}
+
+// DOM §4.2.3 (pre-insert validity): Node-insertion methods must throw
+// HierarchyRequestError when called on a CharacterData receiver — Text,
+// Comment and ProcessingInstruction can never have children. Shared by the
+// generic `appendChild` (Text/Comment, wrapped via `_lumen_make_element`) and
+// the ProcessingInstruction object below (BUG-325).
+function _lumen_character_data_insertion_error() {
+    return new DOMException(
+        'Node insertion methods are not supported on CharacterData nodes',
+        'HierarchyRequestError');
+}
+
+// DOM §4.5 ProcessingInstruction — a detached, JS-only CharacterData node
+// (no arena backing; PIs are never laid out). Enough surface for scripts to
+// read/write `target`/`data` and inspect `nodeType`/`ownerDocument`. The
+// `ProcessingInstruction`/`CharacterData`/`Node` interface globals (for
+// `instanceof`) are defined below (BUG-314) and this object's prototype is set
+// to `ProcessingInstruction.prototype` before it is returned.
+function _lumen_make_processing_instruction(target, data) {
+    var _data = String(data);
+    var pi = {
+        __isProcessingInstruction__: true,
+        get nodeType()      { return 7; }, // Node.PROCESSING_INSTRUCTION_NODE
+        get nodeName()      { return target; },
+        get target()        { return target; },
+        get data()          { return _data; },
+        set data(v)         { _data = String(v); },
+        get nodeValue()     { return _data; },
+        set nodeValue(v)    { _data = String(v); },
+        get textContent()   { return _data; },
+        set textContent(v)  { _data = String(v); },
+        get length()        { return _data.length; },
+        get ownerDocument() { return document; },
+        get parentNode()    { return null; },
+        get childNodes()    { return []; },
+        // BUG-325: CharacterData never has children — throw, not `TypeError:
+        // ... is not a function`, for the whole Node-insertion surface.
+        appendChild:  function()  { throw _lumen_character_data_insertion_error(); },
+        insertBefore: function()  { throw _lumen_character_data_insertion_error(); },
+        replaceChild: function()  { throw _lumen_character_data_insertion_error(); },
+        removeChild:  function()  { throw _lumen_character_data_insertion_error(); },
+    };
+    // BUG-314: give the PI object the ProcessingInstruction → CharacterData →
+    // Node prototype chain so `pi instanceof ProcessingInstruction` holds. The
+    // literal's own accessors above take precedence over anything on the chain.
+    Object.setPrototypeOf(pi, ProcessingInstruction.prototype);
+    return pi;
+}
+
+// ── DOM interface constructors (DOM Standard §4, HTML §4) ────────────────────
+// BUG-314: node-family interfaces exposed as global constructors. Two roles:
+//   1. Reference / `instanceof` resolution — before this a bare
+//      `x instanceof Node` or `window['Comment']` threw `... is not defined`,
+//      taking whole scripts (and testharness feature-detection) down. Every
+//      interface below at least resolves now.
+//   2. Real construction — `new Comment(data)`, `new Text(data)` and
+//      `new DocumentFragment()` build actual nodes.
+// The CharacterData family (Comment/Text/ProcessingInstruction) are detached
+// JS-only objects (no arena backing — same design as the pre-existing PI node),
+// so they get a REAL prototype chain and working `instanceof`. Native-backed
+// element/text wrappers built by `_lumen_build_element` get their [[Prototype]]
+// wired up too (BUG-322, see `_lumen_element_prototype_for` below), so ordinary
+// `document.createElement('div') instanceof HTMLDivElement/HTMLElement/Element/Node`
+// hold for live nodes as well — not just the detached constructor forms above. A
+// constructible `new Document()` and a live `document.doctype` node are deferred
+// (BUG-321, since fixed).
+
+// Abstract bases — not constructible from script (DOM §4.4/§4.9, HTML §3.2.2).
+function Node() { throw new TypeError('Illegal constructor'); }
+// DOM §4.4 Node.hasChildNodes() — shared by every node kind (element, live
+// text/comment, Document, DocumentFragment, DocumentType) via the Node.prototype
+// chain wired below and by BUG-322, so it only needs `this.childNodes` to exist
+// on the receiver. BUG-327: was missing entirely (`c.hasChildNodes is not a
+// function`), alongside `.childNodes` itself being absent on the ordinary live
+// element/text/comment wrapper — see the `childNodes` getter added to `_obj` in
+// `_lumen_build_element` below.
+Node.prototype.hasChildNodes = function() { return this.childNodes.length > 0; };
+function Element() { throw new TypeError('Illegal constructor'); }
+Element.prototype = Object.create(Node.prototype);
+Element.prototype.constructor = Element;
+function CharacterData() { throw new TypeError('Illegal constructor'); }
+CharacterData.prototype = Object.create(Node.prototype);
+CharacterData.prototype.constructor = CharacterData;
+// DOM §4.10 CharacterData — length/substringData/appendData/insertData/
+// deleteData/replaceData. Defined once on the shared prototype so Text,
+// Comment and ProcessingInstruction all get them: every concrete `data`
+// accessor (native live-tree nodes in `_lumen_build_element`, the detached
+// `_lumen_make_character_data` nodes behind `new Comment()`/`new Text()`, and
+// the `_lumen_make_processing_instruction` object) is an instance-own
+// accessor, so `this.data`/`this.data = ...` below resolve to the right
+// backing store regardless of which of the three shapes `this` is — no
+// separate native offset/count plumbing needed, since JS strings are already
+// UTF-16-code-unit indexed like the DOM spec expects.
+function _lumen_character_data_check_offset(offset, length) {
+    // WebIDL `unsigned long` (no [EnforceRange]) coerces via ToUint32 — matches
+    // `>>> 0` (negative/NaN/out-of-range values wrap, then get range-checked below).
+    offset = offset >>> 0;
+    if (offset > length) {
+        throw new DOMException(
+            'Index or size is negative or greater than the allowed amount',
+            'IndexSizeError');
+    }
+    return offset;
+}
+Object.defineProperty(CharacterData.prototype, 'length', {
+    get: function() { return this.data.length; },
+    enumerable: true, configurable: true,
+});
+CharacterData.prototype.substringData = function(offset, count) {
+    var data = this.data;
+    offset = _lumen_character_data_check_offset(offset, data.length);
+    count = count >>> 0;
+    if (offset + count > data.length) count = data.length - offset;
+    return data.substring(offset, offset + count);
+};
+CharacterData.prototype.appendData = function(data) {
+    this.data = this.data + String(data);
+};
+CharacterData.prototype.insertData = function(offset, data) {
+    this.replaceData(offset, 0, data);
+};
+CharacterData.prototype.deleteData = function(offset, count) {
+    this.replaceData(offset, count, '');
+};
+CharacterData.prototype.replaceData = function(offset, count, data) {
+    var oldData = this.data;
+    offset = _lumen_character_data_check_offset(offset, oldData.length);
+    count = count >>> 0;
+    if (offset + count > oldData.length) count = oldData.length - offset;
+    this.data = oldData.substring(0, offset) + String(data) + oldData.substring(offset + count);
+};
+function Attr() { throw new TypeError('Illegal constructor'); }
+Attr.prototype = Object.create(Node.prototype);
+Attr.prototype.constructor = Attr;
+// DOM §4.5 Document() — a detached document with no browsing context (BUG-321).
+// The live page is backed by the single arena `document` object literal below;
+// a script-created document cannot own arena nodes, so it tracks its children
+// in a JS array (`_lumen_build_detached_document`, defined below once
+// `DocumentType`/`DOMImplementation` exist). `new Document()` is the
+// `application/xml`-typed constructor form; `DOMImplementation.createDocument`/
+// `createHTMLDocument` (BUG-324) build the same shape with a different
+// prototype/contentType.
+function Document() {
+    if (!(this instanceof Document)) { throw new TypeError('Illegal constructor'); }
+    return _lumen_build_detached_document(Document.prototype, 'application/xml');
+}
+Document.prototype = Object.create(Node.prototype);
+Document.prototype.constructor = Document;
+// DOM §4.5 XMLDocument — the interface `DOMImplementation.createDocument`
+// returns (not constructible from script directly).
+function XMLDocument() { throw new TypeError('Illegal constructor'); }
+XMLDocument.prototype = Object.create(Document.prototype);
+XMLDocument.prototype.constructor = XMLDocument;
+function DocumentType() { throw new TypeError('Illegal constructor'); }
+DocumentType.prototype = Object.create(Node.prototype);
+DocumentType.prototype.constructor = DocumentType;
+function ProcessingInstruction() { throw new TypeError('Illegal constructor'); }
+ProcessingInstruction.prototype = Object.create(CharacterData.prototype);
+ProcessingInstruction.prototype.constructor = ProcessingInstruction;
+function HTMLElement() { throw new TypeError('Illegal constructor'); }
+HTMLElement.prototype = Object.create(Element.prototype);
+HTMLElement.prototype.constructor = HTMLElement;
+// DOM §4.5 DOMImplementation — not constructible from script; instances are
+// only minted by `_lumen_make_dom_implementation` (BUG-324).
+function DOMImplementation() { throw new TypeError('Illegal constructor'); }
+DOMImplementation.prototype.constructor = DOMImplementation;
+
+// Common concrete HTML element interfaces, generated so `instanceof
+// HTMLDivElement` (and feature-detection like `'HTMLDialogElement' in window`)
+// resolves. Each is a bare, non-constructible interface whose prototype chains
+// through HTMLElement; the `in globalThis` guard preserves already-defined
+// interfaces (e.g. the richer `HTMLImageElement`/`Image` pair below).
+['HTMLDivElement','HTMLSpanElement','HTMLParagraphElement','HTMLHeadingElement',
+ 'HTMLAnchorElement','HTMLInputElement','HTMLButtonElement','HTMLSelectElement',
+ 'HTMLOptionElement','HTMLTextAreaElement','HTMLLabelElement','HTMLFormElement',
+ 'HTMLUListElement','HTMLOListElement','HTMLLIElement','HTMLTableElement',
+ 'HTMLTableRowElement','HTMLTableCellElement','HTMLTableSectionElement',
+ 'HTMLScriptElement','HTMLStyleElement','HTMLLinkElement','HTMLMetaElement',
+ 'HTMLHtmlElement','HTMLHeadElement','HTMLBodyElement','HTMLTitleElement',
+ 'HTMLCanvasElement','HTMLVideoElement','HTMLAudioElement','HTMLIFrameElement',
+ 'HTMLTemplateElement','HTMLPreElement','HTMLBRElement','HTMLHRElement',
+ 'HTMLDialogElement','HTMLUnknownElement'
+].forEach(function(_name) {
+    if (_name in globalThis) return;
+    var _ctor = function() { throw new TypeError('Illegal constructor'); };
+    Object.defineProperty(_ctor, 'name', { value: _name, configurable: true });
+    _ctor.prototype = Object.create(HTMLElement.prototype);
+    _ctor.prototype.constructor = _ctor;
+    globalThis[_name] = _ctor;
+});
+
+// BUG-322: tag name (as returned by `_lumen_get_tag_name`, always upper-cased) →
+// concrete HTML*Element interface global. Tags without a dedicated entry fall back
+// to `HTMLElement.prototype` in `_lumen_element_prototype_for` below, matching HTML
+// LS §3.1.3 (most elements use the plain `HTMLElement` interface; `HTMLUnknownElement`
+// is reserved for genuinely unrecognized tag names, which this simplification does
+// not attempt to distinguish). `HTMLImageElement` (defined further down as the richer
+// `Image`/`HTMLImageElement` pair) is referenced here as a hoisted function
+// declaration — safe regardless of textual order, since this table itself is only
+// read lazily from `_lumen_build_element`, long after the whole shim has loaded.
+var _lumen_html_tag_prototypes = {
+    'DIV': HTMLDivElement, 'SPAN': HTMLSpanElement, 'P': HTMLParagraphElement,
+    'H1': HTMLHeadingElement, 'H2': HTMLHeadingElement, 'H3': HTMLHeadingElement,
+    'H4': HTMLHeadingElement, 'H5': HTMLHeadingElement, 'H6': HTMLHeadingElement,
+    'A': HTMLAnchorElement, 'INPUT': HTMLInputElement, 'BUTTON': HTMLButtonElement,
+    'SELECT': HTMLSelectElement, 'OPTION': HTMLOptionElement, 'TEXTAREA': HTMLTextAreaElement,
+    'LABEL': HTMLLabelElement, 'FORM': HTMLFormElement, 'UL': HTMLUListElement,
+    'OL': HTMLOListElement, 'LI': HTMLLIElement, 'TABLE': HTMLTableElement,
+    'TR': HTMLTableRowElement, 'TD': HTMLTableCellElement, 'TH': HTMLTableCellElement,
+    'THEAD': HTMLTableSectionElement, 'TBODY': HTMLTableSectionElement, 'TFOOT': HTMLTableSectionElement,
+    'SCRIPT': HTMLScriptElement, 'STYLE': HTMLStyleElement, 'LINK': HTMLLinkElement,
+    'META': HTMLMetaElement, 'HTML': HTMLHtmlElement, 'HEAD': HTMLHeadElement,
+    'BODY': HTMLBodyElement, 'TITLE': HTMLTitleElement, 'CANVAS': HTMLCanvasElement,
+    'VIDEO': HTMLVideoElement, 'AUDIO': HTMLAudioElement, 'IFRAME': HTMLIFrameElement,
+    'TEMPLATE': HTMLTemplateElement, 'PRE': HTMLPreElement, 'BR': HTMLBRElement,
+    'HR': HTMLHRElement, 'DIALOG': HTMLDialogElement, 'IMG': HTMLImageElement,
+};
+// BUG-322: resolves the [[Prototype]] a native element wrapper (`_lumen_build_element`)
+// should get. Non-HTML-namespace elements (SVG/MathML/unknown) get the generic
+// `Element.prototype` here — the SVG shim (`svg.rs`) re-points `createElementNS`
+// results at typed `SVG*Element` prototypes afterward, and those already chain
+// through `Element.prototype` (`class SVGElement extends Element`), so this is a
+// safe, non-conflicting default for anything the SVG shim doesn't touch (e.g. SVG
+// markup parsed via `innerHTML` rather than `createElementNS`).
+function _lumen_element_prototype_for(nid) {
+    var ns = _lumen_u2n(_lumen_get_namespace_uri(nid));
+    if (ns !== 'http://www.w3.org/1999/xhtml') return Element.prototype;
+    var ctor = _lumen_html_tag_prototypes[_lumen_get_tag_name(nid)];
+    return ctor ? ctor.prototype : HTMLElement.prototype;
+}
+
+// Builds a detached CharacterData node (Comment/Text) with `proto` as its
+// [[Prototype]] so both the DOM prototype chain (proto → CharacterData.prototype
+// → Node.prototype) and `instanceof` resolve. `data` is stringified per DOM §4.5
+// (undefined → '', null → 'null'); only the first constructor argument is read.
+function _lumen_make_character_data(nodeType, nodeName, data, proto) {
+    var _data = (data === undefined) ? '' : String(data);
+    var obj = Object.create(proto);
+    // data / nodeValue / textContent are the same mutable CharacterData string.
+    ['data', 'nodeValue', 'textContent'].forEach(function(_prop) {
+        Object.defineProperty(obj, _prop, {
+            get: function() { return _data; },
+            set: function(v) { _data = String(v); },
+            enumerable: true, configurable: true,
+        });
+    });
+    Object.defineProperty(obj, 'length',        { get: function() { return _data.length; }, enumerable: true, configurable: true });
+    Object.defineProperty(obj, 'nodeType',      { get: function() { return nodeType; },     enumerable: true, configurable: true });
+    Object.defineProperty(obj, 'nodeName',      { get: function() { return nodeName; },     enumerable: true, configurable: true });
+    Object.defineProperty(obj, 'ownerDocument', { get: function() { return document; },     enumerable: true, configurable: true });
+    Object.defineProperty(obj, 'parentNode',    { get: function() { return null; },         enumerable: true, configurable: true });
+    Object.defineProperty(obj, 'childNodes',    { get: function() { return []; },           enumerable: true, configurable: true });
+    return obj;
+}
+
+// DOM §4.5 Comment(data) / Text(data) — a returned object wins over `this`, so
+// `new Comment()`/`new Text()` yield the detached CharacterData node above.
+function Comment(data) { return _lumen_make_character_data(8, '#comment', data, Comment.prototype); }
+Comment.prototype = Object.create(CharacterData.prototype);
+Comment.prototype.constructor = Comment;
+function Text(data) { return _lumen_make_character_data(3, '#text', data, Text.prototype); }
+Text.prototype = Object.create(CharacterData.prototype);
+Text.prototype.constructor = Text;
+
+// DOM §4.7 DocumentFragment() — a native (arena-backed) empty fragment, so it
+// can hold real inserted children. The wrapper is a plain native-backed object,
+// so it is NOT a `DocumentFragment` instanceof; the interface global still
+// resolves for reference checks.
+function DocumentFragment() { return _lumen_make_document_fragment(_lumen_create_fragment()); }
+DocumentFragment.prototype = Object.create(Node.prototype);
+DocumentFragment.prototype.constructor = DocumentFragment;
+
+// BUG-321: a DocumentType wrapper (`nodeType` 10) whose [[Prototype]] is
+// DocumentType.prototype, so `document.doctype instanceof DocumentType` holds.
+// Interned in the shared `_lumen_element_wrappers` cache (keyed by nid) so that
+// `document.doctype` and `document.childNodes[1]` yield the SAME object
+// (`===` node identity) and `_lumen_gc_collect` purges it like any other
+// node wrapper. `name`/`publicId`/`systemId` read the native fields on demand.
+function _lumen_make_doctype(nid) {
+    if (nid === null || nid === undefined) return null;
+    var cached = _lumen_element_wrappers[nid];
+    if (cached !== undefined) return cached;
+    var _field = function(which) {
+        var v = _lumen_u2n(_lumen_get_doctype_field(nid, which));
+        return v !== null ? v : '';
+    };
+    var obj = Object.create(DocumentType.prototype);
+    Object.defineProperty(obj, '__nid__',       { value: nid, enumerable: false });
+    Object.defineProperty(obj, 'nodeType',      { get: function() { return 10; },            enumerable: true });
+    Object.defineProperty(obj, 'name',          { get: function() { return _field('name'); },   enumerable: true });
+    Object.defineProperty(obj, 'nodeName',      { get: function() { return _field('name'); },   enumerable: true });
+    Object.defineProperty(obj, 'publicId',      { get: function() { return _field('public'); }, enumerable: true });
+    Object.defineProperty(obj, 'systemId',      { get: function() { return _field('system'); }, enumerable: true });
+    Object.defineProperty(obj, 'ownerDocument', { get: function() { return document; },       enumerable: true });
+    Object.defineProperty(obj, 'parentNode',    { get: function() { return document; },       enumerable: true });
+    // DOM §4.4: DocumentType never has children — BUG-327's Node.prototype.hasChildNodes()
+    // needs `.childNodes` to exist on every node kind, not just element/text/comment.
+    Object.defineProperty(obj, 'childNodes',    { get: function() { return []; },             enumerable: true });
+    _lumen_element_wrappers[nid] = obj;
+    return obj;
+}
+
+// BUG-321: wrap a child nid by node kind so `document.childNodes` returns a
+// DocumentType for the doctype child rather than a bogus element wrapper.
+// Text / element / comment nodes fall through to `_lumen_make_element` (whose
+// `nodeType` getter already distinguishes text via `_lumen_is_text_node`).
+function _lumen_make_node(nid) {
+    if (nid === null || nid === undefined) return null;
+    if (_lumen_is_doctype(nid)) { return _lumen_make_doctype(nid); }
+    return _lumen_make_element(nid);
+}
+
+// BUG-324: a DocumentType minted by `DOMImplementation.createDocumentType` —
+// detached (no arena backing, unlike the page's own `<!doctype>` wrapped by
+// `_lumen_make_doctype` above). DOM §4.5 sets its node document to the
+// document whose implementation created it, even before any `appendChild`;
+// `__lumen_setOwner` lets `createDocument`/`appendChild` re-home it on
+// adoption into a (possibly different) document.
+function _lumen_make_detached_doctype(name, publicId, systemId, ownerDoc) {
+    var _owner = ownerDoc;
+    var obj = Object.create(DocumentType.prototype);
+    Object.defineProperty(obj, 'nodeType',      { get: function() { return 10; },   enumerable: true });
+    Object.defineProperty(obj, 'nodeName',      { get: function() { return name; }, enumerable: true });
+    Object.defineProperty(obj, 'name',          { get: function() { return name; }, enumerable: true });
+    Object.defineProperty(obj, 'publicId',      { get: function() { return publicId; }, enumerable: true });
+    Object.defineProperty(obj, 'systemId',      { get: function() { return systemId; }, enumerable: true });
+    Object.defineProperty(obj, 'nodeValue',     { get: function() { return null; }, enumerable: true });
+    Object.defineProperty(obj, 'parentNode',    { get: function() { return null; }, enumerable: true });
+    Object.defineProperty(obj, 'childNodes',    { get: function() { return []; },   enumerable: true });
+    Object.defineProperty(obj, 'ownerDocument', { get: function() { return _owner; }, enumerable: true });
+    Object.defineProperty(obj, '__lumen_setOwner', { value: function(doc) { _owner = doc; }, enumerable: false });
+    return obj;
+}
+
+// BUG-324: shared builder for a detached document (no browsing context) — used
+// by `new Document()` and by `DOMImplementation.createDocument`/
+// `createHTMLDocument`. `proto` fixes which interface's prototype chain the
+// result exposes (`Document.prototype` vs `XMLDocument.prototype`);
+// `contentType` is fixed at construction (DOM §4.5 / §7 — a document with no
+// browsing context always resolves to UTF-8 / about:blank / CSS1Compat).
+// `createElement`/`createElementNS`/`createTextNode` build real arena nodes
+// (never inserted into the live tree's root, so never rendered) so the
+// resulting subtree behaves like any other detached DOM subtree; their
+// `ownerDocument` still reads back as the single live `document` (the arena
+// has no per-node document tag) — a known simplification, not spec-accurate
+// for these detached documents.
+function _lumen_build_detached_document(proto, contentType) {
+    var doc = Object.create(proto);
+    var _children = [];
+    var _impl = null;
+    Object.defineProperty(doc, 'nodeType',      { get: function() { return 9; },            enumerable: true });
+    Object.defineProperty(doc, 'nodeName',      { get: function() { return '#document'; },  enumerable: true });
+    Object.defineProperty(doc, 'nodeValue',     { get: function() { return null; },         enumerable: true });
+    Object.defineProperty(doc, 'DOCUMENT_NODE', { get: function() { return 9; },            enumerable: true });
+    Object.defineProperty(doc, 'ownerDocument', { get: function() { return null; },         enumerable: true });
+    Object.defineProperty(doc, 'childNodes',    { get: function() { return _children.slice(); }, enumerable: true });
+    Object.defineProperty(doc, 'doctype', {
+        get: function() {
+            for (var i = 0; i < _children.length; i++) {
+                if (_children[i] && _children[i].nodeType === 10) { return _children[i]; }
+            }
+            return null;
+        },
+        enumerable: true,
+    });
+    Object.defineProperty(doc, 'documentElement', {
+        get: function() {
+            for (var i = 0; i < _children.length; i++) {
+                if (_children[i] && _children[i].nodeType === 1) { return _children[i]; }
+            }
+            return null;
+        },
+        enumerable: true,
+    });
+    Object.defineProperty(doc, 'implementation', {
+        get: function() {
+            if (_impl === null) { _impl = _lumen_make_dom_implementation(doc); }
+            return _impl;
+        },
+        enumerable: true,
+    });
+    Object.defineProperty(doc, 'URL',           { get: function() { return 'about:blank'; }, enumerable: true });
+    Object.defineProperty(doc, 'documentURI',   { get: function() { return 'about:blank'; }, enumerable: true });
+    Object.defineProperty(doc, 'compatMode',    { get: function() { return 'CSS1Compat'; },  enumerable: true });
+    Object.defineProperty(doc, 'characterSet',  { get: function() { return 'UTF-8'; },       enumerable: true });
+    Object.defineProperty(doc, 'charset',       { get: function() { return 'UTF-8'; },       enumerable: true });
+    Object.defineProperty(doc, 'inputEncoding', { get: function() { return 'UTF-8'; },       enumerable: true });
+    Object.defineProperty(doc, 'contentType',   { get: function() { return contentType; },   enumerable: true });
+    Object.defineProperty(doc, 'location',      { get: function() { return null; },          enumerable: true });
+    doc.createElement = function(tag) {
+        var nid = _lumen_create_element(String(tag).toLowerCase());
+        if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        return _lumen_make_element(nid);
+    };
+    doc.createElementNS = function(ns, qualifiedName) {
+        var local = String(qualifiedName || '').replace(/^[^:]+:/, '');
+        var nid = _lumen_create_element_ns(ns === null || ns === undefined ? '' : String(ns), local);
+        if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        return _lumen_make_element(nid);
+    };
+    doc.createTextNode = function(t) { return _lumen_make_element(_lumen_create_text_node(String(t))); };
+    doc.createComment = function(t) { return _lumen_make_element(_lumen_create_comment(t === undefined ? '' : String(t))); };
+    doc.createDocumentFragment = function() { return _lumen_make_document_fragment(_lumen_create_fragment()); };
+    doc.appendChild = function(node) {
+        if (node) {
+            if (typeof node.__lumen_setOwner === 'function') { node.__lumen_setOwner(doc); }
+            _children.push(node);
+        }
+        return node;
+    };
+    return doc;
+}
+
+// BUG-324: `document.implementation` (DOM §4.5 DOMImplementation) — one
+// instance per document, cached by the caller (`document`'s own getter below,
+// or `_lumen_build_detached_document`'s `_impl` closure) so repeated access
+// yields the SAME object (`document.implementation === document.implementation`,
+// WPT `Document-implementation.html`).
+function _lumen_make_dom_implementation(ownerDoc) {
+    var impl = {
+        // DOM §4.5 'validate': observed browser behavior (WPT
+        // `DOMImplementation-createDocumentType.html`) is far looser than the
+        // XML Name production `_lumen_is_xml_name` enforces elsewhere
+        // (`createProcessingInstruction`) — leading digits, symbols, empty
+        // strings, and stray/duplicate/leading/trailing colons are all
+        // accepted; only whitespace and '>' (which would corrupt a
+        // `<!DOCTYPE name>` serialization) throw.
+        createDocumentType: function(qualifiedName, publicId, systemId) {
+            var qn = String(qualifiedName);
+            if (/[\\s>]/.test(qn)) {
+                throw new DOMException(
+                    'createDocumentType: qualifiedName contains whitespace or the character >: ' + qn,
+                    'InvalidCharacterError');
+            }
+            return _lumen_make_detached_doctype(qn, String(publicId), String(systemId), ownerDoc);
+        },
+        // DOM §4.5: namespace/qualifiedName are both required (missing either
+        // throws TypeError, per WebIDL argument-count checking); qualifiedName
+        // '' or null/undefined omits the document element.
+        createDocument: function(namespace, qualifiedName, doctype) {
+            if (arguments.length < 2) {
+                throw new TypeError('createDocument requires at least 2 arguments');
+            }
+            var ns = (namespace === undefined || namespace === null) ? null : String(namespace);
+            var qn = (qualifiedName === undefined || qualifiedName === null) ? '' : String(qualifiedName);
+            var contentType = ns === 'http://www.w3.org/1999/xhtml' ? 'application/xhtml+xml'
+                : ns === 'http://www.w3.org/2000/svg' ? 'image/svg+xml'
+                : 'application/xml';
+            var doc = _lumen_build_detached_document(XMLDocument.prototype, contentType);
+            if (doctype !== null && doctype !== undefined) {
+                doc.appendChild(doctype);
+            }
+            if (qn !== '') {
+                var local = qn.replace(/^[^:]+:/, '');
+                var nid = _lumen_create_element_ns(ns === null ? '' : ns, local);
+                if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+                doc.appendChild(_lumen_make_element(nid));
+            }
+            return doc;
+        },
+        // DOM §4.5: builds the standard html>head,body skeleton as a REAL
+        // (arena-backed, but unattached to the live tree's root) subtree, so
+        // `documentElement.firstChild`/`lastChild` etc. traverse it normally.
+        // `title` is a WebIDL trailing optional argument with no default — an
+        // explicit `undefined` is treated the same as omitted (no <title>
+        // element at all), only other values (including `null`) create one.
+        createHTMLDocument: function(title) {
+            var doc = _lumen_build_detached_document(Document.prototype, 'text/html');
+            doc.appendChild(_lumen_make_detached_doctype('html', '', '', doc));
+            var htmlNid = _lumen_create_element('html');
+            var headNid = _lumen_create_element('head');
+            _lumen_append_child(htmlNid, headNid);
+            if (arguments.length > 0 && title !== undefined) {
+                var titleNid = _lumen_create_element('title');
+                _lumen_append_child(headNid, titleNid);
+                _lumen_append_child(titleNid, _lumen_create_text_node(String(title)));
+            }
+            var bodyNid = _lumen_create_element('body');
+            _lumen_append_child(htmlNid, bodyNid);
+            doc.appendChild(_lumen_make_element(htmlNid));
+            return doc;
+        },
+        // DOM §4.5: legacy no-op, always true.
+        hasFeature: function() { return true; },
+    };
+    Object.setPrototypeOf(impl, DOMImplementation.prototype);
+    return impl;
 }
 
 // Dispatch slotchange on all <slot> elements inside the shadow root of `host_nid`.
@@ -4181,8 +4882,9 @@ function _lumen_fire_slotchange(host_nid) {
 }
 
 // ── Form Constraint Validation API (HTML LS §4.10.21) ────────────────────────
-// Per-nid storage: persists across multiple _lumen_make_element calls for the
-// same node.
+// Per-nid storage, keyed independently of the (now cached, see BUG-291)
+// `_lumen_make_element` wrapper object — kept as separate maps rather than
+// folded onto the wrapper to avoid coupling this state to wrapper lifetime.
 
 // nid → custom validity message set via setCustomValidity() ('' → no custom error)
 var _validity_msg = {};
@@ -4192,16 +4894,6 @@ var _input_values = {};
 var _canvas2d_ctxs = {};
 // nid → cached GPUCanvasContext object (getContext('webgpu'), persists across _lumen_make_element).
 var _canvas_webgpu_ctxs = {};
-// nid → cached element/text-node JS wrapper (BUG-291). The DOM node arena is
-// append-only for the lifetime of a document (crates/engine/dom/src/lib.rs
-// `alloc()`; no free-list reuse until a future Phase-3 compaction), and this
-// whole shim is re-evaluated from scratch on every navigation/bfcache thaw
-// (fresh V8 isolate), so caching by nid for the life of the JS context is
-// safe: it can never alias a stale wrapper onto an unrelated later node.
-// Without this, repeated access (`.firstChild`, `.parentElement`, ...) minted
-// a brand-new object every time, breaking `===` node identity and silently
-// dropping any expando property set on a node between accesses.
-var _lumen_node_wrappers = {};
 // nid → cached ImageBitmapRenderingContext object (getContext('bitmaprenderer')).
 var _canvas_bitmaprenderer_ctxs = {};
 
@@ -4652,15 +5344,176 @@ function _lumen_canvas_dims(nid) {
 
 // ── Element factory ───────────────────────────────────────────────────────────
 
+// BUG-291: node wrappers must be stable under `===` for repeated access to the
+// same node (`tbody.lastChild === tr` etc.) — real-world JS (testharness.js's
+// results renderer among it) relies on reference identity. `_lumen_build_element`
+// used to run fresh on every `_lumen_make_element` call, minting a brand-new JS
+// object each time; this cache interns wrappers by nid so the same node always
+// yields the same object. Purged per-nid by `_lumen_gc_collect` (idle shell tick)
+// so detached, zero-JS-ref nodes don't retain memory here, same lifecycle as
+// `_input_values`/`_canvas2d_ctxs` below. Caching by nid for the life of the JS
+// context is safe even though this covers element *and* text-node wrappers: the
+// DOM node arena is append-only for the lifetime of a document
+// (`crates/engine/dom/src/lib.rs` `alloc()`; no free-list reuse until a future
+// Phase-3 compaction), and this whole shim is re-evaluated from scratch on
+// every navigation/bfcache thaw (fresh V8 isolate), so a cached wrapper can
+// never alias onto an unrelated later node.
+var _lumen_element_wrappers = {};
+
+// ── ParentNode / ElementTraversal helpers (DOM Standard §4.2.6/§4.2.7) ────────
+// BUG-310: element-only tree navigation. `_lumen_get_children` returns EVERY
+// child node (text/comment included), so `children`/`childElementCount`/
+// `firstElementChild`/… must filter to element nodes to match the spec.
+
+// True when `id` refers to an element node. Text nodes report via
+// `_lumen_is_text_node`; every other non-element (comment/document/fragment/
+// shadow-root) carries a `#`-prefixed node name, which a real element never does.
+function _lumen_is_element_nid(id) {
+    if (_lumen_is_text_node(id)) return false;
+    var t = _lumen_get_tag_name(id);
+    return typeof t === 'string' && t.length > 0 && t.charAt(0) !== '#';
+}
+
+// Element children of `nid`, in tree order, as raw node ids.
+function _lumen_element_child_nids(nid) {
+    var all = _lumen_get_children(nid);
+    var out = [];
+    for (var i = 0; i < all.length; i++) {
+        if (_lumen_is_element_nid(all[i])) out.push(all[i]);
+    }
+    return out;
+}
+
+// HTMLCollection marker prototype (DOM Standard §4.2.10.2) so `children` can
+// satisfy `x instanceof HTMLCollection`. Not constructible from script.
+function HTMLCollection() { throw new TypeError('Illegal constructor'); }
+
+// `namedItem` semantics (DOM §4.2.10.2): first element in `ids` (tree order)
+// whose `id`, or failing that whose `name`, equals `name`; `null` otherwise.
+function _lumen_html_collection_named(ids, name) {
+    for (var i = 0; i < ids.length; i++) {
+        if (_lumen_u2n(_lumen_get_attr(ids[i], 'id')) === name) return _lumen_make_element(ids[i]);
+    }
+    for (var j = 0; j < ids.length; j++) {
+        if (_lumen_u2n(_lumen_get_attr(ids[j], 'name')) === name) return _lumen_make_element(ids[j]);
+    }
+    return null;
+}
+
+// BUG-323: supported property names for `for-in`/`Object.getOwnPropertyNames`/
+// `hasOwnProperty` enumeration (DOM §4.2.10.2) — the `id`, then (failing that)
+// the `name` attribute of every element in the collection, in tree order,
+// ignoring later duplicates. Mirrors the id-pass-then-name-pass structure of
+// `_lumen_html_collection_named` above so the `ownKeys`/`getOwnPropertyDescriptor`
+// traps stay consistent with what `get`/`has`/`namedItem` already expose.
+function _lumen_html_collection_own_names(ids) {
+    var names = [];
+    var seen = {};
+    function add(v) {
+        if (v !== null && v !== '' && !Object.prototype.hasOwnProperty.call(seen, v)) {
+            seen[v] = true;
+            names.push(v);
+        }
+    }
+    for (var i = 0; i < ids.length; i++) add(_lumen_u2n(_lumen_get_attr(ids[i], 'id')));
+    for (var j = 0; j < ids.length; j++) add(_lumen_u2n(_lumen_get_attr(ids[j], 'name')));
+    return names;
+}
+
+// Live HTMLCollection over `owner_nid`'s element children (DOM §4.2.10.2).
+// Backed by a Proxy so `length`, indices and named lookups all re-query the
+// live tree on every access — the collection stays correct across
+// append/remove without being rebuilt. Consumers may index it (`coll[0]`),
+// call `.item(i)`/`.namedItem(name)` or read `.length`.
+function _lumen_make_html_collection(owner_nid) {
+    var proto = Object.create(HTMLCollection.prototype);
+    function ids() { return _lumen_element_child_nids(owner_nid); }
+    return new Proxy(proto, {
+        get: function(target, prop) {
+            if (prop === 'length') return ids().length;
+            if (prop === 'item') {
+                return function(i) {
+                    var list = ids();
+                    i = i >>> 0;
+                    return i < list.length ? _lumen_make_element(list[i]) : null;
+                };
+            }
+            if (prop === 'namedItem') {
+                return function(name) { return _lumen_html_collection_named(ids(), String(name)); };
+            }
+            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+                var list = ids();
+                var idx = parseInt(prop, 10);
+                return idx < list.length ? _lumen_make_element(list[idx]) : undefined;
+            }
+            if (typeof prop === 'string' && prop !== 'constructor') {
+                var named = _lumen_html_collection_named(ids(), prop);
+                if (named !== null) return named;
+            }
+            return target[prop];
+        },
+        has: function(target, prop) {
+            if (prop === 'length' || prop === 'item' || prop === 'namedItem') return true;
+            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+                return parseInt(prop, 10) < ids().length;
+            }
+            if (typeof prop === 'string' && _lumen_html_collection_named(ids(), prop) !== null) return true;
+            return prop in target;
+        },
+        // BUG-323: `ownKeys` + `getOwnPropertyDescriptor` so `for-in`,
+        // `Object.getOwnPropertyNames`/`keys` and `hasOwnProperty` see the
+        // collection's indices and named keys instead of the empty plain
+        // `proto` target. Indexed keys are enumerable (WebIDL legacy platform
+        // object indexed-property semantics); named keys are own but
+        // non-enumerable, matching real HTMLCollection behaviour where
+        // `for (var p in list)` yields only indices while
+        // `Object.getOwnPropertyNames`/`hasOwnProperty` also see named keys.
+        ownKeys: function(target) {
+            var list = ids();
+            var keys = [];
+            for (var i = 0; i < list.length; i++) keys.push(String(i));
+            var names = _lumen_html_collection_own_names(list);
+            for (var k = 0; k < names.length; k++) keys.push(names[k]);
+            return keys;
+        },
+        getOwnPropertyDescriptor: function(target, prop) {
+            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+                var list = ids();
+                var idx = parseInt(prop, 10);
+                if (idx < list.length) {
+                    return { value: _lumen_make_element(list[idx]), writable: false, enumerable: true, configurable: true };
+                }
+                return undefined;
+            }
+            if (typeof prop === 'string') {
+                var named = _lumen_html_collection_named(ids(), prop);
+                if (named !== null) {
+                    return { value: named, writable: false, enumerable: false, configurable: true };
+                }
+            }
+            return undefined;
+        },
+    });
+}
+
 function _lumen_make_element(nid) {
     if (nid === null || nid === undefined) return null;
     // BUG-291: return the interned wrapper if this nid was already wrapped,
     // so repeated access to the same underlying node (`.firstChild`,
     // `.parentElement`, `getElementById` twice, ...) yields the same JS
     // object — required for `===` node identity and for expando properties
-    // set on a node to survive later re-access.
-    var _existing = _lumen_node_wrappers[nid];
-    if (_existing !== undefined) return _existing;
+    // set on a node to survive later re-access. Split from the actual
+    // builder (`_lumen_build_element`) so the cache write below is the one
+    // and only place a wrapper gets interned, matching what `_lumen_gc_collect`
+    // purges.
+    var cached = _lumen_element_wrappers[nid];
+    if (cached !== undefined) return cached;
+    var built = _lumen_build_element(nid);
+    _lumen_element_wrappers[nid] = built;
+    return built;
+}
+
+function _lumen_build_element(nid) {
     var _classList = _lumen_make_class_list(nid);
     var _style     = _lumen_make_style(nid);
     var _returnValue = '';
@@ -4668,7 +5521,7 @@ function _lumen_make_element(nid) {
         __nid__: nid,
         get tagName()        { return _lumen_get_tag_name(nid); },
         get nodeName()       { return _lumen_get_tag_name(nid); },
-        get nodeType()       { return _lumen_is_text_node(nid) ? 3 : 1; },
+        get nodeType()       { return _lumen_is_text_node(nid) ? 3 : (_lumen_is_comment_node(nid) ? 8 : 1); },
         // DOM LS §4.9.1: XHTML namespace for HTML elements, `null` for non-element nodes
         // (text/comment). react-dom's root-listening bootstrap (BUG-281) reads this.
         get namespaceURI()   { return _lumen_u2n(_lumen_get_namespace_uri(nid)); },
@@ -4701,6 +5554,21 @@ function _lumen_make_element(nid) {
         },
         removeAttribute: function(n)    { _lumen_remove_attr(nid, String(n)); },
         hasAttribute:    function(n)    { return _lumen_get_attr(nid, String(n)) !== undefined; },
+        // DOM §4.9.2: hasAttributes() — true iff the element carries any attribute.
+        hasAttributes:   function()     { return _lumen_get_attr_names(nid).length > 0; },
+        // DOM §4.9.2: namespaced attribute accessors. Lumen's attribute model is
+        // name-only, so the namespace argument is accepted but ignored — the
+        // attribute is stored and looked up under its qualified name, matching the
+        // name-based getAttribute/hasAttribute lookup (BUG-309).
+        getAttributeNS:    function(ns, n)    { return _lumen_u2n(_lumen_get_attr(nid, String(n))); },
+        setAttributeNS:    function(ns, n, v) {
+            var attrName = String(n);
+            var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
+            _lumen_set_attr(nid, attrName, String(v));
+            _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, String(v));
+        },
+        removeAttributeNS: function(ns, n)    { _lumen_remove_attr(nid, String(n)); },
+        hasAttributeNS:    function(ns, n)    { return _lumen_get_attr(nid, String(n)) !== undefined; },
         // DOM LS §4.9.3: toggleAttribute(qualifiedName, force?)
         toggleAttribute: function(n, force) {
             var attrName = String(n);
@@ -4857,6 +5725,12 @@ function _lumen_make_element(nid) {
             return false;
         },
         appendChild:     function(c) {
+            // BUG-325: DOM §4.2.3 pre-insert validity — Text/Comment (both
+            // wrapped here via `_lumen_make_element`, sharing this literal)
+            // are CharacterData and can never have children.
+            if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid)) {
+                throw _lumen_character_data_insertion_error();
+            }
             if (!c || c.__nid__ === undefined) return c;
             if (c.__isDocumentFragment__) {
                 // DOM LS §4.2.4: fragment append moves all children, not the fragment itself.
@@ -4971,20 +5845,37 @@ function _lumen_make_element(nid) {
                 }
             }
         },
-        // Element.insertAdjacentText (DOM Parsing & Serialization §4): inserts a
-        // Text node at one of the four positions relative to this element. Built
-        // on the ChildNode/ParentNode primitives above rather than a new native
-        // binding — found missing while diagnosing P2-wpt S4 (`testharness.js`'s
-        // `Output.show_results` calls it unconditionally on tests with no
-        // recorded asserts).
-        insertAdjacentText: function(where, text) {
-            var t = String(text);
+        // HTML LS 4.9.2 (old-fashioned but conforming markup) — insertAdjacent{Text,Element}.
+        // Delegates to the before/after/prepend/append methods above (same silent
+        // no-op-if-no-parent behavior as before/after for beforebegin/afterend).
+        // Found missing (BUG-299) while diagnosing testharness.js's results
+        // renderer / P2-wpt S4 (`Output.show_results` -> `get_asserts_output`)
+        // calling insertAdjacentText unconditionally for every test with no
+        // recorded asserts.
+        insertAdjacentText: function(where, data) {
+            var text = String(data);
             switch (String(where).toLowerCase()) {
-                case 'beforebegin': this.before(t); break;
-                case 'afterbegin':  this.prepend(t); break;
-                case 'beforeend':   this.append(t); break;
-                case 'afterend':    this.after(t); break;
-                default: throw new SyntaxError('insertAdjacentText: invalid position ' + where);
+                case 'beforebegin': this.before(text); break;
+                case 'afterbegin':  this.prepend(text); break;
+                case 'beforeend':   this.append(text); break;
+                case 'afterend':    this.after(text); break;
+                default:
+                    throw new DOMException(
+                        'The value provided (' + where + ') is not one of beforebegin, ' +
+                        'afterbegin, beforeend, or afterend.', 'SyntaxError');
+            }
+        },
+        insertAdjacentElement: function(where, element) {
+            if (!element || element.__nid__ === undefined) return null;
+            switch (String(where).toLowerCase()) {
+                case 'beforebegin': this.before(element); return element;
+                case 'afterbegin':  this.prepend(element); return element;
+                case 'beforeend':   this.append(element); return element;
+                case 'afterend':    this.after(element); return element;
+                default:
+                    throw new DOMException(
+                        'The value provided (' + where + ') is not one of beforebegin, ' +
+                        'afterbegin, beforeend, or afterend.', 'SyntaxError');
             }
         },
         // Replaces all children of this element.
@@ -5014,12 +5905,21 @@ function _lumen_make_element(nid) {
             var frag_nid = _lumen_u2n(_lumen_get_template_content(nid));
             return frag_nid !== null ? _lumen_make_document_fragment(frag_nid) : _lumen_make_document_fragment(_lumen_create_fragment());
         },
+        // Scoped to this element's descendants (DOM Parentnode §4.2.5) — works on
+        // detached subtrees too, unlike the document-global `_lumen_query_selector`.
         querySelector:    function(sel) {
             var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll: function(sel) {
             return _lumen_query_selector_all_scoped(nid, String(sel)).map(_lumen_make_element);
+        },
+        // DOM LS §4.9: getElementsByClassName(names), scoped to this element's
+        // descendants (BUG-302). Static array, not a live HTMLCollection.
+        getElementsByClassName: function(names) {
+            var sel = _lumen_class_selector(names);
+            if (sel === null) return [];
+            return _lumen_query_selector_all_scoped(nid, sel).map(_lumen_make_element);
         },
         matches: function(sel) {
             return _lumen_node_matches_selector(nid, String(sel));
@@ -5177,6 +6077,13 @@ function _lumen_make_element(nid) {
                 var d = _lumen_canvas_dims(nid); _lumen_canvas2d_resize(nid, d[0], d[1]);
             }
         },
+        // Reflected `src` URL attribute — shared by <img>/<script>/<iframe>/<source>/…
+        // (HTML LS: each element's `src` IDL attribute reflects the content attribute).
+        // Returns the raw attribute string (same simplification as `getAttribute`; full
+        // URL resolution to an absolute URL is deferred). Empty string when unset, per
+        // the reflect-a-URL steps. Enables `new Image().src = …` to reach layout (BUG-305).
+        get src()  { var v = _lumen_u2n(_lumen_get_attr(nid, 'src')); return v !== null ? v : ''; },
+        set src(v) { _lumen_set_attr(nid, 'src', String(v)); },
         get offsetWidth()  { var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
         get offsetHeight() { var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
         get offsetLeft()   { var r = _lumen_get_bounding_rect(nid); return r ? r[0] : 0; },
@@ -5458,7 +6365,45 @@ function _lumen_make_element(nid) {
         },
         enumerable: false, configurable: true,
     });
+    // DOM §4.4 Node.parentNode (BUG-310): the parent node, or null at the tree
+    // root. Mirrors `parentElement` — the shim wraps every parent (element or
+    // container) through `_lumen_make_element`, so `.parentNode.children` works.
+    Object.defineProperty(_obj, 'parentNode', {
+        get: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            return pid !== null ? _lumen_make_element(pid) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    // DOM §4.4 Node.isConnected (BUG-311): true when the node's shadow-inclusive
+    // root is the document. In the flat shim tree that means `documentElement`
+    // (<html>) is on the node's ancestor chain (or is the node itself) — a
+    // detached subtree never reaches it, so its topmost ancestor is some
+    // orphan node and `isConnected` is false.
+    Object.defineProperty(_obj, 'isConnected', {
+        get: function() {
+            var htmlId = _lumen_u2n(_lumen_get_html_element());
+            if (htmlId === null) return false;
+            var cur = nid;
+            while (cur !== null) {
+                if (cur === htmlId) return true;
+                cur = _lumen_u2n(_lumen_get_parent(cur));
+            }
+            return false;
+        },
+        enumerable: false, configurable: true,
+    });
+    // DOM §4.2.6 ParentNode.children — element-only live HTMLCollection (BUG-310).
     Object.defineProperty(_obj, 'children', {
+        get: function() { return _lumen_make_html_collection(nid); },
+        enumerable: false, configurable: true,
+    });
+    // BUG-327: `.childNodes` was entirely absent on the ordinary live
+    // element/text/comment wrapper (only `document`/`DocumentFragment`/detached
+    // `CharacterData` had it) — `Node-childNodes.html`, `Node.hasChildNodes()`
+    // (added above) and everything that walks a live subtree via `.childNodes`
+    // threw or silently reported an empty tree.
+    Object.defineProperty(_obj, 'childNodes', {
         get: function() { return _lumen_get_children(nid).map(_lumen_make_element); },
         enumerable: false, configurable: true,
     });
@@ -5473,6 +6418,45 @@ function _lumen_make_element(nid) {
         get: function() {
             var ch = _lumen_get_children(nid);
             return ch.length > 0 ? _lumen_make_element(ch[ch.length - 1]) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    // DOM §4.2.6/§4.2.7 ParentNode/NonDocumentTypeChildNode element traversal (BUG-310).
+    Object.defineProperty(_obj, 'childElementCount', {
+        get: function() { return _lumen_element_child_nids(nid).length; },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(_obj, 'firstElementChild', {
+        get: function() {
+            var ch = _lumen_element_child_nids(nid);
+            return ch.length > 0 ? _lumen_make_element(ch[0]) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(_obj, 'lastElementChild', {
+        get: function() {
+            var ch = _lumen_element_child_nids(nid);
+            return ch.length > 0 ? _lumen_make_element(ch[ch.length - 1]) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(_obj, 'nextElementSibling', {
+        get: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return null;
+            var sibs = _lumen_element_child_nids(pid);
+            var idx = sibs.indexOf(nid);
+            return (idx >= 0 && idx + 1 < sibs.length) ? _lumen_make_element(sibs[idx + 1]) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(_obj, 'previousElementSibling', {
+        get: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return null;
+            var sibs = _lumen_element_child_nids(pid);
+            var idx = sibs.indexOf(nid);
+            return (idx > 0) ? _lumen_make_element(sibs[idx - 1]) : null;
         },
         enumerable: false, configurable: true,
     });
@@ -5588,7 +6572,40 @@ function _lumen_make_element(nid) {
         enumerable: false,
         configurable: true,
     });
-    _lumen_node_wrappers[nid] = _obj;
+    // DOM §4.10 CharacterData.data / Node.nodeValue for live text AND comment
+    // nodes. Only exposed on CharacterData nodes (element wrappers keep `data`
+    // free for expandos and `nodeValue` absent, matching the pre-existing
+    // shape). Writing routes through `_lumen_set_text_content`, whose
+    // MutationObserver wrap emits a `characterData` record (BUG-318, WPT
+    // MutationObserver-takeRecords.html). `CharacterData.prototype.length`/
+    // `substringData`/`appendData`/`insertData`/`deleteData`/`replaceData` are
+    // all built on top of this `data` accessor (see `CharacterData.prototype`
+    // definition above), so both Text and Comment get the full interface here.
+    var _is_character_data_nid = _lumen_is_text_node(nid) || _lumen_is_comment_node(nid);
+    if (_is_character_data_nid) {
+        Object.defineProperty(_obj, 'data', {
+            get: function() { return _lumen_get_text_content(nid); },
+            set: function(v) { _lumen_set_text_content(nid, String(v)); },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(_obj, 'nodeValue', {
+            get: function() { return _lumen_get_text_content(nid); },
+            set: function(v) { _lumen_set_text_content(nid, String(v)); },
+            enumerable: true, configurable: true,
+        });
+    }
+    // BUG-322: give the wrapper a real [[Prototype]] chain — Text.prototype for
+    // text nodes, Comment.prototype for comment nodes, the tag-appropriate
+    // HTML*Element/Element.prototype chain for elements — so `instanceof
+    // Element`/`Node`/`HTMLDivElement`/`Text`/`Comment`/`CharacterData` resolve
+    // for ordinary, native-backed nodes (previously always `false`: every
+    // wrapper was a plain object with no [[Prototype]] set, and native Comment
+    // nodes were additionally mistaken for Text nodes — see `nodeType`/
+    // `createComment` fixes above). Every accessor/method defined on `_obj`
+    // above is an OWN property, so it still shadows anything of the same name
+    // on the inherited chain.
+    Object.setPrototypeOf(_obj, _lumen_is_text_node(nid) ? Text.prototype :
+        (_lumen_is_comment_node(nid) ? Comment.prototype : _lumen_element_prototype_for(nid)));
     return _obj;
 }
 
@@ -5940,6 +6957,34 @@ var _doc_hidden = false;
 var _doc_visibility_state = 'visible';
 var _doc_ready_state = 'loading';
 var __dom_node_warned = false;
+// BUG-324: cache for the live page's `document.implementation`, so repeated
+// access returns the same object (`document.implementation === document.implementation`).
+var _lumen_document_implementation = null;
+
+// HTML LS §4.8.3: the `HTMLImageElement` interface and its legacy factory
+// function `Image(width?, height?)`. BUG-305: both were entirely absent, so
+// `new Image()` — one of the most common legacy patterns (image preloading,
+// tracking pixels, canvas sources) — threw `Image is not defined` and took the
+// whole script down. `Image(w, h)` is defined to be equivalent to
+// `document.createElement('img')` with the width/height content attributes set
+// from the constructor arguments. Returning the element from the constructor
+// makes `new Image()` yield the native `<img>` wrapper (a returned object wins
+// over `this`), so it participates in layout/paint like any parsed `<img>`.
+// `HTMLImageElement` is exposed as an interface global with a real
+// HTMLElement/Element/Node prototype chain (BUG-322), same as the other
+// concrete HTML*Element interfaces generated further up — `_lumen_html_tag_prototypes`
+// points the `<img>` tag at this constructor's `.prototype`, so every `<img>`
+// wrapper (including ones built by `Image()` below) resolves `instanceof
+// HTMLImageElement/HTMLElement/Element/Node`.
+function HTMLImageElement() { throw new TypeError('Illegal constructor'); }
+HTMLImageElement.prototype = Object.create(HTMLElement.prototype);
+HTMLImageElement.prototype.constructor = HTMLImageElement;
+function Image(width, height) {
+    var img = document.createElement('img');
+    if (width !== undefined && width !== null)  { img.width  = width; }
+    if (height !== undefined && height !== null) { img.height = height; }
+    return img;
+}
 
 var document = {
     // DOM LS §4.5: `Document.nodeType` is always `Node.DOCUMENT_NODE` (9). react-dom's
@@ -5947,6 +6992,31 @@ var document = {
     get nodeType()   { return 9; },
     get nodeName()   { return '#document'; },
     get ownerDocument() { return null; },
+    // DOM §4.9: the document's child nodes (top-level comments, the doctype and
+    // the root element) in tree order, wrapped kind-aware so the doctype child
+    // is a DocumentType node (BUG-321). Static array (same simplification as
+    // querySelectorAll). For a standard page `childNodes[1]` is the doctype.
+    get childNodes() {
+        return _lumen_get_children(_lumen_root_nid).map(_lumen_make_node);
+    },
+    // BUG-327: DOM §4.4 Node.hasChildNodes() — the `document` singleton isn't
+    // wired to `Document.prototype` (so it doesn't inherit the one just added
+    // there), hence an own copy here.
+    hasChildNodes: function() { return this.childNodes.length > 0; },
+    // DOM §4.5: the document's DocumentType child (`<!doctype …>`), or null.
+    get doctype() {
+        var dnid = _lumen_u2n(_lumen_get_document_doctype());
+        return dnid !== null ? _lumen_make_doctype(dnid) : null;
+    },
+    // DOM §4.5: DOMImplementation, cached (BUG-324 — was absent entirely,
+    // cascading `Cannot read properties of undefined (reading '...')` into
+    // every WPT fixture that builds an XML/HTML document through it).
+    get implementation() {
+        if (_lumen_document_implementation === null) {
+            _lumen_document_implementation = _lumen_make_dom_implementation(document);
+        }
+        return _lumen_document_implementation;
+    },
     get title()  { return _lumen_get_document_title(); },
     set title(v) { _lumen_set_document_title(String(v)); },
     get cookie()  { return _lumen_cookie_get(); },
@@ -5983,6 +7053,13 @@ var document = {
     getElementsByTagName: function(tag) {
         return _lumen_query_selector_all(String(tag)).map(_lumen_make_element);
     },
+    // DOM LS §4.5: getElementsByClassName(names) — document-global variant.
+    // Static array, not a live HTMLCollection (same simplification as above).
+    getElementsByClassName: function(names) {
+        var sel = _lumen_class_selector(names);
+        if (sel === null) return [];
+        return _lumen_query_selector_all(sel).map(_lumen_make_element);
+    },
     createElement:     function(tag) {
         var nid = _lumen_create_element(String(tag).toLowerCase());
         // QuickJS converts the Rust u32::MAX sentinel to -1 (signed overflow).
@@ -6009,9 +7086,33 @@ var document = {
         return _lumen_make_element(nid);
     },
     createTextNode:         function(t)   { return _lumen_make_element(_lumen_create_text_node(String(t))); },
-    createComment:          function()    { return _lumen_make_element(_lumen_create_text_node('')); },
+    // DOM LS §4.5: createComment(data) — previously ignored `data` entirely and
+    // always built an empty *Text* node (both the missing argument and the
+    // wrong node kind are fixed here; see `_lumen_create_comment`/BUG-322-family
+    // nodeType/nodeName/prototype fixes below for why a real Comment node now
+    // reports nodeType 8, nodeName '#comment' and `Comment.prototype`).
+    createComment:          function(t)   { return _lumen_make_element(_lumen_create_comment(t === undefined ? '' : String(t))); },
     // DOM LS §4.5: createDocumentFragment() returns an empty DocumentFragment.
     createDocumentFragment: function()    { return _lumen_make_document_fragment(_lumen_create_fragment()); },
+    // DOM LS §4.5: createProcessingInstruction(target, data). Throws
+    // InvalidCharacterError if `target` is not a valid XML Name or `data`
+    // contains the PI-closing sequence ?> . Returns a ProcessingInstruction
+    // node (BUG-313).
+    createProcessingInstruction: function(target, data) {
+        var t = String(target);
+        var d = String(data);
+        if (!_lumen_is_xml_name(t)) {
+            throw new DOMException(
+                'createProcessingInstruction: the target is not a valid XML name: ' + t,
+                'InvalidCharacterError');
+        }
+        if (d.indexOf('?>') !== -1) {
+            throw new DOMException(
+                'createProcessingInstruction: the data must not contain the sequence ?>',
+                'InvalidCharacterError');
+        }
+        return _lumen_make_processing_instruction(t, d);
+    },
     appendChild:       function(c)   {
         if (c && c.__nid__ !== undefined) _lumen_append_child(_lumen_root_nid, c.__nid__);
         return c;
@@ -8597,6 +9698,19 @@ var sessionStorage = _lumen_make_storage(
 var _mo_observers = [];
 var _mo_delivery_queued = false;
 
+// True if `nid` is `ancestorNid` or a descendant of it (walks the parent chain
+// via `_lumen_get_parent`). Scopes `subtree:true` observers to their own subtree
+// (DOM §4.3.1) so a mutation elsewhere in the document — e.g. testharness.js's own
+// results-table writes — is not misattributed to them (BUG-318).
+function _lumen_mo_in_subtree(ancestorNid, nid) {
+    var cur = nid;
+    while (cur !== undefined && cur !== null) {
+        if (cur === ancestorNid) return true;
+        cur = _lumen_get_parent(cur);
+    }
+    return false;
+}
+
 function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds) {
     var hasObs = false;
     for (var oi = 0; oi < _mo_observers.length; oi++) {
@@ -8606,8 +9720,14 @@ function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds) {
             var tnid = entry.target && entry.target.__nid__;
             if (tnid === undefined) continue;
             var opts = entry.opts;
-            // Check if this mutation applies to this observation
-            if (tnid !== nid && !opts.subtree) continue;
+            // DOM §4.3.1: queue a record only if the mutated node is the observed
+            // target, or — with subtree:true — a descendant of it. Without the
+            // ancestry test, subtree observers captured every document mutation.
+            if (opts.subtree) {
+                if (!_lumen_mo_in_subtree(tnid, nid)) continue;
+            } else if (tnid !== nid) {
+                continue;
+            }
             if (type === 'attributes' && !opts.attributes) continue;
             if (type === 'childList' && !opts.childList) continue;
             if (type === 'characterData' && !opts.characterData) continue;
@@ -8615,15 +9735,23 @@ function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds) {
                     opts.attributeFilter.indexOf(attrName) < 0) continue;
             var rec = {
                 type: type,
-                target: entry.target,
+                // DOM §4.3.3: target is the mutated node itself — for a subtree
+                // observer this is the descendant, not the observation root.
+                target: _lumen_make_element(nid),
                 attributeName: attrName || null,
+                attributeNamespace: null,
                 oldValue: (type === 'attributes' && opts.attributeOldValue) ? oldVal :
                           (type === 'characterData' && opts.characterDataOldValue) ? oldVal : null,
-                addedNodes: addedNodeIds || [],
-                removedNodes: removedNodeIds || [],
+                // addedNodes/removedNodes are node ids from the mutation primitives;
+                // deliver them as (interned) node wrappers so `record.addedNodes[i]`
+                // is `===` the same object scripts see via `firstChild` etc.
+                addedNodes: (addedNodeIds || []).map(_lumen_make_element),
+                removedNodes: (removedNodeIds || []).map(_lumen_make_element),
                 nextSibling: null,
                 previousSibling: null,
             };
+            // BUG-317: records are MutationRecord instances (DOM §4.3.3).
+            Object.setPrototypeOf(rec, MutationRecord.prototype);
             obs._records.push(rec);
             hasObs = true;
         }
@@ -8686,12 +9814,23 @@ _lumen_remove_child = function(parent, child) {
     }
 };
 
-// Wrap _lumen_set_text_content to intercept characterData/childList mutations
+// Wrap _lumen_set_text_content to intercept mutations. DOM §4.9.1: setting
+// textContent on an ELEMENT replaces all its children with (at most) one text
+// node — a childList mutation (removedNodes = old children, addedNodes = new
+// text node). On a text/CharacterData node it replaces the node's data — a
+// characterData mutation (BUG-318).
 var _orig_set_text_content = _lumen_set_text_content;
 _lumen_set_text_content = function(nid, text) {
-    _orig_set_text_content(nid, text);
-    if (_mo_observers.length > 0) {
-        _mo_notify(nid, 'characterData', null, null, null, null);
+    if (_mo_observers.length === 0) { _orig_set_text_content(nid, text); return; }
+    if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid)) {
+        var old = _lumen_get_text_content(nid);
+        _orig_set_text_content(nid, text);
+        _mo_notify(nid, 'characterData', null, old, null, null);
+    } else {
+        var before = _lumen_get_children(nid);
+        _orig_set_text_content(nid, text);
+        var after = _lumen_get_children(nid);
+        _mo_notify(nid, 'childList', null, null, after, before);
     }
 };
 
@@ -8703,6 +9842,10 @@ function MutationObserver(callback) {
 }
 MutationObserver.prototype.observe = function(target, options) {
     if (!target || target.__nid__ === undefined) return;
+    // DOM §4.3.1: observe() re-activates the observer. `disconnect()` removes it
+    // from `_mo_observers`, so re-observing after a disconnect must re-register it
+    // (only the constructor pushed before — BUG-318, WPT MutationObserver-disconnect).
+    if (_mo_observers.indexOf(this) < 0) _mo_observers.push(this);
     var opts = options || {};
     var config = {
         target: target,
@@ -8735,6 +9878,13 @@ MutationObserver.prototype.takeRecords = function() {
     this._records = [];
     return r;
 };
+
+// DOM §4.3.3 MutationRecord — interface global so records delivered to a
+// MutationObserver callback resolve `record instanceof MutationRecord`
+// (BUG-317, same family as BUG-314). Not constructible from script; every
+// record built in `_mo_notify` gets `MutationRecord.prototype` as its
+// [[Prototype]]. The record literal's own data properties take precedence.
+function MutationRecord() { throw new TypeError('Illegal constructor'); }
 
 // ── ResizeObserver (W3C Resize Observer §5) ───────────────────────────────────
 // Delivers size-change entries after layout; the shell calls
@@ -8949,8 +10099,8 @@ var NodeFilter = {
 // whatToShow bitmask and an optional filter callback or NodeFilter object.
 function _nf_accepts(nid, whatToShow, filter) {
     // whatToShow bitmask check
-    var nt = _lumen_is_text_node(nid) ? 3 : 1; // 1=element, 3=text
-    var bit = (nt === 3) ? NodeFilter.SHOW_TEXT : NodeFilter.SHOW_ELEMENT;
+    var nt = _lumen_is_text_node(nid) ? 3 : (_lumen_is_comment_node(nid) ? 8 : 1); // 1=element, 3=text, 8=comment
+    var bit = (nt === 3) ? NodeFilter.SHOW_TEXT : (nt === 8 ? NodeFilter.SHOW_COMMENT : NodeFilter.SHOW_ELEMENT);
     if (!(whatToShow & bit)) return NodeFilter.FILTER_SKIP;
     if (!filter) return NodeFilter.FILTER_ACCEPT;
     var el = _lumen_make_element(nid);
@@ -10279,8 +11429,10 @@ window.clearTimeout          = clearTimeout;
 window.setInterval           = setInterval;
 window.clearInterval         = clearInterval;
 window.MutationObserver      = MutationObserver;
+window.MutationRecord        = MutationRecord;
 window.ResizeObserver        = ResizeObserver;
 window.IntersectionObserver  = IntersectionObserver;
+window.HTMLCollection        = HTMLCollection;
 window.NodeFilter            = NodeFilter;
 window.TreeWalker            = _TreeWalker;
 window.NodeIterator          = _NodeIterator;
@@ -12963,8 +14115,9 @@ window.reportError = reportError;
 // Called by the shell's GcTick every 30 s with an array of node IDs that
 // have been detached from the document and have zero live JS references.
 // Purges JS-side per-node caches so dead nodes don't retain memory through maps:
-//   - _lumen_listeners  keyed by 'nid:eventtype'
-//   - _input_values     keyed by nid
+//   - _lumen_listeners        keyed by 'nid:eventtype'
+//   - _input_values           keyed by nid
+//   - _lumen_element_wrappers keyed by nid (BUG-291 identity cache)
 // The arena itself is append-only in Phase 1; physical compaction is Phase 3.
 function _lumen_gc_collect(nids) {
     for (var i = 0; i < nids.length; i++) {
@@ -12978,6 +14131,7 @@ function _lumen_gc_collect(nids) {
         }
         delete _input_values[nid];
         delete _canvas2d_ctxs[nid];
+        delete _lumen_element_wrappers[nid];
     }
 }
 
@@ -13162,6 +14316,19 @@ mod tests {
         doc.append_child(div, span);
         doc.append_child(span, text);
         Arc::new(Mutex::new(doc))
+    }
+
+    /// Wrap raw RGBA8 test pixels in a shared `Arc<Image>` for `register_img_bitmaps`
+    /// (BUG-272 срез 20: the store shares the decoded `Arc<Image>` rather than an
+    /// eager RGBA8 copy). `data` is a `width × height` RGBA8 buffer.
+    fn test_img_bitmap(width: u32, height: u32, data: Vec<u8>) -> Arc<lumen_image::Image> {
+        Arc::new(lumen_image::Image {
+            width,
+            height,
+            format: lumen_image::PixelFormat::Rgba8,
+            data,
+            icc_profile: None,
+        })
     }
 
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
@@ -13577,7 +14744,7 @@ mod tests {
         };
         // Inject decoded bitmap: 2×2 solid red RGBA8.
         let rgba8 = vec![255u8, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
-        rt.register_img_bitmaps(vec![(img_nid, 2, 2, rgba8)]);
+        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 2, rgba8))]);
 
         let dest_nid = match rt
             .eval(
@@ -13619,7 +14786,7 @@ mod tests {
         };
         // 1×1 solid blue.
         let rgba8 = vec![0u8, 0, 255, 255];
-        rt.register_img_bitmaps(vec![(img_nid, 1, 1, rgba8)]);
+        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(1, 1, rgba8))]);
 
         let dest_nid = match rt
             .eval(
@@ -13661,7 +14828,7 @@ mod tests {
         };
         // 2×1 RGBA8: [R, G, B, A] × 2 pixels.
         let rgba8 = vec![255u8, 0, 0, 255, 0, 255, 0, 255]; // red | green
-        rt.register_img_bitmaps(vec![(img_nid, 2, 1, rgba8)]);
+        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 1, rgba8))]);
 
         let dest_nid = match rt
             .eval(
@@ -13910,6 +15077,80 @@ mod tests {
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 
+    // BUG-291: Element.querySelector(All) must be scoped to the calling
+    // element's descendants, and must therefore also work on a subtree that
+    // is not (yet) attached to the document — `document.querySelector` has no
+    // path to reach such nodes at all. Before the fix, `_lumen_query_selector`
+    // ignored `this` and always searched from `document.root()`, so this
+    // returned `null` and crashed `testharness.js`'s results renderer
+    // (`Output.show_results`) with `Cannot read properties of null`.
+    #[test]
+    fn element_query_selector_finds_descendant_in_detached_subtree() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var table = document.createElement('table'); \
+                 var tbody = document.createElement('tbody'); \
+                 table.appendChild(tbody); \
+                 table.querySelector('tbody') === tbody",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_query_selector_all_finds_matches_in_detached_subtree() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var ul = document.createElement('ul'); \
+                 ul.appendChild(document.createElement('li')); \
+                 ul.appendChild(document.createElement('li')); \
+                 ul.querySelectorAll('li').length",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(2.0));
+    }
+
+    // BUG-291: Element.querySelector must be scoped to *descendants* — it
+    // must not match the calling element itself, nor elements outside its
+    // subtree (the pre-fix implementation searched the whole document).
+    #[test]
+    fn element_query_selector_excludes_self_and_siblings() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var a = document.createElement('div'); a.id = 'scope'; \
+                 var b = document.createElement('div'); b.id = 'outside'; \
+                 document.body.appendChild(a); document.body.appendChild(b); \
+                 a.querySelector('#scope') === null && a.querySelector('#outside') === null",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-291: repeated access to the same DOM node must yield the same JS
+    // wrapper object (`===` identity), matching real engines and required by
+    // `testharness.js`'s results renderer (`tbody.lastChild === row`-style
+    // checks). Before the fix, `_lumen_make_element` minted a fresh object on
+    // every call.
+    #[test]
+    fn repeated_node_access_yields_stable_identity() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var parent = document.createElement('div'); \
+                 var child = document.createElement('span'); \
+                 parent.appendChild(child); \
+                 parent.lastChild === child && \
+                 parent.firstChild === parent.lastChild && \
+                 parent.children[0] === child && \
+                 document.getElementById('main') === document.getElementById('main')",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
     #[test]
     fn text_content_get() {
         let rt = runtime_with_dom(make_doc());
@@ -14025,6 +15266,91 @@ mod tests {
             .eval("document.querySelectorAll('span').length")
             .unwrap();
         assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn get_elements_by_class_name_document() {
+        // BUG-302: getElementsByClassName was missing from WEB_API_SHIM.
+        let rt = runtime_with_dom(make_doc());
+        let hit = rt
+            .eval("document.getElementsByClassName('highlight').length")
+            .unwrap();
+        assert_eq!(hit, lumen_core::JsValue::Number(1.0));
+        let miss = rt
+            .eval("document.getElementsByClassName('nope').length")
+            .unwrap();
+        assert_eq!(miss, lumen_core::JsValue::Number(0.0));
+        // Empty / whitespace-only token list yields an empty collection.
+        let empty = rt
+            .eval("document.getElementsByClassName('   ').length")
+            .unwrap();
+        assert_eq!(empty, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn get_elements_by_class_name_scoped_element() {
+        // BUG-302: the scoped variant lives on Element too, restricted to the
+        // element's own descendants.
+        let rt = runtime_with_dom(make_doc());
+        let inside = rt
+            .eval("document.body.getElementsByClassName('highlight').length")
+            .unwrap();
+        assert_eq!(inside, lumen_core::JsValue::Number(1.0));
+        // The <span.highlight> has no descendants, so scoping to it finds none.
+        let none = rt
+            .eval(
+                "document.getElementsByClassName('highlight')[0]\
+                 .getElementsByClassName('highlight').length",
+            )
+            .unwrap();
+        assert_eq!(none, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn image_constructor_creates_img_element() {
+        // BUG-305: `new Image()` must produce a native <img> wrapper.
+        let rt = runtime_with_dom(make_doc());
+        let tag = rt.eval("new Image().tagName").unwrap();
+        assert_eq!(tag, lumen_core::JsValue::String("IMG".into()));
+    }
+
+    #[test]
+    fn image_constructor_applies_width_height_args() {
+        // BUG-305: Image(width, height) sets the width/height content attributes.
+        let rt = runtime_with_dom(make_doc());
+        let dims = rt
+            .eval(
+                "var i = new Image(4, 6);\
+                 i.getAttribute('width') + 'x' + i.getAttribute('height')",
+            )
+            .unwrap();
+        assert_eq!(dims, lumen_core::JsValue::String("4x6".into()));
+    }
+
+    #[test]
+    fn image_src_reflects_content_attribute() {
+        // BUG-305: `img.src = …` reaches the underlying `src` attribute so layout
+        // can see the dynamically-assigned image, and reads back the same value.
+        let rt = runtime_with_dom(make_doc());
+        let via_attr = rt
+            .eval("var i = new Image(); i.src = 'test.png'; i.getAttribute('src')")
+            .unwrap();
+        assert_eq!(via_attr, lumen_core::JsValue::String("test.png".into()));
+        let via_prop = rt
+            .eval("var i = new Image(); i.src = 'blue.png'; i.src")
+            .unwrap();
+        assert_eq!(via_prop, lumen_core::JsValue::String("blue.png".into()));
+        // Unset `src` reflects as the empty string, per the reflect-a-URL steps.
+        let unset = rt.eval("new Image().src").unwrap();
+        assert_eq!(unset, lumen_core::JsValue::String("".into()));
+    }
+
+    #[test]
+    fn html_image_element_is_a_global() {
+        // BUG-305: `HTMLImageElement` is exposed as a bare interface global.
+        let rt = runtime_with_dom(make_doc());
+        let ty = rt.eval("typeof HTMLImageElement").unwrap();
+        assert_eq!(ty, lumen_core::JsValue::String("function".into()));
     }
 
     #[test]
@@ -17584,6 +18910,100 @@ mod tests {
     }
 
     #[test]
+    fn mutation_record_is_interface_global() {
+        // BUG-317: MutationRecord resolves as a global interface (bare identifier
+        // and window property) and is not constructible (DOM §4.3.3).
+        let rt = runtime_with_dom(make_doc());
+        assert_eq!(
+            rt.eval("typeof MutationRecord === 'function'").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("typeof window.MutationRecord === 'function'").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("try { new MutationRecord(); false } catch (e) { e instanceof TypeError }")
+                .unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn mutation_observer_records_are_mutation_record_instances() {
+        // BUG-317: records delivered to the callback are `instanceof MutationRecord`
+        // (WPT dom/nodes/MutationObserver-callback-arguments.html).
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _mo_is_rec = false;
+            var obsR = new MutationObserver(function(records) {
+                _mo_is_rec = records[0] instanceof MutationRecord;
+            });
+            var el = document.getElementById('main');
+            obsR.observe(el, { attributes: true });
+            el.setAttribute('data-y', '7');
+        "#).unwrap();
+        rt.eval("_lumen_flush_mutation_observers()").unwrap();
+        assert_eq!(
+            rt.eval("_mo_is_rec").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn attribute_ns_methods_are_name_based() {
+        // BUG-309: the namespaced attribute accessors mirror the name-only model —
+        // setAttributeNS stores under the qualified name, so hasAttribute finds it
+        // irrespective of namespace (WPT dom/nodes/Element-hasAttribute.html §1).
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _el = document.createElement('p'); _el.setAttributeNS('foo', 'x', 'first');")
+            .unwrap();
+        assert_eq!(
+            rt.eval("_el.hasAttribute('x')").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("_el.getAttributeNS('foo', 'x')").unwrap(),
+            lumen_core::JsValue::String("first".into())
+        );
+        assert_eq!(
+            rt.eval("_el.hasAttributeNS('foo', 'x')").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        rt.eval("_el.removeAttributeNS('foo', 'x')").unwrap();
+        assert_eq!(
+            rt.eval("_el.hasAttribute('x')").unwrap(),
+            lumen_core::JsValue::Bool(false)
+        );
+        assert_eq!(
+            rt.eval("_el.getAttributeNS('foo', 'x')").unwrap(),
+            lumen_core::JsValue::Null
+        );
+    }
+
+    #[test]
+    fn has_attributes_reflects_attribute_presence() {
+        // BUG-312: Element.hasAttributes() (DOM §4.9.2) — false with no attributes,
+        // true once any attribute is present (WPT dom/nodes/Element-hasAttributes.html).
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _el = document.createElement('p');").unwrap();
+        assert_eq!(
+            rt.eval("_el.hasAttributes()").unwrap(),
+            lumen_core::JsValue::Bool(false)
+        );
+        rt.eval("_el.setAttribute('id', 'x');").unwrap();
+        assert_eq!(
+            rt.eval("_el.hasAttributes()").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        rt.eval("_el.removeAttribute('id');").unwrap();
+        assert_eq!(
+            rt.eval("_el.hasAttributes()").unwrap(),
+            lumen_core::JsValue::Bool(false)
+        );
+    }
+
+    #[test]
     fn mutation_observer_fires_on_child_list_change() {
         let rt = runtime_with_dom(make_doc());
         rt.eval(r#"
@@ -17632,6 +19052,103 @@ mod tests {
         // Internal queue must be cleared
         let inner_len = rt.eval("obs4.takeRecords().length").unwrap();
         assert_eq!(inner_len, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn mutation_observer_take_records_full_sequence() {
+        // BUG-318: mirrors WPT dom/nodes/MutationObserver-takeRecords.html — the
+        // full record shape must match. In particular: element.textContent yields a
+        // childList record (not characterData), a live text node's `.data` write
+        // yields a characterData record with the correct target/oldValue, and
+        // addedNodes carries the actual (interned) node wrapper.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var p = document.createElement('p');
+            p.setAttribute('id', 'n00');
+            document.body.appendChild(p);
+            var obs = new MutationObserver(function(){});
+            obs.observe(p, {subtree:true, childList:true, attributes:true,
+                            characterData:true, attributeOldValue:true,
+                            characterDataOldValue:true});
+            p.id = "foo";
+            p.id = "bar";
+            p.className = "bar";
+            p.textContent = "old data";
+            p.firstChild.data = "new data";
+            var recs = obs.takeRecords();
+            globalThis._summary = [
+                recs.length,
+                recs[0].type, recs[0].attributeName, recs[0].oldValue,
+                recs[1].type, recs[1].oldValue,
+                recs[2].type, recs[2].attributeName, recs[2].oldValue,
+                recs[3].type, recs[3].addedNodes.length, (recs[3].addedNodes[0] === p.firstChild),
+                recs[4].type, recs[4].oldValue, (recs[4].target === p.firstChild),
+                obs.takeRecords().length
+            ].join('|');
+        "#).unwrap();
+        assert_eq!(
+            rt.eval("_summary").unwrap(),
+            lumen_core::JsValue::String(
+                "5|attributes|id|n00|attributes|foo|attributes|class||childList|1|true|characterData|old data|true|0".into()
+            )
+        );
+    }
+
+    #[test]
+    fn mutation_observer_reobserve_after_disconnect_delivers() {
+        // BUG-318: mirrors WPT dom/nodes/MutationObserver-disconnect.html — a fresh
+        // observe() after disconnect() must re-activate delivery (the observer was
+        // spliced out of the active list by disconnect and only re-added by observe).
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            globalThis._cnt = 0;
+            globalThis._info = '';
+            var el = document.getElementById('main');
+            var observer = new MutationObserver(function(seq){
+                _cnt++;
+                _info = seq.length + '/' + seq[0].type + '/' + seq[0].attributeName + '/' + seq[0].oldValue;
+            });
+            observer.observe(el, {attributes:true});
+            el.id = "foo";
+            el.id = "bar";
+            observer.disconnect();
+            observer.observe(el, {attributes:true, attributeOldValue:true});
+            el.id = "latest";
+            observer.disconnect();
+            observer.observe(el, {attributes:true, attributeOldValue:true});
+            el.id = "n0000";
+        "#).unwrap();
+        rt.eval("_lumen_flush_mutation_observers()").unwrap();
+        assert_eq!(rt.eval("_cnt").unwrap(), lumen_core::JsValue::Number(1.0));
+        assert_eq!(
+            rt.eval("_info").unwrap(),
+            lumen_core::JsValue::String("1/attributes/id/latest".into())
+        );
+    }
+
+    #[test]
+    fn mutation_observer_subtree_scoped_to_target() {
+        // BUG-318: a subtree observer records mutations inside its own subtree only,
+        // not everywhere in the document. The record's target is the mutated node.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var a = document.createElement('div');
+            var b = document.createElement('div');
+            document.body.appendChild(a);
+            document.body.appendChild(b);
+            var child = document.createElement('span');
+            a.appendChild(child);
+            var obs = new MutationObserver(function(){});
+            obs.observe(a, {subtree:true, attributes:true});
+            child.setAttribute('x', '1');
+            b.setAttribute('y', '2');
+            var recs = obs.takeRecords();
+            globalThis._sub = recs.length + '|' + (recs.length === 1 && recs[0].target === child);
+        "#).unwrap();
+        assert_eq!(
+            rt.eval("_sub").unwrap(),
+            lumen_core::JsValue::String("1|true".into())
+        );
     }
 
     // ── ResizeObserver tests ──────────────────────────────────────────────────
@@ -18028,6 +19545,199 @@ mod tests {
         "#).unwrap();
         let count = rt.eval("_container.children.length").unwrap();
         assert_eq!(count, lumen_core::JsValue::Number(0.0));
+    }
+
+    // ── ElementTraversal / ParentNode.children (BUG-310) ──────────────────────
+
+    // Appends three element children (`a`,`b`,`c`) interleaved with text nodes
+    // to a fresh `div` bound to the JS global `varname`. innerHTML is NOT parsed
+    // by the bare unit-test runtime, so the subtree is built via DOM APIs.
+    fn build_mixed_children(rt: &QuickJsRuntime, varname: &str) {
+        rt.eval(&format!(r#"
+            var {v} = document.createElement('div');
+            document.body.appendChild({v});
+            {v}.appendChild(document.createTextNode('x'));
+            var _s0 = document.createElement('span'); _s0.id = 'a'; {v}.appendChild(_s0);
+            {v}.appendChild(document.createTextNode(' '));
+            var _s1 = document.createElement('b');    _s1.id = 'b'; {v}.appendChild(_s1);
+            {v}.appendChild(document.createTextNode(' '));
+            var _s2 = document.createElement('span'); _s2.id = 'c'; {v}.appendChild(_s2);
+            {v}.appendChild(document.createTextNode('y'));
+        "#, v = varname)).unwrap();
+    }
+
+    #[test]
+    fn element_traversal_child_element_count_skips_text() {
+        let rt = runtime_with_dom(make_doc());
+        build_mixed_children(&rt, "_t");
+        // Text nodes ('x', whitespace, 'y') must not be counted.
+        let n = rt.eval("_t.childElementCount").unwrap();
+        assert_eq!(n, lumen_core::JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn element_traversal_first_last_element_child() {
+        let rt = runtime_with_dom(make_doc());
+        build_mixed_children(&rt, "_t");
+        let first = rt.eval("_t.firstElementChild.id").unwrap();
+        let last = rt.eval("_t.lastElementChild.id").unwrap();
+        let ntype = rt.eval("_t.firstElementChild.nodeType").unwrap();
+        assert_eq!(first, lumen_core::JsValue::String("a".into()));
+        assert_eq!(last, lumen_core::JsValue::String("c".into()));
+        assert_eq!(ntype, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn element_traversal_sibling_navigation_skips_text() {
+        let rt = runtime_with_dom(make_doc());
+        build_mixed_children(&rt, "_t");
+        // 'a' → next element 'b' and 'c' → prev element 'b' skip whitespace text.
+        let next = rt.eval("document.getElementById('a').nextElementSibling.id").unwrap();
+        let prev = rt.eval("document.getElementById('c').previousElementSibling.id").unwrap();
+        assert_eq!(next, lumen_core::JsValue::String("b".into()));
+        assert_eq!(prev, lumen_core::JsValue::String("b".into()));
+    }
+
+    #[test]
+    fn element_traversal_null_edges() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _empty = document.createElement('div');
+            document.body.appendChild(_empty);
+            _empty.appendChild(document.createTextNode('just text, no elements'));
+            var _solo = document.createElement('div');
+            document.body.appendChild(_solo);
+            var _only = document.createElement('span'); _only.id = 'solo';
+            _solo.appendChild(_only);
+        "#).unwrap();
+        let no_first = rt.eval("_empty.firstElementChild === null").unwrap();
+        let no_last = rt.eval("_empty.lastElementChild === null").unwrap();
+        let count0 = rt.eval("_empty.childElementCount").unwrap();
+        let no_next = rt.eval("document.getElementById('solo').nextElementSibling === null").unwrap();
+        let no_prev = rt.eval("document.getElementById('solo').previousElementSibling === null").unwrap();
+        assert_eq!(no_first, lumen_core::JsValue::Bool(true));
+        assert_eq!(no_last, lumen_core::JsValue::Bool(true));
+        assert_eq!(count0, lumen_core::JsValue::Number(0.0));
+        assert_eq!(no_next, lumen_core::JsValue::Bool(true));
+        assert_eq!(no_prev, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn children_is_live_html_collection() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _p = document.createElement('ul');
+            document.body.appendChild(_p);
+            _p.appendChild(document.createElement('li'));
+            _p.appendChild(document.createElement('li'));
+            _p.appendChild(document.createElement('li'));
+        "#).unwrap();
+        let is_coll = rt.eval("_p.children instanceof HTMLCollection").unwrap();
+        assert_eq!(is_coll, lumen_core::JsValue::Bool(true));
+        // A cached reference must reflect later mutations (live collection).
+        let live = rt.eval(r#"
+            var _c = _p.children;
+            var before = _c.length;
+            _p.appendChild(document.createElement('li'));
+            var after = _c.length;
+            before === 3 && after === 4
+        "#).unwrap();
+        assert_eq!(live, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn html_collection_supports_enumeration() {
+        // BUG-323: HTMLCollection's Proxy had no `ownKeys`/`getOwnPropertyDescriptor`
+        // traps, so `for-in`, `Object.getOwnPropertyNames` and `hasOwnProperty` all
+        // saw an empty plain object instead of the live indices/named keys.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _p = document.createElement('ul');
+            document.body.appendChild(_p);
+            var _a = document.createElement('li'); _a.id = 'alpha'; _p.appendChild(_a);
+            var _b = document.createElement('li'); _b.name = 'beta'; _p.appendChild(_b);
+            _p.appendChild(document.createElement('li'));
+        "#).unwrap();
+        // for-in yields only the enumerable indexed keys.
+        let for_in = rt.eval(r#"
+            var keys = [];
+            for (var p in _p.children) keys.push(p);
+            keys.join(',')
+        "#).unwrap();
+        assert_eq!(for_in, lumen_core::JsValue::String("0,1,2".into()));
+        // Object.getOwnPropertyNames sees indices AND named keys (non-enumerable).
+        let own_names = rt.eval("Object.getOwnPropertyNames(_p.children).join(',')").unwrap();
+        assert_eq!(own_names, lumen_core::JsValue::String("0,1,2,alpha,beta".into()));
+        // hasOwnProperty is true for both indices and named keys.
+        let has_own = rt.eval(r#"
+            var c = _p.children;
+            c.hasOwnProperty('0') && c.hasOwnProperty('alpha') && c.hasOwnProperty('beta')
+                && !c.hasOwnProperty('missing')
+        "#).unwrap();
+        assert_eq!(has_own, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn parent_node_children_is_reachable() {
+        // Regression for ParentNode-children.html: `node.parentNode.children`
+        // must resolve (parentNode was missing on element wrappers before BUG-310).
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _ul = document.createElement('ul');
+            document.body.appendChild(_ul);
+            var _li = document.createElement('li'); _li.id = 'li0'; _ul.appendChild(_li);
+            _ul.appendChild(document.createElement('li'));
+        "#).unwrap();
+        let via_parent = rt.eval("document.getElementById('li0').parentNode.children.length").unwrap();
+        assert_eq!(via_parent, lumen_core::JsValue::Number(2.0));
+        let parent_tag = rt.eval("document.getElementById('li0').parentNode.tagName.toLowerCase()").unwrap();
+        assert_eq!(parent_tag, lumen_core::JsValue::String("ul".into()));
+    }
+
+    #[test]
+    fn node_is_connected_reflects_document_attachment() {
+        // BUG-311: Node.isConnected — true once the node is in the document tree,
+        // false for a freshly-created (detached) node and after removal.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _det = document.createElement('div'); _det.id = 'det';
+            var _child = document.createElement('span'); _det.appendChild(_child);
+            var _att = document.createElement('div'); _att.id = 'att';
+            document.body.appendChild(_att);
+        "#).unwrap();
+        // Detached element and its detached child: false.
+        let det = rt.eval("document.getElementById('det') === null && _det.isConnected").unwrap();
+        assert_eq!(det, lumen_core::JsValue::Bool(false));
+        let det_child = rt.eval("_child.isConnected").unwrap();
+        assert_eq!(det_child, lumen_core::JsValue::Bool(false));
+        // Attached element: true; documentElement itself: true.
+        let att = rt.eval("_att.isConnected").unwrap();
+        assert_eq!(att, lumen_core::JsValue::Bool(true));
+        let html = rt.eval("document.documentElement.isConnected").unwrap();
+        assert_eq!(html, lumen_core::JsValue::Bool(true));
+        // After removal the node reports disconnected again.
+        let removed = rt.eval("_att.remove(); _att.isConnected").unwrap();
+        assert_eq!(removed, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn children_collection_item_named_and_index() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _q = document.createElement('div');
+            document.body.appendChild(_q);
+            _q.appendChild(document.createElement('span'));
+            var _mid = document.createElement('span'); _mid.id = 'mid'; _q.appendChild(_mid);
+            _q.appendChild(document.createElement('span'));
+        "#).unwrap();
+        let item = rt.eval("_q.children.item(1).id").unwrap();
+        let named = rt.eval("_q.children.namedItem('mid').id").unwrap();
+        let named_null = rt.eval("_q.children.namedItem('nope') === null").unwrap();
+        let indexed = rt.eval("_q.children[0].tagName.toLowerCase()").unwrap();
+        assert_eq!(item, lumen_core::JsValue::String("mid".into()));
+        assert_eq!(named, lumen_core::JsValue::String("mid".into()));
+        assert_eq!(named_null, lumen_core::JsValue::Bool(true));
+        assert_eq!(indexed, lumen_core::JsValue::String("span".into()));
     }
 
     #[test]
@@ -27121,6 +28831,30 @@ mod tests {
     }
 
     #[test]
+    fn pointer_event_coalesced_events_real_batch_and_prediction() {
+        // With buffered intermediate samples, getCoalescedEvents() must return
+        // every one of them (oldest first) plus the main event last, and
+        // getPredictedEvents() must linearly extrapolate from the last two.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var got = null; \
+             el.addEventListener('pointermove', function(e) { got = e; }); \
+             _lumen_dispatch_pointer_event(el.__nid__, 'pointermove', 30, 30, 0, 0, 0, [[10,10],[20,20]]); \
+             var c = got.getCoalescedEvents(); \
+             var p = got.getPredictedEvents(); \
+             Array.isArray(c) && c.length === 3 && \
+             c[0].clientX === 10 && c[0].clientY === 10 && \
+             c[1].clientX === 20 && c[1].clientY === 20 && \
+             c[2] === got && \
+             Array.isArray(p) && p.length === 2 && \
+             p[0].clientX === 40 && p[0].clientY === 40 && \
+             p[1].clientX === 50 && p[1].clientY === 50"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
     fn element_has_set_pointer_capture_method() {
         // Element must expose setPointerCapture, releasePointerCapture, hasPointerCapture.
         let rt = runtime_with_dom(make_doc());
@@ -27275,6 +29009,408 @@ mod tests {
              _lumen_dispatch_locked_mousemove(el.__nid__, 42, 99, 5, 5, 0); \
              cx === 42 && cy === 99"
         ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-313: document.createProcessingInstruction returns a PI node with the
+    // given target/data, nodeType 7, and this document as ownerDocument.
+    #[test]
+    fn create_processing_instruction_returns_node() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var pi = document.createProcessingInstruction('xml-stylesheet', 'href=\"a.css\"'); \
+             pi.target === 'xml-stylesheet' && pi.data === 'href=\"a.css\"' && \
+             pi.nodeType === 7 && pi.nodeName === 'xml-stylesheet' && \
+             pi.ownerDocument === document"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-313: valid XML Name targets from the WPT corpus are accepted, including
+    // a colon (`xml:fail`) and the middle-dot NameChar (`A·A`).
+    #[test]
+    fn create_processing_instruction_accepts_valid_names() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "['xml:fail', 'A\\u00B7A', 'a0'].every(function(t) { \
+                try { return document.createProcessingInstruction(t, 'x').target === t; } \
+                catch (e) { return false; } \
+             })"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-313: invalid targets and `?>` in data throw InvalidCharacterError
+    // (DOMException with legacy code 5).
+    #[test]
+    fn create_processing_instruction_rejects_invalid() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var bad = [['A', '?>'], ['\\u00B7A', 'x'], ['\\u00D7A', 'x'], \
+                        ['A\\u00D7', 'x'], ['\\\\A', 'x'], ['\\f', 'x'], ['0', 'x']]; \
+             bad.every(function(pair) { \
+                try { document.createProcessingInstruction(pair[0], pair[1]); return false; } \
+                catch (e) { return e.name === 'InvalidCharacterError' && e.code === 5; } \
+             })"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-314: `new Comment(data)` / `new Text(data)` build detached CharacterData
+    // nodes with the correct nodeType/nodeName, stringified data, and the current
+    // document as ownerDocument.
+    #[test]
+    fn comment_text_constructors_build_nodes() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var c = new Comment('hi'), t = new Text('yo'); \
+             c.nodeType === 8 && c.nodeName === '#comment' && c.data === 'hi' && \
+             c.nodeValue === 'hi' && c.ownerDocument === document && \
+             t.nodeType === 3 && t.nodeName === '#text' && t.data === 'yo' && \
+             new Comment().data === '' && new Comment(null).data === 'null' && \
+             new Text(42).data === '42'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-314: the CharacterData prototype chain and `instanceof` resolve for
+    // `new Comment()`/`new Text()` and the detached ProcessingInstruction node.
+    #[test]
+    fn character_data_prototype_chain() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var c = new Comment(); \
+             Object.getPrototypeOf(c) === Comment.prototype && \
+             Object.getPrototypeOf(Comment.prototype) === CharacterData.prototype && \
+             Object.getPrototypeOf(CharacterData.prototype) === Node.prototype && \
+             c instanceof Comment && c instanceof CharacterData && c instanceof Node && \
+             (new Text()) instanceof Text && \
+             document.createProcessingInstruction('a', 'b') instanceof ProcessingInstruction"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-322: native-backed element/text wrappers get a real [[Prototype]]
+    // chain too — tag-appropriate HTML*Element for elements (falling back to
+    // plain HTMLElement for tags without a dedicated interface, e.g. a custom
+    // element name), Text for text nodes — so `instanceof` resolves the same
+    // way it does for the detached constructor forms covered by
+    // `character_data_prototype_chain` above.
+    #[test]
+    fn element_prototype_chain_instanceof() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var div = document.createElement('div'); \
+             var span = document.getElementsByClassName('highlight')[0]; \
+             var textNode = document.createTextNode('x'); \
+             var unknown = document.createElement('foo-bar'); \
+             div instanceof HTMLDivElement && div instanceof HTMLElement && \
+             div instanceof Element && div instanceof Node && \
+             Object.getPrototypeOf(HTMLDivElement.prototype) === HTMLElement.prototype && \
+             Object.getPrototypeOf(HTMLElement.prototype) === Element.prototype && \
+             Object.getPrototypeOf(Element.prototype) === Node.prototype && \
+             span instanceof HTMLSpanElement && \
+             document.body instanceof HTMLBodyElement && document.body instanceof HTMLElement && \
+             unknown instanceof HTMLElement && !(unknown instanceof HTMLDivElement) && \
+             textNode instanceof Text && textNode instanceof CharacterData && textNode instanceof Node && \
+             !(div instanceof Text)"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-325: `Node.appendChild()` on any CharacterData receiver (Text/
+    // Comment/ProcessingInstruction) throws HierarchyRequestError — DOM
+    // §4.2.3 pre-insert validity forbids CharacterData from having children.
+    // Mirrors WPT `dom/nodes/CharacterData-appendChild.html`.
+    #[test]
+    fn character_data_append_child_throws_hierarchy_request_error() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "function create(type) { \
+                 if (type === 'Text') return document.createTextNode('test'); \
+                 if (type === 'Comment') return document.createComment('test'); \
+                 return document.createProcessingInstruction('target', 'test'); \
+             } \
+             var types = ['Text', 'Comment', 'ProcessingInstruction']; \
+             types.every(function(t1) { \
+                 return types.every(function(t2) { \
+                     var n1 = create(t1), n2 = create(t2); \
+                     try { n1.appendChild(n2); return false; } \
+                     catch (e) { return e.name === 'HierarchyRequestError' && e.code === 3; } \
+                 }); \
+             })"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // `document.createComment(data)` previously ignored `data` and built an
+    // empty *Text* node (not Comment) — nodeType 3, nodeName '#text', wrong
+    // [[Prototype]]. A live/arena-backed Comment must now report its real
+    // identity, matching WPT `dom/nodes/CharacterData-data.html` /
+    // `-surrogates.html`, which both operate on `document.createComment(...)`.
+    #[test]
+    fn create_comment_is_a_real_comment_node() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var c = document.createComment('hello'); \
+             c.nodeType === 8 && c.nodeName === '#comment' && c.data === 'hello' && \
+             c instanceof Comment && c instanceof CharacterData && c instanceof Node && \
+             !(c instanceof Text)"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // Regression test: `set_text_content` used to apply Element/Document
+    // "replace all children" semantics even to a leaf Text/Comment receiver —
+    // detaching its (empty) children and appending a brand-new CHILD text
+    // node under it, never touching the node's own string. A second write
+    // then read back a stale/concatenated value instead of the last-written
+    // one. `CharacterData.prototype.appendData`/`insertData`/`deleteData`/
+    // `replaceData` all route through the same `.data` setter, so this also
+    // covers WPT `dom/nodes/CharacterData-{data,appendData,insertData,
+    // deleteData,replaceData,substringData}.html`.
+    #[test]
+    fn live_text_and_comment_data_mutates_in_place() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var t = document.createTextNode('abc'); \
+             t.data = 'x'; t.data = 'y'; \
+             var c = document.createComment('abc'); \
+             c.data = 'x'; c.data = 'y'; \
+             t.data === 'y' && t.length === 1 && c.data === 'y' && c.length === 1"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // DOM §4.10 CharacterData interface methods, exercised on a live text
+    // node (arena-backed, not the detached `new Text()` form) — mirrors the
+    // worked examples in WPT `CharacterData-substringData.html` /
+    // `-insertData.html` / `-deleteData.html` / `-replaceData.html` /
+    // `-appendData.html`.
+    #[test]
+    fn character_data_methods_spec_examples() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var t = document.createTextNode('abcdef'); \
+             var results = []; \
+             results.push(t.substringData(2, 3) === 'cde'); \
+             results.push(t.substringData(2, 100) === 'cdef'); \
+             t.appendData('gh'); results.push(t.data === 'abcdefgh'); \
+             t.data = 'abcdef'; \
+             t.insertData(3, 'XYZ'); results.push(t.data === 'abcXYZdef'); \
+             t.data = 'abcdef'; \
+             t.deleteData(1, 2); results.push(t.data === 'adef'); \
+             t.data = 'abcdef'; \
+             t.replaceData(1, 2, 'XYZ'); results.push(t.data === 'aXYZdef'); \
+             try { t.substringData(1000, 1); results.push(false); } \
+             catch (e) { results.push(e.name === 'IndexSizeError'); } \
+             results.every(function(v) { return v === true; })"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-314: `new DocumentFragment()` is owned by the document and holds
+    // inserted children (`firstChild` compares === with the appended node).
+    #[test]
+    fn document_fragment_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var f = new DocumentFragment(); \
+             var t = document.createTextNode(''); \
+             f.appendChild(t); \
+             f.ownerDocument === document && f.firstChild === t"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-314: node/element interface globals resolve so `instanceof` no longer
+    // throws `X is not defined`.
+    #[test]
+    fn dom_interface_globals_defined() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "['Node','Element','CharacterData','Attr','Document','DocumentType', \
+              'ProcessingInstruction','HTMLElement','HTMLDivElement','HTMLInputElement'] \
+             .every(function(n) { return typeof globalThis[n] === 'function'; }) && \
+             (HTMLDivElement.prototype instanceof HTMLElement) && \
+             (HTMLElement.prototype instanceof Element) && \
+             (Element.prototype instanceof Node)"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-321: `document.doctype` is a DocumentType node reflecting `<!doctype …>`,
+    // referentially identical to the doctype child in `document.childNodes`.
+    #[test]
+    fn document_doctype_is_document_type() {
+        let mut doc = Document::new();
+        let dt = doc.create_doctype("html", "", "");
+        let html = doc.create_element(QualName::html("html"));
+        doc.append_child(doc.root(), dt);
+        doc.append_child(doc.root(), html);
+        let rt = runtime_with_dom(Arc::new(Mutex::new(doc)));
+        let r = rt
+            .eval(
+                "document.doctype instanceof DocumentType && \
+                 document.doctype.name === 'html' && \
+                 document.doctype.nodeType === 10 && \
+                 document.doctype === document.childNodes[0]",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-321: a page without a doctype reports `document.doctype === null`.
+    #[test]
+    fn document_doctype_null_when_absent() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("document.doctype === null").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-321: `new Document()` is constructible and detached — createElement /
+    // appendChild work and a fresh document has a null doctype.
+    #[test]
+    fn new_document_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var nd = new Document(); \
+                 nd.appendChild(nd.createElement('html')); \
+                 (nd instanceof Document) && nd.nodeType === 9 && \
+                 nd.doctype === null && nd.documentElement !== null",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `document.implementation` is a cached DOMImplementation — same
+    // object on repeated access, distinct per document (WPT
+    // `Document-implementation.html`).
+    #[test]
+    fn document_implementation_is_cached_dom_implementation() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var impl = document.implementation; \
+                 (impl instanceof DOMImplementation) && \
+                 (document.implementation === impl) && \
+                 (document.implementation.createHTMLDocument().implementation !== impl)",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `createDocumentType` builds a detached DocumentType whose
+    // ownerDocument is the document owning the implementation, immediately
+    // (not just after insertion) — WPT `DOMImplementation-createDocumentType.html`.
+    #[test]
+    fn create_document_type_reflects_fields() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var dt = document.implementation.createDocumentType('test:root', '1234', 'sys'); \
+                 dt.name === 'test:root' && dt.nodeName === 'test:root' && \
+                 dt.publicId === '1234' && dt.systemId === 'sys' && \
+                 dt.nodeValue === null && dt.ownerDocument === document && \
+                 dt instanceof DocumentType && dt.nodeType === 10",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: an invalid XML Name (e.g. containing a space) throws
+    // InvalidCharacterError, matching `document.createProcessingInstruction`'s
+    // validation (same `_lumen_is_xml_name` helper).
+    #[test]
+    fn create_document_type_rejects_invalid_name() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "try { document.implementation.createDocumentType('a b', '', ''); false; } \
+                 catch (e) { e.name === 'InvalidCharacterError'; }",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `createHTMLDocument(title)` builds the standard html>head,body
+    // skeleton with a `<!doctype html>` and, when a title is given, a <title>
+    // text child — WPT `DOMImplementation-createHTMLDocument.html`. An explicit
+    // `undefined` title argument is treated as omitted (no <title> element).
+    #[test]
+    fn create_html_document_builds_skeleton() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var doc = document.implementation.createHTMLDocument('hi'); \
+                 var noTitle = document.implementation.createHTMLDocument(undefined); \
+                 (doc instanceof Document) && doc.childNodes.length === 2 && \
+                 doc.doctype.name === 'html' && doc.doctype.publicId === '' && \
+                 doc.documentElement.tagName === 'HTML' && \
+                 doc.documentElement.firstChild.tagName === 'HEAD' && \
+                 doc.documentElement.firstChild.firstChild.tagName === 'TITLE' && \
+                 doc.documentElement.firstChild.firstChild.firstChild.data === 'hi' && \
+                 doc.documentElement.lastChild.tagName === 'BODY' && \
+                 noTitle.documentElement.firstChild.firstChild === null",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `createDocument(namespace, qualifiedName, doctype)` returns an
+    // XMLDocument with the given doctype and a namespaced document element
+    // (or no document element when qualifiedName is empty) — WPT
+    // `DOMImplementation-createDocument.html`.
+    #[test]
+    fn create_document_builds_xml_document() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var dt = document.implementation.createDocumentType('svg', '', ''); \
+                 var doc = document.implementation.createDocument('http://www.w3.org/2000/svg', 'svg', dt); \
+                 var empty = document.implementation.createDocument(null, '', null); \
+                 (Object.getPrototypeOf(doc) === XMLDocument.prototype) && \
+                 doc.nodeType === 9 && doc.contentType === 'image/svg+xml' && \
+                 doc.doctype === dt && doc.documentElement.tagName === 'SVG' && \
+                 doc.childNodes.length === 2 && \
+                 empty.documentElement === null && empty.contentType === 'application/xml'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `createDocument` requires at least 2 arguments (namespace,
+    // qualifiedName) — a WebIDL required-argument TypeError, not a
+    // DOMException.
+    #[test]
+    fn create_document_requires_two_arguments() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "['', undefined].every(function(v) { \
+                    try { \
+                        if (v === undefined) { document.implementation.createDocument(); } \
+                        else { document.implementation.createDocument(v); } \
+                        return false; \
+                    } catch (e) { return e instanceof TypeError; } \
+                 })",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-324: `hasFeature` is a legacy no-op — always true regardless of
+    // arguments (WPT `DOMImplementation-hasFeature.html`).
+    #[test]
+    fn has_feature_always_true() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "document.implementation.hasFeature() === true && \
+                 document.implementation.hasFeature('bogus', '99.0') === true",
+            )
+            .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }

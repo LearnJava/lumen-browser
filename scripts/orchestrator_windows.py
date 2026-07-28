@@ -81,7 +81,7 @@ Rate limit, auth error (403) и прочие ненулевые коды вых�
 
     haiku  → claude-haiku-4-5
     sonnet → claude-sonnet-5
-    opus   → claude-opus-4-8
+    opus   → claude-opus-5
     fable  → claude-fable-5
 
 - CLI:  `--model haiku`        (или полный `--model claude-haiku-4-5`)
@@ -691,7 +691,7 @@ SESSION_LIMIT_TEXT_RE = re.compile(r"session limit", re.IGNORECASE)
 MODEL_ALIASES: dict[str, str] = {
     "haiku":  "claude-haiku-4-5",
     "sonnet": "claude-sonnet-5",
-    "opus":   "claude-opus-4-8",
+    "opus":   "claude-opus-5",
     "fable":  "claude-fable-5",
 }
 

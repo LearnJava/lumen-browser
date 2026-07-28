@@ -11,7 +11,7 @@ pub use decode_cache::{ImageDecodeCache, ImageHandle, ImageKey};
 pub use jpeg::{decode_jpeg, JpegError};
 pub use png::{decode_png, encode_png_rgba8};
 pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};
-pub use gif::{decode_gif, decode_gif_animated, AnimatedFrame, AnimatedGif, GifError, GifLoopCount, is_gif};
+pub use gif::{decode_gif, decode_gif_animated, AnimatedGif, GifError, GifLoopCount, is_gif};
 pub use avif::{AvifError, AvifImageDecoder, decode_avif, is_avif};
 pub use jxl::{JxlError, decode_jxl, is_jxl};
 pub use heic::{HeicError, decode_heic, is_heic};

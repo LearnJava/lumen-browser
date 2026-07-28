@@ -22,7 +22,8 @@
 //! Toggled with `Ctrl+Shift+O`.  The panel is a self-contained overlay (it does
 //! not change the page viewport size), following the ad-hoc panel convention of
 //! [`super::workspace_panel`] / [`super::sidebar_panel`]: state lives on `Lumen`,
-//! [`hit_test`] classifies clicks, and [`build_panel`] returns a [`DisplayList`].
+//! [`hit_test`] classifies clicks. The legacy display-list renderer was removed
+//! in CC-15-4 - under the engine chrome the panel is `#view-bookmarks`.
 //!
 //! **Folder filter.** The left column lists "All" plus every distinct folder.
 //! Clicking one filters the bookmark list (and the active search query).
@@ -30,21 +31,13 @@
 //! **Search.** When the search box is focused, typed characters filter the list
 //! by case-insensitive substring match against title *and* URL.
 //!
-//! **Drag-and-drop re-file.** Pressing on a bookmark row begins a drag
-//! ([`BookmarkPanel::begin_drag`]); releasing over a folder in the left column
-//! moves the bookmark into that folder (persisted via `Bookmarks::set_folder`).
-//! Releasing elsewhere opens the bookmark instead (a plain click).
-
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-
-use crate::panels::themes::Palette;
+//! **Drag-and-drop re-file** and the folder/delete click targets were removed
+//! in CC-15-6 together with the legacy overlay's mouse handling — the engine
+//! chrome's `#view-bookmarks` wires none of them yet (see BUG-422). What is
+//! left here is state the chrome model reads: the entry list, folder set,
+//! active filter and search query.
 
 // ── Visual constants ─────────────────────────────────────────────────────────
-
-/// Total panel width in CSS px.
-pub const PANEL_WIDTH: f32 = 460.0;
 
 /// Total panel height in CSS px.
 pub const PANEL_HEIGHT: f32 = 380.0;
@@ -55,29 +48,11 @@ const HEADER_H: f32 = 30.0;
 /// Search box height.
 const SEARCH_H: f32 = 26.0;
 
-/// Width of the left folder-tree column.
-const FOLDER_COL_W: f32 = 130.0;
-
-/// Height of a single folder row.
-const FOLDER_ROW_H: f32 = 24.0;
-
 /// Height of a single bookmark row (title line + url line).
 const BM_ROW_H: f32 = 38.0;
 
 /// Outer padding inside the panel.
 const PAD: f32 = 8.0;
-
-/// Width of the trailing "×" delete zone on a bookmark row.
-const DELETE_W: f32 = 22.0;
-
-/// Semantic color: URL link text — kept hard-coded (not a surface chrome token).
-const TEXT_URL: Color = Color { r: 110, g: 150, b: 220, a: 255 };
-/// Semantic color: delete "×" foreground — kept hard-coded (status/danger).
-const DELETE_FG: Color = Color { r: 190, g: 90, b: 90, a: 255 };
-
-const FONT_SZ: f32 = 12.0;
-const FONT_SZ_SM: f32 = 10.5;
-const RADIUS: f32 = 6.0;
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -114,8 +89,6 @@ pub struct BookmarkPanel {
     pub search: String,
     /// Vertical scroll offset of the bookmark list in CSS px.
     pub scroll_y: f32,
-    /// Id of the bookmark currently being dragged, if any.
-    pub drag: Option<i64>,
 }
 
 impl BookmarkPanel {
@@ -129,16 +102,14 @@ impl BookmarkPanel {
             selected_folder: None,
             search: String::new(),
             scroll_y: 0.0,
-            drag: None,
         }
     }
 
-    /// Flip visibility.  Resets transient state (search focus, drag) when hiding.
+    /// Flip visibility.  Resets the search focus when hiding.
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
         if !self.visible {
             self.search_active = false;
-            self.drag = None;
         }
     }
 
@@ -191,16 +162,6 @@ impl BookmarkPanel {
         self.scroll_y = 0.0;
     }
 
-    /// Begin dragging the bookmark with the given id.
-    pub fn begin_drag(&mut self, id: i64) {
-        self.drag = Some(id);
-    }
-
-    /// Take (and clear) the dragged bookmark id, if a drag is in progress.
-    pub fn take_drag(&mut self) -> Option<i64> {
-        self.drag.take()
-    }
-
     /// Scroll the bookmark list by `dy` CSS px, clamped to `[0, max]` where
     /// `max` is derived from the number of visible rows and the fixed list
     /// viewport height.
@@ -222,309 +183,11 @@ impl Default for BookmarkPanel {
 
 // ── Hit-testing ───────────────────────────────────────────────────────────────
 
-/// Result of a click inside the bookmark panel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BookmarkHit {
-    /// Close the panel ("×" in the header).
-    Close,
-    /// Focus the search box.
-    FocusSearch,
-    /// Select a folder filter.  `None` = the "All" row.
-    SelectFolder(Option<String>),
-    /// Body of a bookmark row (open on click / drag source).  Carries the id.
-    Bookmark(i64),
-    /// Trailing "×" delete zone of a bookmark row.  Carries the id.
-    DeleteBookmark(i64),
-    /// Inside the panel but no actionable target.
-    Empty,
-}
-
-/// Hit-test a click at CSS-px `(x, y)` against the panel anchored with its
-/// top-left corner at `(ax, ay)`.  Returns `None` when outside the panel.
-pub fn hit_test(panel: &BookmarkPanel, x: f32, y: f32, ax: f32, ay: f32) -> Option<BookmarkHit> {
-    if x < ax || x >= ax + PANEL_WIDTH || y < ay || y >= ay + PANEL_HEIGHT {
-        return None;
-    }
-    let lx = x - ax;
-    let ly = y - ay;
-
-    // Header: close button is the right HEADER_H square.
-    if ly < HEADER_H {
-        if lx >= PANEL_WIDTH - HEADER_H {
-            return Some(BookmarkHit::Close);
-        }
-        return Some(BookmarkHit::Empty);
-    }
-
-    // Search box.
-    let search_top = HEADER_H + PAD;
-    if ly >= search_top && ly < search_top + SEARCH_H {
-        return Some(BookmarkHit::FocusSearch);
-    }
-
-    // Body: folder column (left) | bookmark list (right).
-    let body_top = search_top + SEARCH_H + PAD;
-    if ly < body_top {
-        return Some(BookmarkHit::Empty);
-    }
-
-    if lx < FOLDER_COL_W {
-        // Folder rows: "All" first, then each folder.
-        let row = ((ly - body_top) / FOLDER_ROW_H) as usize;
-        if row == 0 {
-            return Some(BookmarkHit::SelectFolder(None));
-        }
-        let fi = row - 1;
-        if fi < panel.folders.len() {
-            return Some(BookmarkHit::SelectFolder(Some(panel.folders[fi].clone())));
-        }
-        return Some(BookmarkHit::Empty);
-    }
-
-    // Bookmark list.
-    let visible = panel.visible_entries();
-    let rel_y = ly - body_top + panel.scroll_y;
-    let row = (rel_y / BM_ROW_H) as usize;
-    if let Some(entry) = visible.get(row) {
-        // Trailing delete zone (panel-local right edge is PANEL_WIDTH - PAD).
-        if lx >= PANEL_WIDTH - PAD - DELETE_W {
-            return Some(BookmarkHit::DeleteBookmark(entry.id));
-        }
-        return Some(BookmarkHit::Bookmark(entry.id));
-    }
-    Some(BookmarkHit::Empty)
-}
-
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build the display list for the panel anchored at `(ax, ay)` (top-left).
-/// `pal` provides the active theme's surface colors.
-pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32, pal: &Palette) -> DisplayList {
-    let mut out = DisplayList::with_capacity(32 + panel.entries.len() * 4);
-    let radii = uniform_radii(RADIUS);
-
-    // Panel background + 1px border.
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(ax, ay, PANEL_WIDTH, PANEL_HEIGHT),
-        radii,
-        color: pal.overlay_border,
-    });
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(ax + 1.0, ay + 1.0, PANEL_WIDTH - 2.0, PANEL_HEIGHT - 2.0),
-        radii,
-        color: pal.overlay_bg,
-    });
-
-    // Header.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(ax + 1.0, ay + 1.0, PANEL_WIDTH - 2.0, HEADER_H - 1.0),
-        color: pal.header_bg,
-    });
-    out.push(text(
-        ax + PAD,
-        ay + (HEADER_H - FONT_SZ * 1.3) * 0.5,
-        PANEL_WIDTH - HEADER_H - PAD,
-        "Bookmarks",
-        FONT_SZ,
-        pal.text,
-        FontWeight::BOLD,
-    ));
-    out.push(text(
-        ax + PANEL_WIDTH - HEADER_H + 6.0,
-        ay + (HEADER_H - FONT_SZ * 1.3) * 0.5,
-        HEADER_H,
-        "×",
-        FONT_SZ + 1.0,
-        pal.text_dim,
-        FontWeight::NORMAL,
-    ));
-
-    // Search box.
-    let search_top = ay + HEADER_H + PAD;
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(ax + PAD, search_top, PANEL_WIDTH - 2.0 * PAD, SEARCH_H),
-        radii: uniform_radii(4.0),
-        color: pal.input_bg,
-    });
-    let (search_text, search_col) = if panel.search.is_empty() {
-        ("Search bookmarks…".to_owned(), pal.text_dim)
-    } else {
-        (panel.search.clone(), pal.text)
-    };
-    out.push(text(
-        ax + PAD + 8.0,
-        search_top + (SEARCH_H - FONT_SZ * 1.3) * 0.5,
-        PANEL_WIDTH - 2.0 * PAD - 16.0,
-        &search_text,
-        FONT_SZ,
-        search_col,
-        FontWeight::NORMAL,
-    ));
-
-    // Body region.
-    let body_top = search_top + SEARCH_H + PAD;
-    let body_h = ay + PANEL_HEIGHT - PAD - body_top;
-    let folder_col_x = ax;
-
-    // Folder column background.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(folder_col_x + 1.0, body_top, FOLDER_COL_W - 1.0, body_h),
-        color: pal.row_alt_bg,
-    });
-
-    // Folder rows: "All", then each folder.
-    let draw_folder_row = |out: &mut DisplayList, idx: usize, label: &str, selected: bool| {
-        let ry = body_top + idx as f32 * FOLDER_ROW_H;
-        if selected {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(folder_col_x + 1.0, ry, FOLDER_COL_W - 1.0, FOLDER_ROW_H),
-                color: pal.item_selected_bg,
-            });
-        }
-        let col = if selected { pal.accent } else { pal.text_dim };
-        out.push(text(
-            folder_col_x + PAD,
-            ry + (FOLDER_ROW_H - FONT_SZ_SM * 1.3) * 0.5,
-            FOLDER_COL_W - PAD - 4.0,
-            &truncate(label, 16),
-            FONT_SZ_SM,
-            col,
-            FontWeight::NORMAL,
-        ));
-    };
-    draw_folder_row(&mut out, 0, "All", panel.selected_folder.is_none());
-    for (i, f) in panel.folders.iter().enumerate() {
-        // Stop drawing folder rows that would overflow the body.
-        if (i as f32 + 2.0) * FOLDER_ROW_H > body_h {
-            break;
-        }
-        let selected = panel.selected_folder.as_ref() == Some(f);
-        draw_folder_row(&mut out, i + 1, f, selected);
-    }
-
-    // Bookmark list (right of the folder column), clipped + scrolled.
-    let list_x = ax + FOLDER_COL_W;
-    let list_w = PANEL_WIDTH - FOLDER_COL_W - PAD;
-    out.push(DisplayCommand::PushClipRect {
-        rect: Rect::new(list_x, body_top, list_w, body_h),
-    });
-
-    let visible = panel.visible_entries();
-    if visible.is_empty() {
-        out.push(text(
-            list_x + 10.0,
-            body_top + 12.0,
-            list_w - 20.0,
-            "No bookmarks",
-            FONT_SZ,
-            pal.text_dim,
-            FontWeight::NORMAL,
-        ));
-    }
-    for (i, entry) in visible.iter().enumerate() {
-        let ry = body_top + i as f32 * BM_ROW_H - panel.scroll_y;
-        // Cull rows fully outside the clip rect.
-        if ry + BM_ROW_H < body_top || ry > body_top + body_h {
-            continue;
-        }
-        let dragged = panel.drag == Some(entry.id);
-        if dragged {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(list_x, ry, list_w, BM_ROW_H),
-                color: pal.item_bg,
-            });
-        }
-        // Title line.
-        let title = if entry.title.is_empty() { entry.url.as_str() } else { entry.title.as_str() };
-        out.push(text(
-            list_x + 6.0,
-            ry + 5.0,
-            list_w - DELETE_W - 8.0,
-            &truncate(title, 48),
-            FONT_SZ,
-            pal.text,
-            FontWeight::NORMAL,
-        ));
-        // URL line.
-        out.push(text(
-            list_x + 6.0,
-            ry + 5.0 + FONT_SZ * 1.4,
-            list_w - DELETE_W - 8.0,
-            &truncate(&entry.url, 52),
-            FONT_SZ_SM,
-            TEXT_URL,
-            FontWeight::NORMAL,
-        ));
-        // Delete "×".
-        out.push(text(
-            list_x + list_w - DELETE_W + 4.0,
-            ry + (BM_ROW_H - FONT_SZ * 1.3) * 0.5,
-            DELETE_W,
-            "×",
-            FONT_SZ,
-            DELETE_FG,
-            FontWeight::NORMAL,
-        ));
-        // Row separator.
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(list_x, ry + BM_ROW_H - 1.0, list_w, 1.0),
-            color: pal.divider,
-        });
-    }
-
-    out.push(DisplayCommand::PopClip);
-    out
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Build a `DrawText` command with the panel's default font settings.
-fn text(x: f32, y: f32, w: f32, s: &str, size: f32, color: Color, weight: FontWeight) -> DisplayCommand {
-    DisplayCommand::DrawText {
-        rect: Rect::new(x, y, w.max(0.0), size * 1.4),
-        text: s.to_owned(),
-        font_size: size,
-        color,
-        font_family: Vec::new(),
-        font_weight: weight,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    }
-}
-
-/// Uniform corner radii.
-fn uniform_radii(r: f32) -> CornerRadii {
-    CornerRadii {
-        tl: r, tl_y: r,
-        tr: r, tr_y: r,
-        br: r, br_y: r,
-        bl: r, bl_y: r,
-    }
-}
-
-/// Truncate a label to at most `max_chars` characters, appending "…" if cut.
-fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_owned();
-    }
-    let mut out: String = s.chars().take(max_chars.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const AX: f32 = 8.0;
-    const AY: f32 = 40.0;
 
     fn entry(id: i64, url: &str, title: &str, folder: &str) -> BmEntry {
         BmEntry {
@@ -558,11 +221,9 @@ mod tests {
     fn toggle_resets_transient_state_on_hide() {
         let mut p = sample();
         p.search_active = true;
-        p.begin_drag(1);
         p.toggle(); // now hidden
         assert!(!p.visible);
         assert!(!p.search_active);
-        assert_eq!(p.drag, None);
     }
 
     #[test]
@@ -622,128 +283,5 @@ mod tests {
         p.append_search("rust");
         p.backspace_search();
         assert_eq!(p.search, "rus");
-    }
-
-    // ── Drag ───────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn drag_begin_then_take() {
-        let mut p = sample();
-        p.begin_drag(3);
-        assert_eq!(p.drag, Some(3));
-        assert_eq!(p.take_drag(), Some(3));
-        assert_eq!(p.drag, None);
-        assert_eq!(p.take_drag(), None);
-    }
-
-    // ── Hit-testing ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn hit_outside_returns_none() {
-        let p = sample();
-        assert_eq!(hit_test(&p, AX - 1.0, AY + 10.0, AX, AY), None);
-        assert_eq!(hit_test(&p, AX + 10.0, AY + PANEL_HEIGHT + 1.0, AX, AY), None);
-    }
-
-    #[test]
-    fn hit_close_button() {
-        let p = sample();
-        let hit = hit_test(&p, AX + PANEL_WIDTH - 5.0, AY + 10.0, AX, AY);
-        assert_eq!(hit, Some(BookmarkHit::Close));
-    }
-
-    #[test]
-    fn hit_search_box() {
-        let p = sample();
-        let y = AY + HEADER_H + PAD + SEARCH_H * 0.5;
-        let hit = hit_test(&p, AX + 60.0, y, AX, AY);
-        assert_eq!(hit, Some(BookmarkHit::FocusSearch));
-    }
-
-    #[test]
-    fn hit_all_folder_row() {
-        let p = sample();
-        let body_top = AY + HEADER_H + PAD + SEARCH_H + PAD;
-        let y = body_top + FOLDER_ROW_H * 0.5;
-        let hit = hit_test(&p, AX + 20.0, y, AX, AY);
-        assert_eq!(hit, Some(BookmarkHit::SelectFolder(None)));
-    }
-
-    #[test]
-    fn hit_specific_folder_row() {
-        let p = sample();
-        let body_top = AY + HEADER_H + PAD + SEARCH_H + PAD;
-        // Row index 1 = first folder ("/Reading").
-        let y = body_top + FOLDER_ROW_H * 1.5;
-        let hit = hit_test(&p, AX + 20.0, y, AX, AY);
-        assert_eq!(hit, Some(BookmarkHit::SelectFolder(Some("/Reading".to_string()))));
-    }
-
-    #[test]
-    fn hit_bookmark_row_body() {
-        let p = sample();
-        let body_top = AY + HEADER_H + PAD + SEARCH_H + PAD;
-        let y = body_top + BM_ROW_H * 0.5;
-        // First visible entry (folder sort: root entry id=4 is in display order
-        // as stored — visible_entries preserves entries order).
-        let x = AX + FOLDER_COL_W + 20.0;
-        let hit = hit_test(&p, x, y, AX, AY);
-        let first_id = p.visible_entries()[0].id;
-        assert_eq!(hit, Some(BookmarkHit::Bookmark(first_id)));
-    }
-
-    #[test]
-    fn hit_bookmark_delete_zone() {
-        let p = sample();
-        let body_top = AY + HEADER_H + PAD + SEARCH_H + PAD;
-        let y = body_top + BM_ROW_H * 0.5;
-        let x = AX + PANEL_WIDTH - PAD - DELETE_W * 0.5;
-        let hit = hit_test(&p, x, y, AX, AY);
-        let first_id = p.visible_entries()[0].id;
-        assert_eq!(hit, Some(BookmarkHit::DeleteBookmark(first_id)));
-    }
-
-    // ── Rendering ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn build_panel_emits_commands() {
-        let p = sample();
-        let dl = build_panel(&p, AX, AY, &Palette::DARK);
-        assert!(!dl.is_empty());
-        // Clip is balanced.
-        let pushes = dl.iter().filter(|c| matches!(c, DisplayCommand::PushClipRect { .. })).count();
-        let pops = dl.iter().filter(|c| matches!(c, DisplayCommand::PopClip)).count();
-        assert_eq!(pushes, pops);
-    }
-
-    #[test]
-    fn build_panel_draws_titles_and_folders() {
-        let p = sample();
-        let dl = build_panel(&p, AX, AY, &Palette::DARK);
-        let has = |needle: &str| {
-            dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == needle))
-        };
-        assert!(has("Bookmarks"));
-        assert!(has("All"));
-        assert!(has("Rust"));
-    }
-
-    #[test]
-    fn build_panel_empty_list_shows_placeholder() {
-        let mut p = BookmarkPanel::new();
-        p.visible = true;
-        p.set_data(vec![]);
-        let dl = build_panel(&p, AX, AY, &Palette::DARK);
-        let has_placeholder = dl
-            .iter()
-            .any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "No bookmarks"));
-        assert!(has_placeholder);
-    }
-
-    #[test]
-    fn truncate_long_label() {
-        let s = truncate("abcdefghijklmnop", 6);
-        assert_eq!(s.chars().count(), 6);
-        assert!(s.ends_with('…'));
     }
 }

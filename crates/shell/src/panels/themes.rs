@@ -5,7 +5,11 @@
 //! The accent does not affect page CSS (`prefers-color-scheme` is still read
 //! from the OS unless the user explicitly locks to light or dark).
 
+use lumen_core::geom::Rect;
 use lumen_layout::Color;
+use lumen_paint::{DisplayCommand, DisplayList};
+
+use crate::theme_tokens;
 
 /// Preset accent colours available in the Appearance settings section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -27,6 +31,7 @@ pub enum AccentPreset {
 
 impl AccentPreset {
     /// All six presets in display order.
+    #[allow(dead_code, reason = "BUG-421: выбор темы/акцента ещё не перенесён в движковый #view-settings")]
     pub const ALL: [Self; 6] = [
         Self::Blue,
         Self::Purple,
@@ -49,6 +54,7 @@ impl AccentPreset {
     }
 
     /// Short lowercase key, used in settings serialisation.
+    #[allow(dead_code, reason = "BUG-421: выбор темы/акцента ещё не перенесён в движковый #view-settings")]
     pub fn key(self) -> &'static str {
         match self {
             Self::Blue   => "blue",
@@ -130,6 +136,7 @@ impl ShellTheme {
     }
 
     /// Serialise to the compact settings string.
+    #[allow(dead_code, reason = "BUG-421: выбор темы/акцента ещё не перенесён в движковый #view-settings")]
     pub fn to_settings_str(self) -> String {
         let base = match self.base {
             ThemeBase::Dark   => "dark",
@@ -160,11 +167,22 @@ impl ShellTheme {
 /// `Light` variant are provided as the `DARK` / `LIGHT` constants.
 ///
 /// Tokens are role-named (not brightness-named) so the same field maps to the
-/// correct surface in both themes — e.g. `tab_active_bg` is the darkest tab in
-/// the dark theme but the lightest tab in the light theme. Semantic indicator
-/// colours (ad-block checkbox, lifecycle badges, container strips, group bars)
-/// are intentionally *not* part of the palette: they carry meaning and stay
-/// constant across themes.
+/// correct surface in both themes — e.g. `tab_active_bg` is `theme_tokens::SURFACE_2`
+/// in both themes even though that is the *lightest* dark-theme surface but a
+/// *dimmer* light-theme surface (dark-theme elevation gets lighter, light-theme
+/// elevation gets greyer — see `docs/design/lumen-v3_3.html` `:root`). Semantic
+/// indicator colours (ad-block checkbox, lifecycle badges, container strips,
+/// group bars) are intentionally *not* part of the palette: they carry meaning
+/// and stay constant across themes.
+///
+/// Every field below is sourced from [`theme_tokens`] (DS-2,
+/// `docs/tasks/p1-design-v3.md`). The design-system prototype only names surface
+/// roles for tab strip, omnibox and floating panels/dropdowns/modals — roles with
+/// no direct prototype element (`header_bg`, `row_alt_bg`, `item_bg`,
+/// `item_selected_bg`) are pinned to the *nearest* surface tier and documented
+/// per-field below; the 3-tier token set is deliberately coarser than the
+/// 16-field bespoke palette it replaces, so several roles now legitimately
+/// share one physical shade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
     /// Background of the horizontal tab strip bar.
@@ -173,10 +191,6 @@ pub struct Palette {
     pub tab_active_bg: Color,
     /// Background of an inactive tab.
     pub tab_inactive_bg: Color,
-    /// Background of a sleeping (BackgroundOld / T2) tab — a dimmer signal.
-    pub tab_sleep_bg: Color,
-    /// Background of a hibernated (T3) tab — the deepest dim.
-    pub tab_hibernate_bg: Color,
     /// Background of a floating overlay panel (address bar, find bar).
     pub overlay_bg: Color,
     /// Background of a panel's title / header bar — one step distinct from
@@ -203,47 +217,107 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// Dark chrome palette. Values reproduce the historical hard-coded dark
-    /// constants from `tabs/strip.rs` and `address_bar.rs` so the dark theme is
-    /// visually unchanged.
+    /// Dark chrome palette, built from [`theme_tokens::dark`].
     pub const DARK: Palette = Palette {
-        tab_bar_bg:       Color { r:  22, g:  22, b:  26, a: 255 },
-        tab_active_bg:    Color { r:  18, g:  18, b:  22, a: 255 },
-        tab_inactive_bg:  Color { r:  32, g:  33, b:  36, a: 255 },
-        tab_sleep_bg:     Color { r:  26, g:  27, b:  30, a: 255 },
-        tab_hibernate_bg: Color { r:  21, g:  21, b:  24, a: 255 },
-        overlay_bg:       Color { r:  32, g:  33, b:  36, a: 240 },
-        header_bg:        Color { r:  30, g:  31, b:  38, a: 255 },
-        row_alt_bg:       Color { r:  27, g:  28, b:  34, a: 255 },
-        overlay_border:   Color { r:  55, g:  55, b:  70, a: 255 },
-        input_bg:         Color { r:  18, g:  18, b:  22, a: 255 },
-        item_bg:          Color { r:  26, g:  27, b:  30, a: 245 },
-        item_selected_bg: Color { r:  40, g:  72, b: 152, a: 255 },
-        text:             Color { r: 232, g: 232, b: 236, a: 255 },
-        text_dim:         Color { r: 140, g: 140, b: 148, a: 255 },
-        divider:          Color { r:  45, g:  46, b:  52, a: 255 },
-        accent:           Color { r: 100, g: 128, b: 255, a: 255 },
+        // `.hbar-row1` background in the prototype.
+        tab_bar_bg: theme_tokens::dark::SURFACE_1,
+        // `.hbar-tab.active` / `.tab-row.active` background in the prototype.
+        tab_active_bg: theme_tokens::dark::SURFACE_2,
+        // `.hbar-tab` has no explicit background in the prototype — it shows
+        // through to the strip's own `SURFACE_1`, so an inactive tab is the
+        // same tier as the bar it sits on.
+        tab_inactive_bg: theme_tokens::dark::SURFACE_1,
+        // `.dropdown` / `.popover` / `.modal` background in the prototype —
+        // NOT `--overlay-bg` (that token is the translucent scrim *behind* a
+        // modal, `.modal-overlay`; Lumen's `overlay_bg` field predates DS-1 and
+        // actually means "opaque floating-panel surface", a false-friend name
+        // clash with the prototype's `--overlay-bg` custom property).
+        overlay_bg: theme_tokens::dark::SURFACE_0,
+        header_bg: theme_tokens::dark::SURFACE_1,
+        row_alt_bg: theme_tokens::dark::SURFACE_1,
+        // Every border in the prototype is `--stroke`.
+        overlay_border: theme_tokens::dark::STROKE,
+        // `.omnibox` background in the prototype.
+        input_bg: theme_tokens::dark::SURFACE_1,
+        item_bg: theme_tokens::dark::SURFACE_1,
+        // `.dd-row:hover` background in the prototype (no distinct "selected"
+        // state exists there, only hover — reused for the selected item too).
+        item_selected_bg: theme_tokens::dark::SURFACE_2,
+        text: theme_tokens::dark::TEXT_PRIMARY,
+        text_dim: theme_tokens::dark::TEXT_SECONDARY,
+        divider: theme_tokens::dark::STROKE,
+        accent: theme_tokens::profile::PERSONAL,
     };
 
-    /// Light chrome palette — a soft neutral-grey surface set with dark text.
+    /// Light chrome palette, built from [`theme_tokens::light`].
     pub const LIGHT: Palette = Palette {
-        tab_bar_bg:       Color { r: 222, g: 223, b: 227, a: 255 },
-        tab_active_bg:    Color { r: 252, g: 252, b: 253, a: 255 },
-        tab_inactive_bg:  Color { r: 233, g: 234, b: 238, a: 255 },
-        tab_sleep_bg:     Color { r: 224, g: 225, b: 229, a: 255 },
-        tab_hibernate_bg: Color { r: 214, g: 215, b: 220, a: 255 },
-        overlay_bg:       Color { r: 248, g: 249, b: 251, a: 245 },
-        header_bg:        Color { r: 236, g: 237, b: 241, a: 255 },
-        row_alt_bg:       Color { r: 240, g: 241, b: 245, a: 255 },
-        overlay_border:   Color { r: 198, g: 200, b: 208, a: 255 },
-        input_bg:         Color { r: 255, g: 255, b: 255, a: 255 },
-        item_bg:          Color { r: 244, g: 245, b: 248, a: 248 },
-        item_selected_bg: Color { r: 205, g: 222, b: 255, a: 255 },
-        text:             Color { r:  28, g:  29, b:  34, a: 255 },
-        text_dim:         Color { r: 108, g: 110, b: 120, a: 255 },
-        divider:          Color { r: 205, g: 207, b: 214, a: 255 },
-        accent:           Color { r: 100, g: 128, b: 255, a: 255 },
+        tab_bar_bg: theme_tokens::light::SURFACE_1,
+        tab_active_bg: theme_tokens::light::SURFACE_2,
+        tab_inactive_bg: theme_tokens::light::SURFACE_1,
+        overlay_bg: theme_tokens::light::SURFACE_0,
+        header_bg: theme_tokens::light::SURFACE_1,
+        row_alt_bg: theme_tokens::light::SURFACE_1,
+        overlay_border: theme_tokens::light::STROKE,
+        input_bg: theme_tokens::light::SURFACE_1,
+        item_bg: theme_tokens::light::SURFACE_1,
+        item_selected_bg: theme_tokens::light::SURFACE_2,
+        text: theme_tokens::light::TEXT_PRIMARY,
+        text_dim: theme_tokens::light::TEXT_SECONDARY,
+        divider: theme_tokens::light::STROKE,
+        accent: theme_tokens::profile::PERSONAL,
     };
+
+    /// Desaturated copy of this palette (DS-15: Guest profile signature —
+    /// `filter: grayscale(1)` on `.app-frame` in the design reference).
+    /// Every field converts independently; callers still overwrite `accent`
+    /// with `theme_tokens::profile::GUEST` afterwards per the DS-15 brief,
+    /// which is harmless since that colour is already near-gray.
+    #[must_use]
+    pub fn desaturated(&self) -> Palette {
+        Palette {
+            tab_bar_bg: desaturate(self.tab_bar_bg),
+            tab_active_bg: desaturate(self.tab_active_bg),
+            tab_inactive_bg: desaturate(self.tab_inactive_bg),
+            overlay_bg: desaturate(self.overlay_bg),
+            header_bg: desaturate(self.header_bg),
+            row_alt_bg: desaturate(self.row_alt_bg),
+            overlay_border: desaturate(self.overlay_border),
+            input_bg: desaturate(self.input_bg),
+            item_bg: desaturate(self.item_bg),
+            item_selected_bg: desaturate(self.item_selected_bg),
+            text: desaturate(self.text),
+            text_dim: desaturate(self.text_dim),
+            divider: desaturate(self.divider),
+            accent: desaturate(self.accent),
+        }
+    }
+}
+
+/// Convert `c` to a gray of equal perceived luminance (Rec. 601 luma:
+/// `0.299 r + 0.587 g + 0.114 b`), preserving alpha. DS-15 Guest signature —
+/// see [`Palette::desaturated`].
+#[must_use]
+pub fn desaturate(c: Color) -> Color {
+    let luma = 0.299 * f32::from(c.r) + 0.587 * f32::from(c.g) + 0.114 * f32::from(c.b);
+    let gray = luma.round().clamp(0.0, 255.0) as u8;
+    Color { r: gray, g: gray, b: gray, a: c.a }
+}
+
+/// Anonymous profile window outline (DS-15): a thin red inset frame around
+/// the whole window, matching `box-shadow: inset 0 0 0 2px var(--accent)` on
+/// `.app-frame` in the design reference. `win_w`/`win_h` are the full logical
+/// (CSS px) window size; `color` is `theme_tokens::profile::ANONYMOUS`. The
+/// caller appends this last to the overlay display list so it sits above
+/// every other chrome layer, including modals.
+#[must_use]
+pub fn anonymous_border(win_w: f32, win_h: f32, color: Color) -> DisplayList {
+    const T: f32 = 2.0;
+    vec![
+        DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, win_w, T), color },
+        DisplayCommand::FillRect { rect: Rect::new(0.0, win_h - T, win_w, T), color },
+        DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, T, win_h), color },
+        DisplayCommand::FillRect { rect: Rect::new(win_w - T, 0.0, T, win_h), color },
+    ]
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -354,6 +428,60 @@ mod tests {
         let p = t.palette(true); // os_dark ignored for explicit Light
         assert_eq!(p.tab_bar_bg, Palette::LIGHT.tab_bar_bg);
         assert_eq!(p.text, Palette::LIGHT.text);
+    }
+
+    // ── DS-15: Anonymous/Guest profile signatures ────────────────────────────
+
+    #[test]
+    fn desaturate_pure_red_matches_luma() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let gray = desaturate(red);
+        assert_eq!(gray, Color { r: 76, g: 76, b: 76, a: 255 });
+    }
+
+    #[test]
+    fn desaturate_preserves_alpha() {
+        let translucent = Color { r: 10, g: 200, b: 30, a: 140 };
+        assert_eq!(desaturate(translucent).a, 140);
+    }
+
+    #[test]
+    fn desaturate_gray_input_is_idempotent() {
+        let gray = Color { r: 100, g: 100, b: 100, a: 255 };
+        assert_eq!(desaturate(gray), gray);
+    }
+
+    #[test]
+    fn desaturate_output_has_equal_channels() {
+        let c = Color { r: 12, g: 240, b: 88, a: 255 };
+        let g = desaturate(c);
+        assert_eq!(g.r, g.g);
+        assert_eq!(g.g, g.b);
+    }
+
+    #[test]
+    fn palette_desaturated_converts_every_field() {
+        let d = Palette::DARK.desaturated();
+        assert_eq!(d.tab_bar_bg, desaturate(Palette::DARK.tab_bar_bg));
+        assert_eq!(d.accent, desaturate(Palette::DARK.accent));
+        assert_eq!(d.text, desaturate(Palette::DARK.text));
+        assert_eq!(d.overlay_border, desaturate(Palette::DARK.overlay_border));
+        // Sanity: a colourful field actually loses its hue (r != g != b before,
+        // r == g == b after) rather than staying untouched.
+        assert_ne!(Palette::DARK.accent.r, Palette::DARK.accent.g);
+        assert_eq!(d.accent.r, d.accent.g);
+    }
+
+    #[test]
+    fn anonymous_border_emits_four_rects_covering_perimeter() {
+        let dl = anonymous_border(1024.0, 720.0, theme_tokens::profile::ANONYMOUS);
+        assert_eq!(dl.len(), 4);
+        for cmd in &dl {
+            let DisplayCommand::FillRect { color, .. } = cmd else {
+                panic!("expected FillRect, got {cmd:?}");
+            };
+            assert_eq!(*color, theme_tokens::profile::ANONYMOUS);
+        }
     }
 
     #[test]

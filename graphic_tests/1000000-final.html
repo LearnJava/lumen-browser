@@ -834,6 +834,22 @@
     <div style="display:inline-block;width:100px;height:36px;background:#533483;margin:7px 4px;vertical-align:top;"></div>
     <div style="display:inline-block;width:100px;height:36px;background:#e94560;margin:7px 4px;vertical-align:top;"></div>
   </div>
+  <!-- CC-CSS-1: `::-webkit-scrollbar`/`-thumb`/`-track` translated onto
+       scrollbar-width/scrollbar-color — should render identically to the
+       standard-property box below it (thin bar, custom thumb/track colors). -->
+  <style>
+    .cc-css-1-webkit-sb::-webkit-scrollbar { width: 9px; }
+    .cc-css-1-webkit-sb::-webkit-scrollbar-thumb { background: #e94560; }
+    .cc-css-1-webkit-sb::-webkit-scrollbar-track { background: #0f3460; }
+  </style>
+  <div class="cc-css-1-webkit-sb" style="width:100px;height:70px;overflow-y:scroll;overflow-x:hidden;background:#16213e;border:1px solid #0f3460;">
+    <div style="width:100%;height:60px;background:#533483;margin-bottom:4px;"></div>
+    <div style="width:100%;height:60px;background:#e94560;"></div>
+  </div>
+  <div style="width:100px;height:70px;overflow-y:scroll;overflow-x:hidden;background:#16213e;border:1px solid #0f3460;scrollbar-width:thin;scrollbar-color:#e94560 #0f3460;">
+    <div style="width:100%;height:60px;background:#533483;margin-bottom:4px;"></div>
+    <div style="width:100%;height:60px;background:#e94560;"></div>
+  </div>
 </div>
 
 <!-- text-shadow blur -->

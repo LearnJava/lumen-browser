@@ -175,12 +175,20 @@ pub struct RequestContext {
     /// `Some(true)` — third-party (хост запроса вне registrable-домена
     /// документа), `Some(false)` — first-party, `None` — неизвестно.
     pub third_party: Option<bool>,
+    /// `true` — запрос является навигацией верхнего уровня (главный документ
+    /// вкладки), а не субресурсом. EasyList-правила с типовыми `$`-опциями
+    /// (`$script`, `$image`, …) описывают только субресурсы и по ABP-семантике
+    /// не должны блокировать главный документ — его блокирует только явный
+    /// `$document` (в модели пока нет). Поэтому `is_top_level` заставляет
+    /// такие правила НЕ срабатывать, снимая массовый over-block голых доменов
+    /// (`example.com`, `github.com`) узкими regex-правилами easylist (BUG-292).
+    pub is_top_level: bool,
 }
 
 impl RequestContext {
-    /// Контекст без информации: оба поля `None`. Заставляет
-    /// `should_block_ctx` вести себя как `should_block` (консервативный блок
-    /// для type/party-правил).
+    /// Контекст без информации: `resource_type`/`third_party` = `None`,
+    /// `is_top_level` = `false`. Заставляет `should_block_ctx` вести себя как
+    /// `should_block` (консервативный блок для type/party-правил).
     pub fn unknown() -> Self {
         Self::default()
     }

@@ -89,7 +89,7 @@ impl RenderBackend for CpuBackend {
         // CPU-бэкенд не использует HiDPI scale — рендерит в заданных физических пикселях.
     }
 
-    fn register_image(&mut self, _src: String, _image: &Image) -> Result<(), String> {
+    fn register_image(&mut self, _src: String, _image: Arc<Image>) -> Result<(), String> {
         // CPU-бэкенд не кэширует изображения: DrawImage всегда рисует grey placeholder.
         // Это соответствует поведению InProcessSession::screenshot_cpu_rgba.
         Ok(())
@@ -231,7 +231,7 @@ mod tests {
             data: vec![255, 0, 0, 255],
             icc_profile: None,
         };
-        assert!(b.register_image("test.png".into(), &img).is_ok());
+        assert!(b.register_image("test.png".into(), Arc::new(img)).is_ok());
     }
 
     #[test]

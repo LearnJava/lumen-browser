@@ -1,0 +1,560 @@
+{
+ "date": "20260718-193240",
+ "commit": "ef5acda9",
+ "exe": "D:\\RustProjects\\lumen-browser\\target\\dev-release\\lumen.exe",
+ "page": "file:///D:/RustProjects/lumen-browser/.claude/worktrees/perf-5-mem-timeseries/scripts/perf-fixtures/mem.html",
+ "result": {
+  "tabs": 6,
+  "samples": 84,
+  "mem_reports": 1,
+  "rss_start_mb": 568.0,
+  "rss_after_ramp_mb": 686.7,
+  "rss_end_mb": 686.7,
+  "per_tab_mb": 19.79,
+  "ramp_slope_mb_per_tab": 23.13,
+  "plateau_rss_mb": 686.7,
+  "hold_slope_mb_per_min": 0.0,
+  "leak_suspected": false,
+  "leak_threshold_mb_per_min": 5.0,
+  "breakdown": {
+   "rust_known_mb": 0.4,
+   "cheap_js_mb": null,
+   "js_used_mb": null,
+   "rss_mb": 686.7,
+   "unattributed_mb": 686.3,
+   "gpu_mb": 413.5
+  },
+  "per_tab_rss": [
+   {
+    "tab": 0,
+    "rss_mb": 568.0
+   },
+   {
+    "tab": 1,
+    "rss_mb": 596.3
+   },
+   {
+    "tab": 2,
+    "rss_mb": 616.0
+   },
+   {
+    "tab": 3,
+    "rss_mb": 634.4
+   },
+   {
+    "tab": 4,
+    "rss_mb": 662.2
+   },
+   {
+    "tab": 5,
+    "rss_mb": 686.7
+   }
+  ],
+  "series": [
+   {
+    "t_s": 7.86,
+    "phase": "ramp",
+    "tab": 0,
+    "rss_mb": 568.0
+   },
+   {
+    "t_s": 8.36,
+    "phase": "ramp",
+    "tab": 0,
+    "rss_mb": 568.0
+   },
+   {
+    "t_s": 8.86,
+    "phase": "ramp",
+    "tab": 0,
+    "rss_mb": 568.0
+   },
+   {
+    "t_s": 9.36,
+    "phase": "ramp",
+    "tab": 0,
+    "rss_mb": 568.0
+   },
+   {
+    "t_s": 10.02,
+    "phase": "ramp",
+    "tab": 1,
+    "rss_mb": 596.3
+   },
+   {
+    "t_s": 10.52,
+    "phase": "ramp",
+    "tab": 1,
+    "rss_mb": 596.3
+   },
+   {
+    "t_s": 11.02,
+    "phase": "ramp",
+    "tab": 1,
+    "rss_mb": 596.3
+   },
+   {
+    "t_s": 11.52,
+    "phase": "ramp",
+    "tab": 1,
+    "rss_mb": 596.3
+   },
+   {
+    "t_s": 12.16,
+    "phase": "ramp",
+    "tab": 2,
+    "rss_mb": 615.2
+   },
+   {
+    "t_s": 12.66,
+    "phase": "ramp",
+    "tab": 2,
+    "rss_mb": 616.0
+   },
+   {
+    "t_s": 13.16,
+    "phase": "ramp",
+    "tab": 2,
+    "rss_mb": 616.0
+   },
+   {
+    "t_s": 13.66,
+    "phase": "ramp",
+    "tab": 2,
+    "rss_mb": 616.0
+   },
+   {
+    "t_s": 14.3,
+    "phase": "ramp",
+    "tab": 3,
+    "rss_mb": 633.8
+   },
+   {
+    "t_s": 14.8,
+    "phase": "ramp",
+    "tab": 3,
+    "rss_mb": 634.4
+   },
+   {
+    "t_s": 15.3,
+    "phase": "ramp",
+    "tab": 3,
+    "rss_mb": 634.4
+   },
+   {
+    "t_s": 15.81,
+    "phase": "ramp",
+    "tab": 3,
+    "rss_mb": 634.4
+   },
+   {
+    "t_s": 16.63,
+    "phase": "ramp",
+    "tab": 4,
+    "rss_mb": 662.2
+   },
+   {
+    "t_s": 17.13,
+    "phase": "ramp",
+    "tab": 4,
+    "rss_mb": 662.2
+   },
+   {
+    "t_s": 17.63,
+    "phase": "ramp",
+    "tab": 4,
+    "rss_mb": 662.2
+   },
+   {
+    "t_s": 18.13,
+    "phase": "ramp",
+    "tab": 4,
+    "rss_mb": 662.2
+   },
+   {
+    "t_s": 18.8,
+    "phase": "ramp",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 19.3,
+    "phase": "ramp",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 19.8,
+    "phase": "ramp",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 20.3,
+    "phase": "ramp",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 20.8,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 21.3,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 21.8,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 22.3,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 22.8,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 23.3,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 23.81,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 24.31,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 24.81,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 25.31,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 25.81,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 26.31,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 26.81,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 27.31,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 27.81,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 28.31,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 28.81,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 29.31,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 29.81,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 30.31,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 30.82,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 31.32,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 31.82,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 32.32,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 32.82,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 33.32,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 33.82,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 34.32,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 34.82,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 35.32,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 35.83,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 36.33,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 36.83,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 37.33,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 37.83,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 38.33,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 38.83,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 39.33,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 39.83,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 40.33,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 40.83,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 41.33,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 41.84,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 42.34,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 42.84,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 43.34,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 43.84,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 44.34,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 44.84,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 45.34,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 45.84,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 46.35,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 46.85,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 47.35,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 47.85,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 48.35,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 48.85,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 49.35,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 49.85,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   },
+   {
+    "t_s": 50.35,
+    "phase": "hold",
+    "tab": 5,
+    "rss_mb": 686.7
+   }
+  ]
+ }
+}

@@ -1,9 +1,12 @@
 //! Shields toolbar widget (7C.4): floating panel anchored below the tab bar at
 //! the top-right corner of the window.
 //!
-//! The panel shows a shield icon, the current domain, whether shields are
-//! enabled for that domain, and the number of blocked requests for the
-//! current page.  Clicking the shield toggles protection on/off.
+//! The legacy display-list renderer was removed in CC-15-4 — under the engine
+//! chrome (default since CC-14) the popover is `#permPopover`, which binds only
+//! the blocked-request counter. The domain readout and the shields on/off
+//! indicator this module still models are therefore not shown anywhere:
+//! `BUG-411`. `hit_test` is deliberately kept (still called ungated, itself a
+//! `BUG-404` site) — see those two bug files before deleting anything here.
 //!
 //! Toggled with `Ctrl+Shift+S`.
 //!
@@ -11,17 +14,18 @@
 //! `Event::RequestBlocked` events from the HTTP layer, and stored in a shared
 //! [`BlockedLog`] (`Arc<Mutex<…>>`).  The Lumen struct polls this on each
 //! redraw to refresh the panel display.
+//!
+//! The panel shows one honest counter — total requests blocked on the current
+//! page (DS-18) — and no trackers/ads breakdown: the installed filter
+//! (`lumen_network::EasyListFilter`, fed by the merged EasyList+EasyPrivacy
+//! body, see `crates/shell/src/adblock.rs`) tags every match with a
+//! list-format reason (`"easylist"`/`"hosts"`), not a tracker-vs-ad category,
+//! so a split would be fabricated rather than measured.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::Event;
 use lumen_core::ext::EventSink;
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-
-use crate::panels::themes::Palette;
 
 // ── Visual constants ─────────────────────────────────────────────────────────
 
@@ -34,58 +38,33 @@ const PANEL_TOP_OFFSET: f32 = 4.0;
 /// Right margin from the window edge (CSS px).
 const PANEL_RIGHT_MARGIN: f32 = 8.0;
 
-// Semantic indicator colours — meaning-bearing, theme-invariant.
-/// Shield icon / status text colour when shields are enabled.
-const SHIELD_ON: Color = Color { r: 60, g: 200, b: 120, a: 255 };
-/// Shield icon / status text colour when shields are disabled.
-const SHIELD_OFF: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-/// Toggle-strip background when the action is "Disable for this site" (destructive).
-const TOGGLE_BG_ON: Color = Color { r: 30, g: 90, b: 55, a: 255 };
-/// Toggle-strip background when the action is "Enable for this site" (constructive).
-const TOGGLE_BG_OFF: Color = Color { r: 90, g: 35, b: 35, a: 255 };
-/// Close-button foreground — soft-red muted action indicator.
-const CLOSE_FG: Color = Color { r: 140, g: 80, b: 80, a: 255 };
-
-const FONT_SZ: f32 = 11.0;
-const FONT_SZ_SM: f32 = 10.0;
-const PANEL_RADIUS: f32 = 6.0;
-
 // ── Blocked log ───────────────────────────────────────────────────────────────
 
-/// Shared accumulator for blocked-request counts, indexed by hostname.
+/// Shared accumulator for the total blocked-request count.
 ///
 /// Updated from the network thread via [`ShieldCountSink`]; read by the shell
-/// UI thread to refresh the panel display.  Counts persist for the lifetime of
-/// the browser process (they are NOT reset on navigation — call
+/// UI thread to refresh the panel display.  The count persists for the
+/// lifetime of the browser process (it is NOT reset on navigation — call
 /// [`BlockedLog::clear`] explicitly on page load).
 #[derive(Default)]
 pub struct BlockedLog {
-    /// Blocked-request count per hostname (`example.com → 3`).
-    pub counts: HashMap<String, u32>,
-    /// Total blocked across all domains since the last [`clear`] call.
+    /// Total requests blocked since the last [`clear`] call.
     pub total: u32,
 }
 
 impl BlockedLog {
-    /// Increment the count for the hostname extracted from `url`.
+    /// Increment the total if `url` has a valid HTTP(S) host.
     ///
     /// Non-HTTP/HTTPS URLs and malformed hostnames are silently ignored.
     pub fn record(&mut self, url: &str) {
-        if let Some(host) = extract_host(url) {
-            *self.counts.entry(host).or_insert(0) += 1;
+        if extract_host(url).is_some() {
             self.total += 1;
         }
     }
 
-    /// Clear all counts (call on every top-level navigation).
+    /// Clear the total (call on every top-level navigation).
     pub fn clear(&mut self) {
-        self.counts.clear();
         self.total = 0;
-    }
-
-    /// Blocked count for a specific hostname (0 if unseen).
-    pub fn count_for(&self, host: &str) -> u32 {
-        self.counts.get(host).copied().unwrap_or(0)
     }
 }
 
@@ -133,11 +112,9 @@ pub struct ShieldsPanel {
     ///
     /// `None` while no page is loaded or for local file: URLs.
     pub current_domain: Option<String>,
-    /// Snapshot of blocked counts (pulled from [`BlockedLog`] via
+    /// Snapshot of the total blocked count (pulled from [`BlockedLog`] via
     /// [`ShieldsPanel::refresh`]).
     blocked_total: u32,
-    /// Snapshot: blocked count for the current domain only.
-    blocked_domain: u32,
     /// Shared log produced by [`ShieldCountSink`].
     log: Arc<Mutex<BlockedLog>>,
 }
@@ -145,14 +122,7 @@ pub struct ShieldsPanel {
 impl ShieldsPanel {
     /// Create a new hidden panel backed by the given shared `log`.
     pub fn new(log: Arc<Mutex<BlockedLog>>) -> Self {
-        Self {
-            visible: false,
-            enabled: true,
-            current_domain: None,
-            blocked_total: 0,
-            blocked_domain: 0,
-            log,
-        }
+        Self { visible: false, enabled: true, current_domain: None, blocked_total: 0, log }
     }
 
     /// Flip panel visibility.
@@ -166,16 +136,11 @@ impl ShieldsPanel {
         self.refresh();
     }
 
-    /// Pull the latest counts from the shared [`BlockedLog`] into the panel
-    /// snapshot fields.  Call after every network event or on each redraw.
+    /// Pull the latest total from the shared [`BlockedLog`] into the panel
+    /// snapshot field.  Call after every network event or on each redraw.
     pub fn refresh(&mut self) {
         if let Ok(guard) = self.log.lock() {
             self.blocked_total = guard.total;
-            if let Some(ref d) = self.current_domain {
-                self.blocked_domain = guard.count_for(d);
-            } else {
-                self.blocked_domain = 0;
-            }
         }
     }
 
@@ -185,12 +150,6 @@ impl ShieldsPanel {
             guard.clear();
         }
         self.blocked_total = 0;
-        self.blocked_domain = 0;
-    }
-
-    /// Blocked-request count for the current domain (from last `refresh`).
-    pub fn blocked_domain_count(&self) -> u32 {
-        self.blocked_domain
     }
 
     /// Total blocked-request count for the current page (from last `refresh`).
@@ -244,164 +203,6 @@ pub fn hit_test(
     Some(ShieldsHit::Empty)
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build the display list for the shields floating panel.
-///
-/// The panel is anchored at the top-right of the window, offset by
-/// `tab_bar_h` from the top.  Surface colours are drawn from `pal`; semantic
-/// indicator colours (shield green/red, toggle tracks) remain hard-coded.
-pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32, pal: &Palette) -> DisplayList {
-    let (px, py) = panel_origin(window_w, tab_bar_h);
-    let mut out = DisplayList::with_capacity(20);
-    let radii = uniform_radii(PANEL_RADIUS);
-
-    // Background + border.
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px, py, PANEL_W, PANEL_H),
-        radii,
-        color: pal.overlay_border,
-    });
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
-        radii: uniform_radii(PANEL_RADIUS - 1.0),
-        color: pal.overlay_bg,
-    });
-
-    // Close "×" button (top-right).
-    let close_x = px + PANEL_W - 18.0;
-    let close_y = py + 5.0;
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(close_x, close_y, 14.0, FONT_SZ * 1.2),
-        text: "×".to_owned(),
-        font_size: FONT_SZ,
-        color: CLOSE_FG,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Shield icon + status.
-    let shield_color = if panel.enabled { SHIELD_ON } else { SHIELD_OFF };
-    let status_label = if panel.enabled { "SHIELDS ON" } else { "SHIELDS OFF" };
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + 10.0, py + 6.0, 16.0, 16.0),
-        text: "🛡".to_owned(),
-        font_size: 14.0,
-        color: shield_color,
-        font_family: Vec::new(),
-        font_weight: FontWeight::BOLD,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + 30.0, py + 8.0, 100.0, FONT_SZ * 1.3),
-        text: status_label.to_owned(),
-        font_size: FONT_SZ,
-        color: shield_color,
-        font_family: Vec::new(),
-        font_weight: FontWeight::BOLD,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Domain row.
-    let domain_label = panel
-        .current_domain
-        .as_deref()
-        .unwrap_or("(no domain)");
-    let domain_text = truncate_label(domain_label, 26);
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + 10.0, py + 26.0, PANEL_W - 20.0, FONT_SZ_SM * 1.3),
-        text: domain_text,
-        font_size: FONT_SZ_SM,
-        color: pal.text_dim,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Blocked-count row.
-    let count_text = format!(
-        "{} blocked (this page: {})",
-        panel.blocked_domain_count(),
-        panel.blocked_total_count(),
-    );
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + 10.0, py + 40.0, PANEL_W - 20.0, FONT_SZ_SM * 1.3),
-        text: count_text,
-        font_size: FONT_SZ_SM,
-        color: pal.text,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Toggle button (bottom strip).
-    let toggle_label = if panel.enabled {
-        "Disable for this site"
-    } else {
-        "Enable for this site"
-    };
-    let toggle_bg = if panel.enabled { TOGGLE_BG_OFF } else { TOGGLE_BG_ON };
-    let toggle_fg = if panel.enabled { SHIELD_OFF } else { SHIELD_ON };
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px + 1.0, py + PANEL_H - 25.0, PANEL_W - 2.0, 24.0),
-        radii: uniform_radii(PANEL_RADIUS - 1.0),
-        color: toggle_bg,
-    });
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(
-            px + 10.0,
-            py + PANEL_H - 20.0,
-            PANEL_W - 20.0,
-            FONT_SZ * 1.2,
-        ),
-        text: toggle_label.to_owned(),
-        font_size: FONT_SZ,
-        color: toggle_fg,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    out
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Top-left corner of the shields panel in CSS px.
@@ -409,25 +210,6 @@ fn panel_origin(window_w: f32, tab_bar_h: f32) -> (f32, f32) {
     let px = (window_w - PANEL_W - PANEL_RIGHT_MARGIN).max(0.0);
     let py = tab_bar_h + PANEL_TOP_OFFSET;
     (px, py)
-}
-
-fn uniform_radii(r: f32) -> CornerRadii {
-    CornerRadii {
-        tl: r, tl_y: r,
-        tr: r, tr_y: r,
-        br: r, br_y: r,
-        bl: r, bl_y: r,
-    }
-}
-
-/// Truncate a label to at most `max_chars` characters, appending "…" if needed.
-fn truncate_label(s: &str, max_chars: usize) -> String {
-    let count = s.chars().count();
-    if count <= max_chars {
-        return s.to_owned();
-    }
-    let truncated: String = s.chars().take(max_chars - 1).collect();
-    format!("{truncated}…")
 }
 
 /// Extract the hostname from an HTTP/HTTPS URL string.
@@ -480,7 +262,6 @@ mod tests {
         let mut log = BlockedLog::default();
         log.record("https://tracker.example.com/pixel.gif");
         log.record("https://tracker.example.com/other.js");
-        assert_eq!(log.count_for("tracker.example.com"), 2);
         assert_eq!(log.total, 2);
     }
 
@@ -498,14 +279,13 @@ mod tests {
         log.record("https://ads.example.com/ad.js");
         log.clear();
         assert_eq!(log.total, 0);
-        assert!(log.counts.is_empty());
     }
 
     #[test]
-    fn blocked_log_strips_port() {
+    fn blocked_log_counts_url_with_port() {
         let mut log = BlockedLog::default();
         log.record("https://ads.example.com:8080/track");
-        assert_eq!(log.count_for("ads.example.com"), 1);
+        assert_eq!(log.total, 1);
     }
 
     // ── extract_host ─────────────────────────────────────────────────────────
@@ -574,7 +354,6 @@ mod tests {
         let mut p = ShieldsPanel::new(log);
         p.current_domain = Some("tracker.com".to_owned());
         p.refresh();
-        assert_eq!(p.blocked_domain_count(), 2);
         assert_eq!(p.blocked_total_count(), 3);
     }
 
@@ -629,45 +408,6 @@ mod tests {
         assert_eq!(hit, Some(ShieldsHit::Empty));
     }
 
-    // ── Rendering ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn build_panel_emits_commands() {
-        let p = make_panel_visible(true, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
-        assert!(!dl.is_empty());
-    }
-
-    #[test]
-    fn build_panel_shields_on_label() {
-        let p = make_panel_visible(true, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
-        let has_on = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("ON"))
-        });
-        assert!(has_on, "panel must show SHIELDS ON when enabled");
-    }
-
-    #[test]
-    fn build_panel_shields_off_label() {
-        let p = make_panel_visible(false, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
-        let has_off = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("OFF"))
-        });
-        assert!(has_off, "panel must show SHIELDS OFF when disabled");
-    }
-
-    #[test]
-    fn build_panel_shows_domain() {
-        let p = make_panel_visible(true, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
-        let has_domain = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("example.com"))
-        });
-        assert!(has_domain);
-    }
-
     // ── ShieldCountSink ──────────────────────────────────────────────────────
 
     #[test]
@@ -692,19 +432,7 @@ mod tests {
             reason: "easylist".to_owned(),
         });
         let guard = log.lock().unwrap();
-        assert_eq!(guard.count_for("tracker.example.com"), 1);
+        assert_eq!(guard.total, 1);
     }
 
-    #[test]
-    fn truncate_label_short() {
-        assert_eq!(truncate_label("example.com", 26), "example.com");
-    }
-
-    #[test]
-    fn truncate_label_long() {
-        let long = "a".repeat(30);
-        let t = truncate_label(&long, 26);
-        assert!(t.chars().count() <= 26);
-        assert!(t.ends_with('…'));
-    }
 }

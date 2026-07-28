@@ -27,7 +27,9 @@
 //! descriptors from `@counter-style` at-rules. Use `build_counter_style_registry`
 //! to build from a `Stylesheet`, then pass to `format_counter_with_registry`.
 
-use std::collections::HashMap;
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use lumen_dom::{Document, FlatTree, NodeData, NodeId};
 
@@ -53,6 +55,324 @@ pub enum QuoteSlot {
     After,
 }
 
+/// BUG-341 S24 — the per-node cascade cache, carried from one pass to the next.
+///
+/// Before this slice every pass built its own map: a hover flip reused all 828
+/// of the previous pass's `Arc<ComputedStyle>`s and then inserted all 828 into a
+/// fresh `HashMap`, which the pipeline cloned wholesale so it could serve as the
+/// next cycle's `prev_styles`. Three full-size passes over the document to end
+/// up with the map it started from. The map is now moved into the pass
+/// ([`RestyleDelta::prev_styles`]) and moved back out inside its [`CounterMap`],
+/// with only the recomputed entries rewritten — the S19 answer applied to the
+/// cascade cache instead of the box tree.
+///
+/// # Why entries carry a pass ordinal
+///
+/// The pre-S24 map had one property everything downstream relied on without
+/// naming it: **an entry exists iff the immediately preceding pass visited that
+/// node**. Absence is what forces a recompute for a node that was detached and
+/// re-attached, or moved to a new parent, since the style it would otherwise
+/// reuse was computed under a different inherited chain. A map that simply
+/// accumulates entries forever loses exactly that property (`lumen_dom` never
+/// frees a node or reuses a [`NodeId`], so a *stale* entry is not a wrong-node
+/// hazard — it is a wrong-*pass* one).
+///
+/// So each entry is stamped with the ordinal of the pass that wrote or confirmed
+/// it, and [`Self::finish_pass`] drops the ones this pass did not touch whenever
+/// the counts disagree — a sweep that costs what the old rebuild always cost,
+/// on the rare pass where something was actually removed, and nothing at all on
+/// the steady state. The invariant it maintains is the one above, stated
+/// exactly: after a pass, `entries` holds precisely the elements that pass
+/// walked, all stamped with its ordinal.
+#[derive(Debug, Default, Clone)]
+pub struct CascadeStyles {
+    /// `NodeId` → (style, ordinal of the pass that last wrote or confirmed it).
+    entries: HashMap<NodeId, (Arc<ComputedStyle>, u32)>,
+    /// Ordinal of the pass currently writing into this map, or of the last one
+    /// to have finished. Wraps; see [`Self::reuse`] for why that is harmless.
+    pass: u32,
+    /// Elements the current pass has visited so far — the reference
+    /// [`Self::finish_pass`] compares `entries.len()` against.
+    visited: usize,
+    /// Whether the last [`Self::finish_pass`] had to sweep. Observable so a
+    /// gate can assert the steady state never does: a sweep every pass would
+    /// put the O(document) cost this slice removes straight back, while
+    /// producing byte-identical output — the S8 failure mode exactly.
+    swept: bool,
+    /// BUG-341 S26 — whether the pass that filled this cache recorded any
+    /// counter snapshot or quote depth ([`CounterMap::nodes`] /
+    /// [`CounterMap::quotes`]).
+    ///
+    /// It rides here because this is the one thing an interaction cycle already
+    /// carries from pass to pass, so the fact costs no plumbing through the
+    /// shell and page pipelines. It is what licenses
+    /// [`incremental_precompute_counters`]'s no-op path: those two collections
+    /// are rebuilt by the walk rather than carried, so a pass that does not walk
+    /// hands back empty ones. That is only equivalent when the previous pass had
+    /// nothing in them — and a document that *does* use `counter-increment` or
+    /// `open-quote` would otherwise silently lose its generated content, i.e.
+    /// visible corruption rather than a slow frame.
+    ///
+    /// Deliberately not a predicate over the stylesheet (the S10/S23 shape):
+    /// `counter-reset` and friends can be set from a `style` attribute, which no
+    /// sheet-wide scan can see. Recording what the pass actually produced has no
+    /// such hole.
+    generated_content: bool,
+}
+
+impl CascadeStyles {
+    /// An empty cache sized for a document of `elements` styled elements.
+    fn with_capacity(elements: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(elements),
+            pass: 0,
+            visited: 0,
+            swept: false,
+            generated_content: false,
+        }
+    }
+
+    /// Start writing a new pass into this carried cache.
+    fn begin_pass(&mut self) {
+        self.pass = self.pass.wrapping_add(1);
+        self.visited = 0;
+    }
+
+    /// Take `id`'s entry from the previous pass, restamping it as visited.
+    ///
+    /// `None` when there is nothing to reuse — no entry at all, or one the
+    /// *immediately* preceding pass did not write. Both mean the same thing to
+    /// the caller ("recompute"), which is why the ordinal can wrap without
+    /// consequence: a mismatch only ever costs a recompute, and
+    /// [`Self::finish_pass`] keeps the map exact so a mismatch cannot happen in
+    /// the first place.
+    ///
+    /// BUG-341 S27 — restamp `id`'s entry without reading it, reporting whether
+    /// there was one.
+    ///
+    /// What a pass does to the elements of a subtree it declined to walk. The
+    /// walk's own reuse path is this plus an `Arc` clone the caller needs and a
+    /// skipped subtree does not: nothing between here and the next pass reads
+    /// those styles, so the only thing the pass still owes them is the ordinal.
+    /// Keeping that debt paid is what lets the whole S24 invariant — and the
+    /// [`Self::finish_pass`] sweep that maintains it — stay exactly as it was
+    /// while the traversal above it gets cheaper.
+    ///
+    /// `false` means the licence to skip was violated: every element inside a
+    /// skipped subtree was, by construction, cascaded by the previous pass. See
+    /// [`skip_clean_subtree`].
+    fn confirm(&mut self, id: NodeId) -> bool {
+        let pass = self.pass;
+        match self.entries.get_mut(&id) {
+            Some(entry) => {
+                entry.1 = pass;
+                self.visited += 1;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// One hash lookup, where the pre-S24 shape needed three (`contains_key`
+    /// for the decision, an index for the value, an insert into the fresh map).
+    fn reuse(&mut self, id: NodeId) -> Option<Arc<ComputedStyle>> {
+        let pass = self.pass;
+        let entry = self.entries.get_mut(&id)?;
+        if entry.1.wrapping_add(1) != pass {
+            return None;
+        }
+        entry.1 = pass;
+        self.visited += 1;
+        Some(Arc::clone(&entry.0))
+    }
+
+    /// Record a freshly computed style for `id`, returning the entry it
+    /// displaced (the previous pass's style for that node), if any.
+    ///
+    /// The displaced value is what [`CounterMap::replaced_styles`] keeps for the
+    /// graft — see that field.
+    fn write(&mut self, id: NodeId, style: Arc<ComputedStyle>) -> Option<Arc<ComputedStyle>> {
+        self.visited += 1;
+        self.entries.insert(id, (style, self.pass)).map(|(prev, _)| prev)
+    }
+
+    /// Close the pass: drop every entry it did not visit.
+    ///
+    /// Skipped entirely when the counts already agree, which is every pass that
+    /// removed no node — the whole point of carrying the map. When they do
+    /// disagree the sweep is O(entries), i.e. exactly what rebuilding the map
+    /// used to cost unconditionally.
+    fn finish_pass(&mut self) {
+        self.swept = self.entries.len() != self.visited;
+        if !self.swept {
+            return;
+        }
+        let pass = self.pass;
+        self.entries.retain(|_, (_, stamp)| *stamp == pass);
+    }
+
+    /// How many passes have written into this cache — 0 for one that has only
+    /// ever been filled by a full cascade.
+    ///
+    /// The counter that tells a carried map from a rebuilt one. A pipeline that
+    /// goes back to handing each pass a fresh map produces byte-identical
+    /// styles, just at the cost this slice removed (the S8 lesson), so the gate
+    /// on the carry has to be this and not the cascade output.
+    pub fn passes_lived(&self) -> u32 {
+        self.pass
+    }
+
+    /// Whether the pass that just finished had to evict — see the `swept` field.
+    pub fn swept_last_pass(&self) -> bool {
+        self.swept
+    }
+
+    /// Whether the pass that filled this cache produced any counter snapshot or
+    /// quote depth (BUG-341 S26) — see the `generated_content` field.
+    pub fn generated_content(&self) -> bool {
+        self.generated_content
+    }
+
+    /// Record what the pass that just filled `map` produced (BUG-341 S26).
+    ///
+    /// Called by both cascade entry points once their walk is done, so the fact
+    /// travels with the cache to the pass that may skip walking.
+    fn note_generated_content(&mut self, any: bool) {
+        self.generated_content = any;
+    }
+
+    /// The style this cache holds for `id`, if any.
+    pub fn get(&self, id: &NodeId) -> Option<&Arc<ComputedStyle>> {
+        self.entries.get(id).map(|(style, _)| style)
+    }
+
+    /// Whether this cache holds an entry for `id`.
+    pub fn contains_key(&self, id: &NodeId) -> bool {
+        self.entries.contains_key(id)
+    }
+
+    /// Number of nodes this cache holds a style for.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether this cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Iterate the nodes this cache holds a style for, in arbitrary order.
+    pub fn keys(&self) -> impl Iterator<Item = &NodeId> {
+        self.entries.keys()
+    }
+
+    /// Iterate `(node, style)` pairs in arbitrary order.
+    pub fn iter(&self) -> impl Iterator<Item = (&NodeId, &Arc<ComputedStyle>)> {
+        self.entries.iter().map(|(id, (style, _))| (id, style))
+    }
+
+    /// This cache's contents as a plain map, dropping the pass stamps.
+    ///
+    /// Only used where a *snapshot* rather than the carrier is wanted — the
+    /// flag-off fallback in [`incremental_precompute_counters`]. Carrying the
+    /// map is the whole point everywhere else.
+    fn into_plain(self) -> HashMap<NodeId, Arc<ComputedStyle>> {
+        self.entries.into_iter().map(|(id, (style, _))| (id, style)).collect()
+    }
+
+    /// A cache holding exactly `styles`, as though one pass had just written it.
+    ///
+    /// For callers that assemble a cascade by hand rather than by walking a
+    /// document — the graft's unit gates, which care about one or two nodes.
+    pub fn from_plain(styles: HashMap<NodeId, Arc<ComputedStyle>>) -> Self {
+        Self {
+            entries: styles.into_iter().map(|(id, style)| (id, (style, 0))).collect(),
+            pass: 0,
+            visited: 0,
+            swept: false,
+            // Conservative: a hand-assembled cascade cannot vouch for what the
+            // document's generated content looks like, so it never licenses the
+            // no-op path.
+            generated_content: true,
+        }
+    }
+}
+
+impl std::ops::Index<&NodeId> for CascadeStyles {
+    type Output = Arc<ComputedStyle>;
+
+    fn index(&self, id: &NodeId) -> &Arc<ComputedStyle> {
+        self.get(id).expect("no cascade entry for node")
+    }
+}
+
+impl<'a> IntoIterator for &'a CascadeStyles {
+    type Item = (&'a NodeId, &'a Arc<ComputedStyle>);
+    type IntoIter = Box<dyn Iterator<Item = Self::Item> + 'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.iter())
+    }
+}
+
+impl PartialEq for CascadeStyles {
+    /// Compares the cascade *result*, not the bookkeeping: the pass ordinals are
+    /// an artefact of how many passes a map has lived through, and the
+    /// `incr == full` differential tests compare a carried map against a
+    /// freshly built one by construction.
+    fn eq(&self, other: &Self) -> bool {
+        self.entries.len() == other.entries.len()
+            && self
+                .entries
+                .iter()
+                .all(|(id, (style, _))| other.get(id).is_some_and(|o| style == o))
+    }
+}
+
+impl Eq for CascadeStyles {}
+
+/// BUG-341 S24 — the cascade as it stood *before* the current pass, for
+/// [`crate::incremental::graft_geometry_with_cascade`].
+///
+/// Since S24 the live map holds this pass's values, so "what did the box in
+/// `prev` get built from" is answered by the displaced entries first and the
+/// live map second: a node this pass recomputed is in `replaced`, and every node
+/// it reused is unchanged in `current` by definition.
+#[derive(Clone, Copy)]
+pub struct PrevCascade<'a> {
+    /// This pass's cache — correct for every node the pass did not recompute.
+    current: &'a CascadeStyles,
+    /// What the pass displaced — correct for every node it did recompute.
+    /// `None` when `current` *is* the previous cascade, untouched.
+    replaced: Option<&'a HashMap<NodeId, Arc<ComputedStyle>>>,
+}
+
+impl<'a> PrevCascade<'a> {
+    /// The style the previous pass cascaded for `id`, if it had one.
+    ///
+    /// Takes `self` by value (the type is [`Copy`]) so the borrow it hands back
+    /// is tied to the maps, not to a copy of the two pointers.
+    pub fn get(self, id: &NodeId) -> Option<&'a Arc<ComputedStyle>> {
+        self.replaced.and_then(|r| r.get(id)).or_else(|| self.current.get(id))
+    }
+
+    /// Whether the previous pass cascaded a style for `id` at all.
+    ///
+    /// The distinction matters to the graft's last-resort probe for anonymous
+    /// boxes, which are keyed by a text node the cascade never visits.
+    pub fn contains_key(&self, id: &NodeId) -> bool {
+        self.replaced.is_some_and(|r| r.contains_key(id)) || self.current.contains_key(id)
+    }
+
+    /// A view over a cascade the current pass has not displaced anything from.
+    ///
+    /// For callers holding the previous pass's cache directly rather than the
+    /// [`CounterMap`] that rewrote it.
+    pub fn unchanged(current: &'a CascadeStyles) -> Self {
+        Self { current, replaced: None }
+    }
+}
+
 /// Document-order snapshot of CSS generated-content state.
 ///
 /// Holds both the per-element counter snapshots (after own reset/increment,
@@ -72,10 +392,101 @@ pub struct CounterMap {
     /// same `inherited` chain (pure function of doc/sheet/viewport/dark_mode),
     /// so its own `compute_style(id, ...)` call would recompute an identical
     /// result — reusing this cache skips a second full cascade pass per node.
-    styles: HashMap<NodeId, ComputedStyle>,
+    ///
+    /// BUG-341 S9: behind an [`Arc`] because this map has three consumers that
+    /// each used to deep-copy a whole `ComputedStyle` per node — the incremental
+    /// cascade's reuse path (`walk` below), the per-cycle snapshot the pipeline
+    /// keeps for the next delta, and this map's own insert. All three are now
+    /// refcount bumps. Nothing mutates a cached style in place, so the sharing
+    /// is unobservable.
+    ///
+    /// BUG-341 S24: and the map itself is now *carried* from pass to pass
+    /// ([`CascadeStyles`]) rather than rebuilt — see that type's doc comment.
+    styles: CascadeStyles,
+    /// BUG-341 S24 — for every entry this pass overwrote, the value it replaced.
+    ///
+    /// Carrying `styles` across passes means a recomputed node's *previous*
+    /// style is no longer sitting in a separate map for
+    /// [`crate::incremental::graft_geometry_with_cascade`] to compare against:
+    /// the entry now holds this pass's value, and the freshly built box holds
+    /// the very same allocation, so the graft's pointer test would report
+    /// "unchanged" for exactly the nodes whose style *did* change — a box kept
+    /// at last pass's geometry under a new style, i.e. visible corruption.
+    ///
+    /// So the pass records what it displaced instead of preserving a whole copy
+    /// of what it did not (the S22 shape): one entry per recomputed node — one
+    /// on a keystroke cycle, none on a hover flip — read through
+    /// [`CounterMap::prev_cascade`]. Dropped with this `CounterMap`; only
+    /// `styles` travels on.
+    replaced_styles: HashMap<NodeId, Arc<ComputedStyle>>,
+    /// BUG-341 S4: `NodeId`s whose own `ComputedStyle` AND entire descendant
+    /// subtree are byte-identical to the previous pass (`walk`'s
+    /// `must_recompute` was `false` for every node in the subtree), and
+    /// (BUG-341 S16) which contain no content-mutated node per
+    /// [`RestyleDelta::content_dirty`]. Populated only when that record is
+    /// complete ([`ContentDirty::tracked`]). `build_box_or_reuse` (in
+    /// `box_tree.rs`) treats membership as a licence to clone the whole
+    /// `LayoutBox` subtree from the previous pass instead of rebuilding it —
+    /// see that function's doc comment for why content dirtiness (not style
+    /// equality alone) is the correctness precondition.
+    clean_subtrees: HashSet<NodeId>,
 }
 
 impl CounterMap {
+    /// An empty map sized for a document of `elements` styled elements.
+    ///
+    /// BUG-341 S23: `styles` and `clean_subtrees` take one entry per element
+    /// and are built from scratch every pass, so a default-capacity map rehashes
+    /// its way up to ~830 entries — moving roughly as many entries again as it
+    /// finally holds. The two counter-related maps are left at zero: a document
+    /// without counters or quotes never inserts into them at all.
+    fn with_capacity(elements: usize) -> Self {
+        Self {
+            styles: CascadeStyles::with_capacity(elements),
+            clean_subtrees: HashSet::with_capacity(elements),
+            ..Self::default()
+        }
+    }
+
+    /// BUG-341 S26 — the map a walk over an unchanged document would have
+    /// produced, without walking it. See [`incremental_precompute_counters`].
+    ///
+    /// `clean_subtrees` holds the document root's **element** children and
+    /// nothing else, which is not a shortcut but the exact outcome: a walk would
+    /// put every one of the document's elements in the set, and the set's only
+    /// consumer, [`crate::incremental::extract_clean_subtrees`], stops at the
+    /// topmost member it meets and moves that whole subtree. On any document
+    /// that is `<html>`. Non-elements are excluded for the same reason the walk
+    /// excludes them: it records a node as clean only on its element branch, so
+    /// a doctype or comment child of the root is not in the set a walk would
+    /// build, and admitting one here would hand the reuse index a box the
+    /// mechanism has never had to handle.
+    ///
+    /// `nodes`, `quotes` and `replaced_styles` stay empty: the first two because
+    /// the licence for this path is that the previous pass produced none, the
+    /// third because nothing was recomputed, so nothing was displaced.
+    fn carried_unchanged(doc: &Document, flat: &FlatTree, styles: CascadeStyles) -> Self {
+        let roots = flat.children_of(doc, doc.root());
+        let mut clean_subtrees = HashSet::with_capacity(roots.len());
+        for &child in roots {
+            if matches!(doc.get(child).data, NodeData::Element { .. }) {
+                clean_subtrees.insert(child);
+            }
+        }
+        Self { styles, clean_subtrees, ..Self::default() }
+    }
+
+    /// BUG-341 S24 — a map that continues the carried cascade cache `styles`
+    /// instead of starting a new one.
+    fn continuing(mut styles: CascadeStyles, elements: usize) -> Self {
+        styles.begin_pass();
+        Self {
+            styles,
+            clean_subtrees: HashSet::with_capacity(elements),
+            ..Self::default()
+        }
+    }
+
     /// Returns the counter snapshot for `id`, if any.
     pub fn counters(&self, id: NodeId) -> Option<&CounterSnapshot> {
         self.nodes.get(&id)
@@ -90,7 +501,84 @@ impl CounterMap {
     /// Returns the `ComputedStyle` this map's traversal computed for `id`, if
     /// any (BUG-284 cascade-reuse cache — see the `styles` field).
     pub fn style_for(&self, id: NodeId) -> Option<&ComputedStyle> {
-        self.styles.get(&id)
+        self.styles.get(&id).map(|s| &**s)
+    }
+
+    /// BUG-341 S24 — the cascade as the *previous* pass left it, for the graft.
+    ///
+    /// See [`Self::replaced_styles`] for why this is not simply [`Self::styles`]
+    /// any more.
+    pub fn prev_cascade(&self) -> PrevCascade<'_> {
+        PrevCascade { current: &self.styles, replaced: Some(&self.replaced_styles) }
+    }
+
+    /// What this pass displaced from the carried cache (BUG-341 S24): for every
+    /// node it recomputed, the style the previous pass had cascaded for it.
+    ///
+    /// The graft reads it through [`Self::prev_cascade`]; exposed on its own so
+    /// a census can ask the question it is the exact answer to — "of the nodes
+    /// that re-cascaded, how many really ended up with a different style".
+    pub fn replaced_styles(&self) -> &HashMap<NodeId, Arc<ComputedStyle>> {
+        &self.replaced_styles
+    }
+
+    /// BUG-341 S26 — stamp the carried cache with whether this pass produced any
+    /// generated content, so a later pass knows whether it may skip its walk.
+    ///
+    /// Called by both cascade entry points, never by the no-op path itself: that
+    /// path did not walk, so it has nothing new to say and must leave the fact
+    /// exactly as the pass that did walk left it.
+    fn record_generated_content(&mut self) {
+        let any = !self.nodes.is_empty() || !self.quotes.is_empty();
+        self.styles.note_generated_content(any);
+    }
+
+    /// Hand the carried cascade cache on to the next pass (BUG-341 S24).
+    ///
+    /// The pipeline persists this as the next cycle's
+    /// [`RestyleDelta::prev_styles`]; it used to clone the whole map to do so.
+    pub fn into_styles(self) -> CascadeStyles {
+        self.styles
+    }
+
+    /// Like [`Self::style_for`], but hands back the shared allocation itself.
+    ///
+    /// BUG-341 S12: `build_box` stores the cascade result straight into
+    /// `LayoutBox::style` (now an `Arc<ComputedStyle>`), so the cache entry can
+    /// be shared rather than deep-copied per node — a 3.2 KB struct with ~30
+    /// heap fields, built once per node and previously copied once more into
+    /// every box. The few build-time rewrites (image intrinsic hints, marker
+    /// styles) take their copy via `Arc::make_mut`.
+    pub fn style_arc(&self, id: NodeId) -> Option<Arc<ComputedStyle>> {
+        self.styles.get(&id).cloned()
+    }
+
+    /// Returns the full per-node `ComputedStyle` cascade cache (BUG-341 S2).
+    ///
+    /// The map the full cascade produced, keyed by `NodeId`. It is the reference
+    /// the incremental cascade (BUG-341 S3+) must reproduce bit-for-bit; the
+    /// `incr == full` differential tests compare two such maps directly.
+    pub fn styles(&self) -> &CascadeStyles {
+        &self.styles
+    }
+
+    /// How many per-node counter snapshots this map actually stores
+    /// (BUG-341 S23 census hook).
+    ///
+    /// Not derivable from [`Self::styles`]'s size any more: a node whose
+    /// counter stacks are empty stores nothing, so on a document with no
+    /// counters this is zero while `styles` holds one entry per element. A
+    /// census that assumes the two match would keep reporting the cost this
+    /// slice removed.
+    pub fn counter_snapshot_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Returns the whole-subtree-unchanged node set (BUG-341 S4) — see the
+    /// `clean_subtrees` field doc for the correctness precondition
+    /// (`RestyleDelta::content_dirty`) that gates population.
+    pub fn clean_subtrees(&self) -> &HashSet<NodeId> {
+        &self.clean_subtrees
     }
 }
 
@@ -101,6 +589,13 @@ struct CounterCtx {
     stacks: HashMap<String, Vec<i32>>,
     /// Running quote-nesting depth in document order (CSS Content L3 §3.2).
     quote_depth: usize,
+    /// BUG-341 S10 — whether the stylesheet can produce quote content at all
+    /// (`style::sheet_has_quote_content`, decided once per pass). When false,
+    /// `walk` skips its per-node `::before`/`::after` probe: that probe exists
+    /// only to advance `quote_depth`, and without a quote anywhere in the sheet
+    /// it can never record one. Lives here rather than as a `walk` parameter
+    /// because it is per-pass state like the counter stacks themselves.
+    quotes_possible: bool,
 }
 
 impl CounterCtx {
@@ -173,10 +668,582 @@ pub fn precompute_counters(
     dark_mode: bool,
 ) -> CounterMap {
     let root_style = ComputedStyle::root();
-    let mut ctx = CounterCtx::default();
-    let mut map = CounterMap::default();
-    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode);
+    let mut ctx = CounterCtx {
+        quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
+        ..CounterCtx::default()
+    };
+    let mut map = CounterMap::with_capacity(doc.node_count());
+    let t = std::time::Instant::now();
+    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false);
+    note_walk_ns(t.elapsed().as_nanos() as u64);
+    map.record_generated_content();
     map
+}
+
+/// BUG-341 S3 — incremental-cascade root-set + reuse cache (brief §3/§4).
+///
+/// Passed to [`incremental_precompute_counters`]. Every node in `dirty_roots`,
+/// and every descendant reached from it via [`FlatTree::children_of`] (i.e.
+/// its whole subtree), gets a fresh `compute_style` call; every other node
+/// reuses its entry from `prev_styles` verbatim. A node absent from
+/// `prev_styles` (freshly inserted since the snapshot was taken) always
+/// recomputes even when not in `dirty_roots`, since there is nothing to reuse.
+///
+/// Callers derive `dirty_roots` conservatively via
+/// [`crate::style::restyle_root_set_for_state_change`] (interactive-state
+/// transitions) or [`crate::style::restyle_root_set_for_node_change`] (DOM
+/// attribute/class/structural changes) — see brief §4 for the invalidation
+/// model these implement.
+pub struct RestyleDelta<'a> {
+    /// The previous cascade's per-node style cache — [`CounterMap::styles`]
+    /// from an earlier full or incremental pass over the same document.
+    ///
+    /// BUG-341 S24: **moved in**, not borrowed. The pass rewrites the entries it
+    /// recomputes in place and hands the same map back inside its
+    /// [`CounterMap`]; a caller that needs the previous cascade afterwards
+    /// reads it through [`CounterMap::prev_cascade`], which also knows what this
+    /// pass displaced.
+    pub prev_styles: CascadeStyles,
+    /// Root nodes whose entire subtree must be re-cascaded.
+    pub dirty_roots: HashSet<NodeId>,
+    /// BUG-341 S16: which nodes had their *content* — the things `build_box`
+    /// reads that the cascade cannot see (text-node data, child lists,
+    /// attributes) — mutated since `prev_styles` was taken. See
+    /// [`ContentDirty`] for the three states and their contracts.
+    ///
+    /// Replaces S4's document-wide `dom_content_stable: bool`. That flag was
+    /// all-or-nothing: one changed omnibox text node disabled box reuse for
+    /// every one of chrome's 318 boxes, including the ~300 the mutation came
+    /// nowhere near.
+    ///
+    /// One known residual gap, unchanged from S4: a CSS rule that conditions
+    /// `counter-reset`/`counter-increment`/`counter-set` on a dynamic pseudo-
+    /// class (e.g. `li:hover { counter-increment: item 2; }`) could change a
+    /// *later, otherwise-clean* sibling's rendered counter text without
+    /// changing that sibling's own `ComputedStyle`. This is not exercised
+    /// anywhere in this codebase's CSS and is accepted as an unhandled exotic
+    /// edge case for v1 (see BUG-341 "S4" notes) rather than blocking the
+    /// common case on a full counter-snapshot equality check.
+    pub content_dirty: ContentDirty<'a>,
+}
+
+impl RestyleDelta<'_> {
+    /// BUG-341 S26 — whether this delta states that nothing at all changed.
+    ///
+    /// Not "nothing much": every one of the three inputs the cascade reads must
+    /// positively say so. An empty root set means no node's selector match can
+    /// have flipped; [`ContentDirty::nothing_changed`] means no node's text,
+    /// children or attributes moved; and a non-empty carried cache means there
+    /// is a previous cascade to keep at all (the first incremental pass after a
+    /// full one gets its map from that full pass, so this is only false when
+    /// there is genuinely nothing to reuse).
+    ///
+    /// When it holds, `walk` provably does nothing but restate its input: every
+    /// element takes the reuse branch, every node reports itself clean, and the
+    /// map it hands back has the same styles it was given. See
+    /// [`incremental_precompute_counters`] for why that is *equivalent* to not
+    /// walking rather than merely similar.
+    fn is_noop(&self) -> bool {
+        self.dirty_roots.is_empty()
+            && self.content_dirty.nothing_changed()
+            && !self.prev_styles.is_empty()
+            && !self.prev_styles.generated_content()
+    }
+}
+
+/// BUG-341 S16 — per-node DOM-content dirtiness for one incremental cycle.
+///
+/// The cascade decides whether a node's *style* is unchanged. It cannot decide
+/// whether the node's *content* is unchanged: a text node's data, an element's
+/// child list and its attributes are all invisible to `compute_style` reuse,
+/// yet `build_box` reads all three. This enum is how a mutation source tells
+/// [`incremental_precompute_counters`] what it knows about that second half,
+/// and it is the sole licence for [`CounterMap::clean_subtrees`] — hence for
+/// `build_box_or_reuse` cloning a whole `LayoutBox` subtree.
+///
+/// A missed mutation here is *visible corruption* (a stale box), not a slow
+/// frame, so a source that cannot enumerate its own content mutations must say
+/// [`ContentDirty::Untracked`] rather than guess.
+#[derive(Debug, Clone, Copy)]
+pub enum ContentDirty<'a> {
+    /// No per-node content tracking for this cycle: any node's text, children
+    /// or attributes may have changed. No subtree may be reused
+    /// (`clean_subtrees` stays empty). This is S4's `dom_content_stable: false`
+    /// and remains the correct answer for every mutation source that does not
+    /// enumerate content mutations — today, page-side JS (`DomTouched` reports
+    /// selector-relevant nodes only, plus an `unattributed` escape hatch).
+    Untracked,
+    /// Tracking is complete and nothing changed: a pure interactive-state
+    /// (`:hover`/`:focus`/`:active`) transition, which by construction never
+    /// touches the DOM. This is S4's `dom_content_stable: true`.
+    Nothing,
+    /// Tracking is complete and exactly these nodes were content-mutated. A
+    /// subtree is reusable iff it contains none of them (and its styles were
+    /// all reused). The set is *inclusive of the mutated node itself*: for a
+    /// changed text node that is the text node's own id, for a container that
+    /// gained or lost a child that is the container's id.
+    ///
+    /// Producing this variant obliges the caller to have instrumented **every**
+    /// path by which it mutates the document — see
+    /// `lumen_chrome::model`'s tracked-primitive wrappers and the
+    /// `every_dom_mutation_in_model_rs_goes_through_a_tracked_primitive`
+    /// source-level gate that enforces it.
+    Nodes(&'a HashSet<NodeId>),
+}
+
+impl ContentDirty<'_> {
+    /// Whether this cycle has a complete per-node content-mutation record, and
+    /// therefore may populate [`CounterMap::clean_subtrees`] at all.
+    pub fn tracked(&self) -> bool {
+        !matches!(self, ContentDirty::Untracked)
+    }
+
+    /// Whether `id`'s own content may have changed this cycle. `true` for
+    /// every node under [`ContentDirty::Untracked`] — "unknown" must read as
+    /// "dirty" everywhere the answer is used.
+    pub fn contains(&self, id: NodeId) -> bool {
+        match self {
+            ContentDirty::Untracked => true,
+            ContentDirty::Nothing => false,
+            ContentDirty::Nodes(set) => set.contains(&id),
+        }
+    }
+
+    /// BUG-341 S26 — whether this record positively states that *no* node's
+    /// content changed. [`ContentDirty::Untracked`] is never that: "unknown"
+    /// reads as "dirty" here as everywhere else.
+    pub fn nothing_changed(&self) -> bool {
+        match self {
+            ContentDirty::Untracked => false,
+            ContentDirty::Nothing => true,
+            ContentDirty::Nodes(set) => set.is_empty(),
+        }
+    }
+}
+
+/// BUG-341 S3 — incremental cascade: like [`precompute_counters`], but reuses
+/// `delta.prev_styles` for every node outside `delta.dirty_roots` (and their
+/// subtrees) instead of recomputing `compute_style`.
+///
+/// Must reproduce [`precompute_counters`]'s output bit-for-bit for the same
+/// final document state (brief §4 "Correctness gate") — the
+/// `incr_cascade_matches_full_*` differential tests in `incremental.rs` guard
+/// this. Any divergence means `dirty_roots` under-approximated the change,
+/// not an acceptable trade-off.
+pub fn incremental_precompute_counters(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    flat: &FlatTree,
+    dark_mode: bool,
+    delta: RestyleDelta<'_>,
+) -> CounterMap {
+    if !incremental_restyle_enabled() {
+        // Flag off (the default): behave exactly like a full cascade so a
+        // caller can wire this entry point in ahead of the flag ever being
+        // flipped on (S5) without changing behaviour. BUG-341 S24: the carried
+        // cache still has to reach the graft as "what `prev` was built from" —
+        // a full pass displaces the whole of it, which is exactly what
+        // `replaced_styles` means.
+        let mut map = precompute_counters(doc, sheet, viewport, flat, dark_mode);
+        map.replaced_styles = delta.prev_styles.into_plain();
+        return map;
+    }
+    // BUG-341 S26 — the delta says nothing changed, so the walk would restate
+    // its own input.
+    //
+    // This is not a heuristic and adds no trust the pass did not already place
+    // in the delta. Feed `walk` an empty `dirty_roots` and a content record that
+    // names nobody and every branch is forced: `force` starts false and can only
+    // be set by `must_recompute`, which can only be set by a miss in the carried
+    // cache — impossible for a node the previous pass wrote — so every element
+    // takes the reuse branch, every node reports itself clean, and the map handed
+    // back holds the same styles it was given, restamped. The one output that is
+    // *not* a restatement is `nodes`/`quotes`, which the walk rebuilds rather
+    // than carries; hence the `generated_content` half of the licence.
+    //
+    // Not walking also leaves the pass ordinal where it was, which is exactly
+    // right: `CascadeStyles`' invariant is "an entry exists iff the immediately
+    // preceding pass *visited* that node", and this pass visited nobody. The
+    // next pass to walk therefore still sees its entries as one pass old.
+    if delta.is_noop() {
+        let _prof = lumen_core::profile::scope("cascade_noop");
+        return CounterMap::carried_unchanged(doc, flat, delta.prev_styles);
+    }
+    let root_style = ComputedStyle::root();
+    // BUG-341 S26: the stage's three parts are scoped separately because only
+    // the middle one is proportional to the delta — the prologue is sheet-wide
+    // and the epilogue is proportional to the *document*. A stage total cannot
+    // tell "the cascade is expensive" from "the bookkeeping around it is".
+    let (mut ctx, mut map, incr) = {
+        let _prof = lumen_core::profile::scope("cascade_prologue");
+        let ctx = CounterCtx {
+            quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
+            ..CounterCtx::default()
+        };
+        // BUG-341 S23: the previous pass's cache is the best available estimate of
+        // how many entries this one will hold — closer than `node_count`, which
+        // counts text and comment nodes too. S24: and it *is* this pass's cache.
+        let elements = delta.prev_styles.len();
+        let RestyleDelta { prev_styles, dirty_roots, content_dirty } = delta;
+        // BUG-341 S27: read off the carried cache before it is moved into the
+        // map — it is the previous walking pass's report, and the licence to
+        // skip depends on it.
+        let prev_generated_content = prev_styles.generated_content();
+        let spine = restyle_spine(
+            doc,
+            flat,
+            &dirty_roots,
+            &content_dirty,
+            ctx.quotes_possible,
+            prev_generated_content,
+        );
+        let map = CounterMap::continuing(prev_styles, elements);
+        (ctx, map, IncrRestyle { dirty_roots, content_dirty, spine })
+    };
+    {
+        let _prof = lumen_core::profile::scope("cascade_walk");
+        let t = std::time::Instant::now();
+        walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(&incr), false);
+        note_walk_ns(t.elapsed().as_nanos() as u64);
+    }
+    {
+        let _prof = lumen_core::profile::scope("cascade_finish_pass");
+        map.styles.finish_pass();
+    }
+    map.record_generated_content();
+    map
+}
+
+/// BUG-341 S24 — what `walk` still needs from a [`RestyleDelta`] once its
+/// `prev_styles` have been moved into the map being written.
+///
+/// Splitting the delta this way is what lets the reuse path be a single
+/// `get_mut` on the map: the "is there anything to reuse" question and the reuse
+/// itself are now one lookup into one collection, instead of two lookups into a
+/// borrowed map plus an insert into a fresh one.
+struct IncrRestyle<'a> {
+    /// See [`RestyleDelta::dirty_roots`].
+    dirty_roots: HashSet<NodeId>,
+    /// See [`RestyleDelta::content_dirty`].
+    content_dirty: ContentDirty<'a>,
+    /// BUG-341 S27 — every ancestor of a dirty root or a content-mutated node,
+    /// those nodes themselves included: the only part of the document this pass
+    /// has any reason to enter.
+    ///
+    /// `None` when this pass may not skip anything, which keeps the pre-S27
+    /// traversal verbatim — see [`restyle_spine`] for the four conditions.
+    spine: Option<HashSet<NodeId>>,
+}
+
+/// BUG-341 S27 — the part of the document a pass with this delta can possibly
+/// have something to say about, or `None` when it may not skip at all.
+///
+/// # What the walk restates and what it does not
+///
+/// S26 removed the traversal for the cycle whose delta names nobody. The
+/// general case is the same argument applied per subtree: `walk`'s output for a
+/// node is a reused style, a "clean" verdict and a `clean_subtrees` entry, and
+/// all three are already implied for any subtree that holds no dirty root and
+/// no content-mutated node. The one thing the pass still owes such a subtree is
+/// the S24 pass ordinal, which [`skip_clean_subtree`] pays without reading a
+/// style, running a selector match or touching the counter state.
+///
+/// The set is the *ancestor closure* of the delta's two node sets rather than
+/// the sets themselves, because a node's own dirtiness has to be visible to
+/// everything above it: an ancestor of a content-mutated node must drop out of
+/// `clean_subtrees` (else the box tree reuses a subtree containing the
+/// mutation), and a dirty root has to be reached before its subtree can be
+/// force-recomputed.
+///
+/// # The four conditions
+///
+/// * **A complete content record.** [`ContentDirty::Untracked`] means "any node
+///   may have changed", which no spine can narrow.
+/// * **No composed-tree override.** The closure walks `Node::parent`, the DOM
+///   parent; a shadow host or slot makes that a different tree from the one
+///   `walk` descends (see [`FlatTree::is_plain`]).
+/// * **No quote content in the sheet.** `quote_depth` is a running
+///   document-order counter; a subtree that is not entered cannot advance it.
+/// * **No generated content in the previous pass.** `nodes` and `quotes` are
+///   rebuilt by the walk rather than carried (the S26 licence, for the same
+///   reason): a skipped subtree contributes nothing to them, which is only
+///   equivalent when it would have contributed nothing anyway.
+fn restyle_spine(
+    doc: &Document,
+    flat: &FlatTree,
+    dirty_roots: &HashSet<NodeId>,
+    content_dirty: &ContentDirty<'_>,
+    quotes_possible: bool,
+    prev_generated_content: bool,
+) -> Option<HashSet<NodeId>> {
+    if !content_dirty.tracked() || !flat.is_plain() || quotes_possible || prev_generated_content {
+        return None;
+    }
+    let content: &[NodeId] = match content_dirty {
+        ContentDirty::Nodes(set) => &set.iter().copied().collect::<Vec<_>>(),
+        // `Nothing` names nobody; `Untracked` was rejected above.
+        _ => &[],
+    };
+    let mut spine: HashSet<NodeId> = HashSet::with_capacity(dirty_roots.len() + content.len() + 16);
+    for &seed in dirty_roots.iter().chain(content.iter()) {
+        let mut cur = Some(seed);
+        // Stops at the first node already on the spine: everything above it was
+        // put there by an earlier seed, so the chains share their tails.
+        while let Some(id) = cur.filter(|id| spine.insert(*id)) {
+            cur = doc.get(id).parent;
+        }
+    }
+    Some(spine)
+}
+
+/// BUG-341 S27 — pay a clean subtree the one thing the pass still owes it, and
+/// report what that cost.
+///
+/// Called instead of `walk` for a child the spine says nothing in the delta can
+/// reach. Returns `(confirmed, misses)` — see [`CascadeStats::confirmed`] and
+/// [`CascadeStats::confirm_misses`].
+///
+/// The traversal is still O(subtree), and deliberately so: the alternative —
+/// leaving the ordinals stale and teaching `reuse`/`finish_pass` to tolerate
+/// it — was measured at a further ~0.045 ms on the CC-12 keystroke cycle, i.e.
+/// ~6% of the pass, below what the A/B protocol on this machine resolves
+/// (~10-15%). The S24 rule is to decide that before writing the code, and an
+/// error in the ordinal is a stale style rather than a slow frame.
+fn confirm_clean_subtree(
+    doc: &Document,
+    flat: &FlatTree,
+    map: &mut CounterMap,
+    id: NodeId,
+) -> (u32, u32) {
+    let (mut confirmed, mut misses) = (0, 0);
+    if matches!(doc.get(id).data, NodeData::Element { .. }) {
+        if map.styles.confirm(id) {
+            confirmed += 1;
+        } else {
+            misses += 1;
+        }
+    }
+    for &child in flat.children_of(doc, id) {
+        let (c, m) = confirm_clean_subtree(doc, flat, map, child);
+        confirmed += c;
+        misses += m;
+    }
+    (confirmed, misses)
+}
+
+/// BUG-341 S27 — skip `child`'s subtree if nothing in this pass's delta can
+/// reach it, doing the bookkeeping the walk would have done.
+///
+/// Returns whether it skipped. Beyond the pass-wide licence in
+/// [`restyle_spine`] there are three per-position conditions:
+///
+/// * `child_force` — an ancestor (or the parent itself) is re-cascading, so the
+///   whole subtree must be recomputed, spine or no spine.
+/// * `parent` is content-mutated — its child list may have *gained* `child`
+///   from somewhere else in the document, in which case `child`'s carried style
+///   was cascaded under a different inherited chain. Only the parent is named
+///   by such a mutation, never the arriving node, so this is the condition that
+///   keeps a re-parented node walking exactly as it did before S27.
+/// * the counter stacks are non-empty — an earlier part of *this* pass put a
+///   counter in scope, so a node in this subtree would record a snapshot the
+///   skip would lose. Checked per position rather than per pass because
+///   `counter-increment` without a matching reset leaks forward across
+///   siblings.
+///
+/// Non-elements are never skipped: `walk`'s own branch for them is already a
+/// single set lookup, and they carry no cascade entry to confirm.
+#[allow(clippy::too_many_arguments)]
+fn skip_clean_subtree(
+    doc: &Document,
+    flat: &FlatTree,
+    map: &mut CounterMap,
+    incr: Option<&IncrRestyle<'_>>,
+    ctx: &CounterCtx,
+    parent: NodeId,
+    child: NodeId,
+    child_force: bool,
+) -> bool {
+    if child_force {
+        return false;
+    }
+    let Some(delta) = incr else { return false };
+    let Some(spine) = delta.spine.as_ref() else { return false };
+    if spine.contains(&child)
+        || delta.content_dirty.contains(parent)
+        || !ctx.stacks.is_empty()
+        || !matches!(doc.get(child).data, NodeData::Element { .. })
+    {
+        return false;
+    }
+    let (confirmed, misses) = confirm_clean_subtree(doc, flat, map, child);
+    debug_assert_eq!(
+        misses, 0,
+        "an element inside a skipped subtree had no cascade entry — the spine \
+         under-approximated this pass's delta",
+    );
+    // Exactly one insert, not one per element: the set's only consumer
+    // (`crate::incremental::extract_clean_subtrees`) stops at the topmost
+    // member it meets, and `child` is the top of everything skipped here. Same
+    // argument as `CounterMap::carried_unchanged`.
+    map.clean_subtrees.insert(child);
+    note_clean_insert();
+    note_skipped_subtree(confirmed, misses);
+    true
+}
+
+thread_local! {
+    /// BUG-341 S3 — master on/off switch for the incremental cascade
+    /// (`incremental_precompute_counters`), mirroring
+    /// `box_tree::INCREMENTAL_LAYOUT_MODE`'s pattern. Off by default: no
+    /// current pipeline entry point (`layout_measured_hyp`,
+    /// `layout_mutation_incremental`) consults it yet — that wiring is S5.
+    /// Exists now so `RestyleDelta`-based callers (differential tests today,
+    /// pipeline code in S5) have a single well-known kill switch.
+    static INCREMENTAL_RESTYLE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Enables/disables the incremental cascade for subsequent
+/// [`incremental_precompute_counters`] calls on the current thread.
+pub fn set_incremental_restyle(enabled: bool) {
+    INCREMENTAL_RESTYLE.with(|c| c.set(enabled));
+}
+
+/// Whether the incremental cascade is currently enabled on this thread.
+pub fn incremental_restyle_enabled() -> bool {
+    INCREMENTAL_RESTYLE.with(|c| c.get())
+}
+
+/// BUG-341 S3/S17 — per-pass tally of what the cascade stage recomputed versus
+/// reused from `RestyleDelta::prev_styles`.
+///
+/// Same rationale as [`crate::box_tree::BoxBuildStats`]: an incremental cascade
+/// that reuses nothing produces exactly the full cascade's output, just slowly
+/// (the S8 lesson), so only a counter can tell a working reuse mechanism from a
+/// broken one. Public since S17 so gates outside this crate — where the real
+/// chrome document lives — can assert on it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CascadeStats {
+    /// Elements for which `walk` really called `compute_style`.
+    pub recomputed: u32,
+    /// Elements that took their `Arc<ComputedStyle>` from `prev_styles`.
+    pub reused: u32,
+    /// BUG-341 S26 — every node `walk` *entered*, elements and non-elements
+    /// alike. `recomputed + reused` counts only elements, so a stage total that
+    /// does not divide by them says nothing about the traversal itself: on the
+    /// chrome document the walk enters roughly three times as many nodes as it
+    /// cascades, and after S14/S17 it re-derives the style of one of them.
+    pub visited: u32,
+    /// BUG-341 S26 — inserts into [`CounterMap::clean_subtrees`]. One per clean
+    /// element, i.e. nearly one per element in the steady state; the set is
+    /// rebuilt from scratch every pass.
+    pub clean_inserts: u32,
+    /// BUG-341 S27 — nanoseconds spent inside the traversal itself, excluding
+    /// the stage's prologue and its `finish_pass` epilogue.
+    ///
+    /// S26 established that the traversal, not `compute_style`, is what the
+    /// stage costs on a small delta; a per-pass timer is what lets a gate say
+    /// "this cycle did not pay for the document" without reading a profile
+    /// tree by hand. Two `Instant`s per pass against a stage measured in
+    /// hundreds of microseconds.
+    pub walk_ns: u64,
+    /// BUG-341 S27 — subtrees the traversal declined to enter because no dirty
+    /// root and no content-mutated node lies inside them.
+    ///
+    /// The counter that tells a spine walk from a document walk. Both produce
+    /// the same cascade (the S8 lesson), so only this can show the mechanism
+    /// still works after someone edits the licence.
+    pub skipped_subtrees: u32,
+    /// BUG-341 S27 — elements whose entry a skipped subtree restamped without
+    /// the walk entering them. `visited + confirmed` is what
+    /// `CascadeStyles::finish_pass` still counts against the map's size, so a
+    /// mechanism that skipped a subtree and forgot to confirm it would show up
+    /// here as a shortfall — and as a sweep.
+    pub confirmed: u32,
+    /// BUG-341 S27 — elements a skipped subtree found *no* entry for. The
+    /// licence to skip says there can be none (an inserted node makes its
+    /// parent content-dirty, which puts the whole chain on the spine), so this
+    /// is the counter a gate asserts zero on: a non-zero value means a node was
+    /// left without a cascade entry, i.e. a rebuilt box rather than a reused
+    /// one at best, and a wrong inherited chain at worst.
+    pub confirm_misses: u32,
+}
+
+thread_local! {
+    /// BUG-341 S3/S17 instrumentation, see [`CascadeStats`]. Always compiled —
+    /// two `Cell` bumps against a stage that costs microseconds per node.
+    ///
+    /// `walk` is a plain recursion on the calling thread (unlike `build_box`,
+    /// which fans out over rayon workers — S15's trap), so a thread-local tally
+    /// here really does see the whole document.
+    static CASCADE_STATS: Cell<CascadeStats> = const {
+        Cell::new(CascadeStats {
+            recomputed: 0,
+            reused: 0,
+            visited: 0,
+            clean_inserts: 0,
+            walk_ns: 0,
+            skipped_subtrees: 0,
+            confirmed: 0,
+            confirm_misses: 0,
+        })
+    };
+}
+
+/// Returns the accumulated [`CascadeStats`] and resets the tally.
+pub fn take_cascade_stats() -> CascadeStats {
+    CASCADE_STATS.with(|s| s.replace(CascadeStats::default()))
+}
+
+fn note_cascade(recomputed: bool) {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        if recomputed {
+            v.recomputed += 1;
+        } else {
+            v.reused += 1;
+        }
+        s.set(v);
+    });
+}
+
+/// BUG-341 S26 — one node entered by `walk`, of any kind.
+fn note_visit() {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.visited += 1;
+        s.set(v);
+    });
+}
+
+/// BUG-341 S27 — add `ns` to this pass's traversal time.
+fn note_walk_ns(ns: u64) {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.walk_ns += ns;
+        s.set(v);
+    });
+}
+
+/// BUG-341 S27 — one subtree the traversal declined to enter, and what
+/// confirming its entries found.
+fn note_skipped_subtree(confirmed: u32, misses: u32) {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.skipped_subtrees += 1;
+        v.confirmed += confirmed;
+        v.confirm_misses += misses;
+        s.set(v);
+    });
+}
+
+/// BUG-341 S26 — one insert into `CounterMap::clean_subtrees`.
+fn note_clean_insert() {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.clean_inserts += 1;
+        s.set(v);
+    });
 }
 
 /// CSS Generated Content L3 §3.2 — record the quote-nesting depth for each
@@ -218,62 +1285,157 @@ fn walk(
     ctx: &mut CounterCtx,
     map: &mut CounterMap,
     dark_mode: bool,
-) {
+    // BUG-341 S3: `None` = full cascade (every node recomputes, today's
+    // behaviour, byte-for-byte unchanged). `Some` = incremental cascade —
+    // nodes outside `force`/`dirty_roots` reuse `prev_styles` instead of
+    // calling `compute_style`. See `RestyleDelta`.
+    incr: Option<&IncrRestyle<'_>>,
+    // Set once an ancestor (or this node itself, via `dirty_roots`) forced a
+    // recompute — propagates down the rest of the subtree unconditionally
+    // (brief §4: "root-set and their style-descendants").
+    force: bool,
+    // BUG-341 S4: returns `true` when this node's own style AND its entire
+    // descendant subtree are unchanged from `prev_styles` (vacuously `true`
+    // for non-element nodes, which carry no style of their own). Aggregated
+    // bottom-up into `map.clean_subtrees` — see that field's doc comment.
+) -> bool {
+    note_visit();
     match &doc.get(id).data {
         // Text / comment / doctype / fragment — no counter properties, no children.
+        // BUG-341 S4/S16: a text node carries no style, so the cascade has
+        // nothing to compare; its *content* can still change under a stable
+        // style. Before S16 that was covered document-wide by
+        // `dom_content_stable`; now the delta names the individual mutated text
+        // nodes, and a named one reports itself dirty so its parent element
+        // (whose box embeds this text) drops out of `clean_subtrees`.
         NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. }
-        | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => return,
+        | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => {
+            return !incr.is_some_and(|d| d.content_dirty.contains(id));
+        }
 
         // Document node: has no style of its own; just recurse into children.
         NodeData::Document => {
+            let mut all_clean = true;
             for &child_id in flat.children_of(doc, id) {
-                walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode);
+                if skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, force) {
+                    continue;
+                }
+                all_clean &= walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force);
             }
-            return;
+            return all_clean;
         }
 
         NodeData::Element { .. } => {} // handled below
     }
 
-    let style = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
-    // BUG-284: cache so `build_box`'s own `compute_style(id, ...)` call (same
-    // doc/sheet/viewport/dark_mode, same `inherited` chain) can reuse this
-    // result instead of recomputing an identical cascade.
-    map.styles.insert(id, style.clone());
+    // BUG-341 S9: a refcount bump, not a `ComputedStyle` deep copy — this is
+    // the reuse path, taken for every node outside the dirty root set.
+    // BUG-341 S24: and it reads *and* restamps the carried cache in one lookup,
+    // where S3-S23 asked the previous map twice and then inserted into a fresh
+    // one. `None` here means "nothing to reuse" for either reason — no entry, or
+    // one the immediately preceding pass did not write (see
+    // `CascadeStyles::reuse`).
+    let reused = match incr {
+        None => None,
+        Some(delta) if force || delta.dirty_roots.contains(&id) => None,
+        Some(_) => map.styles.reuse(id),
+    };
+    let must_recompute = reused.is_none();
+    note_cascade(must_recompute);
+    let style: Arc<ComputedStyle> = match reused {
+        Some(style) => style,
+        None => {
+            let style = Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode));
+            // BUG-284: cache so `build_box`'s own `compute_style(id, ...)` call
+            // (same doc/sheet/viewport/dark_mode, same `inherited` chain) can
+            // reuse this result instead of recomputing an identical cascade.
+            // BUG-341 S24: keep whatever this displaced — the graft still needs
+            // to see the style `prev`'s box was built from (`replaced_styles`).
+            if let Some(displaced) = map.styles.write(id, Arc::clone(&style)) {
+                map.replaced_styles.insert(id, displaced);
+            }
+            style
+        }
+    };
 
     // CSS Lists L3 §4: counter-reset first, then counter-increment, then counter-set.
     ctx.apply_reset(&style.counter_reset);
     ctx.apply_increment(&style.counter_increment);
     ctx.apply_set(&style.counter_set);
 
-    map.nodes.insert(id, ctx.snapshot());
+    // BUG-341 S23: an empty snapshot is indistinguishable from no snapshot at
+    // all — both consumers reach it through `snap.and_then(|s| s.get(name))`
+    // (`content_to_inline_segments`, `content_items_to_string`) — so a document
+    // with no counters in scope need not carry one entry per element. That is
+    // every document that never uses `counter-reset`/`-increment`/`-set`,
+    // including Lumen's own chrome: 828 inserts of an empty `HashMap` per
+    // cycle. Exact rather than a sheet-wide predicate: the check is on the live
+    // counter stacks, so a document that uses counters in one subtree still
+    // skips the entries outside it.
+    if !ctx.stacks.is_empty() {
+        map.nodes.insert(id, ctx.snapshot());
+    }
 
     // CSS Generated Content L3 §3.2 — ::before quotes are in document order
     // before the element's children; advance and snapshot the quote depth.
-    if let Some(bps) =
-        compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode)
-    {
-        let depths = record_quote_depths(&bps.content, &mut ctx.quote_depth);
-        if !depths.is_empty() {
-            map.quotes.insert((id, QuoteSlot::Before), depths);
+    // Always run (even when `style` was reused) — `quote_depth` is a running
+    // document-order counter that must stay continuous regardless of which
+    // nodes recomputed their style.
+    // BUG-341 S10: `quotes_possible` is the sheet-wide "could any declaration
+    // produce quote content" flag — when it is false this probe cannot record a
+    // depth, and skipping it removes two pseudo-element cascades per node
+    // (measured: 79% of `precompute_counters` on the CC12_KEY cycle, where only
+    // a dozen nodes recompute their own style but all 828 were probed).
+    if ctx.quotes_possible {
+        let _prof = lumen_core::profile::scope_detail("quote_pseudos");
+        if let Some(bps) =
+            compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode)
+        {
+            let depths = record_quote_depths(&bps.content, &mut ctx.quote_depth);
+            if !depths.is_empty() {
+                map.quotes.insert((id, QuoteSlot::Before), depths);
+            }
         }
     }
 
+    let child_force = force || must_recompute;
+    let mut children_clean = true;
     for &child_id in flat.children_of(doc, id) {
-        walk(doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode);
+        // BUG-341 S27: nothing in the delta can reach this child's subtree, so
+        // the walk's whole output for it is a restatement of its input.
+        if skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, child_force) {
+            continue;
+        }
+        let child_clean = walk(doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode, incr, child_force);
+        children_clean &= child_clean;
     }
 
     // ::after quotes come after all children in document order.
-    if let Some(aps) =
-        compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode)
-    {
-        let depths = record_quote_depths(&aps.content, &mut ctx.quote_depth);
-        if !depths.is_empty() {
-            map.quotes.insert((id, QuoteSlot::After), depths);
+    if ctx.quotes_possible {
+        let _prof = lumen_core::profile::scope_detail("quote_pseudos");
+        if let Some(aps) =
+            compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode)
+        {
+            let depths = record_quote_depths(&aps.content, &mut ctx.quote_depth);
+            if !depths.is_empty() {
+                map.quotes.insert((id, QuoteSlot::After), depths);
+            }
         }
     }
 
     ctx.pop_reset(&style.counter_reset);
+
+    // BUG-341 S4/S16: this node's own style was reused (not recomputed), its
+    // own content was not mutated, AND every descendant is itself clean. Only
+    // recorded when the delta has a complete content record at all — see
+    // `ContentDirty`.
+    let content_dirty = incr.is_some_and(|d| d.content_dirty.contains(id));
+    let subtree_clean = !must_recompute && !content_dirty && children_clean;
+    if subtree_clean && incr.is_some_and(|d| d.content_dirty.tracked()) {
+        map.clean_subtrees.insert(id);
+        note_clean_insert();
+    }
+    subtree_clean
 }
 
 // ─── Counter value formatting ────────────────────────────────────────────────
@@ -1134,6 +2296,482 @@ mod tests {
         // .r5 { counter-set: c 42 } → 42
         ctx.apply_set(&[("c".into(), 42)]);
         assert_eq!(top(&ctx), 42, "r5: set 42");
+    }
+
+    /// BUG-341 S23 gate — **by counter, on both arms**.
+    ///
+    /// `walk` used to store one snapshot per element unconditionally; in a
+    /// document with no counters in scope every one of them was empty, and an
+    /// empty snapshot is indistinguishable from an absent one at both consumers.
+    /// The assertion is on the *number of stored snapshots*, which no rendering
+    /// diff can see — an empty document renders identically either way.
+    ///
+    /// The second arm is what makes the first mean anything: storing nothing at
+    /// all would pass arm 1 and silently render every `counter()` as `0`.
+    #[test]
+    fn bug341_s23_counter_snapshots_are_stored_only_where_a_counter_is_in_scope() {
+        let vp = Size::new(800.0, 600.0);
+        fn all_ids(doc: &Document, id: NodeId, out: &mut Vec<NodeId>) {
+            out.push(id);
+            for &c in &doc.get(id).children {
+                all_ids(doc, c, out);
+            }
+        }
+        let stored = |html: &str, css: &str| {
+            let doc = lumen_html_parser::parse(html);
+            let flat = lumen_dom::build_flat_tree(&doc);
+            let map = precompute_counters(&doc, &lumen_css_parser::parse(css), vp, &flat, false);
+            let mut ids = Vec::new();
+            all_ids(&doc, doc.root(), &mut ids);
+            ids.into_iter().filter(|&id| map.counters(id).is_some()).count()
+        };
+
+        // Arm 1 — no counter anywhere: not one snapshot for ~6 elements.
+        assert_eq!(
+            stored("<div><p>a</p><p>b</p></div>", "p { color: red; }"),
+            0,
+            "a document with no counters must store no counter snapshots"
+        );
+
+        // Arm 2 — a counter in scope: every element inside the scope keeps its
+        // snapshot, and the values are the ones `counter()` would render.
+        let doc = lumen_html_parser::parse("<ol><li>a</li><li>b</li></ol>");
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let css = "ol { counter-reset: n 0; } li { counter-increment: n; }";
+        let map = precompute_counters(&doc, &lumen_css_parser::parse(css), vp, &flat, false);
+        let mut ids = Vec::new();
+        all_ids(&doc, doc.root(), &mut ids);
+        let lis: Vec<NodeId> = ids
+            .into_iter()
+            .filter(|&id| doc.get(id).element_name().is_some_and(|q| q.local.as_str() == "li"))
+            .collect();
+        assert_eq!(lis.len(), 2, "fixture must hold two <li>");
+        let value = |id: NodeId| {
+            map.counters(id)
+                .and_then(|s| s.get("n"))
+                .and_then(|v| v.last())
+                .copied()
+        };
+        assert_eq!(value(lis[0]), Some(1), "first <li> must still see n=1");
+        assert_eq!(value(lis[1]), Some(2), "second <li> must still see n=2");
+    }
+
+    /// BUG-341 S26 gate — **by counter, on both arms**, and the second arm is
+    /// the one that guards against visible corruption.
+    ///
+    /// A cycle whose delta says nothing changed must not enter `walk` at all.
+    /// That is unobservable in the output by construction — the walk's whole
+    /// contribution on such a cycle is to restate its input — so only a counter
+    /// can tell "did not walk" from "walked and reused everything", which is the
+    /// S8 lesson applied to a stage instead of to a reuse mechanism.
+    ///
+    /// Arm two: the map's `nodes`/`quotes` collections are rebuilt by the walk,
+    /// not carried, so a pass that skips the walk hands back empty ones. On a
+    /// document that uses counters that would silently render every `counter()`
+    /// as nothing — visible corruption, not a slow frame. The licence is the
+    /// `generated_content` bit the previous pass stamped into the carried cache,
+    /// and this arm is what proves the bit is actually consulted: without it,
+    /// arm one passes and the counter text disappears.
+    #[test]
+    fn bug341_s26_an_unchanged_cycle_skips_the_walk_unless_it_generates_content() {
+        let vp = Size::new(800.0, 600.0);
+
+        // One cycle over `html`/`css` whose delta says nothing changed, run on
+        // the cache a full pass produced. Returns (nodes walk entered, the map).
+        let unchanged_cycle = |html: &str, css: &str| {
+            let doc = lumen_html_parser::parse(html);
+            let sheet = lumen_css_parser::parse(css);
+            let flat = lumen_dom::build_flat_tree(&doc);
+            let full = precompute_counters(&doc, &sheet, vp, &flat, false);
+            let delta = RestyleDelta {
+                prev_styles: full.into_styles(),
+                dirty_roots: HashSet::new(),
+                content_dirty: ContentDirty::Nothing,
+            };
+            set_incremental_restyle(true);
+            let _ = take_cascade_stats();
+            let map = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+            let stats = take_cascade_stats();
+            set_incremental_restyle(false);
+            (stats, map, doc)
+        };
+
+        // Arm 1 — no generated content: the walk is skipped outright.
+        let (stats, map, doc) = unchanged_cycle("<div><p>a</p><p>b</p></div>", "p { color: red; }");
+        assert_eq!(
+            stats.visited, 0,
+            "a cycle with an empty root set, no content mutation and a carried cache re-walked \
+             {} node(s) to conclude what the delta already stated. Every element would take the \
+             reuse branch and every node report itself clean, so the output is identical either \
+             way — which is precisely why this has to be a counter.",
+            stats.visited,
+        );
+        assert_eq!(stats.recomputed, 0, "and it must not have re-cascaded anything");
+        // The set the skipped walk still has to produce: the document's element
+        // children, which is what the reuse index stops at.
+        let html_el = doc
+            .get(doc.root())
+            .children
+            .iter()
+            .copied()
+            .find(|&c| matches!(doc.get(c).data, NodeData::Element { .. }))
+            .expect("fixture must have a root element");
+        assert!(
+            map.clean_subtrees().contains(&html_el),
+            "the skipped walk must still license reuse of the root element's subtree, or the box \
+             stage rebuilds the whole tree it was about to move"
+        );
+
+        // Arm 2 — the same shape of cycle on a document that *does* generate
+        // content must walk, and must still know its counter values.
+        let (stats, map, doc) = unchanged_cycle(
+            "<ol><li>a</li><li>b</li></ol>",
+            "ol { counter-reset: n 0; } li { counter-increment: n; } li::before { content: counter(n); }",
+        );
+        assert!(
+            stats.visited > 0,
+            "a document whose previous pass recorded counter snapshots must keep walking — the \
+             snapshots are rebuilt by the walk, not carried, so skipping it hands the box stage \
+             an empty counter map and every `counter()` renders as nothing"
+        );
+        let mut ids = Vec::new();
+        fn all_ids(doc: &Document, id: NodeId, out: &mut Vec<NodeId>) {
+            out.push(id);
+            for &c in &doc.get(id).children {
+                all_ids(doc, c, out);
+            }
+        }
+        all_ids(&doc, doc.root(), &mut ids);
+        let lis: Vec<NodeId> = ids
+            .into_iter()
+            .filter(|&id| doc.get(id).element_name().is_some_and(|q| q.local.as_str() == "li"))
+            .collect();
+        assert_eq!(lis.len(), 2, "fixture must hold two <li>");
+        let value = |id: NodeId| map.counters(id).and_then(|s| s.get("n")).and_then(|v| v.last()).copied();
+        assert_eq!(value(lis[0]), Some(1), "first <li> must still see n=1 after the cycle");
+        assert_eq!(value(lis[1]), Some(2), "second <li> must still see n=2 after the cycle");
+    }
+
+    /// BUG-341 S26 gate: and a cycle that *does* carry a change must still walk.
+    ///
+    /// Separate from the test above because it guards a different failure: the
+    /// cheapest way to zero the visit counter is to stop cascading altogether,
+    /// which arm one of the test above cannot see.
+    #[test]
+    fn bug341_s26_a_cycle_with_a_real_change_still_walks() {
+        let vp = Size::new(800.0, 600.0);
+        let doc = lumen_html_parser::parse("<div id=a><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("p { color: red; }");
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let full = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let target = doc.find_by_id("a").expect("fixture must have #a");
+
+        let mut dirty_roots = HashSet::new();
+        dirty_roots.insert(target);
+        let delta = RestyleDelta {
+            prev_styles: full.into_styles(),
+            dirty_roots,
+            content_dirty: ContentDirty::Nothing,
+        };
+        set_incremental_restyle(true);
+        let _ = take_cascade_stats();
+        let _ = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+        let stats = take_cascade_stats();
+        set_incremental_restyle(false);
+
+        assert!(
+            stats.visited > 0 && stats.recomputed > 0,
+            "a delta naming a dirty root must still reach the cascade — visited={} recomputed={}",
+            stats.visited,
+            stats.recomputed,
+        );
+    }
+
+    /// BUG-341 S27 test rig: one incremental cycle over `doc`/`sheet` with the
+    /// given delta, run on the cache `prev` left behind.
+    ///
+    /// Returns `(stats, map)`. The caller supplies the two node sets, which is
+    /// the whole point: every gate below is about which parts of the document
+    /// those two sets can reach.
+    fn s27_cycle(
+        doc: &Document,
+        sheet: &Stylesheet,
+        prev: CascadeStyles,
+        dirty_roots: HashSet<NodeId>,
+        content: &HashSet<NodeId>,
+    ) -> (CascadeStats, CounterMap) {
+        let vp = Size::new(800.0, 600.0);
+        let flat = lumen_dom::build_flat_tree(doc);
+        let delta = RestyleDelta {
+            prev_styles: prev,
+            dirty_roots,
+            content_dirty: ContentDirty::Nodes(content),
+        };
+        set_incremental_restyle(true);
+        let _ = take_cascade_stats();
+        let map = incremental_precompute_counters(doc, sheet, vp, &flat, false, delta);
+        let stats = take_cascade_stats();
+        set_incremental_restyle(false);
+        (stats, map)
+    }
+
+    /// Every node of `doc` in document order, for tests that need to pick one.
+    fn s27_all_ids(doc: &Document) -> Vec<NodeId> {
+        fn rec(doc: &Document, id: NodeId, out: &mut Vec<NodeId>) {
+            out.push(id);
+            for &c in &doc.get(id).children {
+                rec(doc, c, out);
+            }
+        }
+        let mut out = Vec::new();
+        rec(doc, doc.root(), &mut out);
+        out
+    }
+
+    fn s27_find(doc: &Document, local: &str) -> NodeId {
+        s27_all_ids(doc)
+            .into_iter()
+            .find(|&id| doc.get(id).element_name().is_some_and(|q| q.local.as_str() == local))
+            .unwrap_or_else(|| panic!("fixture must contain <{local}>"))
+    }
+
+    /// A full cascade over `doc`/`sheet`, handing back the cache it filled.
+    fn s27_cold(doc: &Document, sheet: &Stylesheet) -> CascadeStyles {
+        let vp = Size::new(800.0, 600.0);
+        let flat = lumen_dom::build_flat_tree(doc);
+        precompute_counters(doc, sheet, vp, &flat, false).into_styles()
+    }
+
+    /// BUG-341 S27 gate: a cycle whose delta names one node must enter that
+    /// node's chain and nothing else.
+    ///
+    /// A counter gate, not a differential one, for the S8 reason: a traversal
+    /// that walks the whole document produces exactly the same cascade — the
+    /// nodes outside the delta all take the reuse branch and report themselves
+    /// clean — so only a count can tell the two apart. S26 established this for
+    /// the delta that names *nobody*; this is the general case, and it is where
+    /// the cost actually is: on the CC-12 keystroke cycle the walk entered 1740
+    /// nodes to re-cascade one of them.
+    ///
+    /// Three arms, and the last two are the load-bearing ones:
+    ///
+    /// * the walk must not enter the untouched siblings,
+    /// * it must still re-cascade the node the delta names — the cheapest way
+    ///   to drive the visit count to zero is to stop cascading, which produces
+    ///   a stale document rather than a slow frame,
+    /// * every element of a skipped subtree must still be found in the carried
+    ///   cache (`confirm_misses`), because that is the claim the skip rests on:
+    ///   an inserted node makes its parent content-dirty, which puts the whole
+    ///   chain on the spine.
+    #[test]
+    fn bug341_s27_a_walk_only_enters_the_spine_of_its_delta() {
+        let rows = (0..20).map(|i| format!("<p>{i}</p>")).collect::<String>();
+        let doc = lumen_html_parser::parse(&format!(
+            "<main><section id=a>{rows}</section><section id=b>{rows}</section></main>"
+        ));
+        let sheet = lumen_css_parser::parse("p { color: red; } section { display: block; }");
+        let prev = s27_cold(&doc, &sheet);
+        let full_visits = {
+            let (stats, _) = s27_cycle(&doc, &sheet, prev.clone(), HashSet::new(), &HashSet::new());
+            // Sanity: with an empty content set and no dirty root the delta is
+            // a no-op and S26's path takes it — so measure the reference from
+            // the cold pass instead.
+            assert_eq!(stats.visited, 0, "an empty delta is S26's case, not S27's");
+            s27_all_ids(&doc).len()
+        };
+
+        let target = s27_find(&doc, "p");
+        let mut content = HashSet::new();
+        content.insert(target);
+        let mut dirty = HashSet::new();
+        dirty.insert(target);
+        let (stats, map) = s27_cycle(&doc, &sheet, prev, dirty, &content);
+
+        assert!(
+            (stats.visited as usize) * 3 < full_visits,
+            "the walk entered {} of the document's {full_visits} nodes although the delta names \
+             one <p>. Nothing outside that node's ancestor chain can be reached by an empty root \
+             set and a one-node content record, so every other node was entered only to restate \
+             the input.",
+            stats.visited,
+        );
+        assert!(
+            stats.skipped_subtrees > 0,
+            "no subtree was skipped at all — the spine was built but never consulted",
+        );
+        assert_eq!(
+            stats.recomputed, 1,
+            "the node the delta names must still re-cascade (recomputed={}); zeroing the visit \
+             counter by never cascading passes the first assertion and renders a stale document",
+            stats.recomputed,
+        );
+        assert_eq!(
+            stats.confirm_misses, 0,
+            "{} element(s) inside a skipped subtree had no entry in the carried cache. The skip \
+             claims the previous pass cascaded every one of them; a miss means a node was left \
+             without a style, which is a rebuilt box at best and a wrong inherited chain at worst.",
+            stats.confirm_misses,
+        );
+        assert_eq!(
+            map.styles().len(),
+            s27_all_ids(&doc)
+                .into_iter()
+                .filter(|&id| matches!(doc.get(id).data, NodeData::Element { .. }))
+                .count(),
+            "the cache must still hold one entry per element after a pass that skipped most of \
+             the document",
+        );
+    }
+
+    /// BUG-341 S27 gate: a skipped subtree still pays the S24 pass ordinal.
+    ///
+    /// This is what makes the skip an optimisation rather than a debt. The
+    /// ordinal's contract is "an entry exists iff the immediately preceding
+    /// pass visited that node", and `CascadeStyles::finish_pass` maintains it
+    /// by dropping whatever the pass did not stamp. A skip that walked away
+    /// without restamping would therefore (a) have its whole subtree evicted at
+    /// the end of the pass and (b) re-cascade all of it on the next one —
+    /// byte-identical output, one document-sized recompute per interaction.
+    ///
+    /// Two cycles whose deltas name nodes in *different* branches, so the
+    /// second walks into exactly what the first skipped — a second cycle with
+    /// the same delta would skip the same subtree again and never ask the
+    /// question.
+    #[test]
+    fn bug341_s27_a_skipped_subtree_still_pays_the_pass_ordinal() {
+        let doc = lumen_html_parser::parse(
+            "<main><section id=a><p>1</p><p>2</p></section>\
+             <section id=b><p>3</p><p>4</p><p>5</p><p>6</p></section></main>",
+        );
+        let sheet = lumen_css_parser::parse("p { color: red; }");
+        let elements = s27_all_ids(&doc)
+            .into_iter()
+            .filter(|&id| matches!(doc.get(id).data, NodeData::Element { .. }))
+            .count();
+        let ps: Vec<NodeId> = s27_all_ids(&doc)
+            .into_iter()
+            .filter(|&id| doc.get(id).element_name().is_some_and(|q| q.local.as_str() == "p"))
+            .collect();
+        assert_eq!(ps.len(), 6, "fixture must hold six <p>");
+        let one = |id: NodeId| HashSet::from([id]);
+
+        // Cycle one names a <p> in #a, so the whole of #b is skipped.
+        let prev = s27_cold(&doc, &sheet);
+        let (first, map) = s27_cycle(&doc, &sheet, prev, one(ps[0]), &one(ps[0]));
+        assert!(first.skipped_subtrees > 0, "the first cycle must skip something to gate anything");
+        assert_eq!(
+            map.styles().len(),
+            elements,
+            "the first cycle swept the entries of the subtrees it skipped: `finish_pass` counts \
+             one visit per element, so a skip that does not confirm its subtree reads as \
+             'these nodes are gone'",
+        );
+
+        // Cycle two names a <p> in #b — the branch cycle one walked away from.
+        let (second, map) = s27_cycle(&doc, &sheet, map.into_styles(), one(ps[5]), &one(ps[5]));
+        assert_eq!(
+            second.recomputed, 1,
+            "the second cycle re-cascaded {} elements. It walks into the branch the first cycle \
+             skipped, and its delta names one node there, so every other element must still be \
+             reusable — an entry the previous pass skipped without restamping is a pass too old, \
+             and `CascadeStyles::reuse` rejects it. That is the skipped half of the document \
+             re-cascading the moment anything happens inside it, with identical output.",
+            second.recomputed,
+        );
+        assert_eq!(map.styles().len(), elements, "and the map must still be exact");
+    }
+
+    /// BUG-341 S27 gate: the children of a content-mutated node are never
+    /// skipped.
+    ///
+    /// A mutation that moves a node names only the two parents — the arriving
+    /// node itself is not in any set the delta carries. Skipping it would keep
+    /// a style cascaded under its *old* inherited chain, and (through
+    /// `clean_subtrees`) hand the box stage the subtree it had under the old
+    /// parent. So the rule is positional: a parent that reports content
+    /// dirtiness has all of its children walked, whatever the spine says about
+    /// them.
+    ///
+    /// Gated by comparison rather than by a flat count, because "how many nodes
+    /// does this fixture have" is not the interesting number: the same cycle
+    /// with the parent *not* named must enter strictly fewer nodes.
+    #[test]
+    fn bug341_s27_children_of_a_content_mutated_node_are_never_skipped() {
+        let doc = lumen_html_parser::parse(
+            "<main><section id=a><p>1</p></section>\
+             <section id=b><article>x</article><article>y</article><article>z</article></section></main>",
+        );
+        let sheet = lumen_css_parser::parse("p { color: red; }");
+        let prev = s27_cold(&doc, &sheet);
+        let host = s27_all_ids(&doc)
+            .into_iter()
+            .find(|&id| doc.get(id).get_attr("id") == Some("b"))
+            .expect("fixture must contain #b");
+
+        // The spine of this delta, by its own definition: #b and its ancestors.
+        let mut spine = 0;
+        let mut cur = Some(host);
+        while let Some(id) = cur {
+            spine += 1;
+            cur = doc.get(id).parent;
+        }
+        let children = doc.get(host).children.len();
+        assert_eq!(children, 3, "fixture must give #b three children");
+
+        let mut named = HashSet::new();
+        named.insert(host);
+        let (stats, _) = s27_cycle(&doc, &sheet, prev, HashSet::new(), &named);
+
+        assert!(
+            stats.visited as usize >= spine + children,
+            "the walk entered {} node(s) for a delta whose spine is {spine} node(s) long, so it \
+             cannot have entered all {children} children of the content-mutated #b. One of them \
+             may have arrived from elsewhere in the document this very cycle — nothing in the \
+             delta names the arriving node, only the parent that received it, so skipping them \
+             keeps a style cascaded under a different inherited chain.",
+            stats.visited,
+        );
+    }
+
+    /// BUG-341 S27 gate: a document that generates content keeps the pre-S27
+    /// traversal, and keeps its counter values.
+    ///
+    /// `nodes` and `quotes` are rebuilt by the walk rather than carried, and
+    /// `quote_depth` is a running document-order counter, so a subtree that is
+    /// never entered contributes nothing to either. That is only equivalent
+    /// when it would have contributed nothing anyway — the same licence S26
+    /// established, applied per subtree.
+    ///
+    /// Both arms: the second is what a "skip everything" regression would fail.
+    #[test]
+    fn bug341_s27_a_document_with_counters_is_still_walked_in_full() {
+        let doc = lumen_html_parser::parse("<ol><li>a</li><li>b</li><li>c</li></ol>");
+        let sheet = lumen_css_parser::parse(
+            "ol { counter-reset: n 0; } li { counter-increment: n; } li::before { content: counter(n); }",
+        );
+        let prev = s27_cold(&doc, &sheet);
+        let target = s27_find(&doc, "ol");
+        let mut content = HashSet::new();
+        content.insert(target);
+        let (stats, map) = s27_cycle(&doc, &sheet, prev, HashSet::new(), &content);
+
+        assert_eq!(
+            stats.skipped_subtrees, 0,
+            "a document whose previous pass recorded counter snapshots must not skip any subtree \
+             — the snapshots live only in the map the walk builds, so a skipped <li> renders its \
+             `counter()` as nothing",
+        );
+        let lis: Vec<NodeId> = s27_all_ids(&doc)
+            .into_iter()
+            .filter(|&id| doc.get(id).element_name().is_some_and(|q| q.local.as_str() == "li"))
+            .collect();
+        assert_eq!(lis.len(), 3, "fixture must hold three <li>");
+        let value = |id: NodeId| map.counters(id).and_then(|s| s.get("n")).and_then(|v| v.last()).copied();
+        assert_eq!(
+            (value(lis[0]), value(lis[1]), value(lis[2])),
+            (Some(1), Some(2), Some(3)),
+            "the counter chain must survive a cycle that only touched <ol>",
+        );
     }
 
     // ── Custom counter style tests ────────────────────────────────────────────

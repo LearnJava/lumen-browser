@@ -998,6 +998,153 @@ call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-js -
 v8-backend download` — 6/6 green; `cargo check -p lumen-js` on default + `v8-backend` — green;
 `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both.
 
+### S12b-16 — `content_index.rs` (2026-07-20, branch p1-v8-s12b-16-content-index)
+
+Sixteenth slice, same systematic selection (`comm -12` on still-present rquickjs
+`fn install_*(…Ctx…)` sites vs `fn install_*_v8(` sites, sorted by file size): after the known
+traps `typed_om_api.rs` (148, S12b-9), `serial.rs` (151, S12b-10) and `scroll_snap_events.rs`
+(179, S12b-10), the smallest non-trap candidate is `content_index.rs` (203 lines). Clean by the
+file-stem method (**zero `dom.rs` hits** for `content_index`/`ContentIndex`) with its own-file
+`mod tests`; call site in `lib.rs`'s `QuickJsRuntime::install_dom` is a plain one-liner (no
+`QuickJsRuntime` `fire_*`/`take_*` method). Exactly the S12b-1..8 shape: pure JS-shim `eval` (no
+native bindings), the Content Index API Level 1 Phase-0 stub (`ContentIndex` class with
+`add`/`getAll`/`delete`, wired onto `ServiceWorkerRegistration.prototype.index`; in-memory, no
+persistence). Deleted the rquickjs `install_content_index_api` fn + its `use rquickjs::Ctx`; gated
+`CONTENT_INDEX_SHIM` behind `#[cfg(feature = "v8-backend")]` (only referenced from the v8 path now,
+same as S12b-12/13/14's SHIM consts); no `empty_line_after_doc_comments` fix needed — the module
+doc was already `//!`. Ported all 5 tests 1:1 to `V8JsRuntime` (bare `V8JsRuntime::new()` + the
+same `ServiceWorkerRegistration`-stub eval + `install_content_index_api_v8`, `with_content_index`
+single-helper pattern — no `install_dom` needed since the shim only touches `globalThis` and
+`ServiceWorkerRegistration.prototype`), gated `#[cfg(all(test, feature = "v8-backend"))]`; dropped
+the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-js --features
+v8-backend content_index` — 5/5 green; `cargo check -p lumen-js` (default) — green; `cargo clippy
+-p lumen-js --all-targets -- -D warnings` clean on both default and `v8-backend` features.
+
+### S12b-17 — `csp.rs` (2026-07-20, branch p1-v8-s12b-17-csp)
+
+Seventeenth slice, same systematic selection. After `content_index.rs` (S12b-16) the next smallest
+non-trap `install_*(…Ctx…)` candidate is `csp.rs` (206 lines). Clean by the file-stem method
+(**zero `dom.rs` hits** for `csp`/`SecurityPolicyViolationEvent`/`_lumen_dispatch_csp_violation`)
+with its own-file `mod tests`; call site in `lib.rs`'s `QuickJsRuntime::install_dom` is a plain
+one-liner (no `QuickJsRuntime` `fire_*`/`take_*` method — the Phase-1 `_lumen_fire_csp_violation`
+native does not exist yet). Same S12b-1..8/16 shape: pure JS-shim `eval` (no native bindings), the
+CSP3 §7.8 Phase-0 stub (`SecurityPolicyViolationEvent extends Event` + the
+`window._lumen_dispatch_csp_violation` dispatch helper). Deleted the rquickjs `install_csp_bindings`
+fn + its `use rquickjs::Ctx`; gated `CSP_SHIM` behind `#[cfg(feature = "v8-backend")]` (only
+referenced from the v8 path now, as S12b-12/13/14/16). Ported all 6 tests 1:1 to `V8JsRuntime`;
+unlike S12b-16 the CSP shim needs `Event`/`window`/`document`/`location`, so `with_csp_api` evals a
+minimal DOM stub (matching the old rquickjs test's stub, but assigning on `globalThis`) on a bare
+`V8JsRuntime::new()` before `install_csp_bindings_v8` — evals on one runtime share global state so
+`_dispatched` persists across the assertion `eval`. Gated `#[cfg(all(test, feature =
+"v8-backend"))]`; dropped the call site in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p
+lumen-js --features v8-backend csp` — 6/6 green; `cargo check -p lumen-js --features v8-backend` —
+green; `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` clean. Next
+candidate S12b-18 = `webxr.rs` (210), then `permissions_policy.rs` (214), `highlight_api.rs` (215).
+
+### S12b-18 — `permissions_policy.rs` (2026-07-20, branch p1-v8-s12b-18-permissions-policy)
+
+Eighteenth slice. **`webxr.rs` (210), listed as the next candidate at the end of S12b-17, is
+disqualified — same trap as `serial.rs` (S12b-10):** the naive file-stem grep (`webxr`/`WebXR`)
+only matches comments in `dom.rs`, but `dom.rs`'s `event_target_dependent_apis_installed` test
+asserts `typeof navigator.xr === 'object'`, so deleting the rquickjs `install_webxr_bindings` call
+site would break that test on the default (quickjs) build. That shared test pins six modules to the
+rquickjs path (`navigator.hid`/`usb`/`bluetooth`/`serial`/`xr` + `window.navigation`); each must be
+handled as a coordinated cluster (or the shared test refactored) rather than as an independent
+single-file slice — deferred. The next non-trap candidate by size is therefore `permissions_policy.rs`
+(214 lines).
+
+Clean by the file-stem method (**zero `dom.rs` hits** for `permissions_policy`/`permissionsPolicy`/
+`featurePolicy`/`FeaturePolicy` — the `FeaturePolicy` shim does not `extends EventTarget`, so it is
+not in the `event_target_dependent_apis_installed` test) with its own-file `mod tests`; call site in
+`lib.rs`'s `QuickJsRuntime::install_dom` is a plain block (no `QuickJsRuntime` `fire_*`/`take_*`
+method — `_lumen_set_permissions_policy` is a plain global assigned inside the shim, not a native
+binding). Same S12b-1..8/16/17 shape: pure JS-shim `eval`, the W3C Permissions Policy §8 Phase-0
+stub (`document.featurePolicy` + `document.permissionsPolicy` alias, `allowsFeature`/`features`/
+`allowedFeatures`/`getAllowlistForFeature`, and the `_lumen_set_permissions_policy(headerValue)`
+header-parse hook). Deleted the rquickjs `install_permissions_policy_bindings` fn + its
+`use rquickjs::Ctx`; gated `PERMISSIONS_POLICY_SHIM` behind `#[cfg(feature = "v8-backend")]` (only
+referenced from the v8 path now, as S12b-12/13/14/16/17). Ported all 6 tests 1:1 to `V8JsRuntime`;
+like S12b-17 the shim needs `window`/`document`, so `with_pp_api` evals a minimal `window = globalThis`
++ `document = {}` stub on a bare `V8JsRuntime::new()` before `install_permissions_policy_bindings_v8`
+— evals on one runtime share global state so the internal `_ppStore` persists across the assertion
+`eval`. Gated `#[cfg(all(test, feature = "v8-backend"))]`; dropped the call site (comment + block) in
+`lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-js --features v8-backend
+permissions_policy` — 6/6 green; `cargo check -p lumen-js` (default) + `--features v8-backend` —
+green; `cargo clippy -p lumen-js --all-targets -- -D warnings` clean on both default and `v8-backend`
+features. Next candidate S12b-19 = `highlight_api.rs` (215).
+
+### S12b-19 — `highlight_api.rs` (2026-07-21, branch p1-v8-s12b-19-highlight-api)
+
+Nineteenth slice, next by size after `permissions_policy.rs`. Clean by the file-stem method
+(all `highlight`/`Highlight` hits in `dom.rs` are the unrelated `.highlight` CSS class used by
+selector tests, not the CSS Highlight API — no cluster trap). The file's `#[cfg(test)]` block
+tests `HighlightRegistry`/`Highlight` (plain Rust structs backing the JS shim) directly, with no
+`rquickjs::Ctx` dependency at all, so — unlike every prior slice — there was nothing to port.
+Deleted the rquickjs `install_highlight_api_bindings` fn (no `use rquickjs::Ctx` to remove, it
+took `&rquickjs::Ctx` inline); gated `HIGHLIGHT_API_SHIM` behind `#[cfg(feature = "v8-backend")]`
+(only referenced from `install_highlight_api_bindings_v8` now); dropped the call site (comment +
+block) in `lib.rs`'s `QuickJsRuntime::install_dom`. `cargo test -p lumen-js --features v8-backend
+highlight_api` — 9/9 green; `cargo check -p lumen-js` (default) + `--features v8-backend` — green;
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` clean. Next
+candidate by size: re-audit the `webxr.rs`-cluster deferral from S12b-18 (`navigator.hid`/`usb`/
+`bluetooth`/`serial`/`xr` + `window.navigation`, pinned together by `dom.rs`'s
+`event_target_dependent_apis_installed`) or pick the next non-trap single file.
+
+### S12b-20 — `pointer_capture.rs` (2026-07-21, branch p1-v8-s12b-20-pointer-capture)
+
+Twentieth slice. Deferred the `webxr.rs` cluster re-audit again; `pointer_capture.rs` (102 lines)
+is the next non-trap single file — clean by the file-stem method (zero `pointer`/`Pointer` hits
+in `dom.rs`'s `event_target_dependent_apis_installed`; `setPointerCapture`/`releasePointerCapture`/
+`hasPointerCapture` are plain `Element.prototype` methods in the shim, not `EventTarget`-derived
+globals, so no cluster trap). Ported `install_pointer_capture_bindings` (three natives —
+`_lumen_set_capture_state`/`_lumen_release_capture_state`/`_lumen_get_capture_nid`) to
+`install_pointer_capture_bindings_v8`, registered via `V8JsRuntime::register_native` instead of
+`rquickjs::Function::new`. Unlike the plain `install_v8!` macro slices, this one needs an
+extra-arg call site (mirrors `geolocation`/`shared_worker`): `V8JsRuntime` gained its own
+`pointer_capture_nid: Arc<Mutex<Option<u32>>>` field plus `pointer_capture_nid()`/
+`take_pointer_capture()` accessors, mirroring `QuickJsRuntime`'s fields of the same name so the
+shell's `PersistentJs` trait (`V8PersistentJs` in `crates/shell/src/main.rs`) observes the same
+state the natives mutate — the pointer-event dispatch routing in `main.rs` was already
+engine-agnostic via the trait, so only the V8-side wiring was missing. Deleted the rquickjs
+`install_pointer_capture_bindings` fn + its call site in `lib.rs`'s `QuickJsRuntime::install_dom`
+(the `QuickJsRuntime::pointer_capture_nid` field/accessors stay — still the live rquickjs-path
+state). 4/4 own-file tests ported 1:1 to `V8JsRuntime`. `cargo test -p lumen-js --features
+v8-backend pointer_capture` — 7/7 green (4 own-file + 3 pre-existing `dom::tests` pointer-capture
+cases); `cargo check -p lumen-js` (default) + `--features v8-backend` — green; `cargo check -p
+lumen-shell --no-default-features --features backend-femtovg,v8` — green; `cargo clippy
+--workspace --all-targets -- -D warnings` clean; `scripts/scoped-test.sh` — all green (0 failed
+across `lumen-ai`/`lumen-bench`/`lumen-bidi-server`/`lumen-driver`/`lumen-js`/`lumen-knowledge`/
+`lumen-mcp`/`lumen-network`/`lumen-paint`/`lumen-shell`/`lumen-storage`). Next candidate by size:
+`battery_bindings.rs` (95) — clean by the file-stem method (zero `battery`/`Battery` hits in
+`dom.rs`), or re-audit the still-deferred `webxr.rs` cluster.
+
+### S12b-21 — `webtransport.rs` (2026-07-21, branch p1-v8-s12b-21-webtransport)
+
+Twenty-first slice. The listed `battery_bindings.rs` (95) candidate turned out to be a false
+positive of the `grep -rl rquickjs` selection method: its only `rquickjs` hit is a doc comment
+saying "rquickjs side removed in S12b-4" — the file is already 100% V8-only. Same false positive
+for `badging.rs` (S12b-1's doc comment) and `pointer_capture.rs` (S12b-20's, just completed).
+Re-ran the selection grep filtering for files that still have a live `use rquickjs::Ctx` import;
+smallest was `webtransport.rs` (108 lines, WebTransport Phase-0 stub, all operations reject — no
+QUIC). Tracing its call site turned up something the prior 20 slices didn't hit:
+`install_webtransport_bindings` has **zero callers anywhere in the repo** — not from
+`QuickJsRuntime::install_dom` (verified by grepping the full ~700-line function body), not from
+`V8JsRuntime::install_dom`, not from shell. `window.WebTransport` is already `undefined` on both
+engines today; this was dead code since it was added (`8ed672dc`), never wired in. Per CLAUDE.md
+("never target new functionality at the rquickjs path" + don't add features beyond what the task
+requires), the correct action for dead code is deletion, not porting — inventing a newly-wired V8
+stub for a capability that was never live anywhere would be new functionality disguised as a
+migration slice. Deleted `crates/js/src/webtransport.rs` whole (incl. its trivial
+`webtransport_stub_exists` test, which only asserted the shim constant was non-empty) and the
+`pub mod webtransport;` line in `lib.rs`. Updated `CAPABILITIES.md`/`ROADMAP.md`
+(`P3-webtransport`) to stop describing a "stub" that no longer exists. `cargo check -p lumen-js`
+(default) + `--features v8-backend` — green; `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` clean. **Selection method update:** grep for a live `use rquickjs::Ctx`
+import, not just any `rquickjs` substring, before ranking candidates by size — and always confirm
+an actual `install_dom` call site exists before committing to a candidate (`contacts.rs`, 110
+lines, confirmed live via `lib.rs:926`'s `contacts::init_contacts_manager` call — good next
+candidate).
+
 ---
 
 ## Risks (Rev 2)

@@ -196,6 +196,7 @@ cargo build --release
 
 - HTML parser — без полного набора HTML5 insertion modes; lenient к ошибкам.
 - JS-движок — V8 (`rusty_v8`) с 2026-07-14 (ADR-018), JIT-компиляция; QuickJS (`rquickjs`) остаётся опциональным rollback-путём (`--features quickjs`) до полного вывода из кода. Оба движка входят в `default` вместе с обоими paint-бэкендами (`backend-femtovg`, `backend-wgpu`) — обычная сборка `cargo build -p lumen-shell` без флагов уже получает самый быстрый вариант (wgpu + V8).
+- Хром браузера (тулбар, вкладки, панели) — с 2026-07-28 (CC-14, ADR-021) рендерится собственным движком из `assets/chrome/*` вместо ручного Rust-кода. Окно rollback'а (`LUMEN_LEGACY_CHROME=1`) закрыто в тот же день срезом CC-15-6 вместе с прежним рендерером — как и с QuickJS, флаг живёт ровно до удаления старого пути.
 - Сетевой стек — HTTP/1.1 + HTTP/2; HTTP/3 (QUIC) — позже.
 - Часть CSS-свойств и WPT-покрытие ещё в работе (см. `CSS-SPECS.md`).
 - JavaScript — нет.

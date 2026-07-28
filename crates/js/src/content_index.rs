@@ -9,19 +9,11 @@
 //! Shell Phase 1: `_lumen_content_index_add(json)` / `_lumen_content_index_getAll()` /
 //! `_lumen_content_index_delete(id)` native bindings for SQLite persistence.
 
-use rquickjs::Ctx;
-
 /// Install Content Index API on `ServiceWorkerRegistration.prototype`.
 ///
 /// Must run after the service-worker shim so that `ServiceWorkerRegistration`
-/// is already defined on `globalThis`.
-pub fn install_content_index_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(CONTENT_INDEX_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_content_index_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// is already defined on `globalThis`. Evaluates the JS shim via
+/// [`lumen_core::ext::JsRuntime::eval`] on the default (V8) engine.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_content_index_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -29,6 +21,7 @@ pub(crate) fn install_content_index_api_v8(rt: &crate::v8_runtime::V8JsRuntime) 
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const CONTENT_INDEX_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -93,19 +86,19 @@ const CONTENT_INDEX_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install_prereqs(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    /// Set up a minimal `ServiceWorkerRegistration` stub + the Content Index shim
+    /// on a bare V8 runtime (no full `install_dom` needed — the shim only touches
+    /// `globalThis` and `ServiceWorkerRegistration.prototype`).
+    fn with_content_index(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
             r#"
             if (typeof ServiceWorkerRegistration === 'undefined') {
                 function ServiceWorkerRegistration() {}
@@ -114,26 +107,23 @@ mod tests {
             "#,
         )
         .unwrap();
-        install_content_index_api(ctx).unwrap();
+        install_content_index_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn content_index_class_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx.eval("typeof ContentIndex === 'function'").unwrap();
-            assert!(ok);
+        with_content_index(|rt| {
+            let ok = rt.eval("typeof ContentIndex === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn content_index_add_and_get_all() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
+        with_content_index(|rt| {
             // add() pushes to _entries synchronously; Promise.resolve wraps the return
-            let ok: bool = ctx
+            let ok = rt
                 .eval(
                     r#"
                     var idx = new ContentIndex();
@@ -142,16 +132,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn content_index_delete() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx
+        with_content_index(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var idx = new ContentIndex();
@@ -161,17 +149,15 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn content_index_add_validates_required_fields() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
+        with_content_index(|rt| {
             // Missing id → returns rejected Promise (synchronously rejected)
-            let ok: bool = ctx
+            let ok = rt
                 .eval(
                     r#"
                     var idx = new ContentIndex();
@@ -180,16 +166,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn service_worker_registration_has_index() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx
+        with_content_index(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var reg = new ServiceWorkerRegistration();
@@ -197,7 +181,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

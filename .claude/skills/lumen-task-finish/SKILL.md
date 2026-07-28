@@ -127,26 +127,33 @@ Merge выполняется через временный worktree на main **
 клон, если он не занят:
 
 ```bash
-# Вариант А — через основной клон (если main свободен):
-git -C /d/kostja/Lumen-browser checkout main
-git -C /d/kostja/Lumen-browser merge --no-ff $ARGUMENTS \
+# Вариант А — через главное дерево (если оно на main и чистое):
+git -C /d/RustProjects/lumen-browser merge --no-ff $ARGUMENTS \
     -m "Влить ветку $ARGUMENTS: <однострочное описание>"
 
-# Вариант Б — через временный detached worktree:
-git worktree add --detach /tmp/lumen-merge-$ARGUMENTS main
-git -C /tmp/lumen-merge-$ARGUMENTS merge --no-ff $ARGUMENTS \
+# Вариант Б — через временный detached worktree (путь ТОЛЬКО внутри папки
+# браузера: /tmp и ../lumen-* запрещены рабочей границей):
+git worktree add --detach .claude/worktrees/merge-$ARGUMENTS main
+git -C .claude/worktrees/merge-$ARGUMENTS merge --no-ff $ARGUMENTS \
     -m "Влить ветку $ARGUMENTS: <однострочное описание>"
-git worktree remove /tmp/lumen-merge-$ARGUMENTS
+git worktree remove .claude/worktrees/merge-$ARGUMENTS
 ```
 
 `--no-ff` обязателен — сохраняет видимую структуру в `git log --graph`.
 
-## Шаг 7 — Удали ветку и worktree
+## Шаг 7 — Освободи слот и удали ветку
+
+Порядок важен: пока слот держит ветку, `git branch -d` отказывает
+(«cannot delete branch ... used by worktree at ...»).
 
 ```bash
-git worktree remove .claude/worktrees/$ARGUMENTS
+bash scripts/worktree-pool.sh release p<N>-work   # detached HEAD на main, target/ остаётся
 git branch -d $ARGUMENTS
 ```
+
+Слот **не удаляем** — в нём прогретый `target/`, ради которого пул и сделан.
+Удалять надо только ad-hoc worktree, если задача велась в нём:
+`git worktree remove .claude/worktrees/$ARGUMENTS`.
 
 Если `git branch -d` отказывает (ветка не полностью смержена) —
 убедись что merge прошёл успешно, затем `-D` вместо `-d`.

@@ -332,6 +332,8 @@ fn interpolate_length(from: &Length, to: &Length, t: f32) -> Option<Length> {
         (Length::Px(a), Length::Px(b)) => Some(Length::Px(lerp_f32(*a, *b, t))),
         (Length::Em(a), Length::Em(b)) => Some(Length::Em(lerp_f32(*a, *b, t))),
         (Length::Rem(a), Length::Rem(b)) => Some(Length::Rem(lerp_f32(*a, *b, t))),
+        (Length::Ch(a), Length::Ch(b)) => Some(Length::Ch(lerp_f32(*a, *b, t))),
+        (Length::Ex(a), Length::Ex(b)) => Some(Length::Ex(lerp_f32(*a, *b, t))),
         (Length::Percent(a), Length::Percent(b)) => Some(Length::Percent(lerp_f32(*a, *b, t))),
         (Length::Vh(a), Length::Vh(b)) => Some(Length::Vh(lerp_f32(*a, *b, t))),
         (Length::Vw(a), Length::Vw(b)) => Some(Length::Vw(lerp_f32(*a, *b, t))),

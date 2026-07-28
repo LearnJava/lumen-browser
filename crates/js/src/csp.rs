@@ -5,17 +5,12 @@
 //! dispatches it on `document`.  No enforcement — the shell wires actual
 //! blocking in Phase 1 via `_lumen_fire_csp_violation`.
 
-use rquickjs::Ctx;
-
 /// Install CSP JS bindings: `SecurityPolicyViolationEvent` class and
-/// `_lumen_fire_csp_violation` native dispatch helper.
-pub fn install_csp_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(CSP_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_csp_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// `_lumen_dispatch_csp_violation` native dispatch helper.
+///
+/// Must run after the DOM shim so that `Event`, `window` and `document` are
+/// already defined. Evaluates the JS shim via
+/// [`lumen_core::ext::JsRuntime::eval`] on the default (V8) engine.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_csp_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -24,6 +19,7 @@ pub(crate) fn install_csp_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
 }
 
 /// JavaScript shim: SecurityPolicyViolationEvent + fire helper.
+#[cfg(feature = "v8-backend")]
 const CSP_SHIM: &str = r#"
 (function() {
   // ── SecurityPolicyViolationEvent (CSP3 §7.8) ────────────────────────────
@@ -76,54 +72,56 @@ const CSP_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn with_csp_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            // Minimal DOM stub
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var location = { href: 'https://example.com/' };
-                var _dispatched = [];
-                var document = {
-                  referrer: '',
-                  dispatchEvent: function(e) { _dispatched.push(e); }
-                };
-                function Event(type, init) {
-                  this.type = type;
-                  this.bubbles    = (init && init.bubbles)    || false;
-                  this.composed   = (init && init.composed)   || false;
-                  this.cancelable = (init && init.cancelable) || false;
-                }
-                globalThis.Event = Event;
-                "#,
-            )
-            .unwrap();
-            install_csp_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    /// Set up a minimal DOM stub (`window`, `Event`, `document`, `location`) plus
+    /// the CSP shim on a bare V8 runtime — the shim only needs `Event`, `window`
+    /// and `document` defined, so no full `install_dom` is required. Evals on one
+    /// runtime share global state, so `_dispatched` persists across `eval` calls.
+    fn with_csp_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            globalThis.window = globalThis;
+            globalThis.location = { href: 'https://example.com/' };
+            globalThis._dispatched = [];
+            globalThis.document = {
+              referrer: '',
+              dispatchEvent: function(e) { _dispatched.push(e); }
+            };
+            function Event(type, init) {
+              this.type = type;
+              this.bubbles    = (init && init.bubbles)    || false;
+              this.composed   = (init && init.composed)   || false;
+              this.cancelable = (init && init.cancelable) || false;
+            }
+            globalThis.Event = Event;
+            "#,
+        )
+        .unwrap();
+        install_csp_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn security_policy_violation_event_class_exists() {
-        with_csp_api(|ctx| {
-            let ok: bool = ctx
+        with_csp_api(|rt| {
+            let ok = rt
                 .eval("typeof window.SecurityPolicyViolationEvent === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn event_has_correct_type() {
-        with_csp_api(|ctx| {
-            let ok: bool = ctx
+        with_csp_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var e = new SecurityPolicyViolationEvent('securitypolicyviolation', {
@@ -136,14 +134,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn event_has_violated_directive() {
-        with_csp_api(|ctx| {
-            let ok: bool = ctx
+        with_csp_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var e = new SecurityPolicyViolationEvent('securitypolicyviolation', {
@@ -157,14 +155,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn event_disposition_defaults_to_enforce() {
-        with_csp_api(|ctx| {
-            let ok: bool = ctx
+        with_csp_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var e = new SecurityPolicyViolationEvent('securitypolicyviolation', {
@@ -175,24 +173,24 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn dispatch_helper_exists() {
-        with_csp_api(|ctx| {
-            let ok: bool = ctx
+        with_csp_api(|rt| {
+            let ok = rt
                 .eval("typeof window._lumen_dispatch_csp_violation === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn dispatch_helper_fires_event_on_document() {
-        with_csp_api(|ctx| {
-            let ok: bool = ctx
+        with_csp_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     _lumen_dispatch_csp_violation('script-src', 'inline', "script-src 'none'", 'enforce');
@@ -200,7 +198,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

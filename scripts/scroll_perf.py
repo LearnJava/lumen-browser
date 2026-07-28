@@ -16,8 +16,9 @@
     --delta   — CSS-пикселей на щелчок (по умолчанию 300)
     --build   — пересобрать lumen-shell перед запуском
 
-Формат строк лога (см. `frame_log_enabled` в lumen-paint):
-    [frame] paint  12.34ms  (content  10.11ms / 8432 cmds, overlay  0.42ms / 12 cmds, flush  1.55ms, swap  0.26ms)
+Формат строк лога (см. `frame_log_enabled` в lumen-paint; `culled N/M leaf` —
+опциональный хвост, есть только на femtovg-бэкенде):
+    [frame] paint  12.34ms  (content  10.11ms / 8432 cmds, overlay  0.42ms / 12 cmds, flush  1.55ms, swap  0.26ms, culled 0/12 leaf)
     [frame] total  15.01ms  (scroll_y 1200, dl 8430 cmds)
 """
 
@@ -43,7 +44,8 @@ for _stream in (sys.stdout, sys.stderr):
 
 PAINT_RE = re.compile(
     r'\[frame\] paint\s+([\d.]+)ms\s+\(content\s+([\d.]+)ms / (\d+) cmds, '
-    r'overlay\s+([\d.]+)ms / (\d+) cmds, flush\s+([\d.]+)ms, swap\s+([\d.]+)ms\)'
+    r'overlay\s+([\d.]+)ms / (\d+) cmds, flush\s+([\d.]+)ms, swap\s+([\d.]+)ms'
+    r'(?:, culled \d+/\d+ leaf)?\)'
 )
 TOTAL_RE = re.compile(r'\[frame\] total\s+([\d.]+)ms\s+\(scroll_y ([\-\d.]+), dl (\d+) cmds\)')
 

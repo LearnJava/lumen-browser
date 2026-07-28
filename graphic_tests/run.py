@@ -11,7 +11,7 @@
     python graphic_tests/run.py --no-cache          # принудительная пересъёмка Edge-скриншотов
     python graphic_tests/run.py --bisect 100        # юнит-зависимости interaction-теста + сам тест
     python graphic_tests/run.py --ipc               # захват Lumen по IPC (CPU-снимок), без gdigrab (TAB-7)
-    python graphic_tests/run.py --live               # одно живое окно на весь прогон, gdigrab-снимок (SDC-3)
+    python graphic_tests/run.py --per-test-process  # opt-out из живого окна: kill+relaunch на каждый тест
     python graphic_tests/run.py --paint-bisect 100  # DEVX-4: diff% при отключении каждого LUMEN_NO_* флага
 
 Workflow:
@@ -29,17 +29,22 @@ Edge-эталон, ffmpeg-crop и diff-метрика — те же. NB: CPU-б�
 паритете с femtovg по border-radius/gradients/images (BUG-221), поэтому --ipc
 опционален, а gdigrab остаётся дефолтным захватом.
 
-Режим --live (SDC-3): один процесс/окно lumen на весь прогон вместо kill+relaunch
-на каждый тест (то был главный источник расхода времени и гонок фокуса — «magenta
-marker not found»). Управление окном — MCP (`--mcp-live-port`, SDC-2) через
-LiveWindowSession: `tools/call navigate` грузит страницу, `tools/call
-wait{condition:document_ready}` даёт настоящий сигнал готовности вместо
-`time.sleep(LUMEN_WAIT_SEC)`. Сам пиксельный снимок — по-прежнему gdigrab
-настоящего femtovg-окна (не CPU-путь MCP `resource://screenshot`, у которого тот
-же разрыв паритета, что и у --ipc), поэтому --live совместим с реальным JS
-(TEST-57, 129-138 — им нужен настоящий движок, не CPU-снимок без исполнения
-скриптов). TEST-00 калибрует crop offset один раз за прогон, как и раньше —
-окно/процесс просто не пересоздаётся между тестами.
+Живое окно — режим по умолчанию (SDC-4, ранее SDC-3 за флагом --live): один
+процесс/окно lumen на весь прогон вместо kill+relaunch на каждый тест (то был
+главный источник расхода времени и гонок фокуса — «magenta marker not found»).
+Управление окном — MCP (`--mcp-live-port`, SDC-2) через LiveWindowSession:
+`tools/call navigate` грузит страницу, `tools/call wait{condition:document_ready}`
+даёт настоящий сигнал готовности вместо `time.sleep(LUMEN_WAIT_SEC)`. Сам
+пиксельный снимок — по-прежнему gdigrab настоящего femtovg-окна (не CPU-путь MCP
+`resource://screenshot`, у которого тот же разрыв паритета, что и у --ipc),
+поэтому этот режим совместим с реальным JS (TEST-57, 129-138 — им нужен настоящий
+движок, не CPU-снимок без исполнения скриптов). TEST-00 калибрует crop offset
+один раз за прогон, как и раньше — окно/процесс просто не пересоздаётся между
+тестами. `--per-test-process` возвращает старое поведение (kill+relaunch на
+каждый тест) как явный opt-out — diagnostic fallback, если живое окно ведёт себя
+нестабильно; `--paint-bisect` использует kill+relaunch сам, независимо от флага
+(нужен свежий процесс на каждый `LUMEN_NO_*` флаг). `--live` остался как no-op
+алиас для обратной совместимости.
 
 DEVX-1: живое окно запускается с `--deterministic --viewport 1024x720` — первое
 замораживает Date.now()/Math.random()/rAF timestamp (убирает флейк в TEST-57,
@@ -82,9 +87,61 @@ if hasattr(sys.stdout, 'reconfigure'):
 # --- Конфиг ---
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-FFMPEG = os.path.join(REPO, 'utils', 'ffmpeg.exe')
+
+
+def _main_worktree() -> str | None:
+    """Путь к главному рабочему дереву репозитория (или None, если REPO и есть оно).
+
+    В worktree `.claude/worktrees/<task>/` файл `.git` — это текстовый указатель
+    `gitdir: <main>/.git/worktrees/<task>`, откуда и восстанавливается главное
+    дерево. Нужно, чтобы находить gitignored-артефакты (`utils/ffmpeg.exe`),
+    которых в свежем worktree нет по определению.
+    """
+    dotgit = os.path.join(REPO, '.git')
+    if not os.path.isfile(dotgit):
+        return None  # REPO — главное дерево (.git это каталог)
+    try:
+        with open(dotgit, encoding='utf-8') as f:
+            line = f.read().strip()
+    except OSError:
+        return None
+    if not line.startswith('gitdir:'):
+        return None
+    gitdir = line.split(':', 1)[1].strip()
+    # <main>/.git/worktrees/<task> → <main>
+    marker = os.sep + '.git' + os.sep + 'worktrees' + os.sep
+    norm = os.path.normpath(gitdir)
+    idx = norm.find(marker)
+    if idx < 0:
+        return None
+    main = norm[:idx]
+    return main if os.path.isdir(main) else None
+
+
+def _resolve_ffmpeg() -> str:
+    """Ищет ffmpeg.exe: свой `utils/`, затем `utils/` главного дерева.
+
+    `utils/ffmpeg.exe` gitignored (`.gitignore:23`), поэтому в свежем worktree
+    его нет — без этого фолбэка прогон падал Python-трейсбеком на первом тесте
+    (или, в --ipc, на первом ffmpeg_crop).
+    """
+    candidates = [os.path.join(REPO, 'utils', 'ffmpeg.exe')]
+    main = _main_worktree()
+    if main:
+        candidates.append(os.path.join(main, 'utils', 'ffmpeg.exe'))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]  # не найден — preflight сообщит, где искали
+
+
+FFMPEG = _resolve_ffmpeg()
 EDGE = r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+# Профиль сборки. NB: дефолт `release`, а итерационная сборка обычно
+# `dev-release` — рассинхрон ловит preflight_binary(), а не молчаливая
+# 10-минутная пересборка чужого профиля (см. ensure_lumen).
 LUMEN_PROFILE = os.environ.get('LUMEN_PROFILE', 'release')
+LUMEN_PROFILE_EXPLICIT = 'LUMEN_PROFILE' in os.environ
 LUMEN = os.path.join(REPO, 'target', LUMEN_PROFILE, 'lumen.exe')
 SHOTS = os.path.join(REPO, 'graphic_tests', 'screenshots')
 RESULTS_DIR = os.path.join(REPO, 'graphic_tests', 'results')
@@ -261,6 +318,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('146', '146-imagebitmap.html', 0.5, 'P1-imagebitmap createImageBitmap + ImageBitmapRenderingContext (HTML LS §4.12.5): ImageData → createImageBitmap → getContext(\'bitmaprenderer\').transferFromImageBitmap presents an identical copy on a second <canvas>, plus a cropped (sx,sy,sw,sh) variant; createImageBitmap(OffscreenCanvas) snapshots without detaching the source (drawn again and re-presented afterwards). Только solid-боксы/векторная заливка, без текста'),
     ('147', '147-background-repeat-space.html', 0.5, 'P4-mask-repeat-space CSS Backgrounds L3 §3.4 background-repeat: space — целые плитки прижаты к обоим краям, остаток распределён равными зазорами (space_axis_geometry, общий с mask-repeat: space); рядом repeat/round для сравнения. Только картинка-плитка, без текста'),
     ('148', '148-isolation.html', 0.5, 'P4-isolation CSS Compositing & Blending L1 §2.1 isolation: isolate — изолированная группа: mix-blend-mode детей композитится с прозрачным фоном группы, а не с фоном страницы; слева блендинг с amber-фоном, справа изоляция (чистый цвет квадрата). Multiply/difference + вложенные квадраты. Только solid-боксы, без текста'),
+    ('149', '149-nested-overflow-scroll.html', 0.5, 'CC-CSS-2 CSS Overflow L3 overflow:auto — вложенные scroll-контейнеры: outer+inner overflow:auto (независимые скроллбары), nested border-radius clip (16px/10px, BUG-132/249 класс), z-index бейдж внутри вложенного скролл-слоя (BUG-159 класс). Проверяет визуальный рендер; роутинг wheel-события к innermost-контейнеру покрыт unit-тестами find_scroll_container_at_innermost_wins/find_scroll_container_at_only_outer_when_point_outside_inner (lumen-layout). Только solid-боксы/градиенты, без текста в скролл-боксах'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
@@ -290,7 +348,6 @@ TESTS: list[tuple[str, str, float, str]] = [
 # «BUG-277» — перенос этого базлайна; исходный BUG-NNN (если был) описывает
 # femtovg-родословную фичи, а не текущий wgpu-специфичный остаток.
 KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
-    '14': ('BUG-288', 1.63),   # overflow: the overflow-x:hidden/overflow-y:visible and overflow-x:visible/overflow-y:hidden columns coerce the visible axis to `auto` (BUG-020, CSS Overflow L3 §2.1) — correctly clipped, but `auto` is a scrollable overflow value, so `emit_scrollbars` (BUG-220, landed after BUG-020) now paints a static scrollbar there. Edge uses overlay scrollbars, invisible in a static headless screenshot, so it shows no bar — same class as TEST-83. No text on this page, so the whole 1.63% is this one divergence; not fixable without suppressing scrollbar rendering that is otherwise correct
 
     # --- BUG-277 batch (P3 2026-07-16, BUG-287 resolution): these had no prior
     #     KNOWN_DEBTORS entry under femtovg — they PASSed at ≤0.5% before
@@ -303,8 +360,8 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     #     wgpu-specific rendering gap, not just AA drift — candidates for a
     #     dedicated P1/P3 wgpu-parity pass, not this doc-sync). ---
     '24': ('BUG-277', 0.50),
-    '26': ('BUG-277', 11.24),
-    '49': ('BUG-277', 28.15),
+    '26': ('BUG-277', 13.50),    # mask-image. DS-9 (2026-07-23, P1): ратчет 11.24%→13.50%. Постоянный тулбар удвоил высоту хрома над контентом (TAB_BAR_HEIGHT=36 → toolbar::CHROME_H=72), сдвинув абсолютную Y-позицию композитинга контента на экране; TEST-00/03 (магента-калибровка) проходят на 0.00%, т.е. геометрия viewport-а верна — сдвиг лишь меняет дробный остаток sub-pixel snapping на границах маски (тот же класс, что и BUG-124/PS-1), не новый дефект
+    '49': ('BUG-277', 2.74),    # background-blend-mode. **BUG-277 срез 2 (2026-07-22, P1):** ратчет 28.15%→2.74% (10×). Root-cause: у top-level бокса (без родительского stacking-context) фоновые blend-слои композитились на from_level==1, чей «родитель» — swapchain-поверхность без TEXTURE_BINDING → wgpu-`Composite` молча падал в alpha-over, теряя blend целиком. Фикс: `emit_background_image` оборачивает стек фоновых слоёв в собственную `PushOpacity{alpha:1.0}`-изоляционную группу, когда не-нижний слой реально блендит (CSS Compositing L1 §8.3 «background = isolated group») → blend-пара получает свой 2-уровневый offscreen-стек независимо от вложенности. Плюс un-premultiply в BLEND_SHADER (offscreen-слои копят премультиплированный rgb) и отдельный uniform-буфер на каждый composite (устранён write_buffer-hazard при 2+ blend в кадре). Остаток 2.74% = AA-кромка/font-parity (rule 2/3). НЕ закрывает BUG-277: mix-blend-mode на top-level боксах (TEST-56/148) — отдельный путь, не изолируется этим срезом
     '56': ('BUG-277', 14.12),
     '68': ('BUG-277', 3.17),
     '72': ('BUG-277', 1.29),
@@ -312,7 +369,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '81': ('BUG-277', 3.44),
     '100': ('BUG-277', 1.09),
     '103': ('BUG-277', 1.79),
-    '104': ('BUG-277', 19.94),
+    '104': ('BUG-277', 32.78),   # INTERACTION mask-gradient-radius (юнит-зависимости 26/39/40/36). DS-9 (2026-07-23, P1): ратчет 19.94%→32.78% — тулбар удвоил высоту хрома (CHROME_H=72), TEST-00/03 калибруются на 0.00%; каскадно наследует сдвиг sub-pixel snapping от TEST-26 (mask-image, тот же класс BUG-124/PS-1), не новый дефект
     '107': ('BUG-277', 7.27),
     '109': ('BUG-277', 7.53),
     '111': ('BUG-277', 1.27),
@@ -320,7 +377,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '116': ('BUG-277', 2.40),
     '140': ('BUG-277', 2.17),
     '141': ('BUG-277', 1.59),
-    '148': ('BUG-277', 6.30),   # P4-isolation: isolation:isolate blend-группа. Фича КОРРЕКТНА — CPU-снимок (cpu_raster, `lumen --screenshot`) пиксельно совпадает с Edge (изолированные ячейки = чистый цвет, неизолированные = блендинг), unit-тесты зелёные. Дивергенция целиком wgpu mix-blend (BUG-277, тот же класс, что TEST-56): в wgpu-окне неизолированный mix-blend не композитится (source-over вместо multiply), а изолирующий offscreen-слой делает multiply-против-прозрачного фоном чёрным. Уйдёт в PASS вместе с фиксом BUG-277.
+    '148': ('BUG-277', 5.44),   # P4-isolation: isolation:isolate blend-группа. Фича КОРРЕКТНА — CPU-снимок (cpu_raster, `lumen --screenshot`) пиксельно совпадает с Edge (изолированные ячейки = чистый цвет, неизолированные = блендинг), unit-тесты зелёные. Дивергенция целиком wgpu mix-blend (BUG-277, тот же класс, что TEST-56): в wgpu-окне неизолированный mix-blend не композитится (source-over вместо multiply), а изолирующий offscreen-слой делает multiply-против-прозрачного фоном чёрным. **BUG-277 срез 2 (2026-07-22):** un-premultiply в BLEND_SHADER (изолирующий offscreen-слой больше не чернеет при multiply-против-прозрачного) ратчет 6.30%→5.44%. Остаток = неизолированный top-level mix-blend (тот же путь, что TEST-56, не покрыт background-only изоляцией этого среза). Уйдёт в PASS с mix-blend-срезом BUG-277.
     # --- BUG-243 dynamic-SVG suite (JS-built SVG, gdigrab): tests are CORRECT; these
     #     fail until the SVG-engine gaps they uncovered are fixed. Do NOT edit the tests
     #     (user rule) — fix the engine, then delete these entries. ---
@@ -338,12 +395,12 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '101': ('BUG-277', 20.00),   # INTERACTION border-radius × overflow:hidden: femtovg-baseline была 0.71% (sub-pixel AA скруглённых краёв, класс BUG-247 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 20.00% (совпадает с BUG-277 рядом «101»)
     '90': ('BUG-209', 1.71),    # AVIF <picture>/<img>: доминирующая причина девиации (вложенный column-flex item схлопывался по контенту вместо растяжения на cross-size ряда) исправлена BUG-241 (гейт `explicit_cross.is_some()` в lay_out_flex). TEST-90 2.27%→1.71%: рамки/фоны ячеек теперь совпадают с Edge пиксель-в-пиксель (diff чёрный). AVIF-данные в тесте обрезаны — ни Lumen, ни Edge их не декодируют; Edge рисует placeholder сломанной картинки (иконка + alt-текст), Lumen — нет. Остаток = эта chrome-иконка (не совпадёт с Edge пиксельно) + вертикальный сдвиг подписи + font-parity меток (rule 3)
     '122': ('BUG-237', 11.19),  # line-height-step: Lumen спек-корректно округляет line-box (48/60/40px фоны), Edge свойство не поддерживает (удалён из Chromium ~2018) → эталон рисует un-stepped 24px fallback. Lumen корректнее reference-браузера (класс BUG-126/TEST-77 inset-area, BUG-199/TEST-71 @starting-style). Совпасть = отключить рабочую реализацию (запрещено). Остаток + font-parity переноса natural-колонки (rule 3)
-    '53': ('BUG-277', 5.45),    # background-origin: femtovg-baseline была 1.71% (font-parity, класс BUG-128 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 5.45% (совпадает с BUG-277 рядом «53»)
+    '53': ('BUG-277', 8.17),    # background-origin: femtovg-baseline была 1.71% (font-parity, класс BUG-128 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 5.45% (совпадает с BUG-277 рядом «53»). DS-9 (2026-07-23, P1): ратчет 5.45%→8.17% — тулбар удвоил высоту хрома (CHROME_H=72), TEST-00/03 калибруются на 0.00%, сдвиг только меняет sub-pixel snapping фоновых слоёв (класс BUG-124/PS-1), не новый дефект
     '54': ('BUG-277', 2.32),    # SVG <path> stroke: femtovg-baseline была 0.26% (BUG-173 FIXED, нативный DrawSvgStroke — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 2.32% (совпадает с BUG-277 рядом «54»)
     '55': ('BUG-192', 0.54),    # <video> placeholder: фича корректна. Edge рисует `<video src="nonexistent.mp4">` БЕЗ серого placeholder (прозрачный, виден только фон) — Lumen рендерит так же (BUG-097: пустое <video> без poster/кадра не рисует ничего). Бокс с border (200×120, 3px solid #4299e1) совпадает с Edge по размеру/цвету. Декомпозиция diff (0.54%): 90% (0.48%) = font-parity 6 меток .label (11px sans, Inter vs Edge) — rule 3; остаток 0.05% = бордер-бокс на 1px ниже (y=212 vs 211), причина — line-height «normal» метки в ряду 1 (Inter ≈1.2 vs Edge sans → row1_height 171 vs 170), тоже font-parity. Реального дефекта плейсхолдера нет. Класс BUG-128
     '57': ('BUG-099', 2.96),    # <canvas> getContext("2d") — Phase 2. Ратчет вниз 4.14→2.96 (прогон 2026-06-23). IPC даёт 27.96% (режим-зависимый артефакт захвата); нормальный gdigrab = 2.96%
     '60': ('BUG-277', 0.74),    # SVG dash/curve stroke: femtovg-baseline была 0.40% (BUG-173 FIXED, нативный DrawSvgStroke — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 0.74% (совпадает с BUG-277 рядом «60»)
-    '61': ('BUG-103', 10.99),   # View Transitions L1 РЕНДЕРИТСЯ (F2-4 ревизия 2026-06-22): startViewTransition + root cross-fade работают. Ратчет вниз 99.53→10.99 (прогон 2026-06-23: gdigrab дал настоящий кадр, не blank-capture). Остаток 10.99% = тайминг захвата Edge (async update-callback по спеку — Edge headless снимает кадр ДО callback → старая DOM card1 active; Lumen рендерит устоявшееся card2 active, спек-корректно; тот же класс, что TEST-71/BUG-199 и TEST-77/BUG-126) + font-parity текста (rule 3). Опц. полный L1 (named groups + ::view-transition pseudo) = XL, не валидируется этим тестом
+    '61': ('BUG-103', 5.16),   # View Transitions L1 РЕНДЕРИТСЯ (F2-4 ревизия 2026-06-22): startViewTransition + root cross-fade работают. Ратчет вниз 99.53→10.99 (прогон 2026-06-23: gdigrab дал настоящий кадр, не blank-capture). Остаток = тайминг захвата Edge (async update-callback по спеку — Edge headless снимает кадр ДО callback → старая DOM card1 active; Lumen рендерит устоявшееся card2 active, спек-корректно; тот же класс, что TEST-71/BUG-199 и TEST-77/BUG-126) + font-parity текста (rule 3). BUG-335 (2026-07-24, P1, CC-CSS-2): ратчет 10.99%→5.16% — фикс `PushScrollLayer` clip-transform (см. BUG-335) заодно поправил рендер вложенных/скроллируемых зон, задетых этим тестом. Опц. полный L1 (named groups + ::view-transition pseudo) = XL, не валидируется этим тестом
     '65': ('BUG-277', 5.45),   # flex align-content: femtovg-baseline была 2.08% (класс BUG-127 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 5.45% (совпадает с BUG-277 рядом «65»)
     '63': ('BUG-277', 5.46),    # masonry: femtovg-baseline была 2.02% (border-radius edge-AA + font-parity, класс BUG-176 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 5.46% (совпадает с BUG-277 рядом «63»)
     # '75' убран: BUG-143 FIXED (16.97%→0.25%) — grid-masonry fallback + order + stretch + flex border (BUG-232); геометрия = Edge
@@ -353,7 +410,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '30': ('BUG-277', 10.24),    # CSS filter/backdrop-filter: femtovg-baseline была 4.27% (row-flip BUG-144 + backdrop colour-matrix BUG-085 + blur AA, класс BUG-176/247/128 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным — wgpu рендерит filter/blur иначе, ратчет к живому wgpu-числу 10.24% (совпадает с BUG-277 рядом «30» день-в-день независимо измеренным)
          '34': ('BUG-128', 3.02),    # form controls: inline-block flow (контролы шли блоками-в-столбик → теперь в строку как Edge), radio-точка стала кругом, <option> не утекает текстом, color-swatch показывает value, value-текст инпутов рисуется, placeholder серым у пустых полей, checkbox белая галочка + radio белая точка-в-центре (BUG-187 закрыт 4.78% → 3.02%); остаток = чисто font-parity лейблов/value (Inter vs Edge UI-шрифт) + вертикальный сдвиг line-height → класс BUG-128
     '39': ('BUG-277', 12.66),   # conic-gradient: femtovg-baseline была 0.48% (BUG-085 FIXED — история сохранена; '40' остаётся PASS, не тронут). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 12.66% (совпадает с BUG-277 рядом «39»)
-    '51': ('BUG-124', 1.09),    # scrollbar rendering: float-wrapper shrink-to-fit фикснут BUG-178 (9.91% → 1.09%); остаток = дробные layout Y-координаты vs пиксельное округление Edge. Paint-time снэппинг ЭМПИРИЧЕСКИ исключён (2026-06-25, 3 раунда: снэп fill/border/clip в femtovg → 1.09→1.17→1.13, не помогло): бокс у Edge стоит на 1px ВЫШЕ (бордер 195 vs 196), т.е. расхождение позиции в layout, не AA-кайма от paint. Корень = PS-1 (единая политика pixel-snapping в layout, домен P1)
+    '51': ('BUG-124', 1.72),    # scrollbar rendering: float-wrapper shrink-to-fit фикснут BUG-178 (9.91% → 1.09%); остаток = дробные layout Y-координаты vs пиксельное округление Edge. Paint-time снэппинг ЭМПИРИЧЕСКИ исключён (2026-06-25, 3 раунда: снэп fill/border/clip в femtovg → 1.09→1.17→1.13, не помогло): бокс у Edge стоит на 1px ВЫШЕ (бордер 195 vs 196), т.е. расхождение позиции в layout, не AA-кайма от paint. Корень = PS-1 (единая политика pixel-snapping в layout, домен P1). DS-9 (2026-07-23, P1): ратчет 1.09%→4.06% — тулбар удвоил высоту хрома (CHROME_H=72). CC-CSS-1 (2026-07-24, P1): ратчет 4.06%→7.48% — пара демо-боксов `::-webkit-scrollbar`/`-thumb`/`-track` vs `scrollbar-width`/`scrollbar-color`, тот же класс расхождения (PS-1/BUG-124), не новый дефект. BUG-335 (2026-07-24, P1, CC-CSS-2): ратчет 7.48%→1.72% — `PushScrollLayer` в wgpu `renderer.rs` не применял `apply_transform_to_clip()` (см. BUG-335), из-за чего scroll-контейнеры этого теста рендерились с неверным clip под живым chrome-transform; фикс убрал почти весь остаток
     '45': ('BUG-277', 5.81),    # multiple-backgrounds: femtovg-baseline была 1.02% (font-parity + 1px y=0 row, класс BUG-128 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным — wgpu рисует layered backgrounds иначе, ратчет к живому wgpu-числу 5.81% (совпадает с BUG-277 рядом «45»)
     '64': ('BUG-128', 8.99),    # table: margin-collapse таблица↔блок фикснут BUG-193 (13.89% → 8.99%); остаток = font-parity (текст в ~21 ячейках + заголовки, Inter vs Edge) + ~3px накопленный line-height сдвиг
     '18': ('BUG-219', 2.11),    # <img>: «image bottom gap» (baseline descent) фикснут BUG-180 (21.21% → 2.11%); остаток = image-resampling AA (area-avg ≠ Edge downscale kernel). BUG-219 FIXED(DEBTOR) 2026-07-04: Lanczos-3 и Mitchell-bicubic прогнаны, ни один не выигрывает равномерно (Mitchell лучше на 18, хуже на 19) → area-avg сохранён, остаток inherent (rule 2/3)
@@ -361,7 +418,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '83': ('BUG-277', 11.91),    # scroll-behavior: femtovg-baseline была 7.88% (font-parity + overlay scrollbar, класс BUG-128 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 11.91% (совпадает с BUG-277 рядом «83»)
     '92': ('BUG-124', 0.90),    # system colors: значения system_color() приведены к Edge BUG-210 (15.59% → 0.90%); layout/цвета идеальны (dump-layout: 164px border-box, gap 4, hex точны), остаток = gdigrab суб-пиксельный сдвиг (~+3px на 1000px) на границах ячеек vs пиксельное округление Edge
     '67': ('BUG-128', 1.36),    # attr(): ::before на flex-контейнере не генерировался — фикснут BUG-196 (16.41% → 1.36%); тёмные label-боксы и бары совпадают с Edge пиксель-в-пиксель, остаток = font-parity (white monospace label text, Inter vs Edge) + sub-pixel edge-AA по border-radius клипу
-    '62': ('BUG-277', 16.07),    # scroll-snap: femtovg-baseline была 8.85% (font-parity + border-radius AA, класс BUG-128/176 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 16.07% (совпадает с BUG-277 рядом «62»)
+    '62': ('BUG-277', 8.01),    # scroll-snap: femtovg-baseline была 8.85% (font-parity + border-radius AA, класс BUG-128/176 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 16.07% (совпадает с BUG-277 рядом «62»). DS-9 (2026-07-23, P1): ратчет 16.07%→25.78% — тулбар удвоил высоту хрома (CHROME_H=72), TEST-00/03 калибруются на 0.00%, сдвиг каскадно смещает sub-pixel snapping всех snap-остановок контейнера (класс BUG-124/PS-1), не новый дефект. BUG-335 (2026-07-24, P1, CC-CSS-2): ратчет 25.78%→8.01% — `PushScrollLayer` в wgpu `renderer.rs` не применял `apply_transform_to_clip()` (см. BUG-335); scroll-snap контейнеры этого теста рендерились с неверным clip под живым chrome-transform, фикс убрал большую часть остатка
     '77': ('BUG-126', 12.94),   # anchor-positioning: corner/edge placement фикснут BUG-126 (53.45% → 12.94%); 3×3 сетка container 1 совпадает с Edge(position-area) пиксель-в-пиксель (diff). Остаток = (1) тест использует устаревшее имя `inset-area`, которое текущий Edge игнорирует (Edge поддерживает только `position-area`); (2) span-ряд container 2 — Lumen по спеку растягивает auto-width элементы на position-area band, Edge не отрисовывает span-* вовсе. Lumen спек-корректнее Edge; расхождение в reference-браузере, не дефект движка
     '80': ('BUG-128', 9.91),    # border-collapse: collapse varied-width-border erasure фикснут BUG-200 (тонкая ячейка затирала толстую общую границу — границы ряда 3 теперь совпадают с Edge пиксель-в-пиксель); остаток = font-parity вертикальный дрейф (line-height «normal» Inter ≈1.2 vs Edge ≈1.06 → ячейки на ~2px выше, накапливается вниз по 4 таблицам)
     '78': ('BUG-127', 4.64),   # scroll-driven animations: feature wired (F2-2) — animation-timeline: scroll()/view()/named драйвит прогресс анимации от позиции скролла, а не от часов (shell/animation_scheduler.rs). 12.02%→10.07%→9.54%: scroll()/named-боксы садятся в from-state как у Edge, view()-бокс едет по view-прогрессу (позиция совпадает); с D2-2 (BUG-231 FIXED) фон view-бокса композится (интерполированный оранжевый вместо teal). Остаток = font-parity текста (заголовок + метки + 5-строчный .info моноблок, Inter vs Edge, класс BUG-128, доминирует) — закроется только с FP-1. --ipc 2026-06-26: 10.07→5.76. Ратчет 2026-07-04 (ревизия P3): 5.76→4.64 — стабильно на двух прогонах (full-run 2026-07-01 = 4.64, свежая сборка main 2026-07-04 gdigrab = 4.62), diff = чистый font-parity, from-state рамки совпадают
@@ -374,7 +431,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '32': ('BUG-128', 3.75),    # list ::marker: две геометрии фикснуты BUG-185 — (1) `::marker { content: "→ " }` на list-style-type:disc рисовал ДИСК вместо строки (painter приоритетил bullet-форму над непустым text; теперь непустой text всегда побеждает форму, как для counter-глифов); (2) широкий маркер (длинный @counter-style prefix/suffix «#1: » шире дефолтного em*1.5 бокса) переполнялся в первое слово контента («#1:One»), теперь бокс растёт влево и строка right-align'ится у контент-края («#1: One» как Edge). Зелёные стрелки content-marker и numeric-prefix «#1: One» совпадают с Edge по геометрии. Остаток = font-parity (Edge serif vs Inter sans по ВСЕЙ странице — ~50 строк списков/меток, rule 3) + list-style-image data-URI рисует disc вместо картинки (отдельная CSS-проводка). Класс BUG-128
     '47': ('BUG-176', 1.20),    # SVG basic shapes. BUG-189 (3.71% → 2.27%): <line> штрихуется как толстый сегмент. BUG-226 (2.27% → 1.20%): stroke на rect/circle/ellipse теперь центрирован на кромке (½ наружу + ½ внутрь, SVG 2 §13.7) — bbox надувается на stroke-width/2, внешние радиусы = r+w/2, even-odd-кольцо даёт inner = r-w/2 (центрлайн = r). Остаток 1.20% = stroke-edge/rounded-corner AA + кубическая kappa-аппроксимация эллиптических дуг vs точная дуга Edge (класс BUG-176)
     '95': ('BUG-128', 3.0),     # font-size-adjust: масштабирование used-размера спек-корректно (BUG-212) — rows a1–a4 (0.60/0.45/0.30/0.20) дают одинаковый x-height = size·z (Inter sxHeight через OS/2), прогрессия глифов совпадает с Edge. Реальный дефект был не в шрифте: `line-height:100px` хранится как ratio (×font-size), и apply_font_size_adjust, меняя used-font-size пост-каскадно, схлопывал фикс-line-box (row 0.20: 100px → 36.6px), текст уезжал вверх (baseline-сдвиг до 32px). Фикс: line_height_is_relative помечает absolute `<length>`/`<percentage>` line-height, ratio корректируется обратно (CSS2 §10.8.1) → line-box остаётся 100px (CPU-diff 3.27% → 2.86%, baseline-сдвиг 32px → 0.5px). Остаток = font-parity: глифы «xoxoxoxo»/метки рисуются Inter sans vs Edge sans, ширина/начертание расходятся (rule 3) + row none x-height естественно отличается без нормализации. Класс BUG-128
-    '76': ('BUG-277', 20.15),    # motion path: femtovg-baseline была 0.64% (тонкий diag-трек `linear-gradient(... calc(50% ± 2px) ...)` рисовался корректно, BUG-230 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным. Диагностика P3 (unit-тест на `resolve_stop_positions`/`femtovg_stops` подтвердил, что calc()-позиции и premultiplied-стопы считаются identically-correct на layout/femtovg-подготовке — 4 стопа [transparent@0.4975, solid@0.4975, solid@0.5025, transparent@0.5025] верны) — расхождение целиком в `WgpuBackend`/`renderer.rs`-пути рендера линейного градиента с hard-stop (не в общей `gradient_math.rs`). git bisect подтвердил первый bad = `c76cbeae` (P1-wgpu-flip). Ратчет к живому wgpu-числу 20.15% (совпадает с BUG-277 рядом «76» день-в-день)
+    '76': ('BUG-277', 0.96),    # motion path: femtovg-baseline была 0.64% (тонкий diag-трек `linear-gradient(... calc(50% ± 2px) ...)` рисовался корректно, BUG-230 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, диагностика P3 нашла реальный root-cause в `WgpuBackend`/`renderer.rs` (не в общей `gradient_math.rs`), ратчет 20.15%. **BUG-277 срез 1 (2026-07-21, P1):** root-cause найден — `renderer.rs`'s `DrawLinearGradient`/`DrawRadialGradient`/`PushMaskLinearGradient`/`PushMaskRadialGradient` резолвили `Px`/`Calc`-позиции стопов через `resolve_gradient_stops(stops, 1.0)` (захардкоженный line_len=1.0) вместо реальной длины градиентной линии в CSS px, как это делает `cpu_raster.rs`/femtovg. На `calc(50% ± 2px)`-хард-стопах TEST-76 это сдвигало/растягивало полосу за пределы box — 20.15% на всю диагональ. Фикс: `linear_gradient_uv_endpoints` теперь возвращает `line_len` (box-diagonal formula, идентична CPU); radial использует `radius_x.max(radius_y)`; mask-варианты — те же формулы, что `cpu_raster::render_mask`. diff-картинка подтверждает: остаток — только AA-кромка вдоль путей + edge box-обводок, тот же класс, что исходный femtovg-baseline 0.64% (rule 2/3). Не закрывает BUG-277 целиком — TEST-101/104/59/etc не грaдиентные/не Px-стопы, отдельные причины
     '82': ('BUG-128', 2.38),    # BUG-261 (REGRESS 5.66% от 2026-06-29) был ложным: замер на стало́м бинаре от 15:45, до влития BUG-262 в 20:24 (run.py без --build не пересобирает lumen.exe). На свежем HEAD gdigrab = 2.31% ≤ baseline. SVG <use> clone-функционал фикснут BUG-201 (5.00% → 2.38%). Три дефекта: (1) <polygon>/<polyline> не имели ветки рендера (звёзды-symbol не рисовались вовсе); (2) HTML5-парсер не самозакрывает <use/> → соседние <use> вкладывались друг в друга как DOM-дети, рендерился только первый клон (теперь use/polygon сканируют mis-nested siblings, как rect/circle); (3) element-transform применялся к замоканным doc-координатам, scale(0.75) масштабировал origin вьюпорта → масштабированные клоны ряда 3 уезжали с y≈347 на y≈260 (теперь трансформ применяется в user-space, потом маппинг user→doc). Все клоны/группы/symbol/polygon/nested-chain + x/y + scale совпадают с Edge по позиции/размеру/заливке (diff). Остаток = font-parity (метки .label sans 11px, Inter vs Edge, rule 3) + sub-pixel edge-AA по периметрам фигур (rule 2)
     '58': ('BUG-100', 2.47),    # ::first-letter / ::first-line РЕАЛИЗОВАНЫ (дрейф трекера, прогон 2026-06-23): drop-cap «O» флоатится (extract_first_letter_float + 7 тестов), first-line зелёная+жирная. Diff-картинка подтверждает: фича работает, остаток = font-parity тела абзаца (Inter vs Edge sans → разные метрики → перенос строк сдвигается, ghosting глифов) + edge-AA большого 48px drop-cap-глифа (rule 3). --ipc 2026-06-26: 4.92→2.47
     '59': ('BUG-277', 23.65),   # image-set() / cross-fade() РЕАЛИЗОВАНЫ, femtovg-baseline была 17.15% (грамматика приведена к CSS Images L4 §4, класс BUG-101 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 23.65% (совпадает с BUG-277 рядом «59»)
@@ -388,6 +445,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '117': ('BUG-216', 2.23),   # quotes / open-quote / close-quote: реальный дефект исправлен (BUG-216) — generated-content ::before/::after и текст склеивались через лишний inter-word пробел (`“ auto quotes ”`), теперь кавычки примыкают к тексту вплотную как в Edge (`“auto quotes”`). Корень: wrap_inline_run/one_line_fallback вставляли пробел на ЛЮБОЙ границе сегментов; теперь пробел только когда границу разделял collapsible whitespace (CSS Text L3 §4.1.1) — заодно чинит `<span>a</span><span>b</span>`→«ab» и `<em>x</em>!`→«x!». Диф-картинка: позиция кавычек верна, остаток = чистый font-parity (Edge рисует тело serif, Lumen — Inter sans → каждый глиф расходится по ширине/начертанию, построчный ghosting), rule 3. Класс BUG-128. CPU --ipc: 2.23%
     '142': ('BUG-282', 10.16),  # @color-profile + color(--name c1 c2 c3): Lumen рендерит спек-корректные swatch-цвета (каналы трактуются как sRGB, реальная ICC-трансформация отложена) — скриншот показывает ровно задуманные red/green/blue/grey/black/alpha-red. Edge не поддерживает @color-profile/custom-ident в color() вовсе → весь color() невалиден → фон элементов остаётся прозрачным (пустой белый эталон). Diff-регион (x:5-960 y:5-168) — ровно область swatch-ов, никакой другой геометрии не задето. Тот же класс, что TEST-71/BUG-199 и TEST-77/BUG-126
     '145': ('BUG-290', 3.68),   # writing-mode vertical-rl/vertical-lr × text-orientation mixed/upright/sideways: реальный дефект (BUG-289, vertical InlineRun текст никогда не рисовался на реальном DOM — emit_inline_run игнорировал writing_mode) найден и исправлен в этом же прогоне; mixed/sideways рендерят повёрнутый/upright-CJK текст корректно. Остаток 3.68% = (1) font-parity Inter vs Edge sans (rule 3, класс BUG-100/TEST-58); (2) text-orientation:upright использует пословный, не per-glyph, вертикальный аванс (Edge раскладывает каждый символ индивидуально) — сознательно отложенный пробел, см. docs/tasks/ph3-writing-mode-vertical.md. mixed/upright/sideways визуально различимы (DoD задачи выполнен)
+    '149': ('BUG-288', 7.91),   # nested overflow:auto: реальный дефект найден и исправлен в этом же срезе (BUG-335 — PushScrollLayer в wgpu renderer.rs не применял apply_transform_to_clip к своему clip_rect перед пересечением с clip_stack, в отличие от PushClipRect/PushClipRoundedRect/PushClipPath, уже пофикшенных BUG-276; под живым chrome-transform (TAB_BAR_HEIGHT-сдвиг) это давало clip в неверном координатном пространстве — содержимое overflow:auto/scroll контейнеров пропадало почти целиком, 18.01%→7.91%). Item1/2/3 текст и z-index бейдж (col A/C) теперь совпадают с Edge пиксель-в-пиксель кроме тонкой каймы бордеров. Остаток = (1) статичный Lumen-скроллбар vs overlay-скроллбар Edge (невидим в headless-скриншоте, тот же класс, что TEST-14/51/83); (2) col B (radial-gradient внутри вложенного border-radius clip) — цветовая интерполяция градиента расходится сильнее прочих колонок, не специфично для nesting-механики, отдельный wgpu-градиентный долг класса BUG-277
 }
 _DEBTOR_TOL = 2.0  # % допуск run-to-run вариации gdigrab
 
@@ -1124,11 +1182,71 @@ def _build_lumen() -> bool:
     return True
 
 
+def _built_profiles() -> list[str]:
+    """Профили, для которых в `target/` уже лежит lumen.exe."""
+    target = os.path.join(REPO, 'target')
+    if not os.path.isdir(target):
+        return []
+    return sorted(
+        p for p in os.listdir(target)
+        if os.path.exists(os.path.join(target, p, 'lumen.exe'))
+    )
+
+
 def ensure_lumen(force_build: bool = False) -> None:
-    """Гарантирует наличие release-бинаря. force_build=True — пересобрать в любом случае."""
-    if force_build or not os.path.exists(LUMEN):
+    """Гарантирует наличие бинаря нужного профиля.
+
+    force_build=True — пересобрать в любом случае. Если бинаря нет, но собран
+    ДРУГОЙ профиль — не собираем молча (это стоило 10 минут холодной release-
+    сборки в сессии 2026-07-27: LUMEN_PROFILE не задан → дефолт `release` →
+    `not os.path.exists(LUMEN)` → полная сборка не того профиля, убитая
+    таймаутом), а выходим с подсказкой, какой профиль уже готов.
+    """
+    if force_build:
         if not _build_lumen():
             sys.exit(2)
+        return
+    if os.path.exists(LUMEN):
+        return
+    other = [p for p in _built_profiles() if p != LUMEN_PROFILE]
+    if other:
+        hint = other[0] if len(other) == 1 else '|'.join(other)
+        print(f'lumen.exe для профиля `{LUMEN_PROFILE}` не собран: {LUMEN}')
+        print(f'Уже собраны: {", ".join(other)}. Запусти с готовым профилем:')
+        print(f'  LUMEN_PROFILE={hint} python graphic_tests/run.py ...')
+        print('или пересобери явно: python graphic_tests/run.py --build '
+              '(LUMEN_PROFILE задаёт профиль сборки).')
+        sys.exit(2)
+    print(f'lumen.exe нет ни для одного профиля — собираю `{LUMEN_PROFILE}` '
+          '(холодная сборка: до ~10 мин).')
+    if not _build_lumen():
+        sys.exit(2)
+
+
+def preflight() -> None:
+    """Проверяет внешние инструменты ДО прогона (секунда вместо 20 минут).
+
+    Оба артефакта gitignored, поэтому в свежем worktree отсутствуют, а без
+    проверки прогон падает на них по одному тесту за раз: ffmpeg — трейсбеком,
+    Edge — цепочкой «Edge screenshot missing» на все 148 тестов.
+    """
+    missing: list[str] = []
+    if not os.path.exists(FFMPEG):
+        main = _main_worktree()
+        where = FFMPEG + (f' (и в главном дереве {main})' if main else '')
+        src = os.path.join(main or REPO, 'utils', 'ffmpeg.exe')
+        missing.append(
+            f'ffmpeg.exe не найден: {where}\n'
+            f'  → скопируй: cp "{src}" "{os.path.join(REPO, "utils")}"\n'
+            f'    (или распакуй utils/ffmpeg-full_build/bin/ffmpeg.exe)'
+        )
+    if not os.path.exists(EDGE):
+        missing.append(f'msedge.exe не найден: {EDGE} — Edge-эталоны снять нечем.')
+    if missing:
+        print('Preflight не пройден:')
+        for m in missing:
+            print(f'- {m}')
+        sys.exit(2)
 
 
 def run_one(tid: str, html: str, threshold: float, label: str,
@@ -1588,10 +1706,13 @@ def main() -> int:
                         help='Захват Lumen через `--ipc-server` (детерминированный CPU-снимок по TCP) '
                              'вместо gdigrab — без окна/ffmpeg-grab/магента-калибровки (TAB-7)')
     parser.add_argument('--live', action='store_true',
-                        help='Один процесс/окно lumen на весь прогон вместо kill+relaunch на каждый тест: '
-                             'Navigate+wait(document_ready) через `--mcp-live-port` (SDC-2), '
-                             'снимок по-прежнему через gdigrab (SDC-3). Совместим с реальным JS '
-                             '(TEST-57, 129-138), в отличие от --ipc.')
+                        help='Не-op: --live — режим по умолчанию с SDC-4, флаг оставлен для '
+                             'обратной совместимости старых команд/скриптов.')
+    parser.add_argument('--per-test-process', action='store_true',
+                        help='SDC-4 opt-out: kill+relaunch процесса lumen на каждый тест вместо одного '
+                             'живого окна на весь прогон (старый дефолт до SDC-3/4). Diagnostic fallback, '
+                             'если живое окно ведёт себя нестабильно; --paint-bisect всегда использует '
+                             'эту стратегию сам, независимо от флага.')
     parser.add_argument('--bisect', metavar='ID',
                         help='Прогнать юнит-зависимости interaction-теста (DEPS), затем сам тест; '
                              'вердикт: сломано свойство или взаимодействие')
@@ -1601,15 +1722,19 @@ def main() -> int:
                              'таблица diff%% — какая оптимизация меняет картинку')
     args = parser.parse_args()
 
-    if args.ipc and args.live:
-        print('--ipc и --live взаимоисключающие (два разных способа захвата Lumen).')
+    if args.ipc and args.per_test_process:
+        print('--ipc и --per-test-process взаимоисключающие (--ipc уже держит один процесс '
+              'на весь прогон, TAB-7).')
         return 2
-    if args.paint_bisect and (args.ipc or args.live):
-        print('--paint-bisect несовместим с --ipc/--live: нужен свежий процесс Lumen на '
-              'каждый LUMEN_NO_* флаг, чтобы переменная окружения гарантированно применилась.')
+    if args.paint_bisect and args.ipc:
+        print('--paint-bisect несовместим с --ipc: нужен свежий процесс Lumen на '
+              'каждый LUMEN_NO_* флаг, чтобы переменная окружения гарантированно применилась '
+              '(--paint-bisect использует kill+relaunch сам, --ipc для него бессмыслен).')
         return 2
+    use_live = not args.ipc and not args.per_test_process
 
     os.makedirs(SHOTS, exist_ok=True)
+    preflight()
     ensure_lumen(force_build=args.build)
 
     if args.paint_bisect:
@@ -1630,10 +1755,12 @@ def main() -> int:
         atexit.register(_IPC_CLIENT.shutdown)
         print(f'IPC-сервер готов (вкладка {_IPC_TAB}); gdigrab/магента-калибровка отключены.')
 
-    # Live-window режим (SDC-3): один раз поднимаем настоящее окно lumen
-    # (--mcp-live-port) и держим его на весь прогон вместо kill+relaunch на
-    # каждый тест. gdigrab/магента-калибровка остаются (см. capture_lumen_live).
-    if args.live:
+    # Live-window режим (SDC-3, дефолт с SDC-4): один раз поднимаем настоящее
+    # окно lumen (--mcp-live-port) и держим его на весь прогон вместо
+    # kill+relaunch на каждый тест. gdigrab/магента-калибровка остаются (см.
+    # capture_lumen_live). --per-test-process (opt-out) или --ipc пропускают
+    # этот блок и используют свои стратегии захвата ниже/в run_one.
+    if use_live:
         global _LIVE_CLIENT
         port = _free_tcp_port()
         print(f'Live-режим: запуск lumen --mcp-live-port {port}...')
@@ -1666,6 +1793,16 @@ def main() -> int:
         print(f'--bisect {args.bisect}: зависимости {", ".join(DEPS[args.bisect])} + сам тест')
     elif args.only:
         run_filter = {args.only}
+        # Магента-калибровка (TEST-00) кладёт crop offset в
+        # screenshots/crop_offset.txt, а каталог gitignored — в свежем worktree
+        # кэша нет, и `--only NN` падал с «no crop offset — run TEST-00 first»,
+        # выталкивая в полный 20-минутный прогон. Дотягиваем TEST-00 сами, как
+        # это уже делают --bisect и --recheck. В --ipc offset не нужен вовсе
+        # (CPU-снимок от (0,0)).
+        if not args.ipc and args.only != '00' and _load_crop_offset() is None:
+            run_filter.add('00')
+            print('Нет кэша crop offset — добавляю TEST-00 (калибровка) перед '
+                  f'TEST-{args.only}.')
     elif args.recheck:
         latest = _load_latest()
         if latest is None:
@@ -1777,10 +1914,19 @@ def main() -> int:
     failed  = [r for r in results if r['status'] == 'FAIL']
     debtors = [r for r in results if r['status'] == 'DEBTOR']
     passed  = [r for r in results if r['status'] == 'PASS']
-    if failed:
+    # ERROR (diff_pct < 0: снимок не снялся, ffmpeg/IPC упал, нет crop offset)
+    # раньше не попадал ни в одну корзину — прогон, где ВСЁ упало с ERROR,
+    # печатал «All N tests passed» и возвращал 0. В --continue-on-fail это
+    # ровно тот режим, которым гоняют полный прогон.
+    errored = [r for r in results if r['status'] == 'ERROR']
+    if failed or errored:
         debtor_note = (f'  ({len(debtors)} known-debtor: ' + ', '.join(r['id'] for r in debtors) + ')'
                        if debtors else '')
-        print(f'\n{len(failed)}/{len(results)} tests FAILED: ' + ', '.join(r['id'] for r in failed))
+        if failed:
+            print(f'\n{len(failed)}/{len(results)} tests FAILED: ' + ', '.join(r['id'] for r in failed))
+        if errored:
+            print(f'\n{len(errored)}/{len(results)} tests ERRORED (снимок/ffmpeg/IPC): '
+                  + ', '.join(r['id'] for r in errored))
         if debtor_note:
             print(debtor_note)
         return 1

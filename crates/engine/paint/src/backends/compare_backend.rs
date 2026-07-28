@@ -205,9 +205,10 @@ impl RenderBackend for CompareBackend {
         self.secondary.set_preview_scale(scale);
     }
 
-    fn register_image(&mut self, src: String, image: &Image) -> Result<(), String> {
-        // Регистрируем в обоих бэкендах; вторая ошибка побеждает.
-        let r1 = self.primary.register_image(src.clone(), image);
+    fn register_image(&mut self, src: String, image: Arc<Image>) -> Result<(), String> {
+        // Регистрируем в обоих бэкендах; вторая ошибка побеждает. Оба
+        // разделяют один и тот же Arc — второго экземпляра пикселей нет.
+        let r1 = self.primary.register_image(src.clone(), Arc::clone(&image));
         let r2 = self.secondary.register_image(src, image);
         r1.and(r2)
     }
@@ -326,7 +327,7 @@ mod tests {
             self.height = h;
         }
         fn set_scale_factor(&mut self, _scale: f64) {}
-        fn register_image(&mut self, _src: String, _image: &Image) -> Result<(), String> {
+        fn register_image(&mut self, _src: String, _image: Arc<Image>) -> Result<(), String> {
             Ok(())
         }
         fn clear_images(&mut self) {}
@@ -387,7 +388,7 @@ mod tests {
             data: vec![255, 0, 0, 255],
             icc_profile: None,
         };
-        assert!(cmp.register_image("test.png".into(), &img).is_ok());
+        assert!(cmp.register_image("test.png".into(), Arc::new(img)).is_ok());
     }
 
     #[test]
@@ -421,7 +422,7 @@ mod tests {
             self.height = h;
         }
         fn set_scale_factor(&mut self, _: f64) {}
-        fn register_image(&mut self, _: String, _: &Image) -> Result<(), String> {
+        fn register_image(&mut self, _: String, _: Arc<Image>) -> Result<(), String> {
             Ok(())
         }
         fn clear_images(&mut self) {}

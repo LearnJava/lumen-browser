@@ -602,7 +602,31 @@ impl BrowserSession for InProcessSession {
             let doc = Self::lock_doc(state)?;
             resolve_click_target(state, &doc, target)?
         };
-        self.dispatch_click(node, x, y)
+        self.dispatch_click(node, x, y)?;
+        // Native default action for checkbox/radio activation — mirrors
+        // `WinitSession::click` and the live shell's `activate_node`
+        // (`forms::FormClickAction::ToggleCheckbox`/`ToggleRadio`): the JS
+        // click dispatch above fires listeners, but toggling `checked` on
+        // activation is this engine's native default action, not something
+        // the JS shim implements itself.
+        #[cfg(feature = "v8")]
+        {
+            let state = self.state()?;
+            let mut doc = Self::lock_doc(state)?;
+            let el = doc.get(node);
+            if matches!(
+                el.input_type(),
+                Some(lumen_dom::InputType::Checkbox) | Some(lumen_dom::InputType::Radio)
+            ) {
+                let el = doc.get_mut(node);
+                if el.get_attr("checked").is_some() {
+                    remove_attr(el, "checked");
+                } else {
+                    set_attr(el, "checked", "checked");
+                }
+            }
+        }
+        Ok(())
     }
 
     fn type_text(&mut self, target: &Target, text: &str) -> Result<()> {
@@ -1300,18 +1324,39 @@ fn resolve_click_target(
             let id = find_first_by_selector(doc, sel).ok_or_else(|| {
                 Error::NotFound(format!("элемент не найден: {sel}"))
             })?;
-            let lb = find_layout_box(&state.layout_root, id).ok_or_else(|| {
+            let lb = find_layout_box_or_ancestor(&state.layout_root, doc, id).ok_or_else(|| {
                 Error::NotFound(format!("layout-бокс не найден для: {sel}"))
             })?;
             Ok((id, lb.rect.x + lb.rect.width / 2.0, lb.rect.y + lb.rect.height / 2.0))
         }
         Target::NodeId(raw_id) => {
             let id = NodeId::from_index(*raw_id as usize);
-            let lb = find_layout_box(&state.layout_root, id).ok_or_else(|| {
+            let lb = find_layout_box_or_ancestor(&state.layout_root, doc, id).ok_or_else(|| {
                 Error::NotFound(format!("layout-бокс не найден для node_id={raw_id}"))
             })?;
             Ok((id, lb.rect.x + lb.rect.width / 2.0, lb.rect.y + lb.rect.height / 2.0))
         }
+    }
+}
+
+/// `find_layout_box`, falling back to the nearest ancestor's box when `id`
+/// itself has none — purely inline elements (e.g. a bare `<a>` wrapping text,
+/// with no block/replaced box of its own) don't get a dedicated `LayoutBox`,
+/// but `dispatch_click`/`dispatch_type` target the *original* node id via
+/// `_lumen_dispatch_mouse_event`/`_lumen_dispatch_key_event` regardless — the
+/// `(x, y)` returned here only becomes `clientX`/`clientY` on the synthesized
+/// event, it does not re-hit-test, so an ancestor's on-screen position is a
+/// safe stand-in.
+fn find_layout_box_or_ancestor<'a>(
+    root: &'a LayoutBox,
+    doc: &Document,
+    mut id: NodeId,
+) -> Option<&'a LayoutBox> {
+    loop {
+        if let Some(lb) = find_layout_box(root, id) {
+            return Some(lb);
+        }
+        id = doc.get(id).parent?;
     }
 }
 
@@ -1329,6 +1374,15 @@ fn set_attr(node: &mut lumen_dom::Node, name: &str, value: &str) {
                 value: value.to_string(),
             });
         }
+    }
+}
+
+/// Удалить атрибут элемента, если он присутствует. Copied from
+/// `winit_session.rs` — see `set_attr` above.
+#[cfg(feature = "v8")]
+fn remove_attr(node: &mut lumen_dom::Node, name: &str) {
+    if let NodeData::Element { attrs, .. } = &mut node.data {
+        attrs.retain(|a| !a.name.local.eq_ignore_ascii_case(name));
     }
 }
 

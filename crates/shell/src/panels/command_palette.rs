@@ -24,18 +24,13 @@
 //! The palette is **modal**: while visible it captures every key and pointer
 //! event (the scrim swallows clicks outside the box, closing the palette).
 //! State lives on `Lumen`; the shell drives it via [`CommandPalette::set_items`]
-//! (on open), [`hit_test`] (clicks) and [`build_panel`] (rendering), mirroring
+//! (on open) and [`hit_test`] (clicks); the legacy display-list renderer was
+//! removed in CC-15-4 (`#cpOverlay` under the engine chrome), mirroring
 //! the ad-hoc panel convention used by [`super::bookmark_panel`].
 //!
 //! Fuzzy matching ([`fuzzy_score`]) is a subsequence matcher with bonuses for
 //! consecutive runs and word-boundary starts, so `nt` ranks *New Tab* above
 //! *Print*. An empty query shows every item in insertion order (commands first).
-
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-
-use crate::panels::themes::Palette;
 
 // ── Visual constants ─────────────────────────────────────────────────────────
 
@@ -48,27 +43,13 @@ const INPUT_H: f32 = 40.0;
 /// Height of a single result row in CSS px.
 const ROW_H: f32 = 34.0;
 
-/// Maximum number of result rows shown at once (the list scrolls beyond this).
-const MAX_VISIBLE_ROWS: usize = 9;
+/// Maximum number of result rows shown at once (the list scrolls beyond
+/// this). Also the window `Lumen::chrome_model_snapshot` slices when
+/// rendering `#cpList` via the engine (CC-10).
+pub(crate) const MAX_VISIBLE_ROWS: usize = 9;
 
 /// Distance from the top of the window to the palette box, in CSS px.
 const TOP_MARGIN: f32 = 90.0;
-
-/// Inner horizontal padding.
-const PAD: f32 = 12.0;
-
-/// Semi-transparent black scrim that dims the page behind the modal.
-const SCRIM: Color = Color { r: 0, g: 0, b: 0, a: 120 };
-/// Category icon colour for built-in commands (blue-tinted).
-const ICON_CMD: Color = Color { r: 150, g: 180, b: 255, a: 255 };
-/// Category icon colour for bookmark items (amber).
-const ICON_BOOKMARK: Color = Color { r: 240, g: 196, b: 92, a: 255 };
-/// Category icon colour for history items (green-tinted).
-const ICON_HISTORY: Color = Color { r: 140, g: 200, b: 150, a: 255 };
-
-const FONT_SZ: f32 = 13.0;
-const FONT_SZ_SM: f32 = 11.0;
-const RADIUS: f32 = 8.0;
 
 // ── Command actions ─────────────────────────────────────────────────────────
 
@@ -467,206 +448,6 @@ pub fn hit_test(palette: &CommandPalette, x: f32, y: f32, viewport_w: f32) -> Pa
     PaletteHit::Inside
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build the display list for the modal palette over a `viewport_w`×`viewport_h`
-/// window (viewport-locked, not scrolled with the page).
-///
-/// `pal` supplies theme-aware surface colours; semantic colours (scrim, icon
-/// category tints) remain as module-level consts and are not palette-driven.
-pub fn build_panel(palette: &CommandPalette, viewport_w: f32, viewport_h: f32, pal: &Palette) -> DisplayList {
-    let mut out = DisplayList::with_capacity(32);
-    let radii = uniform_radii(RADIUS);
-
-    // Full-window dimming scrim (also swallows outside clicks via hit-test).
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(0.0, 0.0, viewport_w, viewport_h),
-        color: SCRIM,
-    });
-
-    let (ax, ay) = box_origin(viewport_w);
-    let filtered = palette.filtered();
-    let h = box_height(filtered.len());
-
-    // Box background + 1px border.
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(ax, ay, PANEL_WIDTH, h),
-        radii,
-        color: pal.overlay_border,
-    });
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(ax + 1.0, ay + 1.0, PANEL_WIDTH - 2.0, h - 2.0),
-        radii,
-        color: pal.overlay_bg,
-    });
-
-    // Input row.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(ax + 1.0, ay + 1.0, PANEL_WIDTH - 2.0, INPUT_H - 1.0),
-        color: pal.input_bg,
-    });
-    out.push(text(
-        ax + PAD,
-        ay + (INPUT_H - FONT_SZ * 1.3) * 0.5,
-        18.0,
-        "›",
-        FONT_SZ + 3.0,
-        pal.text_dim,
-        FontWeight::BOLD,
-    ));
-    let (q_text, q_col) = if palette.query.is_empty() {
-        ("Type a command, bookmark or history…".to_owned(), pal.text_dim)
-    } else {
-        (palette.query.clone(), pal.text)
-    };
-    out.push(text(
-        ax + PAD + 20.0,
-        ay + (INPUT_H - FONT_SZ * 1.3) * 0.5,
-        PANEL_WIDTH - 2.0 * PAD - 20.0,
-        &q_text,
-        FONT_SZ,
-        q_col,
-        FontWeight::NORMAL,
-    ));
-
-    // Result list (clipped to the box body).
-    let list_top = ay + INPUT_H;
-    let list_h = h - INPUT_H - 1.0;
-    out.push(DisplayCommand::PushClipRect {
-        rect: Rect::new(ax + 1.0, list_top, PANEL_WIDTH - 2.0, list_h),
-    });
-
-    if filtered.is_empty() {
-        out.push(text(
-            ax + PAD + 8.0,
-            list_top + 10.0,
-            PANEL_WIDTH - 2.0 * PAD,
-            "No results",
-            FONT_SZ,
-            pal.text_dim,
-            FontWeight::NORMAL,
-        ));
-    }
-
-    let end = (palette.scroll_row + MAX_VISIBLE_ROWS).min(filtered.len());
-    for (vis, &item_idx) in filtered[palette.scroll_row..end].iter().enumerate() {
-        let Some(item) = palette.items.get(item_idx) else { continue };
-        let abs_row = palette.scroll_row + vis;
-        let ry = list_top + vis as f32 * ROW_H;
-
-        if abs_row == palette.selected {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(ax + 1.0, ry, PANEL_WIDTH - 2.0, ROW_H),
-                color: pal.item_selected_bg,
-            });
-        }
-
-        // Leading icon glyph by kind.
-        let (icon, icon_col) = match item.kind {
-            PaletteKind::Command(_) => ("»", ICON_CMD),
-            PaletteKind::Bookmark => ("★", ICON_BOOKMARK),
-            PaletteKind::History => ("◷", ICON_HISTORY),
-        };
-        out.push(text(
-            ax + PAD,
-            ry + (ROW_H - FONT_SZ * 1.3) * 0.5,
-            18.0,
-            icon,
-            FONT_SZ,
-            icon_col,
-            FontWeight::NORMAL,
-        ));
-
-        // Title.
-        let title_x = ax + PAD + 22.0;
-        let title_w = PANEL_WIDTH - 2.0 * PAD - 22.0 - 140.0;
-        out.push(text(
-            title_x,
-            ry + (ROW_H - FONT_SZ * 1.3) * 0.5,
-            title_w,
-            &truncate(&item.title, 52),
-            FONT_SZ,
-            pal.text,
-            FontWeight::NORMAL,
-        ));
-
-        // Trailing hint: shortcut for commands, host for nav items.
-        let (hint, hint_col) = match item.kind {
-            PaletteKind::Command(a) => (a.shortcut().to_owned(), pal.text_dim),
-            PaletteKind::Bookmark | PaletteKind::History => (host_of(&item.url), pal.accent),
-        };
-        if !hint.is_empty() {
-            out.push(text(
-                ax + PANEL_WIDTH - PAD - 134.0,
-                ry + (ROW_H - FONT_SZ_SM * 1.3) * 0.5,
-                134.0,
-                &truncate(&hint, 22),
-                FONT_SZ_SM,
-                hint_col,
-                FontWeight::NORMAL,
-            ));
-        }
-
-        // Row separator.
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(ax + 1.0, ry + ROW_H - 1.0, PANEL_WIDTH - 2.0, 1.0),
-            color: pal.divider,
-        });
-    }
-
-    out.push(DisplayCommand::PopClip);
-    out
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Build a `DrawText` command with the palette's default font settings.
-fn text(x: f32, y: f32, w: f32, s: &str, size: f32, color: Color, weight: FontWeight) -> DisplayCommand {
-    DisplayCommand::DrawText {
-        rect: Rect::new(x, y, w.max(0.0), size * 1.4),
-        text: s.to_owned(),
-        font_size: size,
-        color,
-        font_family: Vec::new(),
-        font_weight: weight,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    }
-}
-
-/// Uniform corner radii.
-fn uniform_radii(r: f32) -> CornerRadii {
-    CornerRadii {
-        tl: r, tl_y: r,
-        tr: r, tr_y: r,
-        br: r, br_y: r,
-        bl: r, bl_y: r,
-    }
-}
-
-/// Truncate a label to at most `max_chars` characters, appending "…" if cut.
-fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_owned();
-    }
-    let mut out: String = s.chars().take(max_chars.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
-
-/// Extract the host portion of a URL for the trailing hint (best-effort; falls
-/// back to the raw string when there is no `scheme://host` shape).
-fn host_of(url: &str) -> String {
-    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let host = after_scheme.split(['/', '?', '#']).next().unwrap_or(after_scheme);
-    host.trim_start_matches("www.").to_owned()
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -857,55 +638,4 @@ mod tests {
         assert_eq!(hit_test(&p, ax + 50.0, y, 1024.0), PaletteHit::Row(0));
     }
 
-    // ── Rendering ──────────────────────────────────────────────────────────────
-
-    #[test]
-    fn build_panel_balanced_clip() {
-        let mut p = CommandPalette::new();
-        with_items(&mut p);
-        p.visible = true;
-        let dl = build_panel(&p, 1024.0, 720.0, &Palette::DARK);
-        let push = dl.iter().filter(|c| matches!(c, DisplayCommand::PushClipRect { .. })).count();
-        let pop = dl.iter().filter(|c| matches!(c, DisplayCommand::PopClip)).count();
-        assert_eq!(push, pop);
-        assert!(!dl.is_empty());
-    }
-
-    #[test]
-    fn build_panel_draws_scrim_and_commands() {
-        let mut p = CommandPalette::new();
-        with_items(&mut p);
-        p.visible = true;
-        let dl = build_panel(&p, 1024.0, 720.0, &Palette::DARK);
-        // Scrim is the first command, full viewport.
-        assert!(matches!(
-            dl.first(),
-            Some(DisplayCommand::FillRect { rect, .. })
-                if rect.width == 1024.0 && rect.height == 720.0
-        ));
-        let has = |needle: &str| {
-            dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == needle))
-        };
-        assert!(has("New Tab"));
-    }
-
-    #[test]
-    fn build_panel_empty_shows_placeholder() {
-        let mut p = CommandPalette::new();
-        with_items(&mut p);
-        p.visible = true;
-        p.append("zzzqqq___");
-        let dl = build_panel(&p, 1024.0, 720.0, &Palette::DARK);
-        let has_placeholder = dl
-            .iter()
-            .any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "No results"));
-        assert!(has_placeholder);
-    }
-
-    #[test]
-    fn host_of_strips_scheme_and_www() {
-        assert_eq!(host_of("https://www.rust-lang.org/learn"), "rust-lang.org");
-        assert_eq!(host_of("http://example.com"), "example.com");
-        assert_eq!(host_of("about:blank"), "about:blank");
-    }
 }

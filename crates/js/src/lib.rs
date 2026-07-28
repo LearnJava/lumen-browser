@@ -61,7 +61,6 @@ pub mod webgl_canvas;
 pub mod webrtc_stub;
 pub mod webhid;
 pub mod webusb;
-pub mod webtransport;
 pub mod worker;
 pub mod url_pattern;
 pub mod navigation_api;
@@ -157,6 +156,12 @@ pub use text_track_store::{set_text_track_store, CueData, TextTrackData, TextTra
 pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
 pub use paint_worklet::{install_paint_worklet_api, PaintWorkletDef, PaintWorkletRegistry, get_paint_worklet_registry};
 pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest, PrintRequest};
+/// BUG-341 S7: page-side DOM-mutation tracker outcome, feeding
+/// `lumen_layout::style::restyle_root_set_for_node_change`. V8-only (see
+/// `v8_runtime::DomTouched`'s doc comment) — the `quickjs` runtime keeps its
+/// existing full-cascade-every-cycle behaviour.
+#[cfg(feature = "v8-backend")]
+pub use v8_runtime::DomTouched;
 pub use view_transitions::ViewTransitionEvent;
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
 pub use lumen_core::WebStorage;
@@ -798,12 +803,6 @@ impl QuickJsRuntime {
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
-            // Install CSS Custom Highlight API (CSS Highlight API L1) — after DOM.
-            // Phase 0: CSS.highlights registry + Highlight class; visual rendering in Phase 1.
-            if let Err(e) = highlight_api::install_highlight_api_bindings(&ctx) {
-                eprintln!("Highlight API bindings init failed: {}", e);
-            }
-
             // Install navigator/screen/timezone normalization (ADR-007 Layer 4, 9D.6) — after DOM.
             if let Err(e) = navigator_bindings::install_navigator_bindings(&ctx) {
                 eprintln!("Navigator bindings init failed: {}", e);
@@ -880,20 +879,6 @@ impl QuickJsRuntime {
             // rejects NotSupportedError; getPorts() returns [].
             if let Err(e) = serial::install_serial_bindings(&ctx) {
                 eprintln!("WebSerial bindings init failed: {}", e);
-            }
-
-            // Install CSP violation event class (W3C CSP Level 3 §7.8) — after DOM/document.
-            // Phase 0: SecurityPolicyViolationEvent class + _lumen_dispatch_csp_violation helper.
-            // Phase 1: shell calls _lumen_fire_csp_violation for actual enforcement.
-            if let Err(e) = csp::install_csp_bindings(&ctx) {
-                eprintln!("CSP bindings init failed: {}", e);
-            }
-
-            // Install Permissions Policy bindings (W3C Permissions Policy §8) — after DOM/document.
-            // Phase 0: document.featurePolicy + _lumen_set_permissions_policy(headerValue) hook.
-            // Phase 1: shell calls _lumen_set_permissions_policy after HTTP response headers.
-            if let Err(e) = permissions_policy::install_permissions_policy_bindings(&ctx) {
-                eprintln!("Permissions Policy bindings init failed: {}", e);
             }
 
             // Install W3C WebCodecs API (https://www.w3.org/TR/webcodecs/) — after DOM.
@@ -1109,12 +1094,6 @@ impl QuickJsRuntime {
                 eprintln!("Soft Navigation API init failed: {}", e);
             }
 
-            // Install Content Index API Phase 0 — ContentIndex class,
-            // ServiceWorkerRegistration.prototype.index getter.
-            if let Err(e) = content_index::install_content_index_api(&ctx) {
-                eprintln!("Content Index API init failed: {}", e);
-            }
-
             // Install URL Pattern API (WHATWG URLPattern §3) — pure JS implementation.
             // Provides new URLPattern({pathname, search, hash, hostname}) with .test() and .exec().
             if let Err(e) = url_pattern::install_url_pattern_api(&ctx) {
@@ -1277,7 +1256,7 @@ impl QuickJsRuntime {
                 eprintln!("Form Constraint Validation API init failed: {}", e);
             }
 
-            // Phase 0: element.attachInternals() + CustomStateSet; :state() selector is P4 handoff.
+            // element.attachInternals() + CustomStateSet, incl. :state() sentinel-attribute reflection.
             if let Err(e) = element_internals::install_element_internals_bindings(&ctx) {
                 eprintln!("ElementInternals API init failed: {}", e);
             }
@@ -1386,16 +1365,6 @@ impl QuickJsRuntime {
             // and fires 'change' when userState transitions active ↔ idle.
             if let Err(e) = idle_detection::install_idle_detection_bindings(&ctx) {
                 eprintln!("Idle Detection API init failed: {}", e);
-            }
-
-            // W3C Pointer Events Level 3 §4.1 — pointer capture native bindings.
-            // _lumen_set_capture_state(nid) / _lumen_release_capture_state()
-            // Called by JS setPointerCapture/releasePointerCapture on Element.
-            if let Err(e) = pointer_capture::install_pointer_capture_bindings(
-                &ctx,
-                Arc::clone(&self.pointer_capture_nid),
-            ) {
-                eprintln!("Pointer capture bindings init failed: {}", e);
             }
 
             Ok(())
@@ -1922,17 +1891,19 @@ impl QuickJsRuntime {
         });
     }
 
-    /// Register decoded RGBA8 bitmaps for `<img>` elements, keyed by node id.
+    /// Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id.
     ///
     /// Call after `fetch_and_decode_images` so that Canvas 2D `drawImage` with an
     /// `<img>` source can read the decoded pixels from [`img_bitmap_store`].
-    /// Each entry is `(nid, natural_width, natural_height, rgba8_vec)`.
-    /// Clears any previous store contents first (navigation-scoped).
-    pub fn register_img_bitmaps(&self, bitmaps: Vec<(u32, u32, u32, Vec<u8>)>) {
+    /// Each entry is `(nid, Arc<Image>)`; the `Arc` is shared with the shell's
+    /// decoded-image cache (BUG-272 срез 20 — no eager RGBA8 copy, the store
+    /// converts lazily on first canvas read). Clears any previous store contents
+    /// first (navigation-scoped).
+    pub fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {
         self.run(|_inner| {
             img_bitmap_store::clear_img_bitmaps();
-            for (nid, w, h, rgba8) in bitmaps {
-                img_bitmap_store::set_img_bitmap(nid, w, h, rgba8);
+            for (nid, image) in bitmaps {
+                img_bitmap_store::set_img_bitmap(nid, image);
             }
         });
     }

@@ -18,6 +18,30 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **Document Picture-in-Picture reaches a real OS window ([P1] P3-pip, 2026-07-17).**
+  `documentPictureInPicture.requestWindow({width,height})` (`document_pip.rs`) called
+  `_lumen_pip_request_window(width,height)` — but that native was never registered, so the
+  call silently no-op'd and no window ever opened. `pip_bindings.rs` now registers it
+  (`into_v8_fn2`), enqueuing a new `PipRequest::OpenDocument { width, height }` the shell drains
+  into `open_pip_os_document` (real sized always-on-top winit window). `PictureInPictureWindow`
+  is unified: `document_pip.rs` defines the class (it installs first, alphabetically) and
+  `video_pip.rs` reuses `globalThis.PictureInPictureWindow` rather than defining a rival one
+  (falling back to its own minimal definition only when evaluated in isolation, e.g. its own
+  rquickjs unit tests). Both PiP paths publish the active window as
+  `globalThis.__lumen_pip_active_window`, so `_lumen_pip_deliver_resize(w,h)` (shell → JS on
+  OS-window resize) updates whichever session is open and fires its `resize` event. Follow-up
+  at the time: forwarding the page's real DOM content into the document-PiP window
+  (`PictureInPictureWindow.document` was still an in-memory stub) — done in later slices
+  (`p1-docpip-content`/`p1-docpip-authorcss`, see `ROADMAP.md` P3-pip). 6 new tests across
+  `pip_bindings.rs` + `document_pip.rs`.
+- **`CustomStateSet` reflects into `data-lumen-state-<name>` ([P1] P3-customstate, 2026-07-17).**
+  `element_internals.rs`'s `ELEMENT_INTERNALS_SHIM` (shared by both engines — QuickJS
+  `install_element_internals_bindings` and V8 `install_element_internals_bindings_v8` eval the
+  same string) — `add`/`delete`/`clear` now call `_lumen_set_attr`/`_lumen_remove_attr` on the
+  host element, same sentinel-attribute bridge as `:fullscreen`/`:modal`. The CSS-side matcher
+  (`PseudoClass::State`, `layout/src/style.rs`) landed earlier (2026-07-15) on the mistaken
+  assumption this reflection already existed — it didn't; `CustomStateSet` only held an in-memory
+  `Set`. 2 new tests (add/delete/clear round-trip, delete-of-absent-state no-op).
 - **`structuredClone` — spec-conformant cycles/typed-arrays/DataCloneError
   (`P3-structclone` partial, [P1] 2026-07-18).** The shared `WEB_API_SHIM`
   implementation (`dom.rs`) now threads a `memory` Map (original → clone) through
@@ -72,8 +96,160 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   `TypeError`. Delegates to the existing `_lumen_query_selector_all` bridge, same pattern as
   `querySelectorAll` (a bare tag name / `*` is already a valid CSS type/universal selector).
   Returns a static array, not a live `HTMLCollection` (same simplification `querySelectorAll`
-  already makes). `Element.prototype.getElementsByTagName` and
-  `document.getElementsByClassName` are still missing (out of this fix's scope).
+  already makes). `Element.prototype.getElementsByTagName` is still missing (out of scope).
+- **`getElementsByClassName(names)` on `document` + `Element` (BUG-302 fix, [P3] 2026-07-19).**
+  Was missing from the main `WEB_API_SHIM` (only `dom_parser.rs`'s `VElement`/`VDocument` had it)
+  — `news.ycombinator.com` scripts died wholesale on `el.getElementsByClassName is not a function`.
+  Helper `_lumen_class_selector(names)` splits the whitespace-separated token list, drops empties
+  and builds a compound class selector (`.a.b`); an empty token list returns `null` so callers
+  short-circuit to `[]` (a `''` selector would throw). The `document` variant delegates to
+  `_lumen_query_selector_all`, the `Element` variant to the scoped `_lumen_query_selector_all_scoped`
+  (descendants only). Static array, not a live `HTMLCollection`, same as `getElementsByTagName`.
+  Known limitation (as with `getElementsByTagName`): class tokens are spliced into the selector
+  without CSS escaping — exotic class names with special chars are unsupported.
+- **`Image` / `HTMLImageElement` constructors (BUG-305 fix, [P3] 2026-07-19).**
+  Both were absent from `WEB_API_SHIM`, so `new Image()` (image preloading, tracking pixels, canvas
+  sources) threw `Image is not defined` and took the whole script down (ria.ru). Added two global
+  declarations before the `document` literal: `function HTMLImageElement() {}` (bare interface global;
+  `instanceof` was not wired at the time — element wrappers were plain objects, since fixed by BUG-322)
+  and `function Image(width?, height?)`
+  which does `document.createElement('img')`, sets the width/height content attributes from its args,
+  and **returns** the element (a returned object wins over `this`), so `new Image()` yields a native
+  `<img>` wrapper that participates in layout/paint. Companion change: `_lumen_build_element` now
+  reflects the `src` content attribute (`get/set src`, shared by `<img>/<script>/<iframe>/<source>`),
+  so `img.src = …` reaches layout; the getter returns the raw attribute string (URL resolution
+  deferred), empty string when unset. `onload`/`onerror` on JS-initiated fetch stays deferred.
+- **Namespaced attribute accessors on `Element` (BUG-309 fix, [P3] 2026-07-19).**
+  `setAttributeNS`/`getAttributeNS`/`removeAttributeNS`/`hasAttributeNS` were absent — WPT
+  `dom/nodes/Element-hasAttribute.html` §1 threw `el.setAttributeNS is not a function`. Added the
+  four methods to `Element.prototype` right after `hasAttribute`. Lumen's attribute model is
+  name-only, so the `namespace` argument is accepted but ignored: each method stores/looks up the
+  attribute under its qualified name, matching the name-based `getAttribute`/`hasAttribute` lookup;
+  `setAttributeNS` fires the custom-element `attributeChangedCallback` hook exactly like
+  `setAttribute`. The Attr-node variants (`getAttributeNodeNS`/`setAttributeNodeNS`) are omitted —
+  the base `getAttributeNode`/`setAttributeNode` do not exist in the shim either (no Attr node
+  objects), so adding only the `NS` forms would be inconsistent.
+- **ElementTraversal + `ParentNode.children` + `Node.parentNode` (BUG-310 fix, [P3] 2026-07-19).**
+  `childElementCount`/`firstElementChild`/`lastElementChild`/`nextElementSibling`/
+  `previousElementSibling` were entirely absent, `.children` was a bare array (no `.item()`), and —
+  surprisingly — element wrappers had only `parentElement`, never `parentNode` (so
+  `node.parentNode.children` threw `Cannot read properties of undefined`). Fix, all in the shared
+  `WEB_API_SHIM`: element-only helpers `_lumen_is_element_nid` (element = not a text node and
+  tag-name not `#`-prefixed — `_lumen_get_children` returns text/comment children too) and
+  `_lumen_element_child_nids` (element children in tree order); the five traversal accessors on the
+  element wrapper (siblings locate the node among the parent's element children and step past text);
+  a `parentNode` getter mirroring `parentElement`. `children` (element + `DocumentFragment`) is now
+  a live `HTMLCollection` built by `_lumen_make_html_collection` over a `Proxy` — `length`, numeric
+  indices, `item(i)` and `namedItem(name)` re-query the live tree on every access; the prototype is
+  the marker `HTMLCollection` (exposed as `window.HTMLCollection`) so `x instanceof HTMLCollection`
+  holds. Consumers that index `el.children[i]`/read `.length` are unaffected (no array methods were
+  used on `.children`). `Element-children.html`'s two subtests were WPT-FAIL at the time (needed
+  `ownKeys`/`getOwnPropertyDescriptor` traps for enumeration, and a `[[Prototype]]` on element
+  wrappers for `instanceof`) — both closed since, see BUG-323 and BUG-322 below.
+- **`Node.isConnected` (DOM §4.4, BUG-311 fix, [P3] 2026-07-19).** Was entirely absent (returned
+  `undefined`). Added as a getter on the element wrapper in the shared `WEB_API_SHIM`: a node is
+  connected iff `documentElement` (`<html>`, via `_lumen_get_html_element`) is on its ancestor chain
+  (walked with `_lumen_get_parent`) or is the node itself — a detached subtree's topmost ancestor is
+  an orphan node, so it reports `false`; after `remove()` a node reports `false` again. WPT
+  `Node-isConnected.html` «Test with ordinary child nodes» now PASSes. Known limitation: «Test with
+  iframes» stays WPT-FAIL — it needs separate iframe sub-documents via `contentDocument`, which the
+  shim does not model as distinct connected trees.
+- **`document.createProcessingInstruction(target, data)` (DOM §4.5, BUG-313 fix, [P3] 2026-07-19).**
+  Was entirely absent. Added to the `document` literal in the shared `WEB_API_SHIM`, plus two
+  top-level helpers before it: `_lumen_is_xml_name(s)` (an `^[NameStartChar][NameChar]*$` regexp built
+  from the XML 1.0 Name production ranges — BMP only; the astral `#x10000-#xEFFFF` range is omitted
+  since no subtest exercises it; the split ranges are what correctly exclude `U+00D7` (×) and `U+00B7`
+  (·) from NameStartChar while still admitting `·` as a NameChar, e.g. `A·A`), and
+  `_lumen_make_processing_instruction(target, data)` (a detached JS-only CharacterData node — PIs never
+  participate in layout — exposing `target`/`data` (mutable)/`nodeValue`/`nodeType 7`/`nodeName`/
+  `length`/`ownerDocument`). The method throws `DOMException(…, 'InvalidCharacterError')` (legacy code
+  5, set by the `v8_runtime.rs` DOMException polyfill) when `target` is not a valid XML Name or `data`
+  contains `?>`. Closes 8 of the 11 WPT `Document-createProcessingInstruction.html` sub-fails (the
+  `INVALID_CHARACTER_ERR` group). The remaining 3 (`Should get a ProcessingInstruction …`) assert
+  `pi instanceof ProcessingInstruction` / `pi instanceof Node` — now satisfied by BUG-314 (the PI
+  object's `[[Prototype]]` is `ProcessingInstruction.prototype`). 3 unit tests
+  (`dom::tests::create_processing_instruction_*`).
+- **DOM node-family interface globals + `Comment`/`Text`/`DocumentFragment` constructors (DOM §4,
+  BUG-314 fix, [P3] 2026-07-20).** Node-family interfaces were entirely absent as globals, so a bare
+  `x instanceof Node` or `window['Comment']` threw `X is not defined` / `is not a constructor`, taking
+  whole scripts (and testharness feature-detection) down. New "DOM interface constructors" block in the
+  shared `WEB_API_SHIM`: (1) bare, non-constructible interface globals for reference/`instanceof`
+  resolution — `Node`/`Element`/`CharacterData`/`Attr`/`Document`/`DocumentType`/`ProcessingInstruction`
+  /`HTMLElement` (hoisted function declarations) plus ~36 `HTML*Element` generated via `globalThis[name]`
+  with an `name in globalThis` guard (so the richer pre-existing `HTMLImageElement`/`Image` pair is not
+  clobbered); prototypes chain `HTML*Element → HTMLElement → Element → Node`. (2) constructible
+  `new Comment(data)`/`new Text(data)` build detached CharacterData objects via
+  `_lumen_make_character_data(nodeType, nodeName, data, proto)` with the full prototype chain
+  (`Comment.prototype → CharacterData.prototype → Node.prototype`) and working `instanceof`; `data` is
+  stringified per DOM §4.5 (undefined → `''`, first argument only). `new DocumentFragment()` returns a
+  native (arena-backed) empty fragment; `_lumen_make_document_fragment` gained `ownerDocument`/
+  `firstChild`. Element wrappers stayed plain native-backed objects at the time, so
+  `el instanceof HTMLDivElement` was still false — closed by BUG-322 below. 4 unit tests
+  (`dom::tests::{comment_text_constructors_build_nodes, character_data_prototype_chain,
+  document_fragment_constructor, dom_interface_globals_defined}`).
+- **`document.doctype` + constructible `new Document()` (DOM §4.5/§4.9, [BUG-321](../bugs/BUG-321-FIXED.md)
+  fix, [P3] 2026-07-20).** Follows up BUG-314's node-family work. New natives in **both** engines
+  (`dom.rs` + `v8_runtime.rs`): `_lumen_is_doctype(nid)`, `_lumen_get_document_doctype()` (the document's
+  doctype child), `_lumen_get_doctype_field(nid, 'name'|'public'|'system')`. Shim: `_lumen_make_doctype(nid)`
+  builds a DocumentType wrapper (`nodeType 10`, prototype `DocumentType.prototype` → `instanceof` works),
+  interned in the shared `_lumen_element_wrappers` cache so `document.doctype === document.childNodes[1]`
+  (same object) and `_lumen_gc_collect` purges it. `document` gained kind-aware `childNodes` (maps children
+  through `_lumen_make_node`, which routes doctype→`_lumen_make_doctype`, else `_lumen_make_element`) and a
+  `doctype` getter. `Document` is now constructible — a detached document tracking its children in a JS
+  array with `createElement`/`createTextNode`/`appendChild`, a `doctype` getter (scans for `nodeType 10`,
+  `null` on a fresh document) and `documentElement`. Passes both WPT `dom/nodes/Document-doctype.html`
+  subtests. Element-wrapper `instanceof HTMLXElement` (BUG-321 item 3) is NOT part of this — spun off
+  as BUG-322 (fixed below). 3 unit tests
+  (`dom::tests::{document_doctype_is_document_type, document_doctype_null_when_absent,
+  new_document_constructor}`).
+- **HTMLCollection `for-in`/`Object.getOwnPropertyNames` enumeration (DOM §4.2.6.2, BUG-323 fix,
+  [P3] 2026-07-21).** The live `HTMLCollection` `Proxy` (`_lumen_make_html_collection`) had no
+  `ownKeys`/`getOwnPropertyDescriptor` traps, so enumerating one (`for...in`, `Object.keys`,
+  `Object.getOwnPropertyNames`) silently yielded nothing despite `length`/`item()`/`namedItem()`
+  all working. Fix: both traps added, backed by a new `_lumen_html_collection_own_names` helper
+  (same id-then-name pass as the existing `_lumen_html_collection_named`) — numeric indices
+  `enumerable: true`, `id`/`name`-derived keys `enumerable: false` (visible via
+  `getOwnPropertyNames`/`hasOwnProperty`, not `for-in`), matching real engines. Unit test
+  `html_collection_supports_enumeration`.
+- **Native element/text wrapper `[[Prototype]]` chain — `instanceof Element`/`Node`/`HTML*Element`/
+  `Text`/`CharacterData` (DOM §4.9/§4.4, HTML §3.1.3, [BUG-322](../bugs/BUG-322-FIXED.md) fix,
+  [P1] 2026-07-21).** `_lumen_build_element` (the single builder behind `_lumen_make_element`, used
+  for both element and text nodes) always returned a plain object with no `[[Prototype]]`, so
+  `document.body instanceof Element`/`Node`/`HTMLElement`, `document.createElement('div') instanceof
+  HTMLDivElement`, etc. were always `false` — the gap BUG-314/BUG-321 explicitly deferred. Fix: a
+  `_lumen_html_tag_prototypes` table (`TAGNAME → HTML*Element` constructor, ~40 common tags; tags
+  without an entry fall back to plain `HTMLElement` per HTML §3.1.3, not `HTMLUnknownElement`) plus
+  `_lumen_element_prototype_for(nid)` (non-HTML-namespace nodes — SVG/MathML — get the generic
+  `Element.prototype`; the SVG shim's `createElementNS` decorator, which re-points results at typed
+  `SVG*Element.prototype` afterward, chains through `Element.prototype` too via `class SVGElement
+  extends Element`, so the two don't conflict). One `Object.setPrototypeOf` call at the end of
+  `_lumen_build_element` — `Text.prototype` for text nodes (`_lumen_is_text_node`), else the
+  tag-resolved prototype. Every accessor/method on the wrapper is still an own property, so it
+  shadows the inherited chain. Fixed a latent hole found along the way: `HTMLImageElement` (BUG-305)
+  had no `.prototype` chain at all (bare `Object.prototype`) — would have broken `instanceof
+  Element`/`Node` specifically for `<img>` once tag-mapped; now matches the other `HTML*Element`
+  interfaces (`Object.create(HTMLElement.prototype)`). Custom elements and parsed (non-
+  `createElementNS`) SVG/MathML markup are untouched — separate, non-overlapping perimeters. Unit
+  test `element_prototype_chain_instanceof`; full `lumen-js` suite green (2506+68, `--features
+  v8-backend`).
+- **DOM §4.10 `CharacterData` interface methods + real `Comment` node identity ([P1] 2026-07-21).**
+  `CharacterData.prototype` gained `length`/`substringData`/`appendData`/`insertData`/`deleteData`/
+  `replaceData` (all defined once on the shared prototype, so `Text`, `Comment` and
+  `ProcessingInstruction` all inherit them; offset/count follow WebIDL `unsigned long` coercion —
+  `>>> 0` — and out-of-range offsets throw `IndexSizeError`). Along the way, two pre-existing bugs
+  surfaced: (1) `document.createComment(data)` ignored `data` and always built an empty *Text* node
+  (`nodeType` 3, not 8, wrong `[[Prototype]]`) — new native `_lumen_create_comment` (mirrored in
+  `dom.rs` + `v8_runtime.rs`) plus a `_lumen_is_comment_node` classifier fix `nodeType`/`nodeName`/
+  `data`/`[[Prototype]]` (`Comment.prototype`) for both native (arena-backed) and `_nf_accepts`
+  (`NodeIterator`/`TreeWalker` `SHOW_COMMENT`) paths; (2) `set_text_content`/`collect_text_content`
+  in both engines applied Element/Document "replace all children" semantics even to a leaf
+  Text/Comment receiver — detached its (empty) children and appended a *new child* text node instead
+  of mutating the node's own string in place, so a second `.data` write read back a stale/duplicated
+  value. Fixed by special-casing `NodeData::Text`/`NodeData::Comment` first in both setters/getters.
+  3 unit tests (`dom::tests::{create_comment_is_a_real_comment_node,
+  live_text_and_comment_data_mutates_in_place, character_data_methods_spec_examples}`); closes most
+  of WPT `dom/nodes/CharacterData-{data,appendData,insertData,deleteData,replaceData,
+  substringData,surrogates}.html`.
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has
@@ -104,6 +280,7 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   - DOM write: `setAttribute`, `removeAttribute`, `textContent =`, `innerHTML =`, `createElement`, `createTextNode`, `appendChild`, `removeChild`.
   - `document.title` get/set.
   - querySelector uses full CSS3 selector engine (lumen_layout::query_all): compound selectors, combinators ( > + ~), pseudo-classes, attribute selectors. element.matches() and element.closest() use per-node matches_selector. (P2 2026-06-03)
+  - **BUG-291 fix (P2-wpt, 2026-07-17).** `Element`/`DocumentFragment`/`ShadowRoot.querySelector(All)` now use `lumen_layout::query_all_scoped(doc, scope, sel)` (new natives `_lumen_query_selector(_all)_scoped`) instead of the document-global `query_all` — scoped to the calling node's descendants (DOM Parentnode §4.2.5), which also makes them work on subtrees not yet attached to the document. `document.querySelector(All)` is unchanged (still whole-document). Also: node-wrapper identity is now stable under `===` — `_lumen_make_element` interns wrappers in `_lumen_element_wrappers[nid]` (purged per-nid by the existing idle `_lumen_gc_collect` tick) instead of minting a fresh object on every call. Added `insertAdjacentText`/`insertAdjacentElement` (were entirely missing).
   - 19 DOM tests + 16 runtime tests = 35 total. All pass.
   - Shell integration: `run_scripts_with_dom` wraps `Document` in `Arc<Mutex<>>`, calls `install_dom`, drops runtime to release Arc clones, recovers `Document`.
 - **Fetch API JS shim** (`install_dom_api`, `crates/js/src/dom.rs`). 2026-05-22.
@@ -159,7 +336,7 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 - **MutationObserver / ResizeObserver / IntersectionObserver + getBoundingClientRect** (`crates/js/src/dom.rs`). 2026-05-26.
   - `_lumen_get_bounding_rect(nid: u32) -> Option<Vec<f64>>` — Rust binding backed by `Arc<Mutex<HashMap<u32,[f32;4]>>>` populated by shell after each `relayout_page`. Returns `[x, y, width, height]` in CSS px.
   - `_lumen_get_viewport_size() -> Vec<f64>` — Rust binding backed by `Arc<Mutex<[f32;2]>>` updated by shell on window resize.
-  - `MutationObserver` (WHATWG DOM §4.3.2): `observe(target, options)` with full options normalization (`childList`, `attributes`, `attributeFilter`, `attributeOldValue`, `characterData`, `characterDataOldValue`, `subtree`); `disconnect()`; `takeRecords()`. `_mo_notify(nid, type, ...)` fires from primitive wrappers, delivers via `_lumen_flush_mutation_observers()` (sync) and `queueMicrotask` (async production path).
+  - `MutationObserver` (WHATWG DOM §4.3.2): `observe(target, options)` with full options normalization (`childList`, `attributes`, `attributeFilter`, `attributeOldValue`, `characterData`, `characterDataOldValue`, `subtree`); `disconnect()`; `takeRecords()`. `_mo_notify(nid, type, ...)` fires from primitive wrappers, delivers via `_lumen_flush_mutation_observers()` (sync) and `queueMicrotask` (async production path). **BUG-317 ([P3] 2026-07-20):** `MutationRecord` exposed as a non-constructible interface global (top-level `function` + `window.MutationRecord`, BUG-314 pattern); each record built in `_mo_notify` gets `MutationRecord.prototype` via `Object.setPrototypeOf` so `record instanceof MutationRecord` holds (DOM §4.3.3). **BUG-318 ([P3] 2026-07-20):** record accounting made spec-correct — `observe()` re-registers the observer in `_mo_observers` after a `disconnect()` (only the constructor did before); `subtree:true` is scoped via `_lumen_mo_in_subtree` (parent-chain walk) instead of matching every document mutation; `element.textContent` emits a `childList` record (removed old children + added text node) not `characterData`; live text nodes gained `.data`/`.nodeValue` setters routing through `_lumen_set_text_content` (→ `characterData` with `oldValue`); each record's `target` is the mutated node, `addedNodes`/`removedNodes` are node wrappers, `attributeNamespace` present.
   - `ResizeObserver` (W3C): `observe(target)`, `unobserve(target)`, `disconnect()`. `_lumen_deliver_resize_observers()` delivers only if width/height changed by >0.5 px. Shell calls it after `relayout_page`.
   - `IntersectionObserver` (WICG): `observe(target)`, `unobserve(target)`, `disconnect()`. `_lumen_deliver_intersection_observers()` intersects element rect with root expanded by `rootMargin` (`_parse_root_margin` supports `px` shorthand 1–4 values), delivers full `IntersectionObserverEntry` shape with threshold crossing semantics. Shell calls it after `relayout_page`.
   - `element.getBoundingClientRect()` wired via `_lumen_get_bounding_rect`.
@@ -410,6 +587,33 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
     prefix; new `decompression_stream_corrupt_input_errors_stream` (bad gzip bytes → `reader.read()`
     rejects, does not resolve) and `decompression_stream_multi_chunk_matches_single_chunk`
     (split-write body decodes identically to a single chunk).
+
+- **BUG-341 S7 (part 1): `v8_runtime::DomTouched`** — page-side DOM-mutation tracker, V8-only,
+  mirroring `lumen_chrome::bind_model_tracked` (BUG-341 S6). `V8JsRuntime::take_dom_touched()`
+  drains `{ nodes: HashSet<NodeId>, unattributed: bool }` since the last call. Instruments the 9
+  native mutation primitives whose selector-relevant effect is precisely attributable —
+  `_lumen_set_attr`/`_lumen_remove_attr` (only when the value actually changed),
+  `_lumen_append_child`/`_lumen_remove_child`/`_lumen_insert_before` (record the parent),
+  `_lumen_set_text_content`/`_lumen_set_inner_html` (record the node itself — a text/childList
+  change can flip `:empty`), and the CSS Typed OM `_lumen_set_style_property`/
+  `_lumen_delete_style_property` (bypass `_lumen_set_attr`, needed their own change-detection).
+  `classList`/`className`/inline `style.color = …` in the JS shim all route through
+  `_lumen_set_attr` already, so no shim changes were needed for those. The other 13
+  `dom_dirty`-setting natives — Shadow DOM attach, Selection/Range get-set-clear,
+  contenteditable key-handler bindings, `execCommand`'s mutating branches — set
+  `unattributed: true` (their effect isn't attributable to a simple node set; the caller must
+  fall back to a full cascade for the cycle). 12 unit tests (`v8_runtime.rs`,
+  `take_dom_touched_*`), all green.
+  **BUG-341 S7 (part 2): wired into the page pipeline.** `Lumen::try_relayout_raf_incremental`
+  (`crates/shell/src/main.rs`) drains `take_dom_touched()` and, when attributed and a matching
+  cascade cache (`Lumen::page_prev_cascade_styles`) exists, takes the restyle-aware
+  `layout_mutation_incremental_restyle` path — same shape as chrome's S6 wiring — falling back to
+  the plain graft-only `layout_mutation_incremental` otherwise (still correct, just without the
+  cascade-skip win). New differential test
+  (`v8_runtime::tests::dom_touched_drives_incremental_restyle_matching_full_cascade`) drives a real
+  V8 `classList.add` mutation end-to-end and asserts the result matches a fresh full-cascade
+  recompute. The engine-thread relayout job is not wired (see BUG-341 "S7 (part 2)" for why —
+  crossing the thread boundary with a `CounterMap`/dirty-roots is a separate design question).
 
 ## Deferred
 

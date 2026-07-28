@@ -2182,6 +2182,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-chrome"
+version = "0.5.0"
+dependencies = [
+ "lumen-core",
+ "lumen-css-parser",
+ "lumen-dom",
+ "lumen-html-parser",
+ "lumen-layout",
+ "workspace-hack",
+]
+
+[[package]]
 name = "lumen-core"
 version = "0.5.0"
 dependencies = [
@@ -2416,6 +2428,7 @@ dependencies = [
  "lumen-a11y",
  "lumen-ai",
  "lumen-bidi-server",
+ "lumen-chrome",
  "lumen-core",
  "lumen-css-parser",
  "lumen-devtools",

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<!--
+  Детерминированный офлайн-fixture для scripts/input_perf.py (PERF-3).
+  Даёт три цели ввода без сети:
+    • длинный контент  — для workload `scroll` (тело выше вьюпорта);
+    • #btn             — для workload `click` (каждый клик меняет фон → repaint);
+    • #inp             — для workload `type`  (каждый ввод меняет DOM → repaint).
+  JS-обработчики гарантируют настоящую перерисовку на каждое событие, чтобы
+  input→repaint латентность мерялась по реальному кадру, а не по служебному
+  redraw фокуса/курсора. Не graphic-тест: порогов/эталонов нет.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Lumen input-perf fixture</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: sans-serif; }
+  header {
+    position: sticky; top: 0; z-index: 10;
+    background: #123; color: #fff; padding: 12px 16px;
+    display: flex; gap: 16px; align-items: center;
+  }
+  #btn {
+    font-size: 18px; padding: 10px 22px; border: 0; border-radius: 6px;
+    background: #a00; color: #fff; cursor: pointer;
+  }
+  #inp {
+    font-size: 18px; padding: 8px 12px; width: 320px;
+    border: 2px solid #345; border-radius: 6px;
+  }
+  #echo { color: #8cf; font-variant-numeric: tabular-nums; }
+  section { padding: 24px 16px; border-bottom: 1px solid #ddd; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .cell {
+    width: 120px; height: 64px; border-radius: 4px;
+    background: linear-gradient(135deg, #eef, #cce);
+    display: flex; align-items: center; justify-content: center;
+  }
+</style>
+</head>
+<body>
+<header>
+  <button id="btn">Клик · <span id="count">0</span></button>
+  <input id="inp" placeholder="печатай сюда…">
+  <span id="echo"></span>
+</header>
+
+<!-- Много секций/ячеек, чтобы страница была заметно выше вьюпорта и скролл
+     двигал реальный контент (нагрузка на paint при прокрутке). -->
+<main id="content"></main>
+
+<script>
+  // #btn: счётчик + смена фона на каждый клик → гарантированный repaint.
+  var count = 0;
+  var btn = document.getElementById('btn');
+  btn.addEventListener('click', function () {
+    count += 1;
+    document.getElementById('count').textContent = count;
+    btn.style.background = (count % 2) ? '#0a0' : '#a00';
+  });
+
+  // #inp: эхо длины/значения + смена рамки → repaint на каждый ввод.
+  var inp = document.getElementById('inp');
+  var echo = document.getElementById('echo');
+  inp.addEventListener('input', function () {
+    echo.textContent = inp.value.length + ' симв.: ' + inp.value;
+    inp.style.borderColor = (inp.value.length % 2) ? '#f80' : '#345';
+  });
+
+  // Генерируем длинный контент программно, чтобы файл оставался компактным.
+  var main = document.getElementById('content');
+  var html = '';
+  for (var s = 0; s < 40; s++) {
+    html += '<section><h2>Секция ' + s + '</h2><div class="row">';
+    for (var c = 0; c < 8; c++) {
+      html += '<div class="cell">' + s + '·' + c + '</div>';
+    }
+    html += '</div></section>';
+  }
+  main.innerHTML = html;
+</script>
+</body>
+</html>

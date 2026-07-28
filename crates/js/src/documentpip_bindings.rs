@@ -92,21 +92,32 @@ pub(crate) fn install_docpip_bindings_v8(
     Ok(())
 }
 
+/// Serializes tests against the process-global `QUEUE` — parallel tests
+/// (in this module and in [`document_pip::tests`](crate::document_pip::tests),
+/// which also drains/asserts on this same queue) would otherwise observe each
+/// other's enqueues. Acquire via [`test_guard`].
+#[cfg(all(test, feature = "v8-backend"))]
+static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Acquire the cross-module serialization lock and drain any leftover queue
+/// state. `pub(crate)` so `document_pip::tests` (a different file, but the
+/// same binary-global `QUEUE`) can serialize against it too.
+#[cfg(all(test, feature = "v8-backend"))]
+pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+    let g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = take_docpip_requests();
+    g
+}
+
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;
 
-    /// Serializes tests: the request queue is process-global, so parallel tests
-    /// would otherwise observe each other's enqueues.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
     /// Acquire the serialization lock and drain any leftover queue state.
     fn guard() -> std::sync::MutexGuard<'static, ()> {
-        let g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = take_docpip_requests();
-        g
+        test_guard()
     }
 
     fn with_docpip_bindings(f: impl FnOnce(&V8JsRuntime)) {

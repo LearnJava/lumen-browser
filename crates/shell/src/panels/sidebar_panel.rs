@@ -26,11 +26,7 @@
 //! existing `relayout_page` pipeline at sidebar-width viewport, stores DL here.
 //! Keyboard toggle: `Ctrl+Shift+A` → `KeyCommand::ToggleSidebar`.
 
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-
-use crate::panels::themes::Palette;
+use lumen_paint::DisplayList;
 
 // ── Visual constants ──────────────────────────────────────────────────────────
 
@@ -38,17 +34,6 @@ use crate::panels::themes::Palette;
 pub const PANEL_WIDTH: f32 = 300.0;
 /// Height of the sidebar title bar in CSS px.
 const HEADER_H: f32 = 32.0;
-/// Close button size in CSS px (square).
-const CLOSE_SIZE: f32 = 18.0;
-/// Right margin for the close button inside the header.
-const CLOSE_RIGHT: f32 = 7.0;
-
-/// Close button foreground "×" — kept as const: not a surface role, purely
-/// a neutral icon tint that works on both light and dark close-button bg.
-const CLOSE_FG: Color = Color { r: 160, g: 160, b: 172, a: 255 };
-
-const FONT_SZ: f32 = 11.0;
-
 // ── Data types ────────────────────────────────────────────────────────────────
 
 /// Right-docked sidebar web panel state (7D.3).
@@ -110,11 +95,6 @@ impl SidebarPanel {
         self.visible = true;
     }
 
-    /// Close the sidebar (hide; URL and content are preserved for re-open).
-    pub fn close(&mut self) {
-        self.visible = false;
-    }
-
     /// Store a freshly-rendered display list for the sidebar page.
     ///
     /// Called by `Lumen::open_sidebar_page` after the page pipeline completes.
@@ -152,235 +132,14 @@ impl Default for SidebarPanel {
 
 // ── Hit-testing ───────────────────────────────────────────────────────────────
 
-/// Result of a click inside the sidebar panel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SidebarHit {
-    /// Clicked the "×" close button in the header.
-    Close,
-    /// Clicked in the page content area.
-    Content,
-    /// Clicked in the header (not on the close button).
-    Header,
-}
-
-/// Hit-test `(x, y)` in CSS px against the sidebar panel.
-///
-/// Returns `None` when the click is outside the panel or the panel is hidden.
-/// `tab_bar_h` is the height of the tab strip above the panel.
-pub fn hit_test(
-    panel: &SidebarPanel,
-    x: f32,
-    y: f32,
-    origin_x: f32,
-    tab_bar_h: f32,
-    window_h: f32,
-    width: f32,
-) -> Option<SidebarHit> {
-    if !panel.visible {
-        return None;
-    }
-    let px = origin_x;
-    if x < px || x >= px + width || y < tab_bar_h || y >= window_h {
-        return None;
-    }
-    let rel_y = y - tab_bar_h;
-
-    if rel_y < HEADER_H {
-        // Close button: right side of header.
-        let close_x = px + width - CLOSE_RIGHT - CLOSE_SIZE;
-        let close_y = tab_bar_h + (HEADER_H - CLOSE_SIZE) / 2.0;
-        if x >= close_x && x < close_x + CLOSE_SIZE && y >= close_y && y < close_y + CLOSE_SIZE {
-            return Some(SidebarHit::Close);
-        }
-        return Some(SidebarHit::Header);
-    }
-
-    Some(SidebarHit::Content)
-}
-
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build the display list for the docked sidebar panel.
-///
-/// Renders from `x = origin_x` to `x = origin_x + width` and from
-/// `y = tab_bar_h` to `y = window_h`.  Scroll offset is baked into a
-/// `PushTransform` over the content area. `origin_x` is the panel's left edge
-/// in CSS px — the shell derives it from the panel's docked side (left edge → 0,
-/// right edge → `window_w − width`), so the panel itself is dock-agnostic.
-///
-/// `pal` supplies the theme tokens for all chrome surface colors.
-pub fn build_panel(
-    panel: &SidebarPanel,
-    origin_x: f32,
-    tab_bar_h: f32,
-    window_h: f32,
-    pal: &Palette,
-    width: f32,
-) -> DisplayList {
-    if !panel.visible {
-        return DisplayList::new();
-    }
-
-    let pw = width;
-    let px = origin_x;
-    let panel_h = window_h - tab_bar_h;
-    let content_y = tab_bar_h + HEADER_H;
-    let content_h = (panel_h - HEADER_H).max(0.0);
-
-    let mut out = DisplayList::with_capacity(28);
-
-    // ── Panel background ──────────────────────────────────────────────────────
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(px, tab_bar_h, pw, panel_h),
-        color: pal.overlay_bg,
-    });
-
-    // Left border (1 px divider between main page and sidebar).
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(px, tab_bar_h, 1.0, panel_h),
-        color: pal.overlay_border,
-    });
-
-    // ── Header bar ────────────────────────────────────────────────────────────
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(px + 1.0, tab_bar_h, pw - 1.0, HEADER_H),
-        color: pal.header_bg,
-    });
-    // Header bottom border.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(px + 1.0, tab_bar_h + HEADER_H - 1.0, pw - 1.0, 1.0),
-        color: pal.divider,
-    });
-
-    // Title text (truncated to avoid overlapping the close button).
-    let title_text = if !panel.title.is_empty() {
-        truncate_label(&panel.title, 28)
-    } else if let Some(ref u) = panel.url {
-        truncate_label(u, 28)
-    } else {
-        "Sidebar".to_owned()
-    };
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + 10.0, tab_bar_h + 9.0, pw - CLOSE_SIZE - CLOSE_RIGHT * 2.0 - 14.0, FONT_SZ * 1.4),
-        text: title_text,
-        font_size: FONT_SZ,
-        color: pal.text,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Close button background.
-    let close_x = px + pw - CLOSE_RIGHT - CLOSE_SIZE;
-    let close_y = tab_bar_h + (HEADER_H - CLOSE_SIZE) / 2.0;
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(close_x, close_y, CLOSE_SIZE, CLOSE_SIZE),
-        radii: CornerRadii { tl: 3.0, tl_y: 3.0, tr: 3.0, tr_y: 3.0, br: 3.0, br_y: 3.0, bl: 3.0, bl_y: 3.0 },
-        color: pal.item_bg,
-    });
-    // Close button "×" glyph.
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(close_x + 3.0, close_y + 1.0, CLOSE_SIZE - 6.0, CLOSE_SIZE - 2.0),
-        text: "×".to_owned(),
-        font_size: 13.0,
-        color: CLOSE_FG,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // ── Content area ──────────────────────────────────────────────────────────
-    out.push(DisplayCommand::PushClipRect {
-        rect: Rect::new(px + 1.0, content_y, pw - 1.0, content_h),
-    });
-
-    if let Some(ref dl) = panel.page_dl {
-        // Translate sidebar page DL: x offset → panel left edge,
-        // y offset → content_y with scroll baked in.
-        out.push(DisplayCommand::PushTransform {
-            matrix: lumen_layout::Mat4::translation_2d(px + 1.0, content_y - panel.scroll_y),
-        });
-        out.extend_from_slice(dl);
-        out.push(DisplayCommand::PopTransform);
-    } else {
-        // Placeholder: show URL and "Loading…" hint until the DL is ready.
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(px + 1.0, content_y, pw - 1.0, content_h),
-            color: pal.tab_bar_bg,
-        });
-        let url_str = panel.url.as_deref().unwrap_or("No page");
-        out.push(DisplayCommand::DrawText {
-            rect: Rect::new(px + 10.0, content_y + 18.0, pw - 20.0, FONT_SZ * 1.4),
-            text: truncate_label(url_str, 34),
-            font_size: FONT_SZ,
-            color: pal.text_dim,
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        });
-        out.push(DisplayCommand::DrawText {
-            rect: Rect::new(px + 10.0, content_y + 38.0, pw - 20.0, FONT_SZ * 1.4),
-            text: "Loading…".to_owned(),
-            font_size: FONT_SZ,
-            color: pal.text_dim,
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        });
-    }
-
-    out.push(DisplayCommand::PopClip);
-    out
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Truncate a label to at most `max_chars` characters, appending "…" if cut.
-fn truncate_label(s: &str, max_chars: usize) -> String {
-    let mut chars = s.chars();
-    let collected: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() {
-        format!("{collected}…")
-    } else {
-        collected
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const WIN_W: f32 = 1024.0;
     const WIN_H: f32 = 720.0;
     const TAB_H: f32 = 36.0;
-    /// Left origin of the panel at its default right dock.
-    const PX: f32 = WIN_W - PANEL_WIDTH;
 
     fn hidden() -> SidebarPanel {
         SidebarPanel::new()
@@ -457,14 +216,6 @@ mod tests {
         assert_eq!(p.scroll_y, 300.0, "scroll clamped to new content height");
     }
 
-    #[test]
-    fn close_hides_preserves_url() {
-        let mut p = visible_no_page();
-        p.close();
-        assert!(!p.visible);
-        assert!(p.url.is_some());
-    }
-
     // ── max_scroll ────────────────────────────────────────────────────────────
 
     #[test]
@@ -480,146 +231,5 @@ mod tests {
         let mut p = visible_no_page();
         p.content_height = 10.0;
         assert_eq!(p.max_scroll(WIN_H - TAB_H), 0.0);
-    }
-
-    // ── hit_test ──────────────────────────────────────────────────────────────
-
-    #[test]
-    fn hit_test_hidden_returns_none() {
-        let p = hidden();
-        assert!(hit_test(&p, WIN_W - 10.0, 100.0, PX, TAB_H, WIN_H, PANEL_WIDTH).is_none());
-    }
-
-    #[test]
-    fn hit_test_outside_panel_returns_none() {
-        let p = visible_no_page();
-        // Click in main page area
-        assert!(hit_test(&p, WIN_W - PANEL_WIDTH - 1.0, 100.0, PX, TAB_H, WIN_H, PANEL_WIDTH).is_none());
-    }
-
-    #[test]
-    fn hit_test_in_tab_bar_area_returns_none() {
-        let p = visible_no_page();
-        assert!(hit_test(&p, WIN_W - 10.0, TAB_H - 1.0, PX, TAB_H, WIN_H, PANEL_WIDTH).is_none());
-    }
-
-    #[test]
-    fn hit_test_header_no_close() {
-        let p = visible_no_page();
-        let hit = hit_test(&p, WIN_W - PANEL_WIDTH + 50.0, TAB_H + 5.0, PX, TAB_H, WIN_H, PANEL_WIDTH);
-        assert_eq!(hit, Some(SidebarHit::Header));
-    }
-
-    #[test]
-    fn hit_test_close_button() {
-        let p = visible_no_page();
-        let close_x = WIN_W - CLOSE_RIGHT - CLOSE_SIZE + 2.0;
-        let close_y = TAB_H + (HEADER_H - CLOSE_SIZE) / 2.0 + 2.0;
-        let hit = hit_test(&p, close_x, close_y, PX, TAB_H, WIN_H, PANEL_WIDTH);
-        assert_eq!(hit, Some(SidebarHit::Close));
-    }
-
-    #[test]
-    fn hit_test_content_area() {
-        let p = visible_no_page();
-        let content_y = TAB_H + HEADER_H + 10.0;
-        let hit = hit_test(&p, WIN_W - PANEL_WIDTH + 10.0, content_y, PX, TAB_H, WIN_H, PANEL_WIDTH);
-        assert_eq!(hit, Some(SidebarHit::Content));
-    }
-
-    // ── cross-dock (origin_x at the left edge) ──────────────────────────────────
-
-    #[test]
-    fn hit_test_left_dock_inside_and_outside() {
-        let p = visible_no_page();
-        // origin_x = 0 → panel hugs the left edge, spanning [0, PANEL_WIDTH).
-        assert!(hit_test(&p, 10.0, TAB_H + HEADER_H + 10.0, 0.0, TAB_H, WIN_H, PANEL_WIDTH).is_some());
-        assert!(hit_test(&p, PANEL_WIDTH + 1.0, TAB_H + HEADER_H + 10.0, 0.0, TAB_H, WIN_H, PANEL_WIDTH).is_none());
-    }
-
-    #[test]
-    fn hit_test_left_dock_close_button() {
-        let p = visible_no_page();
-        let close_x = PANEL_WIDTH - CLOSE_RIGHT - CLOSE_SIZE + 2.0;
-        let close_y = TAB_H + (HEADER_H - CLOSE_SIZE) / 2.0 + 2.0;
-        assert_eq!(
-            hit_test(&p, close_x, close_y, 0.0, TAB_H, WIN_H, PANEL_WIDTH),
-            Some(SidebarHit::Close)
-        );
-    }
-
-    #[test]
-    fn build_panel_left_dock_starts_at_origin() {
-        let p = visible_no_page();
-        let dl = build_panel(&p, 0.0, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
-        let bg = dl.iter().find_map(|c| match c {
-            DisplayCommand::FillRect { rect, .. } if rect.width == PANEL_WIDTH => Some(*rect),
-            _ => None,
-        });
-        assert_eq!(bg.map(|r| r.x), Some(0.0));
-    }
-
-    // ── build_panel ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn build_panel_hidden_is_empty() {
-        let p = hidden();
-        let dl = build_panel(&p, PX, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
-        assert!(dl.is_empty());
-    }
-
-    #[test]
-    fn build_panel_visible_no_page_has_placeholder() {
-        let p = visible_no_page();
-        let dl = build_panel(&p, PX, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
-        assert!(!dl.is_empty());
-        let has_loading = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Loading"))
-        });
-        assert!(has_loading, "placeholder should contain loading hint");
-    }
-
-    #[test]
-    fn build_panel_with_page_no_loading_text() {
-        let p = visible_with_page();
-        let dl = build_panel(&p, PX, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
-        let has_loading = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Loading"))
-        });
-        assert!(!has_loading, "page DL should not show loading placeholder");
-    }
-
-    #[test]
-    fn build_panel_has_close_x_text() {
-        let p = visible_no_page();
-        let dl = build_panel(&p, PX, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
-        let has_close = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == "×")
-        });
-        assert!(has_close);
-    }
-
-    #[test]
-    fn build_panel_has_clip_and_pop() {
-        let p = visible_no_page();
-        let dl = build_panel(&p, PX, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
-        let clips = dl.iter().filter(|c| matches!(c, DisplayCommand::PushClipRect { .. })).count();
-        let pops = dl.iter().filter(|c| matches!(c, DisplayCommand::PopClip)).count();
-        assert_eq!(clips, 1);
-        assert_eq!(pops, 1);
-    }
-
-    // ── truncate_label ────────────────────────────────────────────────────────
-
-    #[test]
-    fn truncate_short_unchanged() {
-        assert_eq!(truncate_label("hi", 10), "hi");
-    }
-
-    #[test]
-    fn truncate_long_adds_ellipsis() {
-        let s = truncate_label("hello world", 5);
-        assert!(s.ends_with('…'));
-        assert!(s.len() <= 8); // 5 chars + 3 bytes for '…'
     }
 }

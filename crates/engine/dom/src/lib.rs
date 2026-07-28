@@ -2357,10 +2357,32 @@ impl FlatTree {
     /// Returns DOM children when no shadow override exists (fast path for
     /// ordinary elements in non-shadow documents).
     pub fn children_of<'a>(&'a self, doc: &'a Document, id: NodeId) -> &'a [NodeId] {
+        // BUG-341 S26: whether this document has *any* composed-tree override is
+        // a fact about the document, not about `id`, and for every page without
+        // Shadow DOM the answer is "no". Without this line each call still hashed
+        // `id` to find that out — one SipHash per node per traversal, and the
+        // cascade, box build and a11y tree all traverse per pass. Measured at
+        // ~13 ns a lookup over the chrome document's 828 elements.
+        if self.overrides.is_empty() {
+            return doc.get(id).children.as_slice();
+        }
         self.overrides
             .get(&id)
             .map(Vec::as_slice)
             .unwrap_or_else(|| doc.get(id).children.as_slice())
+    }
+
+    /// Whether the composed tree *is* the DOM tree — no shadow host or slot
+    /// moves a node away from its DOM parent.
+    ///
+    /// BUG-341 S27: a traversal that wants to ask "does this subtree contain
+    /// any of these nodes" cheaply does it by walking each of those nodes up to
+    /// the root, and `Node::parent` is the DOM parent. That answer is the
+    /// composed-tree answer exactly when this holds; a document with shadow
+    /// trees keeps the pre-S27 traversal instead of growing a composed-tree
+    /// parent index for a case Lumen's own chrome does not have.
+    pub fn is_plain(&self) -> bool {
+        self.overrides.is_empty()
     }
 }
 

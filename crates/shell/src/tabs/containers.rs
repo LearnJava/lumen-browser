@@ -7,9 +7,9 @@
 //! classic use case is signing into two accounts of the same site without
 //! profile switching.
 //!
-//! At UI level, a non-`None` container draws a 3 px coloured border-top
-//! strip on the tab button so the user can tell containers apart at a
-//! glance. The colour comes from [`ContainerKind::border_color`].
+//! At UI level, a non-`None` container draws a 3 px coloured vertical accent
+//! strip on the tab button (DS-13) so the user can tell containers apart at
+//! a glance. The colour comes from [`ContainerKind::border_color`].
 //!
 //! This module ships the data types ([`ContainerKind`], [`ContainerStore`])
 //! and pure helpers. Plumbing into `TabEntry` lives in
@@ -57,10 +57,10 @@ pub enum ContainerKind {
 }
 
 impl ContainerKind {
-    /// Border-top strip colour, or `None` for [`ContainerKind::None`].
+    /// Accent strip colour, or `None` for [`ContainerKind::None`].
     ///
     /// Returned colour is fully opaque (`a = 255`). Caller draws a thin
-    /// `FillRect` at the top edge of the tab button.
+    /// rounded vertical strip along the left edge of the tab button (DS-13).
     #[must_use]
     pub fn border_color(self) -> Option<Color> {
         match self {

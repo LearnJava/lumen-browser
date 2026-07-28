@@ -11,3 +11,4 @@
 
 mod ax_tree;
 mod ax_tree_phase2d;
+mod chrome;

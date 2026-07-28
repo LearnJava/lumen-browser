@@ -9,6 +9,7 @@
 //! - `lumen --dump-display-list <path-or-url>` — печать display list в stdout.
 //! - `lumen --print-to-pdf <out.pdf> <path-or-url>` — сохранить страницу как PDF (A4).
 //! - `lumen --screenshot <out.png> <path-or-url>` — детерминированный CPU-снимок страницы в PNG.
+//! - `lumen --trace-nav <out.json> <path-or-url>` — таймлайн одной навигации в Chrome-trace формате (Perfetto/chrome://tracing).
 //! - `lumen --devtools-port <N>` — запустить DevTools WebSocket сервер на порту N.
 //! - `lumen --bidi-port <N>` — запустить WebDriver BiDi WebSocket сервер на порту N
 //!   (SDC-2: если совмещён с открытым окном — реальные navigate/eval/captureScreenshot).
@@ -28,8 +29,10 @@ mod adblock;
 mod address_bar;
 mod animation_scheduler;
 mod click_log;
+mod health_log;
 mod backend_factory;
 mod bench_frames;
+mod chrome_preview;
 use lumen_bidi_server::spawn as bidi_spawn;
 mod config;
 mod deterministic;
@@ -67,6 +70,8 @@ mod scrollbar;
 mod session_persist;
 mod tab_lifecycle;
 mod tabs;
+mod theme_tokens;
+mod toolbar;
 mod tracks;
 mod zoom;
 mod network_service;
@@ -331,7 +336,26 @@ fn main() -> ExitCode {
     bench_frames::mark_process_start();
     // Load the fingerprint profile (9F.1) once, before any network or JS setup.
     // Absent config → engine defaults, so behaviour is unchanged out of the box.
-    config::init_global(config::load().unwrap_or_default());
+    let mut startup_profile = config::load().unwrap_or_default();
+    // BUG-295: automation sessions (BiDi / MCP) use an in-memory HTTP cache, never
+    // the persistent on-disk one. The disk cache is keyed by URL and survives across
+    // runs, so on the fixed ports an automation server reuses (e.g. wptserve's
+    // 8000/8001) a resource fetched in one run is replayed stale in the next — even
+    // after the served file changed on disk. That silently broke
+    // `tests/wpt/run_smoke.py`: the first run (before the wptrunner `env_options` fix
+    // served the right file) cached the wrong `testharnessreport.js` with its
+    // `Cache-Control: max-age=3600`, and every later run kept serving that stale copy
+    // from disk, setting the wrong result global forever, so the harness timed out no
+    // matter what else was fixed. In-memory cache = fresh per process, deterministic.
+    // This must be decided BEFORE `init_global` — the profile `OnceLock` is set-once,
+    // so a later `init_global` is a no-op — hence a raw arg scan here rather than
+    // reusing the `extract_*` parsers below.
+    if std::env::args()
+        .any(|a| matches!(a.as_str(), "--bidi-port" | "--mcp-live-port" | "--mcp" | "--mcp-port"))
+    {
+        startup_profile.no_persistent_state = true;
+    }
+    config::init_global(startup_profile);
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (devtools_port, rest_args) = match extract_devtools_port(&args) {
@@ -369,11 +393,16 @@ fn main() -> ExitCode {
     let (maximized, rest_args) = extract_maximized(&rest_args);
     let (click_log_flag, rest_args) = extract_click_log(&rest_args);
     click_log::init(click_log_flag);
+    // PERF-6: session health journal. Turned on by `--activity-log`/`--click-log`
+    // (shared surface), the dedicated `--health-log`, or `LUMEN_HEALTH_LOG=1`.
+    let (health_log_flag, rest_args) = extract_health_log(&rest_args);
+    health_log::init(click_log_flag || health_log_flag);
     let (det_cfg, rest_args) = deterministic::extract_deterministic(&rest_args);
     let det_mode = det_cfg.enabled;
     let (viewport_override, rest_args) = extract_viewport_override(&rest_args);
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (screenshot_output, rest_args) = extract_screenshot(&rest_args);
+    let (trace_nav_output, rest_args) = extract_trace_nav(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
     let (use_network_service, rest_args) = extract_network_service(&rest_args);
     let (ipc_server, rest_args) = extract_ipc_server(&rest_args);
@@ -420,6 +449,9 @@ fn main() -> ExitCode {
     } else if let Some(output) = screenshot_output {
         let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
         CliMode::Screenshot { source, output }
+    } else if let Some(output) = trace_nav_output {
+        let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
+        CliMode::TraceNav { source, output }
     } else if let Some(port) = ipc_server {
         CliMode::IpcServer { port }
     } else if let Some(mcp) = mcp_mode {
@@ -511,6 +543,7 @@ fn main() -> ExitCode {
         CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, maximized, det_mode, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
+        CliMode::TraceNav { source, output } => run_trace_nav(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
         CliMode::IpcServer { port } => run_ipc_server(port, event_sink),
     }
@@ -534,6 +567,12 @@ fn page_source_for_automation_url(url: &str) -> PageSource {
     if url == "about:blank" {
         return PageSource::AboutBlank;
     }
+    if url == chrome_preview::URL {
+        return PageSource::Static {
+            html: chrome_preview::HTML.to_owned(),
+            url: chrome_preview::URL.to_owned(),
+        };
+    }
     if let Some(rest) = url.strip_prefix("file://") {
         let path = rest
             .strip_prefix('/')
@@ -542,6 +581,36 @@ fn page_source_for_automation_url(url: &str) -> PageSource {
         return PageSource::File(PathBuf::from(path));
     }
     PageSource::File(PathBuf::from(url))
+}
+
+/// Resolve a JS-initiated navigation URL (`window.open`, `location.href=`,
+/// `location.assign/replace`) to a `PageSource`, honouring `file://` (BUG-293).
+///
+/// Only `file://` URLs get special treatment: they resolve to a
+/// `PageSource::File` so the local page loads from disk instead of hitting the
+/// http-only network path (which rejects them as `unsupported scheme: file`).
+/// Every other URL — http(s), `about:*`, and relative URLs already resolved to
+/// absolute by the JS engine — keeps the existing `PageSource::Url` path
+/// untouched.
+///
+/// Security: a web page (`opener` is an http/https `PageSource::Url`) may not
+/// navigate to a local `file://` resource — that returns `Err(reason)` and the
+/// caller surfaces a clear diagnostic instead of loading the file. `file→file`
+/// (a local page opening another local page) and non-web openers are allowed.
+fn resolve_js_navigation(url: &str, opener: &PageSource) -> Result<PageSource, String> {
+    if !url.starts_with("file://") {
+        return Ok(PageSource::Url(url.to_owned()));
+    }
+    let opener_is_web = matches!(
+        opener,
+        PageSource::Url(u) if u.starts_with("http://") || u.starts_with("https://")
+    );
+    if opener_is_web {
+        return Err(format!(
+            "переход web-страницы на локальный файл заблокирован политикой безопасности: {url}"
+        ));
+    }
+    Ok(page_source_for_automation_url(url))
 }
 
 /// Collect the concatenated text content of `id`'s subtree (SDC-2 `Query` support).
@@ -588,8 +657,49 @@ fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
 /// загрузки `get()` возвращает `None` и спелл-чек молчит.
 static SPELL_DICTS: std::sync::OnceLock<spellcheck::MultiDictionary> = std::sync::OnceLock::new();
 
-/// ADR-016 M2.2: поднимает движковый поток, только если задан
-/// `LUMEN_ENGINE_THREAD=1` (по умолчанию `None` → поведение shell неизменно). В
+/// Whether the ADR-016 engine thread should be spawned.
+///
+/// **ADR-023 (default flip 2026-07-28): now enabled by default.** ADR-016's
+/// M0–M4.1 stages all landed behind `LUMEN_ENGINE_THREAD=1` and each one was
+/// accepted as byte-identical with the flag off, so the flag had become a
+/// finished-but-unused feature. Leaving it off kept every `relayout()` on the
+/// UI thread, which is what makes real sites hang on load: a page with N
+/// `@font-face` files pays N serialized full relayouts before its first frame
+/// (measured on lenta.ru — 9 fonts, ~300–700 ms each, first frame ~6.7 s → ~3.6 s
+/// with the thread on; see `bugs/BUG-274-OPEN.md`, срез 2026-07-28).
+///
+/// Rollback (same flag-strategy idiom as ADR-018's V8 cutover and ADR-021's
+/// chrome flip): `LUMEN_NO_ENGINE_THREAD=1` — or `LUMEN_ENGINE_THREAD=0` for
+/// callers already setting the historical variable — restores the fully
+/// synchronous UI-thread behaviour.
+///
+/// Deliberately **not** tied to `--deterministic`: `graphic_tests/run.py`
+/// launches with `--deterministic --viewport 1024x720`, so forcing the thread
+/// off there would mean the pixel gate never exercises the shipped default.
+fn engine_thread_enabled() -> bool {
+    let opt_out = std::env::var("LUMEN_NO_ENGINE_THREAD").ok();
+    let legacy = std::env::var("LUMEN_ENGINE_THREAD").ok();
+    engine_thread_enabled_from(opt_out.as_deref(), legacy.as_deref())
+}
+
+/// Pure decision behind [`engine_thread_enabled`], split out so the precedence
+/// rules are unit-testable: reading the real environment from a test is
+/// process-global and races the rest of the (parallel) test binary.
+///
+/// `opt_out` is `LUMEN_NO_ENGINE_THREAD`, `legacy` is the historical
+/// `LUMEN_ENGINE_THREAD`. The opt-out wins over everything; otherwise only an
+/// explicit `LUMEN_ENGINE_THREAD=0` disables the thread. A leftover
+/// `LUMEN_ENGINE_THREAD=1` from before the ADR-023 flip keeps working and now
+/// simply agrees with the default.
+fn engine_thread_enabled_from(opt_out: Option<&str>, legacy: Option<&str>) -> bool {
+    if opt_out == Some("1") {
+        return false;
+    }
+    legacy != Some("0")
+}
+
+/// ADR-016 M2.2: поднимает движковый поток, если он не отключён явно
+/// ([`engine_thread_enabled`] — с ADR-023 включён по умолчанию). В
 /// M2.2 через поток маршрутизируется off-thread layout для async-триггеров
 /// (пока — debounce-зум): [`Lumen::submit_relayout_job`] шлёт задание, поток
 /// считает [`EngineCommit`] и кладёт в latest-wins слот, откуда его забирает
@@ -597,7 +707,7 @@ static SPELL_DICTS: std::sync::OnceLock<spellcheck::MultiDictionary> = std::sync
 /// на `None` (как обычно, без движкового потока — синхронный `relayout()`).
 fn spawn_engine_thread_if_enabled()
 -> Option<engine_thread::EngineThread<EngineCommit, EngineJsState>> {
-    if std::env::var("LUMEN_ENGINE_THREAD").as_deref() != Ok("1") {
+    if !engine_thread_enabled() {
         return None;
     }
     // ADR-016 M2.2c-2b: поток владеет `EngineJsState` (будущее сиденье `Document`
@@ -605,7 +715,10 @@ fn spawn_engine_thread_if_enabled()
     // заполняется `sync_engine_js_state` при первой загрузке страницы.
     match engine_thread::EngineThread::<EngineCommit, EngineJsState>::spawn() {
         Ok(engine) => {
-            eprintln!("[engine-thread] запущен (LUMEN_ENGINE_THREAD=1, M2.2 off-thread layout)");
+            eprintln!(
+                "[engine-thread] запущен (ADR-023 дефолт, M2.2 off-thread layout; \
+                 откат — LUMEN_NO_ENGINE_THREAD=1)"
+            );
             Some(engine)
         }
         Err(e) => {
@@ -774,6 +887,48 @@ fn run_window_mode(
     let (input_tx, input_rx) = input::channel();
     let (read_later_tx, read_later_rx) =
         std::sync::mpsc::channel::<(String, String, Vec<u8>)>();
+
+    // DS-14: persistent profile registry — first run seeds the 4 default
+    // profiles and makes the first one ("Личный") active. On later runs the
+    // registry already has rows and an active pointer, so this block is a
+    // no-op past the `count() == 0` check (persists across restart).
+    let profiles_registry = {
+        let path = adblock::browser_data_dir().join("profiles.db");
+        let reg = lumen_storage::ProfileRegistry::open(&path).unwrap_or_else(|e| {
+            eprintln!(
+                "profiles: cannot open {} ({e}); using in-memory store",
+                path.display()
+            );
+            lumen_storage::ProfileRegistry::open_in_memory()
+                .expect("in-memory profiles always opens")
+        });
+        if reg.count().unwrap_or(0) == 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            for (name, slug, _color) in panels::profile_menu::DEFAULT_PROFILES {
+                let _ = reg.create(name, &format!("profiles/{slug}/"), "", now);
+            }
+            if let Ok(Some(first)) = reg.get_by_name(panels::profile_menu::DEFAULT_PROFILES[0].0) {
+                let _ = reg.set_active(Some(first.id));
+            }
+        }
+        reg
+    };
+    let profile_entries: Vec<panels::profile_menu::ProfileEntry> = profiles_registry
+        .list_all()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(i, p)| panels::profile_menu::ProfileEntry {
+            id: p.id,
+            name: p.name.clone(),
+            color: panels::profile_menu::color_for_profile(&p.name, i),
+        })
+        .collect();
+    let active_profile_id = profiles_registry.active().ok().flatten().map(|p| p.id);
+
     let mut app = Lumen {
         display_list: Vec::new(),
         tile_grid: lumen_paint::TileGrid::default_size(),
@@ -788,11 +943,30 @@ fn run_window_mode(
         window: None,
         display_color_profile: platform::display_color_profile::PlatformDisplayColorProfile::new(),
         renderer: None,
+        chrome_doc: Some(lumen_chrome::parse_document(chrome_preview::HTML)),
+        chrome_layout: None,
+        chrome_page_host_rect: None,
+        chrome_hovered_nid: None,
+        chrome_active_nid: None,
+        chrome_omni_input_rect: None,
+        chrome_sidebar_collapsed: false,
+        chrome_settings_section: "general".to_owned(),
+        chrome_animation_scheduler: animation_scheduler::AnimationScheduler::new(),
+        chrome_transition_scheduler: TransitionScheduler::new(),
+        chrome_prev_styles: HashMap::new(),
+        chrome_content_area_detached: None,
+        chrome_prev_cascade_styles: lumen_layout::CascadeStyles::default(),
+        chrome_prev_interactive: (None, None, None),
+        chrome_prev_viewport: None,
+        chrome_prev_forced_colors: false,
+        chrome_anim_frame: None,
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         transition_scheduler: TransitionScheduler::new(),
         starting_style_tracker: StartingStyleTracker::new(),
         prev_styles: HashMap::new(),
+        page_prev_cascade_styles: None,
+        page_prev_interactive: (None, None, None),
         anim_frame: None,
         layout_box: None,
         last_frame_scroll_y: 0.0,
@@ -822,7 +996,6 @@ fn run_window_mode(
         cursor_position: None,
         pending_pointer_moves: Vec::new(),
         hovered_nid: None,
-        hovered_tab_idx: None,
         active_nid: None,
         scroll_drag: None,
         scroll_anim: None,
@@ -873,6 +1046,14 @@ fn run_window_mode(
         cookie_jar: Arc::new(
             lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
         ),
+        // DS-16: Anonymous profile's own ephemeral cookie jar — kept
+        // separate from `cookie_jar` so Anonymous browsing never mixes
+        // cookies with Personal/Work/Guest. Reset to a fresh instance every
+        // time Anonymous becomes the active profile — see
+        // `active_cookie_jar`/`ProfileMenuHit::SwitchTo`.
+        anonymous_cookie_jar: Arc::new(
+            lumen_storage::CookieJar::open_in_memory().expect("anonymous_cookie_jar init"),
+        ),
         js_ctx: None,
         js_present: false,
         raf_pending_flag: None,
@@ -883,6 +1064,7 @@ fn run_window_mode(
         maximized,
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
+        load_failed: false,
         nav_start: None,
         history_fts: HistoryFts::open_in_memory().expect("history_fts init"),
         notes_store: lumen_knowledge::Notes::open_in_memory().expect("notes_store init"),
@@ -930,6 +1112,13 @@ fn run_window_mode(
         workspace_panel: panels::workspace_panel::WorkspacePanel::new(),
         workspaces: lumen_storage::Workspaces::open_in_memory()
             .expect("workspaces in-memory"),
+        profile_menu: {
+            let mut pm = panels::profile_menu::ProfileMenuPanel::new();
+            pm.set_entries(profile_entries);
+            pm.set_active(active_profile_id);
+            pm
+        },
+        profiles: profiles_registry,
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new(),
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
@@ -954,6 +1143,17 @@ fn run_window_mode(
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
+        newtab_tiles: {
+            let path = adblock::browser_data_dir().join("newtab_tiles.db");
+            lumen_storage::NewtabTiles::open(&path).unwrap_or_else(|e| {
+                eprintln!(
+                    "newtab_tiles: cannot open {} ({e}); using in-memory store",
+                    path.display()
+                );
+                lumen_storage::NewtabTiles::open_in_memory()
+                    .expect("in-memory newtab_tiles always opens")
+            })
+        },
         notes: Vec::new(),
         read_later_store: lumen_knowledge::ReadLater::open_in_memory()
             .expect("read_later in-memory"),
@@ -989,7 +1189,6 @@ fn run_window_mode(
             })
         },
         settings_panel: panels::settings_panel::SettingsPanel::new(),
-        settings_hover: None,
         adblock_store: std::sync::Arc::clone(&adblock_store),
         shortcuts_panel: {
             let ks = lumen_storage::KeyboardShortcuts::open_in_memory()
@@ -1119,6 +1318,50 @@ fn run_screenshot(
     }
 }
 
+/// Запустить `--trace-nav <out.json> <url>` (PERF-1): прогнать одну навигацию
+/// через тот же headless CPU-путь, что `--screenshot`, но с включённым
+/// трейсером [`lumen_core::trace`], и сохранить собранный таймлайн как
+/// Chrome-trace JSON (открывается в Perfetto / `chrome://tracing` /
+/// `edge://tracing`). PNG растеризуется как побочный эффект пути и
+/// отбрасывается — важен только таймлайн фаз (fetch-document → parse-html →
+/// run-scripts → fetch-*/layout → paint → first-paint) и по-ресурсные fetch-спаны.
+fn run_trace_nav(
+    source: &PageSource,
+    output: &std::path::Path,
+    event_sink: Arc<dyn EventSink>,
+) -> ExitCode {
+    lumen_core::trace::enable();
+    let render = {
+        // Корневой спан всей навигации; закрывается до `finish`, поэтому попадает
+        // в таймлайн как охватывающая полоса.
+        let _nav = lumen_core::trace::span("navigation", "nav");
+        render_source_to_png(source, event_sink)
+    };
+    let json = match lumen_core::trace::finish() {
+        Some(j) => j,
+        None => {
+            eprintln!("Ошибка --trace-nav: трейсер не собрал данных");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(err) = render {
+        // Рендер мог упасть (битый URL, сеть) — но частичный таймлайн всё равно
+        // полезен, поэтому пишем его и сообщаем об ошибке.
+        eprintln!("Предупреждение --trace-nav: рендер завершился с ошибкой: {err}");
+    }
+    match std::fs::write(output, json) {
+        Ok(()) => {
+            eprintln!("Трейс навигации сохранён: {}", output.display());
+            eprintln!("  Открыть в Perfetto (ui.perfetto.dev) или chrome://tracing");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("Ошибка записи трейса {}: {err}", output.display());
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Headless CPU-снимок страницы целиком (включая контент ниже первого экрана).
 ///
 /// Использует тот же полный pipeline, что `--dump-layout`/`--print-to-pdf`
@@ -1163,7 +1406,13 @@ fn render_source_to_png(
     // guarantee no stale cross-page reuse. No streaming path here, so this pass
     // just decodes each image once.
     crate::image_cache::IMAGE_CACHE.reset_new();
-    let raw = source.load_bytes(event_sink.clone(), None)?;
+    // PERF-1: `--trace-nav` records this headless load as a timeline. Each
+    // `trace::span` is a no-op unless the tracer is enabled, so instrumenting
+    // this shared path costs nothing for `--screenshot`/`--ipc-server`.
+    let raw = {
+        let _s = lumen_core::trace::span("fetch-document", "net");
+        source.load_bytes(event_sink.clone(), None)?
+    };
     let vp = Size::new(SCREENSHOT_VP_W, SCREENSHOT_MIN_H);
     let parsed = parse_and_layout(
         &raw.bytes,
@@ -1196,9 +1445,15 @@ fn render_source_to_png(
     let width = SCREENSHOT_VP_W as u32;
     let height = content_h.ceil() as u32;
 
-    let dl = paint_ordered(&parsed.layout);
-    let image = Renderer::render_to_image_cpu(width, height, &dl, &parsed.images, 0.0, 0.0)?;
-    let png = lumen_image::encode_png_rgba8(&image)?;
+    let (png, width, height) = {
+        let _s = lumen_core::trace::span("paint", "paint");
+        let dl = paint_ordered(&parsed.layout);
+        let image = Renderer::render_to_image_cpu(width, height, &dl, &parsed.images, 0.0, 0.0)?;
+        let png = lumen_image::encode_png_rgba8(&image)?;
+        (png, width, height)
+    };
+    // Pixels are ready — mark the moment the page is first fully rendered.
+    lumen_core::trace::instant("first-paint", "paint");
     Ok((png, width, height))
 }
 
@@ -1620,6 +1875,7 @@ fn print_usage() {
     eprintln!("  lumen --dump-display-list <path-or-url>         — display list в stdout");
     eprintln!("  lumen --print-to-pdf <out.pdf> <path-or-url>   — сохранить страницу как PDF");
     eprintln!("  lumen --screenshot <out.png> <path-or-url>     — CPU-снимок страницы в PNG (без окна)");
+    eprintln!("  lumen --trace-nav <out.json> <path-or-url>     — таймлайн одной навигации в Chrome-trace JSON");
     eprintln!("  [--devtools-port <N>]                           — DevTools WS сервер (любой режим)");
     eprintln!("  [--bidi-port <N>]                               — WebDriver BiDi WS сервер (любой режим)");
     eprintln!("  [--mcp-live-port <N>]                           — MCP-сервер (TCP) на живом окне (любой режим, SDC-2)");
@@ -1673,6 +1929,35 @@ fn extract_screenshot(args: &[String]) -> (Option<std::path::PathBuf>, Vec<Strin
 
     while i < args.len() {
         if args[i] == "--screenshot" && output.is_none() {
+            i += 1;
+            if let Some(path) = args.get(i) {
+                output = Some(std::path::PathBuf::from(path));
+            }
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+
+    if output.is_some() {
+        (output, rest)
+    } else {
+        (None, args.to_vec())
+    }
+}
+
+/// Извлечь `--trace-nav <output.json>` из аргументов (PERF-1).
+///
+/// Возвращает `(Some(output_path), остальные_аргументы)` или `(None, все_аргументы)`.
+/// Порядок аргументов зеркалит `--screenshot`: путь вывода идёт сразу за флагом,
+/// источник страницы — позиционный остаток (`--trace-nav out.json <url>`).
+fn extract_trace_nav(args: &[String]) -> (Option<std::path::PathBuf>, Vec<String>) {
+    let mut i = 0;
+    let mut output: Option<std::path::PathBuf> = None;
+    let mut rest = Vec::new();
+
+    while i < args.len() {
+        if args[i] == "--trace-nav" && output.is_none() {
             i += 1;
             if let Some(path) = args.get(i) {
                 output = Some(std::path::PathBuf::from(path));
@@ -1814,8 +2099,9 @@ fn extract_import_session(
 /// Извлечь `--viewport <W>x<H>` из аргументов (DEVX-1).
 ///
 /// Overrides the window's CSS content viewport size (window height still adds
-/// `tabs::strip::TAB_BAR_HEIGHT` on top, same as the non-deterministic default —
-/// see `resumed()`). Needed because `--deterministic` forces a 1280×800 window,
+/// `toolbar::CHROME_H` — tab bar + toolbar — on top, same as the
+/// non-deterministic default — see `resumed()`). Needed because
+/// `--deterministic` forces a 1280×800 window,
 /// which breaks `graphic_tests/run.py --live`'s magenta-marker crop calibration
 /// (baked in at the pipeline's fixed 1024×720 viewport); this flag lets a caller
 /// combine `--deterministic` (freeze Date.now/Math.random/rAF) with the exact
@@ -1943,6 +2229,68 @@ fn extract_click_log(args: &[String]) -> (bool, Vec<String>) {
         }
     }
     (found, rest)
+}
+
+/// Извлечь `--health-log` из аргументов (PERF-6, журнал здоровья сессии).
+/// Также активируется переменной окружения `LUMEN_HEALTH_LOG=1`.
+fn extract_health_log(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = std::env::var("LUMEN_HEALTH_LOG").is_ok_and(|v| v == "1");
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--health-log" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
+}
+
+/// PERF-6: recursively count every box in a laid-out tree (render-health metric).
+fn count_layout_boxes(b: &lumen_layout::LayoutBox) -> usize {
+    1 + b.children.iter().map(count_layout_boxes).sum::<usize>()
+}
+
+/// PERF-6: count "rendered units" — things that actually paint: non-whitespace
+/// characters across inline text runs plus replaced elements
+/// (`<img>`/`<canvas>`/`<video>`/`<iframe>`). Zero means the page painted
+/// nothing visible, which for a content-bearing DOM signals a white screen.
+fn count_rendered_units(b: &lumen_layout::LayoutBox) -> usize {
+    use lumen_layout::BoxKind;
+    let mut n = match &b.kind {
+        BoxKind::InlineRun { segments, .. } => segments
+            .iter()
+            .map(|s| s.text.chars().filter(|c| !c.is_whitespace()).count())
+            .sum(),
+        BoxKind::Image { .. }
+        | BoxKind::Video { .. }
+        | BoxKind::Canvas { .. }
+        | BoxKind::Iframe { .. } => 1,
+        _ => 0,
+    };
+    for c in &b.children {
+        n += count_rendered_units(c);
+    }
+    n
+}
+
+/// BUG-341 S17 — flatten `bind_model_tracked`'s per-node report into the
+/// `(NodeId, NodeChange)` pairs `restyle_root_set_for_node_change` consumes.
+///
+/// One node can report several attribute writes plus a child-list change in the
+/// same bind; each is answered separately and the root-set unions the results,
+/// so a node whose class changed *and* whose children moved still widens to its
+/// parent via the structural half.
+fn chrome_node_changes(
+    touched: &lumen_chrome::ChromeMutations,
+) -> impl Iterator<Item = (lumen_dom::NodeId, lumen_layout::style::NodeChange<'_>)> {
+    use lumen_layout::style::NodeChange;
+    touched.selector.iter().flat_map(|(id, t)| {
+        t.attrs
+            .iter()
+            .map(move |a| (*id, NodeChange::Attr(a.as_str())))
+            .chain(t.structural.then_some((*id, NodeChange::Unattributed)))
+    })
 }
 
 /// Извлечь `--devtools-port N` из аргументов, вернуть (port, остальные аргументы).
@@ -2171,6 +2519,25 @@ enum JsNavigateRequest {
     Reload,
 }
 
+/// BUG-341 S7: engine-agnostic mirror of `lumen_js::DomTouched`, kept
+/// independent of the `v8` feature so [`PersistentJs::take_dom_touched`]'s
+/// default (used by `quickjs`/no-engine builds, which have no tracker) compiles
+/// unconditionally.
+///
+/// Consumed by [`Lumen::try_relayout_raf_incremental`] (BUG-341 S7 part 2) to
+/// derive the DOM-mutation half of `RestyleDelta::dirty_roots` for the
+/// incremental-cascade path (`layout_mutation_incremental_restyle`).
+#[derive(Debug, Default, Clone)]
+struct DomTouchedSummary {
+    /// Nodes whose selector-relevant state actually changed via a tracked
+    /// mutation primitive. See `lumen_js::DomTouched::nodes`.
+    nodes: std::collections::HashSet<lumen_dom::NodeId>,
+    /// `true` when `nodes` alone is not a safe restyle root-set this cycle —
+    /// the caller must fall back to a full cascade. See
+    /// `lumen_js::DomTouched::unattributed`.
+    unattributed: bool,
+}
+
 /// Shell-local abstraction over a persistent JS context that survives between
 /// renders. The JS DOM closures hold a reference to the same
 /// `Arc<Mutex<Document>>` as `LayoutSource::document`, so event-driven DOM
@@ -2216,6 +2583,19 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Called after each rAF pass in `RedrawRequested`; when `true`, a relayout
     /// must happen before the next paint to reflect DOM changes.
     fn take_dom_dirty(&self) -> bool;
+    /// BUG-341 S7: drain the page-side DOM-mutation tracker since the last
+    /// call — feeds `lumen_layout::style::restyle_root_set_for_node_change`
+    /// so `Lumen::try_relayout_raf_incremental` can take the incremental-
+    /// cascade path (`layout_mutation_incremental_restyle`) instead of a full
+    /// cascade for JS DOM mutations.
+    ///
+    /// Default (used by engines without a tracker — `quickjs`, `NullPersistentJs`):
+    /// no touched nodes but `unattributed: true`, forcing the caller to fall
+    /// back to a full cascade — preserves those engines' existing behaviour
+    /// exactly.
+    fn take_dom_touched(&self) -> DomTouchedSummary {
+        DomTouchedSummary { nodes: std::collections::HashSet::new(), unattributed: true }
+    }
     /// TEMP BUG-272 diagnostics: QuickJS heap (malloc_size, memory_used_size);
     /// `(-1, -1)` when the runtime does not expose it.
     fn debug_js_heap(&self) -> (i64, i64) {
@@ -2276,12 +2656,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `deliver_lazy_images()` after each relayout.
     #[allow(dead_code)]
     fn register_lazy_images(&self, pairs: &[(u32, &str)]);
-    /// Push decoded `<img>` bitmaps (nid, w, h, rgba8) into the JS canvas drawImage store.
+    /// Push decoded `<img>` bitmaps `(nid, Arc<Image>)` into the JS canvas drawImage store.
     ///
     /// Call after `fetch_and_decode_images` so `drawImage(imgElement, …)` works.
-    /// Default no-op covers non-QuickJS builds and `NullPersistentJs`.
+    /// The `Arc` is shared with the decoded-image cache — no pixel copy (BUG-272
+    /// срез 20). Default no-op covers non-QuickJS builds and `NullPersistentJs`.
     #[allow(dead_code)]
-    fn register_img_bitmaps(&self, _bitmaps: Vec<(u32, u32, u32, Vec<u8>)>) {}
+    fn register_img_bitmaps(&self, _bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {}
     /// Check registered lazy images against the current viewport and enqueue load
     /// requests for those within the lazy-load margin (1 viewport ahead of the fold).
     ///
@@ -2699,7 +3080,7 @@ impl PersistentJs for QuickPersistentJs {
     fn deliver_lazy_images(&self) {
         self.eval_js("_lumen_deliver_lazy_images();");
     }
-    fn register_img_bitmaps(&self, bitmaps: Vec<(u32, u32, u32, Vec<u8>)>) {
+    fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {
         self.rt.register_img_bitmaps(bitmaps);
     }
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
@@ -2909,11 +3290,11 @@ impl PersistentJs for QuickPersistentJs {
 ///
 /// Mirrors [`QuickPersistentJs`] method-for-method. Methods backed by state
 /// wired in `install_dom` (S3 core DOM) delegate to `V8JsRuntime` accessors;
-/// methods for subsystems not yet ported to V8 (view transitions, pointer
-/// capture, bfcache heap suspend — see `docs/tasks/ph3-v8-migration.md`
-/// slices S11) use the trait's own default no-op/empty implementation or a
-/// local stub, and start returning real data once their slice lands. Workers
-/// (dedicated + shared + service) were wired in S10.
+/// methods for subsystems not yet ported to V8 (view transitions, bfcache
+/// heap suspend — see `docs/tasks/ph3-v8-migration.md` slices S11) use the
+/// trait's own default no-op/empty implementation or a local stub, and start
+/// returning real data once their slice lands. Workers (dedicated + shared +
+/// service) were wired in S10; pointer capture in S12b-20.
 #[cfg(feature = "v8")]
 struct V8PersistentJs {
     rt: lumen_js::v8_runtime::V8JsRuntime,
@@ -2970,6 +3351,10 @@ impl PersistentJs for V8PersistentJs {
     }
     fn take_dom_dirty(&self) -> bool {
         self.rt.take_dom_dirty()
+    }
+    fn take_dom_touched(&self) -> DomTouchedSummary {
+        let t = self.rt.take_dom_touched();
+        DomTouchedSummary { nodes: t.nodes, unattributed: t.unattributed }
     }
     fn run_animation_frame(&self, timestamp_ms: f64) {
         self.eval_js(&format!("_lumen_run_raf_callbacks({timestamp_ms})"));
@@ -3192,8 +3577,14 @@ impl PersistentJs for V8PersistentJs {
             "if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
         ));
     }
+    fn pointer_capture_nid(&self) -> Option<u32> {
+        self.rt.pointer_capture_nid()
+    }
     fn has_bfcache_freeze_blocker(&self) -> bool {
         matches!(self.eval_js_value("_lumen_bfcache_blocked()"), Ok(ref v) if v == "true")
+    }
+    fn take_pointer_capture(&self) -> Option<u32> {
+        self.rt.take_pointer_capture()
     }
 }
 
@@ -3204,6 +3595,10 @@ impl PageSource {
                 PageSource::Url(s.to_owned())
             }
             Some("about:blank") => PageSource::AboutBlank,
+            Some(s) if s == chrome_preview::URL => PageSource::Static {
+                html: chrome_preview::HTML.to_owned(),
+                url: chrome_preview::URL.to_owned(),
+            },
             Some(s) => PageSource::File(PathBuf::from(s)),
             None => PageSource::Empty,
         }
@@ -3312,7 +3707,11 @@ impl PageSource {
                     );
                 }
                 let client = crate::config::global().apply_http(builder);
+                // PERF-1: HTTP request for the main document (nested inside the
+                // `fetch-document` span); its `size` arg is the response body.
+                let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
                 let (bytes, resp_headers) = client.fetch_page(&lumen_url)?;
+                fetch_span.set_bytes(bytes.len());
                 eprintln!("Получено {} байт", bytes.len());
                 let coop = resp_headers.iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-opener-policy"))
@@ -3463,6 +3862,10 @@ enum CliMode {
     PrintToPdf { source: PageSource, output: std::path::PathBuf },
     /// Headless: страница рендерится CPU-растеризатором и сохраняется как PNG.
     Screenshot { source: PageSource, output: std::path::PathBuf },
+    /// Headless (PERF-1): одна навигация прогоняется через тот же CPU-путь, что и
+    /// `--screenshot`, но с включённым трейсером; таймлайн сохраняется как
+    /// Chrome-trace JSON для Perfetto / `chrome://tracing`.
+    TraceNav { source: PageSource, output: std::path::PathBuf },
     /// Headless: MCP-сервер для AI-агентов (Claude, Browser Use…).
     Mcp(McpMode),
     /// Headless: IPC-сервер таб-команд (TAB-5). Контроллер драйвит вкладки и
@@ -3548,8 +3951,9 @@ struct LoadedPage {
     /// Декодированные `<img src="…">` для GPU upload через
     /// `Renderer::register_image`. Ключ — raw src attribute value (тот же,
     /// что попадает в `DisplayCommand::DrawImage.src`), чтобы render-side
-    /// мог сделать lookup без отдельной нормализации URL.
-    images: Vec<(String, lumen_image::Image)>,
+    /// мог сделать lookup без отдельной нормализации URL. `Arc<Image>` (BUG-272
+    /// срез 17): разделяет пиксели с `IMAGE_CACHE`/`register_image`, не копирует.
+    images: Vec<(String, Arc<lumen_image::Image>)>,
     /// Multi-frame GIF animations decoded at load time. Keyed by the same src URL
     /// as `DrawImage.src`. Frame 0 of each entry is already in `images` so the
     /// renderer has a valid texture on first paint; subsequent frames are uploaded
@@ -3588,7 +3992,7 @@ impl LoadedPage {
             layout_box: lumen_layout::LayoutBox {
                 node: NodeId::from_index(0),
                 rect: Rect::ZERO,
-                style: lumen_layout::style::ComputedStyle::root(),
+                style: std::sync::Arc::new(lumen_layout::style::ComputedStyle::root()),
                 kind: lumen_layout::BoxKind::Block,
                 children: Vec::new(),
                 col_span: 1,
@@ -4252,6 +4656,8 @@ fn fetch_stylesheet_text(
             // BUG-171: read through the prefetch cache — the streaming thread
             // warms linked stylesheets with this same client, so the cascade
             // concatenation here reuses identical bytes without a second fetch.
+            // PERF-1: one span per stylesheet fetch.
+            let mut fetch_span = lumen_core::trace::span(format!("css {url}"), "net");
             let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
                 let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
                 client
@@ -4259,10 +4665,13 @@ fn fetch_stylesheet_text(
                     .map_err(|e| e.to_string())
             });
             match bytes {
-                Ok(bytes) => Some((
-                    String::from_utf8_lossy(&bytes[..]).into_owned(),
-                    ResourceBase::Url(url),
-                )),
+                Ok(bytes) => {
+                    fetch_span.set_bytes(bytes.len());
+                    Some((
+                        String::from_utf8_lossy(&bytes[..]).into_owned(),
+                        ResourceBase::Url(url),
+                    ))
+                }
                 Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); None }
             }
         }
@@ -4421,7 +4830,7 @@ fn fetch_and_decode_images(
     viewport: lumen_core::geom::Size,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
-) -> (Vec<(String, lumen_image::Image)>, Vec<(String, lumen_image::AnimatedGif)>, Vec<(u32, String)>) {
+) -> (Vec<(String, Arc<lumen_image::Image>)>, Vec<(String, lumen_image::AnimatedGif)>, Vec<(u32, String)>) {
     let requests = lumen_layout::collect_image_requests(doc, viewport);
 
     /// Результат параллельной фазы fetch+decode одной картинки. Применение к
@@ -4432,15 +4841,16 @@ fn fetch_and_decode_images(
         Lazy,
         /// Пропуск (ошибка сети/декодирования) — уже залогировано.
         Skip,
-        /// Статическая картинка (включая 1-кадровый GIF).
+        /// Статическая картинка (включая 1-кадровый GIF). `Arc<Image>` (BUG-272
+        /// срез 17): разделяет аллокацию пикселей с `IMAGE_CACHE`, а не копирует.
         Static {
-            image: lumen_image::Image,
+            image: Arc<lumen_image::Image>,
             /// Intrinsic-размеры для HTML-атрибутов, если их не задал автор.
             intrinsic: Option<(u32, u32)>,
         },
         /// Многокадровый GIF: первый кадр + полная анимация.
         Animated {
-            first: lumen_image::Image,
+            first: Arc<lumen_image::Image>,
             gif: lumen_image::AnimatedGif,
             intrinsic: Option<(u32, u32)>,
         },
@@ -4467,12 +4877,11 @@ fn fetch_and_decode_images(
         match decoded {
             None => ImgOutcome::Skip,
             Some(image_cache::DecodedImage::Static(img)) => {
-                let image = (*img).clone();
-                let intrinsic = wants_intrinsic.then_some((image.width, image.height));
-                ImgOutcome::Static { image, intrinsic }
+                // BUG-272 срез 17: share the cache's Arc, not a pixel copy.
+                let intrinsic = wants_intrinsic.then_some((img.width, img.height));
+                ImgOutcome::Static { image: img, intrinsic }
             }
             Some(image_cache::DecodedImage::Animated { first, gif }) => {
-                let first = (*first).clone();
                 let intrinsic = wants_intrinsic.then_some((first.width, first.height));
                 ImgOutcome::Animated { first, gif: (*gif).clone(), intrinsic }
             }
@@ -4480,7 +4889,7 @@ fn fetch_and_decode_images(
     });
 
     // Фаза 2 (последовательно): мутация `doc` + сборка результата в порядке DOM.
-    let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
+    let mut out: Vec<(String, Arc<lumen_image::Image>)> = Vec::new();
     let mut anim_gifs: Vec<(String, lumen_image::AnimatedGif)> = Vec::new();
     let mut lazy_pairs: Vec<(u32, String)> = Vec::new();
     for (req, outcome) in requests.into_iter().zip(outcomes) {
@@ -4542,7 +4951,12 @@ fn fetch_image_bytes(
             // mixed-content enforcement still applies for HTTPS pages.
             let lumen_url = Url::parse(&url)?;
             let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
-            Ok(client.fetch_subresource(&lumen_url, RequestDestination::Image)?)
+            // PERF-1: one span per image fetch — back-to-back spans on a lane
+            // reveal sequential UI-thread subresource loading.
+            let mut fetch_span = lumen_core::trace::span(format!("img {url}"), "net");
+            let bytes = client.fetch_subresource(&lumen_url, RequestDestination::Image)?;
+            fetch_span.set_bytes(bytes.len());
+            Ok(bytes)
         }
     }
 }
@@ -4572,24 +4986,31 @@ fn decode_image(
         }
     };
 
-    // Animated GIF detection: decode all frames; keep the animation if >1 frame.
+    // Animated GIF detection: decode metadata lazily; keep the animation if >1 frame.
     if lumen_image::is_gif(&bytes) {
         return match lumen_image::decode_gif_animated(&bytes) {
-            Ok(gif) if gif.frames.len() > 1 => {
-                let first = gif.frames[0].image.clone();
-                eprintln!(
-                    "Загружена GIF-анимация: {} ({}×{}, {} кадров)",
-                    raw_src, gif.width, gif.height, gif.frames.len()
-                );
-                Some(DecodedImage::Animated {
-                    first: Arc::new(first),
-                    gif: Arc::new(gif),
-                })
+            Ok(gif) if gif.frame_count() > 1 => {
+                // BUG-272 срез 19: only the first frame is materialised eagerly.
+                match gif.frame_image(0) {
+                    Ok(first) => {
+                        eprintln!(
+                            "Загружена GIF-анимация: {} ({}×{}, {} кадров)",
+                            raw_src, gif.width, gif.height, gif.frame_count()
+                        );
+                        Some(DecodedImage::Animated {
+                            first: Arc::new(first),
+                            gif: Arc::new(gif),
+                        })
+                    }
+                    Err(e) => {
+                        eprintln!("Не декодируется GIF {raw_src}: {e}");
+                        None
+                    }
+                }
             }
             Ok(gif) => {
                 // Single-frame GIF: treat as static image.
-                gif.frames.into_iter().next().map(|frame| {
-                    let image = frame.image;
+                gif.frame_image(0).ok().map(|image| {
                     eprintln!(
                         "Загружена картинка (GIF, 1 кадр): {} ({}×{})",
                         raw_src, image.width, image.height
@@ -4714,7 +5135,7 @@ struct ParsedPage {
     title: Option<String>,
     rule_count: usize,
     /// Декодированные изображения, найденные при обходе DOM. См. [`LoadedPage::images`].
-    images: Vec<(String, lumen_image::Image)>,
+    images: Vec<(String, Arc<lumen_image::Image>)>,
     /// Multi-frame GIF animations found in the DOM. See [`LoadedPage::animated_gifs`].
     animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
     /// `(node_id_u32, url)` pairs for `<img loading="lazy">` elements — skipped by
@@ -4775,7 +5196,7 @@ struct LayoutSource {
 struct PageSnapshot {
     display_list: DisplayList,
     title: Option<String>,
-    pending_images: Vec<(String, lumen_image::Image)>,
+    pending_images: Vec<(String, Arc<lumen_image::Image>)>,
     /// PH3-19: saved across tab switch so web-fonts persist in background tabs.
     page_font_registry: Arc<lumen_font::FontRegistry>,
     /// PH3-19: web fonts decoded from @font-face url() sources, needed to
@@ -4787,6 +5208,12 @@ struct PageSnapshot {
     transition_scheduler: TransitionScheduler,
     starting_style_tracker: StartingStyleTracker,
     prev_styles: HashMap<NodeId, ComputedStyle>,
+    /// BUG-341 S7: mirrors `Lumen::page_prev_cascade_styles` — must travel
+    /// with `layout_box` (same producer, same invalidation rule) so a tab
+    /// switch back to this snapshot cannot resurrect a cache that no longer
+    /// matches the restored tree.
+    page_prev_cascade_styles: Option<lumen_layout::CascadeStyles>,
+    page_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
     anim_frame: Option<lumen_layout::AnimationFrame>,
     layout_box: Option<lumen_layout::LayoutBox>,
     /// P3-webvtt срез 3: cues страницы — переезжают вместе с вкладкой.
@@ -4835,6 +5262,8 @@ struct PageSnapshot {
     js_ctx: Option<Arc<dyn PersistentJs>>,
     first_paint_delivered: bool,
     first_contentful_paint_delivered: bool,
+    /// Per-tab settled-navigation-error flag (BUG-308); see the `Lumen` field.
+    load_failed: bool,
     /// Instant at which the current navigation began (set in `reload()`).
     /// Used to compute `duration` for the W3C Navigation Timing entry.
     nav_start: Option<std::time::Instant>,
@@ -4901,7 +5330,10 @@ fn parse_and_layout(
     let preload_hints = lumen_html_parser::scan_preload_hints(&source);
     dispatch_preload_hints(&preload_hints, base, sink, preload_seen);
 
-    let doc = lumen_html_parser::parse(&source);
+    let doc = {
+        let _s = lumen_core::trace::span("parse-html", "parse");
+        lumen_html_parser::parse(&source)
+    };
     let title = extract_title(&doc);
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
@@ -4934,6 +5366,7 @@ fn parse_and_layout(
     // external `<script src>` bodies via the subresource fetcher, so SPA
     // bundles execute (lenta.ru owlBundle.js etc.), not just inline scripts.
     let (classic_scripts, module_scripts) = {
+        let _s = lumen_core::trace::span("fetch-scripts", "net");
         let mut classic_items = Vec::new();
         let mut module_items = Vec::new();
         collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut module_items);
@@ -4942,6 +5375,7 @@ fn parse_and_layout(
             resolve_script_sources(&module_items, base, sink, cookie_jar.clone()),
         )
     };
+    let run_scripts_span = lumen_core::trace::span("run-scripts", "script");
     let (doc_arc, js_nav, js_ctx) = run_scripts_with_dom(
         doc,
         lumen_core::SandboxFlags::empty(),
@@ -4961,6 +5395,7 @@ fn parse_and_layout(
         classic_scripts,
         module_scripts,
     );
+    drop(run_scripts_span);
     // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
     #[cfg(any(feature = "quickjs", feature = "v8"))]
@@ -4997,6 +5432,7 @@ fn parse_and_layout(
     // всю страницу, layout нарисует серый placeholder.
     // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
     let (images, animated_gifs, lazy_pairs) = {
+        let _s = lumen_core::trace::span("fetch-images", "net");
         let mut d = doc_arc.lock().unwrap();
         fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone(), target)
     };
@@ -5013,20 +5449,24 @@ fn parse_and_layout(
     // Register decoded <img> bitmaps with the JS runtime so Canvas 2D
     // drawImage(imgElement, …) can read the pixels. Collect nid→url from DOM
     // (same traversal fetch_and_decode_images used), join with decoded images by
-    // URL, and push RGBA8 buffers into img_bitmap_store on the JS thread.
+    // URL, and share the decoded `Arc<Image>` into img_bitmap_store on the JS thread.
     #[cfg(any(feature = "quickjs", feature = "v8"))]
     if let Some(js) = &js_ctx {
         let img_reqs = {
             let d = doc_arc.lock().unwrap();
             lumen_layout::collect_image_requests(&d, viewport)
         };
-        let url_to_img: std::collections::HashMap<&str, &lumen_image::Image> =
+        // BUG-272 срез 20: share the decoded `Arc<Image>` with the JS canvas
+        // drawImage store instead of eagerly copying an RGBA8 buffer per image.
+        // The store converts to RGBA8 lazily, only for images a canvas actually
+        // draws — images never used as a drawImage source cost zero extra bytes.
+        let url_to_img: std::collections::HashMap<&str, &std::sync::Arc<lumen_image::Image>> =
             images.iter().map(|(url, img)| (url.as_str(), img)).collect();
-        let bitmaps: Vec<(u32, u32, u32, Vec<u8>)> = img_reqs
+        let bitmaps: Vec<(u32, std::sync::Arc<lumen_image::Image>)> = img_reqs
             .iter()
             .filter_map(|req| {
                 let img = url_to_img.get(req.url.as_str())?;
-                Some((req.node_id.index() as u32, img.width, img.height, img.to_rgba8()))
+                Some((req.node_id.index() as u32, std::sync::Arc::clone(img)))
             })
             .collect();
         if !bitmaps.is_empty() {
@@ -5036,6 +5476,7 @@ fn parse_and_layout(
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let css = {
+        let _s = lumen_core::trace::span("fetch-css", "net");
         let d = doc_arc.lock().unwrap();
         let link_media_ctx = if media_print {
             print_media_context(viewport, dark_mode)
@@ -5065,7 +5506,10 @@ fn parse_and_layout(
         css
     };
 
-    let sheet = lumen_css_parser::parse(&css);
+    let sheet = {
+        let _s = lumen_core::trace::span("parse-css", "parse");
+        lumen_css_parser::parse(&css)
+    };
 
     // PH3-19: @font-face загрузка разделена на два прохода.
     // local()-источники загружаются синхронно (из системного индекса, быстро).
@@ -5115,6 +5559,7 @@ fn parse_and_layout(
     // чтобы последующие экранные проходы на этом же потоке не наследовали print.
     lumen_layout::set_print_media(media_print);
     let layout = {
+        let _s = lumen_core::trace::span("layout", "layout");
         let d = doc_arc.lock().unwrap();
         lumen_layout::layout_measured_hyp(&d, &sheet, viewport, &measurer, hp, dark_mode)
     };
@@ -5125,8 +5570,11 @@ fn parse_and_layout(
     // и добавляем к `images` тем же ключом, что эмиттер кладёт в
     // `DisplayCommand::DrawBackgroundImage.src`.
     let mut images = images;
-    for (src, image) in fetch_and_decode_background_images(&layout, base, sink, cookie_jar.clone(), target) {
-        images.push((src, image));
+    {
+        let _s = lumen_core::trace::span("fetch-bg-images", "net");
+        for (src, image) in fetch_and_decode_background_images(&layout, base, sink, cookie_jar.clone(), target) {
+            images.push((src, image));
+        }
     }
 
     let rule_count = sheet.rules.len();
@@ -5183,7 +5631,7 @@ fn fetch_and_decode_background_images(
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
-) -> Vec<(String, lumen_image::Image)> {
+) -> Vec<(String, Arc<lumen_image::Image>)> {
     let urls = lumen_layout::collect_background_image_requests(layout);
     // Параллельная загрузка+декодирование, порядок сохраняем (ключи уникальны).
     let decoded = parallel_map(&urls, |_, url| {
@@ -5214,7 +5662,8 @@ fn fetch_and_decode_background_images(
             "Загружена bg-картинка: {url} ({}×{}, {:?})",
             image.width, image.height, image.format
         );
-        Some((url.clone(), image))
+        // BUG-272 срез 17: wrap once in Arc so `register_image` shares the buffer.
+        Some((url.clone(), Arc::new(image)))
     });
     decoded.into_iter().flatten().collect()
 }
@@ -5341,7 +5790,11 @@ fn parse_font_weight(s: Option<&str>) -> u16 {
 /// Результат используется `transition_scheduler.sync()` для сравнения
 /// предыдущего и нового стиля после каждого relayout-а.
 fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) {
-    map.insert(lb.node, lb.style.clone());
+    // BUG-341 S12: `LayoutBox::style` is now an `Arc`, but the transition
+    // scheduler owns its snapshot (it diffs it against the next frame), so this
+    // stays a deep copy. Sharing it here would need `prev_styles` to hold `Arc`s
+    // too — a page-pipeline follow-up, not part of this slice's measured path.
+    map.insert(lb.node, (*lb.style).clone());
     for child in &lb.children {
         collect_box_styles(child, map);
     }
@@ -5407,6 +5860,178 @@ fn collect_layout_rects_rec(lb: &LayoutBox, map: &mut HashMap<u32, [f32; 4]>) {
     }
 }
 
+/// CC-4/CC-9: removes `#contentArea`'s [`LayoutBox`] from `lb`'s subtree
+/// (depth-first, first match) — not just its children, but its own box (and
+/// background paint command) too, so the real page painted separately at
+/// that rect is never covered by it. Never matches `lb` itself, only
+/// descendants — `#contentArea` is never the chrome document's root box.
+///
+/// CC-9: two of `#contentArea`'s own children — `#findBar`, `#downloadsPanel`
+/// — are real popovers this pass *does* want painted (they sit outside the
+/// pruned rect via `position:absolute`, CSS Positioned Layout L3 §9.10, so
+/// splicing them elsewhere in the tree does not change which stacking
+/// context they join: `#contentArea` itself creates none). `salvage_ids`
+/// lists which descendant node ids to keep; they're spliced back into `lb`
+/// at the exact slot `#contentArea` occupied, preserving both their absolute
+/// paint rects (already resolved by the out-of-flow layout pass) and their
+/// tree-order position relative to `#contentArea`'s former siblings.
+///
+/// BUG-341 S22: the pruning is **reversible**. Every removal is recorded in the
+/// returned [`ContentAreaDetachment`], and [`restore_content_area`] puts the
+/// tree back exactly as it was — which is what lets the next pass take the
+/// live tree as its `prev` basis instead of the pipeline copying a pristine
+/// one aside on every frame (that copy was the largest single item left in an
+/// incremental chrome cycle; see the S22 census in `bugs/BUG-341-OPEN.md`).
+fn take_content_area(
+    lb: &mut LayoutBox,
+    node: lumen_dom::NodeId,
+    salvage_ids: &[&str],
+    doc: &lumen_dom::Document,
+) -> Option<(Rect, ContentAreaDetachment)> {
+    let mut path = Vec::new();
+    take_content_area_at(lb, node, salvage_ids, doc, &mut path)
+}
+
+/// [`take_content_area`]'s recursion, carrying the child-index path walked so
+/// far so the detachment record can name `#contentArea`'s holder.
+fn take_content_area_at(
+    lb: &mut LayoutBox,
+    node: lumen_dom::NodeId,
+    salvage_ids: &[&str],
+    doc: &lumen_dom::Document,
+    path: &mut Vec<usize>,
+) -> Option<(Rect, ContentAreaDetachment)> {
+    if let Some(slot) = lb.children.iter().position(|c| c.node == node) {
+        let mut removed = lb.children.remove(slot);
+        let rect = removed.rect;
+        let mut salvaged = Vec::new();
+        salvage_layout_boxes(&mut removed, salvage_ids, doc, &mut Vec::new(), &mut salvaged);
+        let mut salvage_paths = Vec::with_capacity(salvaged.len());
+        for (offset, (from, b)) in salvaged.into_iter().enumerate() {
+            salvage_paths.push(from);
+            lb.children.insert(slot + offset, b);
+        }
+        return Some((
+            rect,
+            ContentAreaDetachment { holder_path: path.clone(), slot, removed, salvage_paths },
+        ));
+    }
+    for (i, child) in lb.children.iter_mut().enumerate() {
+        path.push(i);
+        if let Some(found) = take_content_area_at(child, node, salvage_ids, doc, path) {
+            return Some(found);
+        }
+        path.pop();
+    }
+    None
+}
+
+/// BUG-341 S22: everything [`take_content_area`] removed from a chrome box
+/// tree, in enough detail for [`restore_content_area`] to undo it exactly.
+///
+/// "Exactly" is the whole point, and the cost of getting it wrong is higher
+/// than it looks. The restored tree is handed to
+/// `layout_mutation_incremental_restyle` as its `prev` basis, and
+/// `incremental_build_box` moves whole *clean* subtrees straight across from
+/// that basis — on an interaction cycle `#contentArea`'s parent is clean, so a
+/// basis missing `#contentArea` produces a document missing `#contentArea`,
+/// and the next cycle inherits that tree in turn. It is not a slow frame, it
+/// is 155 boxes where there should be 318, permanently. Measured, and gated:
+/// `bug341_s22_a_restored_basis_carries_the_whole_document_forward`.
+struct ContentAreaDetachment {
+    /// Child-index path from the tree root down to the box that held
+    /// `#contentArea` (empty when the root itself held it).
+    holder_path: Vec<usize>,
+    /// Index `#contentArea` occupied among that holder's children — also the
+    /// slot the salvaged popovers were spliced into.
+    slot: usize,
+    /// `#contentArea`'s own box, with the salvaged popovers already lifted out
+    /// of its subtree.
+    removed: LayoutBox,
+    /// For each salvaged popover, in removal order, the child-index path
+    /// inside [`Self::removed`] it was removed from — the last element is the
+    /// index within that box's children. Restoring walks these in **reverse**,
+    /// because each path was recorded against the tree state of its own
+    /// removal.
+    salvage_paths: Vec<Vec<usize>>,
+}
+
+/// BUG-341 S22: inverse of [`take_content_area`] — re-inserts the salvaged
+/// popovers into `#contentArea`'s subtree and `#contentArea` back into its
+/// former slot, reproducing the pre-pruning tree box for box.
+///
+/// Returns `false` if any recorded path no longer addresses a box (only
+/// possible if something mutated the tree between the two calls, which nothing
+/// does today — `chrome_layout` is read-only until the next pass replaces it).
+/// The caller treats that as "no usable `prev`" and takes the full-layout path,
+/// so a stale record costs a slow frame, never a wrong one.
+fn restore_content_area(root: &mut LayoutBox, detached: ContentAreaDetachment) -> bool {
+    let ContentAreaDetachment { holder_path, slot, mut removed, salvage_paths } = detached;
+    let Some(holder) = follow_box_path_mut(root, &holder_path) else { return false };
+    if slot + salvage_paths.len() > holder.children.len() {
+        return false;
+    }
+    let salvaged: Vec<LayoutBox> = holder.children.drain(slot..slot + salvage_paths.len()).collect();
+    for (from, b) in salvage_paths.into_iter().zip(salvaged).rev() {
+        let Some((&idx, head)) = from.split_last() else { return false };
+        let Some(parent) = follow_box_path_mut(&mut removed, head) else { return false };
+        if idx > parent.children.len() {
+            return false;
+        }
+        parent.children.insert(idx, b);
+    }
+    holder.children.insert(slot, removed);
+    true
+}
+
+/// Walks `path`'s child indices down from `b`. `None` if any index is out of
+/// range.
+fn follow_box_path_mut<'a>(b: &'a mut LayoutBox, path: &[usize]) -> Option<&'a mut LayoutBox> {
+    let mut cur = b;
+    for &i in path {
+        cur = cur.children.get_mut(i)?;
+    }
+    Some(cur)
+}
+
+/// Depth-first: removes every descendant of `lb` whose element id is in
+/// `salvage_ids`, appending it to `out` in tree order together with the
+/// child-index path (relative to the box this recursion started at) it came
+/// from. Used by [`take_content_area`] to rescue specific popovers out of
+/// `#contentArea` before the rest of its subtree is discarded — and by
+/// [`restore_content_area`] to put them back.
+fn salvage_layout_boxes(
+    lb: &mut LayoutBox,
+    salvage_ids: &[&str],
+    doc: &lumen_dom::Document,
+    prefix: &mut Vec<usize>,
+    out: &mut Vec<(Vec<usize>, LayoutBox)>,
+) {
+    let mut i = 0;
+    while i < lb.children.len() {
+        let matches = doc.get(lb.children[i].node).get_attr("id").is_some_and(|id| salvage_ids.contains(&id));
+        if matches {
+            let mut from = prefix.clone();
+            from.push(i);
+            out.push((from, lb.children.remove(i)));
+        } else {
+            prefix.push(i);
+            salvage_layout_boxes(&mut lb.children[i], salvage_ids, doc, prefix, out);
+            prefix.pop();
+            i += 1;
+        }
+    }
+}
+
+/// CC-10: which modal `Lumen::chrome_modal_ancestor` resolved a `CloseModal`
+/// click to — `#certOverlay` and `#printOverlay` share the same
+/// `data-action="close-modal"` value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChromeModalKind {
+    Cert,
+    Print,
+}
+
 /// Строит display list с правильным painting order (CSS 2.1 Appendix E, z-index stacking).
 fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
     let tree = StackingTree::build(layout);
@@ -5451,8 +6076,8 @@ fn decide_fullscreen_poll(prev: (u32, u32), cur: (u32, u32), attempts: u8) -> Fu
 /// from the full renderer surface size `surface` (already in CSS px).
 ///
 /// In an interactive window the page is composited *below* the browser chrome:
-/// the tab strip (`TAB_BAR_HEIGHT`) always, plus the workspace switcher
-/// (`SWITCHER_HEIGHT`) when visible. The page content is shifted down by that
+/// the tab strip + toolbar (`toolbar::CHROME_H`) always, plus the workspace
+/// switcher (`SWITCHER_HEIGHT`) when visible. The page content is shifted down by that
 /// chrome via `PushTransform`, and scroll clamping uses the same reduced height
 /// (`viewport_height_css`). The layout pass must therefore see the *content*
 /// height — not the full window — so that `vh`/`%`-heights/`@media (height)`
@@ -5466,7 +6091,7 @@ fn content_layout_viewport(surface: Size, has_window: bool, workspace_visible: b
     if !has_window {
         return (surface.width, surface.height);
     }
-    let chrome_h = tabs::strip::TAB_BAR_HEIGHT
+    let chrome_h = toolbar::CHROME_H
         + if workspace_visible {
             panels::workspace_panel::SWITCHER_HEIGHT
         } else {
@@ -5735,6 +6360,77 @@ fn compute_layout_incremental(
     drop(doc);
     let dl = paint_ordered(&layout);
     (dl, layout)
+}
+
+/// BUG-341 S7: restyle-aware variant of [`relayout_page_incremental`] — uses
+/// [`lumen_layout::box_tree::layout_mutation_incremental_restyle`] instead of
+/// [`lumen_layout::layout_mutation_incremental`], skipping cascade work (not
+/// just geometry) for subtrees `delta.dirty_roots` proves untouched. Only
+/// safe when `delta.prev_styles` is the exact `CounterMap::styles()` the
+/// previous cycle over this same document produced — see
+/// `layout_mutation_incremental_restyle`'s own doc comment for the full
+/// precondition; [`Lumen::page_prev_cascade_styles`] being `Some` is the
+/// caller-side half of that contract. Returns the fresh `CounterMap` so the
+/// caller can persist its `styles()` as the next cycle's `delta.prev_styles`.
+#[allow(clippy::too_many_arguments)]
+fn relayout_page_incremental_restyle(
+    src: &LayoutSource,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+    // BUG-341 S19: consumed — the reusable subtrees are moved out of it into
+    // the tree returned. See `layout_mutation_incremental_restyle`.
+    prev: lumen_layout::LayoutBox,
+    delta: lumen_layout::counters::RestyleDelta<'_>,
+) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
+    compute_layout_incremental_restyle(
+        &src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts, prev, delta,
+    )
+}
+
+/// BUG-341 S7: restyle-aware variant of [`compute_layout_incremental`] — see
+/// [`relayout_page_incremental_restyle`].
+#[allow(clippy::too_many_arguments)]
+fn compute_layout_incremental_restyle(
+    document: &Mutex<Document>,
+    stylesheet: &lumen_css_parser::Stylesheet,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+    // BUG-341 S19: consumed — the reusable subtrees are moved out of it into
+    // the tree returned. See `layout_mutation_incremental_restyle`.
+    prev: lumen_layout::LayoutBox,
+    delta: lumen_layout::counters::RestyleDelta<'_>,
+) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    if web_fonts.is_empty() {
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let doc = document.lock().unwrap();
+        let (layout, counters) = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+            &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev, delta,
+        );
+        drop(doc);
+        let dl = paint_ordered(&layout);
+        return (dl, layout, counters);
+    }
+    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
+        .expect("MultiFontMeasurer из bundled Inter");
+    for wf in web_fonts {
+        measurer.register_family_with_ranges(
+            &wf.family,
+            wf.bytes.clone(),
+            wf.unicode_range.clone(),
+        );
+    }
+    let doc = document.lock().unwrap();
+    let (layout, counters) = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+        &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev, delta,
+    );
+    drop(doc);
+    let dl = paint_ordered(&layout);
+    (dl, layout, counters)
 }
 
 /// CSS Containment L3 §4.4 (BB-4) — shell-событие: элемент с
@@ -6202,6 +6898,8 @@ fn resolve_script_sources(
                 // warmed by the streaming thread returns instantly instead of
                 // blocking the UI thread on the socket. On a miss this fetches the
                 // exact same bytes via the same client (script order preserved).
+                // PERF-1: one span per external script fetch.
+                let mut fetch_span = lumen_core::trace::span(format!("script {url}"), "net");
                 let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
                     let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
                     client
@@ -6211,6 +6909,7 @@ fn resolve_script_sources(
                 match bytes {
                     Ok(bytes) => {
                         eprintln!("Загружен скрипт: {url}");
+                        fetch_span.set_bytes(bytes.len());
                         Some(String::from_utf8_lossy(&bytes[..]).into_owned())
                     }
                     Err(e) => {
@@ -6728,8 +7427,8 @@ struct Lumen {
     /// Декодированные `<img>` ресурсы. До создания Renderer-а — хранятся
     /// в Vec и заливаются в GPU в `resumed`; после — register_image идёт
     /// напрямую в `reload`. На переходах между страницами очищается через
-    /// `Renderer::clear_images` + переустановка.
-    pending_images: Vec<(String, lumen_image::Image)>,
+    /// `Renderer::clear_images` + переустановка. `Arc<Image>` (BUG-272 срез 17).
+    pending_images: Vec<(String, Arc<lumen_image::Image>)>,
     /// PH3-19: реестр шрифтов текущей страницы (local() + web-шрифты, пришедшие
     /// через `FontLoaded`). Хранится отдельно от `Arc<dyn FontProvider>` в renderer-е,
     /// чтобы `user_event(FontLoaded)` мог дорегистрировать шрифт через
@@ -6753,6 +7452,143 @@ struct Lumen {
     #[allow(dead_code)] // потребитель появится при P3 wiring (ph3-color-management Step 1)
     display_color_profile: platform::display_color_profile::PlatformDisplayColorProfile,
     renderer: Option<Box<dyn RenderBackend>>,
+    /// CC-4: chrome document + stylesheet, parsed once at startup via
+    /// [`lumen_chrome::parse_document`] from `chrome_preview::HTML` — the same
+    /// bytes `build.rs` already CSS-gated. Only relaid out on resize
+    /// ([`Lumen::relayout_chrome_host`]); the asset has no dynamic content yet
+    /// (`ChromeModel` DOM mutation is CC-6), so nothing else invalidates it.
+    ///
+    /// CC-15-6: always `Some` since the `LUMEN_LEGACY_CHROME` rollback flag was
+    /// deleted — the `Option` is now only the shape every accessor already reads
+    /// through, not a live "no engine chrome" mode.
+    chrome_doc: Option<(lumen_dom::Document, lumen_css_parser::Stylesheet)>,
+    /// CC-4: `LayoutBox` + display list of the last `relayout_chrome_host` pass,
+    /// painted at the front of `overlay_buf` every frame (legacy panels/tab-bar/
+    /// toolbar still draw over it, painter's order). `None` until the first
+    /// resize after startup provides a window size. `#contentArea` — the
+    /// design reference's placeholder for tab content, doubling as the
+    /// brief's "`#page-host`" — is pruned out of this tree entirely (not just
+    /// its children) before painting, so neither its demo markup nor its own
+    /// `background:var(--surface-0)` fill can end up on top of the real page
+    /// painted separately at [`Self::chrome_page_host_rect`]'s rect.
+    chrome_layout: Option<(lumen_layout::LayoutBox, lumen_paint::DisplayList)>,
+    /// CC-4: `#contentArea`'s rect, captured from the layout tree right
+    /// before [`Self::relayout_chrome_host`] prunes that node out — replaces
+    /// the legacy `left_dock()` width / `toolbar::CHROME_H` pair at the two
+    /// render-time page-offset call sites. `None` until the first chrome
+    /// layout exists (mirrors `chrome_layout`).
+    chrome_page_host_rect: Option<Rect>,
+    /// CC-5 (docs/tasks/p1-css-chrome.md): hovered node in `chrome_layout`'s
+    /// tree, or `None` when the pointer isn't over the chrome's own opaque
+    /// area (or off the flag). Set from `WindowEvent::CursorMoved`; feeds
+    /// `:hover` into the next [`Self::relayout_chrome_host`] pass. Kept
+    /// separate from [`Self::hovered_nid`] (the page's own hover state) for
+    /// the same reason `relayout_chrome_host` explicitly resets the
+    /// interactive thread-locals rather than inheriting them — the two
+    /// documents' hover state must never leak into each other's layout pass.
+    chrome_hovered_nid: Option<NodeId>,
+    /// CC-5: pressed node in `chrome_layout`'s tree — mirrors
+    /// [`Self::chrome_hovered_nid`] but for `:active`, set from
+    /// `WindowEvent::MouseInput` press.
+    chrome_active_nid: Option<NodeId>,
+    /// CC-7 (docs/tasks/p1-css-chrome.md): `#omniInput`'s post-layout rect
+    /// from the last [`Self::relayout_chrome_host`] pass — the anchor for the
+    /// hand-painted caret overlay (editing itself stays owned by the legacy
+    /// `address_bar::AddressBarState`, no native caret exists for `<input>`
+    /// yet). `None` off the flag or before the first chrome layout.
+    chrome_omni_input_rect: Option<Rect>,
+    /// CC-8 (docs/tasks/p1-css-chrome.md): `true` collapses the vertical
+    /// sidebar to its icon rail (`#sidebar.collapsed`, `--sidebar-w-collapsed`
+    /// in the asset). Toggled by `ChromeAction::ToggleSidebar`
+    /// (`.sb-collapse` button). Independent of [`Self::vertical_tabs`]'s own
+    /// `visible` flag — that one picks vertical vs. horizontal layout,
+    /// this one narrows the vertical sidebar without hiding it.
+    chrome_sidebar_collapsed: bool,
+    /// CC-10b (docs/tasks/p1-css-chrome.md): `data-section` slug of the
+    /// active `#view-settings` tab (`"general"`/`"privacy"`/`"appearance"`/
+    /// `"sync"`/`"ext"`/`"qa"`). Engine-chrome-only UI state — the design's 6
+    /// sections don't line up with `SettingsPanel::SettingsSection`'s 7 (see
+    /// `lumen_chrome::ChromeSettingsModel` doc comment), so this is a
+    /// separate field rather than a projection of the legacy enum. Set by
+    /// `ChromeAction::SetSettingsSection`.
+    chrome_settings_section: String,
+    /// CC-11 (docs/tasks/p1-css-chrome.md): CSS Animations scheduler for the
+    /// chrome document — a separate instance from [`Self::animation_scheduler`]
+    /// because `chrome_doc` and the page `Document` number `NodeId`s
+    /// independently (both start at 0), so a shared scheduler would collide
+    /// entries between the two trees. Ticked on every `RedrawRequested`
+    /// alongside the page scheduler.
+    /// Unlike the page scheduler, never `.clear()`-ed: `chrome_doc`'s nodes
+    /// persist for the process lifetime (no reload/navigation equivalent for
+    /// chrome), so clearing on every [`Self::relayout_chrome_host`] call —
+    /// which happens far more often than page relayouts (any hover/click) —
+    /// would restart `infinite` animations (the spinner) on every interaction.
+    chrome_animation_scheduler: animation_scheduler::AnimationScheduler,
+    /// CC-11: CSS Transitions scheduler for the chrome document — mirrors
+    /// [`Self::transition_scheduler`] but keyed against `chrome_doc`'s own
+    /// `NodeId` space (see [`Self::chrome_animation_scheduler`] doc comment).
+    /// `sync()` runs at the end of [`Self::relayout_chrome_host`] (chrome's
+    /// post-layout point, mirroring `apply_relayout_result`'s page-side
+    /// sync); `tick()` runs on every `RedrawRequested`.
+    chrome_transition_scheduler: TransitionScheduler,
+    /// CC-11: computed styles from the previous [`Self::relayout_chrome_host`]
+    /// pass — needed by [`Self::chrome_transition_scheduler`]'s `sync()` to
+    /// detect which properties changed. Mirrors [`Self::prev_styles`] for the
+    /// chrome tree.
+    chrome_prev_styles: HashMap<NodeId, ComputedStyle>,
+    /// BUG-341 S5/S22: what the previous pass's [`take_content_area`] removed
+    /// from [`Self::chrome_layout`].
+    ///
+    /// The incremental graft needs the *pristine* (pre-pruning) tree of the
+    /// previous pass: it matches children **by index**, and pruning
+    /// `#contentArea` shifts every sibling after it (see BUG-341's "attempted
+    /// mitigation" note, which hit exactly that). S5 met this by keeping a
+    /// whole second copy of the tree (`chrome_prev_pristine_layout =
+    /// layout.clone()`), which the S22 census priced at 0.16-0.40 ms per
+    /// cycle — the largest item left in a chrome interaction, and ~40 % of a
+    /// hover cycle. S22 keeps the *difference* instead: the pruning is
+    /// recorded here and undone by [`restore_content_area`] at the top of the
+    /// next pass, so the live tree in [`Self::chrome_layout`] becomes the
+    /// basis and no copy is made at all. Sound because nothing mutates
+    /// `chrome_layout` between passes — it is read-only until
+    /// [`Self::relayout_chrome_host`] replaces it wholesale.
+    chrome_content_area_detached: Option<ContentAreaDetachment>,
+    /// BUG-341 S5: the per-node `ComputedStyle` cascade cache
+    /// ([`lumen_layout::CounterMap::styles`]) from the previous pass —
+    /// `RestyleDelta::prev_styles` for the next incremental cascade. Distinct
+    /// from [`Self::chrome_prev_styles`] (CC-11's transition-sync snapshot,
+    /// collected from post-layout `LayoutBox`es *after* `font-size-adjust` has
+    /// mutated them in place) — the cascade cache must be the pre-layout,
+    /// pre-adjust styles the cascade itself produced, or the incremental
+    /// cascade's `incr == full` correctness gate (BUG-341 brief §4) would
+    /// compare against the wrong reference.
+    chrome_prev_cascade_styles: lumen_layout::CascadeStyles,
+    /// BUG-341 S5: `(hover, focus, active)` node ids from the previous pass —
+    /// `restyle_root_set_for_state_change`'s `prev` argument for each axis, so
+    /// a hover/focus/active transition can compute its conservative dirty
+    /// root-set (brief §4).
+    chrome_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
+    /// BUG-341 S5: viewport size the previous pass laid out at — a resize
+    /// invalidates the previous tree's geometry for `graft_geometry` purposes,
+    /// so a viewport change forces the full-layout path regardless of what
+    /// `bind_model_tracked` reports touched.
+    chrome_prev_viewport: Option<Size>,
+    /// BUG-341 S5: Forced Colors Mode state ([`lumen_layout::forced_colors_active`])
+    /// the previous pass ran under. Not part of `ChromeModel` (it's a
+    /// thread-local accessibility preference, not shell UI state), but it does
+    /// feed the cascade — a change here must force a full recompute (the
+    /// `bind_model_tracked` diff cannot see it, since it never touches `doc`),
+    /// or the incremental path would reuse `chrome_prev_cascade_styles`
+    /// computed under the wrong Forced-Colors state.
+    chrome_prev_forced_colors: bool,
+    /// CC-11: last computed animation/transition frame for the chrome
+    /// document. `None` when the chrome flag is off or nothing is currently
+    /// animating. Only the compositor-offloadable properties (opacity,
+    /// transform, color, background-color) are applied — same limitation as
+    /// [`Self::anim_frame`] for the page, since `width` transitions
+    /// (`#sidebar`, `.dl-progress-fill`) aren't in the Phase-0 animatable
+    /// property table (`TransitionScheduler::sync`) and stay unanimated.
+    chrome_anim_frame: Option<lumen_layout::AnimationFrame>,
     /// HTML event loop runtime. На каждой итерации winit-loop (AboutToWait)
     /// выполняется одна task, на RedrawRequested — run_rendering_step
     /// (вызывает rAF-callback-и), на WindowEvent::Resized —
@@ -6774,6 +7610,22 @@ struct Lumen {
     /// Computed styles предыдущего layout-дерева — нужны `transition_scheduler.sync()`
     /// для определения изменившихся свойств. Обновляется после каждого layout.
     prev_styles: HashMap<NodeId, ComputedStyle>,
+    /// BUG-341 S7: `CounterMap::styles()` cascade cache from the last
+    /// [`Self::try_relayout_raf_incremental`] call that took the restyle-aware
+    /// path (`layout_mutation_incremental_restyle`) — the `RestyleDelta::prev_styles`
+    /// basis for the *next* such call. `None` whenever `layout_box` was set by
+    /// any other producer (`relayout()`, tab switch, page load, hibernate
+    /// restore, streaming layout, …), since a stale cache would silently derive
+    /// the wrong dirty-root set against a `layout_box` it does not match —
+    /// `try_relayout_raf_incremental` falls back to the existing
+    /// full-cascade-plus-graft path (`layout_mutation_incremental`) whenever
+    /// this is `None`.
+    page_prev_cascade_styles: Option<lumen_layout::CascadeStyles>,
+    /// Interactive state (`hovered_nid`/`focused_node`/`active_nid`) at the
+    /// moment `page_prev_cascade_styles` was captured — the `prev` side of the
+    /// next call's `restyle_root_set_for_state_change`. Only meaningful when
+    /// `page_prev_cascade_styles` is `Some`.
+    page_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
     /// Последний вычисленный кадр анимаций. `None` — страница не загружена
     /// или нет активных анимаций.
     anim_frame: Option<lumen_layout::AnimationFrame>,
@@ -6927,10 +7779,6 @@ struct Lumen {
     /// Updated on every `CursorMoved`; triggers relayout when it changes so
     /// `:hover` rules re-evaluate. `None` when cursor is outside the content area.
     hovered_nid: Option<NodeId>,
-    /// Tab bar: index of the hovered tab for displaying tier-tooltip. Updated on
-    /// every `CursorMoved` when cursor is over the tab bar (y < TAB_BAR_HEIGHT).
-    /// `None` when cursor is outside the tab bar or no tabs exist.
-    hovered_tab_idx: Option<usize>,
     /// DOM node whose mouse button is currently held down (CSS `:active` target).
     /// Set on `MouseInput(Pressed)`, cleared on `MouseInput(Released)`.
     active_nid: Option<NodeId>,
@@ -7129,8 +7977,18 @@ struct Lumen {
     /// Session-scoped cookie jar. Shared across all `HttpClient` instances so
     /// `Set-Cookie` headers received on one hop (including 3xx redirects) are
     /// sent back on subsequent requests to the same domain. In-memory in Phase 0;
-    /// wired to a per-profile SQLite file in Phase 2.
+    /// wired to a per-profile SQLite file in Phase 2. Used for every profile
+    /// except the ephemeral Anonymous one — see [`Self::anonymous_cookie_jar`]
+    /// and [`Self::active_cookie_jar`] (DS-16).
     cookie_jar: Arc<lumen_storage::CookieJar>,
+    /// Anonymous profile's own cookie jar (DS-16, §9.3 ADR-020) — kept out of
+    /// [`Self::cookie_jar`] so cookies set while browsing as Anonymous never
+    /// leak into Personal/Work/Guest and vice versa. Reset to a fresh
+    /// in-memory instance every time Anonymous becomes the active profile
+    /// (`ProfileMenuHit::SwitchTo`), so it never carries state from a
+    /// previous Anonymous session either — true ephemerality within the
+    /// running process, not just isolation.
+    anonymous_cookie_jar: Arc<lumen_storage::CookieJar>,
     /// Live JS context for the current page — keeps event listeners active after
     /// initial script execution. `None` when `quickjs` feature is disabled or
     /// no scripts were registered. Must be dropped before `layout_source` on
@@ -7191,6 +8049,14 @@ struct Lumen {
     first_paint_delivered: bool,
     /// `true` once `first-contentful-paint` has been delivered to JS.
     first_contentful_paint_delivered: bool,
+    /// `true` when the current navigation finished in a network/HTTP error
+    /// (`LoadError` / final-render `Err`) rather than a loaded document. A
+    /// settled error IS "done loading": `check_wait_condition` treats it as
+    /// `DocumentReady` so a `wait{document_ready}` (MCP/BiDi) resolves at once
+    /// instead of hanging until its deadline when there is no JS context and no
+    /// prior `layout_box` to fall back on (BUG-308). Reset to `false` at the
+    /// start of every navigation; per-tab (saved/restored via `PageSnapshot`).
+    load_failed: bool,
     /// Instant at which the current navigation began (set in `reload()`).
     /// Used to compute `duration` for the W3C Navigation Timing entry.
     nav_start: Option<std::time::Instant>,
@@ -7353,6 +8219,16 @@ struct Lumen {
     /// Persistent workspace storage — SQLite in-memory during testing; wired to
     /// a disk path in production via `Workspaces::open(path)`.
     workspaces: lumen_storage::Workspaces,
+    /// Profile switcher dropdown state (DS-14), anchored below the toolbar
+    /// avatar button (`toolbar::avatar_x()`).
+    profile_menu: panels::profile_menu::ProfileMenuPanel,
+    /// Persistent profile registry (§9.3, DS-14): profile metadata + which
+    /// one is active. Opened from the portable data dir
+    /// (`<exe_dir>/data/profiles.db`); first run seeds 4 default profiles
+    /// (Личный/Рабочий/Анонимный/Гость — `panels::profile_menu::DEFAULT_PROFILES`).
+    /// DS-14 scope: only the active pointer and visual signature (avatar,
+    /// chrome accent) are wired — per-profile data isolation is DS-16.
+    profiles: lumen_storage::ProfileRegistry,
     /// Shields floating panel state (7C.4).
     ///
     /// Shows blocked-request counts per domain, and lets the user toggle
@@ -7493,6 +8369,11 @@ struct Lumen {
     /// Seeded with `!g` (Google) and `!gh` (GitHub) on startup.  Custom aliases
     /// are addable via `set(trigger, expansion)`.
     omnibox_aliases: lumen_storage::OmniboxAliases,
+    /// SQLite-backed pinned `about:newtab` speed-dial tiles (DS-11).
+    ///
+    /// Portable-data store (`<exe_dir>/data/newtab_tiles.db`); falls back to
+    /// in-memory if the path cannot be opened.
+    newtab_tiles: lumen_storage::NewtabTiles,
     /// In-session notes created via `@notes <text>` in the omnibox.
     ///
     /// Persisted in-memory for the session; each entry is a raw text string.
@@ -7615,10 +8496,6 @@ struct Lumen {
     /// stores other than `settings_store` (HTTP/3 → `fingerprint.toml`,
     /// ad-block subscriptions → `AdblockStore`, spellcheck locale → `SPELL_DICTS`).
     settings_panel: panels::settings_panel::SettingsPanel,
-    /// Cursor position (window CSS px) while the settings panel is visible,
-    /// used to render a hover tooltip next to the pointer. `None` when the
-    /// panel is hidden or the cursor is outside it.
-    settings_hover: Option<(f32, f32)>,
     /// Persistent ad-block filter-list store (`<exe_dir>/data/adblock/adblock.db`).
     ///
     /// Opened once at startup ([`config::init_adblock`]); shared with the
@@ -7689,11 +8566,14 @@ struct Lumen {
     /// `Some(ms)` = spinner overlay is active; `None` = no restoration in progress.
     /// Set at the start of `restore_hibernated_tab` and cleared when restore completes.
     restore_spinner_start_ms: Option<f64>,
-    /// Active element resize: `Some((node_id, start_x, start_y))` when user is dragging
-    /// the resize grip. `None` when no resize is active.
+    /// Active element resize: `Some((node_id, start_x, start_y, allow_width, allow_height))`
+    /// when user is dragging the resize grip. `None` when no resize is active.
     /// Set on MouseInput Pressed over a resize grip, cleared on MouseInput Released.
-    /// During CursorMoved, width/height are updated via JS binding.
-    resize_active: Option<(lumen_dom::NodeId, f32, f32)>,
+    /// `allow_width`/`allow_height` are the grip node's `Resize` CSS value resolved to
+    /// physical axes (CC-CSS-4: `Resize::allowed_axes`, writing-mode aware) at press
+    /// time — they gate which of width/height is updated during CursorMoved via the
+    /// JS binding, so `resize: vertical` no longer also changes width on a diagonal drag.
+    resize_active: Option<(lumen_dom::NodeId, f32, f32, bool, bool)>,
     /// In-progress tab drag-and-drop (§O-9).
     ///
     /// `Some` from the moment the user presses on a tab until they release.
@@ -7775,23 +8655,27 @@ enum PendingIntercepted {
 
 impl Lumen {
     /// Finds a layout box with a resize grip at position (x, y) in the layout tree.
-    /// Returns the NodeId of that element, or None if no grip is found.
+    /// Returns `(node_id, allow_width, allow_height)` — the latter two are the box's
+    /// `resize` value resolved to physical axes (CC-CSS-4: `Resize::allowed_axes`,
+    /// writing-mode aware), so the caller knows which dimension(s) a drag from this
+    /// grip is allowed to change. Returns `None` if no grip is found.
     /// This is used in B-7: CSS Resize property Phase 1 to detect mouse clicks on grips.
     fn find_resize_grip_node(
         &self,
         b: &lumen_layout::LayoutBox,
         x: f32,
         y: f32,
-    ) -> Option<lumen_dom::NodeId> {
+    ) -> Option<(lumen_dom::NodeId, bool, bool)> {
         // Check this box first
         if lumen_paint::point_on_resize_grip(b, x, y) {
-            return Some(b.node);
+            let (allow_w, allow_h) = b.style.resize.allowed_axes(b.style.writing_mode);
+            return Some((b.node, allow_w, allow_h));
         }
 
         // Recursively check children
         for child in &b.children {
-            if let Some(nid) = self.find_resize_grip_node(child, x, y) {
-                return Some(nid);
+            if let Some(hit) = self.find_resize_grip_node(child, x, y) {
+                return Some(hit);
             }
         }
 
@@ -7955,6 +8839,1022 @@ impl Lumen {
         }
     }
 
+    /// CC-4 (docs/tasks/p1-css-chrome.md): re-lays-out and re-paints the
+    /// engine-drawn chrome document at the current window size. No-op when the
+    /// renderer/window is not ready yet (mirrors the degenerate-size guard in
+    /// [`Self::relayout_viewport`]).
+    ///
+    /// Called once the renderer has a first non-zero size and again on every
+    /// `WindowEvent::Resized`. The chrome asset has no dynamic content yet
+    /// (`ChromeModel` DOM mutation lands in CC-6), so a resize is the only
+    /// thing that can currently change its layout.
+    ///
+    /// CC-5: hover/active state comes from [`Self::chrome_hovered_nid`]/
+    /// [`Self::chrome_active_nid`]. CC-7 adds `:focus`/`:focus-within` for
+    /// `#omniInput` — `Some` exactly while the legacy `address_bar` is open;
+    /// its caret is still hand-painted (no native `<input>` caret exists,
+    /// see [`Self::chrome_omni_input_rect`]), only editing state moved to
+    /// chrome-DOM. The interactive thread-locals are process-wide (brief
+    /// risk #6), so this pass explicitly sets them from chrome's own state
+    /// rather than inheriting whatever the page's last [`Self::relayout`]
+    /// left behind, and clears them again afterward so a subsequent page
+    /// relayout does not inherit chrome's state either.
+    ///
+    /// The design reference's `#contentArea` — the container it reserves for
+    /// live tab content, doubling as the brief's "`#page-host`" (no new id
+    /// was introduced) — carries its own placeholder markup (new-tab tiles, a
+    /// demo site page, …) meant for standalone preview
+    /// (`about:chrome-preview`, CC-1), not for stacking under the real tab
+    /// content this host paints separately at that same rect
+    /// ([`Self::chrome_page_host_rect`]). Since this pass's display list
+    /// paints *above* the page in `overlay_buf`, leaving that placeholder in
+    /// — or even just clearing its children but keeping its own box — would
+    /// permanently hide the real page behind either the placeholder markup or
+    /// `#contentArea`'s own `background:var(--surface-0)` fill. This pass
+    /// therefore removes `#contentArea` from the tree entirely
+    /// ([`take_content_area`]) right after layout, capturing its rect into
+    /// `chrome_page_host_rect` first, and before [`paint_ordered`] — except
+    /// `#findBar`/`#downloadsPanel` (CC-9), salvaged back into the tree at
+    /// `#contentArea`'s former slot since they're real popovers, not preview
+    /// placeholder content.
+    fn relayout_chrome_host(&mut self) {
+        if self.chrome_doc.is_none() {
+            return;
+        }
+        let Some(r) = self.renderer.as_ref() else { return };
+        let viewport = r.viewport_size();
+        if viewport.width <= 0.0 || viewport.height <= 0.0 {
+            return;
+        }
+        // CC-6: rebind ChromeModel from current shell state before every
+        // layout pass — no separate dirty flag, `bind_model` is cheap (a
+        // handful of attribute/text mutations + two small list rebuilds).
+        let model = self.chrome_model_snapshot();
+        let Some((doc, sheet)) = self.chrome_doc.as_mut() else { return };
+        // BUG-341 S6: `bind_model_tracked` (not plain `bind_model`) — reports
+        // every node whose selector-relevant attribute/class actually changed
+        // value, or whose row-list container gained/lost a member, so a
+        // content-mutating pass (typed omnibox text, a tab title, …) can also
+        // take the incremental path below instead of only a pure
+        // interactive-state transition (S5's limit — see BUG-341 "S5" §"Not
+        // attempted").
+        let touched = lumen_chrome::bind_model_tracked(doc, &model);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        // CC-7: `#omniInput` is focused (`:focus`/`:focus-within`, e.g. the
+        // `.omnibox` accent ring) exactly while the legacy `address_bar` is
+        // open — there is no other focusable element in the chrome document
+        // yet, so a single node id is enough.
+        let omni_input = doc.find_by_id(lumen_chrome::ids::OMNI_INPUT);
+        let chrome_focus = if self.address_bar.is_open() { omni_input } else { None };
+        lumen_layout::set_interactive_state(self.chrome_hovered_nid, chrome_focus, self.chrome_active_nid);
+        // BUG-341 S5/S6: `layout_mutation_incremental` (plain graft_geometry,
+        // no incremental cascade) was tried here early on and measured
+        // *worse* than a plain full layout (`graft_geometry`'s then-O(depth)
+        // redundant clone bug) — fixed since (BUG-341 "third session"), and
+        // now combined with the S3 incremental cascade via
+        // `layout_mutation_incremental_restyle`. Safe whenever a previous
+        // pristine tree/cascade cache exists to graft/diff against and
+        // viewport/Forced-Colors still match — a resize or Forced-Colors flip
+        // invalidates geometry `bind_model_tracked` cannot see, so those still
+        // force the full, known-correct `layout_measured_hyp_with_counters`
+        // fallback (as does the very first pass).
+        let new_interactive = (self.chrome_hovered_nid, chrome_focus, self.chrome_active_nid);
+        let forced_colors = lumen_layout::forced_colors_active();
+        let viewport_stable = self.chrome_prev_viewport == Some(viewport);
+        let forced_colors_stable = self.chrome_prev_forced_colors == forced_colors;
+        // BUG-341 S22: the previous pass's pristine tree is *reconstructed*
+        // from the live one, not copied out of it while it was still pristine.
+        // `chrome_layout` holds the pruned tree that pass painted, and
+        // `chrome_content_area_detached` holds exactly what the pruning took
+        // out — putting the second back into the first yields the pre-pruning
+        // tree box for box, for the price of one insert per salvaged popover
+        // instead of a whole-tree copy. Taking `chrome_layout` by value is
+        // what makes it free: the incremental path below *moves* the reusable
+        // subtrees out of the basis (S19), so the basis does not survive the
+        // call either way. Both fields are reassigned from this pass's own
+        // result further down, on both arms; the display list is dropped with
+        // the tree because this pass builds a new one.
+        let prev_pristine = match (self.chrome_layout.take(), self.chrome_content_area_detached.take()) {
+            (Some((mut lb, _stale_dl)), Some(detached)) => restore_content_area(&mut lb, detached).then_some(lb),
+            // No `#contentArea` in the chrome document (or it had no box):
+            // nothing was pruned, so the live tree *is* the pristine one.
+            (Some((lb, _stale_dl)), None) => Some(lb),
+            (None, _) => None,
+        };
+        let (mut layout, cascade_styles) = match (
+            viewport_stable && forced_colors_stable,
+            prev_pristine,
+        ) {
+            (true, Some(prev)) => {
+                let (prev_hover, prev_focus, prev_active) = self.chrome_prev_interactive;
+                // BUG-341 S7: computed once per pass, not once per axis — the
+                // stylesheet/shadow-DOM shape doesn't change between the three
+                // hover/focus/active calls below.
+                let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
+                let mut dirty_roots = std::collections::HashSet::new();
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc,
+                    prev_hover,
+                    new_interactive.0,
+                    &state_index,
+                ));
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc,
+                    prev_focus,
+                    new_interactive.1,
+                    &state_index,
+                ));
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc,
+                    prev_active,
+                    new_interactive.2,
+                    &state_index,
+                ));
+                // BUG-341 S6: DOM-mutation root-set, unioned with the
+                // interactive-state one above — `touched` is empty on a pure
+                // hover/focus/active-only pass (S5's original case), non-empty
+                // whenever `bind_model` actually changed content this cycle.
+                // BUG-341 S17: the report names the mutated attributes, so the
+                // root-set can narrow each one to the node itself unless some
+                // selector reaches a sibling from a compound matching it.
+                let node_index = lumen_layout::style::restyle_node_index(doc, sheet);
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                    doc,
+                    chrome_node_changes(&touched),
+                    &node_index,
+                ));
+                let delta = lumen_layout::counters::RestyleDelta {
+                    prev_styles: std::mem::take(&mut self.chrome_prev_cascade_styles),
+                    dirty_roots,
+                    // BUG-341 S16: `bind_model_tracked` enumerates every node
+                    // whose content it mutated (see `ChromeMutations::content`
+                    // and the source-level completeness gate behind it), so
+                    // this cycle can name them instead of declaring the whole
+                    // document unstable the way S4-S15 had to — one changed
+                    // omnibox character no longer costs all 318 boxes.
+                    content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                };
+                lumen_layout::counters::set_incremental_restyle(true);
+                // BUG-341 S15: reuse whole box subtrees from `prev` too, not
+                // just their geometry. Licensed by the `content_dirty` record
+                // this call site establishes above — a subtree containing a
+                // mutated node stays out of `clean_subtrees`.
+                lumen_layout::box_tree::set_incremental_box_build(true);
+                let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                    doc,
+                    sheet,
+                    viewport,
+                    &measurer,
+                    &*self.hyp_provider,
+                    self.dark_mode,
+                    prev,
+                    delta,
+                );
+                lumen_layout::box_tree::set_incremental_box_build(false);
+                lumen_layout::counters::set_incremental_restyle(false);
+                result
+            }
+            _ => lumen_layout::layout_measured_hyp_with_counters(
+                doc,
+                sheet,
+                viewport,
+                &measurer,
+                &*self.hyp_provider,
+                self.dark_mode,
+            ),
+        };
+        lumen_layout::clear_interactive_state();
+        // Persist this pass's cascade cache as the `prev` basis for the next
+        // call's incremental path (BUG-341 S5). Its box-tree counterpart is no
+        // longer copied here — S22 records `take_content_area`'s removals
+        // below instead and undoes them at the top of the next pass.
+        self.chrome_prev_cascade_styles = cascade_styles.into_styles();
+        self.chrome_prev_viewport = Some(viewport);
+        self.chrome_prev_interactive = new_interactive;
+        self.chrome_prev_forced_colors = forced_colors;
+        // CC-9: `#findBar`/`#downloadsPanel` are salvaged out of
+        // `#contentArea` before the rest of it is discarded — see
+        // `take_content_area`'s doc comment. CC-10 adds the command palette
+        // and cert/print modals — all three are `position:absolute` direct
+        // children of `#contentArea` too, same reasoning as `#findBar`/
+        // `#downloadsPanel`.
+        // BUG-341 S22: the detachment record is kept, not discarded — it is
+        // what lets the next pass rebuild this tree's pristine form instead of
+        // this pass copying one aside.
+        let pruned = doc.find_by_id(lumen_chrome::ids::CONTENT_AREA).and_then(|id| {
+            take_content_area(
+                &mut layout,
+                id,
+                &[
+                    lumen_chrome::ids::FIND_BAR,
+                    lumen_chrome::ids::DOWNLOADS_PANEL,
+                    lumen_chrome::ids::CP_OVERLAY,
+                    lumen_chrome::ids::CERT_OVERLAY,
+                    lumen_chrome::ids::PRINT_OVERLAY,
+                ],
+                doc,
+            )
+        });
+        let (page_host_rect, detached) = match pruned {
+            Some((rect, detached)) => (Some(rect), Some(detached)),
+            None => (None, None),
+        };
+        self.chrome_page_host_rect = page_host_rect;
+        self.chrome_content_area_detached = detached;
+        // CC-7/CC-9: captured non-destructively (unlike `#contentArea`
+        // above) — these nodes stay in the tree and paint normally.
+        self.chrome_omni_input_rect = omni_input
+            .and_then(|id| lumen_layout::find_box_by_node(&layout, id))
+            .map(|b| b.rect);
+        // CC-11: sync transitions — compare chrome_prev_styles with the fresh
+        // layout before replacing it, mirroring apply_relayout_result's
+        // page-side sync (main.rs's collect_box_styles + sync loop). No
+        // @starting-style handling here: bind_model mutates existing
+        // chrome_doc nodes in place rather than inserting/removing them, so
+        // there are no "entering" nodes the way JS page mutation can produce.
+        let now_s = self.epoch.elapsed().as_secs_f32();
+        let mut new_styles = HashMap::new();
+        collect_box_styles(&layout, &mut new_styles);
+        for (node, new_style) in &new_styles {
+            if let Some(old_style) = self.chrome_prev_styles.get(node) {
+                self.chrome_transition_scheduler.sync(*node, old_style, new_style, now_s);
+            }
+        }
+        self.chrome_prev_styles = new_styles;
+        let dl = paint_ordered(&layout);
+        self.chrome_layout = Some((layout, dl));
+    }
+
+    /// CC-6 (docs/tasks/p1-css-chrome.md): snapshots tab strip, workspaces,
+    /// theme, tab layout, and active profile into a [`lumen_chrome::ChromeModel`]
+    /// — [`Self::relayout_chrome_host`] binds this before every chrome layout
+    /// pass. Mirrors the same shell fields [`Self::chrome_snapshot`] (DS-17 a11y
+    /// tree) reads, shaped for [`lumen_chrome::bind_model`] instead. CC-7 adds
+    /// the omnibox value/spoof-warning, read from the legacy `address_bar`.
+    fn chrome_model_snapshot(&self) -> lumen_chrome::ChromeModel {
+        let active_id = self.tab_strip.tabs.get(self.tab_strip.active).map(|t| t.id);
+        let tabs = self
+            .tab_strip
+            .tabs
+            .iter()
+            .map(|t| lumen_chrome::ChromeTabModel {
+                id: t.id,
+                title: t.title.clone(),
+                active: Some(t.id) == active_id,
+                sleeping: t.tab_state == TabState::Hibernated,
+                // CC-8: tree-style tabs (7A.2) — a tab with an opener is
+                // rendered as a `.child` row with a `.tree-line` connector.
+                // The asset's CSS only indents one nesting level, so this
+                // collapses depth ≥1 to a single boolean rather than
+                // threading `tabs::tree::depth_of`'s full depth through.
+                is_child: t.opener_id.is_some(),
+                container_color: t.container.border_color().map(Self::chrome_hex_color),
+            })
+            .collect();
+        let workspaces = self
+            .workspace_panel
+            .workspaces
+            .iter()
+            .map(|w| lumen_chrome::ChromeWorkspaceModel {
+                id: w.id,
+                name: w.name.clone(),
+                active: Some(w.id) == self.workspace_panel.active_id,
+                color: Self::chrome_hex_color(w.accent),
+            })
+            .collect();
+        let profile_slug = self
+            .profile_menu
+            .active_entry()
+            .and_then(|e| panels::profile_menu::slug_for_profile(&e.name))
+            .map(str::to_owned);
+        // CC-7: same not-focused/focused branching `build_inline_field` uses
+        // for the legacy overlay text, retargeted at `#omniInput`'s `value`.
+        let (omnibox_value, omnibox_warning) =
+            address_bar::chrome_omnibox_value(&self.address_bar, self.current_display_url());
+        // CC-9: same `MAX_VISIBLE` cap the legacy `address_bar::build_dropdown`
+        // applies — the asset's `.dropdown` isn't scroll-clipped, so an
+        // uncapped list would grow the popover past its designed height.
+        let dropdown_suggestions: Vec<lumen_chrome::ChromeSuggestionModel> = self
+            .address_bar
+            .suggestions()
+            .iter()
+            .take(address_bar::MAX_VISIBLE)
+            .enumerate()
+            .map(|(idx, s)| {
+                // CC-15-3/DS-6: punycode-guard both strings, as the legacy
+                // `build_dropdown` did — without this a homograph host in a
+                // history/bookmark hit renders in its Unicode form.
+                let (label, sub_label) = address_bar::chrome_suggestion_text(s);
+                lumen_chrome::ChromeSuggestionModel {
+                    idx,
+                    label,
+                    sub_label,
+                    color: Self::chrome_hex_color(s.tag_color()),
+                }
+            })
+            .collect();
+        let dropdown = lumen_chrome::ChromeDropdownModel {
+            open: self.address_bar.is_open() && !dropdown_suggestions.is_empty(),
+            suggestions: dropdown_suggestions,
+        };
+        // CC-9: `current_matches()` re-scans the display list for the query —
+        // cheap relative to a full relayout, and this snapshot only runs on
+        // explicit chrome-relayout triggers (resize/click/key), not every
+        // `RedrawRequested` frame (see `Self::relayout_chrome_host`'s doc).
+        let find_matches_len = if self.find.is_open() { self.current_matches().len() } else { 0 };
+        let find = lumen_chrome::ChromeFindModel {
+            open: self.find.is_open(),
+            value: self.find.query().to_owned(),
+            // CC-15-6: the "ERR" state is carried over from the deleted legacy
+            // bar (`find::append_bar`) — without it an invalid regex is
+            // indistinguishable from "no matches" (`0/0`). Text only: the
+            // legacy bar also painted it red (`BAR_ERR`), the asset has no
+            // error class for `#findCount` (see BUG-419).
+            count_label: if self.find.is_regex_mode()
+                && !self.find.query().is_empty()
+                && !find::is_valid_regex_pattern(self.find.query())
+            {
+                "ERR".to_owned()
+            } else if find_matches_len == 0 {
+                "0/0".to_owned()
+            } else {
+                format!("{}/{}", self.find.active_index() + 1, find_matches_len)
+            },
+        };
+        let downloads: Vec<lumen_chrome::ChromeDownloadModel> = self
+            .downloads
+            .entries()
+            .iter()
+            .map(|d| {
+                let (meta, progress_fraction) = match &d.status {
+                    download::DownloadStatus::Pending => ("В очереди…".to_owned(), None),
+                    download::DownloadStatus::InProgress => {
+                        let text = match d.total {
+                            Some(t) if t > 0 => format!(
+                                "{} / {} — идёт загрузка…",
+                                download::human_bytes(d.received),
+                                download::human_bytes(t)
+                            ),
+                            _ => "Загрузка…".to_owned(),
+                        };
+                        (text, Some(d.progress_fraction().unwrap_or(0.6)))
+                    }
+                    download::DownloadStatus::Done { bytes } => {
+                        (format!("{} — готово", download::human_bytes(*bytes)), None)
+                    }
+                    download::DownloadStatus::Failed(reason) => (format!("Ошибка: {reason}"), None),
+                    download::DownloadStatus::Cancelled => ("Отменено".to_owned(), None),
+                };
+                lumen_chrome::ChromeDownloadModel {
+                    id: d.id.raw(),
+                    ext_label: download::extension_label(&d.filename),
+                    name: d.filename.clone(),
+                    meta,
+                    progress_fraction,
+                }
+            })
+            .collect();
+        // CC-9: the frozen design merges shields' blocked-count and the
+        // permission rows into one `#permPopover` — no separate engine
+        // control exists for `PermissionPanel::visible` (`Ctrl+Shift+P`), so
+        // either legacy toggle shows it.
+        let popover_open = self.shields.visible || self.permission.visible;
+        let permissions = [
+            panels::permission_panel::PermissionKind::Camera,
+            panels::permission_panel::PermissionKind::Microphone,
+        ]
+        .map(|kind| match self.permission.state_for(kind) {
+            panels::permission_panel::PermissionState::Allow => lumen_chrome::ChromePermState::Allow,
+            panels::permission_panel::PermissionState::Deny => lumen_chrome::ChromePermState::Deny,
+            panels::permission_panel::PermissionState::Ask => lumen_chrome::ChromePermState::Ask,
+        });
+        // CC-10: same `MAX_VISIBLE_ROWS`-windowed slice
+        // `command_palette::build_panel` shows, mapped down to what `.cp-row`
+        // can render — a command's keyboard shortcut, or a bookmark/history
+        // item's URL, as the sub-label.
+        let filtered = self.command_palette.filtered();
+        let palette_results: Vec<lumen_chrome::ChromePaletteResultModel> = filtered
+            .iter()
+            .enumerate()
+            .skip(self.command_palette.scroll_row)
+            .take(panels::command_palette::MAX_VISIBLE_ROWS)
+            .filter_map(|(rank, &item_idx)| {
+                self.command_palette.items.get(item_idx).map(|item| {
+                    let sub_label = match &item.kind {
+                        panels::command_palette::PaletteKind::Command(action) => {
+                            action.shortcut().to_owned()
+                        }
+                        panels::command_palette::PaletteKind::Bookmark
+                        | panels::command_palette::PaletteKind::History => item.url.clone(),
+                    };
+                    lumen_chrome::ChromePaletteResultModel {
+                        label: item.title.clone(),
+                        sub_label,
+                        selected: rank == self.command_palette.selected,
+                    }
+                })
+            })
+            .collect();
+        let palette = lumen_chrome::ChromePaletteModel {
+            open: self.command_palette.visible,
+            query: self.command_palette.query.clone(),
+            results: palette_results,
+        };
+        // CC-10: the design's 6 `.cert-row`s + `.cert-fp` cover a subset of
+        // `PanelCertData`'s 9 fields (no TLS-version slot) — missing/empty
+        // individual fields render as `"—"`, mirroring
+        // `cert_panel::build_rows`'s own em-dash fallback.
+        let dash = |s: &str| if s.is_empty() { "\u{2014}".to_owned() } else { s.to_owned() };
+        let cert = match &self.cert_panel.cert {
+            Some(c) if c.has_data() => {
+                let san = if c.san_list.is_empty() { "\u{2014}".to_owned() } else { c.san_list.join(", ") };
+                let issuer = if !c.issuer_org.is_empty() { c.issuer_org.clone() } else { dash(&c.issuer_cn) };
+                lumen_chrome::ChromeCertModel {
+                    open: self.cert_panel.visible,
+                    title: format!("Сертификат — {}", dash(&c.subject_cn)),
+                    rows: [
+                        dash(&c.subject_cn),
+                        dash(&c.subject_org),
+                        san,
+                        issuer,
+                        dash(&c.not_before),
+                        dash(&c.not_after),
+                    ],
+                    fingerprint: dash(&c.fingerprint_sha256),
+                }
+            }
+            _ => lumen_chrome::ChromeCertModel {
+                open: self.cert_panel.visible,
+                title: "Сертификат недоступен".to_owned(),
+                rows: std::array::from_fn(|_| "\u{2014}".to_owned()),
+                fingerprint: "\u{2014}".to_owned(),
+            },
+        };
+        // CC-10b: which `#contentArea` view is shown — mirrors whichever of
+        // the three legacy panel `visible` flags is set (kept mutually
+        // exclusive by `dispatch_chrome_action`'s `ShowView` handler), same
+        // "reuse the legacy flag as source of truth" approach CC-9/CC-10
+        // already use for print/cert/palette `open` state.
+        let content_view = if self.settings_panel.visible {
+            lumen_chrome::ChromeContentView::Settings
+        } else if self.history_panel.visible {
+            lumen_chrome::ChromeContentView::History
+        } else if self.bookmark_panel.visible {
+            lumen_chrome::ChromeContentView::Bookmarks
+        } else {
+            lumen_chrome::ChromeContentView::Page
+        };
+        // CC-10b: DS-16's "history not saved" banner — same anonymous-profile
+        // check the legacy `history_panel::build_panel` call site makes.
+        let is_anon = self
+            .profile_menu
+            .active_entry()
+            .is_some_and(|e| panels::profile_menu::is_anonymous(&e.name));
+        let history = lumen_chrome::ChromeHistoryModel {
+            banner: is_anon,
+            rows: self
+                .history_panel
+                .rows
+                .iter()
+                .map(|r| match r {
+                    panels::history_panel::HistoryRow::Group(label) => {
+                        lumen_chrome::ChromeHistoryRow::Group(label.clone())
+                    }
+                    panels::history_panel::HistoryRow::Entry(item) => lumen_chrome::ChromeHistoryRow::Entry {
+                        title: if item.title.is_empty() { item.url.clone() } else { item.title.clone() },
+                        url: item.url.clone(),
+                        time_label: panels::history_panel::format_time_hhmm(item.visit_date),
+                    },
+                })
+                .collect(),
+        };
+        // CC-10b: `"Все закладки"` (the `None`-filter entry) followed by the
+        // real folder set — mirrors `bookmark_panel::hit_test`'s own "All"
+        // row convention.
+        let mut bookmark_folders = vec![lumen_chrome::ChromeBookmarkFolderModel {
+            label: "Все закладки".to_owned(),
+            active: self.bookmark_panel.selected_folder.is_none(),
+        }];
+        bookmark_folders.extend(self.bookmark_panel.folders.iter().map(|f| {
+            lumen_chrome::ChromeBookmarkFolderModel {
+                label: f.clone(),
+                active: self.bookmark_panel.selected_folder.as_deref() == Some(f.as_str()),
+            }
+        }));
+        let bookmarks = lumen_chrome::ChromeBookmarksModel {
+            folders: bookmark_folders,
+            title: self.bookmark_panel.selected_folder.clone().unwrap_or_else(|| "Все закладки".to_owned()),
+            cards: self
+                .bookmark_panel
+                .visible_entries()
+                .iter()
+                .map(|e| {
+                    let title = if e.title.is_empty() { e.url.clone() } else { e.title.clone() };
+                    lumen_chrome::ChromeBookmarkCardModel {
+                        fav_letter: title
+                            .chars()
+                            .next()
+                            .map(|c| c.to_uppercase().to_string())
+                            .unwrap_or_else(|| "\u{2022}".to_owned()),
+                        title,
+                        url: e.url.clone(),
+                    }
+                })
+                .collect(),
+        };
+        let settings = lumen_chrome::ChromeSettingsModel {
+            active_section: self.chrome_settings_section.clone(),
+            ad_block_on: self.settings_panel.draft.shields_enabled,
+            fingerprint_on: self.settings_panel.draft.fingerprint_mode != "off",
+        };
+        // CC-10b: the design's single tabbed `#rightSidebar` merges the
+        // legacy independently-dockable `ai_panel`/`sidebar` — kept mutually
+        // exclusive by `dispatch_chrome_action`'s `OpenAiSidebar`/
+        // `OpenWebSidebar`/`SetSidebarTab` handlers, so `sidebar.visible`
+        // alone picks the tab.
+        let right_sidebar = lumen_chrome::ChromeRightSidebarModel {
+            open: self.ai_panel.visible || self.sidebar.visible,
+            tab: if self.sidebar.visible {
+                lumen_chrome::ChromeSidebarTab::Web
+            } else {
+                lumen_chrome::ChromeSidebarTab::Ai
+            },
+        };
+        lumen_chrome::ChromeModel {
+            dark_theme: self.dark_mode,
+            layout_vertical: self.vertical_tabs.visible,
+            profile_slug,
+            tabs,
+            workspaces,
+            omnibox: lumen_chrome::OmniboxModel {
+                value: omnibox_value,
+                warning: omnibox_warning.map(str::to_owned),
+            },
+            sidebar_collapsed: self.chrome_sidebar_collapsed,
+            dropdown,
+            find,
+            downloads_open: self.downloads.visible,
+            downloads,
+            popover_open,
+            blocked_total: self.shields.blocked_total_count(),
+            permissions,
+            palette,
+            cert,
+            print_open: self.print_panel.visible,
+            content_view,
+            history,
+            bookmarks,
+            settings,
+            right_sidebar,
+        }
+    }
+
+    /// CC-8: renders a [`lumen_layout::Color`] as the `#RRGGBB` string
+    /// `ChromeModel`'s container/workspace colour fields need (CSS custom
+    /// properties and inline `style="background:…"` are both plain text).
+    /// Drops alpha — every caller (container accent, workspace accent) is
+    /// opaque in practice.
+    fn chrome_hex_color(c: lumen_layout::Color) -> String {
+        format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
+    }
+
+    /// CC-5 (docs/tasks/p1-css-chrome.md): where the page content starts, in
+    /// window CSS pixels — the single source of truth input-coordinate
+    /// conversion ([`Self::page_point`], [`Self::update_cursor_icon`]) and
+    /// the render-time page transform share, so a click/hover always lands
+    /// on the same page element the frame actually painted there.
+    ///
+    /// This is [`Self::chrome_page_host_rect`]'s origin, falling back to
+    /// `(0, CHROME_H)` before the first chrome layout exists, mirroring
+    /// [`Self::relayout_chrome_host`]'s own degenerate-size guard — that frame
+    /// paints the page flush with the window too.
+    fn page_offset(&self) -> (f32, f32) {
+        self.chrome_page_host_rect
+            .map(|r| (r.x, r.y))
+            .unwrap_or((0.0, toolbar::CHROME_H))
+    }
+
+    /// CC-5: `true` when `(x_css, y_css)` falls outside the page-content
+    /// rect — i.e. over an opaque chrome furniture area (sidebar, toolbar,
+    /// tab strip). A `None` [`Self::chrome_page_host_rect`] (no chrome layout
+    /// yet) counts as "over chrome": mirrors [`Self::relayout_chrome_host`]'s
+    /// guard — nothing is painted at the page rect either in that frame, so
+    /// there is no page underneath to click through to yet.
+    fn point_over_chrome(&self, x_css: f32, y_css: f32) -> bool {
+        match self.chrome_page_host_rect {
+            Some(r) => {
+                x_css < r.x || x_css >= r.right() || y_css < r.y || y_css >= r.bottom()
+            }
+            None => true,
+        }
+    }
+
+    /// CC-5: hit-tests [`Self::chrome_layout`] at window-CSS coordinates —
+    /// the chrome document paints at the window origin, no scroll/page
+    /// transform involved. `None` before the first chrome layout exists.
+    fn chrome_hit_test(&self, x_css: f32, y_css: f32) -> Option<lumen_paint::HitTestResult> {
+        let (layout, _) = self.chrome_layout.as_ref()?;
+        hit_test(Point::new(x_css, y_css), layout)
+    }
+
+    /// CC-5: walks `hit.path` (bubble order, closest node first — the same
+    /// list `HitTestResult` already builds for event-dispatch bubbling) for
+    /// the nearest ancestor carrying a recognised `data-action`, mirroring
+    /// how the legacy toolbar/tab-strip hit-testers resolve a click to one
+    /// semantic action regardless of which child element (icon, label,
+    /// badge) the point actually landed on. Returns the carrying node too —
+    /// `dispatch_chrome_action` needs it to read action-specific sibling
+    /// attributes (`data-view`, …).
+    fn chrome_action_at(
+        &self,
+        hit: &lumen_paint::HitTestResult,
+    ) -> Option<(NodeId, lumen_chrome::ChromeAction)> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        hit.path.iter().find_map(|&nid| {
+            doc.get(nid)
+                .get_attr("data-action")
+                .and_then(lumen_chrome::ChromeAction::from_attr_value)
+                .map(|action| (nid, action))
+        })
+    }
+
+    /// CC-6: reads and parses a `data-tab-id`/`data-ws-id`-style integer
+    /// attribute off `nid` in the live `chrome_doc` — the id `ChromeModel`
+    /// (`crates/chrome/src/model.rs`) stamps on rebuilt tab rows/workspace
+    /// buttons so a click can be resolved back to a `tab_strip`/
+    /// `workspace_panel` entry. `None` off the flag, before the first chrome
+    /// layout, or if the attribute is missing/unparsable.
+    fn chrome_data_id(&self, nid: NodeId, attr: &str) -> Option<i64> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        doc.get(nid).get_attr(attr)?.parse().ok()
+    }
+
+    /// CC-5/CC-6: routes a chrome `data-action` click to the shell's existing
+    /// handlers — the same functions the legacy toolbar/tab-strip hit-
+    /// testers call, so behavior (reload semantics, panel toggling, …)
+    /// matches exactly. `SelectTab`/`CloseTab`/`SelectWorkspace`/`AddWorkspace`
+    /// resolve the clicked row back to a real `tab_strip`/`workspace_panel`
+    /// entry via the `data-tab-id`/`data-ws-id` attribute `ChromeModel`
+    /// stamped on it (CC-6, `crates/chrome/src/model.rs`) — `nid` is the
+    /// `data-action`-carrying node itself for these four. Actions whose only
+    /// visible effect would still need a `chrome_doc` DOM mutation this slice
+    /// doesn't cover (`SetProfile`, settings/history/bookmarks section
+    /// switches, …) remain no-ops: those panels are still legacy overlays
+    /// pending CC-10b, and `data-profile` already updates automatically on
+    /// any profile switch made through the legacy profile-menu popover (it
+    /// is read fresh from `self.profile_menu` by every
+    /// [`Self::chrome_model_snapshot`]).
+    fn dispatch_chrome_action(
+        &mut self,
+        nid: NodeId,
+        action: lumen_chrome::ChromeAction,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
+        use lumen_chrome::ChromeAction;
+        match action {
+            ChromeAction::Reload => {
+                // Mirrors `toolbar::ToolbarHit::Reload` — routed through the
+                // UserInteraction task source rather than called directly
+                // (HTML §8.1.4).
+                let flag = Rc::clone(&self.pending_reload);
+                self.runtime.handle().queue_task(
+                    runtime::TaskSource::UserInteraction,
+                    move || { flag.set(true); },
+                );
+            }
+            ChromeAction::NewTab => self.open_new_tab(),
+            ChromeAction::OpenCertViewer => {
+                let cert = self.cert_info.clone();
+                self.cert_panel.toggle(cert);
+                // CC-10: see the matching comment on `ToggleShieldPopover`.
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleShieldPopover => {
+                self.shields.toggle();
+                // CC-9: `#permPopover`'s `.open` class is baked into
+                // `chrome_layout` at `relayout_chrome_host` time, same gap
+                // CC-7 found for `#omniInput` — without this the popover
+                // wouldn't show until some other trigger relayouts chrome.
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleFind => {
+                if self.find.is_open() {
+                    self.find.close();
+                } else {
+                    self.hint.close();
+                    self.find.open();
+                }
+                self.relayout_chrome_host();
+            }
+            // CC-10b: `#rightSidebar` is a single tabbed panel in the design
+            // (`.right-sidebar`/`.content-area` are flex siblings — opening
+            // it really does push `#contentArea`, unlike the modal overlays
+            // CC-9/CC-10 gated) — mutually exclusive with the AI tab so
+            // `chrome_model_snapshot`'s `right_sidebar.tab` stays unambiguous.
+            // `relayout_chrome()` keeps the legacy (flag-off) page-reflow
+            // behavior; `relayout_chrome_host()` is the CC-7/9/10-class fix
+            // this action was missing — `#rightSidebar`'s `.open` class is
+            // baked into `chrome_layout` at relayout time, so without it the
+            // panel wouldn't show until some other trigger relayouts chrome.
+            ChromeAction::OpenWebSidebar => {
+                self.ai_panel.visible = false;
+                self.sidebar.toggle();
+                self.relayout_chrome();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::OpenAiSidebar => {
+                self.sidebar.visible = false;
+                self.ai_panel.toggle();
+                self.relayout_chrome();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleDownloads => {
+                self.downloads.toggle_visible();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::OpenPrintDialog => {
+                self.print_panel.toggle();
+                // CC-10: see the matching comment on `ToggleShieldPopover`.
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleDevtools => self.devtools_console.toggle(),
+            ChromeAction::ToggleProfileMenu => {
+                self.profile_menu.toggle();
+                if self.profile_menu.visible {
+                    self.refresh_profile_menu_entries();
+                }
+            }
+            // CC-10b: `data-view` picks the target. `#view-page`/`#view-history`/
+            // `#view-bookmarks`/`#view-settings` are mutually exclusive
+            // (`.view.active`, one at a time — `chrome_model_snapshot`'s
+            // `content_view` derives from whichever legacy panel's `visible`
+            // flag is set), so opening one closes the other two. Reuses the
+            // exact legacy open/refresh calls the `Ctrl+H`/`Ctrl+Shift+O`/
+            // `Ctrl+,` keyboard shortcuts already make, so behavior (data
+            // load, draft flush on settings close) matches exactly.
+            ChromeAction::ShowView => {
+                let view = self
+                    .chrome_doc
+                    .as_ref()
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-view"))
+                    .map(str::to_owned);
+                match view.as_deref() {
+                    Some("settings") => {
+                        if self.settings_panel.visible {
+                            self.close_settings_panel();
+                        } else {
+                            self.history_panel.visible = false;
+                            self.bookmark_panel.visible = false;
+                            self.open_settings_panel();
+                        }
+                    }
+                    Some("history") => {
+                        if !self.history_panel.visible {
+                            if self.settings_panel.visible {
+                                self.close_settings_panel();
+                            }
+                            self.bookmark_panel.visible = false;
+                        }
+                        self.history_panel.toggle();
+                        if self.history_panel.visible {
+                            self.refresh_history();
+                        }
+                    }
+                    Some("bookmarks") => {
+                        if !self.bookmark_panel.visible {
+                            if self.settings_panel.visible {
+                                self.close_settings_panel();
+                            }
+                            self.history_panel.visible = false;
+                        }
+                        self.bookmark_panel.toggle();
+                        if self.bookmark_panel.visible {
+                            self.refresh_bookmarks();
+                        }
+                    }
+                    _ => {
+                        // "page" or unrecognised: back to the active tab's page.
+                        if self.settings_panel.visible {
+                            self.close_settings_panel();
+                        }
+                        self.history_panel.visible = false;
+                        self.bookmark_panel.visible = false;
+                    }
+                }
+                self.relayout_chrome_host();
+            }
+            ChromeAction::SelectTab => {
+                if let Some(id) = self.chrome_data_id(nid, "data-tab-id")
+                    && let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id as usize)
+                {
+                    self.switch_tab(idx);
+                }
+            }
+            ChromeAction::CloseTab => {
+                if let Some(id) = self.chrome_data_id(nid, "data-tab-id")
+                    && let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id as usize)
+                {
+                    self.close_tab(idx, event_loop);
+                }
+            }
+            ChromeAction::SelectWorkspace => {
+                if let Some(id) = self.chrome_data_id(nid, "data-ws-id") {
+                    self.workspace_panel.set_active(Some(id));
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::AddWorkspace => {
+                let idx = self.workspace_panel.workspaces.len();
+                let name = format!("Workspace {}", idx + 1);
+                let color = panels::workspace_panel::default_color_for_index(idx);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                if let Ok(id) = self.workspaces.create(&name, color, "", None, now) {
+                    self.refresh_workspaces();
+                    self.workspace_panel.set_active(Some(id));
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ToggleSidebar => {
+                self.chrome_sidebar_collapsed = !self.chrome_sidebar_collapsed;
+                self.relayout_chrome_host();
+            }
+            // CC-9: `#omniDropdown` rows carry `data-sugg-idx` (stamped by
+            // `bind_dropdown`, mirroring `data-tab-id`) — resolve it back to
+            // `AddressBarState::suggestions()[idx]` and commit exactly like
+            // `AddressBarState::commit()`'s `selected_idx` branch would, just
+            // without requiring keyboard navigation to have set that index
+            // first.
+            ChromeAction::OmniGo => {
+                if let Some(idx) =
+                    self.chrome_data_id(nid, "data-sugg-idx").and_then(|i| usize::try_from(i).ok())
+                {
+                    self.address_bar.commit_suggestion(idx);
+                    if let Some(value) = self.address_bar.take_commit() {
+                        self.handle_omnibox_commit(value);
+                    }
+                    self.relayout_chrome_host();
+                }
+            }
+            // CC-9: resolves the clicked button's `.perm-row` ancestor back
+            // to a `PermissionKind` by position (the asset's two static rows
+            // are Camera then Microphone, `PermissionKind::ALL`'s first two —
+            // see `Self::chrome_permission_kind_for_node`), then sets it
+            // directly per `data-perm` ("allow"/"deny"). Unlike the legacy
+            // panel's single cycle button, the design has two distinct
+            // buttons with no "ask" control, so this sets state directly
+            // rather than calling `PermissionPanel::cycle_permission`.
+            ChromeAction::SetPermission => {
+                if let Some(kind) = self.chrome_permission_kind_for_node(nid)
+                    && let Some(perm) = self
+                        .chrome_doc
+                        .as_ref()
+                        .and_then(|(doc, _)| doc.get(nid).get_attr("data-perm"))
+                {
+                    let state = match perm {
+                        "allow" => Some(panels::permission_panel::PermissionState::Allow),
+                        "deny" => Some(panels::permission_panel::PermissionState::Deny),
+                        _ => None,
+                    };
+                    if let Some(state) = state {
+                        self.permission.set_permission(kind, state);
+                        self.relayout_chrome_host();
+                    }
+                }
+            }
+            // CC-10: `#cpOverlay` itself carries this action (scrim click
+            // closes the palette, mirroring the legacy modal's own
+            // click-outside behavior) — `nid` doesn't need resolving further.
+            ChromeAction::ClosePalette => {
+                self.command_palette.close();
+                self.relayout_chrome_host();
+            }
+            // CC-10: shared by `#certOverlay` and `#printOverlay` (root
+            // scrim, `.modal-close`, and both footer buttons all carry this
+            // same action) — which one to close is resolved by walking up
+            // from `nid` to whichever modal ancestor it's inside.
+            ChromeAction::CloseModal => match self.chrome_modal_ancestor(nid) {
+                Some(ChromeModalKind::Cert) => {
+                    self.cert_panel.close();
+                    self.relayout_chrome_host();
+                }
+                Some(ChromeModalKind::Print) => {
+                    self.print_panel.close();
+                    self.relayout_chrome_host();
+                }
+                None => {}
+            },
+            // CC-10b: `.set-nav .item`/`.set-section` both carry the same
+            // slug on `data-section`/`data-set` — `bind_settings` matches
+            // `ChromeSettingsModel::active_section` against either
+            // attribute, so this only needs to store the clicked slug.
+            ChromeAction::SetSettingsSection => {
+                if let Some(section) =
+                    self.chrome_doc.as_ref().and_then(|(doc, _)| doc.get(nid).get_attr("data-section"))
+                {
+                    self.chrome_settings_section = section.to_owned();
+                    self.relayout_chrome_host();
+                }
+            }
+            // CC-10b: switches the active tab without closing the panel
+            // (unlike `OpenAiSidebar`/`OpenWebSidebar`, which toggle
+            // open/closed) — mirrors clicking a tab in an already-open
+            // `#rightSidebar`.
+            ChromeAction::SetSidebarTab => {
+                if let Some(tab) =
+                    self.chrome_doc.as_ref().and_then(|(doc, _)| doc.get(nid).get_attr("data-rs-tab"))
+                {
+                    match tab {
+                        "ai" => {
+                            self.ai_panel.visible = true;
+                            self.sidebar.visible = false;
+                        }
+                        "web" => {
+                            self.sidebar.visible = true;
+                            self.ai_panel.visible = false;
+                        }
+                        _ => {}
+                    }
+                    self.relayout_chrome();
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::CloseRightSidebar => {
+                self.ai_panel.visible = false;
+                self.sidebar.visible = false;
+                self.relayout_chrome();
+                self.relayout_chrome_host();
+            }
+            // Demo-only actions on the static preview markup: no shell state
+            // backs them yet. Recognised (so the click doesn't fall through
+            // to legacy geometry) but otherwise a no-op for now. `SetProfile`
+            // specifically: the profile-menu popover is still a legacy
+            // overlay (its click handling — and the actual
+            // `profiles.set_active` call — lives in the
+            // `WindowEvent::MouseInput` legacy-popover branch, not here),
+            // and `ChromeModel` already reflects whatever profile that path
+            // activates on the very next relayout. `ToggleSwitch`: the
+            // clicked toggle can't be resolved to a specific setting from
+            // `data-action` alone (all 6 `.toggle`s in the design share the
+            // same action, no distinguishing attribute) — `bind_settings`
+            // still reflects the two settings with real backing state
+            // read-only; wiring a click-to-flip requires a structural
+            // resolver (à la `chrome_permission_kind_for_node`), out of this
+            // slice's DoD.
+            ChromeAction::SetProfile
+            | ChromeAction::ArchiveCard
+            | ChromeAction::ToggleSwitch
+            | ChromeAction::ToggleFocusTimer
+            | ChromeAction::ToggleFocus
+            | ChromeAction::SetDevtoolsTab => {}
+        }
+    }
+
+    /// CC-10: which modal `nid` (a `close-modal`-carrying node, or one of its
+    /// descendants) belongs to — `#certOverlay` and `#printOverlay` share the
+    /// same `data-action` value, so this walks up the tree to disambiguate,
+    /// mirroring [`Self::chrome_permission_kind_for_node`].
+    fn chrome_modal_ancestor(&self, nid: NodeId) -> Option<ChromeModalKind> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        let cert_overlay = doc.find_by_id(lumen_chrome::ids::CERT_OVERLAY);
+        let print_overlay = doc.find_by_id(lumen_chrome::ids::PRINT_OVERLAY);
+        let mut cur = Some(nid);
+        while let Some(id) = cur {
+            if Some(id) == cert_overlay {
+                return Some(ChromeModalKind::Cert);
+            }
+            if Some(id) == print_overlay {
+                return Some(ChromeModalKind::Print);
+            }
+            cur = doc.get(id).parent;
+        }
+        None
+    }
+
+    /// CC-9: walks up from `nid` (a `.perm-btn` inside `#permPopover`) to its
+    /// `.perm-row` ancestor, then resolves that row's position among
+    /// `#permPopover`'s `.perm-row` children to a [`PermissionKind`] —
+    /// `PermissionKind::ALL`'s first two entries, matching the frozen
+    /// design's fixed row order (Camera, Microphone; it has no rows for
+    /// Notifications/Clipboard). `None` if `nid` isn't inside a `.perm-row`,
+    /// or the row's index has no matching kind.
+    fn chrome_permission_kind_for_node(&self, nid: NodeId) -> Option<panels::permission_panel::PermissionKind> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        let has_class = |id: NodeId, class: &str| {
+            doc.get(id).get_attr("class").is_some_and(|c| c.split_whitespace().any(|t| t == class))
+        };
+        let mut cur = doc.get(nid).parent?;
+        while !has_class(cur, "perm-row") {
+            cur = doc.get(cur).parent?;
+        }
+        let popover = doc.find_by_id(lumen_chrome::ids::PERM_POPOVER)?;
+        let idx = doc.get(popover).children.iter().copied().filter(|&c| has_class(c, "perm-row")).position(|c| c == cur)?;
+        panels::permission_panel::PermissionKind::ALL.get(idx).copied()
+    }
+
     /// ADR-016 M2.2b: route an **async-safe chrome-inset relayout** off the UI
     /// thread when the engine thread is enabled, falling back to the synchronous
     /// [`Self::relayout`] otherwise (the default, so behavior is byte-identical
@@ -8014,6 +9914,22 @@ impl Lumen {
     /// layout is available (first load) or when `layout_source` / viewport are
     /// not ready — the caller falls back to [`Self::relayout`].
     ///
+    /// BUG-341 S7: when [`Self::page_prev_cascade_styles`] is `Some` (the last
+    /// cycle to touch `self.layout_box` was this same restyle path) *and* the
+    /// page-side JS DOM-mutation tracker ([`PersistentJs::take_dom_touched`])
+    /// reports an attributed summary, this takes the incremental-cascade path
+    /// ([`lumen_layout::box_tree::layout_mutation_incremental_restyle`])
+    /// instead of the plain graft-only one — mirroring
+    /// `Lumen::relayout_chrome_host`'s BUG-341 S6 wiring. `dirty_roots` unions
+    /// the interactive-state delta (hover/focus/active, vs.
+    /// `self.page_prev_interactive`) with the DOM-mutation delta
+    /// (`touched.nodes`); `content_dirty` is `Nothing` only when `touched.nodes`
+    /// is empty (a pure interactive-state cycle) and `Untracked` otherwise, the
+    /// same precondition `RestyleDelta::content_dirty` documents. An `unattributed` summary
+    /// (untracked mutation primitive — Shadow DOM attach, `execCommand`, …) or a
+    /// missing/invalidated cache falls back to today's `layout_mutation_incremental`
+    /// (full cascade, still correct, just without the cascade-skip win).
+    ///
     /// `self.layout_box` is **moved out** (not cloned) to avoid copying the
     /// potentially large tree; `apply_relayout_result` moves the fresh tree
     /// back in, so field is always `Some` after a successful call.
@@ -8034,12 +9950,82 @@ impl Lumen {
         lumen_layout::set_forced_colors(self.a11y_store.forced_colors());
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
-        let (new_dl, new_lb) =
-            relayout_page_incremental(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb);
+        let new_interactive = (self.hovered_nid, self.focused_node, self.active_nid);
+        let touched = self.js_ctx.as_ref().map(|js| js.take_dom_touched()).unwrap_or_default();
+        // BUG-341 S19: the two paths are one `if`/`else` rather than an
+        // `Option` plus a `match` because the restyle path now *consumes*
+        // `prev_lb` (it moves the reusable subtrees straight into the fresh
+        // tree instead of copying them), and only this shape lets the compiler
+        // see that the fallback below runs exactly when the move did not.
+        let (new_dl, new_lb, fresh_cascade_styles) = if !touched.unattributed
+            && let Some(prev_styles) = self.page_prev_cascade_styles.take()
+        {
+            let (prev_hover, prev_focus, prev_active) = self.page_prev_interactive;
+            let doc = src.document.lock().unwrap();
+            // BUG-341 S7: computed once per pass, reused across all three axes.
+            let state_index = lumen_layout::style::restyle_state_index(&doc, &src.stylesheet);
+            let mut dirty_roots = std::collections::HashSet::new();
+            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                &doc, prev_hover, new_interactive.0, &state_index,
+            ));
+            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                &doc, prev_focus, new_interactive.1, &state_index,
+            ));
+            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                &doc, prev_active, new_interactive.2, &state_index,
+            ));
+            // BUG-341 S17: `DomTouched` records node ids without attribute
+            // names, so every page-side mutation stays `Unattributed` — the
+            // pre-S17 widen-to-parent behaviour, unchanged.
+            let node_index = lumen_layout::style::restyle_node_index(&doc, &src.stylesheet);
+            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                &doc,
+                touched.nodes.iter().map(|&n| (n, lumen_layout::style::NodeChange::Unattributed)),
+                &node_index,
+            ));
+            drop(doc);
+            // BUG-341 S16: the page-side tracker reports *selector-relevant*
+            // nodes only (`DomTouched` deliberately says nothing about text
+            // writes) and has an `unattributed` escape hatch, so it cannot
+            // claim a complete per-node content record the way
+            // `bind_model_tracked` can. Anything but "nothing touched at all"
+            // must therefore stay `Untracked` — this is exactly S4's
+            // `dom_content_stable` semantics, unchanged. Giving the page path a
+            // real content set means completing `DomTouched` for content first.
+            let content_dirty = if touched.nodes.is_empty() {
+                lumen_layout::counters::ContentDirty::Nothing
+            } else {
+                lumen_layout::counters::ContentDirty::Untracked
+            };
+            let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, content_dirty };
+            lumen_layout::counters::set_incremental_restyle(true);
+            // BUG-341 S15 — see the twin call in `relayout_chrome_host`: the
+            // box-build reuse rides on the same content precondition computed
+            // just above.
+            lumen_layout::box_tree::set_incremental_box_build(true);
+            let (dl, lb, counters) = relayout_page_incremental_restyle(
+                src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, prev_lb, delta,
+            );
+            lumen_layout::box_tree::set_incremental_box_build(false);
+            lumen_layout::counters::set_incremental_restyle(false);
+            (dl, lb, Some(counters.into_styles()))
+        } else {
+            let (dl, lb) = relayout_page_incremental(
+                src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb,
+            );
+            (dl, lb, None)
+        };
         lumen_layout::clear_interactive_state();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
         self.apply_relayout_result(new_dl, new_lb, viewport);
+        // `apply_relayout_result` unconditionally clears the cache — restore it
+        // here, after `lb` has already landed in `self.layout_box`, only when
+        // this cycle actually produced a matching one.
+        if let Some(styles) = fresh_cascade_styles {
+            self.page_prev_cascade_styles = Some(styles);
+            self.page_prev_interactive = new_interactive;
+        }
         true
     }
 
@@ -8309,6 +10295,14 @@ impl Lumen {
             }
         }
         self.prev_styles = new_styles;
+        // BUG-341 S7: invalidate the restyle-cascade cache by default — every
+        // producer routes through here, but only `try_relayout_raf_incremental`'s
+        // restyle sub-path knows how to recompute a cache that actually matches
+        // `lb`, and re-validates it right after this call returns. Every other
+        // producer (full `relayout()`, `readback_relayout_job`,
+        // `poll_engine_commit`) leaves it `None`, forcing the next incremental
+        // attempt onto the safe full-cascade-plus-graft fallback for one cycle.
+        self.page_prev_cascade_styles = None;
         self.layout_box = Some(lb);
         self.refresh_cv_state();
         // Promote nodes with will-change: transform/opacity/filter to GPU layers so
@@ -8638,7 +10632,7 @@ impl Lumen {
             PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return,
         };
         for (nid, url) in requests {
-            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink, Some(Arc::clone(&self.cookie_jar))) {
+            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink, Some(self.active_cookie_jar())) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("Lazy: пропуск {url}: {e}");
@@ -8649,8 +10643,15 @@ impl Lumen {
             // Animated GIF detection for lazy-loaded images.
             if lumen_image::is_gif(&bytes) {
                 match lumen_image::decode_gif_animated(&bytes) {
-                    Ok(gif) if gif.frames.len() > 1 => {
-                        let first = gif.frames[0].image.clone();
+                    Ok(gif) if gif.frame_count() > 1 => {
+                        // BUG-272 срез 19: only the first frame is decoded eagerly here.
+                        let first = match gif.frame_image(0) {
+                            Ok(img) => img,
+                            Err(e) => {
+                                eprintln!("Lazy: не декодируется GIF {url}: {e}");
+                                continue;
+                            }
+                        };
                         if let Some(src) = self.layout_source.as_ref() {
                             let mut doc = src.document.lock().unwrap();
                             let node_id = NodeId::from_index(nid as usize);
@@ -8658,23 +10659,25 @@ impl Lumen {
                         }
                         eprintln!(
                             "Lazy GIF-анимация: {} ({}×{}, {} кадров)",
-                            url, gif.width, gif.height, gif.frames.len()
+                            url, gif.width, gif.height, gif.frame_count()
                         );
                         if let Some(r) = self.renderer.as_mut() {
-                            if let Err(e) = r.register_image(url.clone(), &first) {
+                            // BUG-272 срез 17: insert into the CPU cache first, then
+                            // register the returned Arc handle — raw_images shares the
+                            // cache's allocation instead of a second pixel copy.
+                            let handle = self.image_cache.insert(lumen_image::ImageKey::new(&url), first);
+                            if let Err(e) = r.register_image(url.clone(), handle) {
                                 eprintln!("Lazy GIF: не зарегистрирована {url}: {e}");
                             }
-                            self.image_cache.insert(lumen_image::ImageKey::new(&url), first);
                         } else {
-                            self.pending_images.push((url.clone(), first));
+                            self.pending_images.push((url.clone(), Arc::new(first)));
                         }
                         self.gif_last_frame.remove(&url);
                         self.animated_gifs.insert(url, gif);
                         continue;
                     }
                     Ok(gif) => {
-                        if let Some(frame) = gif.frames.into_iter().next() {
-                            let img = frame.image;
+                        if let Ok(img) = gif.frame_image(0) {
                             if let Some(src) = self.layout_source.as_ref() {
                                 let mut doc = src.document.lock().unwrap();
                                 let node_id = NodeId::from_index(nid as usize);
@@ -8682,12 +10685,12 @@ impl Lumen {
                             }
                             eprintln!("Lazy загружена (GIF, 1 кадр): {url} ({}×{})", img.width, img.height);
                             if let Some(r) = self.renderer.as_mut() {
-                                if let Err(e) = r.register_image(url.clone(), &img) {
+                                let handle = self.image_cache.insert(lumen_image::ImageKey::new(&url), img);
+                                if let Err(e) = r.register_image(url.clone(), handle) {
                                     eprintln!("Lazy: не зарегистрирована {url}: {e}");
                                 }
-                                self.image_cache.insert(lumen_image::ImageKey::new(&url), img);
                             } else {
-                                self.pending_images.push((url, img));
+                                self.pending_images.push((url, Arc::new(img)));
                             }
                         }
                         continue;
@@ -8714,12 +10717,12 @@ impl Lumen {
                 apply_intrinsic_size(&mut doc, node_id, image.width, image.height);
             }
             if let Some(r) = self.renderer.as_mut() {
-                if let Err(e) = r.register_image(url.clone(), &image) {
+                let handle = self.image_cache.insert(lumen_image::ImageKey::new(&url), image);
+                if let Err(e) = r.register_image(url.clone(), handle) {
                     eprintln!("Lazy: не зарегистрирована {url}: {e}");
                 }
-                self.image_cache.insert(lumen_image::ImageKey::new(&url), image);
             } else {
-                self.pending_images.push((url, image));
+                self.pending_images.push((url, Arc::new(image)));
             }
         }
     }
@@ -8780,7 +10783,7 @@ impl Lumen {
                 PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => continue,
             };
 
-            let bytes = match fetch_image_bytes(&src, &base, &self.event_sink, Some(Arc::clone(&self.cookie_jar))) {
+            let bytes = match fetch_image_bytes(&src, &base, &self.event_sink, Some(self.active_cookie_jar())) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("video GIF: пропуск {src}: {e}");
@@ -8795,10 +10798,18 @@ impl Lumen {
 
             match lumen_image::decode_gif_animated(&bytes) {
                 Ok(gif) => {
-                    let first = gif.frames[0].image.clone();
+                    // BUG-272 срез 17/19: Arc so register/pending share the buffer;
+                    // only the first frame is materialised eagerly.
+                    let first = match gif.frame_image(0) {
+                        Ok(img) => Arc::new(img),
+                        Err(e) => {
+                            eprintln!("video GIF: ошибка декодирования {src}: {e}");
+                            continue;
+                        }
+                    };
                     let key = format!("video:{nid}");
                     if let Some(r) = self.renderer.as_mut() {
-                        if let Err(e) = r.register_image(key.clone(), &first) {
+                        if let Err(e) = r.register_image(key.clone(), Arc::clone(&first)) {
                             eprintln!("video GIF: не зарегистрирован {key}: {e}");
                         }
                     } else {
@@ -8812,10 +10823,10 @@ impl Lumen {
                     }
                     eprintln!(
                         "video GIF: загружен nid={nid} ({}×{}, {} кадров)",
-                        gif.width, gif.height, gif.frames.len()
+                        gif.width, gif.height, gif.frame_count()
                     );
                     // Store frames in shell-side map (lumen_image dep stays in shell).
-                    let cycle_ms: u64 = gif.frames.iter().map(|f| f.delay_ms()).sum();
+                    let cycle_ms: u64 = gif.total_cycle_ms();
                     let loop_count = match gif.loop_count {
                         lumen_image::GifLoopCount::Infinite | lumen_image::GifLoopCount::Finite(0) => 0u32,
                         lumen_image::GifLoopCount::Finite(n) => u32::from(n),
@@ -8864,7 +10875,7 @@ impl Lumen {
                 if last == idx {
                     return None;
                 }
-                Some((*nid, idx, gif.frames[idx].image.clone()))
+                Some((*nid, idx, gif.frame_image(idx).ok()?))
             })
             .collect();
         drop(playback);
@@ -8872,7 +10883,7 @@ impl Lumen {
         for (nid, idx, image) in updates {
             let key = format!("video:{nid}");
             if let Some(r) = self.renderer.as_mut()
-                && let Err(e) = r.register_image(key.clone(), &image)
+                && let Err(e) = r.register_image(key.clone(), Arc::new(image))
             {
                 eprintln!("video GIF кадр {key}[{idx}]: {e}");
             }
@@ -8974,6 +10985,8 @@ impl Lumen {
         }
         // Record navigation start for PerformanceNavigationTiming (Navigation Timing L2 §4.2).
         self.nav_start = Some(std::time::Instant::now());
+        // A fresh navigation supersedes any prior settled error (BUG-308).
+        self.load_failed = false;
         click_log::log_load_start(&self.source.describe());
         println!("Reload: {}", self.source.describe());
 
@@ -9052,6 +11065,10 @@ impl Lumen {
                 self.starting_style_tracker = StartingStyleTracker::new();
                 self.prev_styles.clear();
                 collect_box_styles(&page.layout_box, &mut self.prev_styles);
+                // BUG-341 S7: this producer bypasses the restyle-aware path
+                // entirely — invalidate so the next `try_relayout_raf_incremental`
+                // doesn't diff a stale cache against this fresh tree.
+                self.page_prev_cascade_styles = None;
                 self.layout_box = Some(page.layout_box);
                 // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
                 self.cv_relevant.clear();
@@ -9117,10 +11134,12 @@ impl Lumen {
                     // и регистрируем заново.
                     r.clear_images();
                     for (src, image) in &page.images {
-                        if let Err(err) = r.register_image(src.clone(), image) {
+                        // BUG-272 срез 17: `image` — Arc из IMAGE_CACHE; register
+                        // клонирует указатель, raw_images разделяет аллокацию.
+                        if let Err(err) = r.register_image(src.clone(), Arc::clone(image)) {
                             eprintln!("Картинка {src} не зарегистрирована: {err}");
                         }
-                        self.image_cache.insert(lumen_image::ImageKey::new(src), image.clone());
+                        self.image_cache.insert(lumen_image::ImageKey::new(src), (**image).clone());
                     }
                 } else {
                     // Renderer ещё не создан — обычно невозможно (reload идёт
@@ -9158,10 +11177,12 @@ impl Lumen {
                 }
                 click_log::log_load_ok(&self.source.describe(), title);
                 click_log::log_page_ready(&self.source.describe(), self.scroll_y);
+                self.record_render_health();
             }
             Err(err) => {
                 self.nav_start = None;
                 click_log::log_load_err(&self.source.describe(), &err.to_string());
+                health_log::log_load_error(&self.source.describe(), &err.to_string());
                 eprintln!("Ошибка reload {}: {err}", self.source.describe());
             }
         }
@@ -9219,7 +11240,9 @@ impl Lumen {
         Some(LoadedPage {
             display_list: rendered.display_list,
             title: rendered.title,
-            images: rendered.images,
+            // BUG-272 срез 17: driver's `RenderedPage.images` is still owned
+            // `Image`; wrap at this boundary (driver path unchanged).
+            images: rendered.images.into_iter().map(|(s, i)| (s, Arc::new(i))).collect(),
             animated_gifs: Vec::new(), // lumen-driver path has no animated GIF support yet
             lazy_pairs: Vec::new(), // Phase 4c: TODO integrate lazy loading
             layout_box: rendered.layout_box,
@@ -9264,7 +11287,7 @@ impl Lumen {
         let source = self.source.clone();
         let sink = Arc::clone(&self.event_sink);
         let proxy = self.load_proxy.clone();
-        let cookie_jar = Arc::clone(&self.cookie_jar);
+        let cookie_jar = self.active_cookie_jar();
         // BUG-268: media-контекст экрана — для гейта speculative-фетча
         // `<link rel=stylesheet media=...>`, чтобы print-only лист не грел
         // кэш и не слал CssLoaded (progressive-кадры не красятся print-стилями).
@@ -9389,6 +11412,10 @@ impl Lumen {
         self.content_height = content_height_of(&dl);
         self.content_width = content_width_of(&dl);
         self.display_list = dl;
+        // BUG-341 S7: streaming layout is a separate incremental mechanism
+        // (`layout_streaming_incremental`, no `CounterMap`) — invalidate the
+        // restyle cache so it isn't diffed against this tree by mistake.
+        self.page_prev_cascade_styles = None;
         self.layout_box = Some(layout);
         self.stream_layout_seeded = true;
         self.update_snap_containers();
@@ -9426,7 +11453,7 @@ impl Lumen {
             }
             let base = base.clone();
             let sink = Arc::clone(&self.event_sink);
-            let cookie_jar = Arc::clone(&self.cookie_jar);
+            let cookie_jar = self.active_cookie_jar();
             let proxy = self.load_proxy.clone();
             let target = self.target_color_space();
             std::thread::spawn(move || {
@@ -9455,6 +11482,33 @@ impl Lumen {
                 }
             });
         }
+    }
+
+    /// PERF-6: emit a broken-render / white-screen health signal for the page
+    /// that just finished loading. No-op unless the health journal is enabled.
+    /// The signal fires only when a content-bearing DOM painted nothing at all
+    /// (see [`health_log::log_render_health`] for the heuristic and its limits).
+    fn record_render_health(&self) {
+        if !health_log::is_enabled() {
+            return;
+        }
+        let layout_boxes = self.layout_box.as_ref().map(count_layout_boxes).unwrap_or(0);
+        let rendered_units = self
+            .layout_box
+            .as_ref()
+            .map(count_rendered_units)
+            .unwrap_or(0);
+        let dom_nodes = self
+            .layout_source
+            .as_ref()
+            .and_then(|ls| ls.document.lock().ok().map(|d| d.node_count()))
+            .unwrap_or(0);
+        health_log::log_render_health(
+            &self.source.describe(),
+            dom_nodes,
+            layout_boxes,
+            rendered_units,
+        );
     }
 
     /// Применить результат полного pipeline (fetch + parse + CSS + images).
@@ -9526,11 +11580,19 @@ impl Lumen {
         // Reset paint timing guards so new page fires fresh PerformancePaintTiming entries.
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
+        // A page was applied successfully — clear any prior settled-error flag
+        // (BUG-308) so `document_ready` reflects this real load, not a stale one.
+        self.load_failed = false;
 
         // Индексировать страницу в history_fts для omnibox (@history) и записать
         // в history_store для панели истории (Ctrl+H).
         // Пропускаем Empty и File sources — только HTTP(S) и bfcache snapshots.
-        if let Some(url) = self.source.url_str() {
+        // DS-16: while Anonymous is the active profile, skip both writes —
+        // an ephemeral session must leave no trace in the history a
+        // Personal/Work switch-back would then see (ADR-020).
+        if let Some(url) = self.source.url_str()
+            && !self.active_profile_is_anonymous()
+        {
             let title = page.title.as_deref().unwrap_or("");
             let _ = self.history_fts.index(self.next_history_id, url, title, "");
             self.next_history_id += 1;
@@ -9601,7 +11663,7 @@ impl Lumen {
             for pf in page.pending_web_fonts {
                 if let Some(base) = base_opt.clone() {
                     let sink = Arc::clone(&self.event_sink);
-                    let cookie_jar = Arc::clone(&self.cookie_jar);
+                    let cookie_jar = self.active_cookie_jar();
                     let proxy = self.load_proxy.clone();
                     std::thread::spawn(move || {
                         let raw = match fetch_image_bytes(&pf.url, &base, &sink, Some(cookie_jar)) {
@@ -9656,10 +11718,11 @@ impl Lumen {
             }
             r.clear_images();
             for (src, image) in &page.images {
-                if let Err(err) = r.register_image(src.clone(), image) {
+                // BUG-272 срез 17: share the Arc; raw_images no longer deep-copies.
+                if let Err(err) = r.register_image(src.clone(), Arc::clone(image)) {
                     eprintln!("Картинка {src} не зарегистрирована: {err}");
                 }
-                self.image_cache.insert(lumen_image::ImageKey::new(src), image.clone());
+                self.image_cache.insert(lumen_image::ImageKey::new(src), (**image).clone());
             }
         } else {
             self.pending_images = page.images;
@@ -9764,13 +11827,69 @@ impl Lumen {
         }
     }
 
+    /// Snapshot the tab strip, toolbar, and omnibox for the synthetic chrome
+    /// AX nodes (DS-17) — `lumen_a11y::chrome::chrome_nodes` turns this into
+    /// `TabList`/`ToolBar` siblings of the DOM-derived tree.
+    fn chrome_snapshot(&self) -> lumen_a11y::chrome::ChromeSnapshot {
+        use lumen_a11y::chrome::{ChromeButton, ChromeSnapshot, ChromeTab};
+
+        let tabs = self
+            .tab_strip
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(idx, tab)| ChromeTab { title: tab.title.clone(), selected: idx == self.tab_strip.active })
+            .collect();
+
+        let profile_name = self.profile_menu.active_entry().map(|e| e.name.as_str()).unwrap_or("?");
+        let buttons = vec![
+            ChromeButton { name: format!("Профиль: {profile_name}"), pressed: None },
+            ChromeButton { name: "Назад".to_owned(), pressed: None },
+            ChromeButton { name: "Вперёд".to_owned(), pressed: None },
+            ChromeButton { name: "Обновить".to_owned(), pressed: None },
+            ChromeButton { name: "Найти на странице".to_owned(), pressed: Some(self.find.is_open()) },
+            ChromeButton { name: "Веб-сайдбар".to_owned(), pressed: Some(self.sidebar.visible) },
+            ChromeButton { name: "ИИ-сайдбар".to_owned(), pressed: Some(self.ai_panel.visible) },
+            ChromeButton { name: "Загрузки".to_owned(), pressed: Some(self.downloads.visible) },
+            ChromeButton { name: "DevTools".to_owned(), pressed: Some(self.devtools_console.visible) },
+            ChromeButton { name: "Настройки".to_owned(), pressed: Some(self.settings_panel.visible) },
+        ];
+
+        let omnibox_value = if self.address_bar.is_open() {
+            self.address_bar.input().to_owned()
+        } else {
+            self.current_display_url().to_owned()
+        };
+
+        ChromeSnapshot { tabs, buttons, omnibox_value }
+    }
+
+    /// Chrome AX siblings for [`Self::update_platform_ax_tree`]/
+    /// `automation_a11y_tree` — CC-13: these come from the engine-rendered
+    /// chrome `Document` via `lumen_a11y::chrome::chrome_root_from_document`
+    /// (real ARIA roles off `assets/chrome/chrome.html`, injected at generation
+    /// time). The DS-17 synthetic-snapshot fallback below is unreachable since
+    /// CC-15-6 removed the rollback flag ([`Self::chrome_doc`] is always
+    /// `Some`); it is kept only as the `None`-arm of that `Option`.
+    fn chrome_ax_nodes(&self) -> Vec<lumen_a11y::AXNode> {
+        if let Some((doc, _)) = &self.chrome_doc {
+            let flat_tree = lumen_dom::build_flat_tree(doc);
+            vec![lumen_a11y::chrome::chrome_root_from_document(doc, doc.root(), &flat_tree)]
+        } else {
+            lumen_a11y::chrome::chrome_nodes(&self.chrome_snapshot())
+        }
+    }
+
     /// Rebuild the platform accessibility tree from the current DOM and push it to
-    /// the OS bridge. Called after every full page load.
+    /// the OS bridge. Called after every full page load and tab switch — the
+    /// chrome nodes (DS-17, CC-13) are attached as siblings so they stay live too.
     fn update_platform_ax_tree(&mut self) {
         let Some(src) = &self.layout_source else { return };
         let Ok(doc) = src.document.lock() else { return };
         let flat_tree = lumen_dom::build_flat_tree(&doc);
         let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &flat_tree);
+        let chrome = self.chrome_ax_nodes();
+        let ax_tree = lumen_a11y::chrome::attach_chrome(ax_tree, chrome);
         self.platform_bridge.update(&ax_tree);
     }
 }
@@ -9820,13 +11939,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             // `--viewport` (DEVX-1) wins over both defaults below — lets
             // `--deterministic` be combined with graphic_tests' fixed 1024×720
             // crop-calibration contract.
-            (w, h + tabs::strip::TAB_BAR_HEIGHT)
+            (w, h + toolbar::CHROME_H)
         } else if self.deterministic {
             (1280.0, 800.0)
         } else {
-            // Высота окна = CSS viewport (720) + tab bar (36) = 756, чтобы
-            // веб-контент получал ровно 720 CSS px, как ожидают graphic tests.
-            (1024.0, 720.0 + tabs::strip::TAB_BAR_HEIGHT)
+            // Высота окна = CSS viewport (720) + tab bar + toolbar (CHROME_H) = 792,
+            // чтобы веб-контент получал ровно 720 CSS px, как ожидают graphic tests.
+            (1024.0, 720.0 + toolbar::CHROME_H)
         };
         let attrs = Window::default_attributes()
             .with_title(window_title(self.title.as_deref()))
@@ -9859,10 +11978,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Заливаем декодированные ранее картинки в GPU. Take, чтобы освободить
         // память Vec (изображение копируется в wgpu Texture внутри register_image).
         for (src, image) in self.pending_images.drain(..) {
-            if let Err(err) = renderer.register_image(src.clone(), &image) {
+            // BUG-272 срез 17: `image` — Arc; register shares it, raw_images
+            // holds no separate copy.
+            if let Err(err) = renderer.register_image(src.clone(), Arc::clone(&image)) {
                 eprintln!("Картинка {src} не зарегистрирована: {err}");
             }
-            self.image_cache.insert(lumen_image::ImageKey::new(&src), image);
+            self.image_cache.insert(lumen_image::ImageKey::new(&src), (*image).clone());
         }
 
         // CSS Media Queries L5 §5.2 — read the OS `prefers-color-scheme` once the
@@ -9889,6 +12010,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
         self.window = Some(window);
         self.renderer = Some(renderer);
+        // CC-4: first chrome layout pass, now that the renderer knows the
+        // window's initial size.
+        self.relayout_chrome_host();
 
         // GG-4: Restore vertical-tab layout from persisted settings.
         if tabs::strip::TabLayout::from_str(&self.settings_store.tab_layout())
@@ -9906,6 +12030,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         self.stream_layout_seeded = false;
         // Record navigation start for the initial streaming load.
         self.nav_start = Some(std::time::Instant::now());
+        // A fresh navigation supersedes any prior settled error (BUG-308).
+        self.load_failed = false;
         self.load_generation = self.load_generation.wrapping_add(1);
         self.start_streaming_load(self.load_generation);
     }
@@ -9939,23 +12065,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if generation != self.load_generation { return; }
                 // PH1-2: CSS загружен параллельным потоком — мёрджим в stream_sheet.
                 // Применится в следующем paint_partial_dom (16 мс throttle).
-                let sheet = *boxed;
-                let s = &mut self.stream_sheet;
-                s.rules.extend(sheet.rules);
-                s.properties.extend(sheet.properties);
-                s.media_rules.extend(sheet.media_rules);
-                s.imports.extend(sheet.imports);
-                s.font_faces.extend(sheet.font_faces);
-                s.layer_order.extend(sheet.layer_order);
-                s.layers.extend(sheet.layers);
-                s.supports_rules.extend(sheet.supports_rules);
-                s.keyframes.extend(sheet.keyframes);
-                s.counter_styles.extend(sheet.counter_styles);
-                s.page_rules.extend(sheet.page_rules);
-                s.scope_rules.extend(sheet.scope_rules);
-                s.starting_style_rules.extend(sheet.starting_style_rules);
-                s.container_rules.extend(sheet.container_rules);
-                s.font_palette_values.extend(sheet.font_palette_values);
+                // `merge_from` also mints a new `StylesheetRevision`, which is
+                // what tells the cascade's rule-index cache that this sheet is
+                // no longer the one it indexed (BUG-341 S21). It replaced a
+                // hand-rolled field-by-field merge here that had fallen two
+                // fields behind the struct.
+                self.stream_sheet.merge_from(*boxed);
             }
             LoadEvent::ImageDecoded { src, image, animated } => {
                 // PH1-2c: картинка декодирована параллельным потоком во время
@@ -9964,14 +12079,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // redraw — следующий кадр заменит placeholder реальной картинкой.
                 let image = *image;
                 if let Some(r) = self.renderer.as_mut() {
-                    if let Err(e) = r.register_image(src.clone(), &image) {
+                    // BUG-272 срез 17: cache-insert returns the Arc handle; register
+                    // with it so raw_images shares the CPU cache's allocation.
+                    let handle = self.image_cache.insert(lumen_image::ImageKey::new(&src), image);
+                    if let Err(e) = r.register_image(src.clone(), handle) {
                         eprintln!("Streaming-картинка: не зарегистрирована {src}: {e}");
                     }
-                    self.image_cache.insert(lumen_image::ImageKey::new(&src), image);
                 } else {
                     // Renderer ещё не создан (окно не открыто) — отложим заливку
                     // в GPU до `resumed`.
-                    self.pending_images.push((src.clone(), image));
+                    self.pending_images.push((src.clone(), Arc::new(image)));
                 }
                 if let Some(gif) = animated {
                     // Многокадровый GIF: тикается в `RedrawRequested`.
@@ -10043,7 +12160,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // безопасно — следующая навигация пересоздаёт набор в streaming.
                 let sink = self.event_sink.clone();
                 let hp = Arc::clone(&self.hyp_provider);
-                let cookie_jar = Some(Arc::clone(&self.cookie_jar));
+                let cookie_jar = Some(self.active_cookie_jar());
                 let sw_worker_store = Some(Arc::clone(&self.sw_worker_store));
                 let cache_backend =
                     Some(Arc::clone(&self.cache_store) as Arc<dyn lumen_core::ext::CacheBackend>);
@@ -10111,10 +12228,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             }
                         }
                         click_log::log_page_ready(&self.source.describe(), self.scroll_y);
+                        self.record_render_health();
                     }
                     Err(e) => {
                         self.nav_start = None;
+                        // Settled navigation error — mark done so a
+                        // `wait{document_ready}` resolves at once (BUG-308).
+                        self.load_failed = true;
                         click_log::log_load_err(&self.source.describe(), &e);
+                        health_log::log_load_error(&self.source.describe(), &e);
                         eprintln!("Ошибка финального render {}: {e}", self.source.describe());
                     }
                 }
@@ -10122,7 +12244,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             LoadEvent::LoadError(msg, generation) => {
                 if generation != self.load_generation { return; }
                 self.nav_start = None;
+                // Settled navigation error — mark done so a
+                // `wait{document_ready}` resolves at once (BUG-308).
+                self.load_failed = true;
                 click_log::log_load_err(&self.source.describe(), &msg);
+                health_log::log_load_error(&self.source.describe(), &msg);
                 eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
                 self.stream_builder = None;
                 self.stream_sheet = lumen_css_parser::Stylesheet::default();
@@ -10175,10 +12301,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             if now_s - self.last_mem_report_s >= 10.0 {
                 self.last_mem_report_s = now_s;
                 let wf_bytes: usize = self.web_fonts.iter().map(|f| f.bytes.len()).sum();
+                // BUG-272 срез 19: lazy GIFs hold encoded bytes + ~one decoded frame,
+                // not all N frames — `resident_bytes` reflects the real footprint.
                 let gif_bytes: usize = self
                     .animated_gifs
                     .values()
-                    .map(|g| g.frames.iter().map(|f| f.image.data.len()).sum::<usize>())
+                    .map(lumen_image::AnimatedGif::resident_bytes)
                     .sum();
                 let (img_n, img_b) = image_cache::IMAGE_CACHE.debug_stats();
                 let (pf_n, pf_b) = prefetch::PREFETCH_CACHE.debug_stats();
@@ -10449,7 +12577,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         data: rgba.clone(),
                         icc_profile: None,
                     };
-                    if let Err(e) = r.register_image(format!("canvas:{nid}"), &image) {
+                    if let Err(e) = r.register_image(format!("canvas:{nid}"), Arc::new(image)) {
                         eprintln!("Canvas: не зарегистрирован canvas:{nid}: {e}");
                     }
                 }
@@ -10741,6 +12869,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // so a message logged earlier this frame isn't missed).
                     let msgs = self.drain_query_js(|j| j.take_console_messages()).unwrap_or_default();
                     if !msgs.is_empty() {
+                        // PERF-6: record page `console.error(...)` calls as health signals.
+                        if health_log::is_enabled() {
+                            let url = self.source.describe();
+                            for (level, text) in &msgs {
+                                if *level == 2 {
+                                    health_log::log_console_error(&url, text);
+                                }
+                            }
+                        }
                         self.devtools_console.push_batch(msgs);
                     }
                     let entries: Vec<ConsoleEntry> = self
@@ -10821,6 +12958,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // Pointer Events L3 §4.1: flush pointer-move samples buffered this
+        // tick (real `CursorMoved` + injected `MouseMove`) as one coalesced
+        // `pointermove`/`mousemove` dispatch. Safety-net flush point: press/
+        // release/enter/leave dispatch sites flush eagerly for ordering, but a
+        // plain move with no state change only reaches JS here.
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
+        self.flush_pointer_moves();
+
         // Download manager: drain completion events from background threads.
         self.downloads.poll();
 
@@ -10882,13 +13027,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         {
             let popups = self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default();
             for (url, _target, _width, _height) in popups {
-                self.open_new_tab();
-                let url = if url.is_empty() {
-                    "about:blank".to_owned()
+                // BUG-293: resolve `file://` popups to a `PageSource::File` (load
+                // from disk) rather than the http-only network path. Read the
+                // opener's scheme from `self.source` BEFORE `open_new_tab()`
+                // resets it, so the web→file security check sees the real opener.
+                let resolved = if url.is_empty() {
+                    Ok(PageSource::Url("about:blank".to_owned()))
                 } else {
-                    url
+                    resolve_js_navigation(&url, &self.source)
                 };
-                self.navigate_to(PageSource::Url(url));
+                self.open_new_tab();
+                match resolved {
+                    Ok(source) => self.navigate_to(source),
+                    Err(reason) => eprintln!("window.open заблокирован: {reason}"),
+                }
             }
         }
 
@@ -10939,20 +13091,27 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
-        // CC-7: Video Picture-in-Picture — open/close the real OS floating window.
-        // Drained from the process-global queue fed by `_lumen_pip_enter` /
-        // `_lumen_pip_exit` (see `lumen_js::pip_bindings`).
+        // CC-7 / P3-pip: Video and Document Picture-in-Picture — open/close the
+        // real OS floating window. Drained from the process-global queue fed
+        // by `_lumen_pip_enter` / `_lumen_pip_exit` / `_lumen_pip_request_window`
+        // (see `lumen_js::pip_bindings`).
         for req in lumen_js::pip_bindings::take_pip_requests() {
             use lumen_js::pip_bindings::PipRequest;
             use panels::pip_os_window::PipAction;
-            let action = match req {
-                PipRequest::Enter { nid } => self.pip_controller.on_enter(nid),
-                PipRequest::Exit { .. } => self.pip_controller.on_exit(),
-            };
-            match action {
-                PipAction::Open(nid) => self.open_pip_os(event_loop, nid),
-                PipAction::Close => self.close_pip_os(),
-                PipAction::None => {}
+            match req {
+                PipRequest::Enter { nid } => match self.pip_controller.on_enter(nid) {
+                    PipAction::Open(nid) => self.open_pip_os(event_loop, nid),
+                    PipAction::Close => self.close_pip_os(),
+                    PipAction::None => {}
+                },
+                PipRequest::Exit { .. } => match self.pip_controller.on_exit() {
+                    PipAction::Open(nid) => self.open_pip_os(event_loop, nid),
+                    PipAction::Close => self.close_pip_os(),
+                    PipAction::None => {}
+                },
+                PipRequest::OpenDocument { width, height } => {
+                    self.open_pip_os_document(event_loop, width, height);
+                }
             }
         }
 
@@ -11055,6 +13214,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         {
             let msgs = self.drain_query_js(|j| j.take_console_messages()).unwrap_or_default();
             if !msgs.is_empty() {
+                // PERF-6: record page `console.error(...)` calls as health signals.
+                if health_log::is_enabled() {
+                    let url = self.source.describe();
+                    for (level, text) in &msgs {
+                        if *level == 2 {
+                            health_log::log_console_error(&url, text);
+                        }
+                    }
+                }
                 self.devtools_console.push_batch(msgs);
                 if self.devtools_console.visible {
                     self.request_redraw();
@@ -11193,11 +13361,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             match nav {
                 JsNavigateRequest::Push(url) => {
                     click_log::log_js_nav("pushState/location.href", &url);
-                    self.navigate_to(PageSource::Url(url));
+                    // BUG-293: same file://-resolution + web→file guard as popups.
+                    match resolve_js_navigation(&url, &self.source) {
+                        Ok(source) => self.navigate_to(source),
+                        Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
+                    }
                 }
                 JsNavigateRequest::Replace(url) => {
                     click_log::log_js_nav("replaceState/location.replace", &url);
-                    self.navigate_replace(PageSource::Url(url));
+                    match resolve_js_navigation(&url, &self.source) {
+                        Ok(source) => self.navigate_replace(source),
+                        Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
+                    }
                 }
                 JsNavigateRequest::Reload => {
                     click_log::log_js_nav("location.reload", &self.source.describe());
@@ -11266,15 +13441,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.close_pip_os();
                     self.pip_controller.on_exit();
                     // Mirror the close into JS so `leavepictureinpicture` fires
-                    // and `document.pictureInPictureElement` clears. ADR-016
-                    // M2.2c-2d: fire-and-forget void eval через маршрутизатор —
-                    // под флагом off-UI-thread, без флага байт-идентично.
+                    // and `document.pictureInPictureElement` clears (video PiP),
+                    // and so Document PiP's `PictureInPictureWindow.close()`
+                    // runs too (P3-pip) — the same OS window may have been
+                    // opened by either side, and each guards itself so only
+                    // the truly-active one does anything. ADR-016 M2.2c-2d:
+                    // fire-and-forget void eval через маршрутизатор — под
+                    // флагом off-UI-thread, без флага байт-идентично.
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     route_eval_js(
                         self.engine_thread.as_ref(),
                         self.js_ctx.as_ref(),
                         "if(typeof document!=='undefined'&&document.pictureInPictureElement)\
-                         {try{document.exitPictureInPicture();}catch(e){}}"
+                         {try{document.exitPictureInPicture();}catch(e){}}\
+                         if(typeof documentPictureInPicture!=='undefined'&&\
+                         documentPictureInPicture._activeWindow&&\
+                         !documentPictureInPicture._activeWindow._closed)\
+                         {try{documentPictureInPicture._activeWindow.close();}catch(e){}}"
                             .to_string(),
                     );
                 }
@@ -11299,6 +13482,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         p.renderer.set_scale_factor(scale_factor);
                     }
                     self.render_pip_os();
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
+                    self.deliver_pip_resize();
                 }
                 WindowEvent::RedrawRequested => {
                     self.render_pip_os();
@@ -11375,6 +13560,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     r.resize(size.width, size.height);
                 }
                 self.relayout();
+                // CC-4: re-lay-out the engine-drawn chrome at the new window
+                // size.
+                self.relayout_chrome_host();
                 // HTML §8.1.5.1, шаг 13: ResizeObserver delivery.
                 // JS-observers are delivered inside relayout() via deliver_layout_observers().
                 // The shell runtime.deliver_observer_records delivers Rust-level observers.
@@ -11448,7 +13636,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (position.x as f32) / dpr;
                     let y_css = (position.y as f32) / dpr;
-                    let hovered = if y_css < tabs::strip::TAB_BAR_HEIGHT {
+                    let hovered = if y_css < toolbar::CHROME_H {
                         None
                     } else {
                         let (page_x, page_y) = self.page_point(x_css, y_css);
@@ -11520,7 +13708,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let y_css = (position.y as f32) / dpr;
                         let (page_x, page_y) = (
                             x_css - left_dock_w + self.scroll_x,
-                            y_css - tabs::strip::TAB_BAR_HEIGHT + self.scroll_y,
+                            y_css - toolbar::CHROME_H + self.scroll_y,
                         );
                         let target_nid = self.layout_box.as_ref().and_then(|lb| {
                             hit_test(Point::new(page_x, page_y), lb)
@@ -11601,7 +13789,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .map_or(1.0_f32, |r| r.scale_factor() as f32)
                         .max(1e-6);
                     let win_w = self.viewport_width_css();
-                    let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + toolbar::CHROME_H;
                     self.pip.drag_to(
                         (position.x as f32) / dpr,
                         (position.y as f32) / dpr,
@@ -11626,7 +13814,34 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (position.x as f32) / dpr;
                     let y_css = (position.y as f32) / dpr;
-                    let new_hovered = if y_css < tabs::strip::TAB_BAR_HEIGHT {
+                    // CC-5: independent hover tracking for the engine-drawn
+                    // chrome document — separate thread-locals/relayout pass
+                    // from the page's own `:hover` below (`relayout_chrome_host`'s
+                    // doc comment explains why the two must not share state).
+                    // `point_over_chrome`/`chrome_hit_test` both answer "no
+                    // chrome" once the pointer is over the page, so moving out
+                    // of the sidebar/toolbar correctly clears this again.
+                    let new_chrome_hovered = if self.point_over_chrome(x_css, y_css) {
+                        self.chrome_hit_test(x_css, y_css).map(|r| r.node)
+                    } else {
+                        None
+                    };
+                    if new_chrome_hovered != self.chrome_hovered_nid {
+                        self.chrome_hovered_nid = new_chrome_hovered;
+                        self.relayout_chrome_host();
+                        self.request_redraw();
+                    }
+                    // Pointer Events L3 §4.1: buffer this raw sample instead of
+                    // dispatching immediately. Flushed as one coalesced
+                    // `pointermove` on the next `about_to_wait` tick, or sooner
+                    // (below) if hover changes so ordering vs enter/leave holds.
+                    #[cfg(any(feature = "quickjs", feature = "v8"))]
+                    self.pending_pointer_moves.push((x_css, y_css));
+                    // CC-5: `point_over_chrome` replaces the legacy `y_css <
+                    // toolbar::CHROME_H` gate — that constant no longer
+                    // describes where the chrome's opaque area ends
+                    // (variable-width sidebar, differently-sized toolbar row).
+                    let new_hovered = if self.point_over_chrome(x_css, y_css) {
                         None
                     } else {
                         let (page_x, page_y) = self.page_point(x_css, y_css);
@@ -11677,42 +13892,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     self.pending_pointer_moves.push((x_css, y_css));
                 }
-                // Tab bar: update hovered_tab_idx for tooltip rendering.
-                {
-                    let dpr = self
-                        .renderer
-                        .as_ref()
-                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
-                        .max(1e-6);
-                    let x_css = (position.x as f32) / dpr;
-                    let y_css = (position.y as f32) / dpr;
-                    let win_w = self.viewport_width_css();
-                    self.hovered_tab_idx = if y_css < tabs::strip::TAB_BAR_HEIGHT {
-                        let tab_area_w = win_w
-                            - tabs::archive::ARCHIVE_BTN_W
-                            - tabs::strip::LAYOUT_BTN_W
-                            - tabs::strip::SETTINGS_BTN_W;
-                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
-                            tabs::strip::TabHit::Tab(idx) => Some(idx),
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    };
-                }
-                // Settings panel: update hover position for tooltip rendering.
-                if self.settings_panel.visible {
-                    let dpr = self
-                        .renderer
-                        .as_ref()
-                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
-                        .max(1e-6);
-                    self.settings_hover = Some((
-                        (position.x as f32) / dpr,
-                        (position.y as f32) / dpr,
-                    ));
-                    self.request_redraw();
-                }
+                // CC-15-4: the settings-panel hover tracker lived here — it fed
+                // only `settings_panel::tooltip_for`/`build_tooltip`, both
+                // deleted with the legacy paint, so every `CursorMoved` while
+                // the panel was open cost a `request_redraw()` for nothing.
                 // CC-4: update tab context-menu hover highlight.
                 if self.tab_context_menu.is_open() {
                     let dpr = self
@@ -11736,9 +13919,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.request_redraw();
                     }
                 }
-                // B-7: Active resize — update element width/height as mouse moves.
+                // B-7/CC-CSS-4: Active resize — update element width/height as mouse
+                // moves, gated to the axes the grip's `resize` value allows (a pure
+                // `resize: vertical` grip must not also change width on a diagonal drag).
                 #[cfg(any(feature = "quickjs", feature = "v8"))]
-                if let Some((node_id, start_x, start_y)) = self.resize_active {
+                if let Some((node_id, start_x, start_y, allow_w, allow_h)) = self.resize_active {
                     let dpr = self
                         .renderer
                         .as_ref()
@@ -11746,8 +13931,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (position.x as f32) / dpr;
                     let y_css = (position.y as f32) / dpr;
-                    let delta_x = x_css - start_x;
-                    let delta_y = y_css - start_y;
+                    let delta_x = if allow_w { x_css - start_x } else { 0.0 };
+                    let delta_y = if allow_h { y_css - start_y } else { 0.0 };
                     let nid_u32 = node_id.index() as u32;
                     // ADR-016 M2.2c-2d: resize-eval через `route_eval_js` — снимаем прямое
                     // `self.js_ctx`-обращение. Чистый fire-and-forget void без чтения
@@ -11765,8 +13950,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::CursorLeft { .. } => {
                 self.cursor_position = None;
-                self.hovered_tab_idx = None;
-                self.settings_hover = None;
                 self.resize_active = None; // Clear resize when cursor leaves window
                 // Clear hover state when cursor leaves the window.
                 if self.hovered_nid.is_some() {
@@ -11873,6 +14056,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (cursor.x as f32) / dpr;
                     let y_css = (cursor.y as f32) / dpr;
+                    // CC-5: chrome's own `:active` — mirrors the page's
+                    // `active_nid` handling above but scoped to `chrome_layout`
+                    // (see `relayout_chrome_host`'s doc comment for why the two
+                    // documents can't share interactive thread-locals).
+                    if self.point_over_chrome(x_css, y_css) {
+                        self.chrome_active_nid = self.chrome_hit_test(x_css, y_css).map(|r| r.node);
+                        self.relayout_chrome_host();
+                        self.request_redraw();
+                    }
                     // F2-6: a press on a docked panel's inner edge begins a
                     // resize drag; the click never reaches the page / panels.
                     if let Some(edge) = self.resize_edge_at(x_css, y_css) {
@@ -11976,8 +14168,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // B-7: Check if click is on resize grip of any element in layout tree.
                     // If so, activate resize mode. This must be checked before other UI panels.
                     if let Some(ref layout_box) = self.layout_box
-                        && let Some(nid) = self.find_resize_grip_node(layout_box, x_css, y_css) {
-                            self.resize_active = Some((nid, x_css, y_css));
+                        && let Some((nid, allow_w, allow_h)) = self.find_resize_grip_node(layout_box, x_css, y_css) {
+                            self.resize_active = Some((nid, x_css, y_css, allow_w, allow_h));
                             self.request_redraw();
                             return;
                         }
@@ -12049,124 +14241,61 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Tab bar occupies y = 0..TAB_BAR_HEIGHT — dispatch first.
-                    if y_css < tabs::strip::TAB_BAR_HEIGHT {
-                        let win_w = self.viewport_width_css();
-                        // Archive panel: close on click-outside before checking button.
-                        if self.archive.visible {
-                            match tabs::archive::hit_test_panel(
-                                &self.archive,
-                                x_css,
-                                y_css,
-                                win_w,
-                                tabs::strip::TAB_BAR_HEIGHT,
-                            ) {
-                                Some(tabs::archive::ArchiveHit::Restore(id)) => {
-                                    if let Some(entry) = self.archive.take(id)
-                                        && !entry.url.is_empty()
-                                    {
-                                        self.navigate_to(PageSource::Url(entry.url));
-                                    }
-                                    self.archive.close();
-                                    self.request_redraw();
-                                    return;
+                    // CC-5 (docs/tasks/p1-css-chrome.md): the engine-drawn
+                    // chrome (CC-4) covers the whole top-strip/sidebar area the
+                    // legacy hit-testers below assume — falling through to both
+                    // would double-count the same physical click (nothing
+                    // paints the legacy geometry to click on, yet their y/x-range
+                    // checks don't know that). Route exclusively through the
+                    // chrome hit-test + `data-action` dispatch instead; a click
+                    // outside the chrome's own opaque area (i.e. on real page
+                    // content, including any floating popover panel drawn above
+                    // it — those stay positioned within the page-content rect)
+                    // is left unhandled here and falls through unchanged to the
+                    // panel checks below.
+                    if self.point_over_chrome(x_css, y_css) {
+                        let hit = self.chrome_hit_test(x_css, y_css);
+                        self.chrome_active_nid = hit.as_ref().map(|r| r.node);
+                        self.relayout_chrome_host();
+                        if let Some(hit) = hit {
+                            // CC-7: `.omnibox`/`#omniInput` carries no
+                            // `data-action` (nothing to translate an
+                            // `onfocus` handler from — the frozen design
+                            // reference has none either, see CC-7 in
+                            // docs/tasks/p1-css-chrome.md) — special-cased
+                            // here exactly like the legacy
+                            // `toolbar::ToolbarHit::Omnibox` branch it
+                            // mirrors: a no-op while already open so an
+                            // in-progress edit/dropdown selection isn't reset.
+                            let omni_input = self
+                                .chrome_doc
+                                .as_ref()
+                                .and_then(|(doc, _)| doc.find_by_id(lumen_chrome::ids::OMNI_INPUT));
+                            if omni_input.is_some_and(|id| hit.path.contains(&id)) {
+                                if !self.address_bar.is_open() {
+                                    self.hint.close();
+                                    let current = self.current_display_url().to_owned();
+                                    self.address_bar.open(&current);
+                                    // CC-7: the relayout above ran before
+                                    // `open()` — redo it so the
+                                    // `:focus-within` ring/caret show on
+                                    // this same click, not one input
+                                    // later (see the matching comment in
+                                    // `Self::handle_address_bar_key`).
+                                    self.relayout_chrome_host();
                                 }
-                                Some(tabs::archive::ArchiveHit::Dismiss(id)) => {
-                                    self.archive.take(id);
-                                    self.request_redraw();
-                                    return;
-                                }
-                                Some(tabs::archive::ArchiveHit::Inside) => {
-                                    self.request_redraw();
-                                    return;
-                                }
-                                Some(tabs::archive::ArchiveHit::Outside) => {
-                                    self.archive.close();
-                                    self.request_redraw();
-                                }
-                                None => {}
+                            } else if let Some((nid, action)) = self.chrome_action_at(&hit) {
+                                self.dispatch_chrome_action(nid, action, event_loop);
                             }
                         }
-                        // Archive toolbar button (rightmost 36 px of the tab bar).
-                        if tabs::archive::hit_test_button(
-                            x_css,
-                            y_css,
-                            win_w,
-                            tabs::strip::TAB_BAR_HEIGHT,
-                        ) {
-                            self.archive.toggle();
-                            self.request_redraw();
-                            return;
-                        }
-                        // Layout toggle button (GG-4): between tabs and archive button.
-                        let layout_btn_x = win_w
-                            - tabs::archive::ARCHIVE_BTN_W
-                            - tabs::strip::LAYOUT_BTN_W;
-                        if tabs::strip::hit_test_layout_btn(x_css, y_css, layout_btn_x) {
-                            self.vertical_tabs.toggle();
-                            let new_layout = if self.vertical_tabs.visible {
-                                tabs::strip::TabLayout::Vertical
-                            } else {
-                                tabs::strip::TabLayout::Horizontal
-                            };
-                            let _ = self.settings_store.set_tab_layout(new_layout.as_str());
-                            self.request_redraw();
-                            return;
-                        }
-                        // Settings gear button: between tabs and layout toggle.
-                        let settings_btn_x = layout_btn_x - tabs::strip::SETTINGS_BTN_W;
-                        if tabs::strip::hit_test_settings_btn(x_css, y_css, settings_btn_x) {
-                            if self.settings_panel.visible {
-                                self.close_settings_panel();
-                            } else {
-                                self.open_settings_panel();
-                            }
-                            self.request_redraw();
-                            return;
-                        }
-                        // Tab area: pass effective width (excluding archive + layout + settings buttons).
-                        let tab_area_w = win_w
-                            - tabs::archive::ARCHIVE_BTN_W
-                            - tabs::strip::LAYOUT_BTN_W
-                            - tabs::strip::SETTINGS_BTN_W;
-                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
-                            tabs::strip::TabHit::Tab(idx) => {
-                                // Record a potential drag; switch tab only if no drag occurs
-                                // (resolved on MouseInput Release).
-                                self.tab_drag = Some(tabs::strip::TabDragState {
-                                    src_idx: idx,
-                                    press_x: x_css,
-                                    ghost_x: x_css,
-                                    active: false,
-                                });
-                                self.switch_tab(idx);
-                            }
-                            tabs::strip::TabHit::Close(idx) => {
-                                self.close_tab(idx, event_loop);
-                            }
-                            tabs::strip::TabHit::Adblock(idx) => {
-                                // Per-tab toggle: flip this tab's flag independently.
-                                if let Some(tab) = self.tab_strip.tabs.get_mut(idx) {
-                                    tab.adblock = !tab.adblock;
-                                    let now_on = tab.adblock;
-                                    println!(
-                                        "Ad-block вкладки {idx}: {}",
-                                        if now_on { "включён" } else { "отключён" }
-                                    );
-                                    // If this is the active tab, the filter governing its
-                                    // page fetches must reflect the new flag now — sync the
-                                    // process-global toggle and reload.
-                                    if idx == self.tab_strip.active {
-                                        lumen_network::set_global_adblock_enabled(now_on);
-                                        self.reload();
-                                    }
-                                }
-                                self.request_redraw();
-                            }
-                            tabs::strip::TabHit::Empty => {}
-                        }
+                        self.request_redraw();
                         return;
                     }
+                    // CC-15-3: the legacy tab-bar/toolbar left-click dispatch
+                    // (tab switch/close/adblock, archive/layout/settings
+                    // buttons, toolbar buttons) lived here — removed along with
+                    // the paint/hit-test functions it called, unreachable since
+                    // CC-4 routed those clicks through `chrome_hit_test` above.
                     // Archive panel: close on click below tab bar when open.
                     if self.archive.visible {
                         let win_w = self.viewport_width_css();
@@ -12175,7 +14304,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             x_css,
                             y_css,
                             win_w,
-                            tabs::strip::TAB_BAR_HEIGHT,
+                            toolbar::CHROME_H,
                         ) {
                             Some(tabs::archive::ArchiveHit::Restore(id)) => {
                                 if let Some(entry) = self.archive.take(id)
@@ -12216,12 +14345,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         && x_css >= vt_origin
                         && x_css < vt_origin + vt_w
                     {
-                        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                        let win_h = self.viewport_height_css() + toolbar::CHROME_H;
                         match panels::vertical_tabs::hit_test(
                             &self.tab_strip,
                             x_css - vt_origin,
                             y_css,
-                            tabs::strip::TAB_BAR_HEIGHT,
+                            toolbar::CHROME_H,
                             win_h,
                             self.vertical_tabs.scroll_y,
                             vt_w,
@@ -12249,13 +14378,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         && x_css >= tt_origin
                         && x_css < tt_origin + tt_w
                     {
-                        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                        let win_h = self.viewport_height_css() + toolbar::CHROME_H;
                         match panels::tree_tabs::hit_test(
                             &self.tab_strip,
                             &self.tree_tabs,
                             x_css - tt_origin,
                             y_css,
-                            tabs::strip::TAB_BAR_HEIGHT,
+                            toolbar::CHROME_H,
                             win_h,
                             tt_w,
                         ) {
@@ -12287,10 +14416,51 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
+                    // Profile switcher dropdown (DS-14): anchored below the
+                    // toolbar avatar button. BUG-403/BUG-404 class: use the
+                    // measured `page_offset()` Y, not the legacy-only
+                    // `toolbar::CHROME_H` constant, so the hit-test matches
+                    // wherever the popover is actually drawn (both chromes).
+                    if self.profile_menu.visible {
+                        let avatar_x = toolbar::avatar_x();
+                        let (_, page_y_offset) = self.page_offset();
+                        if let Some(hit) = panels::profile_menu::hit_test(
+                            &self.profile_menu,
+                            x_css,
+                            y_css,
+                            avatar_x,
+                            page_y_offset,
+                        ) {
+                            match hit {
+                                panels::profile_menu::ProfileMenuHit::SwitchTo(id) => {
+                                    if self.profiles.set_active(Some(id)).is_ok() {
+                                        self.profile_menu.set_active(Some(id));
+                                        // DS-16: Anonymous is ephemeral — every
+                                        // time it becomes active, start from a
+                                        // fresh in-memory jar so no cookie
+                                        // survives a previous Anonymous session.
+                                        if self.active_profile_is_anonymous() {
+                                            self.anonymous_cookie_jar = Arc::new(
+                                                lumen_storage::CookieJar::open_in_memory()
+                                                    .expect("anonymous_cookie_jar reset"),
+                                            );
+                                        }
+                                    }
+                                    self.profile_menu.visible = false;
+                                    // CC-6: re-sync the CSS chrome's data-profile (no-op off the flag).
+                                    self.relayout_chrome_host();
+                                }
+                                panels::profile_menu::ProfileMenuHit::Empty => {}
+                            }
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+
                     // Shields floating panel (7C.4): top-right overlay.
                     if self.shields.visible {
                         let win_w = self.viewport_width_css();
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         if let Some(hit) = panels::shields_panel::hit_test(
                             &self.shields,
                             x_css,
@@ -12315,7 +14485,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                     // Privacy network panel (V5): right-docked overlay.
                     if self.privacy.visible {
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         let win_w = self.viewport_width_css();
                         let win_h = self.viewport_height_css() + tab_h;
                         match panels::privacy_panel::hit_test(
@@ -12340,7 +14510,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                     // Permission popover (7C.2): top-left overlay below tab bar.
                     if self.permission.visible {
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         if let Some(hit) = panels::permission_panel::hit_test(
                             &self.permission,
                             x_css,
@@ -12366,7 +14536,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     if self.read_later_panel.visible {
                         use panels::read_later_panel::ReadLaterHit;
                         let win_w = self.viewport_width_css();
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         let px = win_w - panels::read_later_panel::PANEL_W - 4.0;
                         let py = tab_h + 4.0;
                         let hit = panels::read_later_panel::hit_test(
@@ -12410,54 +14580,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Bookmark manager panel (task #22): floating overlay.
-                    if self.bookmark_panel.visible {
-                        let (ax, ay) = self.bookmark_anchor();
-                        if let Some(hit) = panels::bookmark_panel::hit_test(
-                            &self.bookmark_panel,
-                            x_css,
-                            y_css,
-                            ax,
-                            ay,
-                        ) {
-                            use panels::bookmark_panel::BookmarkHit;
-                            match hit {
-                                BookmarkHit::Close => {
-                                    self.bookmark_panel.visible = false;
-                                    self.bookmark_panel.search_active = false;
-                                }
-                                BookmarkHit::FocusSearch => {
-                                    self.bookmark_panel.search_active = true;
-                                }
-                                BookmarkHit::SelectFolder(folder) => {
-                                    self.bookmark_panel.selected_folder = folder;
-                                    self.bookmark_panel.scroll_y = 0.0;
-                                }
-                                BookmarkHit::DeleteBookmark(id) => {
-                                    if let Some(url) = self
-                                        .bookmark_panel
-                                        .entries
-                                        .iter()
-                                        .find(|e| e.id == id)
-                                        .map(|e| e.url.clone())
-                                    {
-                                        let _ = self.bookmarks.delete(&url);
-                                        self.refresh_bookmarks();
-                                    }
-                                }
-                                BookmarkHit::Bookmark(id) => {
-                                    // Begin a potential drag; open vs. re-file is
-                                    // resolved on the matching mouse release.
-                                    self.bookmark_panel.begin_drag(id);
-                                }
-                                BookmarkHit::Empty => {
-                                    self.bookmark_panel.search_active = false;
-                                }
-                            }
-                            self.request_redraw();
-                            return;
-                        }
-                    }
+                    // CC-10b/CC-15-6: the legacy bookmark-manager overlay's click
+                    // hit-test lived here, gated off the rollback flag —
+                    // `#view-bookmarks` in the engine chrome owns it now.
 
                     // Accessibility settings panel (E-2): centred overlay.
                     if self.a11y_panel.visible {
@@ -12512,205 +14637,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Print dialog (E-1): centred overlay, Ctrl+P.
-                    if self.print_panel.visible {
-                        let win_w = self.viewport_width_css();
-                        let win_h = self.viewport_height_css();
-                        use panels::print_panel::PrintHit;
-                        let hit = panels::print_panel::hit_test(
-                            &self.print_panel,
-                            x_css,
-                            y_css,
-                            win_w,
-                            win_h,
-                        );
-                        match hit {
-                            PrintHit::Close | PrintHit::Cancel => {
-                                self.print_panel.close();
-                            }
-                            PrintHit::Print => {
-                                let path = std::path::PathBuf::from(
-                                    self.print_panel.output_path.clone()
-                                );
-                                let source = self.source.clone();
-                                let sink = Arc::clone(&self.event_sink);
-                                let (margin_tb, margin_lr) = self.print_panel.margin_px();
-                                let scale = self.print_panel.scale;
-                                let print_backgrounds = self.print_panel.print_backgrounds;
-                                if let Err(e) = do_print_to_pdf_with_opts(
-                                    &source,
-                                    &path,
-                                    sink,
-                                    margin_tb,
-                                    margin_lr,
-                                    scale,
-                                    print_backgrounds,
-                                ) {
-                                    eprintln!("Ошибка печати: {e}");
-                                }
-                                self.print_panel.close();
-                            }
-                            PrintHit::PaperSize(s) => {
-                                self.print_panel.paper = s;
-                            }
-                            PrintHit::Orientation(o) => {
-                                self.print_panel.orientation = o;
-                            }
-                            PrintHit::Margins(m) => {
-                                self.print_panel.margins = m;
-                            }
-                            PrintHit::ScaleDecrease => {
-                                self.print_panel.scale = (self.print_panel.scale - 10).max(50);
-                            }
-                            PrintHit::ScaleIncrease => {
-                                self.print_panel.scale = (self.print_panel.scale + 10).min(200);
-                            }
-                            PrintHit::PageRangeField => {
-                                self.print_panel.editing_field =
-                                    Some(panels::print_panel::PrintField::PageRange);
-                            }
-                            PrintHit::ColorMode(c) => {
-                                self.print_panel.color_mode = c;
-                            }
-                            PrintHit::Backgrounds(on) => {
-                                self.print_panel.print_backgrounds = on;
-                            }
-                            PrintHit::OutputPathField => {
-                                self.print_panel.editing_field =
-                                    Some(panels::print_panel::PrintField::OutputPath);
-                            }
-                            PrintHit::Inside => { /* swallow */ }
-                            PrintHit::Outside => {
-                                self.print_panel.close();
-                            }
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy print-dialog click hit-test lived
+                    // here, gated off the rollback flag — the engine chrome's own
+                    // print panel owns it now.
 
-                    // Settings panel (task D-7): centred overlay.
-                    if self.settings_panel.visible {
-                        let win_w = self.viewport_width_css();
-                        let win_h = self.viewport_height_css();
-                        let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
-                        let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
-                        use panels::settings_panel::SettingsHit;
-                        let hit = panels::settings_panel::hit_test(
-                            &self.settings_panel,
-                            x_css,
-                            y_css,
-                            sp_x,
-                            sp_y,
-                        );
-                        match hit {
-                            SettingsHit::Close => {
-                                self.close_settings_panel();
-                            }
-                            SettingsHit::TabSelect(sec) => {
-                                self.settings_panel.section = sec;
-                                self.settings_panel.scroll_y = 0.0;
-                            }
-                            SettingsHit::ToggleShields => {
-                                self.settings_panel.draft.shields_enabled =
-                                    !self.settings_panel.draft.shields_enabled;
-                            }
-                            SettingsHit::ToggleDoh => {
-                                self.settings_panel.draft.doh_enabled =
-                                    !self.settings_panel.draft.doh_enabled;
-                            }
-                            SettingsHit::SetFingerprintMode(mode) => {
-                                self.settings_panel.draft.fingerprint_mode = mode;
-                            }
-                            SettingsHit::SetTheme(base) => {
-                                // Preserve the existing accent when changing the base.
-                                let current = panels::themes::ShellTheme::parse(
-                                    &self.settings_panel.draft.theme,
-                                );
-                                let new_theme = panels::themes::ShellTheme {
-                                    base: panels::themes::ShellTheme::parse(&base).base,
-                                    accent: current.accent,
-                                };
-                                self.settings_panel.draft.theme = new_theme.to_settings_str();
-                                self.shell_theme = new_theme;
-                            }
-                            SettingsHit::SetAccent(accent_key) => {
-                                // Preserve the existing base when changing the accent.
-                                let current = panels::themes::ShellTheme::parse(
-                                    &self.settings_panel.draft.theme,
-                                );
-                                let new_theme = panels::themes::ShellTheme {
-                                    base: current.base,
-                                    accent: panels::themes::AccentPreset::from_key(&accent_key),
-                                };
-                                self.settings_panel.draft.theme = new_theme.to_settings_str();
-                                self.shell_theme = new_theme;
-                            }
-                            SettingsHit::FontSizeDecrease => {
-                                self.settings_panel.draft.font_size =
-                                    (self.settings_panel.draft.font_size - 2.0).max(8.0);
-                            }
-                            SettingsHit::FontSizeIncrease => {
-                                self.settings_panel.draft.font_size =
-                                    (self.settings_panel.draft.font_size + 2.0).min(36.0);
-                            }
-                            SettingsHit::SetTabLayout(mode) => {
-                                self.settings_panel.draft.tab_layout = mode;
-                            }
-                            SettingsHit::FocusHomepage => {
-                                self.settings_panel.focused_input =
-                                    Some(panels::settings_panel::SettingInput::Homepage);
-                            }
-                            SettingsHit::FocusDownloadPath => {
-                                self.settings_panel.focused_input =
-                                    Some(panels::settings_panel::SettingInput::DownloadPath);
-                            }
-                            SettingsHit::ResetPanelLayout => {
-                                self.settings_panel.draft.panel_layout = String::new();
-                            }
-                            SettingsHit::ToggleHttp3 => {
-                                self.settings_panel.http3_draft = !self.settings_panel.http3_draft;
-                            }
-                            SettingsHit::ToggleSubscription(url) => {
-                                if let Some(sub) = self
-                                    .settings_panel
-                                    .adblock_subs
-                                    .iter()
-                                    .find(|s| s.url == url)
-                                {
-                                    let _ = self.adblock_store.set_subscription(
-                                        &sub.url, &sub.title, !sub.enabled,
-                                    );
-                                }
-                                self.settings_panel.adblock_subs =
-                                    self.adblock_store.list_subscriptions().unwrap_or_default();
-                                let count = adblock::load_and_install(&self.adblock_store);
-                                eprintln!("adblock: список переключён, фильтр обновлён ({count} правил)");
-                            }
-                            SettingsHit::RefreshAdblockNow => {
-                                let store = std::sync::Arc::clone(&self.adblock_store);
-                                let http = config::global().apply_http(lumen_network::HttpClient::new());
-                                std::thread::Builder::new()
-                                    .name("adblock-manual-refresh".to_owned())
-                                    .spawn(move || {
-                                        if adblock::refresh(&store, &http) {
-                                            let count = adblock::load_and_install(&store);
-                                            eprintln!(
-                                                "adblock: списки обновлены вручную, фильтр обновлён ({count} правил)"
-                                            );
-                                        } else {
-                                            eprintln!("adblock: обновление вручную — изменений нет");
-                                        }
-                                    })
-                                    .ok();
-                            }
-                            SettingsHit::Inside => { /* swallow */ }
-                            SettingsHit::Outside => {
-                                self.close_settings_panel();
-                            }
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy settings-panel click hit-test lived
+                    // here, gated off the rollback flag — `#view-settings` in the
+                    // engine chrome owns it now.
 
                     // Keyboard shortcuts panel (§D-4): centred overlay.
                     if self.shortcuts_panel.visible {
@@ -12740,80 +14673,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Certificate viewer panel (§D-1): centred overlay.
-                    if self.cert_panel.visible {
-                        let win_w = self.viewport_width_css();
-                        let win_h = self.viewport_height_css();
-                        let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
-                        let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
-                        let lx = x_css - cp_x;
-                        let ly = y_css - cp_y;
-                        if (0.0..panels::cert_panel::PANEL_W).contains(&lx)
-                            && (0.0..panels::cert_panel::PANEL_H).contains(&ly)
-                        {
-                            use panels::cert_panel::CertHit;
-                            match self.cert_panel.hit_test(lx, ly) {
-                                CertHit::Close | CertHit::Header => {
-                                    self.cert_panel.close();
-                                }
-                                CertHit::Body => { /* swallow */ }
-                            }
-                        } else {
-                            self.cert_panel.close();
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy certificate-panel click hit-test
+                    // lived here, gated off the rollback flag — the engine chrome's
+                    // own cert popover owns it now.
 
-                    // History panel (task D-5): centred floating overlay.
-                    if self.history_panel.visible {
-                        let (px, py) = self.history_panel_anchor();
-                        use panels::history_panel::HistoryHit;
-                        let hit =
-                            panels::history_panel::hit_test(&self.history_panel, x_css, y_css, px, py);
-                        match hit {
-                            HistoryHit::Close => {
-                                self.history_panel.visible = false;
-                                self.history_panel.search_active = false;
-                            }
-                            HistoryHit::FocusSearch => {
-                                self.history_panel.search_active = true;
-                            }
-                            HistoryHit::ClearAll => {
-                                let _ = self.history_store.clear();
-                                let _ = self.history_fts.clear();
-                                self.refresh_history();
-                            }
-                            HistoryHit::Delete(id) => {
-                                if let Some(url) = self
-                                    .history_panel
-                                    .rows
-                                    .iter()
-                                    .find_map(|r| {
-                                        if let panels::history_panel::HistoryRow::Entry(e) = r {
-                                            if e.id == id { Some(e.url.clone()) } else { None }
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                {
-                                    let _ = self.history_store.delete(&url);
-                                    self.refresh_history();
-                                }
-                            }
-                            HistoryHit::Navigate(url) => {
-                                self.history_panel.visible = false;
-                                self.navigate_to(PageSource::Url(url));
-                            }
-                            HistoryHit::Inside => { /* swallow */ }
-                            HistoryHit::Outside => {
-                                self.history_panel.visible = false;
-                                self.history_panel.search_active = false;
-                            }
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy history-panel click hit-test lived
+                    // here, gated off the rollback flag — `#view-history` in the
+                    // engine chrome owns it now.
 
                     // Note viewer overlay (§12.2, GG-2): click [×] to close.
                     if self.note_viewer.visible {
@@ -12833,82 +14699,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
-                    // AI sidebar panel (§12.8): cross-dockable AI assistant.
-                    if self.ai_panel.visible {
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
-                        let win_h = self.viewport_height_css() + tab_h;
-                        let ai_w = self
-                            .panel_layout
-                            .width_for(panel_layout::ID_AI, panels::ai_panel::PANEL_WIDTH);
-                        let ai_side = self.sidebar_dock_side(panel_layout::ID_AI);
-                        let ai_x = self.dock_origin_x(ai_side, ai_w);
-                        if let Some(hit) = panels::ai_panel::hit_test(
-                            &self.ai_panel,
-                            x_css,
-                            y_css,
-                            ai_x,
-                            tab_h,
-                            win_h,
-                            ai_w,
-                        ) {
-                            match hit {
-                                panels::ai_panel::AiHit::Close => {
-                                    self.ai_panel.close();
-                                    // Async-safe (M2.2b-6): mouse-click close is the
-                                    // counterpart of the `ToggleAiPanel` keyboard toggle
-                                    // routed off-thread in M2.2b-3 — chrome-inset shift,
-                                    // no page-geometry read (just redraw + `return`).
-                                    self.relayout_chrome();
-                                    self.request_redraw();
-                                }
-                                panels::ai_panel::AiHit::Input
-                                | panels::ai_panel::AiHit::Response
-                                | panels::ai_panel::AiHit::Header => {}
-                            }
-                            return;
-                        }
-                    }
+                    // CC-10b/CC-15-6: the legacy AI-sidebar click hit-test lived
+                    // here, gated off the rollback flag — `#rightSidebar` in the
+                    // engine chrome owns it now.
 
-                    // Sidebar web panel (7D.3): cross-dockable panel.
-                    if self.sidebar.visible {
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
-                        let win_h = self.viewport_height_css() + tab_h;
-                        let sb_w = self
-                            .panel_layout
-                            .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
-                        let sb_side = self.sidebar_dock_side(panel_layout::ID_SIDEBAR);
-                        let sb_x = self.dock_origin_x(sb_side, sb_w);
-                        if let Some(hit) = panels::sidebar_panel::hit_test(
-                            &self.sidebar,
-                            x_css,
-                            y_css,
-                            sb_x,
-                            tab_h,
-                            win_h,
-                            sb_w,
-                        ) {
-                            match hit {
-                                panels::sidebar_panel::SidebarHit::Close => {
-                                    self.sidebar.close();
-                                    // Async-safe (M2.2b-6): mouse-click close is the
-                                    // counterpart of `open_sidebar_page` routed off-thread
-                                    // in M2.2b-2 — chrome-inset shift, no page-geometry
-                                    // read (just redraw + `return`).
-                                    self.relayout_chrome();
-                                    self.request_redraw();
-                                }
-                                panels::sidebar_panel::SidebarHit::Content
-                                | panels::sidebar_panel::SidebarHit::Header => {}
-                            }
-                            return;
-                        }
-                    }
+                    // CC-10b/CC-15-6: the legacy web-sidebar click hit-test lived
+                    // here, gated off the rollback flag — `#rightSidebar` in the
+                    // engine chrome owns it now.
 
                     // Workspace switcher bar (7A.3): clicks in the bottom bar area.
                     if self.workspace_panel.visible {
                         let win_w = self.viewport_width_css();
                         let win_h = self.viewport_height_css()
-                            + tabs::strip::TAB_BAR_HEIGHT
+                            + toolbar::CHROME_H
                             + panels::workspace_panel::SWITCHER_HEIGHT;
                         if let Some(hit) = panels::workspace_panel::hit_test(
                             &self.workspace_panel,
@@ -12940,14 +14743,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                     }
                                 }
                                 panels::workspace_panel::WorkspaceHit::NewWorkspace => {
-                                    let n = self.workspace_panel.workspaces.len() + 1;
-                                    let name = format!("Workspace {n}");
+                                    let idx = self.workspace_panel.workspaces.len();
+                                    let name = format!("Workspace {}", idx + 1);
+                                    let color = panels::workspace_panel::default_color_for_index(idx);
                                     let now = std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .map(|d| d.as_secs() as i64)
                                         .unwrap_or(0);
                                     if let Ok(id) =
-                                        self.workspaces.create(&name, "#6482dc", "", None, now)
+                                        self.workspaces.create(&name, color, "", None, now)
                                     {
                                         self.refresh_workspaces();
                                         self.workspace_panel.set_active(Some(id));
@@ -13051,6 +14855,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         )
                         .flatten()
                         .unwrap_or(hit_nid);
+                        // Buffered moves must fire ahead of pointerup.
+                        self.flush_pointer_moves();
                         self.js_pointer_event(ptr_nid, "pointerup", xu, yu, 0, 0);
                         self.js_mouse_event(hit_nid, "mouseup", xu, yu, 0, 0);
                         // Pointer Events L3 §4.1: implicit release on pointerup.
@@ -13111,13 +14917,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             }
                             self.request_redraw();
                         }
-                    // Bookmark drag-and-drop: if a bookmark drag is in progress,
-                    // resolve the drop target. Dropping on a folder re-files the
-                    // bookmark; dropping anywhere else opens it (a plain click).
-                    if let Some(id) = self.bookmark_panel.take_drag() {
-                        self.finish_bookmark_drop(id);
-                        self.request_redraw();
-                    }
+                    // CC-15-6: the bookmark drag-drop release handler lived here.
+                    // Its only drag source was the legacy overlay's press
+                    // hit-test, removed with the rollback flag — the engine
+                    // `#view-bookmarks` has no drag source yet (BUG-422).
                     // End a PiP window drag (task #21).
                     if self.pip.dragging() {
                         self.pip.end_drag();
@@ -13158,7 +14961,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         MouseScrollDelta::LineDelta(_, l) => l,
                         MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
                     };
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let tab_h = toolbar::CHROME_H;
                     let win_h = self.viewport_height_css() + tab_h;
                     let body_h = panels::privacy_panel::list_body_height(win_h, tab_h);
                     if lines > 0.0 {
@@ -13258,7 +15061,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         MouseScrollDelta::LineDelta(_, l) => l,
                         MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
                     };
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let tab_h = toolbar::CHROME_H;
                     let win_h = self.viewport_height_css() + tab_h;
                     let panel_h = win_h - tab_h;
                     self.vertical_tabs.scroll_by(
@@ -13561,6 +15364,38 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.anim_frame = if frame.overrides.is_empty() { None } else { Some(frame) };
                 }
 
+                // Step 2b (CC-11, docs/tasks/p1-css-chrome.md): the chrome
+                // document's own Animations + Transitions tick — separate
+                // schedulers from the page's (see
+                // Self::chrome_animation_scheduler doc comment for why),
+                // same merge-and-request-redraw pattern. Not gated on
+                // freeze_content_ticks: chrome isn't affected by page
+                // fast-scroll degradation (its own document doesn't scroll
+                // with the page).
+                if let (Some((c_lb, _)), Some((_, c_sheet))) = (&self.chrome_layout, &self.chrome_doc)
+                {
+                    let vp = lumen_layout::Viewport {
+                        width: self.viewport_width_css(),
+                        height: self.viewport_height_css(),
+                    };
+                    let mut c_frame = self.chrome_animation_scheduler.tick(
+                        timestamp_ms,
+                        c_lb,
+                        c_sheet,
+                        0.0,
+                        0.0,
+                        vp,
+                    );
+                    let now_s = (timestamp_ms / 1000.0) as f32;
+                    let c_trans_frame = self.chrome_transition_scheduler.tick(now_s);
+                    c_frame.merge_from(c_trans_frame);
+                    if c_frame.has_active {
+                        self.request_redraw();
+                    }
+                    self.chrome_anim_frame =
+                        if c_frame.overrides.is_empty() { None } else { Some(c_frame) };
+                }
+
                 // Step 2.5: GIF animation — update GPU textures for frames that changed.
                 // Uses the same `epoch` as rAF timestamps so GIF timing is consistent
                 // with CSS animations and JS. Runs before rAF so JS can read correct img.
@@ -13577,7 +15412,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             .filter_map(|(url, gif)| {
                                 let idx = gif.frame_index_at(elapsed_ms);
                                 if last.get(url).copied().unwrap_or(usize::MAX) != idx {
-                                    Some((url.clone(), idx, gif.frames[idx].image.clone()))
+                                    gif.frame_image(idx).ok().map(|img| (url.clone(), idx, img))
                                 } else {
                                     None
                                 }
@@ -13587,7 +15422,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                     for (url, idx, image) in updates {
                         if let Some(r) = self.renderer.as_mut()
-                            && let Err(e) = r.register_image(url.clone(), &image)
+                            && let Err(e) = r.register_image(url.clone(), Arc::new(image))
                         {
                             eprintln!("GIF кадр {url}[{idx}]: не зарегистрирован: {e}");
                         }
@@ -13598,10 +15433,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let gif_animating = {
                         let gifs = &self.animated_gifs;
                         gifs.values().any(|gif| match gif.loop_count {
-                            lumen_image::GifLoopCount::Infinite => gif.frames.len() > 1,
+                            lumen_image::GifLoopCount::Infinite => gif.frame_count() > 1,
                             lumen_image::GifLoopCount::Finite(n) => {
-                                let total_ms: u64 =
-                                    gif.frames.iter().map(lumen_image::AnimatedFrame::delay_ms).sum();
+                                let total_ms: u64 = gif.total_cycle_ms();
                                 elapsed_ms < total_ms.saturating_mul(u64::from(n))
                             }
                         })
@@ -13729,29 +15563,145 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Без find — page = self.display_list, overlay = только scrollbar.
                 // Resolved chrome palette for the active theme — passed to every
                 // themed overlay panel so they follow the light/dark setting.
-                let pal = self.shell_theme.palette(self.dark_mode);
+                // DS-14: the active profile's accent overrides the theme's own
+                // accent preset — profile (level 0) outranks the Appearance
+                // setting for this one field, matching "переключение профилей
+                // меняет ... accent всего хрома" in the DS-14 brief.
+                // DS-15: profile visual signatures (level-0 nested-frame rule).
+                // Name cloned up front — the border draw below needs it after
+                // several intervening `&mut self` overlay-builder calls, past
+                // where a borrow of `self.profile_menu` would still be live.
+                let active_profile_name: Option<String> =
+                    self.profile_menu.active_entry().map(|e| e.name.clone());
+                let mut pal = self.shell_theme.palette(self.dark_mode);
+                if active_profile_name.as_deref().is_some_and(panels::profile_menu::is_guest) {
+                    pal = pal.desaturated();
+                }
+                if let Some(entry) = self.profile_menu.active_entry() {
+                    pal.accent = entry.color;
+                }
 
                 let (mut page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
                     if self.find.is_open() {
-                        let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                            let s = w.inner_size();
-                            (s.width, s.height)
-                        });
                         let matches = self.current_matches();
                         let page = find::build_page_with_highlights(
                             &self.display_list,
                             &self.find,
                             &matches,
                         );
-                        let bar = find::build_bar_overlay(
-                            &self.find,
-                            matches.len(),
-                            find::BarOverlay { window_size: win_size },
-                        );
-                        (Some(page), bar)
+                        // CC-9/CC-15-6: the find bar itself is drawn by the
+                        // engine chrome (`#findBar`, bound in
+                        // `Self::relayout_chrome_host`) — the legacy overlay
+                        // builder was deleted with the rollback flag. The
+                        // highlighted-page overlay above is page content, not
+                        // chrome, and stays unconditional.
+                        (Some(page), Vec::new())
                     } else {
                         (None, Vec::new())
                     };
+
+                // CC-4 (docs/tasks/p1-css-chrome.md): the engine-drawn chrome
+                // paints first — every legacy panel/scrollbar/find-bar/tab-bar/
+                // toolbar built below still lands on top of it, painter's order
+                // (brief: "остальное пока legacy поверх"). Painted through 4
+                // clip "frame" strips around the page-host rect (top/bottom/
+                // left/right), not one plain copy: `#contentArea`'s ancestors
+                // (`body{background:var(--surface-1); height:100vh}`) still emit
+                // a full-window background box even with `#contentArea` itself
+                // pruned out of the layout tree (`relayout_chrome_host`) — an
+                // unclipped copy would paint that full-window background *over*
+                // the real page, which renders separately (as `content`, so it
+                // draws *under* `overlay_buf`) at exactly that rect. Clipping to
+                // the 4 strips surrounding the rect lets every other chrome
+                // pixel (sidebar, toolbar, any future popover CC-9+ adds outside
+                // that rect) through unchanged while guaranteeing nothing paints
+                // inside the live page's own rect. No-op off the flag
+                // (`chrome_layout` stays `None`).
+                // CC-11: patch chrome_dl with compositor-offloadable overrides
+                // (opacity/transform/color/background-color) from the tick
+                // above — same to_compositor_frame() mechanism the page uses
+                // for anim_dl (Step 6 below), rebuilt here since chrome_dl
+                // itself is a cached snapshot from the last
+                // relayout_chrome_host pass and isn't otherwise touched by
+                // ticks. `width` transitions (#sidebar, .dl-progress-fill)
+                // aren't offloadable and stay unanimated (see
+                // Self::chrome_anim_frame doc comment).
+                let chrome_dl_anim: Option<lumen_paint::DisplayList> =
+                    self.chrome_anim_frame.as_ref().and_then(|frame| {
+                        let comp = frame.to_compositor_frame();
+                        if comp.is_empty() {
+                            None
+                        } else {
+                            self.chrome_layout.as_ref().map(|(lb, _)| {
+                                let tree = StackingTree::build(lb);
+                                let order = PaintOrder::from_tree(&tree);
+                                build_display_list_ordered_with_anim_split(
+                                    lb, &tree, &order, Some(&comp),
+                                )
+                                .0
+                            })
+                        }
+                    });
+                if let (Some((_layout, chrome_dl)), Some(host)) =
+                    (self.chrome_layout.as_ref(), self.chrome_page_host_rect)
+                {
+                    let chrome_dl = chrome_dl_anim.as_ref().unwrap_or(chrome_dl);
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.window_height_css();
+                    let strips = [
+                        Rect { x: 0.0, y: 0.0, width: win_w, height: host.y },
+                        Rect {
+                            x: 0.0,
+                            y: host.y + host.height,
+                            width: win_w,
+                            height: (win_h - (host.y + host.height)).max(0.0),
+                        },
+                        Rect { x: 0.0, y: host.y, width: host.x, height: host.height },
+                        Rect {
+                            x: host.x + host.width,
+                            y: host.y,
+                            width: (win_w - (host.x + host.width)).max(0.0),
+                            height: host.height,
+                        },
+                    ];
+                    let mut framed = lumen_paint::DisplayList::new();
+                    for strip in strips {
+                        if strip.width <= 0.0 || strip.height <= 0.0 {
+                            continue;
+                        }
+                        framed.push(lumen_paint::DisplayCommand::PushClipRect { rect: strip });
+                        framed.extend_from_slice(chrome_dl);
+                        framed.push(lumen_paint::DisplayCommand::PopClip);
+                    }
+                    // CC-7: `#omniInput` editing stays owned by the legacy
+                    // `address_bar` state machine — no native `<input>` caret
+                    // exists (`crates/chrome/src/model.rs` only binds the
+                    // *value*), so it's hand-painted here, on top of the
+                    // chrome document just painted above. Same simplified
+                    // "flush right of the field" placement `build_inline_field`
+                    // used for the old overlay caret (`address_bar.rs`) — not
+                    // per-glyph-measured, and it never needed to be while
+                    // `AddressBarState` only supports append/backspace at the
+                    // end of the string. Hidden while a dropdown suggestion is
+                    // selected, mirroring the same overlay behavior.
+                    if self.address_bar.is_open()
+                        && self.address_bar.selected_idx().is_none()
+                        && !self.address_bar.input().is_empty()
+                        && let Some(field) = self.chrome_omni_input_rect
+                    {
+                        framed.push(lumen_paint::DisplayCommand::FillRect {
+                            rect: Rect::new(
+                                field.x + field.width - 8.0,
+                                field.y + 4.0,
+                                2.0,
+                                (field.height - 8.0).max(0.0),
+                            ),
+                            color: lumen_layout::Color { a: 220, ..pal.accent },
+                        });
+                    }
+                    framed.append(&mut overlay_buf);
+                    overlay_buf = framed;
+                }
 
                 // Scrollbar встаёт перед find-bar в overlay-буфере: рисуется
                 // первым = находится под find-bar-ом в painter's order. Они не
@@ -13849,21 +15799,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
 
-                // Адресная строка (Ctrl+L) — рисуется поверх всего остального.
-                if self.address_bar.is_open() {
-                    let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                        let s = w.inner_size();
-                        (s.width, s.height)
-                    });
-                    let mut bar = address_bar::build_bar_overlay(
-                        &self.address_bar,
-                        address_bar::BarOverlay { window_size: win_size },
-                        &pal,
-                    );
-                    bar.append(&mut overlay_buf);
-                    overlay_buf = bar;
-                }
-
                 // Compositor offload: если есть активные анимации с opacity/transform/
                 // color/background-color — пересобираем display list из layout_box с
                 // overrides, минуя relayout (BUG-231 распространил offload на цвета).
@@ -13942,16 +15877,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut hint_cmds);
                 }
 
-                // Download panel: viewport-locked bottom-right panel.
-                // Rendered before the tab bar so it appears below the tab strip.
-                if self.downloads.visible {
-                    let win_size = (
-                        self.viewport_width_css() as u32,
-                        self.window_height_css() as u32,
-                    );
-                    let mut dl_cmds = download::build_download_bar(&self.downloads, win_size);
-                    overlay_buf.append(&mut dl_cmds);
-                }
+                // CC-10/CC-15-6: the legacy download-panel overlay lived here,
+                // gated off the rollback flag — `#downloadsPanel` in the engine
+                // chrome (`bind_downloads`, CC-9) is the only renderer now.
 
                 // DevTools JS console panel: bottom overlay, toggled by F12.
                 if self.devtools_console.visible {
@@ -13990,7 +15918,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut priv_cmds = panels::privacy_panel::build_privacy_panel(
                         &self.privacy,
                         priv_win_size,
-                        tabs::strip::TAB_BAR_HEIGHT,
+                        toolbar::CHROME_H,
                         &pal,
                     );
                     overlay_buf.append(&mut priv_cmds);
@@ -14020,7 +15948,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut insp_cmds = devtools::inspector::build_inspector_panel(
                         &self.dom_inspector,
                         win_css,
-                        tabs::strip::TAB_BAR_HEIGHT,
+                        toolbar::CHROME_H,
                     );
                     overlay_buf.append(&mut insp_cmds);
                 }
@@ -14028,18 +15956,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Vertical tab panel: docked left sidebar, below the tab bar.
                 // Rendered before the tab bar so tab bar draws on top.
                 if self.vertical_tabs.visible {
-                    let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + toolbar::CHROME_H;
                     let vt_w = self.panel_layout.width_for(
                         panel_layout::ID_VERTICAL_TABS,
                         panels::vertical_tabs::PANEL_WIDTH,
                     );
                     let mut vt_cmds = panels::vertical_tabs::build_tab_bar_vertical(
                         &self.tab_strip,
-                        tabs::strip::TAB_BAR_HEIGHT,
+                        toolbar::CHROME_H,
                         win_h,
                         self.vertical_tabs.scroll_y,
                         &pal,
                         vt_w,
+                        self.workspace_panel.active_accent(),
                     );
                     // Cross-dock: the panel paints left-relative; re-home it onto
                     // the right edge when flipped there.
@@ -14052,7 +15981,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // parent-child indentation and collapse/expand arrows.
                 // Toggle via Ctrl+Shift+B; occupies the same PANEL_WIDTH as vertical_tabs.
                 if self.tree_tabs.visible {
-                    let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + toolbar::CHROME_H;
                     let tt_w = self.panel_layout.width_for(
                         panel_layout::ID_TREE_TABS,
                         panels::tree_tabs::PANEL_WIDTH,
@@ -14060,7 +15989,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut tt_cmds = panels::tree_tabs::build_panel(
                         &self.tab_strip,
                         &self.tree_tabs,
-                        tabs::strip::TAB_BAR_HEIGHT,
+                        toolbar::CHROME_H,
                         win_h,
                         &pal,
                         tt_w,
@@ -14073,29 +16002,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 // Shields floating panel (7C.4): top-right overlay anchored below
-                // the tab bar.  Refresh blocked counts before rendering.
+                // the tab bar. Refresh blocked counts before rendering — kept
+                // unconditional (CC-10) since `chrome_model_snapshot`'s
+                // `#statTrackers` binding (CC-9) reads `blocked_total_count()`
+                // and this is the only call site that refreshes it; only the
+                // legacy *paint* below is gated.
                 if self.shields.visible {
                     self.shields.refresh();
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
-                    let win_w = self.viewport_width_css();
-                    let mut sh_cmds = panels::shields_panel::build_panel(
-                        &self.shields,
-                        win_w,
-                        tab_h,
-                        &pal,
-                    );
-                    overlay_buf.append(&mut sh_cmds);
-                }
-
-                // Permission popover (7C.2): top-left overlay anchored below the tab bar.
-                if self.permission.visible {
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
-                    let mut perm_cmds = panels::permission_panel::build_panel(
-                        &self.permission,
-                        tab_h,
-                        &pal,
-                    );
-                    overlay_buf.append(&mut perm_cmds);
                 }
 
                 // Note viewer overlay (§12.2, GG-2): floating annotation panel.
@@ -14108,53 +16021,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut nv_cmds);
                 }
 
-                // AI sidebar panel (§12.8, GG-1): cross-dockable AI assistant.
-                if self.ai_panel.visible {
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
-                    let win_h = self.viewport_height_css() + tab_h;
-                    let ai_w = self
-                        .panel_layout
-                        .width_for(panel_layout::ID_AI, panels::ai_panel::PANEL_WIDTH);
-                    let ai_side = self.sidebar_dock_side(panel_layout::ID_AI);
-                    let ai_x = self.dock_origin_x(ai_side, ai_w);
-                    let mut ai_cmds = panels::ai_panel::build_panel(
-                        &self.ai_panel,
-                        ai_x,
-                        tab_h,
-                        win_h,
-                        &pal,
-                        ai_w,
-                    );
-                    overlay_buf.append(&mut ai_cmds);
-                }
-
-                // Sidebar web panel (7D.3): cross-dockable secondary viewport.
-                if self.sidebar.visible {
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
-                    let win_h = self.viewport_height_css() + tab_h;
-                    let sb_w = self
-                        .panel_layout
-                        .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
-                    let sb_side = self.sidebar_dock_side(panel_layout::ID_SIDEBAR);
-                    let sb_x = self.dock_origin_x(sb_side, sb_w);
-                    let mut sb_cmds = panels::sidebar_panel::build_panel(
-                        &self.sidebar,
-                        sb_x,
-                        tab_h,
-                        win_h,
-                        &pal,
-                        sb_w,
-                    );
-                    overlay_buf.append(&mut sb_cmds);
-                }
-
                 // Workspace switcher bar (7A.3): bottom-docked horizontal strip.
                 // Rendered before the tab bar so tab bar always draws on top.
                 if self.workspace_panel.visible {
                     let win_w = self.viewport_width_css();
                     // Full window height including tab bar — bar is docked at bottom.
                     let win_h = self.viewport_height_css()
-                        + tabs::strip::TAB_BAR_HEIGHT
+                        + toolbar::CHROME_H
                         + panels::workspace_panel::SWITCHER_HEIGHT;
                     let mut ws_cmds = panels::workspace_panel::build_panel(
                         &self.workspace_panel,
@@ -14163,16 +16036,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &pal,
                     );
                     overlay_buf.append(&mut ws_cmds);
-                }
-
-                // Bookmark manager panel (task #22): floating overlay anchored
-                // under the toolbar. Drawn above page/other overlays, below the
-                // tab bar.
-                if self.bookmark_panel.visible {
-                    let (ax, ay) = self.bookmark_anchor();
-                    let mut bm_cmds =
-                        panels::bookmark_panel::build_panel(&self.bookmark_panel, ax, ay, &pal);
-                    overlay_buf.append(&mut bm_cmds);
                 }
 
                 // Accessibility settings panel (E-2): centred overlay, Ctrl+Shift+Q.
@@ -14185,42 +16048,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut a11y_cmds);
                 }
 
-                // Print dialog (E-1): centred overlay, Ctrl+P.
-                if self.print_panel.visible {
-                    let win_w = self.viewport_width_css();
-                    let win_h = self.viewport_height_css();
-                    let pp_x = (win_w - panels::print_panel::PANEL_W) * 0.5;
-                    let pp_y = (win_h - panels::print_panel::PANEL_H) * 0.5;
-                    // Dim backdrop behind the modal.
-                    overlay_buf.push(lumen_paint::DisplayCommand::FillRect {
-                        rect: lumen_core::geom::Rect::new(0.0, 0.0, win_w, win_h),
-                        color: lumen_layout::Color { r: 0, g: 0, b: 0, a: 110 },
-                    });
-                    let mut pp_cmds =
-                        panels::print_panel::build_panel(&self.print_panel, pp_x, pp_y, &pal);
-                    overlay_buf.append(&mut pp_cmds);
-                }
-
-                // Settings panel (task D-7): centred overlay, Ctrl+, gear button, or about:settings.
-                if self.settings_panel.visible {
-                    let win_w = self.viewport_width_css();
-                    let win_h = self.viewport_height_css();
-                    let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
-                    let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
-                    panels::settings_panel::build_panel(&self.settings_panel, &mut overlay_buf, sp_x, sp_y, &pal);
-                    // Hover tooltip: immediate, no delay (matches the tab-strip pattern).
-                    if let Some((mx, my)) = self.settings_hover
-                        && let Some(text) = panels::settings_panel::tooltip_for(
-                            &self.settings_panel, mx, my, sp_x, sp_y,
-                        )
-                    {
-                        let mut tip_cmds = panels::settings_panel::build_tooltip(
-                            text, mx, my, win_w, win_h, &pal,
-                        );
-                        overlay_buf.append(&mut tip_cmds);
-                    }
-                }
-
                 // Keyboard shortcuts panel (§D-4): centred floating overlay.
                 if self.shortcuts_panel.visible {
                     let win_w = self.viewport_width_css();
@@ -14230,28 +16057,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y, &pal);
                 }
 
-                // Certificate viewer panel (§D-1): centred floating overlay.
-                if self.cert_panel.visible {
-                    let win_w = self.viewport_width_css();
-                    let win_h = self.viewport_height_css();
-                    let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
-                    let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
-                    panels::cert_panel::build_panel(&self.cert_panel, &mut overlay_buf, cp_x, cp_y, &pal);
-                }
-
-                // History panel (task D-5): centred floating overlay.
-                if self.history_panel.visible {
-                    let win_w = self.viewport_width_css();
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
-                    let mut hist_cmds =
-                        panels::history_panel::build_panel(&self.history_panel, win_w, tab_h, &pal);
-                    overlay_buf.append(&mut hist_cmds);
-                }
-
                 // §12.3 Read-later panel: right-docked overlay.
                 if self.read_later_panel.visible {
                     let win_w = self.viewport_width_css();
-                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let tab_h = toolbar::CHROME_H;
                     let mut rl_cmds = panels::read_later_panel::build_panel(
                         &self.read_later_panel,
                         win_w,
@@ -14261,68 +16070,35 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut rl_cmds);
                 }
 
-                // Tab bar: viewport-locked strip at y=0..TAB_BAR_HEIGHT.
-                // Rendered last → always on top of all other overlays.
-                // Hidden in focus mode (task #25) for a distraction-free view;
-                // the page transform offset is left unchanged so toggling focus
-                // mode never reflows content (the strip shows page background).
-                if !self.focus.active {
-                    let win_w = self.viewport_width_css();
-                    // Tab strip uses the area to the left of the settings/layout/archive buttons.
-                    let tab_area_w = win_w
-                        - tabs::archive::ARCHIVE_BTN_W
-                        - tabs::strip::LAYOUT_BTN_W
-                        - tabs::strip::SETTINGS_BTN_W;
-                    let mut tab_cmds = tabs::strip::build_tab_bar(
-                        &self.tab_strip,
-                        tab_area_w,
+                // CC-15-3: the legacy tab-bar/toolbar paint block (viewport-
+                // locked strip at y=0..TAB_BAR_HEIGHT) lived here — removed
+                // along with `tabs::strip::build_tab_bar`/`build_tab_tooltip`/
+                // `build_layout_toggle_btn`/`build_settings_btn` and
+                // `toolbar::build_toolbar`. Under the engine-drawn chrome
+                // (CC-4) it never ran.
+
+                // Profile switcher dropdown (DS-14): BUG-403 — kept as a
+                // legacy overlay always (CC-15-1, `docs/tasks/p1-css-chrome.md`
+                // §CC-15-1 decision), not migrated to `ChromeModel`/`bind_model`
+                // like the CC-9/CC-10 panels. Its hit-test (below, in the
+                // `MouseInput` handler) was already unconditional — this render
+                // call must match, or a click toggles `profile_menu.visible`
+                // with nothing ever drawn (the actual BUG-403 symptom) while
+                // the invisible popover still eats clicks under it. Anchored
+                // via `page_offset()` rather than the legacy-only
+                // `toolbar::CHROME_H` constant so the dropdown lines up with
+                // the engine-drawn toolbar's *measured* bottom edge, not an
+                // assumed one — the same class of drift BUG-404 flags for
+                // `flush_pointer_moves`.
+                if !self.focus.active && self.profile_menu.visible {
+                    let (_, page_y_offset) = self.page_offset();
+                    let mut pm_cmds = panels::profile_menu::build_panel(
+                        &self.profile_menu,
+                        toolbar::avatar_x(),
+                        page_y_offset,
                         &pal,
-                        self.tab_drag.as_ref(),
                     );
-                    overlay_buf.append(&mut tab_cmds);
-                    // Tab tier tooltip on hover.
-                    if let Some(idx) = self.hovered_tab_idx
-                        && let Some(tab) = self.tab_strip.tabs.get(idx) {
-                            let tab_w = tab_area_w / self.tab_strip.tabs.len().max(1) as f32;
-                            let tab_center_x = (idx as f32 + 0.5) * tab_w;
-                            if let Some(mut tooltip_cmds) = tabs::strip::build_tab_tooltip(
-                                tab,
-                                tab_center_x,
-                                tabs::strip::TAB_BAR_HEIGHT,
-                            ) {
-                                overlay_buf.append(&mut tooltip_cmds);
-                            }
-                        }
-                    // Layout toggle button (GG-4): between tabs and archive button.
-                    let layout_btn_x = win_w
-                        - tabs::archive::ARCHIVE_BTN_W
-                        - tabs::strip::LAYOUT_BTN_W;
-                    let tab_layout = tabs::strip::TabLayout::from_str(
-                        &self.settings_store.tab_layout(),
-                    );
-                    let mut layout_btn = tabs::strip::build_layout_toggle_btn(tab_layout, layout_btn_x);
-                    overlay_buf.append(&mut layout_btn);
-                    // Settings gear button: between tabs and layout toggle.
-                    let settings_btn_x = layout_btn_x - tabs::strip::SETTINGS_BTN_W;
-                    let mut settings_btn = tabs::strip::build_settings_btn(
-                        settings_btn_x,
-                        self.settings_panel.visible,
-                    );
-                    overlay_buf.append(&mut settings_btn);
-                    // Archive toolbar button (rightmost 36 px of tab bar).
-                    let mut arch_btn = tabs::archive::build_button(
-                        &self.archive,
-                        win_w,
-                        tabs::strip::TAB_BAR_HEIGHT,
-                    );
-                    overlay_buf.append(&mut arch_btn);
-                    // Archive panel: floating drop-down anchored below the button.
-                    let mut arch_panel = tabs::archive::build_panel(
-                        &self.archive,
-                        win_w,
-                        tabs::strip::TAB_BAR_HEIGHT,
-                    );
-                    overlay_buf.append(&mut arch_panel);
+                    overlay_buf.append(&mut pm_cmds);
                 }
 
                 // CC-4: tab context menu — drawn above the tab strip.
@@ -14344,21 +16120,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_h = self.window_height_css();
                     let mut menu_cmds = self.page_context_menu.build_overlay(win_w, win_h);
                     overlay_buf.append(&mut menu_cmds);
-                }
-
-                // Command palette (task #23): modal — drawn above everything,
-                // including the tab bar, with a full-window dimming scrim.
-                if self.command_palette.visible {
-                    let win_w = self.viewport_width_css();
-                    let win_h =
-                        self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
-                    let mut cp_cmds = panels::command_palette::build_panel(
-                        &self.command_palette,
-                        win_w,
-                        win_h,
-                        &pal,
-                    );
-                    overlay_buf.append(&mut cp_cmds);
                 }
 
                 // Focus mode widget (task #25): floating Pomodoro card with an
@@ -14383,7 +16144,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let elapsed_ms = now_ms - start_ms;
                     let win_w = self.viewport_width_css();
                     let win_h =
-                        self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                        self.viewport_height_css() + toolbar::CHROME_H;
                     if let Some(mut spinner) =
                         panels::restore_spinner::build_spinner(elapsed_ms, win_w, win_h)
                     {
@@ -14519,6 +16280,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
 
+                // DS-15: Anonymous profile draws a thin red inset outline
+                // around the whole window (design ref: `box-shadow: inset 0
+                // 0 0 2px var(--accent)` on `.app-frame`). Appended last of
+                // all chrome overlays so it sits above every panel/modal —
+                // web content itself is never touched, only the chrome layer.
+                if active_profile_name.as_deref().is_some_and(panels::profile_menu::is_anonymous) {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.window_height_css();
+                    overlay_buf.append(&mut panels::themes::anonymous_border(
+                        win_w,
+                        win_h,
+                        theme_tokens::profile::ANONYMOUS,
+                    ));
+                }
+
                 // Build the split-view combined DL before borrowing renderer,
                 // so the immutable borrow of self.split_view ends first.
                 let split_combined: Option<lumen_paint::DisplayList> = {
@@ -14528,7 +16304,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .unwrap_or(&self.display_list);
                     if let Some(ref sv) = self.split_view {
                         let vp_w = self.viewport_width_css();
-                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let tab_h = toolbar::CHROME_H;
                         let vp_full_h = self.viewport_height_css() + tab_h;
                         let split_x = (vp_w / 2.0).floor();
                         Some(sv.build_combined_dl(
@@ -14570,7 +16346,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Width of any left-docked sidebar, computed before the renderer
                 // borrow so the page transform can shift right of it. Cross-dock
                 // aware across all four sidebars (tabs / AI / web).
-                let page_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
+                //
+                // CC-4 (docs/tasks/p1-css-chrome.md): both offsets come from the
+                // engine-drawn chrome's `#contentArea` rect (the brief's
+                // "#page-host") — the same [`Self::page_offset`] every input path
+                // reads, so a click lands on the element actually painted there.
+                let (page_x_offset, page_y_offset) = self.page_offset();
 
                 // CSS Backgrounds §3.11.1: clear the whole surface to the canvas
                 // background (the root element's propagated background color) so the
@@ -14607,7 +16388,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // единственный отвечает supports_page_offset=true) игнорирует
                         // их и рисует монолитом — контент списка тот же.
                         if inspector_box_dl.is_empty() && r.supports_page_offset() {
-                            r.set_page_offset(page_x_offset, tabs::strip::TAB_BAR_HEIGHT);
+                            r.set_page_offset(page_x_offset, page_y_offset);
                             if let Err(err) = r.render(base, &overlay_buf, scroll_y, scroll_x) {
                                 eprintln!("Ошибка рендера: {err:?}");
                             }
@@ -14623,7 +16404,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             shifted.push(lumen_paint::DisplayCommand::PushTransform {
                                 matrix: Mat4::translation_2d(
                                     page_x_offset,
-                                    tabs::strip::TAB_BAR_HEIGHT,
+                                    page_y_offset,
                                 ),
                             });
                             shifted.extend_from_slice(base);
@@ -14681,7 +16462,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             sw,
                             sh,
                             (self.scroll_x, self.scroll_y),
-                            (page_x_offset, tabs::strip::TAB_BAR_HEIGHT),
+                            (page_x_offset, toolbar::CHROME_H),
                         );
                         match self.last_frame_fp.map(|p| fp.delta_from(&p)) {
                             Some(d) => eprintln!("[frame] delta {d:?}"),
@@ -14791,6 +16572,33 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
+    /// Dispatch a `pointermove` whose buffered intermediate samples are exposed
+    /// via `PointerEvent.getCoalescedEvents()` (Pointer Events L3 §4.1).
+    /// `coalesced` holds CSS-pixel positions strictly older than
+    /// `(x_css, y_css)`, oldest first; the dispatched event is appended last,
+    /// per spec. Always dispatches with button=0/buttons=0 — the only caller
+    /// is the plain-move flush path, which (like the rest of this file) does
+    /// not track held-button state for hover/move events.
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    fn js_pointer_event_coalesced(&self, nid: u32, x_css: f32, y_css: f32, coalesced: &[(f32, f32)]) {
+        let mut points_json = String::from("[");
+        for (i, (cx, cy)) in coalesced.iter().enumerate() {
+            if i > 0 {
+                points_json.push(',');
+            }
+            points_json.push_str(&format!("[{},{}]", *cx as i32, *cy as i32));
+        }
+        points_json.push(']');
+        let script = format!(
+            "_lumen_dispatch_pointer_event({}, 'pointermove', {}, {}, 0, 0, {}, {})",
+            nid,
+            x_css as i32, y_css as i32,
+            self.mod_flags(),
+            points_json,
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+    }
+
     /// Dispatch a `DragEvent` of the given `event_type` to DOM node `nid`.
     ///
     /// Calls the JS shim `_lumen_dispatch_drag_event` (defined in `lumen-js::dom`)
@@ -14816,74 +16624,46 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
-    /// Flush `pending_pointer_moves` (Pointer Events L3 §4.1 coalescing) as a
-    /// single `pointermove` + `mousemove` dispatch.
-    ///
-    /// Hit-tests the *last* queued point to find the target (mirrors
-    /// [`Lumen::dispatch_mouse_move`]); every queued point becomes an entry
-    /// in `getCoalescedEvents()` on the dispatched (main) `pointermove`, main
-    /// event last per spec. `getPredictedEvents()` is computed JS-side from
-    /// the trailing two points. No-op if the buffer is empty or the last
-    /// point hits no element (e.g. cursor over the tab bar / browser chrome).
+    /// Buffer a synthetic pointer-move sample at CSS-pixel viewport
+    /// coordinates. Used by [`input::humanlike::HumanLikeSender`] to trace
+    /// Bézier-curve paths before a click. Real `CursorMoved` samples are
+    /// buffered the same way (see the `WindowEvent::CursorMoved` handler); both
+    /// sources are flushed together by [`Self::flush_pointer_moves`] as one
+    /// coalesced `pointermove` + `mousemove` dispatch (Pointer Events L3 §4.1).
+    fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
+        self.pending_pointer_moves.push((x_css, y_css));
+        #[cfg(not(any(feature = "quickjs", feature = "v8")))]
+        {
+            let _ = x_css;
+            let _ = y_css;
+        }
+    }
+
+    /// Flush buffered pointer-move samples (`CursorMoved` + injected automation
+    /// moves accumulated since the last flush) as one coalesced `pointermove` +
+    /// `mousemove` dispatch (Pointer Events L3 §4.1). The last buffered sample
+    /// hit-tests the target and becomes the "main" dispatched event; earlier
+    /// samples are exposed via `PointerEvent.getCoalescedEvents()`. Called once
+    /// per `about_to_wait` tick, and before any press/release/enter/leave
+    /// dispatch so buffered moves stay ordered ahead of those events. No-op if
+    /// nothing is buffered or there is no element at the final position.
     #[cfg(any(feature = "quickjs", feature = "v8"))]
     fn flush_pointer_moves(&mut self) {
         if self.pending_pointer_moves.is_empty() {
             return;
         }
-        let points = std::mem::take(&mut self.pending_pointer_moves);
-        let (x_css, y_css) = *points.last().expect("checked non-empty above");
-        let (page_x, page_y) = self.page_point(x_css, y_css);
-        let Some(hit) = self
-            .layout_box
-            .as_ref()
-            .and_then(|lb| hit_test(Point::new(page_x, page_y), lb))
-        else {
+        let samples = std::mem::take(&mut self.pending_pointer_moves);
+        let Some(&(x_css, y_css)) = samples.last() else {
             return;
         };
-        let hit_nid = hit.node.index() as u32;
-        let ptr_nid = route_query_js(
-            self.engine_thread.as_ref(),
-            self.js_ctx.as_ref(),
-            |c| c.pointer_capture_nid(),
-        )
-        .flatten()
-        .unwrap_or(hit_nid);
-        let mut points_json = String::from("[");
-        for (i, (px, py)) in points.iter().enumerate() {
-            if i > 0 {
-                points_json.push(',');
-            }
-            points_json.push_str(&format!("[{},{}]", *px as i32, *py as i32));
-        }
-        points_json.push(']');
-        let script = format!(
-            "_lumen_dispatch_pointer_move_coalesced({}, '{}', {}, {}, {})",
-            ptr_nid,
-            points_json,
-            0u8,
-            0u8,
-            self.mod_flags(),
-        );
-        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
-        self.js_mouse_event(hit_nid, "mousemove", x_css, y_css, 0, 0);
-    }
-
-    /// Dispatch a synthetic `mousemove` event at CSS-pixel viewport coordinates.
-    ///
-    /// Hit-tests the position (accounting for current scroll offset) and fires
-    /// `_lumen_dispatch_mouse_event` with event type `"mousemove"`.  Used by
-    /// [`input::humanlike::HumanLikeSender`] to trace Bézier-curve paths before
-    /// a click.  No-op when there is no JS context or no element at the position.
-    /// Also fires the matching W3C `pointermove` event per Pointer Events L2 §10.
-    fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
         let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
+        let page_y = (y_css - toolbar::CHROME_H) + self.scroll_y;
         let hit = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
-        #[cfg(any(feature = "quickjs", feature = "v8"))]
-        if let Some(result) = hit.as_ref() {
+        if let Some(result) = hit {
             // Pointer Events L3 §4.1: if a pointer capture is active, redirect
             // pointermove (and all pointer events) to the captured element.
             let hit_nid = result.node.index() as u32;
@@ -14896,11 +16676,10 @@ impl Lumen {
             )
             .flatten()
             .unwrap_or(hit_nid);
-            self.js_pointer_event(ptr_nid, "pointermove", x_css, y_css, 0, 0);
+            let coalesced = &samples[..samples.len() - 1];
+            self.js_pointer_event_coalesced(ptr_nid, x_css, y_css, coalesced);
             self.js_mouse_event(hit_nid, "mousemove", x_css, y_css, 0, 0);
         }
-        #[cfg(not(any(feature = "quickjs", feature = "v8")))]
-        let _ = hit;
     }
 
     /// Handle a left-button click at CSS-pixel viewport coordinates `(x_css, y_css)`.
@@ -14913,11 +16692,8 @@ impl Lumen {
     /// [`Lumen::handle_click_at`] so hit tests stay consistent across input
     /// paths.
     fn page_point(&self, x_css: f32, y_css: f32) -> (f32, f32) {
-        let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
-        (
-            (x_css - panel_x_offset) + self.scroll_x,
-            (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y,
-        )
+        let (offset_x, offset_y) = self.page_offset();
+        ((x_css - offset_x) + self.scroll_x, (y_css - offset_y) + self.scroll_y)
     }
 
     fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
@@ -14933,7 +16709,7 @@ impl Lumen {
             if self.dom_inspector.is_panel_click(x_css, win_w_css) {
                 if self.dom_inspector.click_tab_at(
                     x_css, y_css, win_w_css,
-                    tabs::strip::TAB_BAR_HEIGHT,
+                    toolbar::CHROME_H,
                 ) {
                     self.request_redraw();
                 }
@@ -15101,11 +16877,11 @@ impl Lumen {
         // Single hit test shared by form dispatch and link navigation.
         // When the vertical/tree tabs panel is visible, page content is shifted
         // right by PANEL_WIDTH, so we subtract that offset to convert to page coords.
-        // Page content is also shifted down by TAB_BAR_HEIGHT via PushTransform,
+        // Page content is also shifted down by toolbar::CHROME_H via PushTransform,
         // so we subtract that offset from y to get layout coordinates.
         let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
+        let page_y = (y_css - toolbar::CHROME_H) + self.scroll_y;
         let hit_result = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
@@ -15503,10 +17279,12 @@ impl Lumen {
                         self.navigate_fragment(frag.to_owned());
                     } else if links::is_navigable_href(&href) {
                         let resolved = self.source.resolve_href(&href);
-                        // A full-URL link to the current document differing only in
-                        // its fragment (`<a href="/page#x">` clicked from `/page`)
-                        // is a same-document fragment navigation, not a full reload.
-                        if let Some(frag) =
+                        // `about:newtab?...` special links (pin/unpin, "+",
+                        // restore-closed, DS-11) are handled in-place, never
+                        // as a real navigation.
+                        if let Some(action) = newtab::parse_action(&resolved) {
+                            self.apply_newtab_action(action);
+                        } else if let Some(frag) =
                             links::same_document_fragment(self.current_display_url(), &resolved)
                         {
                             if click_log::is_enabled() {
@@ -16017,6 +17795,10 @@ impl Lumen {
                 self.hint.close();
                 let current = self.current_display_url().to_owned();
                 self.address_bar.open(&current);
+                // CC-7: reflect the now-open state (focus ring, value) in
+                // the engine-rendered `#omniInput` — see the comment on the
+                // matching call in `Self::handle_address_bar_key`.
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::HintModeOpen => {
@@ -16084,6 +17866,7 @@ impl Lumen {
             }
             KeyCommand::ToggleVerticalTabs => {
                 self.vertical_tabs.toggle();
+                self.persist_tab_layout();
                 // Viewport width changes — re-layout the current page (ADR-016
                 // M2.2b: chrome-inset change, off-thread when the engine is on).
                 self.relayout_chrome();
@@ -16177,6 +17960,12 @@ impl Lumen {
                     self.refresh_palette_items();
                 }
                 self.request_redraw();
+                // CC-10: `#cpOverlay`'s engine-rendered open state/results
+                // (`Self::chrome_model_snapshot`) is baked into
+                // `self.chrome_layout` at `relayout_chrome_host` time, not
+                // recomputed every `RedrawRequested` — same class of gap
+                // CC-7/CC-9 found for the omnibox/find-bar. No-op off the flag.
+                self.relayout_chrome_host();
             }
             KeyCommand::ToggleFocusMode => {
                 // Enter with a default-length Pomodoro; re-baseline the timer so
@@ -16236,11 +18025,15 @@ impl Lumen {
             KeyCommand::TogglePrint => {
                 self.print_panel.toggle();
                 self.request_redraw();
+                // CC-10: see the matching comment on `ToggleCommandPalette`.
+                self.relayout_chrome_host();
             }
             KeyCommand::ToggleCert => {
                 let cert = self.cert_info.clone();
                 self.cert_panel.toggle(cert);
                 self.request_redraw();
+                // CC-10: see the matching comment on `ToggleCommandPalette`.
+                self.relayout_chrome_host();
             }
             KeyCommand::ZoomIn => {
                 self.zoom_factor = zoom::zoom_in(self.zoom_factor);
@@ -16292,7 +18085,7 @@ impl Lumen {
             return;
         }
         let win_w = self.viewport_width_css();
-        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+        let win_h = self.viewport_height_css() + toolbar::CHROME_H;
         let (src, poster) = self
             .layout_box
             .as_ref()
@@ -16307,7 +18100,7 @@ impl Lumen {
     /// created (no GPU surface, window-creation failure).
     fn open_pip_overlay(&mut self) {
         let win_w = self.viewport_width_css();
-        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+        let win_h = self.viewport_height_css() + toolbar::CHROME_H;
         let (src, poster) = self
             .layout_box
             .as_ref()
@@ -16387,6 +18180,57 @@ impl Lumen {
         self.notify_pip_window_resized(win_w, win_h);
     }
 
+    /// P3-pip: open a real OS floating window for Document Picture-in-Picture
+    /// (`documentPictureInPicture.requestWindow({width, height})`) — no
+    /// `<video>` is involved, so the window shows a plain sized container
+    /// (empty poster → [`panels::pip_os_window::build_pip_content`] draws just
+    /// the background fill). Forwarding the requesting document's actual DOM
+    /// content into the window is a follow-up — see
+    /// `docs/tasks/ph3-picture-in-picture.md`. Unlike [`Self::open_pip_os`]
+    /// there is no video overlay to fall back to on window/backend failure —
+    /// this Phase 0 slice just logs and gives up.
+    fn open_pip_os_document(&mut self, event_loop: &ActiveEventLoop, width: f32, height: f32) {
+        use panels::pip_os_window::{pip_window_attributes, PipOsConfig};
+
+        let cfg = if width > 0.0 && height > 0.0 {
+            PipOsConfig::sized(width, height)
+        } else {
+            PipOsConfig::DEFAULT
+        };
+        let title = self
+            .title
+            .clone()
+            .unwrap_or_else(|| "Picture-in-Picture".to_owned());
+        let attrs = pip_window_attributes(&title, cfg);
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(err) => {
+                eprintln!("Document PiP: не удалось создать OS-окно ({err})");
+                return;
+            }
+        };
+        let renderer = match backend_factory::create_backend(
+            window.clone(),
+            INTER_FONT.to_vec(),
+            self.target_color_space(),
+        ) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("Document PiP: не удалось создать рендер OS-окна ({err})");
+                return;
+            }
+        };
+
+        self.pip_os = Some(PipOsWindow {
+            window,
+            renderer,
+            poster_url: String::new(),
+            video_rect: Rect::new(0.0, 0.0, cfg.width, cfg.height),
+        });
+        self.render_pip_os();
+    }
+
     /// CC-7: tear down the OS PiP window. Releasing the last `Arc<Window>` makes
     /// winit destroy the OS window and free its GPU surface; the overlay fallback
     /// (if it was used instead) is cleared too.
@@ -16415,6 +18259,27 @@ impl Lumen {
         if let Err(err) = pip.renderer.render(&[], &content, 0.0, 0.0) {
             eprintln!("PiP OS render error: {err:?}");
         }
+    }
+
+    /// P3-pip slice 5: notify JS of the OS PiP window's current CSS-pixel size
+    /// via [`Self::notify_pip_window_resized`] — updates whichever
+    /// `PictureInPictureWindow` is active (video or legacy Document PiP,
+    /// both backed by [`Self::pip_os`]) and fires its `resize` event. No-op
+    /// when no OS PiP window is open. Reads the window's own current size —
+    /// use this from event handlers (e.g. `ScaleFactorChanged`) that don't
+    /// already have a fresh logical size on hand; when one is already
+    /// computed (e.g. `WindowEvent::Resized`), call
+    /// [`Self::notify_pip_window_resized`] directly instead.
+    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    fn deliver_pip_resize(&mut self) {
+        let Some(pip) = self.pip_os.as_ref() else {
+            return;
+        };
+        let size = pip.window.inner_size();
+        let scale = pip.window.scale_factor() as f32;
+        let (win_w, win_h) =
+            panels::pip_os_window::physical_to_logical(size.width, size.height, scale);
+        self.notify_pip_window_resized(win_w, win_h);
     }
 
     /// Push the OS PiP window's current logical size into JS via
@@ -16845,6 +18710,9 @@ impl Lumen {
             }
         }
         click_log::log_nav(&source.describe());
+        // PERF-6: remember the page under navigation so a panic on any thread can
+        // be attributed to it in the health journal.
+        health_log::set_current_url(&source.describe());
         self.hint.close();
         // Phase-3 freeze: serialize live DOM arena + shell-side stylesheet.
         // JS heap suspend is gated on 10C.2, so event handlers are NOT retained.
@@ -17470,17 +19338,35 @@ impl Lumen {
                 }
             }
         }
+        // CC-7 (docs/tasks/p1-css-chrome.md): `#omniInput`'s engine-rendered
+        // value/warning/caret (`Self::chrome_model_snapshot`,
+        // `Self::chrome_omni_input_rect`) is baked into `self.chrome_layout`
+        // at `relayout_chrome_host` time, not recomputed every
+        // `RedrawRequested` — every branch above mutates `self.address_bar`
+        // (text, selection, or open/closed), so without this call the
+        // on-screen field would keep showing stale text while the user
+        // types. No-op off the flag (`Self::relayout_chrome_host` early-
+        // returns when `chrome_doc` is `None`).
+        self.relayout_chrome_host();
     }
 
     /// Process a committed omnibox value: resolve aliases, then navigate or act.
     ///
     /// Order: `sidebar:` prefix → bang aliases (`!g`) → `@notes` / `@read-later`
     /// → record in search_history → plain navigate.
-    /// Build a fresh `about:newtab` [`PageSource::Static`] from the current
-    /// history. Reads the top-[`newtab::MAX_TILES`] most-visited sites from
-    /// `history_store`; an empty/failed read yields a tile-less page.
+    /// Build a fresh `about:newtab` [`PageSource::Static`] from pinned tiles
+    /// (`newtab_tiles`) plus a top-sites filler from `history_store`
+    /// (DS-11). Pinned tiles always come first, in their stored order; an
+    /// empty/failed read of either store just yields fewer tiles.
     fn build_newtab_source(&self) -> PageSource {
-        let sites: Vec<newtab::TopSite> = self
+        let pinned: Vec<newtab::TopSite> = self
+            .newtab_tiles
+            .list_all()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| newtab::TopSite { url: t.url, title: t.title, pinned: true })
+            .collect();
+        let top_sites: Vec<newtab::TopSite> = self
             .history_store
             .most_visited(newtab::MAX_TILES as i64)
             .unwrap_or_default()
@@ -17491,13 +19377,54 @@ impl Lumen {
                 } else {
                     e.title
                 };
-                newtab::TopSite { url: e.url, title }
+                newtab::TopSite { url: e.url, title, pinned: false }
             })
             .collect();
+        let sites = newtab::merge_tiles(&pinned, &top_sites);
         PageSource::Static {
             html: newtab::build_newtab_html(&sites),
             url: newtab::NEWTAB_URL.to_owned(),
         }
+    }
+
+    /// Apply a [`newtab::NewtabAction`] parsed from a clicked `about:newtab?...`
+    /// link (pin/unpin toggle, the "+" tile, or "Restore closed"), then reload
+    /// the newtab page with the updated tile set.
+    ///
+    /// `RestoreClosed` reuses the cross-restart session-restore mechanism
+    /// (`restore_session`, backed by `session_store`) — Lumen has no separate
+    /// per-tab "closed tabs" stack, so this reopens the last persisted session
+    /// snapshot wholesale instead of undoing a single tab close.
+    fn apply_newtab_action(&mut self, action: newtab::NewtabAction) {
+        match action {
+            newtab::NewtabAction::Pin { url, title } => {
+                let _ = self.newtab_tiles.pin(&url, &title);
+            }
+            newtab::NewtabAction::Unpin { url } => {
+                let _ = self.newtab_tiles.unpin(&url);
+            }
+            newtab::NewtabAction::PinCurrent => {
+                if let Some(prev) = self.nav_back.last()
+                    && let Some(url) = prev.source.url_str()
+                {
+                    let title = self
+                        .history_store
+                        .get(url)
+                        .ok()
+                        .flatten()
+                        .map(|e| e.title)
+                        .filter(|t| !t.trim().is_empty())
+                        .unwrap_or_else(|| url.to_owned());
+                    let _ = self.newtab_tiles.pin(url, &title);
+                }
+            }
+            newtab::NewtabAction::RestoreClosed => {
+                self.restore_session();
+                self.request_redraw();
+                return;
+            }
+        }
+        self.navigate_to(self.build_newtab_source());
     }
 
     fn handle_omnibox_commit(&mut self, value: String) {
@@ -17544,10 +19471,27 @@ impl Lumen {
             return;
         }
 
-        // `about:newtab` — internal start page with a speed dial of the
-        // top-5 most-visited sites (task CC-5).
+        // `about:newtab?...` — pin/unpin/"+"/restore-closed special links
+        // (DS-11), committed e.g. by pasting a copied tile link.
+        if let Some(action) = newtab::parse_action(value.trim()) {
+            self.apply_newtab_action(action);
+            return;
+        }
+
+        // `about:newtab` — internal start page with a speed dial of pinned +
+        // most-visited sites (task CC-5, DS-11).
         if value.trim() == newtab::NEWTAB_URL {
             self.navigate_to(self.build_newtab_source());
+            return;
+        }
+
+        // `about:chrome-preview` — CC-1 render-smoke for the engine-drawn
+        // chrome asset (docs/tasks/p1-css-chrome.md).
+        if value.trim() == chrome_preview::URL {
+            self.navigate_to(PageSource::Static {
+                html: chrome_preview::HTML.to_owned(),
+                url: chrome_preview::URL.to_owned(),
+            });
             return;
         }
 
@@ -17557,7 +19501,7 @@ impl Lumen {
             if !sidebar_url.is_empty() {
                 let sink = Arc::clone(&self.event_sink);
                 let src = PageSource::from_arg(Some(&sidebar_url));
-                match src.load_bytes(sink, Some(Arc::clone(&self.cookie_jar))) {
+                match src.load_bytes(sink, Some(self.active_cookie_jar())) {
                     Ok(raw) => {
                         self.open_sidebar_page(sidebar_url, &raw.bytes, String::new());
                     }
@@ -17633,6 +19577,25 @@ impl Lumen {
             let _ = self.search_history.record(&value, now);
         }
         self.navigate_to(PageSource::from_arg(Some(&value)));
+    }
+
+    /// Persist the current tab-strip layout (horizontal/vertical) into
+    /// `browser_settings`.
+    ///
+    /// CC-15-3: the legacy tab-bar layout-toggle button was the only caller of
+    /// `set_tab_layout` outside the settings panel's snapshot apply — removing
+    /// its paint/hit-test would have silently dropped persistence from the two
+    /// remaining toggle entry points (`KeyCommand::ToggleVerticalTabs`,
+    /// `PaletteAction::ToggleVerticalTabs`), which never persisted on their
+    /// own. Both now route through here so the choice survives a restart the
+    /// same way the removed button made it.
+    fn persist_tab_layout(&self) {
+        let layout = if self.vertical_tabs.visible {
+            tabs::strip::TabLayout::Vertical
+        } else {
+            tabs::strip::TabLayout::Horizontal
+        };
+        let _ = self.settings_store.set_tab_layout(layout.as_str());
     }
 
     /// Запрашивает подсказки для текущего ввода в адресной строке.
@@ -17883,6 +19846,14 @@ impl Lumen {
                 }
             }
         }
+        // CC-9 (docs/tasks/p1-css-chrome.md): `#findBar`'s engine-rendered
+        // value/count (`Self::chrome_model_snapshot`) is baked into
+        // `self.chrome_layout` at `relayout_chrome_host` time, not
+        // recomputed every `RedrawRequested` — every branch above mutates
+        // `self.find`, so without this call the on-screen bar would keep
+        // showing stale text/count. Mirrors the same call at the end of
+        // `Self::handle_address_bar_key` (CC-7). No-op off the flag.
+        self.relayout_chrome_host();
     }
 
     /// Handle a key while the bookmark panel search box is focused.
@@ -18173,6 +20144,8 @@ impl Lumen {
             }
         }
         self.settings_panel.visible = false;
+        // CC-6: re-sync the CSS chrome's data-theme/data-layout (no-op off the flag).
+        self.relayout_chrome_host();
     }
 
     /// Handle keyboard input when the settings panel is visible.
@@ -18392,10 +20365,9 @@ impl Lumen {
                         self.navigate_fragment(frag.to_owned());
                     } else if links::is_navigable_href(&href) {
                         let resolved = self.source.resolve_href(&href);
-                        // A full-URL link to the current document differing only
-                        // in its fragment (`<a href="/page#x">` from `/page`) is a
-                        // same-document fragment navigation, not a full reload.
-                        if let Some(frag) =
+                        if let Some(action) = newtab::parse_action(&resolved) {
+                            self.apply_newtab_action(action);
+                        } else if let Some(frag) =
                             links::same_document_fragment(self.current_display_url(), &resolved)
                         {
                             self.navigate_fragment(frag);
@@ -18470,7 +20442,7 @@ impl Lumen {
         } else {
             0.0
         };
-        (total - tabs::strip::TAB_BAR_HEIGHT - ws_bar).max(0.0)
+        (total - toolbar::CHROME_H - ws_bar).max(0.0)
     }
 
     /// Full logical (CSS px) window height including the tab bar. Used to
@@ -18508,11 +20480,19 @@ impl Lumen {
         (self.viewport_width_css() - left_offset - right_offset).max(0.0)
     }
 
-    /// All four cross-dockable docked sidebars as `(persist id, visible, default
+    /// The cross-dockable docked sidebars as `(persist id, visible, default
     /// width)`, in side-resolution priority order (outermost first). Each can be
     /// flipped to either window edge; [`Self::left_dock`] / [`Self::right_dock`]
     /// pick the first visible one whose effective side matches.
-    fn dockable_sidebars(&self) -> [(&'static str, bool, f32); 4] {
+    ///
+    /// CC-10b/CC-15-6: `ID_AI`/`ID_SIDEBAR` are **not** listed — they paint as
+    /// `#rightSidebar`, a real flex sibling of `#contentArea` in the engine
+    /// chrome layout, so `chrome_page_host_rect` ([`Self::page_offset`]) already
+    /// reflects their width. Listing them would make
+    /// [`Self::page_content_width_css`]'s horizontal scroll-clamp bound subtract
+    /// the same width twice. (They were entries reporting `visible: false` while
+    /// the `LUMEN_LEGACY_CHROME` rollback flag existed.)
+    fn dockable_sidebars(&self) -> [(&'static str, bool, f32); 2] {
         [
             (
                 panel_layout::ID_VERTICAL_TABS,
@@ -18523,16 +20503,6 @@ impl Lumen {
                 panel_layout::ID_TREE_TABS,
                 self.tree_tabs.visible,
                 panels::tree_tabs::PANEL_WIDTH,
-            ),
-            (
-                panel_layout::ID_AI,
-                self.ai_panel.visible,
-                panels::ai_panel::PANEL_WIDTH,
-            ),
-            (
-                panel_layout::ID_SIDEBAR,
-                self.sidebar.visible,
-                panels::sidebar_panel::PANEL_WIDTH,
             ),
         ]
     }
@@ -18637,7 +20607,7 @@ impl Lumen {
     /// Left docks have their handle at `x = width`; right docks at
     /// `x = viewport_width − width`.
     fn resize_edge_at(&self, x_css: f32, y_css: f32) -> Option<(panel_layout::Dock, &'static str)> {
-        if y_css < tabs::strip::TAB_BAR_HEIGHT {
+        if y_css < toolbar::CHROME_H {
             return None;
         }
         let grab = panel_layout::RESIZE_GRAB;
@@ -18767,6 +20737,47 @@ impl Lumen {
         self.workspace_panel.set_workspaces(entries);
     }
 
+    /// Reload the profile list from `ProfileRegistry` into the dropdown's
+    /// cache (DS-14). Cheap — the registry only ever holds a handful of
+    /// rows — called each time the dropdown opens so it reflects any
+    /// external edit to `profiles.db` between sessions.
+    fn refresh_profile_menu_entries(&mut self) {
+        let entries: Vec<panels::profile_menu::ProfileEntry> = self
+            .profiles
+            .list_all()
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .map(|(i, p)| panels::profile_menu::ProfileEntry {
+                id: p.id,
+                name: p.name.clone(),
+                color: panels::profile_menu::color_for_profile(&p.name, i),
+            })
+            .collect();
+        self.profile_menu.set_entries(entries);
+    }
+
+    /// `true` while the active profile is the seeded Anonymous profile
+    /// (DS-16 ephemeral slice, ADR-020) — gates history writes, the
+    /// history-panel banner, and which cookie jar navigation uses.
+    fn active_profile_is_anonymous(&self) -> bool {
+        self.profile_menu
+            .active_entry()
+            .is_some_and(|e| panels::profile_menu::is_anonymous(&e.name))
+    }
+
+    /// Cookie jar used for outgoing HTTP requests on the active tab: the
+    /// shared jar for every profile except Anonymous, which gets its own
+    /// ephemeral jar (DS-16) so its cookies never leak into — or persist
+    /// past — any other profile's browsing.
+    fn active_cookie_jar(&self) -> Arc<lumen_storage::CookieJar> {
+        if self.active_profile_is_anonymous() {
+            Arc::clone(&self.anonymous_cookie_jar)
+        } else {
+            Arc::clone(&self.cookie_jar)
+        }
+    }
+
     /// Reload the bookmark list from storage into the panel cache.
     ///
     /// Call this after every bookmark mutation (add / delete / move) so the
@@ -18834,7 +20845,7 @@ impl Lumen {
     fn show_view_source_for_url(&mut self, url: &str) {
         let source = PageSource::from_arg(Some(url));
         let sink = Arc::clone(&self.event_sink);
-        let jar = Arc::clone(&self.cookie_jar);
+        let jar = self.active_cookie_jar();
         match source.load_bytes(sink, Some(jar)) {
             Ok(raw) => {
                 let html_str = String::from_utf8_lossy(&raw.bytes).into_owned();
@@ -18914,14 +20925,6 @@ impl Lumen {
                 .collect()
         };
         self.history_panel.set_items(items);
-    }
-
-    /// Top-left corner of the history panel in window-space CSS px.
-    fn history_panel_anchor(&self) -> (f32, f32) {
-        let win_w = self.viewport_width_css();
-        let px = (win_w - panels::history_panel::PANEL_W) * 0.5;
-        let py = tabs::strip::TAB_BAR_HEIGHT + 4.0;
-        (px, py)
     }
 
     /// Rebuild the command-palette item list: curated commands, every bookmark,
@@ -19040,6 +21043,9 @@ impl Lumen {
                     self.hint.close();
                     let current = self.current_display_url().to_owned();
                     self.address_bar.open(&current);
+                    // CC-7: see the comment on the matching call in
+                    // `Self::handle_address_bar_key`.
+                    self.relayout_chrome_host();
                 }
                 PaletteAction::ToggleBookmarks => {
                     self.bookmark_panel.toggle();
@@ -19050,6 +21056,7 @@ impl Lumen {
                 PaletteAction::BookmarkCurrentPage => self.bookmark_current_page(),
                 PaletteAction::ToggleVerticalTabs => {
                     self.vertical_tabs.toggle();
+                    self.persist_tab_layout();
                     // ADR-016 M2.2b: async-safe chrome-inset relayout.
                     self.relayout_chrome();
                 }
@@ -19165,48 +21172,6 @@ impl Lumen {
         "AI module not enabled — rebuild with `cargo build --features ai` \
          (requires a local Ollama daemon, see ADR-019)."
             .to_owned()
-    }
-
-    /// Top-left anchor of the bookmark panel overlay (just under the tab bar).
-    fn bookmark_anchor(&self) -> (f32, f32) {
-        (8.0, tabs::strip::TAB_BAR_HEIGHT + 4.0)
-    }
-
-    /// Resolve a bookmark drag release: dropping on a folder re-files the
-    /// bookmark (`Bookmarks::set_folder`), dropping elsewhere opens it.
-    fn finish_bookmark_drop(&mut self, id: i64) {
-        let Some(cursor) = self.cursor_position else { return };
-        let dpr = self
-            .renderer
-            .as_ref()
-            .map_or(1.0_f32, |r| r.scale_factor() as f32)
-            .max(1e-6);
-        let x_css = (cursor.x as f32) / dpr;
-        let y_css = (cursor.y as f32) / dpr;
-        let Some(url) = self
-            .bookmark_panel
-            .entries
-            .iter()
-            .find(|e| e.id == id)
-            .map(|e| e.url.clone())
-        else {
-            return;
-        };
-        let (ax, ay) = self.bookmark_anchor();
-        match panels::bookmark_panel::hit_test(&self.bookmark_panel, x_css, y_css, ax, ay) {
-            Some(panels::bookmark_panel::BookmarkHit::SelectFolder(folder)) => {
-                // Re-file: `None` (the "All" row) moves the bookmark to root.
-                let target = folder.unwrap_or_default();
-                let _ = self.bookmarks.set_folder(&url, &target);
-                self.refresh_bookmarks();
-            }
-            _ => {
-                // Released over the same row / list / outside: treat as a click.
-                self.bookmark_panel.visible = false;
-                self.bookmark_panel.search_active = false;
-                self.navigate_to(PageSource::from_arg(Some(&url)));
-            }
-        }
     }
 
     /// Максимальный валидный scroll_y: ничего не скроллим, если контент
@@ -19678,16 +21643,24 @@ impl Lumen {
         let scrollbar_icon = cursor_icon_for_hover(hover, self.scroll_drag.is_some());
 
         // F2-6: a docked-panel resize drag (or hovering an edge) shows the
-        // horizontal-resize cursor, ahead of scrollbar/page hover.
+        // horizontal-resize cursor, ahead of scrollbar/page/chrome hover.
         let desired = if self.panel_resize.is_some() || self.resize_edge_at(x_css, y_css).is_some() {
             CursorIcon::EwResize
+        } else if self.point_over_chrome(x_css, y_css) {
+            // CC-5: the engine-drawn chrome owns the cursor over its own
+            // opaque area (sidebar, toolbar, tab strip) — ahead of
+            // scrollbar/page hit-test below, which assume page coordinates.
+            match self.chrome_hit_test(x_css, y_css) {
+                Some(result) => css_cursor_to_winit(result.cursor),
+                None => CursorIcon::Default,
+            }
         } else if scrollbar_icon != CursorIcon::Default {
             scrollbar_icon
         } else if let Some(lb) = &self.layout_box {
             // Hit-test layout tree in page coordinates (viewport + scroll offset).
-            // Page content is shifted down by TAB_BAR_HEIGHT via PushTransform.
-            let page_x = x_css + self.scroll_x;
-            let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
+            let (offset_x, offset_y) = self.page_offset();
+            let page_x = (x_css - offset_x) + self.scroll_x;
+            let page_y = (y_css - offset_y) + self.scroll_y;
             match hit_test(Point::new(page_x, page_y), lb) {
                 Some(result) => css_cursor_to_winit(result.cursor),
                 None => CursorIcon::Default,
@@ -20115,7 +22088,7 @@ impl Lumen {
                 last_activated_ms: 0.0,
                 pinned: false,
                 group_id: None,
-                adblock: true,
+                adblock: false,
             });
             self.lifecycle_mgr.open_tab(id as u64);
 
@@ -20310,6 +22283,9 @@ impl Lumen {
         let event_sink = self.event_sink.clone();
         let cookie_banner_dismiss = self.cookie_banner_dismiss;
         let deterministic = self.deterministic;
+        // Computed up front: `&mut self.ls_storage` below would otherwise
+        // conflict with this `&self` method call as a later call argument.
+        let cookie_jar = self.active_cookie_jar();
         let (document_arc, js_ctx) = tab_lifecycle::hibernate::restore_js_context(
             &data.url,
             doc,
@@ -20319,7 +22295,7 @@ impl Lumen {
             &self.sw_backend,
             cookie_banner_dismiss,
             deterministic,
-            Some(Arc::clone(&self.cookie_jar)),
+            Some(cookie_jar),
         );
 
         let layout_source = LayoutSource {
@@ -20354,6 +22330,8 @@ impl Lumen {
         self.display_list = display_list;
         self.title = Some(data.title);
         self.layout_source = Some(layout_source);
+        // BUG-341 S7: hibernate restore bypasses the restyle-aware path.
+        self.page_prev_cascade_styles = None;
         self.layout_box = Some(lb);
         self.cv_relevant.clear();
         self.cv_events.clear();
@@ -20529,6 +22507,8 @@ impl Lumen {
             transition_scheduler: std::mem::take(&mut self.transition_scheduler),
             starting_style_tracker: std::mem::take(&mut self.starting_style_tracker),
             prev_styles: std::mem::take(&mut self.prev_styles),
+            page_prev_cascade_styles: self.page_prev_cascade_styles.take(),
+            page_prev_interactive: std::mem::take(&mut self.page_prev_interactive),
             anim_frame: self.anim_frame.take(),
             layout_box: self.layout_box.take(),
             page_tracks: std::mem::take(&mut self.page_tracks),
@@ -20572,6 +22552,7 @@ impl Lumen {
             js_ctx: self.take_js_ctx(),
             first_paint_delivered: self.first_paint_delivered,
             first_contentful_paint_delivered: self.first_contentful_paint_delivered,
+            load_failed: self.load_failed,
             nav_start: self.nav_start.take(),
             animated_gifs: std::mem::take(&mut self.animated_gifs),
             gif_last_frame: std::mem::take(&mut self.gif_last_frame),
@@ -20611,6 +22592,8 @@ impl Lumen {
         self.transition_scheduler = snap.transition_scheduler;
         self.starting_style_tracker = snap.starting_style_tracker;
         self.prev_styles = snap.prev_styles;
+        self.page_prev_cascade_styles = snap.page_prev_cascade_styles;
+        self.page_prev_interactive = snap.page_prev_interactive;
         self.anim_frame = snap.anim_frame;
         self.layout_box = snap.layout_box;
         self.page_tracks = snap.page_tracks;
@@ -20647,6 +22630,7 @@ impl Lumen {
         self.set_js_ctx(snap.js_ctx);
         self.first_paint_delivered = snap.first_paint_delivered;
         self.first_contentful_paint_delivered = snap.first_contentful_paint_delivered;
+        self.load_failed = snap.load_failed;
         self.nav_start = snap.nav_start;
         self.animated_gifs = snap.animated_gifs;
         self.gif_last_frame = snap.gif_last_frame;
@@ -20658,7 +22642,7 @@ impl Lumen {
             let mut pb = self.video_gif_store.playback.lock().unwrap();
             pb.clear();
             for (nid, gif) in &self.video_gif_frames {
-                let cycle_ms: u64 = gif.frames.iter().map(|f| f.delay_ms()).sum();
+                let cycle_ms: u64 = gif.total_cycle_ms();
                 let loop_count = match gif.loop_count {
                     lumen_image::GifLoopCount::Infinite | lumen_image::GifLoopCount::Finite(0) => 0u32,
                     lumen_image::GifLoopCount::Finite(n) => u32::from(n),
@@ -20700,6 +22684,8 @@ impl Lumen {
         self.transition_scheduler = TransitionScheduler::new();
         self.starting_style_tracker = StartingStyleTracker::new();
         self.prev_styles = HashMap::new();
+        self.page_prev_cascade_styles = None;
+        self.page_prev_interactive = (None, None, None);
         self.anim_frame = None;
         self.layout_box = None;
         self.find = find::FindState::default();
@@ -20741,6 +22727,7 @@ impl Lumen {
         self.set_js_ctx(None);
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
+        self.load_failed = false;
         self.nav_start = None;
         self.animated_gifs = HashMap::new();
         self.gif_last_frame = HashMap::new();
@@ -20786,6 +22773,8 @@ impl Lumen {
         self.reset_to_blank_tab();
         // Register the new tab with the lifecycle manager.
         self.lifecycle_mgr.open_tab(new_id as u64);
+        // CC-6: re-sync the CSS chrome's tab list (no-op off the flag).
+        self.relayout_chrome_host();
         self.request_redraw();
     }
 
@@ -20862,6 +22851,8 @@ impl Lumen {
             let _ = self.t2_store.delete(closing_id as i64);
             self.tab_strip.remove(idx);
         }
+        // CC-6: re-sync the CSS chrome's tab list (no-op off the flag).
+        self.relayout_chrome_host();
         self.request_redraw();
     }
 
@@ -20966,21 +22957,29 @@ impl Lumen {
         /// rendered *content-viewport* space — the same space `captureScreenshot`
         /// renders (no scroll subtraction needed, since it's relative to the
         /// already-scrolled visible viewport, not absolute document position) —
-        /// so only the tab-bar/panel offset is added, not scroll. Confirmed by
-        /// hand: without this, `input.performActions` clicks landed above the
-        /// target by exactly `TAB_BAR_HEIGHT` (real pixel offset validated with
-        /// a manual BiDi click→navigate scenario).
+        /// so only the tab-bar/toolbar/panel offset is added, not scroll. Confirmed
+        /// by hand: without this, `input.performActions` clicks landed above the
+        /// target by exactly `toolbar::CHROME_H` (real pixel offset validated with
+        /// a manual BiDi click→navigate scenario; DS-9 widened the offset from
+        /// the tab-bar-only height to include the new toolbar row).
+        ///
+        /// CC-14: the offset itself is [`Self::page_offset`], not a hardcoded
+        /// `(left_dock width, toolbar::CHROME_H)` pair — the content area's
+        /// real origin is `chrome_page_host_rect`'s, which can differ from the
+        /// legacy toolbar/sidebar geometry (e.g. the web/AI sidebar occupies
+        /// chrome layout width but is not a `left_dock()` entry at all,
+        /// see [`Self::dockable_sidebars`]). Using the wrong offset here would
+        /// silently misfire every MCP/BiDi click/type once engine chrome is
+        /// the default, since `page_offset()` is otherwise the single source
+        /// of truth for this conversion (real mouse input already uses it).
         fn resolve_automation_target(&self, target: &lumen_driver::Target) -> Option<(f32, f32)> {
             use lumen_driver::Target;
-            let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
+            let (offset_x, offset_y) = self.page_offset();
             let page_to_viewport = |px: f32, py: f32| {
-                (
-                    px - self.scroll_x + panel_x_offset,
-                    py - self.scroll_y + tabs::strip::TAB_BAR_HEIGHT,
-                )
+                (px - self.scroll_x + offset_x, py - self.scroll_y + offset_y)
             };
             match target {
-                Target::Point { x, y } => Some((x + panel_x_offset, y + tabs::strip::TAB_BAR_HEIGHT)),
+                Target::Point { x, y } => Some((x + offset_x, y + offset_y)),
                 Target::NodeId(id) => {
                     let lb = self.layout_box.as_ref()?;
                     let node = lumen_dom::NodeId::from_index(*id as usize);
@@ -21033,6 +23032,8 @@ impl Lumen {
             let doc = source.document.lock().ok()?;
             let flat_tree = lumen_dom::build_flat_tree(&doc);
             let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &flat_tree);
+            let chrome = self.chrome_ax_nodes();
+            let ax_tree = lumen_a11y::chrome::attach_chrome(ax_tree, chrome);
             Some(automation_ax_node(&ax_tree.root))
         }
 
@@ -21072,6 +23073,17 @@ impl Lumen {
         fn check_wait_condition(&self, cond: &WaitCondition) -> bool {
             match cond {
                 WaitCondition::DocumentReady | WaitCondition::NetworkIdle => {
+                    // A settled navigation error (network/HTTP failure) is "done
+                    // loading" — resolve immediately instead of hanging until the
+                    // wait's deadline (BUG-308). Without this, a nav that ends in
+                    // `LoadError` with no JS context and no prior `layout_box`
+                    // (e.g. `about:blank` → an anti-bot 403) never satisfies
+                    // either readiness branch below, so `wait{document_ready}`
+                    // blocks for minutes. Still gated on `nav_start.is_none()` so
+                    // a stale flag from a superseded nav can't win a race.
+                    if self.nav_start.is_none() && self.load_failed {
+                        return true;
+                    }
                     // ADR-016: eval через `route_query_js`, тот же паттерн, что
                     // `WaitCondition::JsIdle` ниже.
                     match route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
@@ -21324,6 +23336,14 @@ impl Lumen {
         }
         // Otherwise the tab is blank (never loaded) — leave reset state.
 
+        // DS-17: the synthetic TabList's `selected` state is rebuilt fresh
+        // from `self.tab_strip.active` every time — without this, switching
+        // to an already-loaded tab (no navigation, so nothing else rebuilds
+        // the AX tree) left the OS bridge reporting the *previous* tab as
+        // selected until the next full page load.
+        self.update_platform_ax_tree();
+        // CC-6: re-sync the CSS chrome's active-tab highlight (no-op off the flag).
+        self.relayout_chrome_host();
         self.request_redraw();
     }
 }
@@ -21632,6 +23652,3330 @@ fn escape_js_string_char(ch: char) -> String {
 mod tests {
     use super::*;
 
+    // ── ADR-023: engine-thread default flip + rollback precedence ────────────
+
+    #[test]
+    fn engine_thread_on_by_default_when_no_vars_set() {
+        assert!(engine_thread_enabled_from(None, None));
+    }
+
+    #[test]
+    fn engine_thread_opt_out_disables() {
+        assert!(!engine_thread_enabled_from(Some("1"), None));
+    }
+
+    #[test]
+    fn engine_thread_opt_out_beats_explicit_legacy_on() {
+        assert!(!engine_thread_enabled_from(Some("1"), Some("1")));
+    }
+
+    #[test]
+    fn engine_thread_legacy_zero_disables() {
+        assert!(!engine_thread_enabled_from(None, Some("0")));
+    }
+
+    #[test]
+    fn engine_thread_legacy_one_still_enables() {
+        assert!(engine_thread_enabled_from(None, Some("1")));
+    }
+
+    #[test]
+    fn engine_thread_opt_out_only_honours_exact_one() {
+        // Anything other than "1" is not the documented opt-out spelling.
+        assert!(engine_thread_enabled_from(Some("0"), None));
+        assert!(engine_thread_enabled_from(Some(""), None));
+    }
+
+    // ── DS-1: design-token generator output sanity ───────────────────────────
+
+    #[test]
+    fn theme_tokens_radius_lg_matches_prototype() {
+        assert_eq!(crate::theme_tokens::radius::LG, 6.0);
+    }
+
+    #[test]
+    fn theme_tokens_profile_anonymous_matches_prototype() {
+        assert_eq!(
+            crate::theme_tokens::profile::ANONYMOUS,
+            lumen_layout::Color {
+                r: 255,
+                g: 59,
+                b: 48,
+                a: 255,
+            }
+        );
+    }
+
+    // ── CC-9: #contentArea pruning salvages #findBar/#downloadsPanel ────────
+
+    #[test]
+    fn take_content_area_salvages_find_bar_and_downloads_panel() {
+        let html = concat!(
+            "<html><body>",
+            "<div id=\"before\"></div>",
+            "<div id=\"contentArea\">",
+            "<div id=\"placeholder\">demo</div>",
+            "<div id=\"findBar\">find</div>",
+            "<div id=\"downloadsPanel\">downloads</div>",
+            "</div>",
+            "<div id=\"after\"></div>",
+            "</body></html>",
+        );
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let mut layout = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let content_area = doc.find_by_id("contentArea").expect("fixture has #contentArea");
+
+        let pruned = take_content_area(&mut layout, content_area, &["findBar", "downloadsPanel"], &doc);
+        assert!(pruned.is_some(), "must return #contentArea's own rect");
+
+        assert!(
+            lumen_layout::find_box_by_node(&layout, content_area).is_none(),
+            "#contentArea's own box must be gone"
+        );
+        let placeholder = doc.find_by_id("placeholder").expect("fixture has #placeholder");
+        assert!(
+            lumen_layout::find_box_by_node(&layout, placeholder).is_none(),
+            "non-salvaged descendants of #contentArea must be discarded"
+        );
+
+        let find_bar = doc.find_by_id("findBar").expect("fixture has #findBar");
+        let downloads_panel = doc.find_by_id("downloadsPanel").expect("fixture has #downloadsPanel");
+        assert!(lumen_layout::find_box_by_node(&layout, find_bar).is_some(), "#findBar must be salvaged");
+        assert!(
+            lumen_layout::find_box_by_node(&layout, downloads_panel).is_some(),
+            "#downloadsPanel must be salvaged"
+        );
+
+        // Salvaged boxes must land at #contentArea's former slot, in document
+        // order, as direct children of #contentArea's former parent (<body>)
+        // — not nested under some other unrelated box.
+        let body_box = lumen_layout::find_box_by_node(&layout, doc.body().expect("fixture has <body>"))
+            .expect("<body> must have a layout box");
+        let before = doc.find_by_id("before").expect("fixture has #before");
+        let after = doc.find_by_id("after").expect("fixture has #after");
+        let order: Vec<NodeId> = body_box.children.iter().map(|b| b.node).collect();
+        assert_eq!(order, vec![before, find_bar, downloads_panel, after]);
+    }
+
+    // ── CC-11: chrome document gets its own Animation/Transition scheduler ──
+
+    #[test]
+    fn chrome_transition_scheduler_stays_independent_of_page_scheduler_for_same_node_id() {
+        // chrome_doc and the page Document each number NodeIds from 0
+        // independently (see Lumen::chrome_animation_scheduler's doc
+        // comment) — this proves two separate TransitionScheduler instances
+        // don't let one tree's transition state leak into the other's frame
+        // when driven with a colliding NodeId. A single shared scheduler
+        // would fail this test (the page's transition would also appear in
+        // the chrome frame).
+        let node = lumen_dom::NodeId::from_index(3usize);
+
+        let mut page_sched = TransitionScheduler::new();
+        let mut chrome_sched = TransitionScheduler::new();
+
+        let mut old = lumen_layout::ComputedStyle::root();
+        old.opacity = 0.0;
+        old.transition_properties = vec!["opacity".to_string()];
+        old.transition_durations = vec![1.0];
+        old.transition_timing_functions = vec![lumen_layout::TimingFunction::Linear];
+        let mut new = old.clone();
+        new.opacity = 1.0;
+
+        // Only the page's #box transitions opacity 0 → 1 at t=0; chrome's own
+        // node with the same NodeId is never synced (nothing changed there).
+        page_sched.sync(node, &old, &new, 0.0);
+        let chrome_frame = chrome_sched.tick(0.5);
+        assert!(
+            !chrome_frame.overrides.contains_key(&node),
+            "chrome scheduler must not see the page's transition for the same NodeId"
+        );
+
+        let page_frame = page_sched.tick(0.5);
+        let op = page_frame.overrides[&node]
+            .opacity
+            .expect("page transition must be active at t=0.5");
+        assert!((op - 0.5).abs() < 0.01, "expected ~0.5 midpoint, got {op}");
+    }
+
+    // ── CC-12: chrome perf gate — mutate → restyle → relayout → paint cycle ─
+
+    /// Builds a populated `ChromeModel` (6 tabs, 3 workspaces) so the bound
+    /// document approaches the ~400-node ballpark CC-12's brief measures
+    /// against, rather than the near-empty `ChromeModel::default()` a real
+    /// session never actually renders.
+    fn cc12_bench_model(omnibox_value: &str) -> lumen_chrome::ChromeModel {
+        let tabs = (0..6usize)
+            .map(|i| lumen_chrome::ChromeTabModel {
+                id: i,
+                title: format!("Tab {i}"),
+                active: i == 0,
+                sleeping: false,
+                is_child: false,
+                container_color: None,
+            })
+            .collect();
+        let workspaces = (0..3i64)
+            .map(|i| lumen_chrome::ChromeWorkspaceModel {
+                id: i,
+                name: format!("Workspace {i}"),
+                active: i == 0,
+                color: "#3b82f6".to_owned(),
+            })
+            .collect();
+        lumen_chrome::ChromeModel {
+            tabs,
+            workspaces,
+            omnibox: lumen_chrome::OmniboxModel { value: omnibox_value.to_owned(), ..Default::default() },
+            ..Default::default()
+        }
+    }
+
+    /// BUG-341 S24: [`cc12_bench_model`] with half its tabs and workspaces
+    /// gone, so a cycle really detaches DOM nodes instead of only rewriting
+    /// attributes. The eviction arm of the S24 gate needs a pass whose element
+    /// set genuinely shrinks.
+    fn cc12_bench_shrunk_model(omnibox_value: &str) -> lumen_chrome::ChromeModel {
+        let mut model = cc12_bench_model(omnibox_value);
+        model.tabs.truncate(2);
+        model.workspaces.truncate(1);
+        model
+    }
+
+    /// BUG-341 S5: persisted state `cc12_bench_cycle` carries across
+    /// iterations, mirroring exactly what `Lumen::relayout_chrome_host`
+    /// itself now persists (`chrome_prev_*` fields) — a standalone struct
+    /// here since this bench has no `Lumen` instance to hang them on.
+    #[derive(Default)]
+    struct Cc12IncrementalState {
+        prev_pristine_layout: Option<lumen_layout::LayoutBox>,
+        prev_cascade_styles: lumen_layout::CascadeStyles,
+        prev_interactive: (Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>),
+        /// BUG-341 S18: run the cycle with whole-subtree box reuse (S15) off,
+        /// so the box tree is rebuilt and `graft_geometry` really compares it
+        /// against its predecessor box by box. The S13 gate needs that: with
+        /// reuse on, the graft is now handed a subtree it knows is a copy of
+        /// `prev` and honours it in O(1), which is the right production
+        /// behaviour but leaves nothing for a per-box reject census to measure.
+        box_reuse_off: bool,
+    }
+
+    /// One `relayout_chrome_host`-equivalent pass, timed exactly like the
+    /// mutate (`bind_model`) → restyle+relayout → persist-for-next-cycle →
+    /// paint (`paint_ordered`, display-list build — CC-12's "paint" stops
+    /// here, same as the rest of the engine's layout→paint terminology; GPU
+    /// submit/present is a separate stage this cycle never reaches) sequence
+    /// `Lumen::relayout_chrome_host` runs on every chrome interaction.
+    ///
+    /// BUG-341 S6: mirrors `relayout_chrome_host`'s own eligibility check —
+    /// the incremental path is taken whenever a previous pristine tree/
+    /// cascade cache exists, deriving its cascade dirty-root-set from
+    /// `bind_model_tracked`'s real diff (unioned with the interactive-state
+    /// root-set) instead of requiring the whole `ChromeModel` to be
+    /// bit-identical (S5's limit — that's what kept `CC12_KEY`'s per-cycle
+    /// omnibox-text change on the full-layout path). Falls back to
+    /// `layout_measured_hyp_with_counters` only on the first cycle. `state`'s
+    /// persist of the fresh tree/cascade cache is deliberately inside the timed
+    /// region — that per-cycle cost is real production overhead, not a
+    /// benchmark artifact. BUG-341 S22 turned the tree half of it from a
+    /// whole-tree `clone()` into a move.
+    #[allow(clippy::too_many_arguments)]
+    fn cc12_bench_cycle(
+        doc: &mut lumen_dom::Document,
+        sheet: &lumen_css_parser::Stylesheet,
+        model: &lumen_chrome::ChromeModel,
+        viewport: Size,
+        measurer: &lumen_paint::FontMeasurer,
+        hyp: &KnuthLiangHyphenation,
+        hover: Option<lumen_dom::NodeId>,
+        state: &mut Cc12IncrementalState,
+    ) -> (f64, lumen_layout::box_tree::BoxBuildStats) {
+        let touched = lumen_chrome::bind_model_tracked(doc, model);
+        lumen_layout::set_interactive_state(hover, None, None);
+        let new_interactive = (hover, None, None);
+
+        let t0 = std::time::Instant::now();
+        let (layout, counters) = match state.prev_pristine_layout.take() {
+            Some(prev) => {
+                let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
+                let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
+                let mut dirty_roots = std::collections::HashSet::new();
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc, prev_hover, new_interactive.0, &state_index,
+                ));
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc, prev_focus, new_interactive.1, &state_index,
+                ));
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc, prev_active, new_interactive.2, &state_index,
+                ));
+                let node_index = lumen_layout::style::restyle_node_index(doc, sheet);
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                    doc,
+                    chrome_node_changes(&touched),
+                    &node_index,
+                ));
+                let delta = lumen_layout::counters::RestyleDelta {
+                    prev_styles: std::mem::take(&mut state.prev_cascade_styles),
+                    dirty_roots,
+                    // BUG-341 S16 — mirrors `relayout_chrome_host` exactly, so
+                    // the bench measures the production reuse decision.
+                    content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                };
+                lumen_layout::counters::set_incremental_restyle(true);
+                lumen_layout::box_tree::set_incremental_box_build(!state.box_reuse_off);
+                let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                    doc, sheet, viewport, measurer, hyp, false, prev, delta,
+                );
+                lumen_layout::box_tree::set_incremental_box_build(false);
+                lumen_layout::counters::set_incremental_restyle(false);
+                result
+            }
+            None => lumen_layout::layout_measured_hyp_with_counters(doc, sheet, viewport, measurer, hyp, false),
+        };
+        // BUG-341 S8: split the timed region so the incremental design's own
+        // per-cycle bookkeeping (two deep clones of the whole document) is
+        // visible separately from the layout work it is meant to be saving —
+        // the S8 re-analysis found that bookkeeping to be ~12-13ms of the
+        // cycle, which no stage profile inside `lumen-layout` can show.
+        let t_layout = t0.elapsed().as_secs_f64() * 1000.0;
+        let t2 = std::time::Instant::now();
+        state.prev_cascade_styles = counters.into_styles();
+        let t_clone_styles = t2.elapsed().as_secs_f64() * 1000.0;
+        let t3 = std::time::Instant::now();
+        let _dl = paint_ordered(&layout);
+        let t_paint = t3.elapsed().as_secs_f64() * 1000.0;
+        // BUG-341 S22: a **move**, not a `clone()`. Production stopped copying
+        // the tree here too — `relayout_chrome_host` hands the next pass its
+        // own live tree with `take_content_area`'s removals undone
+        // (`restore_content_area`). This bench has never modelled the pruning,
+        // so the move is the whole of the change here; production additionally
+        // pays the restore, which is one insert per salvaged popover plus a
+        // path walk and does not scale with the tree.
+        let t1 = std::time::Instant::now();
+        state.prev_pristine_layout = Some(layout);
+        let t_persist_tree = t1.elapsed().as_secs_f64() * 1000.0;
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let bb = lumen_layout::box_tree::take_box_build_stats();
+        eprintln!(
+            "[cc12-split] total={ms:.2} layout={t_layout:.2} persist_tree={t_persist_tree:.2} \
+             clone_styles={t_clone_styles:.2} paint={t_paint:.2} \
+             boxes_built={} boxes_reused={}",
+            bb.built, bb.reused
+        );
+        lumen_layout::clear_interactive_state();
+        state.prev_interactive = new_interactive;
+        (ms, bb)
+    }
+
+    /// CC-12 (docs/tasks/p1-css-chrome.md): perf gate for the chrome
+    /// document's full restyle-on-every-interaction cost. Deliberately
+    /// headless/CPU-only rather than driven through the live `LUMEN_BENCH`
+    /// harness (`bench_frames.rs`) — that harness measures a whole GPU frame,
+    /// but the brief's "мутация → рестайл → релэйаут → paint" cycle is
+    /// exactly `Lumen::relayout_chrome_host`'s body, which never touches the
+    /// GPU (paint here means display-list build, not rasterization). Timing
+    /// it directly gives a deterministic, GPU-independent number instead of
+    /// bench_frames.rs's own cautionary tale (its doc comment: a whole-frame
+    /// sample folded an unrelated cost into the number it was aimed at).
+    ///
+    /// `#[ignore]`d like `LUMEN_BENCH` itself is opt-in — a wall-clock budget
+    /// assert doesn't belong in the default `cargo test -p lumen-shell` gate
+    /// (shared-runner contention would make it flaky there); run explicitly:
+    /// `cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate -- --ignored --nocapture`.
+    ///
+    /// Was red (measured p50 ≈ 580-630ms, ~300× over the 2ms budget) before
+    /// BUG-341's fixes — see [BUG-341](../../../bugs/BUG-341-OPEN.md) for the
+    /// full history: `lay_out_flex`'s double layout pass (fixed, ~86ms),
+    /// `bind_model`'s list rebuilds churning NodeIds every call (fixed), the
+    /// S3 incremental cascade + S5 pipeline wiring below (this bench now
+    /// takes the same `layout_mutation_incremental_restyle` path
+    /// `relayout_chrome_host` does). CC12_HOVER's own SIDEBAR/`None` toggle
+    /// is a documented S3 worst case (`:hover` invalidates every ancestor of
+    /// both the old and new target on a "nothing hovered" transition, which
+    /// this fixture hits every other cycle) — see BUG-341 "S3" for why a
+    /// representative sibling-to-sibling hover move fares much better, and
+    /// `bug341_s5_incremental_pipeline_share` below for that number. Still
+    /// red at S5 — see BUG-341 "S5" for the re-measured numbers.
+    #[test]
+    #[ignore = "manual perf gate (CC-12) — see BUG-341; doc comment has the run command"]
+    fn cc12_chrome_perf_gate_hover_and_keystroke_cycles() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let hover_target = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        const WARMUP: usize = 10;
+        const SAMPLES: usize = 60;
+        const BUDGET_MS: f32 = 2.0;
+
+        let mut hover_stats = lumen_paint::FrameStats::new();
+        let mut hover_state = Cc12IncrementalState::default();
+        for i in 0..WARMUP + SAMPLES {
+            let hover = if i % 2 == 0 { hover_target } else { None };
+            let model = cc12_bench_model("");
+            let (ms, _) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut hover_state);
+            if i >= WARMUP {
+                hover_stats.record(ms as f32);
+            }
+        }
+        let hover_summary = hover_stats.summary().expect("samples collected");
+        eprintln!("{}", hover_summary.display_with("CC12_HOVER"));
+
+        let mut key_stats = lumen_paint::FrameStats::new();
+        let mut key_state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        for i in 0..WARMUP + SAMPLES {
+            typed.push('a');
+            if typed.len() > 40 {
+                typed.clear();
+            }
+            let model = cc12_bench_model(&typed);
+            let (ms, _) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut key_state);
+            if i >= WARMUP {
+                key_stats.record(ms as f32);
+            }
+        }
+        let key_summary = key_stats.summary().expect("samples collected");
+        eprintln!("{}", key_summary.display_with("CC12_KEY"));
+
+        assert!(
+            hover_summary.p95_ms < BUDGET_MS,
+            "hover-flip p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 \"S5\" for \
+             the current numbers and the open follow-up (S6) needed to close this",
+            hover_summary.p95_ms,
+        );
+        assert!(
+            key_summary.p95_ms < BUDGET_MS,
+            "keystroke p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 \"S5\" for \
+             the current numbers and the open follow-up (S6) needed to close this",
+            key_summary.p95_ms,
+        );
+    }
+
+    /// BUG-341 S8 regression gate: `graft_geometry` must reuse the **whole**
+    /// chrome box tree when two consecutive layouts see an identical document.
+    ///
+    /// This is the test whose absence let two independent defects sit in the
+    /// incremental-layout path unnoticed through slices S1-S7, while every
+    /// differential test stayed green (they assert `incremental == full`
+    /// *output*, which a graft that reuses nothing also satisfies — just
+    /// slowly). Both are described in BUG-341 "S8": `kind_layout_eq` was
+    /// missing 6 of `BoxKind`'s 20 variants (every SVG kind among them, and
+    /// chrome is built out of SVG icons), and `graft_geometry` returned before
+    /// recursing whenever one node's style differed — which the root box does
+    /// on every single cycle, because `lay_out` writes the used viewport
+    /// `height` back into it. Either one alone drove reuse to zero.
+    ///
+    /// Asserting the *count* rather than the output is the point: a reuse
+    /// regression is invisible in geometry and only shows up as wall-clock,
+    /// where machine noise (±10-15% on this project's reference machine) hides
+    /// it. Keep this test exact — "most boxes clean" is not a useful contract.
+    #[test]
+    fn graft_geometry_reuses_whole_chrome_tree_when_nothing_changed() {
+        use lumen_layout::incremental::{graft_geometry, mark_subtree_dirty, DirtyBits};
+
+        fn count(b: &lumen_layout::box_tree::LayoutBox, clean: &mut usize, total: &mut usize) {
+            *total += 1;
+            if b.dirty == DirtyBits::CLEAN {
+                *clean += 1;
+            }
+            for c in &b.children {
+                count(c, clean, total);
+            }
+        }
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        lumen_chrome::bind_model(&mut doc, &cc12_bench_model(""));
+
+        let (prev, _) =
+            lumen_layout::layout_measured_hyp_with_counters(&doc, &sheet, viewport, &measurer, &hyp, false);
+        let (mut next, _) =
+            lumen_layout::layout_measured_hyp_with_counters(&doc, &sheet, viewport, &measurer, &hyp, false);
+
+        mark_subtree_dirty(&mut next);
+        let all_clean = graft_geometry(&mut next, &prev);
+        let (mut clean, mut total) = (0usize, 0usize);
+        count(&next, &mut clean, &mut total);
+
+        assert!(total > 100, "chrome document should produce a non-trivial box tree, got {total}");
+        assert_eq!(
+            clean, total,
+            "graft_geometry reused only {clean}/{total} boxes of an unchanged chrome document —              every box must be reusable when nothing changed (BUG-341 S8). A drop here means some              `BoxKind` variant is missing from `kind_layout_eq`, or a layout pass writes a used              value back into `ComputedStyle` that the freshly-built tree cannot match.",
+        );
+        assert!(all_clean, "graft_geometry must report the whole tree clean when nothing changed");
+    }
+
+    /// BUG-341 S13 regression gate: a hover flip must not force boxes back
+    /// through layout merely because the *previous* pass wrote its own used
+    /// values into their styles.
+    ///
+    /// `prev` is a laid-out tree: `lay_out_flex` overwrites each flex item's
+    /// `width`/`height`/`box_sizing` with the resolved used value, and the
+    /// post-layout passes rewrite more. The freshly-built tree carries none of
+    /// that, so a naive style comparison called 81 of this document's 318 boxes
+    /// "changed" — every one of them differing *only* in those fields — and
+    /// dragged 41 ancestors along, because a graft reject propagates upwards.
+    /// 122 boxes re-laid-out per interaction, none of them actually changed.
+    ///
+    /// Gated on the **count**, like its S8 predecessor above and for the same
+    /// reason: geometry is identical either way, so only wall-clock would show
+    /// this, and machine noise (±10-15%) hides it. The
+    /// `reject_style_used_value_only` assert is the load-bearing one — it fails
+    /// the moment a layout pass starts writing a used value the graft cannot
+    /// account for, whatever the stylesheet happens to contain.
+    #[test]
+    fn bug341_s13_hover_flip_reuses_boxes_the_layout_pass_only_wrote_used_values_into() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        lumen_layout::incremental::set_graft_diagnostics(true);
+        // BUG-341 S18: with whole-subtree box reuse on, the graft is handed the
+        // document as one `REUSED_SUBTREE` claim and honours it without
+        // comparing a single box — correct, and exactly what S18 is for, but it
+        // would turn this census into "1 box visited, 1 reused". Turning reuse
+        // off keeps this gate measuring what it was written to measure: whether
+        // the *comparison*, when it does run, is fooled by the used values the
+        // previous layout pass wrote back into the styles.
+        let mut state = Cc12IncrementalState { box_reuse_off: true, ..Default::default() };
+        let mut last = lumen_layout::incremental::GraftStats::default();
+        for i in 0..4 {
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let _ = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            last = lumen_layout::incremental::take_graft_stats();
+        }
+        lumen_layout::incremental::set_graft_diagnostics(false);
+
+        assert!(last.visited > 100, "chrome document should produce a non-trivial box tree: {last:?}");
+        assert_eq!(
+            last.reject_style_used_value_only, 0,
+            "{} boxes were refused reuse purely because the previous layout pass wrote used \
+             values back into their styles (BUG-341 S13) — the graft must compare against the \
+             cascade result, not against the laid-out tree's polluted styles. Full census: {last:?}",
+            last.reject_style_used_value_only,
+        );
+        assert_eq!(
+            last.reused_clean, last.visited,
+            "a hover flip that changes no computed style must leave the whole chrome document \
+             reusable, got {}/{} — census: {last:?}. If chrome.html gains a rule that really does \
+             restyle on `#sidebar:hover`, this number legitimately drops: replace the equality \
+             with the count that rule accounts for, do not loosen it to a percentage.",
+            last.reused_clean,
+            last.visited,
+        );
+    }
+
+    /// BUG-341 S15 regression gate: a hover flip that re-cascades nothing must
+    /// not rebuild the box tree either.
+    ///
+    /// After S13/S14 the chrome document's dirty set on a `#sidebar`/`None`
+    /// toggle is empty and `graft_geometry` reuses all 318 boxes — yet the tree
+    /// was still built from scratch every cycle, only to be grafted straight
+    /// back onto the previous geometry (`build_box` was 2.2-2.5 ms of a
+    /// ~3.7 ms cycle, the largest item left). S4's `clean_subtrees` mechanism
+    /// existed for exactly this and had been switched off since S4's own
+    /// measurement rejected it.
+    ///
+    /// The gate is the **count**, not wall-clock: cloning versus rebuilding
+    /// produces the identical tree, so nothing but a counter can tell the two
+    /// apart, and the 15% machine noise this fixture sits in hides the whole
+    /// effect. `built` at single digits means the whole document came across in
+    /// one subtree clone; a regression (e.g. the reuse flag stops reaching the
+    /// rayon workers that build large flex containers, which is precisely what
+    /// happened before S15) sends it back into the hundreds.
+    #[test]
+    fn bug341_s15_hover_flip_reuses_the_box_tree_instead_of_rebuilding_it() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut first_full_built = 0;
+        let mut last = lumen_layout::box_tree::BoxBuildStats::default();
+        for i in 0..4 {
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let (_, bb) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            // Cycle 0 has no `prev` — it is the full-rebuild reference.
+            if i == 0 {
+                first_full_built = bb.built;
+            }
+            last = bb;
+        }
+
+        assert!(
+            first_full_built > 100,
+            "the first (full) cycle should build a non-trivial chrome tree, got {first_full_built}",
+        );
+        assert!(
+            last.reused >= 1,
+            "a hover flip nothing can react to must clone the document's box subtree from the \
+             previous cycle, got {last:?}",
+        );
+        assert!(
+            last.built < 10,
+            "{} boxes were rebuilt on a cycle whose cascade dirty set is empty (full rebuild is \
+             {first_full_built}) — the S4 `clean_subtrees` reuse is not reaching them. Census: \
+             {last:?}",
+            last.built,
+        );
+    }
+
+    /// BUG-341 S16 regression gate: a keystroke must cost the omnibox's own
+    /// chain, not the whole document's box tree.
+    ///
+    /// This is `CC12_KEY`: one typed character changes the `#omniInput`
+    /// `value` attribute and nothing else. S15 made hover frames reuse all 318
+    /// boxes, but reuse was licensed by a single document-wide
+    /// `dom_content_stable` boolean, so this cycle — the one real content
+    /// change in the fixture — still rebuilt every box, `build_box` being
+    /// 1.9-2.3 ms of a ~3.1-3.8 ms cycle. The boolean is now a per-node
+    /// `ContentDirty::Nodes` set fed by `bind_model_tracked`.
+    ///
+    /// The gate is the **count**: rebuilding and cloning produce identical
+    /// trees, so nothing but a counter distinguishes them (S8's lesson), and
+    /// the fixture's machine noise is wider than the whole effect. The
+    /// correctness side of this mechanism is gated separately and closer to the
+    /// code, in `lumen-layout`'s
+    /// `box_build_text_mutation_reuses_everything_but_the_mutated_chain` (stale
+    /// text is what an under-reporting tracker produces) and in
+    /// `lumen-chrome`'s `every_dom_mutation_in_model_rs_goes_through_a_tracked_primitive`
+    /// (which is what keeps the tracker from under-reporting in the first
+    /// place).
+    #[test]
+    fn bug341_s16_keystroke_rebuilds_only_the_omnibox_chain() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        let mut first_full_built = 0;
+        let mut last = lumen_layout::box_tree::BoxBuildStats::default();
+        for i in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let (_, bb) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut state);
+            if i == 0 {
+                first_full_built = bb.built;
+            }
+            last = bb;
+        }
+
+        assert!(
+            first_full_built > 100,
+            "the first (full) cycle should build a non-trivial chrome tree, got {first_full_built}",
+        );
+        assert!(
+            last.reused > 0,
+            "a keystroke must let the ~99% of the document it never came near be cloned from the \
+             previous cycle, got {last:?} — this is exactly what the document-wide \
+             `dom_content_stable` boolean prevented up to S15",
+        );
+        assert!(
+            last.built * 4 < first_full_built,
+            "{} of {first_full_built} boxes were rebuilt for a one-character omnibox change — \
+             the per-node content-dirty set is not narrowing anything. Census: {last:?}. If \
+             chrome.html gains a rule that genuinely restyles a large region on `#omniInput`, \
+             raise this to the count that rule accounts for; do not turn it into a percentage \
+             of whatever the code currently does.",
+            last.built,
+        );
+    }
+
+    /// BUG-341 S19 regression gate: finding the reusable subtrees must cost the
+    /// spine above them, not a walk of the whole previous tree.
+    ///
+    /// The reuse unit became a *move* in S19 (the subtrees are taken out of the
+    /// previous tree instead of deep-copied out of it — see
+    /// `lumen-layout`'s `bug341_s19_reuse_takes_the_subtree_out_of_prev_
+    /// instead_of_copying_it` for that half), and carving the index that way
+    /// stops at each reusable subtree's root instead of hashing every box the
+    /// way S4's `index_by_node` did. This is the production-document counter for
+    /// it: on a keystroke, chrome's 318 boxes are found through ~19.
+    ///
+    /// A counter, not wall-clock — an index that walks the whole tree again
+    /// produces the identical result, and 0.02 ms on this fixture is far inside
+    /// the machine noise the whole cycle sits in.
+    #[test]
+    fn bug341_s19_reuse_index_walks_the_spine_not_the_previous_tree() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        let mut first_full_built = 0;
+        let mut last = lumen_layout::box_tree::BoxBuildStats::default();
+        for i in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let (_, bb) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut state);
+            if i == 0 {
+                first_full_built = bb.built;
+            }
+            last = bb;
+        }
+
+        assert!(
+            first_full_built > 100,
+            "the first (full) cycle should build a non-trivial chrome tree, got {first_full_built}",
+        );
+        assert!(
+            last.reused >= 5,
+            "a keystroke must still take whole subtrees out of the previous tree — {last:?}",
+        );
+        assert!(
+            last.prev_index_visited < 50,
+            "{} boxes of the previous tree were walked to find {} reusable subtrees on a keystroke \
+             that rebuilds ~28 of 318 — the index is being built over the whole tree again \
+             (S4's `index_by_node`), not carved out of the spine. Census: {last:?}. If \
+             chrome.html gains structure that genuinely rebuilds a large region on every \
+             keystroke, record the count that structure accounts for; do not turn this into a \
+             percentage of whatever the code currently does.",
+            last.prev_index_visited,
+            last.reused,
+        );
+    }
+
+    /// BUG-341 S20 regression gate: a keystroke must not dispatch rayon workers
+    /// to carry out moves.
+    ///
+    /// ADR-016 M4.1 fans a flex/grid container's children onto rayon once there
+    /// are eight or more of them, sized against a full pass where each child
+    /// costs a cascade and a box build. On the incremental path since S15/S19 a
+    /// child that is in the reuse index costs a `Mutex` lock and a move, and on
+    /// a chrome interaction nearly every one of them is — so the threshold, read
+    /// off `dom_children.len()`, was dispatching a worker per subtree the pass
+    /// was about to move in O(1). Measured at ~1 ms of a 2.5 ms keystroke cycle
+    /// (BUG-341 "S20"), spread across `body`, `.main-col` and `.omnibox-wrap`,
+    /// whose own work is ~4 µs each.
+    ///
+    /// Both arms are asserted, and the full-pass one matters as much as the
+    /// incremental one: the cheapest way to make this test's headline number
+    /// pass is to stop parallelising altogether, which would cost the full pass
+    /// the parallel selector matching M4.1 exists for.
+    ///
+    /// A counter, not wall-clock: the fan-out produces the identical tree, so
+    /// every differential test in the track passes either way (S8's lesson), and
+    /// thread-pool overhead is exactly the kind of cost machine noise hides.
+    #[test]
+    fn bug341_s20_keystroke_moves_subtrees_without_dispatching_workers() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        let mut first_full = lumen_layout::box_tree::BoxBuildStats::default();
+        let mut last = lumen_layout::box_tree::BoxBuildStats::default();
+        for i in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let (_, bb) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut state);
+            if i == 0 {
+                first_full = bb;
+            }
+            last = bb;
+        }
+
+        assert!(
+            first_full.fanouts > 0,
+            "the first (full) cycle must still parallelise its large containers — M4.1's \
+             parallel selector matching is what the threshold exists for, and narrowing the \
+             *incremental* estimate must not have reached the full path. Census: {first_full:?}",
+        );
+        assert!(
+            last.reused >= 5,
+            "a keystroke must still take whole subtrees out of the previous tree, otherwise this \
+             test is asserting about a cycle that has no moves to skip dispatching for — {last:?}",
+        );
+        assert_eq!(
+            last.fanouts, 0,
+            "a keystroke dispatched {} rayon fan-out(s) while reusing {} whole subtrees — the \
+             threshold is counting children the pass will move rather than children it will \
+             build. Census: {last:?}. If chrome.html ever gains a container that genuinely \
+             rebuilds eight or more element children on a keystroke, record that container and \
+             its count here; do not relax this to `<= whatever the code currently does`.",
+            last.fanouts, last.reused,
+        );
+    }
+
+    /// BUG-341 S21 regression gate: an interaction must not re-index the sheet.
+    ///
+    /// The cascade's `CascadeIndex` — the top-level `RuleIndex` plus one per
+    /// `@layer`/`@media`/`@supports` block plus two sheet-wide predicate scans —
+    /// was keyed by the stylesheet's **address**, which the allocator hands back
+    /// the moment a sheet is freed. To keep that key honest every layout pass
+    /// dropped the cache before its first `compute_style`, and so did every
+    /// rayon worker's `StyleEnvSnapshot::install`, which reduced a cross-pass
+    /// cache to a within-pass one: the S21 census measured one rebuild per
+    /// incremental cycle (0.14-0.22 ms, 7-19% of a cycle that had got down to
+    /// 0.74-3.0 ms) and 33 per full pass across the worker pool. Keyed by
+    /// `Stylesheet::revision`, which is minted per sheet and never recycled,
+    /// nothing needs dropping.
+    ///
+    /// A counter, not wall-clock: an index rebuilt from scratch every frame
+    /// yields byte-identical styles, so no differential test in this track can
+    /// see it, and 0.2 ms is well inside machine noise.
+    ///
+    /// Both arms. The cold pass must still build one — a cache that is never
+    /// populated also never rebuilds, and would serve an empty index (i.e. no
+    /// rule matches anything, which the `dirty_roots` assertion below and every
+    /// pixel test would catch, but not this counter).
+    #[test]
+    fn bug341_s21_interaction_cycles_do_not_reindex_the_stylesheet() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        lumen_layout::style::clear_rule_idx_cache();
+        let _ = lumen_layout::style::take_cascade_index_stats();
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        typed.push('a');
+        let _ = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
+        );
+        let cold = lumen_layout::style::take_cascade_index_stats();
+        assert!(
+            cold.builds >= 1,
+            "the first pass must index the sheet — a cache that stays empty would hand every \
+             node an index that matches nothing. Census: {cold:?}",
+        );
+
+        // Both interaction shapes CC-12 measures: a keystroke (DOM mutation)
+        // and a hover flip. Neither touches the stylesheet.
+        for i in 0..4 {
+            typed.push('a');
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None,
+                &mut state,
+            );
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, hover,
+                &mut state,
+            );
+        }
+
+        let warm = lumen_layout::style::take_cascade_index_stats();
+        assert_eq!(
+            warm.builds, 0,
+            "eight interaction cycles re-indexed the stylesheet {} time(s) ({:.3} ms) without a \
+             single rule changing. The index is keyed by `Stylesheet::revision`; something is \
+             either dropping the cache on the layout path or minting a revision for a sheet that \
+             was not mutated. Census: {warm:?}",
+            warm.builds,
+            warm.build_ns as f64 / 1e6,
+        );
+    }
+
+    /// BUG-341 S24 regression gate: interaction cycles must *carry* the cascade
+    /// cache, not rebuild it — and must not sweep it either.
+    ///
+    /// A hover cycle reused all 828 of the previous pass's styles and then
+    /// inserted all 828 into a fresh map, which the pipeline cloned wholesale so
+    /// it could be the next cycle's `prev_styles`. Since S24 the map is moved
+    /// into the pass and back out of it. Nothing about the *output* changes, so
+    /// this has to be a counter gate (S8's lesson): `passes_lived` is the number
+    /// of passes that have written into the map the pipeline is holding, and a
+    /// pipeline that went back to handing each pass a fresh one would report 1
+    /// for ever while every differential test stayed green.
+    ///
+    /// Both arms, and the second is the load-bearing one. The cheapest way to
+    /// satisfy "never rebuild" is to never evict either — and an entry that
+    /// outlives the pass that wrote it breaks the property the whole reuse rule
+    /// rests on: *an entry exists iff the immediately preceding pass visited
+    /// that node*. Absence is what forces a recompute for a node that was
+    /// detached and re-attached, or moved to a new parent, whose style was
+    /// computed under a different inherited chain. So the gate also asserts that
+    /// the steady state never sweeps (the sweep is O(document) — putting it back
+    /// on every pass would undo the slice while keeping every test green) and
+    /// that a pass which really does drop nodes evicts exactly them.
+    #[test]
+    fn bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_it() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        // Cold pass: a full cascade, which legitimately builds its map from
+        // scratch and has lived through no incremental pass at all.
+        let _ = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
+        );
+        assert_eq!(
+            state.prev_cascade_styles.passes_lived(),
+            0,
+            "the first pass is a full cascade — it has no cache to carry",
+        );
+        let cold_len = state.prev_cascade_styles.len();
+        assert!(cold_len > 100, "chrome must cascade a non-trivial node count, got {cold_len}");
+
+        // Eight interaction cycles of both shapes CC-12 measures: a keystroke
+        // (DOM mutation) and a hover flip. Neither adds or removes a node.
+        for i in 0..4 {
+            typed.push('a');
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None,
+                &mut state,
+            );
+            assert!(
+                !state.prev_cascade_styles.swept_last_pass(),
+                "keystroke cycle {i} swept the cascade cache — a full scan of {} entries for a \
+                 pass that removed nothing puts back exactly the per-pass O(document) work this \
+                 slice removed. Either `visited` is not counting one visit per element, or the \
+                 flat tree really does reach a node twice (then this gate needs the count, not a \
+                 flat `false`).",
+                state.prev_cascade_styles.len(),
+            );
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, hover,
+                &mut state,
+            );
+            assert!(
+                !state.prev_cascade_styles.swept_last_pass(),
+                "hover cycle {i} swept the cascade cache — see the keystroke assertion above",
+            );
+        }
+        assert_eq!(
+            state.prev_cascade_styles.passes_lived(),
+            4,
+            "the interaction cycles that really cascade must have written into one and the same \
+             map. A lower number means some pass handed the pipeline a freshly built map instead \
+             of the one it was given — byte-identical styles at the cost S24 removed. Four and \
+             not eight since BUG-341 S26: the four hover cycles present an empty delta, and a \
+             pass that skips its walk deliberately leaves the ordinal alone — it visited nobody, \
+             so 'the immediately preceding pass to visit this node' is still the keystroke \
+             before it, which is exactly what keeps the entries reusable. \
+             `bug341_s26_hover_cycles_do_not_re_walk_the_cascade` gates that half.",
+        );
+        assert_eq!(
+            state.prev_cascade_styles.len(),
+            cold_len,
+            "no cycle added or removed a node, so the carried map must still hold exactly the \
+             elements the cold pass cascaded",
+        );
+
+        // Arm two: a cycle that really does drop nodes must evict them. The
+        // sidebar's tab list is rebuilt from the model, so a shorter model
+        // detaches rows — their entries must not survive into the next pass.
+        let before_removal = state.prev_cascade_styles.len();
+        let _ = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_shrunk_model(&typed), viewport, &measurer, &hyp, None,
+            &mut state,
+        );
+        assert!(
+            state.prev_cascade_styles.swept_last_pass(),
+            "a cycle that detached rows left the cache un-swept: every detached node's entry is \
+             still there, and a node re-attached under a different parent would reuse a style \
+             cascaded under the old inherited chain",
+        );
+        assert!(
+            state.prev_cascade_styles.len() < before_removal,
+            "the sweep kept all {before_removal} entries although the model lost rows",
+        );
+        for (nid, _) in state.prev_cascade_styles.iter() {
+            assert!(
+                doc.get(*nid).parent.is_some() || *nid == doc.root(),
+                "the carried cache still holds {nid:?}, which is detached from the document",
+            );
+        }
+    }
+
+    /// BUG-341 S27 regression gate: a cycle whose delta names one node must
+    /// walk that node's chain, not the document.
+    ///
+    /// S26 removed the traversal for the cycle whose delta names *nobody*, and
+    /// left the general case open: a keystroke names one dirty root and one
+    /// content-mutated node, yet the walk still entered all 1 740 nodes of the
+    /// chrome document to re-cascade one of them. Everything it did to the
+    /// other 1 739 was a restatement of its input — reuse the carried style,
+    /// report clean, record a `clean_subtrees` entry — all of which the delta
+    /// already implies for any subtree holding neither of those two nodes.
+    ///
+    /// A counter gate, not wall-clock and not differential, for the S8 reason:
+    /// walking the whole document produces byte-identical output, so only a
+    /// count separates the two shapes.
+    ///
+    /// Four arms, and the last three are the load-bearing ones:
+    ///
+    /// * the cold pass must still walk everything,
+    /// * the keystroke must still re-cascade the node it changed — driving the
+    ///   visit count to zero by never cascading passes arm two and renders a
+    ///   stale document,
+    /// * every element inside a skipped subtree must be found in the carried
+    ///   cache (`confirm_misses`); a miss means the spine under-approximated
+    ///   the delta and a node was left with no style at all,
+    /// * the cache must survive the skipping: the S24 ordinal contract is "an
+    ///   entry exists iff the immediately preceding pass visited that node", so
+    ///   a skip that walks away without restamping gets its whole subtree swept
+    ///   at `finish_pass` and re-cascaded next cycle — same output, one
+    ///   document-sized recompute per interaction.
+    #[test]
+    fn bug341_s27_a_keystroke_walks_its_own_chain_not_the_document() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        // Cold pass — a full cascade, which must walk the whole document.
+        let _ = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
+        );
+        let cold = lumen_layout::counters::take_cascade_stats();
+        assert!(
+            cold.visited > 1000,
+            "the cold pass must walk the whole chrome document, got visited={}",
+            cold.visited,
+        );
+        let elements = state.prev_cascade_styles.len();
+
+        for i in 0..4 {
+            typed.push('a');
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None,
+                &mut state,
+            );
+            let key = lumen_layout::counters::take_cascade_stats();
+
+            assert!(
+                key.visited * 4 < cold.visited,
+                "keystroke cycle {i} entered {} of the document's {} nodes. Its delta names one \
+                 dirty root and one content-mutated node, so nothing outside their ancestor \
+                 chains can be reached — every other node was entered only to hand back what the \
+                 delta already said about it.",
+                key.visited,
+                cold.visited,
+            );
+            assert!(
+                key.skipped_subtrees > 0,
+                "keystroke cycle {i} skipped no subtree at all — the spine was built and never \
+                 consulted",
+            );
+            assert!(
+                key.recomputed > 0,
+                "keystroke cycle {i} re-cascaded nothing (visited={}). The omnibox's own `value` \
+                 attribute changed, so a node really does need re-cascading; zeroing the visit \
+                 counter by never cascading passes the arm above and renders a stale document.",
+                key.visited,
+            );
+            assert_eq!(
+                key.confirm_misses, 0,
+                "keystroke cycle {i}: {} element(s) inside a skipped subtree had no entry in the \
+                 carried cache. The skip rests on the claim that the previous pass cascaded every \
+                 one of them — a miss means a node was left with no style, which is a rebuilt box \
+                 at best and a wrong inherited chain at worst.",
+                key.confirm_misses,
+            );
+            assert!(
+                !state.prev_cascade_styles.swept_last_pass(),
+                "keystroke cycle {i} swept the cache although no node left the document. A \
+                 skipped subtree still owes the S24 pass ordinal; skipping without restamping \
+                 makes `finish_pass` read the whole subtree as gone, and the next cycle \
+                 re-cascades it — identical output, one document-sized recompute per keystroke.",
+            );
+            assert_eq!(
+                state.prev_cascade_styles.len(),
+                elements,
+                "keystroke cycle {i} left the carried cache holding {} entries instead of the \
+                 {elements} elements the cold pass cascaded",
+                state.prev_cascade_styles.len(),
+            );
+        }
+    }
+
+    /// BUG-341 S26 regression gate: an interaction cycle whose delta says
+    /// nothing changed must not walk the document to find that out.
+    ///
+    /// The census that opened this slice split the incremental pass by stage for
+    /// the first time and found the cascade *traversal* — not `compute_style`,
+    /// which by then ran once per keystroke and never on a hover — to be 50-75 %
+    /// of the whole pass on both CC-12 scenarios. On a hover flip, S14 had
+    /// already emptied the root set and S16 reported no content mutation, so the
+    /// walk entered all 1 740 nodes of the chrome document, reused all 828
+    /// styles, declared all 828 elements clean, and handed back the map it was
+    /// given. Every one of those answers was already in the delta.
+    ///
+    /// A counter, not wall-clock, for the usual reason (the S8 lesson): a walk
+    /// that reuses everything produces byte-identical output, so no differential
+    /// test in this track can tell it from not walking at all.
+    ///
+    /// Both arms, and the second is load-bearing: the cheapest way to drive the
+    /// visit count to zero is to stop cascading altogether, which arm one alone
+    /// would happily accept.
+    #[test]
+    fn bug341_s26_hover_cycles_do_not_re_walk_the_cascade() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        // Cold pass — a full cascade, which must walk everything.
+        let _ = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
+        );
+        let cold = lumen_layout::counters::take_cascade_stats();
+        assert!(
+            cold.visited > 100,
+            "the cold pass must walk the whole document, got visited={}",
+            cold.visited,
+        );
+
+        for i in 0..4 {
+            // Arm 2 — a keystroke really mutates the omnibox, so the cascade
+            // stage must still run.
+            typed.push('a');
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None,
+                &mut state,
+            );
+            let key = lumen_layout::counters::take_cascade_stats();
+            assert!(
+                key.visited > 0 && key.recomputed > 0,
+                "keystroke cycle {i} skipped the cascade entirely (visited={} recomputed={}) — \
+                 the omnibox's own value attribute changed, so a node really does need \
+                 re-cascading. Zeroing the visit counter by never cascading passes arm one and \
+                 renders a stale document.",
+                key.visited,
+                key.recomputed,
+            );
+
+            // Arm 1 — a hover flip on the sidebar: S14 leaves the root set
+            // empty and the model is unchanged, so the delta states outright
+            // that nothing changed.
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, hover,
+                &mut state,
+            );
+            let hov = lumen_layout::counters::take_cascade_stats();
+            assert_eq!(
+                hov.visited, 0,
+                "hover cycle {i} walked {} node(s) although its delta named no dirty root and no \
+                 content mutation. Every element would take the reuse branch and every node \
+                 report itself clean — the stage's whole output on such a cycle is a restatement \
+                 of its input, and it was the largest single item in the pass.",
+                hov.visited,
+            );
+        }
+    }
+
+    /// BUG-341 S25 regression gate: the box-build stage must read a child's
+    /// `display` off the cascade cache, not cascade the child again.
+    ///
+    /// Deciding which formatting context a child joins asked `compute_style`
+    /// up to three times per element child — `is_inline_content`,
+    /// `is_inline_block` and the `display:none` re-probe inside the
+    /// inline-collect loop each ran a full cascade. `precompute_counters` had
+    /// already cascaded every one of those nodes against the same parent style,
+    /// and `build_box_inner` builds the child's box out of *that* entry
+    /// whatever the probe answers, so the probes were pure re-derivation: 14
+    /// per keystroke cycle and 2 per hover cycle, 0.21-0.25 ms of a 0.63 ms
+    /// keystroke and 0.07-0.08 ms of a 0.29 ms hover. Two of chrome's most
+    /// expensive cascades sat in that count — `<html>`, which carries the
+    /// whole design system's custom properties, was re-cascaded on every hover
+    /// frame purely to be told it is not inline.
+    ///
+    /// A counter, not wall-clock: the answer is identical either way, so no
+    /// differential test in this track can see it (the S8 lesson).
+    ///
+    /// Both arms, and the second is load-bearing: the cheapest way to drive
+    /// "cascades" to zero is to stop asking about `display` at all, which puts
+    /// every child in the wrong formatting context — a wrong tree, not a slow
+    /// frame. `display_probes` is the count of questions asked, and it must
+    /// stay above zero. What the answers must *be* is gated in `lumen-layout`
+    /// (`bug341_s25_display_probes_read_the_cascade_instead_of_re_running_it`),
+    /// on a fixture that exercises all three probes at once.
+    #[test]
+    fn bug341_s25_the_box_build_stage_reads_display_off_the_cascade_cache() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        // Cold pass: a full cascade populates the cache for the whole document,
+        // so even here no probe has an excuse to run one of its own.
+        let (_, cold) = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
+        );
+        assert!(
+            cold.display_probes > 0,
+            "the full pass must still ask which formatting context each element child joins. \
+             Census: {cold:?}",
+        );
+        assert_eq!(
+            cold.display_probe_cascades, 0,
+            "the full pass re-cascaded {} node(s) only to read their `display`, although \
+             `precompute_counters` had just cascaded every one of them. Census: {cold:?}",
+            cold.display_probe_cascades,
+        );
+
+        // Both interaction shapes CC-12 measures: a keystroke (DOM mutation)
+        // and a hover flip.
+        for i in 0..4 {
+            typed.push('a');
+            let (_, key) = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None,
+                &mut state,
+            );
+            assert_eq!(
+                key.display_probe_cascades, 0,
+                "keystroke cycle {i} re-cascaded {} node(s) to read their `display`. The \
+                 incremental pass carries the cascade cache (S24), so every element the box \
+                 build walks has an entry in it; a non-zero count means either the probe stopped \
+                 consulting the cache or the carried map lost entries the pass still needs. \
+                 Census: {key:?}",
+                key.display_probe_cascades,
+            );
+            assert!(key.display_probes > 0, "cycle {i} asked nothing. Census: {key:?}");
+
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let (_, hov) = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, hover,
+                &mut state,
+            );
+            assert_eq!(
+                hov.display_probe_cascades, 0,
+                "hover cycle {i} — see the keystroke assertion above. Census: {hov:?}",
+            );
+            assert!(hov.display_probes > 0, "hover cycle {i} asked nothing. Census: {hov:?}");
+        }
+    }
+
+    /// BUG-341 S14 regression gate: a hover flip no rule in the sheet can
+    /// react to must re-cascade nothing at all.
+    ///
+    /// This is CC-12's own `#sidebar`/`None` toggle — the shape S3 documented
+    /// as its worst case and every slice since then worked around. `:hover`
+    /// genuinely does flip on every ancestor of `#sidebar` up to the document
+    /// root (CSS Selectors L4 §4.3), so the pre-S14 root-set contained the root
+    /// and forced a whole-document re-cascade — 6.8-8.4 ms of a ~12 ms cycle,
+    /// producing byte-identical styles for all 318 boxes (S13's census proved
+    /// the "identical" half).
+    ///
+    /// Two asserts, in this order on purpose. The first is the *ground truth*:
+    /// the two cascades really are equal, independently of any narrowing code.
+    /// The second is the **count gate** — the root-set is empty — which is the
+    /// only thing that can fail if the narrowing silently stops narrowing: a
+    /// mechanism that reuses nothing still reproduces the full cascade exactly
+    /// (S8's lesson), just slowly. If `chrome.html` ever gains a rule that
+    /// really does restyle on `#sidebar:hover` or on one of its ancestors, both
+    /// asserts flip together and the fix is to point this test at a different
+    /// node, not to loosen it.
+    #[test]
+    fn bug341_s14_hover_flip_no_rule_can_react_to_recascades_nothing() {
+        use lumen_layout::counters::{
+            incremental_precompute_counters, precompute_counters, set_incremental_restyle, RestyleDelta,
+        };
+        use lumen_layout::style::{restyle_root_set_for_state_change, restyle_state_index};
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        lumen_chrome::bind_model(&mut doc, &cc12_bench_model(""));
+        let viewport = Size::new(1280.0, 800.0);
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let sidebar = doc
+            .find_by_id(lumen_chrome::ids::SIDEBAR)
+            .expect("chrome preview must have #sidebar");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(
+            !index.is_conservative(),
+            "chrome.html has no dynamic `:has()` and the chrome document has no shadow roots — \
+             if either changes, the per-node narrowing turns itself off and CC-12's hover cycle \
+             silently returns to a whole-document re-cascade",
+        );
+        assert!(
+            index.state_compound_count() > 10,
+            "chrome.html has dozens of `:hover` rules; scanning found only {} — the narrowing \
+             would be trivially (and uselessly) correct on an empty compound list",
+            index.state_compound_count(),
+        );
+
+        // Ground truth, computed without any incremental machinery: nothing
+        // hovered vs `#sidebar` hovered produce the same cascade.
+        lumen_layout::set_interactive_state(None, None, None);
+        let none_map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        lumen_layout::set_interactive_state(Some(sidebar), None, None);
+        let hovered_map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        lumen_layout::clear_interactive_state();
+        assert!(none_map.styles().len() > 100, "chrome document should cascade a non-trivial node count");
+        assert_eq!(
+            none_map.styles(),
+            hovered_map.styles(),
+            "no rule in chrome.html reacts to hovering #sidebar, so both full cascades must agree",
+        );
+
+        // The count gate: the narrowed root-set for that transition is empty.
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(sidebar), &index);
+        assert!(
+            dirty_roots.is_empty(),
+            "hovering #sidebar flips `:hover` on {} node(s) the restyle root-set still keeps, but \
+             no selector in chrome.html can observe any of them (asserted above) — BUG-341 S14",
+            dirty_roots.len(),
+        );
+
+        // And the incremental cascade run under that empty root-set still
+        // reproduces the full post-transition cascade bit-for-bit.
+        lumen_layout::set_interactive_state(Some(sidebar), None, None);
+        let delta = RestyleDelta {
+            prev_styles: none_map.styles().clone(),
+            dirty_roots,
+            content_dirty: lumen_layout::counters::ContentDirty::Nothing,
+        };
+        set_incremental_restyle(true);
+        let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);
+        set_incremental_restyle(false);
+        lumen_layout::clear_interactive_state();
+        assert_eq!(
+            incr.styles(),
+            hovered_map.styles(),
+            "incremental cascade with an empty root-set must equal the full post-transition cascade",
+        );
+    }
+
+
+    /// BUG-341 S17 regression gate: a keystroke must re-cascade the omnibox
+    /// input, not the omnibox.
+    ///
+    /// This is the S14 argument applied to DOM mutations. Typing one character
+    /// writes `#omniInput`'s `value` attribute; the pre-S17 root-set answered
+    /// that by invalidating the *parent's* whole subtree, because a sibling
+    /// combinator (`X + Y`) is the one shape that reaches outside the changed
+    /// node's own subtree. The census (`bug341_s17_keystroke_restyle_census`)
+    /// found that cost 12 re-cascaded elements, all 12 producing a
+    /// byte-identical `ComputedStyle`, and each losing its box on the way
+    /// (`must_recompute` ⇒ not in `clean_subtrees`).
+    ///
+    /// Three asserts, in this order on purpose. First the *ground truth*,
+    /// computed with no incremental machinery at all: the two full cascades
+    /// really are equal, so nothing in `chrome.html` reacts to the `value`
+    /// write. Then the **count gate** — the root-set is `{#omniInput}` and the
+    /// cascade recomputes exactly one element — which is the only thing that
+    /// can fail silently: a mechanism that narrows nothing still reproduces the
+    /// full cascade (S8's lesson), just slowly. Last, that the incremental
+    /// cascade run under the narrowed root-set equals the full one.
+    ///
+    /// If `chrome.html` ever gains a sibling rule that can match `#omniInput`,
+    /// the count assert flips and the honest fix is to record the number that
+    /// rule accounts for — not to loosen this into a percentage.
+    #[test]
+    fn bug341_s17_keystroke_recascades_the_input_not_the_omnibox() {
+        use lumen_layout::counters::{
+            incremental_precompute_counters, precompute_counters, set_incremental_restyle,
+            take_cascade_stats, RestyleDelta,
+        };
+        use lumen_layout::style::{restyle_node_index, restyle_root_set_for_node_change};
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let viewport = Size::new(1280.0, 800.0);
+        lumen_chrome::bind_model(&mut doc, &cc12_bench_model("a"));
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let omni = doc
+            .find_by_id(lumen_chrome::ids::OMNI_INPUT)
+            .expect("chrome preview must have #omniInput");
+        let omnibox = doc.get(omni).parent.expect("#omniInput must have a parent");
+
+        // Ground truth: cascade before and after one more typed character.
+        let before = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        let touched = lumen_chrome::bind_model_tracked(&mut doc, &cc12_bench_model("ab"));
+        let after = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        assert!(before.styles().len() > 100, "chrome document should cascade a non-trivial node count");
+        assert_eq!(
+            before.styles(),
+            after.styles(),
+            "no rule in chrome.html reacts to `#omniInput`'s `value`, so both full cascades must agree",
+        );
+
+        // The mutation report itself: exactly one node, exactly one attribute.
+        assert_eq!(
+            touched.selector.keys().copied().collect::<std::collections::HashSet<_>>(),
+            [omni].into_iter().collect::<std::collections::HashSet<_>>(),
+            "typing must report only #omniInput as selector-touched: {touched:?}",
+        );
+        assert_eq!(
+            touched.selector[&omni].attrs.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["value"],
+            "typing writes exactly the `value` attribute",
+        );
+
+        // The count gate: the narrowed root-set is the input itself, not the
+        // `.omnibox` wrapper whose 12-element subtree used to re-cascade.
+        let node_index = restyle_node_index(&doc, &sheet);
+        assert!(
+            !node_index.is_conservative(),
+            "chrome.html has no `:has()`/`:nth-child(of …)` and the chrome document has no shadow \
+             roots — if any of that changes, the per-node narrowing turns itself off and CC-12's \
+             keystroke cycle silently returns to re-cascading the whole `.omnibox`",
+        );
+        let dirty_roots =
+            restyle_root_set_for_node_change(&doc, chrome_node_changes(&touched), &node_index);
+        assert_eq!(
+            dirty_roots,
+            [omni].into_iter().collect::<std::collections::HashSet<_>>(),
+            "a `value` write must invalidate #omniInput alone; {:?} would be the pre-S17 \
+             widen-to-parent answer",
+            [omnibox],
+        );
+
+        let _ = take_cascade_stats();
+        let delta = RestyleDelta {
+            prev_styles: before.styles().clone(),
+            dirty_roots,
+            content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+        };
+        set_incremental_restyle(true);
+        let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);
+        set_incremental_restyle(false);
+        let stats = take_cascade_stats();
+        assert_eq!(
+            stats.recomputed, 1,
+            "exactly one element (#omniInput) may re-run `compute_style` for a one-character \
+             omnibox change; got {stats:?}",
+        );
+        assert_eq!(
+            incr.styles(),
+            after.styles(),
+            "the incremental cascade under the narrowed root-set must equal the full one",
+        );
+    }
+
+    /// BUG-341 S13 diagnostic: census of *why* `graft_geometry` refuses boxes
+    /// on the two CC-12 interaction shapes.
+    ///
+    /// S12's detail scopes established that a hover flip touching one subtree
+    /// still re-lays-out ~1700 of ~3100 boxes, and that both `build_box` and
+    /// `lay_out` are close to linear in that number — but not whether those
+    /// boxes genuinely changed. This prints the partition
+    /// (`reused_clean` / identity / style / child-count / descendant) plus the
+    /// share of style rejects that vanish once the used-value writeback fields
+    /// are discounted. Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s13_graft_reject_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S13) — see doc comment for run command"]
+    fn bug341_s13_graft_reject_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+        let tabs_container = doc
+            .find_by_id(lumen_chrome::ids::SB_TABS)
+            .expect("chrome preview must have #sbTabs");
+        let tab_rows = doc.get(tabs_container).children.clone();
+        let (tab_a, tab_b) = (Some(tab_rows[0]), Some(tab_rows[1]));
+
+        lumen_layout::incremental::set_graft_diagnostics(true);
+
+        for (label, targets) in [
+            ("CC12_HOVER(sidebar/none)", [sidebar, None]),
+            ("SIBLING_HOVER(tabA/tabB)", [tab_a, tab_b]),
+        ] {
+            // Reuse off for the same reason as the S13 gate above: this census
+            // is about the per-box comparison, which S18's O(1) reuse claim
+            // (rightly) skips in production.
+            let mut state = Cc12IncrementalState { box_reuse_off: true, ..Default::default() };
+            for i in 0..6 {
+                let _ = cc12_bench_cycle(
+                    &mut doc,
+                    &sheet,
+                    &model,
+                    viewport,
+                    &measurer,
+                    &hyp,
+                    targets[i % 2],
+                    &mut state,
+                );
+                let s = lumen_layout::incremental::take_graft_stats();
+                if i >= 2 {
+                    eprintln!(
+                        "[s13-census] {label} cycle={i} visited={} clean={} \
+                         rej_identity={} rej_style={} (used_value_only={}, no_cascade={}, \
+                         cascade_differs={}) rej_child_count={} rej_descendant={}",
+                        s.visited,
+                        s.reused_clean,
+                        s.reject_identity,
+                        s.reject_style,
+                        s.reject_style_used_value_only,
+                        s.reject_style_no_cascade_entry,
+                        s.reject_style_cascade_differs,
+                        s.reject_child_count,
+                        s.reject_descendant,
+                    );
+                }
+            }
+        }
+        lumen_layout::incremental::set_graft_diagnostics(false);
+    }
+
+    /// Short human-readable identification of a DOM node, for the census
+    /// diagnostics below (`div#omniInput.foo`, `text"abc"`).
+    fn census_describe(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> String {
+        match &doc.get(id).data {
+            lumen_dom::NodeData::Element { name, attrs } => {
+                let mut s = name.local.to_string();
+                for a in attrs {
+                    match a.name.local.as_str() {
+                        "id" => s.push_str(&format!("#{}", a.value)),
+                        "class" => {
+                            for c in a.value.split_whitespace() {
+                                s.push_str(&format!(".{c}"));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                s
+            }
+            lumen_dom::NodeData::Text(t) => {
+                format!("text{:?}", t.chars().take(20).collect::<String>())
+            }
+            other => format!("{other:?}").chars().take(24).collect(),
+        }
+    }
+
+    /// BUG-341 S17 diagnostic: census of *why* a keystroke re-cascades and
+    /// rebuilds what it does.
+    ///
+    /// S16 left `build_box` as the largest stage on `CC12_KEY` with the census
+    /// "38 boxes built for one typed character, against 3 on a hover frame".
+    /// That number is downstream of the cascade: every re-cascaded node loses
+    /// its box (`must_recompute` ⇒ not in `clean_subtrees`). This prints, for
+    /// the keystroke cycle, the mutation the tracker reported, the restyle
+    /// root-set derived from it, how many nodes that root-set re-cascaded, and
+    /// — the load-bearing column — how many of those re-cascaded nodes ended up
+    /// with a **different** `ComputedStyle` than the one they already had.
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s17_keystroke_restyle_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S17) — see doc comment for run command"]
+    fn bug341_s17_keystroke_restyle_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        for i in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+            lumen_layout::set_interactive_state(None, None, None);
+
+            let (layout, counters) = match state.prev_pristine_layout.take() {
+                Some(prev) => {
+                    let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                    let dirty_roots = lumen_layout::style::restyle_root_set_for_node_change(
+                        &doc,
+                        chrome_node_changes(&touched),
+                        &node_index,
+                    );
+                    if i == 3 {
+                        for (n, t) in &touched.selector {
+                            eprintln!(
+                                "[s17-census] selector-touched: {} attrs={:?} structural={}",
+                                census_describe(&doc, *n),
+                                t.attrs,
+                                t.structural,
+                            );
+                        }
+                        for n in &touched.content {
+                            eprintln!("[s17-census] content-touched:  {}", census_describe(&doc, *n));
+                        }
+                        for n in &dirty_roots {
+                            eprintln!(
+                                "[s17-census] dirty root: {} (subtree {} elements)",
+                                census_describe(&doc, *n),
+                                census_subtree_elements(&doc, *n),
+                            );
+                        }
+                        // The chain that cannot be cloned: every ancestor of a
+                        // content-dirty node is itself rebuilt, and each rebuild
+                        // costs its own box plus one `build_box_or_reuse` call
+                        // per child. This is what `boxes_built` is made of once
+                        // the cascade root-set is down to one node.
+                        let mut chain = Vec::new();
+                        let mut cur = touched.content.iter().copied().next();
+                        while let Some(n) = cur {
+                            chain.push(n);
+                            cur = doc.get(n).parent;
+                        }
+                        for n in chain.iter().rev() {
+                            eprintln!(
+                                "[s17-census] rebuilt chain: {} ({} children)",
+                                census_describe(&doc, *n),
+                                doc.get(*n).children.len(),
+                            );
+                        }
+                    }
+                    let delta = lumen_layout::counters::RestyleDelta {
+                        prev_styles: std::mem::take(&mut state.prev_cascade_styles),
+                        dirty_roots,
+                        content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                    };
+                    lumen_layout::counters::set_incremental_restyle(true);
+                    lumen_layout::box_tree::set_incremental_box_build(true);
+                    let _ = lumen_layout::counters::take_cascade_stats();
+                    let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
+                    );
+                    lumen_layout::box_tree::set_incremental_box_build(false);
+                    lumen_layout::counters::set_incremental_restyle(false);
+                    result
+                }
+                None => lumen_layout::layout_measured_hyp_with_counters(
+                    &doc, &sheet, viewport, &measurer, &hyp, false,
+                ),
+            };
+            let cs = lumen_layout::counters::take_cascade_stats();
+            let bb = lumen_layout::box_tree::take_box_build_stats();
+
+            // Ground truth: of the nodes that re-cascaded, how many actually
+            // ended up with a different `ComputedStyle`?
+            //
+            // BUG-341 S24: read off the displaced-entry record rather than by
+            // diffing this pass's map against the previous one — the two are
+            // now the same map, and `replaced_styles` holds exactly the
+            // "recomputed, and here is what it had before" pairs this census
+            // used to reconstruct. Nodes with no previous entry (freshly
+            // inserted) are absent from both, as before.
+            let mut changed = Vec::new();
+            let mut identical = Vec::new();
+            for (nid, prev) in counters.replaced_styles() {
+                let style = &counters.styles()[nid];
+                if **prev == **style {
+                    identical.push(*nid);
+                } else {
+                    changed.push(*nid);
+                }
+            }
+            if i == 3 {
+                for n in &changed {
+                    eprintln!("[s17-census] style REALLY changed: {}", census_describe(&doc, *n));
+                }
+                eprintln!(
+                    "[s17-census] recascaded-but-identical: {}",
+                    identical
+                        .iter()
+                        .map(|n| census_describe(&doc, *n))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+            }
+            eprintln!(
+                "[s17-census] cycle={i} cascade_recomputed={} cascade_reused={} \
+                 really_changed={} recascaded_identical={} boxes_built={} boxes_reused={}",
+                cs.recomputed,
+                cs.reused,
+                changed.len(),
+                identical.len(),
+                bb.built,
+                bb.reused,
+            );
+
+            state.prev_pristine_layout = Some(layout.clone());
+            state.prev_cascade_styles = counters.into_styles();
+            lumen_layout::clear_interactive_state();
+        }
+    }
+
+    /// BUG-341 S18 regression gate: a subtree the box-build stage cloned out of
+    /// the previous tree must not be walked again by the two stages that follow.
+    ///
+    /// S15 made a hover frame clone the whole chrome document in one
+    /// `build_box_or_reuse` call, and S16 made a keystroke clone all of it but
+    /// the omnibox chain. Both then handed the copy to `mark_subtree_dirty`,
+    /// which marked all 318 boxes dirty, and to `graft_geometry`, which compared
+    /// each of them against the very box it had just been copied from and
+    /// cleared the bit again — two full walks per frame to re-derive a fact the
+    /// box-build stage already knew (`graft_geometry` was 0.4-1.0 ms of a ~2.6 ms
+    /// keystroke cycle).
+    ///
+    /// The gate is the **count**: honouring the claim in O(1) and re-deriving it
+    /// in O(n) produce the identical tree, so only a counter can tell them apart
+    /// (S8's lesson), and this fixture's machine noise is wider than the whole
+    /// effect. `visited` is the number of boxes the graft really compared; it
+    /// must collapse to the chain the keystroke rebuilt, not the document.
+    /// Correctness — that the skipped subtrees really are identical, and that a
+    /// skipped claim never reaches `lay_out` looking clean when it should not —
+    /// is gated separately in `lumen-layout`'s
+    /// `mutation_incremental_restyle_*_matches_full` differential tests, which
+    /// compare geometry against a full pass.
+    #[test]
+    fn bug341_s18_reused_subtrees_are_not_re_walked_by_the_graft() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut last = lumen_layout::incremental::GraftStats::default();
+        for i in 0..4 {
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let model = cc12_bench_model("");
+            let _ = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            last = lumen_layout::incremental::take_graft_stats();
+        }
+        assert_eq!(
+            last.reused_wholesale, 1,
+            "a hover flip nothing can react to must reach the graft as a single whole-document \
+             reuse claim, got {last:?}",
+        );
+        // Four: the three boxes S15's gate records as still built on this flip,
+        // plus the one claim that stands for the other 314.
+        assert!(
+            last.visited <= 5,
+            "{} boxes were compared against their own copies on a hover flip whose box tree came \
+             wholesale out of the previous cycle — before S18 this was the whole 318-box \
+             document, and it must now be only the handful the box-build stage really rebuilt. \
+             Census: {last:?}",
+            last.visited,
+        );
+
+        // The keystroke shape: the omnibox chain is rebuilt, everything else is
+        // claimed. The graft must visit the chain only.
+        let mut key_state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        let mut key_last = lumen_layout::incremental::GraftStats::default();
+        for _ in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let _ =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut key_state);
+            key_last = lumen_layout::incremental::take_graft_stats();
+        }
+        assert!(
+            key_last.reused_wholesale >= 5,
+            "the boxes a keystroke never came near must reach the graft as reuse claims, got \
+             {key_last:?}",
+        );
+        assert!(
+            key_last.visited < 100,
+            "{} boxes were compared on a keystroke cycle that rebuilds ~28 of 318 — the graft is \
+             still walking subtrees the box-build stage copied verbatim. Census: {key_last:?}. If \
+             chrome.html gains structure that genuinely rebuilds a large region on every \
+             keystroke, record the count that structure accounts for; do not turn this into a \
+             percentage of whatever the code currently does.",
+            key_last.visited,
+        );
+    }
+
+    /// BUG-341 S18 diagnostic: census of *what* the 28 boxes a keystroke
+    /// rebuilds actually are.
+    ///
+    /// S17 drove the cascade down to a single recomputed element, yet the box
+    /// tree still rebuilds ~28 boxes — so the residual is no longer about which
+    /// nodes are invalidated but about the **unit of reuse**. `clean_subtrees`
+    /// licenses cloning a whole element subtree, and a subtree containing one
+    /// content-dirty node is not clonable, so every ancestor of `#omniInput`
+    /// rebuilds — and each rebuild re-walks all of its own children.
+    ///
+    /// This prints the built list itself (per-node, classified) plus the
+    /// per-ancestor breakdown: how many child slots each rebuilt ancestor has,
+    /// how many of them came across as whole-subtree clones, and how many were
+    /// rebuilt for want of a finer-grained unit. Run: `cargo test -p lumen-shell
+    /// --profile dev-release bug341_s18_keystroke_box_build_census --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S18) — see doc comment for run command"]
+    fn bug341_s18_keystroke_box_build_census() {
+        use std::collections::HashSet;
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        for i in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+            lumen_layout::set_interactive_state(None, None, None);
+            let last = i == 3;
+
+            lumen_layout::box_tree::set_box_build_diagnostics(last);
+            let _ = lumen_layout::counters::take_cascade_stats();
+            let _ = lumen_layout::style::take_compute_style_calls();
+            let (layout, counters) = match state.prev_pristine_layout.take() {
+                Some(prev) => {
+                    let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                    let dirty_roots = lumen_layout::style::restyle_root_set_for_node_change(
+                        &doc,
+                        chrome_node_changes(&touched),
+                        &node_index,
+                    );
+                    let delta = lumen_layout::counters::RestyleDelta {
+                        prev_styles: std::mem::take(&mut state.prev_cascade_styles),
+                        dirty_roots,
+                        content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                    };
+                    lumen_layout::counters::set_incremental_restyle(true);
+                    lumen_layout::box_tree::set_incremental_box_build(true);
+                    let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
+                    );
+                    lumen_layout::box_tree::set_incremental_box_build(false);
+                    lumen_layout::counters::set_incremental_restyle(false);
+                    result
+                }
+                None => lumen_layout::layout_measured_hyp_with_counters(
+                    &doc, &sheet, viewport, &measurer, &hyp, false,
+                ),
+            };
+            let built = lumen_layout::box_tree::take_box_build_log();
+            lumen_layout::box_tree::set_box_build_diagnostics(false);
+            let bb = lumen_layout::box_tree::take_box_build_stats();
+            let cs = lumen_layout::counters::take_cascade_stats();
+            let full_cascades = lumen_layout::style::take_compute_style_calls();
+            let copy = lumen_layout::box_tree::take_box_copy_stats();
+            eprintln!(
+                "[s18-census] cycle={i} cascade_recomputed={} cascade_reused={} \
+                 boxes_built={} boxes_reused={} compute_style_calls={full_cascades} \
+                 subtree_reuse={:.3}ms over {} boxes; prev_index={:.3}ms over {} boxes",
+                cs.recomputed,
+                cs.reused,
+                bb.built,
+                bb.reused,
+                copy.reuse_ns as f64 / 1e6,
+                copy.reuse_boxes,
+                copy.index_ns as f64 / 1e6,
+                copy.index_boxes,
+            );
+
+            if last {
+                // The chain that cannot be cloned: every ancestor of a
+                // content-dirty node, plus the dirty node itself.
+                let mut chain: HashSet<lumen_dom::NodeId> = HashSet::new();
+                for &n in &touched.content {
+                    let mut cur = Some(n);
+                    while let Some(c) = cur {
+                        chain.insert(c);
+                        cur = doc.get(c).parent;
+                    }
+                }
+                let clean = counters.clean_subtrees();
+                let built_set: HashSet<lumen_dom::NodeId> = built.iter().copied().collect();
+
+                eprintln!("[s18-census] content-dirty nodes: {}", touched.content.len());
+                for &n in &touched.content {
+                    eprintln!("[s18-census]   {}", census_describe(&doc, n));
+                }
+                eprintln!(
+                    "[s18-census] built={} (distinct nodes {}) reused={} chain_len={}",
+                    bb.built,
+                    built_set.len(),
+                    bb.reused,
+                    chain.len(),
+                );
+
+                // Partition the built list: which of them are on the
+                // un-clonable chain, which are non-elements (never eligible —
+                // `clean_subtrees` records elements only), which are elements
+                // the cascade re-ran, and which are left unexplained.
+                let (mut on_chain, mut non_elem, mut recascaded, mut other) =
+                    (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                for &n in &built {
+                    let is_elem = matches!(doc.get(n).data, lumen_dom::NodeData::Element { .. });
+                    if chain.contains(&n) {
+                        on_chain.push(n);
+                    } else if !is_elem {
+                        non_elem.push(n);
+                    } else if !clean.contains(&n) {
+                        recascaded.push(n);
+                    } else {
+                        other.push(n);
+                    }
+                }
+                for (label, list) in [
+                    ("on-chain", &on_chain),
+                    ("non-element", &non_elem),
+                    ("elem-not-clean", &recascaded),
+                    ("clean-but-built", &other),
+                ] {
+                    eprintln!(
+                        "[s18-census] {label}: {} — {}",
+                        list.len(),
+                        list.iter()
+                            .map(|&n| census_describe(&doc, n))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
+                }
+
+                // Per-ancestor breakdown: the child slots each rebuilt ancestor
+                // re-walked, split by what happened to each child.
+                let mut chain_ordered: Vec<lumen_dom::NodeId> = chain.iter().copied().collect();
+                chain_ordered.sort_by_key(|&n| {
+                    let mut d = 0usize;
+                    let mut cur = doc.get(n).parent;
+                    while let Some(c) = cur {
+                        d += 1;
+                        cur = doc.get(c).parent;
+                    }
+                    d
+                });
+                let (mut slots, mut slots_reused, mut slots_built) = (0usize, 0usize, 0usize);
+                for &anc in &chain_ordered {
+                    let kids = doc.get(anc).children.clone();
+                    let reused_kids = kids
+                        .iter()
+                        .filter(|&&k| clean.contains(&k) && !built_set.contains(&k))
+                        .count();
+                    let built_kids = kids.iter().filter(|&&k| built_set.contains(&k)).count();
+                    slots += kids.len();
+                    slots_reused += reused_kids;
+                    slots_built += built_kids;
+                    eprintln!(
+                        "[s18-census] ancestor {} children={} reused={} built={} \
+                         (elem children {}, text/comment {})",
+                        census_describe(&doc, anc),
+                        kids.len(),
+                        reused_kids,
+                        built_kids,
+                        kids.iter()
+                            .filter(|&&k| matches!(
+                                doc.get(k).data,
+                                lumen_dom::NodeData::Element { .. }
+                            ))
+                            .count(),
+                        kids.iter()
+                            .filter(|&&k| !matches!(
+                                doc.get(k).data,
+                                lumen_dom::NodeData::Element { .. }
+                            ))
+                            .count(),
+                    );
+                }
+                eprintln!(
+                    "[s18-census] chain child slots total={slots} reused={slots_reused} \
+                     built={slots_built} neither={}",
+                    slots - slots_reused - slots_built,
+                );
+            }
+
+            state.prev_pristine_layout = Some(layout.clone());
+            state.prev_cascade_styles = counters.into_styles();
+            lumen_layout::clear_interactive_state();
+        }
+    }
+
+    /// Boxes in `b`'s subtree, inclusive — census only.
+    fn census_count_boxes(b: &lumen_layout::LayoutBox) -> u64 {
+        1 + b.children.iter().map(census_count_boxes).sum::<u64>()
+    }
+
+    /// BUG-341 S19 diagnostic: census of the whole-tree **copies** an
+    /// incremental cycle makes, as opposed to the boxes it builds.
+    ///
+    /// S18 drove the graft down to O(1) per reused subtree and left the copies
+    /// as the largest remaining items. This prints, per cycle and per scenario,
+    /// the three the queue names: the reuse copy taken out of `prev` inside
+    /// `build_box_or_reuse`, the index walk over `prev` that feeds it, and the
+    /// pipeline's own `layout.clone()` that persists the next cycle's `prev`
+    /// — each with the number of boxes it touched, so a later run can tell
+    /// "the copy got cheaper" from "the region got smaller".
+    ///
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s19_copy_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S19) — see doc comment for run command"]
+    fn bug341_s19_copy_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        for scenario in ["KEY", "HOVER"] {
+            let mut state = Cc12IncrementalState::default();
+            let mut typed = String::new();
+            for i in 0..6 {
+                let (model, hover) = if scenario == "KEY" {
+                    typed.push('a');
+                    (cc12_bench_model(&typed), None)
+                } else {
+                    (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+                };
+                // Diagnostics on for the last two cycles only: the census
+                // traversals they add are themselves measurable, and the first
+                // cycles are the cold full-layout ones anyway.
+                lumen_layout::box_tree::set_box_build_diagnostics(i >= 4);
+                let prev_boxes =
+                    state.prev_pristine_layout.as_ref().map_or(0, census_count_boxes);
+                let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+                lumen_layout::set_interactive_state(hover, None, None);
+                let (layout, counters) = match state.prev_pristine_layout.take() {
+                    Some(prev) => {
+                        let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
+                        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+                        let mut dirty_roots = std::collections::HashSet::new();
+                        for (was, now) in [
+                            (prev_hover, hover),
+                            (prev_focus, None),
+                            (prev_active, None),
+                        ] {
+                            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                                &doc, was, now, &state_index,
+                            ));
+                        }
+                        let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                            &doc,
+                            chrome_node_changes(&touched),
+                            &node_index,
+                        ));
+                        let delta = lumen_layout::counters::RestyleDelta {
+                            prev_styles: std::mem::take(&mut state.prev_cascade_styles),
+                            dirty_roots,
+                            content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        };
+                        lumen_layout::counters::set_incremental_restyle(true);
+                        lumen_layout::box_tree::set_incremental_box_build(true);
+                        let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
+                        );
+                        lumen_layout::box_tree::set_incremental_box_build(false);
+                        lumen_layout::counters::set_incremental_restyle(false);
+                        result
+                    }
+                    None => lumen_layout::layout_measured_hyp_with_counters(
+                        &doc, &sheet, viewport, &measurer, &hyp, false,
+                    ),
+                };
+                let bb = lumen_layout::box_tree::take_box_build_stats();
+                let copy = lumen_layout::box_tree::take_box_copy_stats();
+                let t = std::time::Instant::now();
+                let persisted = layout.clone();
+                let clone_tree_ns = t.elapsed().as_nanos() as u64;
+                let clone_tree_boxes = census_count_boxes(&persisted);
+                let cs = lumen_layout::counters::take_cascade_stats();
+                if i >= 4 {
+                    eprintln!(
+                        "[s19-census] {scenario} cycle={i} prev_boxes={prev_boxes} \
+                         cascade_recomputed={} boxes_built={} boxes_reused={} | \
+                         subtree_reuse={:.3}ms/{} boxes | prev_index={:.3}ms/{} boxes | \
+                         clone_tree={:.3}ms/{clone_tree_boxes} boxes",
+                        cs.recomputed,
+                        bb.built,
+                        bb.reused,
+                        copy.reuse_ns as f64 / 1e6,
+                        copy.reuse_boxes,
+                        copy.index_ns as f64 / 1e6,
+                        copy.index_boxes,
+                        clone_tree_ns as f64 / 1e6,
+                    );
+                }
+                lumen_layout::box_tree::set_box_build_diagnostics(false);
+                state.prev_pristine_layout = Some(persisted);
+                state.prev_cascade_styles = counters.into_styles();
+                state.prev_interactive = (hover, None, None);
+                lumen_layout::clear_interactive_state();
+            }
+        }
+    }
+
+    /// BUG-341 S20 diagnostic: where an incremental cycle's time actually goes,
+    /// stage by stage, and inside the two stages that dominate.
+    ///
+    /// The queue named two items for this slice (the pipeline's `layout.clone()`
+    /// and `precompute_counters` rebuilding its `CounterMap` from scratch). This
+    /// census exists to check that claim before a line is changed — the sixth
+    /// slice in a row to do so, and the fifth where the planned premise was not
+    /// where the time was. It prints, per scenario and per cycle:
+    ///
+    /// - the whole pass's wall-clock, and after it the tree copy **this harness**
+    ///   makes to keep a `prev` for the next cycle. That column stopped
+    ///   describing production at S22, which replaced the pipeline's per-frame
+    ///   `layout.clone()` with a reversible prune, so read it as harness
+    ///   overhead and not as part of the cycle;
+    /// - the `CascadeIndex` rebuild the pass forces. When this census was
+    ///   written every pass forced one, because the cache was keyed by the
+    ///   sheet's address and had to be dropped at the top of each pass; S21
+    ///   keyed it by `Stylesheet::revision` and the column now reads zero on a
+    ///   warm thread. See `bug341_s21_cascade_index_census` for the split;
+    /// - the `CounterMap` the cascade stage produced, by size, plus a replay of
+    ///   rebuilding those three collections so the map's own construction cost
+    ///   can be told from the traversal that fills it. Replayed rather than
+    ///   timed in place: per-node timers around ~2500 hash operations would cost
+    ///   a sizeable fraction of the stage they are measuring. **Since S24 the
+    ///   `styles` replay is a measure of removed cost, not incurred cost** — the
+    ///   pass carries that map rather than filling it, which the `carried=`
+    ///   column reports (passes lived through, whether the pass had to sweep,
+    ///   and how many entries it displaced);
+    /// - every box the build stage really built, with its **inclusive** cost,
+    ///   and a self-time column derived by subtracting the descendants that are
+    ///   themselves in the log.
+    ///
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s20_stage_census -- --ignored --nocapture`. Add
+    /// `LUMEN_PROFILE_TREE=1` for the engine's own stage split alongside it.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S20) — see doc comment for run command"]
+    fn bug341_s20_stage_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        for scenario in ["KEY", "HOVER"] {
+            let mut state = Cc12IncrementalState::default();
+            let mut typed = String::new();
+            for i in 0..6 {
+                let (model, hover) = if scenario == "KEY" {
+                    typed.push('a');
+                    (cc12_bench_model(&typed), None)
+                } else {
+                    (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+                };
+                let report = i >= 4;
+                // S20's own gate, not S18/S19's: the copy census walks every
+                // reused subtree from inside the parent's `build_box`, which
+                // would show up as that parent's build cost.
+                lumen_layout::box_tree::set_box_time_diagnostics(report);
+                lumen_layout::style::set_pseudo_cascade_diagnostics(report);
+                let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+                lumen_layout::set_interactive_state(hover, None, None);
+                let _ = lumen_layout::style::take_cascade_index_stats();
+                let _ = lumen_layout::style::take_pseudo_cascade_stats();
+                let _ = lumen_layout::style::take_pseudo_cascade_sites();
+                let t_pass = std::time::Instant::now();
+                let (layout, counters) = match state.prev_pristine_layout.take() {
+                    Some(prev) => {
+                        let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
+                        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+                        let mut dirty_roots = std::collections::HashSet::new();
+                        for (was, now) in [
+                            (prev_hover, hover),
+                            (prev_focus, None),
+                            (prev_active, None),
+                        ] {
+                            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                                &doc, was, now, &state_index,
+                            ));
+                        }
+                        let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                            &doc,
+                            chrome_node_changes(&touched),
+                            &node_index,
+                        ));
+                        let delta = lumen_layout::counters::RestyleDelta {
+                            prev_styles: std::mem::take(&mut state.prev_cascade_styles),
+                            dirty_roots,
+                            content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        };
+                        lumen_layout::counters::set_incremental_restyle(true);
+                        lumen_layout::box_tree::set_incremental_box_build(true);
+                        let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
+                        );
+                        lumen_layout::box_tree::set_incremental_box_build(false);
+                        lumen_layout::counters::set_incremental_restyle(false);
+                        result
+                    }
+                    None => lumen_layout::layout_measured_hyp_with_counters(
+                        &doc, &sheet, viewport, &measurer, &hyp, false,
+                    ),
+                };
+                let pass_ns = t_pass.elapsed().as_nanos() as u64;
+                let idx_stats = lumen_layout::style::take_cascade_index_stats();
+                let ps_stats = lumen_layout::style::take_pseudo_cascade_stats();
+                let ps_sites = lumen_layout::style::take_pseudo_cascade_sites();
+                let cs = lumen_layout::counters::take_cascade_stats();
+                let bb = lumen_layout::box_tree::take_box_build_stats();
+                let (probe_ns, miss_ns) = lumen_layout::box_tree::take_box_probe_ns();
+                let times = lumen_layout::box_tree::take_box_build_time_log();
+                let t = std::time::Instant::now();
+                let persisted = layout.clone();
+                let clone_tree_ns = t.elapsed().as_nanos() as u64;
+
+                if report {
+                    eprintln!(
+                        "[s20-census] {scenario} cycle={i} pass={:.3}ms clone_tree={:.3}ms | \
+                         cascade_index rebuilds={} {:.3}ms | pseudo={} hits={} {:.3}ms | \
+                         cascade recomputed={} reused={} visited={} clean_inserts={} | \
+                         boxes built={} reused={} fanouts={} | \
+                         display_probes={} cascaded={} {:.3}ms style_misses={} {:.3}ms",
+                        pass_ns as f64 / 1e6,
+                        clone_tree_ns as f64 / 1e6,
+                        idx_stats.builds,
+                        idx_stats.build_ns as f64 / 1e6,
+                        ps_stats.calls,
+                        ps_stats.hits,
+                        ps_stats.ns as f64 / 1e6,
+                        cs.recomputed,
+                        cs.reused,
+                        cs.visited,
+                        cs.clean_inserts,
+                        bb.built,
+                        bb.reused,
+                        bb.fanouts,
+                        bb.display_probes,
+                        bb.display_probe_cascades,
+                        probe_ns as f64 / 1e6,
+                        bb.style_misses,
+                        miss_ns as f64 / 1e6,
+                    );
+                    let mut sites: Vec<_> = ps_sites.into_iter().collect();
+                    sites.sort_by_key(|(_, st)| std::cmp::Reverse(st.ns));
+                    for (name, st) in &sites {
+                        eprintln!(
+                            "[s20-census]   pseudo ::{name} calls={} hits={} {:.3}ms",
+                            st.calls,
+                            st.hits,
+                            st.ns as f64 / 1e6,
+                        );
+                    }
+                    census_report_counter_map(&counters);
+                    census_report_built_boxes(&doc, &times);
+                }
+
+                lumen_layout::box_tree::set_box_time_diagnostics(false);
+                lumen_layout::style::set_pseudo_cascade_diagnostics(false);
+                state.prev_pristine_layout = Some(persisted);
+                state.prev_cascade_styles = counters.into_styles();
+                state.prev_interactive = (hover, None, None);
+                lumen_layout::clear_interactive_state();
+            }
+        }
+    }
+
+    /// BUG-341 S20 census helper: the `CounterMap` a cycle produced, by size,
+    /// with a replay of rebuilding its collections.
+    ///
+    /// The replay reproduces exactly the inserts `counters::walk` performs: an
+    /// `Arc` clone plus insert per element into `styles`, a counter-stack
+    /// snapshot plus insert per element into `nodes`, and one insert per clean
+    /// node into `clean_subtrees` — over the real sizes, so "the map costs X of
+    /// the stage's Y" is an honest attribution rather than a guess. `nodes` is
+    /// not exposed, but it holds one entry per element, which is `styles`' size.
+    fn census_report_counter_map(counters: &lumen_layout::CounterMap) {
+        let styles = counters.styles();
+        let clean = counters.clean_subtrees();
+
+        // BUG-341 S23: the replays reserve capacity because production now does
+        // (`CounterMap::with_capacity`). A replay that still grew from zero
+        // would keep reporting the rehashing this slice removed.
+        let t = std::time::Instant::now();
+        let mut styles_replay: HashMap<lumen_dom::NodeId, std::sync::Arc<lumen_layout::style::ComputedStyle>> =
+            HashMap::with_capacity(styles.len());
+        for (&id, style) in styles {
+            styles_replay.insert(id, std::sync::Arc::clone(style));
+        }
+        let styles_ns = t.elapsed().as_nanos() as u64;
+
+        // BUG-341 S23: only nodes with a counter actually in scope store a
+        // snapshot, so this replays the map's real size — zero on `chrome.html`,
+        // which declares no counters. Before S23 it was one empty-map clone per
+        // element, and reading the count off `styles` hid exactly that.
+        let snapshots = counters.counter_snapshot_count();
+        let t = std::time::Instant::now();
+        let mut nodes_replay: HashMap<lumen_dom::NodeId, lumen_layout::counters::CounterSnapshot> =
+            HashMap::new();
+        let stacks: lumen_layout::counters::CounterSnapshot = HashMap::new();
+        for &id in styles.keys().take(snapshots) {
+            nodes_replay.insert(id, stacks.clone());
+        }
+        let nodes_ns = t.elapsed().as_nanos() as u64;
+
+        let t = std::time::Instant::now();
+        let mut clean_replay: std::collections::HashSet<lumen_dom::NodeId> =
+            std::collections::HashSet::with_capacity(styles.len());
+        for &id in clean {
+            clean_replay.insert(id);
+        }
+        let clean_ns = t.elapsed().as_nanos() as u64;
+
+        // BUG-341 S26: the reuse path itself. One hash lookup plus an `Arc`
+        // clone per element is what a pass that recomputes *nothing* still
+        // pays, and no earlier census separated it from `compute_style`. Uses
+        // the same map, so the probe sequence and load factor are production's.
+        // BUG-341 S26: the reuse path, split into the two things it does per
+        // element — the hash lookup that finds the entry, and the `Arc::clone`
+        // that takes it. The first attempt at this replay measured them together
+        // and read as "the hash barely matters": `Arc::clone` touches the
+        // refcount word of a 3.2 KB `ComputedStyle`, one cold cache line per
+        // element and 2.6 MB of working set per pass, which swamped the hash on
+        // both sides of the comparison being made. Split, it is the clone that
+        // costs 2-4× the lookup — and the walk never reads the style it is
+        // counting a reference to.
+        let ids: Vec<lumen_dom::NodeId> = styles.keys().copied().collect();
+        let t = std::time::Instant::now();
+        let mut sink = 0usize;
+        for id in &ids {
+            if let Some(s) = styles.get(id) {
+                sink ^= std::sync::Arc::as_ptr(s) as usize;
+            }
+        }
+        let lookup_ns = t.elapsed().as_nanos() as u64;
+        assert!(sink != 0 || ids.is_empty(), "lookup replay must not be optimised away");
+
+        // The refcount half on its own: clone every entry, then drop the lot.
+        let t = std::time::Instant::now();
+        let clones: Vec<std::sync::Arc<lumen_layout::style::ComputedStyle>> =
+            ids.iter().filter_map(|id| styles.get(id).map(std::sync::Arc::clone)).collect();
+        let arc_ns = t.elapsed().as_nanos() as u64;
+        assert_eq!(clones.len(), ids.len(), "arc replay must clone every entry");
+        drop(clones);
+
+        eprintln!(
+            "[s20-census]   CounterMap: carried passes={} swept={} displaced={} | \
+             styles={} ({:.3}ms replay AVOIDED) snapshots={} ({:.3}ms replay) \
+             clean_subtrees={} ({:.3}ms replay) reuse_lookups={} \
+             (lookup {:.3}ms / arc_clone {:.3}ms) — total replay {:.3}ms",
+            styles.passes_lived(),
+            styles.swept_last_pass(),
+            counters.replaced_styles().len(),
+            styles_replay.len(),
+            styles_ns as f64 / 1e6,
+            snapshots,
+            nodes_ns as f64 / 1e6,
+            clean_replay.len(),
+            clean_ns as f64 / 1e6,
+            ids.len(),
+            lookup_ns as f64 / 1e6,
+            arc_ns as f64 / 1e6,
+            (styles_ns + nodes_ns + clean_ns) as f64 / 1e6,
+        );
+    }
+
+    /// BUG-341 S20 census helper: every box the build stage really built, most
+    /// expensive first, with inclusive and self time.
+    ///
+    /// Self time subtracts the *direct* descendants that are themselves in the
+    /// log — a built box's children are either built (logged, subtracted here)
+    /// or moved in wholesale (O(1), nothing to subtract). Inclusive time on a
+    /// container that rayon fanned out also covers the join wait, so a container
+    /// whose self time is large is worth a second look before it is believed.
+    fn census_report_built_boxes(doc: &lumen_dom::Document, times: &[(lumen_dom::NodeId, u64)]) {
+        let incl: HashMap<lumen_dom::NodeId, u64> = times.iter().copied().collect();
+        let mut rows: Vec<(lumen_dom::NodeId, u64, i64)> = times
+            .iter()
+            .map(|&(id, ns)| {
+                let kids: i64 = doc
+                    .get(id)
+                    .children
+                    .iter()
+                    .filter_map(|c| incl.get(c))
+                    .map(|&n| n as i64)
+                    .sum();
+                (id, ns, ns as i64 - kids)
+            })
+            .collect();
+        rows.sort_by_key(|&(_, ns, _)| std::cmp::Reverse(ns));
+        let total: u64 = times.iter().map(|&(_, ns)| ns).sum();
+        let self_total: i64 = rows.iter().map(|&(_, _, s)| s).sum();
+        eprintln!(
+            "[s20-census]   built {} boxes, Σinclusive={:.3}ms Σself={:.3}ms",
+            times.len(),
+            total as f64 / 1e6,
+            self_total as f64 / 1e6,
+        );
+        for &(id, ns, self_ns) in rows.iter().take(10) {
+            eprintln!(
+                "[s20-census]     {:>8.3}ms incl {:>8.3}ms self  {}",
+                ns as f64 / 1e6,
+                self_ns as f64 / 1e6,
+                census_describe(doc, id),
+            );
+        }
+    }
+
+    /// BUG-341 S21 diagnostic: how often the `CascadeIndex` is really rebuilt
+    /// per incremental pass, by whom, and how the rebuild's time splits.
+    ///
+    /// The queue named `CascadeIndex::build` the largest remaining item of the
+    /// S20 census (0.12-0.21ms every pass, on both scenarios) — but that number
+    /// came from `take_cascade_index_stats`, which was **thread-local** while
+    /// the code it counts is not: `build_box` fans flex/grid containers out over
+    /// rayon workers, and every worker's `StyleEnvSnapshot::install` drops the
+    /// per-thread index cache before doing style work. The counter is
+    /// process-wide as of this slice, so this census is the first honest count.
+    /// It prints, per scenario and per cycle:
+    ///
+    /// - the whole pass's wall-clock, so a rebuild can be read as a share of it;
+    /// - rebuild count and total nanoseconds, split into the four phases of
+    ///   `CascadeIndex::build` (top-level `RuleIndex`, the per-block indexes,
+    ///   the `@media`/`@supports` activity evaluation, the two sheet-wide
+    ///   predicate scans) — so "re-index the sheet" can be told apart from
+    ///   "re-evaluate the media queries";
+    /// - the same figures for a pass run with the box-build fan-out suppressed
+    ///   (`prev_index`-driven, so simply an incremental pass) versus a full
+    ///   pass, which is the only way to attribute rebuilds to workers;
+    /// - the sheet's shape (rule and block counts), because the rebuild is
+    ///   linear in it and `chrome.html` is not a large sheet.
+    ///
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s21_cascade_index_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S21) — see doc comment for run command"]
+    fn bug341_s21_cascade_index_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        eprintln!(
+            "[s21-census] sheet: rules={} media_blocks={} (Σ{} rules) layers={} supports={} scope={}",
+            sheet.rules.len(),
+            sheet.media_rules.len(),
+            sheet.media_rules.iter().map(|m| m.rules.len()).sum::<usize>(),
+            sheet.layers.len(),
+            sheet.supports_rules.len(),
+            sheet.scope_rules.len(),
+        );
+
+        for scenario in ["KEY", "HOVER"] {
+            let mut state = Cc12IncrementalState::default();
+            let mut typed = String::new();
+            for i in 0..6 {
+                let (model, hover) = if scenario == "KEY" {
+                    typed.push('a');
+                    (cc12_bench_model(&typed), None)
+                } else {
+                    (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+                };
+                let report = i >= 4;
+                let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+                lumen_layout::set_interactive_state(hover, None, None);
+                let _ = lumen_layout::style::take_cascade_index_stats();
+                let t_pass = std::time::Instant::now();
+                let (layout, counters) = match state.prev_pristine_layout.take() {
+                    Some(prev) => {
+                        let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
+                        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+                        let mut dirty_roots = std::collections::HashSet::new();
+                        for (was, now) in [
+                            (prev_hover, hover),
+                            (prev_focus, None),
+                            (prev_active, None),
+                        ] {
+                            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                                &doc, was, now, &state_index,
+                            ));
+                        }
+                        let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                            &doc,
+                            chrome_node_changes(&touched),
+                            &node_index,
+                        ));
+                        let delta = lumen_layout::counters::RestyleDelta {
+                            prev_styles: std::mem::take(&mut state.prev_cascade_styles),
+                            dirty_roots,
+                            content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        };
+                        lumen_layout::counters::set_incremental_restyle(true);
+                        lumen_layout::box_tree::set_incremental_box_build(true);
+                        let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
+                        );
+                        lumen_layout::box_tree::set_incremental_box_build(false);
+                        lumen_layout::counters::set_incremental_restyle(false);
+                        result
+                    }
+                    None => lumen_layout::layout_measured_hyp_with_counters(
+                        &doc, &sheet, viewport, &measurer, &hyp, false,
+                    ),
+                };
+                let pass_ns = t_pass.elapsed().as_nanos() as u64;
+                let idx = lumen_layout::style::take_cascade_index_stats();
+                let bb = lumen_layout::box_tree::take_box_build_stats();
+
+                if report {
+                    eprintln!(
+                        "[s21-census] {scenario} cycle={i} pass={:.3}ms | index rebuilds={} \
+                         {:.3}ms ({:.1}% of pass) = rules {:.3} + blocks {:.3} + active {:.3} \
+                         + predicates {:.3} | fanouts={} built={} reused={}",
+                        pass_ns as f64 / 1e6,
+                        idx.builds,
+                        idx.build_ns as f64 / 1e6,
+                        100.0 * idx.build_ns as f64 / pass_ns.max(1) as f64,
+                        idx.rules_ns as f64 / 1e6,
+                        idx.blocks_ns as f64 / 1e6,
+                        idx.active_ns as f64 / 1e6,
+                        idx.predicates_ns as f64 / 1e6,
+                        bb.fanouts,
+                        bb.built,
+                        bb.reused,
+                    );
+                }
+
+                state.prev_pristine_layout = Some(layout);
+                state.prev_cascade_styles = counters.into_styles();
+                state.prev_interactive = (hover, None, None);
+                lumen_layout::clear_interactive_state();
+            }
+        }
+
+        // A full pass for contrast: it fans out over rayon (M4.1), so its
+        // rebuild count is the worker count plus one, and it is the number the
+        // thread-local counter could never see.
+        let _ = lumen_layout::style::take_cascade_index_stats();
+        let t = std::time::Instant::now();
+        let _ = lumen_layout::layout_measured_hyp_with_counters(
+            &doc, &sheet, viewport, &measurer, &hyp, false,
+        );
+        let full_ns = t.elapsed().as_nanos() as u64;
+        let idx = lumen_layout::style::take_cascade_index_stats();
+        eprintln!(
+            "[s21-census] FULL pass={:.3}ms | index rebuilds={} {:.3}ms (Σ over all threads)",
+            full_ns as f64 / 1e6,
+            idx.builds,
+            idx.build_ns as f64 / 1e6,
+        );
+    }
+
+    /// BUG-341 S27 census: the nodes a walk would have to enter if it only
+    /// followed the *spine* — every ancestor of a dirty root or a
+    /// content-mutated node, plus those nodes' own subtrees.
+    ///
+    /// This is the exact size of the traversal the slice proposes, computed
+    /// from the same two inputs the delta carries, so the census can say what
+    /// fraction of the real traversal is removable before a line of it is
+    /// written (the S17/S19 rule: measure the note, do not trust it).
+    fn census_spine_size(
+        doc: &lumen_dom::Document,
+        dirty_roots: &std::collections::HashSet<lumen_dom::NodeId>,
+        content: &std::collections::HashSet<lumen_dom::NodeId>,
+    ) -> (usize, usize) {
+        let mut spine: std::collections::HashSet<lumen_dom::NodeId> = std::collections::HashSet::new();
+        for &seed in dirty_roots.iter().chain(content.iter()) {
+            let mut cur = Some(seed);
+            while let Some(id) = cur {
+                if !spine.insert(id) {
+                    break;
+                }
+                cur = doc.get(id).parent;
+            }
+        }
+        // A dirty root re-cascades its whole subtree, so those nodes are
+        // entered too — they are the part of the walk the slice cannot remove.
+        let mut forced = 0usize;
+        for &root in dirty_roots {
+            forced += census_subtree_nodes(doc, root);
+        }
+        (spine.len(), forced)
+    }
+
+    /// Number of nodes (of any kind) in `id`'s subtree, inclusive.
+    fn census_subtree_nodes(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> usize {
+        1 + doc.get(id).children.iter().map(|&c| census_subtree_nodes(doc, c)).sum::<usize>()
+    }
+
+    /// BUG-341 S27 census replay: the recursion alone, with no per-node work.
+    /// The floor under any shape that still visits the document.
+    fn census_bare_traversal(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> usize {
+        let mut n = 1;
+        for &c in &doc.get(id).children {
+            n += census_bare_traversal(doc, c);
+        }
+        n
+    }
+
+    /// BUG-341 S27 census replay: the recursion plus one map restamp per
+    /// element — the cheapest traversal that can still keep the S24 pass
+    /// ordinal exact, and therefore the candidate that changes no invariant.
+    fn census_restamp_traversal(
+        doc: &lumen_dom::Document,
+        id: lumen_dom::NodeId,
+        map: &mut HashMap<lumen_dom::NodeId, (std::sync::Arc<lumen_layout::style::ComputedStyle>, u64)>,
+        pass: u64,
+    ) -> usize {
+        let mut n = 0;
+        if let Some(e) = map.get_mut(&id) {
+            e.1 = pass;
+            n += 1;
+        }
+        for &c in &doc.get(id).children {
+            n += census_restamp_traversal(doc, c, map, pass);
+        }
+        n
+    }
+
+    /// BUG-341 S27 census: how much of the cascade stage is the traversal
+    /// itself, and how much of that traversal the spine would keep.
+    ///
+    /// S26 proved the traversal is the stage (50-70% of the pass) and removed
+    /// it for the cycle whose delta names nobody. This asks the general
+    /// question — on a cycle that *does* name somebody, how many of the nodes
+    /// it enters could no dirty root and no content mutation possibly reach.
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s27_walk_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual census (BUG-341 S27) — see doc comment for run command"]
+    fn bug341_s27_walk_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        for scenario in ["KEY", "HOVER"] {
+            let mut state = Cc12IncrementalState::default();
+            let mut typed = String::new();
+            for i in 0..6 {
+                let (model, hover) = if scenario == "KEY" {
+                    typed.push('a');
+                    (cc12_bench_model(&typed), None)
+                } else {
+                    (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+                };
+                let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+                lumen_layout::set_interactive_state(hover, None, None);
+                let structural = touched.selector.values().filter(|t| t.structural).count();
+                let t_pass = std::time::Instant::now();
+                let (layout, counters) = match state.prev_pristine_layout.take() {
+                    Some(prev) => {
+                        let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
+                        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+                        let mut dirty_roots = std::collections::HashSet::new();
+                        for (was, now) in [(prev_hover, hover), (prev_focus, None), (prev_active, None)] {
+                            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                                &doc, was, now, &state_index,
+                            ));
+                        }
+                        let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                            &doc,
+                            chrome_node_changes(&touched),
+                            &node_index,
+                        ));
+                        let (spine, forced) = census_spine_size(&doc, &dirty_roots, &touched.content);
+                        eprintln!(
+                            "[s27-census] {scenario} cycle={i} dirty_roots={} content={} \
+                             structural={structural} spine={spine} forced_subtrees={forced}",
+                            dirty_roots.len(),
+                            touched.content.len(),
+                        );
+                        let delta = lumen_layout::counters::RestyleDelta {
+                            prev_styles: std::mem::take(&mut state.prev_cascade_styles),
+                            dirty_roots,
+                            content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        };
+                        lumen_layout::counters::set_incremental_restyle(true);
+                        lumen_layout::box_tree::set_incremental_box_build(true);
+                        let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
+                        );
+                        lumen_layout::box_tree::set_incremental_box_build(false);
+                        lumen_layout::counters::set_incremental_restyle(false);
+                        result
+                    }
+                    None => lumen_layout::layout_measured_hyp_with_counters(
+                        &doc, &sheet, viewport, &measurer, &hyp, false,
+                    ),
+                };
+                let pass_ns = t_pass.elapsed().as_nanos() as u64;
+                let cs = lumen_layout::counters::take_cascade_stats();
+                // The two candidate shapes for the traversal, replayed over the
+                // real document and a map of the real size. Split by operation
+                // (the S26 lesson): a replay that times the recursion together
+                // with the restamp cannot tell "walking the document is the
+                // cost" from "touching the map is".
+                let mut replay: HashMap<lumen_dom::NodeId, (std::sync::Arc<lumen_layout::style::ComputedStyle>, u64)> =
+                    HashMap::with_capacity(counters.styles().len());
+                for (nid, style) in counters.styles().iter() {
+                    replay.insert(*nid, (std::sync::Arc::clone(style), 0));
+                }
+                let t = std::time::Instant::now();
+                let bare = census_bare_traversal(&doc, doc.root());
+                let bare_ns = t.elapsed().as_nanos() as u64;
+                let t = std::time::Instant::now();
+                let stamped = census_restamp_traversal(&doc, doc.root(), &mut replay, 1);
+                let restamp_ns = t.elapsed().as_nanos() as u64;
+                eprintln!(
+                    "[s27-census] {scenario} cycle={i} replay bare={:.3}ms ({bare} nodes) \
+                     restamp={:.3}ms ({stamped} entries)",
+                    bare_ns as f64 / 1e6,
+                    restamp_ns as f64 / 1e6,
+                );
+                eprintln!(
+                    "[s27-census] {scenario} cycle={i} pass={:.3}ms walk={:.3}ms ({:.0}%) \
+                     visited={} recomputed={} reused={} clean_inserts={} skipped={} entries={}",
+                    pass_ns as f64 / 1e6,
+                    cs.walk_ns as f64 / 1e6,
+                    100.0 * cs.walk_ns as f64 / pass_ns as f64,
+                    cs.visited,
+                    cs.recomputed,
+                    cs.reused,
+                    cs.clean_inserts,
+                    cs.skipped_subtrees,
+                    counters.styles().len(),
+                );
+                state.prev_pristine_layout = Some(layout.clone());
+                state.prev_cascade_styles = counters.into_styles();
+                state.prev_interactive = (hover, None, None);
+                lumen_layout::clear_interactive_state();
+            }
+        }
+    }
+
+    /// Number of element nodes in `id`'s subtree, inclusive — the "how wide is
+    /// this dirty root" column of the S17 census.
+    fn census_subtree_elements(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> usize {
+        let node = doc.get(id);
+        let own = usize::from(matches!(node.data, lumen_dom::NodeData::Element { .. }));
+        own + node.children.iter().map(|&c| census_subtree_elements(doc, c)).sum::<usize>()
+    }
+
+    /// BUG-341 S5: like `cc12_chrome_perf_gate_hover_and_keystroke_cycles`'s
+    /// `CC12_HOVER` scenario, but hover moves between two sibling tab rows
+    /// (`#sbTabs`' first two children) instead of toggling `SIDEBAR`/`None`.
+    /// S3 documented the toggle as a conservative-invalidation worst case
+    /// (`:hover` invalidates every ancestor of both the old and new target
+    /// when transitioning from "nothing hovered" — see BUG-341 "S3"); this is
+    /// the representative case real mouse movement over already-hovered
+    /// chrome looks like, and where the incremental cascade is expected to
+    /// pay off the most. Not a pass/fail gate (no separate budget exists for
+    /// this shape yet) — a recorded measurement, run alongside CC-12's own
+    /// number for comparison. Run: `cargo test -p lumen-shell --profile
+    /// dev-release bug341_s5_incremental_pipeline_share -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual perf measurement (BUG-341 S5) — see doc comment for run command"]
+    fn bug341_s5_incremental_pipeline_share() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let tabs_container = doc
+            .find_by_id(lumen_chrome::ids::SB_TABS)
+            .expect("chrome preview must have #sbTabs");
+        let tab_rows = doc.get(tabs_container).children.clone();
+        assert!(tab_rows.len() >= 2, "bind_model must have populated at least 2 tab rows");
+        let tab_a = tab_rows[0];
+        let tab_b = tab_rows[1];
+
+        const WARMUP: usize = 10;
+        const SAMPLES: usize = 60;
+
+        let mut stats = lumen_paint::FrameStats::new();
+        let mut state = Cc12IncrementalState::default();
+        for i in 0..WARMUP + SAMPLES {
+            let hover = if i % 2 == 0 { Some(tab_a) } else { Some(tab_b) };
+            let (ms, _) = cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
+            if i >= WARMUP {
+                stats.record(ms as f32);
+            }
+        }
+        let summary = stats.summary().expect("samples collected");
+        eprintln!("{}", summary.display_with("BUG341_S5_SIBLING_HOVER"));
+    }
+
+    /// BUG-341 S3: standalone measurement of the incremental cascade's
+    /// `precompute_counters` wall-time saving on the real chrome document, for
+    /// a *representative* hover interaction — the pointer moving between two
+    /// sibling tab rows (`sbTabs`' first two children after `bind_model`
+    /// populates 6 tabs, same fixture CC-12 uses). Not wired into
+    /// `layout_measured_hyp`/`layout_mutation_incremental` yet (that pipeline
+    /// wiring is S5), so this calls
+    /// `lumen_layout::counters::{precompute_counters, incremental_precompute_counters}`
+    /// directly rather than going through CC-12's full `relayout_chrome_host`
+    /// cycle.
+    ///
+    /// Deliberately does **not** mirror CC-12's own hover fixture
+    /// (`SIDEBAR`/`None` toggle each cycle): `restyle_root_set_for_state_change`
+    /// treats a transition where nothing was previously hovered as "every
+    /// ancestor of the new target flipped its `:hover` boolean" (correct per
+    /// CSS Selectors L4 §4.3 — `:hover` matches ancestors too), which forces a
+    /// conservative full-subtree invalidation from close to the document root.
+    /// That is real, correct behaviour of the v1 model (brief §4 explicitly
+    /// allows v1 to over-approximate), but it means CC-12's specific
+    /// on/off-toggle interaction shape is close to a worst case for this
+    /// model, not the common case — sibling-to-sibling hover motion (this
+    /// test) is what most real mouse movement over already-hovered chrome
+    /// looks like, and is where the model is supposed to pay off. Recorded
+    /// here as the honest, representative number; see BUG-341 for the
+    /// SIDEBAR/None-toggle number as a documented worst case instead of a
+    /// silently-omitted one.
+    ///
+    /// `#[ignore]`d like CC-12 itself — a wall-clock number isn't a pass/fail
+    /// gate here (no pipeline consumes the incremental path yet), it is a
+    /// recorded measurement (brief §5 S3: "measure `precompute_counters` share
+    /// drop"). Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s3_incremental_cascade_precompute_share -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual perf measurement (BUG-341 S3) — see doc comment for run command"]
+    fn bug341_s3_incremental_cascade_precompute_share() {
+        use lumen_layout::counters::{
+            incremental_precompute_counters, precompute_counters, set_incremental_restyle, RestyleDelta,
+        };
+        use lumen_layout::style::restyle_root_set_for_state_change;
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let viewport = Size::new(1280.0, 800.0);
+        let flat = lumen_dom::build_flat_tree(&doc);
+
+        let tabs_container = doc
+            .find_by_id(lumen_chrome::ids::SB_TABS)
+            .expect("chrome preview must have #sbTabs");
+        let tab_rows = doc.get(tabs_container).children.clone();
+        assert!(tab_rows.len() >= 2, "bind_model must have populated at least 2 tab rows");
+        let tab_a = tab_rows[0];
+        let tab_b = tab_rows[1];
+
+        const WARMUP: usize = 10;
+        const SAMPLES: usize = 60;
+
+        // Baseline snapshot: tab_a hovered (steady state before the move).
+        lumen_layout::set_interactive_state(Some(tab_a), None, None);
+        let baseline = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        let total_nodes = baseline.styles().len();
+
+        let mut full_stats = lumen_paint::FrameStats::new();
+        for i in 0..WARMUP + SAMPLES {
+            lumen_layout::set_interactive_state(Some(tab_b), None, None);
+            let t0 = std::time::Instant::now();
+            let map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if i >= WARMUP {
+                full_stats.record(ms as f32);
+            }
+            std::hint::black_box(&map);
+        }
+        let full_summary = full_stats.summary().expect("samples collected");
+        eprintln!("{}", full_summary.display_with("BUG341_S3_FULL_PRECOMPUTE"));
+
+        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), &state_index);
+        let dirty_count = dirty_roots.len();
+        set_incremental_restyle(true);
+        let mut incr_stats = lumen_paint::FrameStats::new();
+        let mut last_incr_map = None;
+        for i in 0..WARMUP + SAMPLES {
+            lumen_layout::set_interactive_state(Some(tab_b), None, None);
+            // BUG-341 S24: the cache is consumed by the pass, so each sample
+            // gets its own copy of the same baseline — built outside the timed
+            // region, exactly like the `prev` tree copy the S4 bench below makes.
+            let delta = RestyleDelta {
+                prev_styles: baseline.styles().clone(),
+                dirty_roots: dirty_roots.clone(),
+                content_dirty: lumen_layout::counters::ContentDirty::Nothing,
+            };
+            let t0 = std::time::Instant::now();
+            let map = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if i >= WARMUP {
+                incr_stats.record(ms as f32);
+            }
+            last_incr_map = Some(map);
+        }
+        set_incremental_restyle(false);
+        lumen_layout::clear_interactive_state();
+        let incr_summary = incr_stats.summary().expect("samples collected");
+        eprintln!("{}", incr_summary.display_with("BUG341_S3_INCREMENTAL_PRECOMPUTE"));
+
+        // Correctness: same hover target, must match the full cascade exactly
+        // regardless of the wall-time saving (brief §4 correctness gate).
+        lumen_layout::set_interactive_state(Some(tab_b), None, None);
+        let full_after = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        lumen_layout::clear_interactive_state();
+        assert_eq!(
+            last_incr_map.expect("at least one sample").styles(),
+            full_after.styles(),
+            "incremental cascade must reproduce the full cascade exactly on the chrome doc",
+        );
+
+        eprintln!(
+            "BUG341_S3: {total_nodes} nodes, dirty_roots={dirty_count}; full_precompute \
+             p50={:.4}ms p95={:.4}ms; incremental_precompute p50={:.4}ms p95={:.4}ms; drop={:.1}%",
+            full_summary.p50_ms,
+            full_summary.p95_ms,
+            incr_summary.p50_ms,
+            incr_summary.p95_ms,
+            (1.0 - incr_summary.p50_ms as f64 / full_summary.p50_ms as f64) * 100.0,
+        );
+    }
+
+    /// BUG-341 S4 — real-machine measurement companion to the S3 test above:
+    /// wall-clock `build_box` (full rebuild every call) vs
+    /// `incremental_build_box` (whole-subtree reuse for the untouched region)
+    /// on the same CC-12 chrome-preview hover transition. Feeds the S4
+    /// recorded measurement (brief §5 S4: "measure `build_box` share drop").
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s4_incremental_box_build_share -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual perf measurement (BUG-341 S4) — see doc comment for run command"]
+    fn bug341_s4_incremental_box_build_share() {
+        use lumen_layout::box_tree::{incremental_build_box, set_incremental_box_build};
+        use lumen_layout::counters::{
+            build_counter_style_registry, incremental_precompute_counters, precompute_counters,
+            set_incremental_restyle, RestyleDelta,
+        };
+        use lumen_layout::style::{restyle_root_set_for_state_change, ComputedStyle};
+
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let model = cc12_bench_model("");
+        lumen_chrome::bind_model(&mut doc, &model);
+        let viewport = Size::new(1280.0, 800.0);
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let registry = build_counter_style_registry(&sheet);
+
+        let tabs_container = doc
+            .find_by_id(lumen_chrome::ids::SB_TABS)
+            .expect("chrome preview must have #sbTabs");
+        let tab_rows = doc.get(tabs_container).children.clone();
+        assert!(tab_rows.len() >= 2, "bind_model must have populated at least 2 tab rows");
+        let tab_a = tab_rows[0];
+        let tab_b = tab_rows[1];
+
+        const WARMUP: usize = 10;
+        const SAMPLES: usize = 60;
+
+        // Baseline snapshot + box tree: tab_a hovered (the "prev" for reuse).
+        // `incremental_build_box` with the flag off degrades to a plain full
+        // `build_box` (private to `lumen_layout`, not reachable from here) —
+        // used here as the full-rebuild reference/timing throughout. The very
+        // first call has no real "prev" yet, so pass an unused placeholder
+        // (never consulted while the flag is off).
+        set_incremental_box_build(false);
+        let mut unused_placeholder = lumen_layout::LayoutBox {
+            node: doc.root(),
+            rect: Rect::ZERO,
+            style: std::sync::Arc::new(root_style.clone()),
+            kind: lumen_layout::BoxKind::Skip,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: Default::default(),
+        };
+        lumen_layout::set_interactive_state(Some(tab_a), None, None);
+        let baseline = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        let prev_tree = incremental_build_box(
+            &doc, &sheet, doc.root(), &root_style, viewport, &flat, &baseline, &registry, false, &mut unused_placeholder,
+        );
+
+        let mut full_stats = lumen_paint::FrameStats::new();
+        for i in 0..WARMUP + SAMPLES {
+            lumen_layout::set_interactive_state(Some(tab_b), None, None);
+            let map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+            // BUG-341 S19: each iteration gets its own `prev` — the incremental
+            // path moves the reusable subtrees out of it, so a shared one would
+            // be empty from the second sample on. The copy is outside the timed
+            // region, exactly like the cascade above it.
+            let mut prev_copy = prev_tree.clone();
+            let t0 = std::time::Instant::now();
+            let tree = incremental_build_box(
+                &doc, &sheet, doc.root(), &root_style, viewport, &flat, &map, &registry, false, &mut prev_copy,
+            );
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if i >= WARMUP {
+                full_stats.record(ms as f32);
+            }
+            std::hint::black_box(&tree);
+        }
+        let full_summary = full_stats.summary().expect("samples collected");
+        eprintln!("{}", full_summary.display_with("BUG341_S4_FULL_BUILD_BOX"));
+
+        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), &state_index);
+        set_incremental_restyle(true);
+        set_incremental_box_build(true);
+        let mut incr_stats = lumen_paint::FrameStats::new();
+        let mut last_incr_tree = None;
+        for i in 0..WARMUP + SAMPLES {
+            lumen_layout::set_interactive_state(Some(tab_b), None, None);
+            // BUG-341 S24: one fresh cache per sample, like the `prev` copy below.
+            let delta = RestyleDelta {
+                prev_styles: baseline.styles().clone(),
+                dirty_roots: dirty_roots.clone(),
+                content_dirty: lumen_layout::counters::ContentDirty::Nothing,
+            };
+            let map = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);
+            // See the full-rebuild loop above: one fresh `prev` per sample.
+            let mut prev_copy = prev_tree.clone();
+            let t0 = std::time::Instant::now();
+            let tree = incremental_build_box(
+                &doc, &sheet, doc.root(), &root_style, viewport, &flat, &map, &registry, false, &mut prev_copy,
+            );
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if i >= WARMUP {
+                incr_stats.record(ms as f32);
+            }
+            last_incr_tree = Some(tree);
+        }
+        set_incremental_restyle(false);
+        set_incremental_box_build(false);
+        lumen_layout::clear_interactive_state();
+        let incr_summary = incr_stats.summary().expect("samples collected");
+        eprintln!("{}", incr_summary.display_with("BUG341_S4_INCREMENTAL_BUILD_BOX"));
+
+        // Correctness: same hover target, must match a full rebuild exactly
+        // regardless of the wall-time saving (brief §4 correctness gate).
+        lumen_layout::set_interactive_state(Some(tab_b), None, None);
+        let full_after_map = precompute_counters(&doc, &sheet, viewport, &flat, false);
+        let full_after_tree = incremental_build_box(
+            &doc, &sheet, doc.root(), &root_style, viewport, &flat, &full_after_map, &registry, false, &mut prev_tree.clone(),
+        );
+        lumen_layout::clear_interactive_state();
+        let incr_tree = last_incr_tree.expect("at least one sample");
+
+        // Structural sanity check only (node id + `BoxKind` discriminant +
+        // child count) — NOT full field/`Debug` equality: `ComputedStyle`
+        // carries a `custom_props: HashMap<String, String>` (CSS custom
+        // properties, heavily used by this design-system chrome doc), and
+        // `HashMap`'s `Debug` prints entries in iteration order, which two
+        // independently-computed (but content-equal) cascades need not share.
+        // `lay_out`/`collect_rects`-based bit-for-bit verification (the real
+        // BUG-341 S4 correctness gate) lives in `lumen_layout`'s own
+        // differential tests (`box_build_*` in `box_tree.rs`), which have
+        // access to the crate-private `lay_out` this test does not.
+        fn assert_same_shape(a: &lumen_layout::LayoutBox, b: &lumen_layout::LayoutBox, path: &mut Vec<String>) {
+            assert_eq!(a.node, b.node, "{}: node id mismatch", path.join(">"));
+            assert_eq!(
+                std::mem::discriminant(&a.kind), std::mem::discriminant(&b.kind),
+                "{}: BoxKind discriminant mismatch a={:?} b={:?}", path.join(">"), a.kind, b.kind,
+            );
+            assert_eq!(
+                a.children.len(), b.children.len(),
+                "{}: children.len() mismatch", path.join(">"),
+            );
+            for (i, (ca, cb)) in a.children.iter().zip(b.children.iter()).enumerate() {
+                path.push(format!("child[{i}] node={:?}", ca.node));
+                assert_same_shape(ca, cb, path);
+                path.pop();
+            }
+        }
+        assert_same_shape(&incr_tree, &full_after_tree, &mut vec!["root".to_string()]);
+
+        eprintln!(
+            "BUG341_S4: full_build_box p50={:.4}ms p95={:.4}ms; incremental_build_box \
+             p50={:.4}ms p95={:.4}ms; drop={:.1}%",
+            full_summary.p50_ms,
+            full_summary.p95_ms,
+            incr_summary.p50_ms,
+            incr_summary.p95_ms,
+            (1.0 - incr_summary.p50_ms as f64 / full_summary.p50_ms as f64) * 100.0,
+        );
+    }
+
+    #[test]
+    fn take_content_area_with_no_salvage_ids_behaves_like_a_plain_prune() {
+        let html = concat!(
+            "<html><body>",
+            "<div id=\"contentArea\"><div id=\"placeholder\">demo</div></div>",
+            "</body></html>",
+        );
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let mut layout = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let content_area = doc.find_by_id("contentArea").expect("fixture has #contentArea");
+
+        assert!(take_content_area(&mut layout, content_area, &[], &doc).is_some());
+        assert!(lumen_layout::find_box_by_node(&layout, content_area).is_none());
+        let placeholder = doc.find_by_id("placeholder").expect("fixture has #placeholder");
+        assert!(lumen_layout::find_box_by_node(&layout, placeholder).is_none());
+    }
+
+    // ── BUG-341 S22: the pruning is reversible ──────────────────────────────
+
+    /// The salvage list `relayout_chrome_host` passes to `take_content_area`.
+    const S22_SALVAGE_IDS: [&str; 5] = [
+        lumen_chrome::ids::FIND_BAR,
+        lumen_chrome::ids::DOWNLOADS_PANEL,
+        lumen_chrome::ids::CP_OVERLAY,
+        lumen_chrome::ids::CERT_OVERLAY,
+        lumen_chrome::ids::PRINT_OVERLAY,
+    ];
+
+    /// Box-for-box identity of two chrome trees, for BUG-341 S22's round-trip
+    /// gate. Style is compared by `Arc` **identity**, not by value: the
+    /// restored tree must hold the very boxes that were detached, not
+    /// equivalent ones.
+    fn s22_assert_identical(
+        a: &lumen_layout::LayoutBox,
+        b: &lumen_layout::LayoutBox,
+        path: &mut Vec<String>,
+    ) {
+        let at = || path.join(">");
+        assert_eq!(a.node, b.node, "{}: node id", at());
+        assert_eq!(a.rect, b.rect, "{}: rect", at());
+        assert_eq!(
+            std::mem::discriminant(&a.kind),
+            std::mem::discriminant(&b.kind),
+            "{}: BoxKind discriminant",
+            at(),
+        );
+        assert!(std::sync::Arc::ptr_eq(&a.style, &b.style), "{}: style is a different Arc", at());
+        assert_eq!(a.children.len(), b.children.len(), "{}: children.len()", at());
+        for (i, (ca, cb)) in a.children.iter().zip(b.children.iter()).enumerate() {
+            path.push(format!("child[{i}] node={:?}", ca.node));
+            s22_assert_identical(ca, cb, path);
+            path.pop();
+        }
+    }
+
+    /// BUG-341 S22 soundness gate: `restore_content_area` reproduces the
+    /// pre-pruning tree exactly, on the real chrome document.
+    ///
+    /// Exactness is the contract, not a nicety. The restored tree becomes the
+    /// next pass's `prev` basis, and `incremental_build_box` moves whole clean
+    /// subtrees across from it — so whatever the basis is missing or has in the
+    /// wrong slot, the produced document is missing or has in the wrong slot
+    /// too (`bug341_s22_a_restored_basis_carries_the_whole_document_forward`
+    /// measures exactly that failure). Comparing `style` by `Arc` identity is
+    /// part of the point: the restore must hand back the boxes it took, not
+    /// equivalent ones.
+    ///
+    /// The box-count assert is the other arm: without it the test would pass
+    /// just as well if `take_content_area` had quietly stopped pruning.
+    #[test]
+    fn bug341_s22_restoring_a_detachment_reproduces_the_pristine_tree() {
+        let (doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let (mut layout, _counters) = lumen_layout::layout_measured_hyp_with_counters(
+            &doc, &sheet, viewport, &measurer, &hyp, false,
+        );
+        let pristine = layout.clone();
+        let content_area = doc
+            .find_by_id(lumen_chrome::ids::CONTENT_AREA)
+            .expect("chrome document has #contentArea");
+
+        let (_rect, detached) = take_content_area(&mut layout, content_area, &S22_SALVAGE_IDS, &doc)
+            .expect("#contentArea has a layout box");
+        assert!(
+            census_count_boxes(&layout) < census_count_boxes(&pristine),
+            "pruning must actually remove boxes, otherwise the round-trip below is a no-op",
+        );
+
+        assert!(restore_content_area(&mut layout, detached), "restore must find every recorded path");
+        s22_assert_identical(&layout, &pristine, &mut vec!["root".to_owned()]);
+    }
+
+    /// BUG-341 S22: the same round-trip over the salvage path, which the real
+    /// chrome document cannot exercise at rest.
+    ///
+    /// Every salvageable popover (`#findBar`, `#downloadsPanel`, the CC-10
+    /// modals) is `display:none` until opened, so it has no box and
+    /// `take_content_area` salvages nothing — the gate above therefore runs
+    /// with an empty `salvage_paths` and would not notice if the salvage half
+    /// of the restore were broken. This fixture nests one popover inside
+    /// another element so the recorded paths are more than one level deep and
+    /// their removal order matters: restoring in the wrong order, or against
+    /// the wrong parent, misplaces a box and `s22_assert_identical` says so.
+    #[test]
+    fn bug341_s22_restoring_puts_salvaged_popovers_back_where_they_came_from() {
+        let html = concat!(
+            "<html><body>",
+            "<div id=\"before\"></div>",
+            "<div id=\"contentArea\">",
+            "<div id=\"placeholder\">demo<div id=\"downloadsPanel\">downloads</div></div>",
+            "<div id=\"findBar\">find</div>",
+            "</div>",
+            "<div id=\"after\"></div>",
+            "</body></html>",
+        );
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let mut layout = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let pristine = layout.clone();
+        let content_area = doc.find_by_id("contentArea").expect("fixture has #contentArea");
+
+        let (_rect, detached) =
+            take_content_area(&mut layout, content_area, &["findBar", "downloadsPanel"], &doc)
+                .expect("#contentArea has a layout box");
+        assert_eq!(detached.salvage_paths.len(), 2, "both popovers must be salvaged");
+        assert!(
+            detached.salvage_paths.iter().any(|p| p.len() > 1),
+            "the nested popover's path must be deeper than one level, or this fixture is not \
+             exercising what it was written for",
+        );
+
+        assert!(restore_content_area(&mut layout, detached), "restore must find every recorded path");
+        s22_assert_identical(&layout, &pristine, &mut vec!["root".to_owned()]);
+    }
+
+    /// BUG-341 S22 counter gate: three production-shaped chrome cycles,
+    /// returning the last cycle's `(built, reused, boxes_produced)`.
+    ///
+    /// `restore` picks the arm: `true` is production (undo the pruning, hand
+    /// the pristine tree on), `false` feeds the pruned tree straight back as
+    /// the basis — the mistake this slice's design makes possible.
+    fn s22_pipeline_cycles(restore: bool) -> (u32, u32, u64) {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut live: Option<(lumen_layout::LayoutBox, Option<ContentAreaDetachment>)> = None;
+        let mut prev_cascade_styles = lumen_layout::CascadeStyles::default();
+        let mut typed = String::new();
+        let mut last = (0, 0);
+        let mut last_boxes = 0;
+        for _ in 0..3 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+            lumen_layout::set_interactive_state(None, None, None);
+            let basis = live.take().and_then(|(mut lb, detached)| match detached {
+                Some(d) if restore => restore_content_area(&mut lb, d).then_some(lb),
+                _ => Some(lb),
+            });
+            let (mut layout, counters) = match basis {
+                Some(prev) => {
+                    let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                    let dirty_roots: std::collections::HashSet<_> =
+                        lumen_layout::style::restyle_root_set_for_node_change(
+                            &doc,
+                            chrome_node_changes(&touched),
+                            &node_index,
+                        )
+                        .into_iter()
+                        .collect();
+                    let delta = lumen_layout::counters::RestyleDelta {
+                        prev_styles: std::mem::take(&mut prev_cascade_styles),
+                        dirty_roots,
+                        content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                    };
+                    lumen_layout::counters::set_incremental_restyle(true);
+                    lumen_layout::box_tree::set_incremental_box_build(true);
+                    let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
+                    );
+                    lumen_layout::box_tree::set_incremental_box_build(false);
+                    lumen_layout::counters::set_incremental_restyle(false);
+                    result
+                }
+                None => lumen_layout::layout_measured_hyp_with_counters(
+                    &doc, &sheet, viewport, &measurer, &hyp, false,
+                ),
+            };
+            let bb = lumen_layout::box_tree::take_box_build_stats();
+            last = (bb.built, bb.reused);
+            last_boxes = census_count_boxes(&layout);
+            let detached = doc
+                .find_by_id(lumen_chrome::ids::CONTENT_AREA)
+                .and_then(|id| take_content_area(&mut layout, id, &S22_SALVAGE_IDS, &doc))
+                .map(|(_rect, d)| d);
+            live = Some((layout, detached));
+            prev_cascade_styles = counters.into_styles();
+            lumen_layout::clear_interactive_state();
+        }
+        (last.0, last.1, last_boxes)
+    }
+
+    /// BUG-341 S22 gate, both arms: what a chrome cycle produces when its
+    /// basis was restored, versus when the pruned tree is fed straight back.
+    ///
+    /// The measured answer, and the reason this slice needs a gate of its own:
+    /// a pruned basis does not merely cost a rebuild, it produces a **wrong
+    /// tree**. `#contentArea`'s parent is clean on an interaction cycle, so
+    /// `incremental_build_box` moves that whole subtree over from `prev` in
+    /// O(1) — and a `prev` missing `#contentArea` therefore yields a document
+    /// missing `#contentArea`, permanently, 155 boxes instead of 318. It never
+    /// recovers, because the next cycle's basis is that same tree.
+    ///
+    /// Wall-clock cannot gate this and neither can the differential suite: the
+    /// chrome host paints the real page over `#contentArea`'s rect anyway, so
+    /// the visible frame of a wrong-basis run is very nearly the right one.
+    /// Box counts are the observable, which is the lesson S8 wrote for the
+    /// whole track.
+    #[test]
+    fn bug341_s22_a_restored_basis_carries_the_whole_document_forward() {
+        let (built_restored, reused_restored, boxes_restored) = s22_pipeline_cycles(true);
+        let (built_pruned, reused_pruned, boxes_pruned) = s22_pipeline_cycles(false);
+        eprintln!(
+            "[s22-gate] restored built={built_restored} reused={reused_restored} \
+             boxes={boxes_restored} | pruned-basis built={built_pruned} \
+             reused={reused_pruned} boxes={boxes_pruned}"
+        );
+        assert!(
+            boxes_restored > boxes_pruned,
+            "a restored basis must carry the whole document forward, a pruned one must not \
+             ({boxes_restored} vs {boxes_pruned}) — equal counts mean either the restore is a \
+             no-op or the pruning is, and this gate is then measuring nothing",
+        );
+        // The steady-state cycle of the production arm must still be an
+        // *incremental* one: a restore that quietly failed would fall back to
+        // a full layout, which also yields the whole document — and would be
+        // the slow frame this slice exists to avoid.
+        assert!(
+            built_restored < 100 && reused_restored > 0,
+            "the restored arm's steady-state cycle must stay incremental \
+             (built={built_restored} reused={reused_restored}) — a full-layout fallback \
+             builds every one of the document's boxes",
+        );
+    }
+
     // ── Ph3 P3-bfcache: Cache-Control: no-store eligibility filter ──────────
 
     #[test]
@@ -21658,15 +27002,70 @@ mod tests {
         assert!(!cache_control_no_store(&headers));
     }
 
+    // ── BUG-293: JS-navigation URL resolution (window.open / location.href) ──
+
+    #[test]
+    fn resolve_js_nav_file_from_local_page_loads_from_disk() {
+        // file→file: a local page opening a local file resolves to PageSource::File.
+        let opener = PageSource::File(PathBuf::from("/home/x/index.html"));
+        let src = resolve_js_navigation("file:///home/x/page.html", &opener)
+            .expect("file→file must be allowed");
+        match src {
+            PageSource::File(p) => assert_eq!(p, PathBuf::from("/home/x/page.html")),
+            other => panic!("expected PageSource::File, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_js_nav_file_strips_windows_drive_slash() {
+        // file:///D:/… → D:/… (leading slash before the drive letter dropped).
+        let opener = PageSource::File(PathBuf::from("D:/proj/index.html"));
+        let src = resolve_js_navigation("file:///D:/proj/page.html", &opener)
+            .expect("file→file must be allowed");
+        match src {
+            PageSource::File(p) => assert_eq!(p, PathBuf::from("D:/proj/page.html")),
+            other => panic!("expected PageSource::File, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_js_nav_web_to_file_is_blocked() {
+        // web→file: an http(s) page must not open a local file:// resource.
+        let opener = PageSource::Url("https://example.com/".to_owned());
+        let err = resolve_js_navigation("file:///etc/passwd", &opener)
+            .expect_err("web→file must be blocked");
+        assert!(err.contains("политикой безопасности"), "reason: {err}");
+    }
+
+    #[test]
+    fn resolve_js_nav_http_url_untouched() {
+        // Non-file URLs keep the existing PageSource::Url path regardless of opener.
+        let opener = PageSource::Url("https://example.com/".to_owned());
+        let src = resolve_js_navigation("https://example.org/next", &opener)
+            .expect("http navigation stays on the network path");
+        match src {
+            PageSource::Url(u) => assert_eq!(u, "https://example.org/next"),
+            other => panic!("expected PageSource::Url, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_js_nav_file_from_about_blank_allowed() {
+        // A non-web opener (about:blank / Empty) may open a file:// resource.
+        let src = resolve_js_navigation("file:///home/x/page.html", &PageSource::AboutBlank)
+            .expect("non-web opener → file is allowed");
+        assert!(matches!(src, PageSource::File(_)));
+    }
+
     // ── RP-2: live layout viewport tracks window size, minus chrome ─────────
 
     #[test]
     fn content_layout_viewport_subtracts_tab_strip() {
         // Interactive window at 1280×800 → page content area excludes the tab
-        // strip (TAB_BAR_HEIGHT) but keeps the full width.
+        // strip + toolbar (toolbar::CHROME_H) but keeps the full width.
         let (w, h) = content_layout_viewport(Size::new(1280.0, 800.0), true, false);
         assert!((w - 1280.0).abs() < 1e-3);
-        assert!((h - (800.0 - tabs::strip::TAB_BAR_HEIGHT)).abs() < 1e-3);
+        assert!((h - (800.0 - toolbar::CHROME_H)).abs() < 1e-3);
     }
 
     #[test]
@@ -21675,14 +27074,14 @@ mod tests {
         // the content height follows it too (no hardcoded 720).
         let (w, h) = content_layout_viewport(Size::new(640.0, 480.0), true, false);
         assert!((w - 640.0).abs() < 1e-3);
-        assert!((h - (480.0 - tabs::strip::TAB_BAR_HEIGHT)).abs() < 1e-3);
+        assert!((h - (480.0 - toolbar::CHROME_H)).abs() < 1e-3);
     }
 
     #[test]
     fn content_layout_viewport_default_window_yields_720() {
-        // The interactive window opens at 1024 × (720 + TAB_BAR_HEIGHT) so the
+        // The interactive window opens at 1024 × (720 + toolbar::CHROME_H) so the
         // page gets exactly 720 CSS px, as graphic tests expect.
-        let surface = Size::new(1024.0, 720.0 + tabs::strip::TAB_BAR_HEIGHT);
+        let surface = Size::new(1024.0, 720.0 + toolbar::CHROME_H);
         let (w, h) = content_layout_viewport(surface, true, false);
         assert!((w - 1024.0).abs() < 1e-3);
         assert!((h - 720.0).abs() < 1e-3);
@@ -21694,7 +27093,7 @@ mod tests {
         let surface = Size::new(1024.0, 800.0);
         let (_w, h) = content_layout_viewport(surface, true, true);
         let expected =
-            800.0 - tabs::strip::TAB_BAR_HEIGHT - panels::workspace_panel::SWITCHER_HEIGHT;
+            800.0 - toolbar::CHROME_H - panels::workspace_panel::SWITCHER_HEIGHT;
         assert!((h - expected).abs() < 1e-3);
     }
 
@@ -23040,6 +28439,30 @@ mod tests {
             extract_screenshot(&args(&["--screenshot", "a.png", "--screenshot", "b.png"]));
         assert_eq!(output.as_deref(), Some(std::path::Path::new("a.png")));
         assert_eq!(rest, args(&["--screenshot", "b.png"]));
+    }
+
+    // ── extract_trace_nav (PERF-1) ───────────────────────────────────────────
+
+    #[test]
+    fn extract_trace_nav_basic() {
+        let (output, rest) = extract_trace_nav(&args(&["--trace-nav", "out.json", "page.html"]));
+        assert_eq!(output.as_deref(), Some(std::path::Path::new("out.json")));
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn extract_trace_nav_no_flag() {
+        let (output, rest) = extract_trace_nav(&args(&["page.html"]));
+        assert!(output.is_none());
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn extract_trace_nav_with_url_source() {
+        let (output, rest) =
+            extract_trace_nav(&args(&["--trace-nav", "t.json", "https://example.com"]));
+        assert_eq!(output.as_deref(), Some(std::path::Path::new("t.json")));
+        assert_eq!(rest, args(&["https://example.com"]));
     }
 
     #[test]

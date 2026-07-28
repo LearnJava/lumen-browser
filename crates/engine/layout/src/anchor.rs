@@ -740,7 +740,7 @@ mod tests {
         let root = LayoutBox {
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],
             col_span: 1,
@@ -762,7 +762,7 @@ mod tests {
         let mut child = LayoutBox {
             node: node(1),
             rect: rect(100.0, 150.0, 200.0, 100.0),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],
             col_span: 1,
@@ -772,12 +772,12 @@ mod tests {
             scroll_y: 0.0,
             dirty: Default::default(),
         };
-        child.style.anchor_name = Some("--tooltip".into());
+        std::sync::Arc::make_mut(&mut child.style).anchor_name = Some("--tooltip".into());
 
         let root = LayoutBox {
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![child],
             col_span: 1,
@@ -802,7 +802,7 @@ mod tests {
         let mut anchor_deep = LayoutBox {
             node: node(2),
             rect: rect(50.0, 50.0, 100.0, 100.0),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],
             col_span: 1,
@@ -812,12 +812,12 @@ mod tests {
             scroll_y: 0.0,
             dirty: Default::default(),
         };
-        anchor_deep.style.anchor_name = Some("--deep".into());
+        std::sync::Arc::make_mut(&mut anchor_deep.style).anchor_name = Some("--deep".into());
 
         let child = LayoutBox {
             node: node(1),
             rect: rect(0.0, 0.0, 200.0, 200.0),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![anchor_deep],
             col_span: 1,
@@ -831,7 +831,7 @@ mod tests {
         let root = LayoutBox {
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![child],
             col_span: 1,
@@ -856,7 +856,7 @@ mod tests {
         let mut child1 = LayoutBox {
             node: node(1),
             rect: rect(0.0, 0.0, 100.0, 100.0),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],
             col_span: 1,
@@ -866,12 +866,12 @@ mod tests {
             scroll_y: 0.0,
             dirty: Default::default(),
         };
-        child1.style.anchor_name = Some("--left".into());
+        std::sync::Arc::make_mut(&mut child1.style).anchor_name = Some("--left".into());
 
         let mut child2 = LayoutBox {
             node: node(2),
             rect: rect(150.0, 0.0, 100.0, 100.0),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],
             col_span: 1,
@@ -881,12 +881,12 @@ mod tests {
             scroll_y: 0.0,
             dirty: Default::default(),
         };
-        child2.style.anchor_name = Some("--right".into());
+        std::sync::Arc::make_mut(&mut child2.style).anchor_name = Some("--right".into());
 
         let root = LayoutBox {
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),
-            style: ComputedStyle::root(),
+            style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![child1, child2],
             col_span: 1,

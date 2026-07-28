@@ -29,7 +29,7 @@ const TEXT_PAD_X: f32 = 14.0;
 /// Row text font size.
 const FONT_SZ: f32 = 13.0;
 /// Corner radius of the menu background.
-const RADIUS: f32 = 6.0;
+const RADIUS: f32 = crate::theme_tokens::radius::LG;
 
 const MENU_BG: Color = Color { r: 38, g: 39, b: 44, a: 250 };
 const MENU_BORDER: Color = Color { r: 70, g: 71, b: 78, a: 255 };

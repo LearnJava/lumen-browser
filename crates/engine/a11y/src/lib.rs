@@ -8,6 +8,7 @@
 //! Platform bridges live in the [`platform`] module:
 //! UIA (Windows), NSAccessibility (macOS), AT-SPI2 (Linux).
 
+pub mod chrome;
 mod names;
 mod roles;
 pub mod platform;

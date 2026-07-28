@@ -385,6 +385,96 @@ enum GlContextState {
     NotCurrent(NotCurrentContext),
 }
 
+/// Максимальное число одновременно живущих уменьшенных вариантов изображений
+/// (`"src@WxH"`), которое держит femtovg-бэкенд (BUG-272 срез 18).
+///
+/// Взято с большим запасом относительно числа различных placed-размеров
+/// картинок, видимых в одном кадре, поэтому внутрикадровый thrash невозможен;
+/// ограничивает межкадровое накопление, когда одна и та же картинка
+/// переразмещается во множестве размеров за сессию (responsive-relayout, зум,
+/// анимация) — без этой границы `"src@WxH"`-текстуры копились бы до следующей
+/// навигации (`clear_images`).
+const RESIZED_VARIANT_CACHE_CAP: usize = 128;
+
+/// Небольшой LRU-кэш фиксированной ёмкости (BUG-272 срез 18).
+///
+/// Служит хранилищем уменьшенных вариантов изображений [`FemtovgBackend`] — по
+/// одной полноценной GPU-текстуре на каждый различный placed-размер исходной
+/// картинки. Точное совпадение размера — уже *попадание* в кэш (ключ
+/// `"src@WxH"`), но разные размеры — это честно разные пересэмплированные
+/// пиксели: их нельзя дедуплицировать без повторного ресемплинга, а он вернул бы
+/// алиасинг downscale'а, ради устранения которого варианты и существуют
+/// (BUG-077). Поэтому рычаг, ограничивающий накопление, — именно эвикция, а не
+/// дедупликация.
+///
+/// Наименее недавно использованный ключ лежит в начале `order`; попадание в
+/// [`Self::get`] или свежая [`Self::insert`] перемещают ключ в конец. `insert`
+/// сверх `cap` вытесняет начало (LRU) и возвращает вытесненное значение, чтобы
+/// вызывающая сторона освободила связанный ресурс (GPU-текстуру).
+struct LruMap<V> {
+    /// Ключ (`"src@WxH"`) → значение (GPU `ImageId`).
+    map: HashMap<String, V>,
+    /// Порядок обращений, наименее недавно использованный — в начале.
+    order: Vec<String>,
+    /// Максимальное число записей до вытеснения в [`Self::insert`].
+    cap: usize,
+}
+
+impl<V: Copy> LruMap<V> {
+    /// Создаёт пустой кэш, хранящий не более `cap` записей (минимум 1).
+    fn new(cap: usize) -> Self {
+        Self { map: HashMap::new(), order: Vec::new(), cap: cap.max(1) }
+    }
+
+    /// Ищет `key`, помечая его как наиболее недавно использованный при попадании.
+    fn get(&mut self, key: &str) -> Option<V> {
+        let val = *self.map.get(key)?;
+        self.touch(key);
+        Some(val)
+    }
+
+    /// Перемещает `key` в конец порядка обращений (наиболее недавний).
+    fn touch(&mut self, key: &str) {
+        if let Some(pos) = self.order.iter().position(|k| k == key) {
+            let k = self.order.remove(pos);
+            self.order.push(k);
+        }
+    }
+
+    /// Вставляет `key` → `val` как наиболее недавнюю запись. Если кэш заполнен,
+    /// вытесняет наименее недавно использованную запись и возвращает её значение,
+    /// чтобы вызывающая сторона освободила связанный ресурс. `key` не должен уже
+    /// присутствовать (вызывается только на miss-пути).
+    fn insert(&mut self, key: String, val: V) -> Option<V> {
+        let evicted = if self.map.len() >= self.cap && !self.order.is_empty() {
+            let lru = self.order.remove(0);
+            self.map.remove(&lru)
+        } else {
+            None
+        };
+        self.map.insert(key.clone(), val);
+        self.order.push(key);
+        evicted
+    }
+
+    /// Число живых записей.
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Итерирует хранимые значения (для учёта GPU-байт).
+    fn values(&self) -> impl Iterator<Item = &V> {
+        self.map.values()
+    }
+
+    /// Удаляет все записи, возвращая значения, чтобы вызывающая сторона их
+    /// освободила.
+    fn drain(&mut self) -> Vec<V> {
+        self.order.clear();
+        self.map.drain().map(|(_, v)| v).collect()
+    }
+}
+
 /// Реализует [`RenderBackend`] через femtovg 2D Canvas API поверх OpenGL.
 /// Создаётся из winit-окна через [`FemtovgBackend::new`].
 pub struct FemtovgBackend {
@@ -404,20 +494,44 @@ pub struct FemtovgBackend {
     scale: f64,
     /// ID bundled-шрифта (Inter Regular) в femtovg atlas.
     font_id: Option<femtovg::FontId>,
-    /// Зарегистрированные изображения: src URL → femtovg ImageId.
+    /// ID bundled Golos Text Regular (DS-4) — default chrome UI font, resolved
+    /// for reserved family `"Golos Text"` and for empty-`font_family` chrome text.
+    chrome_font_id: Option<femtovg::FontId>,
+    /// ID bundled Golos Text Medium (DS-4) — reserved family `"Golos Text Medium"`.
+    chrome_font_medium_id: Option<femtovg::FontId>,
+    /// ID bundled JetBrains Mono Regular (DS-4) — reserved family `"JetBrains Mono"`,
+    /// used for the omnibox URL field and DevTools panels.
+    mono_font_id: Option<femtovg::FontId>,
+    /// Зарегистрированные изображения в исходном разрешении: src URL →
+    /// femtovg ImageId. Жизненный цикл — регистрация (`register_image`) →
+    /// очистка (`clear_images`).
     ///
-    /// Помимо ключа `src` (исходное разрешение) здесь же кешируются
-    /// предварительно уменьшенные варианты под ключом `"src@WxH"` (см.
-    /// [`Self::resolve_image_for_rect`]) — нужны для качественного downscale
-    /// (BUG-077): femtovg сэмплит текстуру билинейно, что даёт алиасинг при
-    /// сильном уменьшении; вместо этого рисуем заранее area-averaged картинку.
+    /// BUG-272 срез 18: уменьшенные варианты (`"src@WxH"`) больше здесь **не**
+    /// хранятся — они вынесены в LRU-ограниченный [`Self::resized_variants`],
+    /// чтобы их межкадровое накопление было ограничено, а не жило до следующей
+    /// навигации.
     images: HashMap<String, femtovg::ImageId>,
     /// Декодированные пиксели исходных изображений: src URL → `Image`.
     ///
     /// Храним рядом с GPU-текстурами, чтобы пересэмплировать на CPU
     /// (`resize_area_avg`) при downscale. Зеркалит `Renderer::raw_images`
     /// (wgpu-бэкенд).
-    raw_images: HashMap<String, Image>,
+    ///
+    /// BUG-272 срез 17: `Arc<Image>`, а не `Image` — `register_image` получает
+    /// `Arc<Image>` от вызывающей стороны и клонирует указатель, разделяя
+    /// аллокацию декодированных пикселей с `IMAGE_CACHE`/CPU image-cache вместо
+    /// второго экземпляра каждой картинки (тот же приём, что срез 6 применил к
+    /// шрифтовым байтам).
+    raw_images: HashMap<String, Arc<Image>>,
+    /// BUG-272 срез 18: LRU-ограниченный кэш area-averaged уменьшенных вариантов
+    /// (`"src@WxH"` → GPU `ImageId`, см. [`Self::resolve_image_for_rect`]).
+    /// Ёмкость — [`RESIZED_VARIANT_CACHE_CAP`]; вытеснение отправляет старую
+    /// текстуру в [`Self::resized_variant_pending_delete`].
+    resized_variants: LruMap<femtovg::ImageId>,
+    /// BUG-272 срез 18: варианты, вытесненные LRU, — удаляются после следующего
+    /// `canvas.flush()`: вытесненный `ImageId` мог быть отрисован ранее в этом же
+    /// кадре, поэтому удаление ждёт flush, как и остальные pending-delete-очереди.
+    resized_variant_pending_delete: Vec<femtovg::ImageId>,
     /// Зарегистрированные layer snapshots: id → femtovg ImageId.
     snapshots: HashMap<u64, femtovg::ImageId>,
     /// Провайдер шрифтов для multi-family рендера (опциональный).
@@ -530,6 +644,36 @@ pub struct FemtovgBackend {
     /// Device-pixel size `backdrop_bbox_pool` images were created for; see
     /// `cpu_upload_pool_size`.
     backdrop_bbox_pool_size: (usize, usize),
+    /// BUG-272 срез 10 (item 3(b), last full-framebuffer piece of the
+    /// backdrop-filter path), generalised in срез 11 (item 3(c)): pool of
+    /// reusable render-target FBOs sized to a group's own bbox instead of the
+    /// full framebuffer, shared by every Push opener whose visible (on-viewport)
+    /// layer only ever needs to cover its own `bounds` — срез 10's
+    /// `PushBackdropFilter` element-content capture (`elem_image_id`) and срез
+    /// 11's `PushOpacity` visible layer, with срезы 12–14 (clip/mask/filter
+    /// openers) reusing it unchanged. Kept separate from `layer_pool` because
+    /// its size varies per group (like `backdrop_bbox_pool` vs
+    /// `cpu_upload_pool`). `offscreen_layer_image_flags()` — `FLIP_Y` needed, a
+    /// render target later `Paint::image`-sampled directly at composite time.
+    bbox_layer_pool: Vec<femtovg::ImageId>,
+    /// Device-pixel size `bbox_layer_pool` images were created for; see
+    /// `backdrop_bbox_pool_size`.
+    bbox_layer_pool_size: (usize, usize),
+    /// BUG-272 срез 14: pool of reusable CPU-upload images for bbox-sized
+    /// results whose group varies per element — `composite_filter_layer`'s
+    /// colour-matrix-only re-upload (PushFilter with no blur in the chain)
+    /// and `composite_blend_layer`'s blend-result re-upload, both only when
+    /// their source layer was itself bbox-sized via `acquire_bbox_layer`.
+    /// Kept separate from `cpu_upload_pool` (still used by these same two
+    /// paths on their full-framebuffer fallback) for the same size-thrash
+    /// reason `backdrop_bbox_pool` is separate from it — see that field's
+    /// doc. Shared by two consumer types under one pool, same precedent as
+    /// `bbox_layer_pool` (one category of varying-size images, several
+    /// Push openers).
+    bbox_cpu_upload_pool: Vec<femtovg::ImageId>,
+    /// Device-pixel size `bbox_cpu_upload_pool` images were created for; see
+    /// `cpu_upload_pool_size`.
+    bbox_cpu_upload_pool_size: (usize, usize),
     /// Offscreen opacity group layer stack (BUG-133). Each entry holds an
     /// offscreen ImageId that subtree draws render into; PopOpacity composites
     /// it once with the group alpha (CSS Color L3 §3.2: opacity is atomic —
@@ -609,7 +753,96 @@ pub struct FemtovgBackend {
     /// via [`Self::invalidate_scroll_cache`]. Invariant:
     /// `scroll_cache.is_populated() == retained_band.is_some()`.
     retained_band: Option<femtovg::ImageId>,
+    /// BUG-273 срез 2: inter-frame cache of composited **bbox-sized filter
+    /// layers** (colour-matrix chains without a blur — the only offscreen
+    /// filter path whose pixels are scroll-invariant, see
+    /// [`FilterLayerEntry::bbox`] and [`Self::filter_is_bbox_cacheable`]).
+    /// Keyed by a content hash of the `PushFilter…PopFilter` subtree (folded
+    /// via [`crate::display_list::hash_command_into`], which excludes the outer
+    /// scroll transform by construction), so a fully-visible filtered element
+    /// scrolled without content change hits and reuses its cached filtered
+    /// texture — skipping the expensive `screenshot()` GPU-readback + CPU
+    /// colour-matrix loop in [`Self::composite_filter_layer`] every frame. The
+    /// texture placement is always recomputed fresh from the current transform
+    /// on a hit, so only the *pixels* are cached, never the position. Held
+    /// outside the scratch pools (like `retained_band`); entries are validated
+    /// on lookup by device dims + sub-pixel phase and dropped wholesale by
+    /// [`Self::invalidate_scroll_cache`] on any resize/DPI/content/image-load
+    /// change (the events that alter on-screen pixels without changing the
+    /// content hash).
+    filter_layer_cache: HashMap<u64, CachedFilterLayer>,
+    /// BUG-273 срез 2: sum of `filter_layer_cache` texture footprints in bytes,
+    /// used to enforce [`FILTER_CACHE_BUDGET_BYTES`] via LRU eviction on store.
+    filter_cache_bytes: usize,
+    /// BUG-273 срез 2: monotonic LRU clock, bumped once per `render()`; each
+    /// cache entry records the clock value at its last hit/store so the
+    /// least-recently-used entry can be evicted when the budget is exceeded.
+    filter_cache_clock: u64,
+    /// BUG-273 срез 2: `false` disables the filter-layer cache entirely
+    /// (`LUMEN_NO_FILTER_CACHE=1`), for paint-bisect diffing a cached frame
+    /// against an always-recomputed one.
+    filter_cache_enabled: bool,
+    /// BUG-273 срез 2: hash + sub-pixel phase computed by
+    /// [`Self::filter_cache_probe`] on a cache **miss**, handed to the very next
+    /// `render_command(PushFilter)` so [`Self::composite_filter_layer`] can
+    /// store the composited result under that key. `take()`-n unconditionally by
+    /// the `PushFilter` arm so it can never leak to an unrelated later push.
+    pending_filter_cache_meta: Option<FilterCacheMeta>,
+    /// BUG-273 срез 2: filter-cache hits this frame (reset in `render()`,
+    /// reported under `LUMEN_FRAME_LOG=2`).
+    filter_cache_hits: u32,
 }
+
+/// BUG-273 срез 2: cache key metadata for a bbox-sized filter layer — the
+/// subtree content hash plus the sub-device-pixel phase of the group's mapped
+/// top-left. The phase gates hits so a reused texture is pixel-identical to a
+/// fresh render: content alignment inside a bbox texture depends on the
+/// fractional device offset, which only stays constant under integer-device
+/// scroll (always the case at scale 1.0). A phase change → a miss → a re-render,
+/// never a sub-pixel-shifted false hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FilterCacheMeta {
+    /// Content hash of the `PushFilter…PopFilter` bracket (inclusive).
+    hash: u64,
+    /// Sub-device-pixel phase of the mapped top-left, quantized to eighths.
+    phase_x: u32,
+    /// Sub-device-pixel phase of the mapped top-left, quantized to eighths.
+    phase_y: u32,
+}
+
+/// BUG-273 срез 2: a retained composited filter-layer texture plus the metadata
+/// needed to validate a reuse. The `image_id` is a CPU-upload image (the
+/// colour-matrix re-upload result) held live across frames; it is queued to
+/// `filter_layer_pending_delete` when evicted or overwritten.
+struct CachedFilterLayer {
+    /// Retained composited (post-filter) texture, sized `(w, h)` device px.
+    image_id: femtovg::ImageId,
+    /// Device-pixel width the texture was composited at; a hit requires the
+    /// current group's clamped device width to match (a partially-scrolled-in
+    /// group's clamped size differs → miss → re-render).
+    w: usize,
+    /// Device-pixel height, same validation role as `w`.
+    h: usize,
+    /// Sub-device-pixel phase the texture was rendered at (see [`FilterCacheMeta`]).
+    phase_x: u32,
+    /// Sub-device-pixel phase, same role as `phase_x`.
+    phase_y: u32,
+    /// GPU footprint (`w * h * 4`) for the budget accounting.
+    bytes: usize,
+    /// LRU clock value at the last hit/store.
+    last_used: u64,
+}
+
+/// BUG-273 срез 2: GPU memory budget for retained filter-layer textures (32 MB).
+/// A realistic page has a handful of filtered elements, each a small bbox
+/// texture (e.g. 300×200×4 ≈ 240 KB), so 32 MB is ample headroom; the LRU
+/// eviction only bites on pathological pages with many large filtered regions.
+const FILTER_CACHE_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+
+/// BUG-273 срез 2: hard cap on retained filter-layer entries, a backstop
+/// against unbounded key growth on pages whose filtered subtrees churn content
+/// hashes every frame (the budget alone already bounds bytes).
+const FILTER_CACHE_MAX_ENTRIES: usize = 128;
 
 // SAFETY: FemtovgBackend используется только из одного потока одновременно
 // (enforce-ится через `&mut self` в методах трейта). OpenGL контекст
@@ -633,6 +866,21 @@ struct FilterLayerEntry {
     filters: Vec<lumen_layout::FilterFn>,
     /// Render target active before PushFilter — restored on PopFilter.
     prev_render_target: femtovg::RenderTarget,
+    /// BUG-272 срез 14: device-pixel `(x0, y0, w, h)` when `image_id` was
+    /// acquired bbox-sized via [`FemtovgBackend::acquire_bbox_layer`] instead
+    /// of full-framebuffer via [`FemtovgBackend::acquire_layer`] — same
+    /// convention as [`OpacityLayerEntry::bbox`]. Always `None` when the
+    /// filter chain contains a blur: `filter_image`'s Gaussian blur samples
+    /// texels beyond the element's own border box, which a tight bbox
+    /// texture has no data for (BUG-145) — Push keeps blur chains
+    /// full-framebuffer unconditionally.
+    bbox: Option<(f32, f32, usize, usize)>,
+    /// BUG-273 срез 2: `Some` when this bbox layer is a **cacheable** colour-matrix
+    /// group rendered on a cache miss — the hash + phase
+    /// [`FemtovgBackend::composite_filter_layer`] stores the composited result
+    /// under (instead of recycling it to the scratch pool). `None` for blur
+    /// chains, full-framebuffer fallbacks, and when the cache is disabled.
+    cache_meta: Option<FilterCacheMeta>,
 }
 
 // ─── Offscreen layer support (BUG-133 opacity, BUG-146 filter) ───────────────
@@ -745,6 +993,17 @@ struct OpacityLayerEntry {
     alpha: f32,
     /// Render target active before PushOpacity — restored on PopOpacity.
     prev_render_target: femtovg::RenderTarget,
+    /// BUG-272 срез 11: when `image_id` was acquired bbox-sized via
+    /// [`FemtovgBackend::acquire_bbox_layer`] instead of full-framebuffer via
+    /// [`FemtovgBackend::acquire_layer`], the device-pixel `(x0, y0, w, h)` the
+    /// layer was sized/positioned for — screen-space origin plus extent, same
+    /// convention as [`FemtovgBackend::screen_bbox_device_px`]'s return value.
+    /// `None` for the full-framebuffer path (`bounds` was `None`, the bbox
+    /// landed off-target, or acquiring a bbox layer failed and the
+    /// full-framebuffer fallback was used instead). `PopOpacity` uses this to
+    /// undo the Push-time bbox `translate`/`scissor` and to composite/release
+    /// the layer at the right device-pixel rect instead of the full canvas.
+    bbox: Option<(f32, f32, usize, usize)>,
 }
 
 // ─── Gradient mask support (BUG-183) ─────────────────────────────────────────
@@ -781,6 +1040,17 @@ struct MaskLayerEntry {
     rect: lumen_core::geom::Rect,
     /// Render target active before the matching `PushMask*` — restored on `PopMask`.
     prev_render_target: femtovg::RenderTarget,
+    /// BUG-272 срез 13: same convention as [`OpacityLayerEntry::bbox`] — when
+    /// `image_id` was acquired bbox-sized via
+    /// [`FemtovgBackend::acquire_bbox_layer`] instead of full-framebuffer via
+    /// [`FemtovgBackend::acquire_layer`], the device-pixel `(x0, y0, w, h)` the
+    /// layer was sized/positioned for. `None` for the full-framebuffer path
+    /// (the bbox landed off-target, or acquiring a bbox layer failed and the
+    /// full-framebuffer fallback was used instead) or the scissor fallback.
+    /// `PopMask` passes this through to [`FemtovgBackend::composite_opacity_layer`]
+    /// to undo the Push-time bbox `translate`/`scissor` and composite/release
+    /// the layer at the right device-pixel rect instead of the full canvas.
+    bbox: Option<(f32, f32, usize, usize)>,
 }
 
 // ─── Clip-path shape clip support (BUG-140) ──────────────────────────────────
@@ -796,7 +1066,8 @@ enum ClipEntry {
     /// `PopClip` композитит слой на `prev_render_target` одним
     /// `fill_path`-вызовом по форме (антиалиасинг пути — бесплатно).
     PathLayer {
-        /// Offscreen-слой с содержимым клип-группы (full-RT, FLIP_Y FBO).
+        /// Offscreen-слой с содержимым клип-группы. Full-RT FLIP_Y FBO, либо
+        /// (BUG-272 срез 12) bbox-сайзинг слой — см. `bbox`.
         image_id: femtovg::ImageId,
         /// Форма клипа в page-координатах (до transform элемента).
         shape: ResolvedClipShape,
@@ -807,13 +1078,20 @@ enum ClipEntry {
         transform: femtovg::Transform2D,
         /// Render target, активный до PushClipPath.
         prev_render_target: femtovg::RenderTarget,
+        /// BUG-272 срез 12: тот же bbox-конвент, что и
+        /// `OpacityLayerEntry::bbox` (срез 11) — device-px `(x0, y0, w, h)`,
+        /// если `image_id` был аллоцирован через
+        /// [`FemtovgBackend::acquire_bbox_layer`], `None` для
+        /// full-framebuffer-пути (`acquire_layer`).
+        bbox: Option<(f32, f32, usize, usize)>,
     },
     /// Скруглённый клип (`PushClipRoundedRect`, BUG-249): как `PathLayer`, но
     /// форма — rounded-rect. Subtree рендерится в offscreen `image_id`, а
     /// `PopClip` композитит его одним `fill_path` по скруглённому контуру —
     /// углы детей обрезаются по border-radius (а не square scissor).
     RoundedRectLayer {
-        /// Offscreen-слой с содержимым клип-группы (full-RT, FLIP_Y FBO).
+        /// Offscreen-слой с содержимым клип-группы. Full-RT FLIP_Y FBO, либо
+        /// (BUG-272 срез 12) bbox-сайзинг слой — см. `bbox`.
         image_id: femtovg::ImageId,
         /// Клип-прямоугольник (padding-box) в page-координатах.
         rect: lumen_core::geom::Rect,
@@ -823,6 +1101,8 @@ enum ClipEntry {
         transform: femtovg::Transform2D,
         /// Render target, активный до PushClipRoundedRect.
         prev_render_target: femtovg::RenderTarget,
+        /// BUG-272 срез 12: см. `PathLayer::bbox`.
+        bbox: Option<(f32, f32, usize, usize)>,
     },
 }
 
@@ -970,8 +1250,9 @@ struct BlendLayerEntry {
     mode: BlendMode,
     /// Offscreen image capturing the source layer (draws between Push and Pop).
     src_image_id: femtovg::ImageId,
-    /// Snapshot of the previous render target taken at PushBlendMode time.
-    /// Premultiplied RGBA u8, dimensions `backdrop_w × backdrop_h`.
+    /// Snapshot of the previous render target taken at PushBlendMode time,
+    /// cropped to `bbox` when set (BUG-272 срез 14) or the full framebuffer
+    /// otherwise. Premultiplied RGBA u8, dimensions `backdrop_w × backdrop_h`.
     backdrop_rgba: Vec<u8>,
     /// Width of the backdrop snapshot in pixels.
     backdrop_w: usize,
@@ -979,6 +1260,13 @@ struct BlendLayerEntry {
     backdrop_h: usize,
     /// Render target active before PushBlendMode — restored on PopBlendMode.
     prev_render_target: femtovg::RenderTarget,
+    /// BUG-272 срез 14: device-pixel `(x0, y0, w, h)` when `src_image_id` was
+    /// acquired bbox-sized via [`FemtovgBackend::acquire_bbox_layer`] instead
+    /// of full-framebuffer via [`FemtovgBackend::acquire_layer`] — same
+    /// convention as [`OpacityLayerEntry::bbox`]. Mix-blend is pure per-pixel
+    /// work (no neighbour sampling), so unlike `PushFilter` this applies
+    /// whenever `bounds` maps to an on-target bbox — no blur-style exception.
+    bbox: Option<(f32, f32, usize, usize)>,
 }
 
 // ─── Backdrop filter layer support (PA-4) ────────────────────────────────────
@@ -989,22 +1277,59 @@ struct BlendLayerEntry {
 /// the backdrop snapshot cropped to `bounds` (device px) with the filter chain applied
 /// (blur + colour-matrix) — BUG-272 item 3: sized to the element's bbox instead of the
 /// full framebuffer, since the filtered result is only ever sampled within `bounds`.
+/// BUG-272 срез 10: `elem_image_id` is sized to that same bbox
+/// (`filtered_backdrop_w/h`) instead of full-framebuffer.
+///
+/// Two different position conventions are in play, and they must NOT be
+/// confused: `apply_backdrop_filters`'s crop (hence `filtered_backdrop_x/y`)
+/// indexes the backdrop screenshot using `bounds.x/y` directly, with no
+/// adjustment for ambient scroll/page-offset/nested transforms — a
+/// pre-existing srez-5 limitation, out of scope to fix here, that this
+/// entry's `filtered_backdrop_id` compositing (step 1) inherits unchanged.
+/// `elem_image_id`'s own content, by contrast, is captured with the ambient
+/// transform PRESERVED (ADR-style: same convention every other renderer
+/// command uses) plus an extra translate on top, so it lands at the
+/// element's true on-screen position — matching how the pre-срез-10
+/// full-framebuffer `elem_image_id` behaved (a direct, unshifted copy of the
+/// whole frame already had it there). `true_elem_x/y` is that true position
+/// (device px, captured once at Push time via `canvas.transform()` before any
+/// reset), used by `composite_backdrop_filter_layer` to place it back
+/// correctly — using `filtered_backdrop_x/y` instead here reintroduces the
+/// step 1 mismatch as a second-order bug: the element's own border/background
+/// would land partway through backdrop step 1's (already off) rect, splitting
+/// the card visibly into a correctly-tinted zone and a wrong-tint zone (found
+/// via a single-card A/B gdigrab repro that ruled out FLIP_Y, pooling and a
+/// CPU-roundtrip re-upload as the cause — all three left the diff unchanged
+/// until this position mismatch was identified via `apply_backdrop_filters`'
+/// own CPU crop dumped to PPM: byte-identical between branch and main, so the
+/// bug was never in step 1 or in capturing `elem_image_id`, only in how srez
+/// 10 was placing it back).
 /// On `PopBackdropFilter`, `composite_backdrop_filter_layer` blits the filtered backdrop
 /// at `bounds`, then composites element content on top (CSS Filter Effects L2 §2).
 struct BackdropFilterLayerEntry {
     /// Offscreen image capturing element content (draws between Push and Pop).
+    /// Bbox-sized (BUG-272 срез 10) — see `filtered_backdrop_w/h` for its
+    /// device-pixel size, `true_elem_x/y` for where it belongs on composite.
     elem_image_id: femtovg::ImageId,
+    /// Device-pixel X of the element's true on-screen position (ambient
+    /// transform applied) at Push time — see the struct doc for why this is
+    /// a different coordinate than `filtered_backdrop_x`.
+    true_elem_x: f32,
+    /// Device-pixel Y of the element's true on-screen position; see `true_elem_x`.
+    true_elem_y: f32,
     /// Bbox-cropped filtered backdrop snapshot — blurred and/or colour-filtered.
     filtered_backdrop_id: femtovg::ImageId,
     /// Device-pixel width `filtered_backdrop_id` was uploaded at (BUG-272 срез
-    /// 5) — needed to return it to `backdrop_bbox_pool` on Pop.
+    /// 5) — needed to return it to `backdrop_bbox_pool` on Pop. Also
+    /// `elem_image_id`'s own device-pixel width (both share the same crop size).
     filtered_backdrop_w: usize,
     /// Device-pixel height `filtered_backdrop_id` was uploaded at; see
     /// `filtered_backdrop_w`.
     filtered_backdrop_h: usize,
     /// Device-pixel X origin of `filtered_backdrop_id` within the framebuffer
     /// (BUG-272 срез 5) — the crop's top-left corner, needed to place the
-    /// smaller image back at the right spot on composite.
+    /// smaller image back at the right spot on composite. NOT `elem_image_id`'s
+    /// origin — see `true_elem_x`.
     filtered_backdrop_x: usize,
     /// Device-pixel Y origin of `filtered_backdrop_id`; see `filtered_backdrop_x`.
     filtered_backdrop_y: usize,
@@ -1452,6 +1777,13 @@ impl FemtovgBackend {
         // Загружаем bundled Inter как fallback-шрифт.
         let font_id = canvas.add_font_mem(&font_bytes).ok();
 
+        // Bundled chrome UI faces (DS-4): Golos Text (default UI) + JetBrains
+        // Mono (omnibox URL / DevTools). Loaded eagerly, like Inter above —
+        // chrome never falls back to the system FontProvider for these.
+        let chrome_font_id = canvas.add_font_mem(crate::chrome_fonts::GOLOS_TEXT_REGULAR).ok();
+        let chrome_font_medium_id = canvas.add_font_mem(crate::chrome_fonts::GOLOS_TEXT_MEDIUM).ok();
+        let mono_font_id = canvas.add_font_mem(crate::chrome_fonts::JETBRAINS_MONO_REGULAR).ok();
+
         let size = window.inner_size();
         let scale = window.scale_factor();
 
@@ -1463,8 +1795,13 @@ impl FemtovgBackend {
             height: size.height,
             scale,
             font_id,
+            chrome_font_id,
+            chrome_font_medium_id,
+            mono_font_id,
             images: HashMap::new(),
             raw_images: HashMap::new(),
+            resized_variants: LruMap::new(RESIZED_VARIANT_CACHE_CAP),
+            resized_variant_pending_delete: Vec::new(),
             snapshots: HashMap::new(),
             font_provider: None,
             loaded_fonts: HashMap::new(),
@@ -1492,6 +1829,10 @@ impl FemtovgBackend {
             cpu_upload_pool_size: (0, 0),
             backdrop_bbox_pool: Vec::new(),
             backdrop_bbox_pool_size: (0, 0),
+            bbox_layer_pool: Vec::new(),
+            bbox_layer_pool_size: (0, 0),
+            bbox_cpu_upload_pool: Vec::new(),
+            bbox_cpu_upload_pool_size: (0, 0),
             backdrop_filter_layer_stack: Vec::new(),
             clip_stack: Vec::new(),
             active_rt_image: None,
@@ -1503,6 +1844,12 @@ impl FemtovgBackend {
             content_band_size: (0, 0),
             scroll_cache: crate::ScrollCache::new(crate::DEFAULT_OVERSCAN),
             retained_band: None,
+            filter_layer_cache: HashMap::new(),
+            filter_cache_bytes: 0,
+            filter_cache_clock: 0,
+            filter_cache_enabled: std::env::var_os("LUMEN_NO_FILTER_CACHE").is_none(),
+            pending_filter_cache_meta: None,
+            filter_cache_hits: 0,
         })
     }
 
@@ -1591,17 +1938,20 @@ impl FemtovgBackend {
     /// The caller MUST clear the texture (`clear_rect` to transparent) before
     /// drawing: a reused texture holds the previous layer's pixels.
     fn acquire_layer(&mut self) -> Option<femtovg::ImageId> {
-        if self.layer_pool_size != (self.width, self.height) {
+        // BUG-320: size to the ACTIVE render target (band FBO during a
+        // scroll-blit pass, else the framebuffer), not the window.
+        let (w, h) = self.current_rt_size();
+        if self.layer_pool_size != (w, h) {
             self.filter_layer_pending_delete.append(&mut self.layer_pool);
-            self.layer_pool_size = (self.width, self.height);
+            self.layer_pool_size = (w, h);
         }
         if let Some(id) = self.layer_pool.pop() {
             return Some(id);
         }
         self.canvas
             .create_image_empty(
-                self.width as usize,
-                self.height as usize,
+                w as usize,
+                h as usize,
                 femtovg::PixelFormat::Rgba8,
                 offscreen_layer_image_flags(),
             )
@@ -1614,7 +1964,10 @@ impl FemtovgBackend {
     fn release_layer(&mut self, id: femtovg::ImageId) {
         /// Deeper simultaneous layer nesting than this is not worth pooling.
         const MAX_POOLED_LAYERS: usize = 8;
-        if self.layer_pool_size == (self.width, self.height)
+        // BUG-320: match the pool against the active-target size the layer was
+        // sized for; a band-sized layer released while the framebuffer is bound
+        // (or vice versa) is retired rather than reused at the wrong dimensions.
+        if self.layer_pool_size == self.current_rt_size()
             && self.layer_pool.len() < MAX_POOLED_LAYERS
         {
             self.layer_pool.push(id);
@@ -1724,11 +2077,135 @@ impl FemtovgBackend {
         }
     }
 
+    /// BUG-272 срез 10, generalised in срез 11: same contract as
+    /// [`Self::acquire_layer`] (a render-target FBO,
+    /// `offscreen_layer_image_flags()`), but sized `w × h` instead of the full
+    /// framebuffer and backed by `bbox_layer_pool` — a dedicated slot for any
+    /// group's own visible-layer FBO (backdrop-filter's `elem_image_id`,
+    /// opacity's bbox-sized layer, and срезы 12–14's clip/mask/filter layers),
+    /// kept separate for the same reason [`Self::acquire_backdrop_bbox_image`]
+    /// is: its per-group varying size would thrash the full-framebuffer-sized
+    /// `layer_pool`.
+    fn acquire_bbox_layer(&mut self, w: usize, h: usize) -> Option<femtovg::ImageId> {
+        if self.bbox_layer_pool_size != (w, h) {
+            self.filter_layer_pending_delete.append(&mut self.bbox_layer_pool);
+            self.bbox_layer_pool_size = (w, h);
+        }
+        if let Some(id) = self.bbox_layer_pool.pop() {
+            return Some(id);
+        }
+        self.canvas
+            .create_image_empty(w, h, femtovg::PixelFormat::Rgba8, offscreen_layer_image_flags())
+            .ok()
+    }
+
+    /// Returns an image acquired via [`Self::acquire_bbox_layer`] to the
+    /// pool for reuse; see [`Self::release_layer`].
+    fn release_bbox_layer(&mut self, id: femtovg::ImageId, w: usize, h: usize) {
+        /// Same cap as `release_backdrop_bbox_image` — these pools hold
+        /// paired images for the same offscreen-composite group.
+        const MAX_POOLED_BBOX_LAYERS: usize = 4;
+        if self.bbox_layer_pool_size == (w, h) && self.bbox_layer_pool.len() < MAX_POOLED_BBOX_LAYERS {
+            self.bbox_layer_pool.push(id);
+        } else {
+            self.filter_layer_pending_delete.push(id);
+        }
+    }
+
+    /// BUG-272 срез 14: same contract as [`Self::acquire_cpu_upload_image`],
+    /// backed by `bbox_cpu_upload_pool` — see its field doc for why it's kept
+    /// separate.
+    fn acquire_bbox_cpu_upload_image(&mut self, w: usize, h: usize) -> Option<femtovg::ImageId> {
+        if self.bbox_cpu_upload_pool_size != (w, h) {
+            self.blend_layer_pending_delete.append(&mut self.bbox_cpu_upload_pool);
+            self.bbox_cpu_upload_pool_size = (w, h);
+        }
+        self.bbox_cpu_upload_pool.pop()
+    }
+
+    /// Returns an image acquired via [`Self::acquire_bbox_cpu_upload_image`]
+    /// to the pool for reuse; see [`Self::release_cpu_upload_image`].
+    fn release_bbox_cpu_upload_image(&mut self, id: femtovg::ImageId, w: usize, h: usize) {
+        /// Same cap as the other CPU-upload pools.
+        const MAX_POOLED_BBOX_CPU_UPLOADS: usize = 4;
+        if self.bbox_cpu_upload_pool_size == (w, h)
+            && self.bbox_cpu_upload_pool.len() < MAX_POOLED_BBOX_CPU_UPLOADS
+        {
+            self.bbox_cpu_upload_pool.push(id);
+        } else {
+            self.blend_layer_pending_delete.push(id);
+        }
+    }
+
+    /// Uploads `img_src` into `pooled` (a slot from one of the CPU-upload
+    /// pools) via `update_image`, or creates a fresh image if `pooled` is
+    /// `None` or the refresh fails. Shared by the colour-matrix filter and
+    /// blend-result re-upload steps (BUG-272 срез 4, extended to the bbox
+    /// pools in срез 14) — both re-upload a CPU-processed RGBA8 buffer once
+    /// per Pop and want the same reuse-or-fall-back-to-fresh-upload logic.
+    fn upload_to_pool(
+        &mut self,
+        pooled: Option<femtovg::ImageId>,
+        img_src: imgref::ImgRef<'_, rgb::RGBA8>,
+    ) -> Option<femtovg::ImageId> {
+        match pooled {
+            Some(id) => match self.canvas.update_image(id, img_src, 0, 0) {
+                Ok(()) => Some(id),
+                Err(_) => {
+                    self.blend_layer_pending_delete.push(id);
+                    self.canvas
+                        .create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED)
+                        .ok()
+                }
+            },
+            None => self
+                .canvas
+                .create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED)
+                .ok(),
+        }
+    }
+
     fn current_rt(&self) -> femtovg::RenderTarget {
         match self.active_rt_image {
             Some(id) => femtovg::RenderTarget::Image(id),
             None => femtovg::RenderTarget::Screen,
         }
+    }
+
+    /// BUG-320: device-pixel size of the currently active render target — the
+    /// bound offscreen image's own dimensions when an `Image` target is set,
+    /// else the framebuffer (`self.width × self.height`).
+    ///
+    /// `acquire_layer`/`release_layer` must key off this, NOT `self.width`/
+    /// `self.height`: during a scroll-blit band content pass (ADR-016 M3.2.1b)
+    /// the active target is the band FBO, which is larger than the window
+    /// (viewport + 2·overscan). A window-sized full-frame layer acquired against
+    /// that band target makes `composite_blend_layer`'s `src_rgba` (read back
+    /// from the layer via `screenshot()`) and `backdrop_rgba` (read from the
+    /// band) disagree in length, so the CPU blend is silently skipped and
+    /// `mix-blend-mode` (and the other full-frame fallback openers) never
+    /// renders. Falls back to the framebuffer size if the image lookup fails.
+    fn current_rt_size(&self) -> (u32, u32) {
+        match self.active_rt_image {
+            Some(id) => self
+                .canvas
+                .image_size(id)
+                .map(|(w, h)| (w as u32, h as u32))
+                .unwrap_or((self.width, self.height)),
+            None => (self.width, self.height),
+        }
+    }
+
+    /// BUG-320: CSS-px size of the active render target — [`Self::current_rt_size`]
+    /// divided by the device scale. The full-frame composite paths (`bbox ==
+    /// None`) fill the whole active target 1:1 with their (now active-target-
+    /// sized) layer; a window-sized rect would squash a larger band-sized layer
+    /// into the top-left corner during a scroll-blit content pass. On the direct
+    /// path the active target is the framebuffer, so this equals the window CSS
+    /// size — behaviour there is unchanged.
+    fn current_rt_css_size(&self) -> (f32, f32) {
+        let (w, h) = self.current_rt_size();
+        (w as f32 / self.scale as f32, h as f32 / self.scale as f32)
     }
 
     /// Sets the femtovg render target and updates `active_rt_image` accordingly.
@@ -1904,6 +2381,15 @@ impl FemtovgBackend {
                     i = Self::matching_close(content, i) + 1;
                     continue;
                 }
+                // BUG-273 срез 2: a cacheable bbox filter group whose composited
+                // texture is still valid (unchanged content, matching device
+                // size + sub-pixel phase) is blitted from the inter-frame cache;
+                // skip the whole bracket instead of re-running the screenshot +
+                // CPU colour-matrix composite this frame.
+                if let Some(close) = self.filter_cache_probe(content, i) {
+                    i = close + 1;
+                    continue;
+                }
                 let t = std::time::Instant::now();
                 self.render_command(cmd);
                 let e = per_variant.entry(cmd.variant_name()).or_default();
@@ -1919,8 +2405,9 @@ impl FemtovgBackend {
                 .map(|(name, (dur, n))| format!("{name} {:.2}ms/{n}", dur.as_secs_f64() * 1000.0))
                 .collect();
             eprintln!(
-                "[frame] top: {}, offscreen groups culled: {culled_groups}",
+                "[frame] top: {}, offscreen groups culled: {culled_groups}, filter cache hits: {}",
                 top.join(", "),
+                self.filter_cache_hits,
             );
         } else {
             let mut i = 0usize;
@@ -1934,6 +2421,12 @@ impl FemtovgBackend {
                     && self.is_command_culled(bounds)
                 {
                     i = Self::matching_close(content, i) + 1;
+                    continue;
+                }
+                // BUG-273 срез 2: reuse a cached bbox filter-layer texture — see
+                // the instrumented branch above for the rationale.
+                if let Some(close) = self.filter_cache_probe(content, i) {
+                    i = close + 1;
                     continue;
                 }
                 self.render_command(cmd);
@@ -2007,6 +2500,12 @@ impl FemtovgBackend {
             let (dw, dh) = self.content_band_size;
             self.release_content_band(id, dw, dh);
         }
+        // BUG-273 срез 2: the retained filter-layer textures key on a per-subtree
+        // content hash, which cannot see a pixel change that leaves the display
+        // list identical (an image finishing load, a bg/font swap) or a device
+        // geometry change (resize / DPI). This method is called on exactly those
+        // events, so drop the filter cache here in lock-step with the scroll band.
+        self.clear_filter_cache();
     }
 
     // ─── Drawing helpers ──────────────────────────────────────────────────────
@@ -2231,10 +2730,14 @@ impl FemtovgBackend {
 
     /// Resolves CSS `font-family` list + weight/style to a femtovg font chain.
     ///
-    /// Order: CSS-declared families (first match wins per CSS Fonts L4 §3.1) →
+    /// Order: CSS-declared families (first match wins per CSS Fonts L4 §3.1;
+    /// reserved bundled names "Golos Text"/"Golos Text Medium"/"JetBrains Mono"
+    /// resolve to the DS-4 chrome faces without touching the provider) →
     /// bundled Inter → curated system fallbacks (emoji/CJK/RTL/Indic/Thai).
     /// Generic keywords (serif/sans-serif/monospace/cursive/fantasy/system-ui)
     /// are skipped — they fall through to Inter which covers Latin well enough.
+    /// An empty `families` list — every chrome `DrawText` call site, since
+    /// chrome never resolves CSS font-family — defaults to bundled Golos Text.
     /// Returns at least `[inter_id]` when no provider is set.
     ///
     /// The two booleans report whether the FIRST provider-resolved face is a
@@ -2251,13 +2754,53 @@ impl FemtovgBackend {
         let mut true_bold = false;
         let mut true_italic = false;
 
-        if let Some(provider) = self.font_provider.clone() {
+        // DS-4: chrome never queries the CSS FontProvider — every chrome
+        // `DrawText` passes an empty `font_family` (page content always has a
+        // non-empty one, from the UA/author stylesheet's font-family cascade),
+        // so an empty list defaults to the bundled chrome UI face. Reserved
+        // bundled family names ("Golos Text"/"Golos Text Medium"/"JetBrains
+        // Mono") resolve directly and skip the provider lookup below —
+        // independent of whether a `FontProvider` is installed at all.
+        if families.is_empty() {
+            if let Some(chrome) = self.chrome_font_id {
+                ids.push(chrome);
+            }
+        } else {
+            let provider = self.font_provider.clone();
             let core_style = match style {
                 FontStyle::Normal => lumen_core::ext::FontStyle::Normal,
                 FontStyle::Italic => lumen_core::ext::FontStyle::Italic,
                 FontStyle::Oblique => lumen_core::ext::FontStyle::Oblique,
             };
             for fam in families {
+                match fam.as_str() {
+                    "Golos Text" => {
+                        if let Some(id) = self.chrome_font_id
+                            && !ids.contains(&id)
+                        {
+                            ids.push(id);
+                        }
+                        continue;
+                    }
+                    "Golos Text Medium" => {
+                        if let Some(id) = self.chrome_font_medium_id
+                            && !ids.contains(&id)
+                        {
+                            ids.push(id);
+                        }
+                        continue;
+                    }
+                    "JetBrains Mono" => {
+                        if let Some(id) = self.mono_font_id
+                            && !ids.contains(&id)
+                        {
+                            ids.push(id);
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                let Some(provider) = provider.as_ref() else { continue };
                 let lc = fam.to_ascii_lowercase();
                 if matches!(
                     lc.as_str(),
@@ -2266,7 +2809,7 @@ impl FemtovgBackend {
                     continue;
                 }
                 if let Some(rec) = provider.pick_face(fam, weight, core_style)
-                    && let Some(id) = self.load_font_by_path(&rec.path.clone(), &provider)
+                    && let Some(id) = self.load_font_by_path(&rec.path.clone(), provider)
                     && !ids.contains(&id)
                 {
                     if ids.is_empty() {
@@ -2278,7 +2821,9 @@ impl FemtovgBackend {
             }
         }
 
-        // Bundled Inter as the primary Latin fallback.
+        // Bundled Inter as the primary Latin fallback (DS-4: stays in the chain
+        // even for chrome text, per the design brief — Golos/mono are primary,
+        // Inter still backstops any glyph missing from those bundled faces).
         if let Some(inter) = self.font_id
             && !ids.contains(&inter)
         {
@@ -2425,7 +2970,17 @@ impl FemtovgBackend {
     /// Реализует PA-2: GPU Gaussian blur через `filter_image` + CPU colour-matrix
     /// через flush → screenshot → pixel process → re-upload.
     fn composite_filter_layer(&mut self, entry: FilterLayerEntry) {
-        let FilterLayerEntry { image_id: src_id, filters, prev_render_target } = entry;
+        let FilterLayerEntry { image_id: src_id, filters, prev_render_target, bbox, cache_meta } = entry;
+
+        // BUG-272 срез 14: undo the Push-time bbox save()+translate()+scissor(),
+        // if any — mirrors composite_opacity_layer's own restore(). Safe to do
+        // up-front: canvas save/restore state is independent of which GL
+        // render target is bound, and `bbox` is only ever `Some` when Push
+        // determined the chain has no blur (see PushFilter), so Step 1 below
+        // never runs for a bbox-sized layer.
+        if bbox.is_some() {
+            self.canvas.restore();
+        }
 
         let has_blur = filters.iter().any(|f| matches!(f, lumen_layout::FilterFn::Blur(s) if *s > 0.0));
         let has_color_matrix = filters.iter().any(|f| {
@@ -2508,25 +3063,21 @@ impl FemtovgBackend {
                     .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
                     .collect();
                 let img_src = imgref::ImgRef::new(&pixels, iw, ih);
-                let dst = match self.acquire_cpu_upload_image(iw, ih) {
-                    Some(id) => match self.canvas.update_image(id, img_src, 0, 0) {
-                        Ok(()) => Some(id),
-                        Err(_) => {
-                            self.blend_layer_pending_delete.push(id);
-                            self.canvas
-                                .create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED)
-                                .ok()
-                        }
-                    },
-                    None => self
-                        .canvas
-                        .create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED)
-                        .ok(),
+                // BUG-272 срез 14: a bbox-sized Push layer re-uploads into
+                // `bbox_cpu_upload_pool` instead of the full-framebuffer
+                // `cpu_upload_pool` — see that field's doc for why.
+                let acquired = match bbox {
+                    Some(_) => self.acquire_bbox_cpu_upload_image(iw, ih),
+                    None => self.acquire_cpu_upload_image(iw, ih),
                 };
+                let dst = self.upload_to_pool(acquired, img_src);
                 if let Some(dst) = dst {
                     // BUG-272: recycle the pooled source; the re-uploaded image
-                    // belongs to `cpu_upload_pool`, not `layer_pool`.
-                    self.release_layer(current_id);
+                    // belongs to a CPU-upload pool, not a layer pool.
+                    match bbox {
+                        Some((_, _, w, h)) => self.release_bbox_layer(current_id, w, h),
+                        None => self.release_layer(current_id),
+                    }
                     current_id = dst;
                     current_pooled = false;
                     current_cpu_upload_dims = Some((iw, ih));
@@ -2538,25 +3089,57 @@ impl FemtovgBackend {
         self.switch_render_target(prev_render_target);
 
         // ── Step 4: Composite filtered image onto the (now-current) target ───
+        // BUG-272 срез 14: `bbox` covers both the common case (colour-matrix
+        // ran, `current_id` is a bbox-sized cpu-upload image) and the
+        // degenerate `blur(0px)`-only chain (colour-matrix never ran,
+        // `current_id` is still the bbox-sized Push layer, still FLIP_Y'd —
+        // same direct-GPU-composite situation `composite_opacity_layer`'s
+        // bbox path handles).
         self.canvas.save();
         self.canvas.reset_transform();
-        let css_w = (self.width as f64 / self.scale) as f32;
-        let css_h = (self.height as f64 / self.scale) as f32;
-        let paint = femtovg::Paint::image(current_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
-        let mut path = femtovg::Path::new();
-        path.rect(0.0, 0.0, css_w, css_h);
-        self.canvas.fill_path(&path, &paint);
+        match bbox {
+            Some((x0, y0, w, h)) => {
+                let x = x0 / self.scale as f32;
+                let y = y0 / self.scale as f32;
+                let cw = w as f32 / self.scale as f32;
+                let ch = h as f32 / self.scale as f32;
+                let paint = femtovg::Paint::image(current_id, x, y, cw, ch, 0.0, 1.0);
+                let mut path = femtovg::Path::new();
+                path.rect(x, y, cw, ch);
+                self.canvas.fill_path(&path, &paint);
+            }
+            None => {
+                // BUG-320: fill the whole active target (band FBO during a
+                // scroll-blit pass) so the band-sized layer composites 1:1.
+                let (css_w, css_h) = self.current_rt_css_size();
+                let paint = femtovg::Paint::image(current_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+                let mut path = femtovg::Path::new();
+                path.rect(0.0, 0.0, css_w, css_h);
+                self.canvas.fill_path(&path, &paint);
+            }
+        }
         self.canvas.restore();
 
-        // BUG-272: `layer_pool` images are recycled via `release_layer`; a
-        // colour-matrix re-upload (срез 4) goes back to `cpu_upload_pool`;
-        // anything else waits on the after-flush delete queue.
-        if current_pooled {
-            self.release_layer(current_id);
-        } else if let Some((w, h)) = current_cpu_upload_dims {
-            self.release_cpu_upload_image(current_id, w, h);
-        } else {
-            self.filter_layer_pending_delete.push(current_id);
+        // BUG-272: layer-pool images (full-frame or bbox) are recycled via
+        // `release_layer`/`release_bbox_layer`; a colour-matrix re-upload
+        // (срез 4, bbox variant срез 14) goes back to the matching
+        // cpu-upload pool; anything else waits on the after-flush delete
+        // queue.
+        match (current_pooled, bbox, current_cpu_upload_dims) {
+            (true, Some((_, _, w, h)), _) => self.release_bbox_layer(current_id, w, h),
+            (true, None, _) => self.release_layer(current_id),
+            // BUG-273 срез 2: a cacheable colour-matrix bbox group (the only case
+            // that reaches here with `cache_meta = Some`) retains its composited
+            // texture in the inter-frame cache instead of recycling it to the
+            // bbox cpu-upload pool, so a later frame with the same subtree can
+            // reuse it. The stored image leaves the pool's ownership; it is freed
+            // via `filter_layer_pending_delete` on eviction/overwrite/invalidate.
+            (false, Some(_), Some((w, h))) => match cache_meta {
+                Some(meta) => self.store_filter_cache(meta, current_id, w, h),
+                None => self.release_bbox_cpu_upload_image(current_id, w, h),
+            },
+            (false, None, Some((w, h))) => self.release_cpu_upload_image(current_id, w, h),
+            _ => self.filter_layer_pending_delete.push(current_id),
         }
     }
 
@@ -2571,13 +3154,15 @@ impl FemtovgBackend {
     /// `fill_path`-вызовом: путь — форма клипа, трансформированная матрицей
     /// `t` (канва на момент Push, включая transform элемента); заливка —
     /// image-paint слоя 1:1 (identity-канва, слой уже в screen-space).
-    /// AA кромки формы — штатный femtovg path-AA.
+    /// AA кромки формы — штатный femtovg path-AA. `bbox` — см.
+    /// [`Self::composite_clip_layer`] (BUG-272 срез 12).
     fn composite_clip_path_layer(
         &mut self,
         src_id: femtovg::ImageId,
         shape: &ResolvedClipShape,
         t: &femtovg::Transform2D,
         prev_render_target: femtovg::RenderTarget,
+        bbox: Option<(f32, f32, usize, usize)>,
     ) {
         // CSS Shapes L1 §3/§4 — even-odd оставляет дырки в самопересекающихся
         // clip-формах (polygon()/path()); по умолчанию nonzero.
@@ -2586,12 +3171,13 @@ impl FemtovgBackend {
             _ => femtovg::FillRule::NonZero,
         };
         let path = clip_shape_path(shape, t);
-        self.composite_clip_layer(src_id, &path, fill_rule, prev_render_target);
+        self.composite_clip_layer(src_id, &path, fill_rule, prev_render_target, bbox);
     }
 
     /// BUG-249: композитит offscreen-слой скруглённого клипа (`RoundedRectLayer`)
     /// на `prev_render_target`, обрезая содержимое по скруглённому контуру
-    /// `rect`/`radii` (углы детей следуют border-radius контейнера).
+    /// `rect`/`radii` (углы детей следуют border-radius контейнера). `bbox` —
+    /// см. [`Self::composite_clip_layer`] (BUG-272 срез 12).
     fn composite_rounded_rect_clip_layer(
         &mut self,
         src_id: femtovg::ImageId,
@@ -2599,27 +3185,61 @@ impl FemtovgBackend {
         radii: &[f32; 4],
         t: &femtovg::Transform2D,
         prev_render_target: femtovg::RenderTarget,
+        bbox: Option<(f32, f32, usize, usize)>,
     ) {
         let path = rounded_rect_clip_path(rect, radii, t);
-        self.composite_clip_layer(src_id, &path, femtovg::FillRule::NonZero, prev_render_target);
+        self.composite_clip_layer(src_id, &path, femtovg::FillRule::NonZero, prev_render_target, bbox);
     }
 
     /// Общий хвост композита клип-слоёв (`composite_clip_path_layer` /
     /// `composite_rounded_rect_clip_layer`): рисует offscreen `src_id` на
     /// `prev_render_target`, маскируя его уже трансформированным `path` под
     /// identity-канвой (антиалиасинг края пути — бесплатно).
+    ///
+    /// `bbox` — тот же конвент, что [`Self::composite_opacity_layer`]'s
+    /// одноимённый параметр (BUG-272 срез 12): `Some((x0, y0, w, h))` —
+    /// device px — когда `src_id` был аллоцирован bbox-сайзинг через
+    /// [`Self::acquire_bbox_layer`] (Push-время сделал `save()` +
+    /// bbox-`translate`/`scissor` — их нужно сначала откатить `restore()`-ом,
+    /// та же причина, что у `composite_opacity_layer`: это состояние живёт в
+    /// стеке канвы, а не в конкретном FBO); `None` для full-framebuffer-слоя
+    /// из `acquire_layer`. `path` уже в screen-space в обоих случаях
+    /// (построен через `t` — канва на момент Push), поэтому не зависит от
+    /// `bbox`: разница только в том, где `Paint::image` берёт исходные
+    /// пиксели слоя (весь framebuffer против `bbox`-прямоугольника) — `path`,
+    /// ограниченный той же bbox-геометрией (`group_bounds`), никогда не
+    /// сэмплирует за пределами этого прямоугольника.
     fn composite_clip_layer(
         &mut self,
         src_id: femtovg::ImageId,
         path: &femtovg::Path,
         fill_rule: femtovg::FillRule,
         prev_render_target: femtovg::RenderTarget,
+        bbox: Option<(f32, f32, usize, usize)>,
     ) {
+        if let Some((x0, y0, w, h)) = bbox {
+            self.canvas.restore();
+            self.switch_render_target(prev_render_target);
+            self.canvas.save();
+            self.canvas.reset_transform();
+            let x = x0 / self.scale as f32;
+            let y = y0 / self.scale as f32;
+            let cw = w as f32 / self.scale as f32;
+            let ch = h as f32 / self.scale as f32;
+            let paint = femtovg::Paint::image(src_id, x, y, cw, ch, 0.0, 1.0)
+                .with_anti_alias(true)
+                .with_fill_rule(fill_rule);
+            self.canvas.fill_path(path, &paint);
+            self.canvas.restore();
+            self.release_bbox_layer(src_id, w, h);
+            return;
+        }
         self.switch_render_target(prev_render_target);
         self.canvas.save();
         self.canvas.reset_transform();
-        let css_w = (self.width as f64 / self.scale) as f32;
-        let css_h = (self.height as f64 / self.scale) as f32;
+        // BUG-320: fill the whole active target (band FBO during a scroll-blit
+        // pass) so the band-sized layer composites 1:1.
+        let (css_w, css_h) = self.current_rt_css_size();
         let paint = femtovg::Paint::image(src_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0)
             .with_anti_alias(true)
             .with_fill_rule(fill_rule);
@@ -2631,60 +3251,223 @@ impl FemtovgBackend {
         self.release_layer(src_id);
     }
 
+    /// BUG-272 срез 12: `PushClipRoundedRect` fallback when
+    /// `screen_bbox_device_px` returned `None` (degenerate/off-target bbox) or
+    /// `acquire_bbox_layer` failed — the same two-tier fallback the
+    /// pre-срез-12 code always used: a full-framebuffer layer via
+    /// [`Self::acquire_layer`], or (if even that fails) a plain rectangular
+    /// scissor (BUG-132 fallback, square corners instead of rounded).
+    fn push_clip_rounded_rect_fallback(
+        &mut self,
+        rect: &Rect,
+        radii: &[f32; 4],
+        prev_rt: femtovg::RenderTarget,
+    ) -> ClipEntry {
+        match self.acquire_layer() {
+            Some(img_id) => {
+                self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                // BUG-320: full-frame fallback layer is sized to the active
+                // render target (band FBO during a scroll-blit pass), not the
+                // window — clear its full extent.
+                let (cw, ch) = self.current_rt_size();
+                self.canvas.clear_rect(
+                    0, 0, cw, ch,
+                    femtovg::Color::rgba(0, 0, 0, 0),
+                );
+                ClipEntry::RoundedRectLayer {
+                    image_id: img_id,
+                    rect: *rect,
+                    radii: *radii,
+                    transform: self.canvas.transform(),
+                    prev_render_target: prev_rt,
+                    bbox: None,
+                }
+            }
+            None => {
+                self.canvas.save();
+                self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                ClipEntry::Scissor
+            }
+        }
+    }
+
+    /// BUG-272 срез 12: `PushClipPath` fallback — same two-tier fallback as
+    /// [`Self::push_clip_rounded_rect_fallback`], `bbox_rect` is the shape's
+    /// own `bounding_rect()` (used both for the full-framebuffer layer's
+    /// transform-capture point and the plain-scissor fallback, matching the
+    /// pre-срез-12 behaviour).
+    fn push_clip_path_fallback(
+        &mut self,
+        shape: &ResolvedClipShape,
+        bbox_rect: &Rect,
+        prev_rt: femtovg::RenderTarget,
+    ) -> ClipEntry {
+        match self.acquire_layer() {
+            Some(img_id) => {
+                self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                // BUG-320: full-frame fallback layer is sized to the active
+                // render target (band FBO during a scroll-blit pass), not the
+                // window — clear its full extent.
+                let (cw, ch) = self.current_rt_size();
+                self.canvas.clear_rect(
+                    0, 0, cw, ch,
+                    femtovg::Color::rgba(0, 0, 0, 0),
+                );
+                ClipEntry::PathLayer {
+                    image_id: img_id,
+                    shape: shape.clone(),
+                    transform: self.canvas.transform(),
+                    prev_render_target: prev_rt,
+                    bbox: None,
+                }
+            }
+            None => {
+                self.canvas.save();
+                self.canvas.scissor(bbox_rect.x, bbox_rect.y, bbox_rect.width, bbox_rect.height);
+                ClipEntry::Scissor
+            }
+        }
+    }
+
+    /// Composites an opacity group's offscreen layer onto `prev_render_target`.
+    ///
+    /// `bbox` distinguishes the two layer shapes `PushOpacity` can have
+    /// produced (BUG-272 срез 11): `Some((x0, y0, w, h))` — device px — for a
+    /// bbox-sized layer acquired via [`Self::acquire_bbox_layer`], `None` for
+    /// the full-framebuffer layer from [`Self::acquire_layer`] (used when
+    /// `bounds` was `None`, e.g. the full-page view-transition fade, or the
+    /// bbox path fell back). The bbox path must first undo the Push-time
+    /// `save()` + bbox `translate`/`scissor` (mirrors
+    /// [`Self::composite_backdrop_filter_layer`]'s own `restore()` for the same
+    /// reason — that state lives on the canvas stack, independent of which FBO
+    /// is bound) before switching back to `prev_render_target`.
     fn composite_opacity_layer(
         &mut self,
         src_id: femtovg::ImageId,
         alpha: f32,
         prev_render_target: femtovg::RenderTarget,
+        bbox: Option<(f32, f32, usize, usize)>,
     ) {
-        self.switch_render_target(prev_render_target);
-        self.canvas.save();
-        self.canvas.reset_transform();
-        let css_w = (self.width as f64 / self.scale) as f32;
-        let css_h = (self.height as f64 / self.scale) as f32;
-        let paint = femtovg::Paint::image(src_id, 0.0, 0.0, css_w, css_h, 0.0, alpha);
-        let mut path = femtovg::Path::new();
-        path.rect(0.0, 0.0, css_w, css_h);
-        self.canvas.fill_path(&path, &paint);
-        self.canvas.restore();
-        // BUG-272: back to the pool (see composite_clip_layer).
-        self.release_layer(src_id);
+        match bbox {
+            Some((x0, y0, w, h)) => {
+                self.canvas.restore();
+                self.switch_render_target(prev_render_target);
+                self.canvas.save();
+                self.canvas.reset_transform();
+                let x = x0 / self.scale as f32;
+                let y = y0 / self.scale as f32;
+                let cw = w as f32 / self.scale as f32;
+                let ch = h as f32 / self.scale as f32;
+                let paint = femtovg::Paint::image(src_id, x, y, cw, ch, 0.0, alpha);
+                let mut path = femtovg::Path::new();
+                path.rect(x, y, cw, ch);
+                self.canvas.fill_path(&path, &paint);
+                self.canvas.restore();
+                self.release_bbox_layer(src_id, w, h);
+            }
+            None => {
+                self.switch_render_target(prev_render_target);
+                self.canvas.save();
+                self.canvas.reset_transform();
+                // BUG-320: fill the whole active target (band FBO during a
+                // scroll-blit pass) so the band-sized layer composites 1:1.
+                let (css_w, css_h) = self.current_rt_css_size();
+                let paint = femtovg::Paint::image(src_id, 0.0, 0.0, css_w, css_h, 0.0, alpha);
+                let mut path = femtovg::Path::new();
+                path.rect(0.0, 0.0, css_w, css_h);
+                self.canvas.fill_path(&path, &paint);
+                self.canvas.restore();
+                // BUG-272: back to the pool (see composite_clip_layer).
+                self.release_layer(src_id);
+            }
+        }
     }
 
     /// CSS Masking L1 §4 (BUG-183) — opens an offscreen layer for a gradient
-    /// `mask-image`. The masked subtree renders into a transparent full-RT FBO;
-    /// the matching `PopMask` multiplies that FBO's alpha by the gradient.
+    /// `mask-image`. The masked subtree renders into a transparent FBO; the
+    /// matching `PopMask` multiplies that FBO's alpha by the gradient.
     ///
-    /// On FBO-allocation failure falls back to a rect scissor (mask no-op).
+    /// BUG-272 срез 13: reuses срез 11/12's bbox-sizing move
+    /// (`screen_bbox_device_px` + `acquire_bbox_layer`) — `rect` is the same
+    /// masked-element border-box already used for culling in срез 9, so the
+    /// layer is sized to its screen-space device-pixel bbox instead of the
+    /// full framebuffer. Content draws with the ambient transform plus a
+    /// translate mapping the bbox's screen origin to the layer's local
+    /// `(0, 0)`, matching `PushOpacity`'s bbox convention (see its doc for why
+    /// the explicit `scissor` re-establishment after the translate matters).
     fn push_mask_gradient_layer(&mut self, rect: lumen_core::geom::Rect, gradient: MaskGradient) {
         let prev_rt = self.current_rt();
+        let screen_bbox = self.screen_bbox_device_px(rect);
+        let entry = match screen_bbox {
+            Some((x0, y0, w, h)) => match self.acquire_bbox_layer(w, h) {
+                Some(img_id) => {
+                    self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                    self.canvas.clear_rect(
+                        0, 0, w as u32, h as u32,
+                        femtovg::Color::rgba(0, 0, 0, 0),
+                    );
+                    self.canvas.save();
+                    self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                    self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                    MaskLayerEntry {
+                        image_id: Some(img_id),
+                        gradient: Some(gradient),
+                        rect,
+                        prev_render_target: prev_rt,
+                        bbox: Some((x0, y0, w, h)),
+                    }
+                }
+                None => self.push_mask_gradient_fallback(rect, gradient, prev_rt),
+            },
+            None => self.push_mask_gradient_fallback(rect, gradient, prev_rt),
+        };
+        self.mask_layer_stack.push(entry);
+        self.layer_stack_depth += 1;
+    }
+
+    /// BUG-272 срез 13: `PushMask*Gradient` fallback when
+    /// `screen_bbox_device_px` returned `None` (degenerate/off-target bbox) or
+    /// `acquire_bbox_layer` failed — same two-tier fallback as
+    /// [`Self::push_clip_rounded_rect_fallback`]: a full-framebuffer layer via
+    /// [`Self::acquire_layer`], or (if even that fails) a plain rect scissor
+    /// (gradient mask becomes a hard rect clip — pre-срез-13 behaviour).
+    fn push_mask_gradient_fallback(
+        &mut self,
+        rect: lumen_core::geom::Rect,
+        gradient: MaskGradient,
+        prev_rt: femtovg::RenderTarget,
+    ) -> MaskLayerEntry {
         match self.acquire_layer() {
             Some(img_id) => {
                 self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                // BUG-320: full-frame fallback layer is sized to the active
+                // render target (band FBO during a scroll-blit pass), not the
+                // window — clear its full extent.
+                let (cw, ch) = self.current_rt_size();
                 self.canvas.clear_rect(
-                    0, 0, self.width, self.height,
+                    0, 0, cw, ch,
                     femtovg::Color::rgba(0, 0, 0, 0),
                 );
-                self.mask_layer_stack.push(MaskLayerEntry {
+                MaskLayerEntry {
                     image_id: Some(img_id),
                     gradient: Some(gradient),
                     rect,
                     prev_render_target: prev_rt,
-                });
+                    bbox: None,
+                }
             }
             None => {
-                // Fallback: rect scissor (gradient mask becomes a hard rect clip).
                 self.canvas.save();
                 self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
-                self.mask_layer_stack.push(MaskLayerEntry {
+                MaskLayerEntry {
                     image_id: None,
                     gradient: None,
                     rect,
                     prev_render_target: prev_rt,
-                });
+                    bbox: None,
+                }
             }
         }
-        self.layer_stack_depth += 1;
     }
 
     /// CSS Masking L1 §4 (BUG-183) — applies the gradient mask to the offscreen
@@ -2695,9 +3478,11 @@ impl FemtovgBackend {
     /// alpha by the gradient's alpha (`mask-mode: alpha`, the default), then the
     /// masked layer is composited down exactly like an opacity group.
     fn composite_mask_layer(&mut self, entry: MaskLayerEntry) {
-        let MaskLayerEntry { image_id, gradient, rect, prev_render_target } = entry;
+        let MaskLayerEntry { image_id, gradient, rect, prev_render_target, bbox } = entry;
         let Some(img_id) = image_id else { return };
-        // RT is currently the FBO: multiply its alpha by the gradient.
+        // RT is currently the FBO, with the Push-time transform (translated
+        // to bbox-local origin when `bbox` is `Some`) still active: multiply
+        // its alpha by the gradient, painted in that same coordinate space.
         if let Some(g) = gradient {
             self.canvas.save();
             self.canvas.global_composite_operation(femtovg::CompositeOperation::DestinationIn);
@@ -2705,7 +3490,11 @@ impl FemtovgBackend {
             self.canvas.restore();
         }
         // Composite the masked layer (alpha already folded in) onto prev_rt.
-        self.composite_opacity_layer(img_id, 1.0, prev_render_target);
+        // BUG-272 срез 13: `bbox` — see `MaskLayerEntry::bbox` — threads
+        // through the bbox vs. full-framebuffer distinction so
+        // `composite_opacity_layer` undoes the right Push-time state and
+        // releases the layer to the matching pool.
+        self.composite_opacity_layer(img_id, 1.0, prev_render_target, bbox);
     }
 
     /// Paints `gradient` over `rect` using the current canvas transform. Used by
@@ -2770,13 +3559,23 @@ impl FemtovgBackend {
     /// 5. Upload result image and draw with `CompositeOperation::Source` to
     ///    replace the backdrop area with the blended result.
     fn composite_blend_layer(&mut self, entry: BlendLayerEntry) {
-        let BlendLayerEntry { mode, src_image_id, backdrop_rgba, backdrop_w, backdrop_h, prev_render_target } = entry;
+        let BlendLayerEntry { mode, src_image_id, backdrop_rgba, backdrop_w, backdrop_h, prev_render_target, bbox } = entry;
+
+        // BUG-272 срез 14: undo the Push-time bbox save()+translate()+scissor(),
+        // if any — mirrors composite_opacity_layer's own restore() (canvas
+        // save/restore state is independent of which GL render target is
+        // bound, so doing this before the flush/screenshot below is safe).
+        if bbox.is_some() {
+            self.canvas.restore();
+        }
 
         // Step 1: flush pending commands so src_image_id is fully rendered.
         self.canvas.flush();
 
-        // Step 2: screenshot the source offscreen image.
-        // We're currently rendering into src_image_id, so screenshot reads from it.
+        // Step 2: screenshot the source offscreen image. Reads whatever RT is
+        // currently bound (src_image_id) at its own texture size — bbox-sized
+        // when `bbox` is set (matches `backdrop_rgba`'s already-cropped size),
+        // full-framebuffer otherwise (BUG-272 срез 14).
         let src_rgba = self.canvas.screenshot()
             .map(|img| img.buf().iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect::<Vec<u8>>())
             .unwrap_or_default();
@@ -2822,38 +3621,61 @@ impl FemtovgBackend {
                 .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
                 .collect();
             let img_ref = imgref::ImgRef::new(&pixels, backdrop_w, backdrop_h);
-            // BUG-272 (item 5): reuse a pooled image via `update_image` instead
-            // of `create_image`-ing a fresh GPU upload on every Pop (see
-            // `cpu_upload_pool`). Fall back to a fresh upload if the pooled
-            // slot fails to update (e.g. driver-level image loss).
-            let result_id = match self.acquire_cpu_upload_image(backdrop_w, backdrop_h) {
-                Some(id) => match self.canvas.update_image(id, img_ref, 0, 0) {
-                    Ok(()) => Some(id),
-                    Err(_) => {
-                        self.blend_layer_pending_delete.push(id);
-                        self.canvas.create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED).ok()
-                    }
-                },
-                None => self.canvas.create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED).ok(),
+            // BUG-272 (item 5, bbox variant срез 14): reuse a pooled image via
+            // `update_image` instead of `create_image`-ing a fresh GPU upload
+            // on every Pop — `bbox_cpu_upload_pool` when the source layer was
+            // bbox-sized, `cpu_upload_pool` otherwise (see their field docs).
+            // Fall back to a fresh upload if the pooled slot fails to update
+            // (e.g. driver-level image loss).
+            let acquired = match bbox {
+                Some(_) => self.acquire_bbox_cpu_upload_image(backdrop_w, backdrop_h),
+                None => self.acquire_cpu_upload_image(backdrop_w, backdrop_h),
             };
+            let result_id = self.upload_to_pool(acquired, img_ref);
             if let Some(result_id) = result_id {
                 self.canvas.save();
                 self.canvas.reset_transform();
-                // Source operation: replace dest pixels with the blended result image.
+                // Source operation: replace dest pixels with the blended
+                // result image. GL only blends pixels the drawn primitive
+                // rasterizes, so restricting that primitive to `bbox` (BUG-272
+                // срез 14) leaves everything outside it untouched — the same
+                // reasoning `composite_clip_layer`'s bbox path relies on.
                 self.canvas.global_composite_operation(femtovg::CompositeOperation::Copy);
-                let css_w = (self.width as f64 / self.scale) as f32;
-                let css_h = (self.height as f64 / self.scale) as f32;
-                let paint = femtovg::Paint::image(result_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
-                let mut path = femtovg::Path::new();
-                path.rect(0.0, 0.0, css_w, css_h);
-                self.canvas.fill_path(&path, &paint);
+                match bbox {
+                    Some((x0, y0, w, h)) => {
+                        let x = x0 / self.scale as f32;
+                        let y = y0 / self.scale as f32;
+                        let cw = w as f32 / self.scale as f32;
+                        let ch = h as f32 / self.scale as f32;
+                        let paint = femtovg::Paint::image(result_id, x, y, cw, ch, 0.0, 1.0);
+                        let mut path = femtovg::Path::new();
+                        path.rect(x, y, cw, ch);
+                        self.canvas.fill_path(&path, &paint);
+                    }
+                    None => {
+                        // BUG-320: fill the whole active target (band FBO
+                        // during a scroll-blit pass) so the band-sized layer
+                        // composites 1:1.
+                        let (css_w, css_h) = self.current_rt_css_size();
+                        let paint = femtovg::Paint::image(result_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+                        let mut path = femtovg::Path::new();
+                        path.rect(0.0, 0.0, css_w, css_h);
+                        self.canvas.fill_path(&path, &paint);
+                    }
+                }
                 self.canvas.restore();
-                self.release_cpu_upload_image(result_id, backdrop_w, backdrop_h);
+                match bbox {
+                    Some(_) => self.release_bbox_cpu_upload_image(result_id, backdrop_w, backdrop_h),
+                    None => self.release_cpu_upload_image(result_id, backdrop_w, backdrop_h),
+                }
             }
         }
-        // BUG-272: src_image_id came from acquire_layer() — recycle it
-        // instead of queuing a delete.
-        self.release_layer(src_image_id);
+        // BUG-272: src_image_id came from acquire_bbox_layer (bbox) or
+        // acquire_layer (full-frame) — recycle to the matching pool.
+        match bbox {
+            Some((_, _, w, h)) => self.release_bbox_layer(src_image_id, w, h),
+            None => self.release_layer(src_image_id),
+        }
     }
 
     /// Applies `filters` to a snapshot of the current render target, cropped to
@@ -2981,12 +3803,18 @@ impl FemtovgBackend {
     ///
     /// Algorithm:
     /// 1. Flush so `elem_image_id` contains the final element content.
-    /// 2. Switch to `prev_render_target`.
+    /// 2. Undo the Push-time bbox `translate`/`scissor` (BUG-272 срез 10), then
+    ///    switch to `prev_render_target`.
     /// 3. Draw `filtered_backdrop_id` at element `bounds` using Copy (replace-in-place).
-    /// 4. Draw `elem_image_id` (full canvas) with SourceOver to composite element on top.
+    /// 4. Draw `elem_image_id` at its `true_elem_x/y` position with SourceOver to
+    ///    composite element content on top (BUG-272 срез 10: bbox-sized, no
+    ///    longer a full-canvas quad — see `BackdropFilterLayerEntry`'s doc for why
+    ///    this uses a different placement than step 3's `filtered_backdrop_id`).
     fn composite_backdrop_filter_layer(&mut self, entry: BackdropFilterLayerEntry) {
         let BackdropFilterLayerEntry {
             elem_image_id,
+            true_elem_x,
+            true_elem_y,
             filtered_backdrop_id,
             filtered_backdrop_w,
             filtered_backdrop_h,
@@ -2999,11 +3827,15 @@ impl FemtovgBackend {
         // Flush pending draws into elem_image_id.
         self.canvas.flush();
 
+        // Undo the `canvas.save()` + bbox `translate`/`scissor` pushed in
+        // `PushBackdropFilter` (BUG-272 срез 10) before touching the render
+        // target — restoring pops the canvas transform *and* scissor stack
+        // (both are part of femtovg's `State`), independent of which FBO is
+        // active.
+        self.canvas.restore();
+
         // Restore previous render target.
         self.switch_render_target(prev_render_target);
-
-        let css_w = (self.width as f64 / self.scale) as f32;
-        let css_h = (self.height as f64 / self.scale) as f32;
 
         // Step 1: blit filtered backdrop at element bounds (Copy = pixel-replace).
         // BUG-272 item 3: `filtered_backdrop_id` is bbox-sized (cropped to
@@ -3023,12 +3855,19 @@ impl FemtovgBackend {
         self.canvas.fill_path(&bd_path, &bd_paint);
         self.canvas.restore();
 
-        // Step 2: composite element content on top (SourceOver = normal CSS compositing).
+        // Step 2: composite element content on top (SourceOver = normal CSS
+        // compositing). BUG-272 срез 10: placed at `true_elem_x/y` (the
+        // element's true on-screen position captured at Push time), NOT
+        // `bd_x/y` — see `BackdropFilterLayerEntry`'s doc for why those two
+        // differ and why using `bd_x/y` here would misplace the element's own
+        // content relative to step 1's (already off) backdrop rect.
         self.canvas.save();
         self.canvas.reset_transform();
-        let elem_paint = femtovg::Paint::image(elem_image_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+        let true_x = true_elem_x / self.scale as f32;
+        let true_y = true_elem_y / self.scale as f32;
+        let elem_paint = femtovg::Paint::image(elem_image_id, true_x, true_y, bd_w, bd_h, 0.0, 1.0);
         let mut elem_path = femtovg::Path::new();
-        elem_path.rect(0.0, 0.0, css_w, css_h);
+        elem_path.rect(true_x, true_y, bd_w, bd_h);
         self.canvas.fill_path(&elem_path, &elem_paint);
         self.canvas.restore();
 
@@ -3036,7 +3875,10 @@ impl FemtovgBackend {
         // via `backdrop_bbox_pool` (separate from `cpu_upload_pool`'s
         // full-framebuffer consumers — see field doc).
         self.release_backdrop_bbox_image(filtered_backdrop_id, filtered_backdrop_w, filtered_backdrop_h);
-        self.release_layer(elem_image_id);
+        // BUG-272 срез 10: `elem_image_id` is now bbox-sized and pooled via
+        // `bbox_layer_pool` (separate from `layer_pool`'s full-framebuffer
+        // consumers — see field doc).
+        self.release_bbox_layer(elem_image_id, filtered_backdrop_w, filtered_backdrop_h);
     }
 
     /// Рисует изображение из зарегистрированного URL в content box `rect`
@@ -3198,7 +4040,9 @@ impl FemtovgBackend {
         };
 
         let key = format!("{src}@{tw}x{th}");
-        if let Some(&id) = self.images.get(&key) {
+        // BUG-272 срез 18: варианты живут в LRU-ограниченном кэше, а не в
+        // `self.images`; попадание помечает ключ как недавно использованный.
+        if let Some(id) = self.resized_variants.get(&key) {
             return Some(id);
         }
 
@@ -3210,7 +4054,11 @@ impl FemtovgBackend {
             .canvas
             .create_image(femtovg::ImageSource::Rgba(img), femtovg::ImageFlags::empty())
             .ok()?;
-        self.images.insert(key, id);
+        // Вставка сверх ёмкости вытесняет LRU-вариант; его текстуру удаляем после
+        // следующего flush (могла быть отрисована ранее в этом кадре).
+        if let Some(evicted) = self.resized_variants.insert(key, id) {
+            self.resized_variant_pending_delete.push(evicted);
+        }
         Some(id)
     }
 
@@ -3422,6 +4270,56 @@ impl FemtovgBackend {
             || min_y > self.cull_css_h + slop
     }
 
+    /// BUG-272 срез 11: screen-space device-pixel axis-aligned bounding box of
+    /// `local` (a group's own bbox in document-space CSS px, pre-transform —
+    /// same convention as [`Self::group_bounds`]/[`Self::is_command_culled`]),
+    /// mapped through the current canvas transform and clamped to the active
+    /// render target's device-pixel extent (`self.width × self.height` — the
+    /// screen, or on the scroll-blit band path, the band FBO). This is the
+    /// bbox-sizing counterpart to [`Self::is_command_culled`]'s AABB test:
+    /// where that method only asks "does this footprint touch the viewport",
+    /// this one returns the actual device-pixel rect a bbox-sized offscreen
+    /// layer must cover to hold every pixel the group can paint this frame.
+    ///
+    /// Returns `(x0, y0, w, h)` — device-pixel origin within the framebuffer
+    /// plus extent — or `None` for a degenerate `local` or an extent that
+    /// clamps to empty (the transformed box landed fully outside the target;
+    /// callers fall back to a full-framebuffer layer, which stays correct —
+    /// just not bbox-optimised — for that frame).
+    fn screen_bbox_device_px(&self, local: Rect) -> Option<(f32, f32, usize, usize)> {
+        if local.width <= 0.0 || local.height <= 0.0 {
+            return None;
+        }
+        let t = self.canvas.transform();
+        let (x0, y0) = (local.x, local.y);
+        let (x1, y1) = (local.x + local.width, local.y + local.height);
+        let corners = [
+            t.transform_point(x0, y0),
+            t.transform_point(x1, y0),
+            t.transform_point(x0, y1),
+            t.transform_point(x1, y1),
+        ];
+        let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+        let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+        for (sx, sy) in corners {
+            min_x = min_x.min(sx);
+            min_y = min_y.min(sy);
+            max_x = max_x.max(sx);
+            max_y = max_y.max(sy);
+        }
+        let scale = self.scale as f32;
+        let dev_x0 = (min_x * scale).floor().max(0.0);
+        let dev_y0 = (min_y * scale).floor().max(0.0);
+        let dev_x1 = (max_x * scale).ceil().min(self.width as f32);
+        let dev_y1 = (max_y * scale).ceil().min(self.height as f32);
+        let w = dev_x1 - dev_x0;
+        let h = dev_y1 - dev_y0;
+        if w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+        Some((dev_x0, dev_y0, w.round() as usize, h.round() as usize))
+    }
+
     /// BUG-273 срез 1: document-space CSS px bbox of the offscreen-composite
     /// group a command opens (`PushFilter` / `PushBackdropFilter` /
     /// `PushBlendMode` / `PushOpacity`, plus the clip openers from срез 8 and the
@@ -3481,6 +4379,226 @@ impl FemtovgBackend {
             j += 1;
         }
         content.len().saturating_sub(1)
+    }
+
+    /// BUG-273 срез 2: is a `PushFilter` chain eligible for the inter-frame
+    /// bbox filter-layer cache?
+    ///
+    /// Eligible ⇔ the chain has **no blur** (blur chains render into a
+    /// full-framebuffer, scroll-baked layer — not scroll-invariant, see
+    /// [`FilterLayerEntry::bbox`]) **and** carries at least one colour-matrix
+    /// filter (a non-`Blur`/non-`Opacity` primitive). That is exactly the set of
+    /// chains for which `PushFilter` takes the bbox path and
+    /// [`Self::composite_filter_layer`] runs the expensive `screenshot()` +
+    /// CPU colour-matrix loop whose result is worth retaining. An opacity-only
+    /// or blur(0)-only chain has nothing costly to cache.
+    fn filter_is_bbox_cacheable(filters: &[lumen_layout::FilterFn]) -> bool {
+        let has_blur = filters
+            .iter()
+            .any(|f| matches!(f, lumen_layout::FilterFn::Blur(s) if *s > 0.0));
+        let has_color_matrix = filters.iter().any(|f| {
+            !matches!(
+                f,
+                lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_)
+            )
+        });
+        !has_blur && has_color_matrix
+    }
+
+    /// BUG-273 срез 2: device-pixel placement `(x0, y0, w, h)` plus the
+    /// sub-device-pixel phase `(phase_x, phase_y)` (eighths) of the group's
+    /// mapped top-left under the current transform. `None` when the group has no
+    /// on-screen bbox (fully clamped away / zero-area). The phase captures where
+    /// content lands *within* the bbox texture; two frames with matching dims
+    /// but differing phase would produce sub-pixel-shifted renders, so a hit is
+    /// gated on both matching (integer-device scroll — the scale-1.0 common case
+    /// — keeps the phase constant).
+    fn filter_cache_placement(&self, local: Rect) -> Option<(f32, f32, usize, usize, u32, u32)> {
+        let (x0, y0, w, h) = self.screen_bbox_device_px(local)?;
+        // The bbox origin `screen_bbox_device_px` floors is the AABB min corner.
+        // For the phase we need the sub-pixel remainder of that same min corner,
+        // so re-derive the mapped corners here (cheap: only runs for the handful
+        // of cacheable filter groups per frame).
+        let t = self.canvas.transform();
+        let (bx0, by0) = (local.x, local.y);
+        let (bx1, by1) = (local.x + local.width, local.y + local.height);
+        let corners = [
+            t.transform_point(bx0, by0),
+            t.transform_point(bx1, by0),
+            t.transform_point(bx0, by1),
+            t.transform_point(bx1, by1),
+        ];
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        for (sx, sy) in corners {
+            min_x = min_x.min(sx);
+            min_y = min_y.min(sy);
+        }
+        let scale = self.scale as f32;
+        // `x0`/`y0` are `(min * scale).floor().max(0.0)`; the phase is the
+        // fractional device offset lost to that floor, quantized to eighths.
+        let phase_x = (((min_x * scale) - x0).rem_euclid(1.0) * 8.0).round() as u32 % 8;
+        let phase_y = (((min_y * scale) - y0).rem_euclid(1.0) * 8.0).round() as u32 % 8;
+        Some((x0, y0, w, h, phase_x, phase_y))
+    }
+
+    /// BUG-273 срез 2: content hash of the `PushFilter…PopFilter` bracket
+    /// `content[open..=close]` (inclusive). Folded via
+    /// [`crate::display_list::hash_command_into`], which hashes document-space
+    /// command fields only — the outer scroll transform is never part of a
+    /// command, so the hash is stable across pure scrolling by construction.
+    fn hash_filter_bracket(content: &[DisplayCommand], open: usize, close: usize) -> u64 {
+        use std::hash::Hasher as _;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for cmd in &content[open..=close] {
+            crate::display_list::hash_command_into(cmd, &mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// BUG-273 срез 2: decide, at a `PushFilter` index in `run_content_pass`,
+    /// whether the bbox filter-layer cache handles this bracket.
+    ///
+    /// Returns `Some(close)` on a **hit** — the caller must blit-then-skip to
+    /// `close + 1` (the composited texture has already been drawn at the current
+    /// on-screen position). Returns `None` when the bracket must render normally;
+    /// on a genuine miss for a cacheable group it records
+    /// [`Self::pending_filter_cache_meta`] so the store fires at `PopFilter`.
+    fn filter_cache_probe(&mut self, content: &[DisplayCommand], i: usize) -> Option<usize> {
+        if !self.filter_cache_enabled {
+            return None;
+        }
+        let DisplayCommand::PushFilter {
+            filters,
+            bounds: Some(b),
+        } = &content[i]
+        else {
+            return None;
+        };
+        if !Self::filter_is_bbox_cacheable(filters) {
+            return None;
+        }
+        let (x0, y0, w, h, phase_x, phase_y) = self.filter_cache_placement(*b)?;
+        let close = Self::matching_close(content, i);
+        let hash = Self::hash_filter_bracket(content, i, close);
+        // Hit: dims + phase must match so the reuse is pixel-identical. Copy the
+        // texture id out here so the immutable lookup borrow ends before the
+        // `get_mut`/counter mutations below.
+        let hit = self
+            .filter_layer_cache
+            .get(&hash)
+            .filter(|e| e.w == w && e.h == h && e.phase_x == phase_x && e.phase_y == phase_y)
+            .map(|e| e.image_id);
+        if let Some(image_id) = hit {
+            self.filter_cache_clock += 1;
+            let clock = self.filter_cache_clock;
+            if let Some(e) = self.filter_layer_cache.get_mut(&hash) {
+                e.last_used = clock;
+            }
+            self.filter_cache_hits += 1;
+            self.blit_cached_filter_layer(image_id, x0, y0, w, h);
+            return Some(close);
+        }
+        // Miss: hand the key to the upcoming PushFilter → composite → store.
+        self.pending_filter_cache_meta = Some(FilterCacheMeta {
+            hash,
+            phase_x,
+            phase_y,
+        });
+        None
+    }
+
+    /// BUG-273 срез 2: draw a cached filter-layer texture at its current
+    /// on-screen device rect. Mirrors the `bbox = Some(..)` branch of
+    /// [`Self::composite_filter_layer`]'s Step 4 exactly, so a cache hit is
+    /// byte-identical to the composite it replaces — `reset_transform` + an
+    /// absolute-device-space image fill, independent of the ambient transform.
+    fn blit_cached_filter_layer(
+        &mut self,
+        image_id: femtovg::ImageId,
+        x0: f32,
+        y0: f32,
+        w: usize,
+        h: usize,
+    ) {
+        let x = x0 / self.scale as f32;
+        let y = y0 / self.scale as f32;
+        let cw = w as f32 / self.scale as f32;
+        let ch = h as f32 / self.scale as f32;
+        self.canvas.save();
+        self.canvas.reset_transform();
+        let paint = femtovg::Paint::image(image_id, x, y, cw, ch, 0.0, 1.0);
+        let mut path = femtovg::Path::new();
+        path.rect(x, y, cw, ch);
+        self.canvas.fill_path(&path, &paint);
+        self.canvas.restore();
+    }
+
+    /// BUG-273 срез 2: retain a freshly composited bbox filter-layer texture
+    /// under `meta`, so future frames with the same subtree hit. Enforces
+    /// [`FILTER_CACHE_BUDGET_BYTES`] / [`FILTER_CACHE_MAX_ENTRIES`] by evicting
+    /// the least-recently-used entries first; every image removed (evicted or
+    /// overwritten) is queued to `filter_layer_pending_delete` so it is deleted
+    /// only after the frame's flush.
+    fn store_filter_cache(&mut self, meta: FilterCacheMeta, image_id: femtovg::ImageId, w: usize, h: usize) {
+        let bytes = w.saturating_mul(h).saturating_mul(4);
+        self.filter_cache_clock += 1;
+        let clock = self.filter_cache_clock;
+        // Overwrite any stale entry under this key (content hash collision within
+        // the same key is impossible; a repeat store means a re-render of the
+        // same group whose previous texture is now superseded).
+        if let Some(old) = self.filter_layer_cache.remove(&meta.hash) {
+            self.filter_cache_bytes = self.filter_cache_bytes.saturating_sub(old.bytes);
+            self.filter_layer_pending_delete.push(old.image_id);
+        }
+        self.filter_layer_cache.insert(
+            meta.hash,
+            CachedFilterLayer {
+                image_id,
+                w,
+                h,
+                phase_x: meta.phase_x,
+                phase_y: meta.phase_y,
+                bytes,
+                last_used: clock,
+            },
+        );
+        self.filter_cache_bytes = self.filter_cache_bytes.saturating_add(bytes);
+        self.evict_filter_cache();
+    }
+
+    /// BUG-273 срез 2: LRU-evict retained filter textures until both the byte
+    /// budget and the entry cap are satisfied. Evicted images go to the
+    /// after-flush delete queue.
+    fn evict_filter_cache(&mut self) {
+        while self.filter_cache_bytes > FILTER_CACHE_BUDGET_BYTES
+            || self.filter_layer_cache.len() > FILTER_CACHE_MAX_ENTRIES
+        {
+            let Some((&victim, _)) = self
+                .filter_layer_cache
+                .iter()
+                .min_by_key(|(_, e)| e.last_used)
+            else {
+                break;
+            };
+            if let Some(e) = self.filter_layer_cache.remove(&victim) {
+                self.filter_cache_bytes = self.filter_cache_bytes.saturating_sub(e.bytes);
+                self.filter_layer_pending_delete.push(e.image_id);
+            }
+        }
+    }
+
+    /// BUG-273 срез 2: drop every retained filter-layer texture (queued for
+    /// after-flush deletion) and empty the cache. Called from
+    /// [`Self::invalidate_scroll_cache`] on the same resize/DPI/content/
+    /// image-load events that invalidate the scroll-blit band — the events that
+    /// change on-screen pixels without changing a subtree's content hash, which
+    /// the per-subtree hash alone could not detect.
+    fn clear_filter_cache(&mut self) {
+        for (_, e) in self.filter_layer_cache.drain() {
+            self.filter_layer_pending_delete.push(e.image_id);
+        }
+        self.filter_cache_bytes = 0;
     }
 
     fn render_command(&mut self, cmd: &DisplayCommand) {
@@ -3577,6 +4695,15 @@ impl FemtovgBackend {
                 self.clip_stack.push(ClipEntry::Scissor);
                 self.layer_stack_depth += 1;
             }
+            // BUG-272 срез 12: bbox-сайзинг слоя переиспользует срез 11's
+            // механизм (`screen_bbox_device_px` + `acquire_bbox_layer`) —
+            // тот же `bounds`-прямоугольник (`rect`), что уже используется
+            // для куллинга в срезе 8. `transform` захватывается ДО
+            // bbox-`translate`/`scissor` — путь клипа композитится на
+            // `prev_render_target` под identity-канвой, поэтому должен
+            // остаться в истинном screen-space, а не в bbox-локальном
+            // (см. `PushOpacity`'s doc для той же bbox-translate/scissor
+            // конвенции).
             DisplayCommand::PushClipRoundedRect { rect, radii } => {
                 // BUG-249: скруглённый клип через offscreen-слой + маска (как
                 // PushClipPath/BUG-140). Раньше использовался прямоугольный
@@ -3584,28 +4711,31 @@ impl FemtovgBackend {
                 // расходясь с Edge (TEST-101). Subtree рендерится в FBO, а
                 // PopClip композитит его одним fill_path по скруглённому контуру.
                 let prev_rt = self.current_rt();
-                let entry = match self.acquire_layer() {
-                    Some(img_id) => {
-                        self.switch_render_target(femtovg::RenderTarget::Image(img_id));
-                        self.canvas.clear_rect(
-                            0, 0, self.width, self.height,
-                            femtovg::Color::rgba(0, 0, 0, 0),
-                        );
-                        ClipEntry::RoundedRectLayer {
-                            image_id: img_id,
-                            rect: *rect,
-                            radii: *radii,
-                            transform: self.canvas.transform(),
-                            prev_render_target: prev_rt,
+                let screen_bbox = self.screen_bbox_device_px(*rect);
+                let entry = match screen_bbox {
+                    Some((x0, y0, w, h)) => match self.acquire_bbox_layer(w, h) {
+                        Some(img_id) => {
+                            self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                            self.canvas.clear_rect(
+                                0, 0, w as u32, h as u32,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            let transform = self.canvas.transform();
+                            self.canvas.save();
+                            self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                            self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                            ClipEntry::RoundedRectLayer {
+                                image_id: img_id,
+                                rect: *rect,
+                                radii: *radii,
+                                transform,
+                                prev_render_target: prev_rt,
+                                bbox: Some((x0, y0, w, h)),
+                            }
                         }
-                    }
-                    None => {
-                        // Fallback при сбое аллокации слоя — прямоугольный scissor
-                        // (углы острые, но содержимое всё равно обрезано по боксу).
-                        self.canvas.save();
-                        self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
-                        ClipEntry::Scissor
-                    }
+                        None => self.push_clip_rounded_rect_fallback(rect, radii, prev_rt),
+                    },
+                    None => self.push_clip_rounded_rect_fallback(rect, radii, prev_rt),
                 };
                 self.clip_stack.push(entry);
                 self.layer_stack_depth += 1;
@@ -3614,32 +4744,36 @@ impl FemtovgBackend {
             // рендерится в offscreen-слой; PopClip композитит его одним
             // fill_path по форме, трансформированной матрицей канвы на момент
             // Push — клип переносится transform-ом элемента (команда эмитится
-            // внутри PushTransform).
+            // внутри PushTransform). BUG-272 срез 12: bbox-сайзинг слоя, тот
+            // же приём и та же причина захвата `transform` до translate, что
+            // у `PushClipRoundedRect` выше.
             DisplayCommand::PushClipPath { shape } => {
                 let prev_rt = self.current_rt();
-                let entry = match self.acquire_layer() {
-                    Some(img_id) => {
-                        self.switch_render_target(femtovg::RenderTarget::Image(img_id));
-                        self.canvas.clear_rect(
-                            0, 0, self.width, self.height,
-                            femtovg::Color::rgba(0, 0, 0, 0),
-                        );
-                        ClipEntry::PathLayer {
-                            image_id: img_id,
-                            shape: shape.clone(),
-                            transform: self.canvas.transform(),
-                            prev_render_target: prev_rt,
+                let bbox_rect = shape.bounding_rect();
+                let screen_bbox = self.screen_bbox_device_px(bbox_rect);
+                let entry = match screen_bbox {
+                    Some((x0, y0, w, h)) => match self.acquire_bbox_layer(w, h) {
+                        Some(img_id) => {
+                            self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                            self.canvas.clear_rect(
+                                0, 0, w as u32, h as u32,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            let transform = self.canvas.transform();
+                            self.canvas.save();
+                            self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                            self.canvas.scissor(bbox_rect.x, bbox_rect.y, bbox_rect.width, bbox_rect.height);
+                            ClipEntry::PathLayer {
+                                image_id: img_id,
+                                shape: shape.clone(),
+                                transform,
+                                prev_render_target: prev_rt,
+                                bbox: Some((x0, y0, w, h)),
+                            }
                         }
-                    }
-                    None => {
-                        // Fallback: scissor по bounding box формы (поведение
-                        // до BUG-140). Scissor задан в текущем transform-
-                        // пространстве — переносится transform-ом сам.
-                        let bb = shape.bounding_rect();
-                        self.canvas.save();
-                        self.canvas.scissor(bb.x, bb.y, bb.width, bb.height);
-                        ClipEntry::Scissor
-                    }
+                        None => self.push_clip_path_fallback(shape, &bbox_rect, prev_rt),
+                    },
+                    None => self.push_clip_path_fallback(shape, &bbox_rect, prev_rt),
                 };
                 self.clip_stack.push(entry);
                 self.layer_stack_depth += 1;
@@ -3649,11 +4783,11 @@ impl FemtovgBackend {
                     self.layer_stack_depth -= 1;
                 }
                 match self.clip_stack.pop() {
-                    Some(ClipEntry::PathLayer { image_id, shape, transform, prev_render_target }) => {
-                        self.composite_clip_path_layer(image_id, &shape, &transform, prev_render_target);
+                    Some(ClipEntry::PathLayer { image_id, shape, transform, prev_render_target, bbox }) => {
+                        self.composite_clip_path_layer(image_id, &shape, &transform, prev_render_target, bbox);
                     }
-                    Some(ClipEntry::RoundedRectLayer { image_id, rect, radii, transform, prev_render_target }) => {
-                        self.composite_rounded_rect_clip_layer(image_id, &rect, &radii, &transform, prev_render_target);
+                    Some(ClipEntry::RoundedRectLayer { image_id, rect, radii, transform, prev_render_target, bbox }) => {
+                        self.composite_rounded_rect_clip_layer(image_id, &rect, &radii, &transform, prev_render_target, bbox);
                     }
                     Some(ClipEntry::Scissor) => self.canvas.restore(),
                     // Защита от рассинхрона пар (эмиттер гарантирует парность):
@@ -3950,32 +5084,87 @@ impl FemtovgBackend {
             // alpha. Per-draw set_global_alpha double-blends overlaps, lets
             // negative-z children show through siblings, and a nested group
             // replaces (not multiplies) the outer alpha.
-            DisplayCommand::PushOpacity { alpha, .. } => {
+            //
+            // BUG-272 срез 11: when `bounds` is known, the layer is sized to its
+            // screen-space device-pixel bbox instead of the full framebuffer
+            // (`screen_bbox_device_px` + `acquire_bbox_layer`) — the same
+            // bbox-sizing move срез 10 made for `elem_image_id`. Children draw
+            // with the ambient transform still active plus an extra translate
+            // mapping the bbox's screen origin to the layer's local `(0, 0)`
+            // (mirrors `PushBackdropFilter`'s `true_elem_x/y` convention, not
+            // `apply_backdrop_filters`'s ambient-blind crop — see
+            // `BackdropFilterLayerEntry`'s doc for why that distinction
+            // matters). The explicit `scissor(bounds)` re-establishes the clip
+            // against the NEW (translated) transform: femtovg bakes a scissor
+            // against whatever transform was active when it was set, so an
+            // ancestor's `overflow: hidden` scissor — baked pre-translate —
+            // would otherwise clip this layer's content using coordinates that
+            // belong to the full framebuffer, not this bbox-local image.
+            DisplayCommand::PushOpacity { alpha, bounds } => {
                 let prev_rt = self.current_rt();
-                let entry = match self.acquire_layer() {
-                    Some(img_id) => {
-                        // Redirect subtree draws into the transparent offscreen layer.
-                        self.switch_render_target(femtovg::RenderTarget::Image(img_id));
-                        self.canvas.clear_rect(
-                            0, 0, self.width, self.height,
-                            femtovg::Color::rgba(0, 0, 0, 0),
-                        );
-                        OpacityLayerEntry {
-                            image_id: Some(img_id),
-                            alpha: alpha.clamp(0.0, 1.0),
-                            prev_render_target: prev_rt,
+                let screen_bbox = bounds.and_then(|b| self.screen_bbox_device_px(b));
+                let entry = match screen_bbox {
+                    Some((x0, y0, w, h)) => match self.acquire_bbox_layer(w, h) {
+                        Some(img_id) => {
+                            self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                            self.canvas.clear_rect(
+                                0, 0, w as u32, h as u32,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            self.canvas.save();
+                            self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                            let b = bounds.expect("screen_bbox_device_px came from Some(bounds)");
+                            self.canvas.scissor(b.x, b.y, b.width, b.height);
+                            OpacityLayerEntry {
+                                image_id: Some(img_id),
+                                alpha: alpha.clamp(0.0, 1.0),
+                                prev_render_target: prev_rt,
+                                bbox: Some((x0, y0, w, h)),
+                            }
                         }
-                    }
-                    None => {
-                        // Fallback: per-draw alpha (pre-BUG-133 behaviour).
-                        self.canvas.save();
-                        self.canvas.set_global_alpha(alpha.clamp(0.0, 1.0));
-                        OpacityLayerEntry {
-                            image_id: None,
-                            alpha: alpha.clamp(0.0, 1.0),
-                            prev_render_target: prev_rt,
+                        None => {
+                            // Fallback: per-draw alpha (pre-BUG-133 behaviour).
+                            self.canvas.save();
+                            self.canvas.set_global_alpha(alpha.clamp(0.0, 1.0));
+                            OpacityLayerEntry {
+                                image_id: None,
+                                alpha: alpha.clamp(0.0, 1.0),
+                                prev_render_target: prev_rt,
+                                bbox: None,
+                            }
                         }
-                    }
+                    },
+                    None => match self.acquire_layer() {
+                        Some(img_id) => {
+                            // Redirect subtree draws into the transparent offscreen layer.
+                            self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                            // BUG-320: full-frame fallback layer is sized to the
+                            // active render target (band FBO during a scroll-blit
+                            // pass), not the window — clear its full extent.
+                            let (cw, ch) = self.current_rt_size();
+                            self.canvas.clear_rect(
+                                0, 0, cw, ch,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            OpacityLayerEntry {
+                                image_id: Some(img_id),
+                                alpha: alpha.clamp(0.0, 1.0),
+                                prev_render_target: prev_rt,
+                                bbox: None,
+                            }
+                        }
+                        None => {
+                            // Fallback: per-draw alpha (pre-BUG-133 behaviour).
+                            self.canvas.save();
+                            self.canvas.set_global_alpha(alpha.clamp(0.0, 1.0));
+                            OpacityLayerEntry {
+                                image_id: None,
+                                alpha: alpha.clamp(0.0, 1.0),
+                                prev_render_target: prev_rt,
+                                bbox: None,
+                            }
+                        }
+                    },
                 };
                 self.opacity_layer_stack.push(entry);
                 self.layer_stack_depth += 1;
@@ -3990,6 +5179,7 @@ impl FemtovgBackend {
                             img_id,
                             entry.alpha,
                             entry.prev_render_target,
+                            entry.bbox,
                         ),
                         None => self.canvas.restore(),
                     }
@@ -3999,7 +5189,7 @@ impl FemtovgBackend {
             // ── Blend mode (PA-3) ─────────────────────────────────────────────
             // Normal → fast path (SourceOver). PlusLighter → fast path (Lighter).
             // All other CSS blend modes → offscreen CPU compositing via mix_blend_rgba.
-            DisplayCommand::PushBlendMode { mode, .. } => {
+            DisplayCommand::PushBlendMode { mode, bounds } => {
                 if *mode == BlendMode::Normal {
                     self.canvas.save();
                     self.layer_stack_depth += 1;
@@ -4013,29 +5203,55 @@ impl FemtovgBackend {
                     // Flush pending commands so backdrop is fully drawn in prev_rt.
                     self.canvas.flush();
                     // Screenshot the current RT to get the backdrop pixels.
-                    let (backdrop_rgba, backdrop_w, backdrop_h) =
-                        if let Ok(img) = self.canvas.screenshot() {
-                            let w = img.width();
-                            let h = img.height();
-                            let rgba = img.buf().iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
-                            (rgba, w, h)
-                        } else {
-                            (vec![], 0, 0)
-                        };
-                    // BUG-272: acquire from the shared layer pool instead of a
-                    // fresh create_image_empty — this src image is only ever
-                    // used as a render target and later read back via
-                    // screenshot() (never GPU-sampled with Paint::image), so
-                    // the pool's FLIP_Y sampler flag is a no-op here, same as
-                    // the acquire_layer() blur destinations in
-                    // composite_filter_layer.
-                    match self.acquire_layer() {
-                        Some(src_id) => {
+                    let (full_rgba, full_w, full_h) = if let Ok(img) = self.canvas.screenshot() {
+                        let w = img.width();
+                        let h = img.height();
+                        let rgba = img.buf().iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
+                        (rgba, w, h)
+                    } else {
+                        (vec![], 0, 0)
+                    };
+                    // BUG-272 срез 14: mix-blend is pure per-pixel work (no
+                    // neighbour sampling) — bbox-size the source layer and
+                    // its backdrop snapshot like PushMask/PushClip*, instead
+                    // of the full framebuffer. `acquire_bbox_layer`, like
+                    // `acquire_layer` below, is a render-target FBO — the src
+                    // image is only ever used as a render target and read
+                    // back via screenshot() (never GPU-sampled with
+                    // `Paint::image`), so the pool's FLIP_Y sampler flag is a
+                    // no-op here, same as the `acquire_layer()` blur
+                    // destinations in `composite_filter_layer`.
+                    let acquired = self
+                        .screen_bbox_device_px(*bounds)
+                        .and_then(|(x0, y0, w, h)| {
+                            self.acquire_bbox_layer(w, h).map(|id| (id, Some((x0, y0, w, h))))
+                        })
+                        .or_else(|| self.acquire_layer().map(|id| (id, None)));
+                    match acquired {
+                        Some((src_id, bbox)) => {
                             self.switch_render_target(femtovg::RenderTarget::Image(src_id));
-                            self.canvas.clear_rect(
-                                0, 0, self.width, self.height,
-                                femtovg::Color::rgba(0, 0, 0, 0),
-                            );
+                            let (backdrop_rgba, backdrop_w, backdrop_h) = match bbox {
+                                Some((x0, y0, w, h)) => crop_region_rgba(
+                                    &full_rgba, full_w, full_h,
+                                    (x0 as usize, y0 as usize, x0 as usize + w, y0 as usize + h),
+                                ),
+                                None => (full_rgba, full_w, full_h),
+                            };
+                            // BUG-320: the full-frame fallback layer (`bbox ==
+                            // None`) is sized to the ACTIVE render target (the
+                            // src layer just bound, band-sized during a
+                            // scroll-blit pass) — clear the whole layer, not just
+                            // the window-sized sub-rect, so no band-overscan
+                            // stale pixels leak into the blend.
+                            let (cw, ch) = bbox
+                                .map(|(_, _, w, h)| (w as u32, h as u32))
+                                .unwrap_or_else(|| self.current_rt_size());
+                            self.canvas.clear_rect(0, 0, cw, ch, femtovg::Color::rgba(0, 0, 0, 0));
+                            if let Some((x0, y0, _, _)) = bbox {
+                                self.canvas.save();
+                                self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                                self.canvas.scissor(bounds.x, bounds.y, bounds.width, bounds.height);
+                            }
                             self.blend_layer_stack.push(BlendLayerEntry {
                                 mode: *mode,
                                 src_image_id: src_id,
@@ -4043,6 +5259,7 @@ impl FemtovgBackend {
                                 backdrop_w,
                                 backdrop_h,
                                 prev_render_target: prev_rt,
+                                bbox,
                             });
                         }
                         None => {
@@ -4086,7 +5303,7 @@ impl FemtovgBackend {
             // PA-2: реальный Gaussian blur (GPU via filter_image) и colour-matrix
             // (CPU via flush+screenshot) через offscreen-слой.
             // Только Opacity — легкий путь через set_global_alpha без offscreen.
-            DisplayCommand::PushFilter { filters, bounds: _ } => {
+            DisplayCommand::PushFilter { filters, bounds } => {
                 let needs_offscreen = filters
                     .iter()
                     .any(|f| !matches!(f, lumen_layout::FilterFn::Opacity(_)));
@@ -4096,34 +5313,72 @@ impl FemtovgBackend {
                     // Uses active_rt_image (maintained by switch_render_target) to
                     // correctly handle nesting with blend layers (PA-3).
                     let prev_rt = self.current_rt();
+                    // BUG-273 срез 2: the cache key `filter_cache_probe` staged
+                    // on a miss (if any). Taken unconditionally so it can never
+                    // leak to a later, unrelated PushFilter; only attached to the
+                    // entry on the bbox path below (a full-framebuffer fallback is
+                    // not cacheable).
+                    let cache_meta = self.pending_filter_cache_meta.take();
 
-                    // BUG-145: the layer must stay full-RT-sized. `bounds` is the
-                    // element's untransformed border box, but content is drawn into
-                    // the layer in page coordinates (no translation to layer-local
-                    // space), transformed content extends beyond the border box, and
-                    // blur needs ~3σ of padding around it; `composite_filter_layer`
-                    // also composites the layer as a full-viewport quad. A
-                    // bounds-sized layer (BUG-076 attempt) captured the page's
-                    // top-left corner and stretched it across the viewport
-                    // (TEST-30 30.68%, TEST-103 49.59%).
-                    // BUG-146: FLIP_Y so the rare direct GPU composite of this
-                    // layer (no blur, no colour-matrix — e.g. `blur(0px)`, or
-                    // blur-destination allocation failure) samples it upright.
+                    // BUG-145 / BUG-272 срез 14: a chain containing a blur
+                    // must stay full-RT-sized. `filter_image`'s Gaussian
+                    // blur samples texels beyond the element's own border
+                    // box, and `bounds` carries no padding for that (see
+                    // `group_bounds`'s doc) — a tight bbox texture has no
+                    // data for those samples. A bounds-sized layer for a
+                    // blur chain (BUG-076 attempt, pre-срез-11 translate
+                    // fix) captured the page's top-left corner and
+                    // stretched it across the viewport (TEST-30 30.68%,
+                    // TEST-103 49.59%). A colour-matrix-only chain (no
+                    // blur) is pure per-pixel work — same as
+                    // PushBlendMode/PushMask — so its visible layer can be
+                    // bbox-sized like срезы 11-13.
+                    // BUG-146: FLIP_Y so the rare direct GPU composite of
+                    // this layer (no colour-matrix — e.g. `blur(0px)`, or a
+                    // bbox/layer allocation failure) samples it upright.
                     // The blur pass ignores the flag; the colour-matrix
                     // screenshot round-trip flips rows regardless of it.
-                    match self.acquire_layer() {
-                        Some(img_id) => {
+                    let has_blur = filters
+                        .iter()
+                        .any(|f| matches!(f, lumen_layout::FilterFn::Blur(s) if *s > 0.0));
+                    let acquired = if has_blur {
+                        None
+                    } else {
+                        bounds.and_then(|b| self.screen_bbox_device_px(b))
+                    }
+                    .and_then(|(x0, y0, w, h)| {
+                        self.acquire_bbox_layer(w, h).map(|id| (id, Some((x0, y0, w, h))))
+                    })
+                    .or_else(|| self.acquire_layer().map(|id| (id, None)));
+
+                    match acquired {
+                        Some((img_id, bbox)) => {
                             // Redirect draws into the offscreen image.
                             self.switch_render_target(femtovg::RenderTarget::Image(img_id));
                             // Clear to transparent so content composites correctly.
-                            self.canvas.clear_rect(
-                                0, 0, self.width, self.height,
-                                femtovg::Color::rgba(0, 0, 0, 0),
-                            );
+                            // BUG-320: the full-frame fallback layer (`bbox ==
+                            // None`) is sized to the ACTIVE render target (the
+                            // band FBO during a scroll-blit pass, just bound
+                            // above), not the window — clear the whole layer.
+                            let (cw, ch) = bbox
+                                .map(|(_, _, w, h)| (w as u32, h as u32))
+                                .unwrap_or_else(|| self.current_rt_size());
+                            self.canvas.clear_rect(0, 0, cw, ch, femtovg::Color::rgba(0, 0, 0, 0));
+                            if let Some((x0, y0, _, _)) = bbox {
+                                self.canvas.save();
+                                self.canvas.translate(-(x0 / self.scale as f32), -(y0 / self.scale as f32));
+                                let b = bounds.expect("screen_bbox_device_px came from Some(bounds)");
+                                self.canvas.scissor(b.x, b.y, b.width, b.height);
+                            }
                             self.filter_layer_stack.push(FilterLayerEntry {
                                 image_id: img_id,
                                 filters: filters.clone(),
                                 prev_render_target: prev_rt,
+                                bbox,
+                                // Only a bbox-sized layer is cacheable; a
+                                // full-framebuffer fallback (`bbox == None`) is
+                                // scroll-baked, so drop the staged key there.
+                                cache_meta: bbox.and(cache_meta),
                             });
                             self.layer_stack_depth += 1;
                         }
@@ -4165,6 +5420,12 @@ impl FemtovgBackend {
             // at element bounds (Copy op) then composites element content on top.
             DisplayCommand::PushBackdropFilter { filters, bounds } => {
                 let prev_rt = self.current_rt();
+                // BUG-272 срез 10: the element's true on-screen device position,
+                // captured from the CURRENT (ambient) transform before anything
+                // below touches it — see `BackdropFilterLayerEntry::true_elem_x`'s
+                // doc for why this must NOT be conflated with `apply_backdrop_
+                // filters`'s own (ambient-blind) `filt_x/y` crop origin.
+                let true_origin = self.canvas.transform().transform_point(bounds.x, bounds.y);
                 // Flush so backdrop has all content rendered.
                 self.canvas.flush();
                 // Apply filters to a screenshot of the current RT.
@@ -4182,15 +5443,46 @@ impl FemtovgBackend {
                     // landed in the wrong row, `viewport_h - bounds.bottom`).
                     // `filtered_backdrop_id` is a CPU pixel upload (top-down) and
                     // correctly stays flag-free per `offscreen_layer_image_flags`.
-                    match self.acquire_layer() {
+                    match self.acquire_bbox_layer(filt_w, filt_h) {
                         Some(elem_id) => {
                             self.switch_render_target(femtovg::RenderTarget::Image(elem_id));
                             self.canvas.clear_rect(
-                                0, 0, self.width, self.height,
+                                0, 0, filt_w as u32, filt_h as u32,
                                 femtovg::Color::rgba(0, 0, 0, 0),
                             );
+                            self.canvas.save();
+                            // BUG-272 срез 10: unlike the (buggy, ambient-blind)
+                            // `filt_x/y` crop, child draws must land at their TRUE
+                            // on-screen position for `composite_backdrop_filter_layer`
+                            // to place `elem_image_id` back correctly (see
+                            // `BackdropFilterLayerEntry`'s doc) — so the ambient
+                            // transform (scroll/page-offset/nested `PushTransform`)
+                            // stays active here; only an extra translate is added on
+                            // top (NOT a reset) to map `true_origin` to this image's
+                            // local `(0, 0)`.
+                            self.canvas.translate(
+                                -(true_origin.0 / self.scale as f32),
+                                -(true_origin.1 / self.scale as f32),
+                            );
+                            // Re-establish (not intersect) the scissor to exactly this
+                            // element's bbox, in the SAME (ambient-preserving)
+                            // coordinate space child draws already use (`bounds`,
+                            // untransformed — femtovg's `scissor()` bakes it against
+                            // the CURRENT transform, same as `intersect_scissor(rect.x,
+                            // rect.y, ...)` calls elsewhere in this file). Needed
+                            // because femtovg's scissor is baked (`Scissor::transform`)
+                            // from whatever CTM was active when an ancestor's overflow
+                            // clip called `intersect_scissor` (e.g. the page's own
+                            // `overflow: hidden` root); left as inherited, it clips
+                            // this small, differently-positioned image against
+                            // coordinates that belong to the full framebuffer, cutting
+                            // content off partway (root-caused via femtovg source
+                            // reading + row-range instrumentation).
+                            self.canvas.scissor(bounds.x, bounds.y, bounds.width, bounds.height);
                             self.backdrop_filter_layer_stack.push(BackdropFilterLayerEntry {
                                 elem_image_id: elem_id,
+                                true_elem_x: true_origin.0,
+                                true_elem_y: true_origin.1,
                                 filtered_backdrop_id: filt_id,
                                 filtered_backdrop_w: filt_w,
                                 filtered_backdrop_h: filt_h,
@@ -4241,6 +5533,7 @@ impl FemtovgBackend {
                     gradient: None,
                     rect: *rect,
                     prev_render_target: self.current_rt(),
+                    bbox: None,
                 });
                 self.layer_stack_depth += 1;
             }
@@ -4330,6 +5623,20 @@ impl FemtovgBackend {
             DisplayCommand::PageBreak => {}
         }
     }
+
+    /// BUG-272 срез 16: GPU-byte estimate for a set of femtovg textures — used
+    /// by [`Self::debug_mem_report`] to attribute GPU memory per category
+    /// instead of only reporting pool entry counts. Every texture this backend
+    /// creates is `PixelFormat::Rgba8` (4 bytes/px — `create_image_empty`
+    /// call sites and `ImageSource::Rgba` uploads both fix the format), so a
+    /// flat ×4 multiplier is exact, not an approximation. Missing/stale ids
+    /// (already released) contribute 0 rather than erroring — a best-effort
+    /// diagnostic snapshot, not a correctness-critical path.
+    fn gpu_image_bytes<'a>(&self, ids: impl Iterator<Item = &'a femtovg::ImageId>) -> usize {
+        ids.filter_map(|id| self.canvas.image_size(*id).ok())
+            .map(|(w, h)| w * h * 4)
+            .sum()
+    }
 }
 
 // ─── RenderBackend impl ───────────────────────────────────────────────────────
@@ -4337,15 +5644,57 @@ impl FemtovgBackend {
 impl RenderBackend for FemtovgBackend {
     fn debug_mem_report(&self) -> String {
         let raw_bytes: usize = self.raw_images.values().map(|i| i.data.len()).sum();
+        // BUG-272 срез 16 (остаток item 1): per-category GPU-byte breakdown,
+        // not just a process-wide total — attributes texture memory to glyph
+        // atlas / framebuffer / each layer-FBO pool / decoded-image cache
+        // separately, to test the "glyph atlas ≈ 285 MB on lenta.ru" hypothesis
+        // and any others without guessing. `debug_inspector_get_font_textures`
+        // (femtovg `debug_inspector` feature) is the only way to reach the
+        // glyph atlas's own `ImageId`s — femtovg's `TextContext` is otherwise
+        // fully private.
+        let glyph_atlas_ids = self.canvas.debug_inspector_get_font_textures();
+        let glyph_atlas_bytes = self.gpu_image_bytes(glyph_atlas_ids.iter());
+        // The default render target (window surface) isn't a femtovg `ImageId`
+        // at all — glutin/OpenGL own it — so this is a single-buffer RGBA8
+        // estimate from the known surface size, not a measured value.
+        let framebuffer_bytes = self.width as usize * self.height as usize * 4;
+        let decoded_gpu_bytes = self.gpu_image_bytes(self.images.values());
+        // BUG-272 срез 18: уменьшенные варианты (`"src@WxH"`) — отдельная
+        // категория, LRU-ограниченная RESIZED_VARIANT_CACHE_CAP.
+        let resized_variant_bytes = self.gpu_image_bytes(self.resized_variants.values());
+        let layer_pool_bytes = self.gpu_image_bytes(self.layer_pool.iter());
+        let content_band_bytes = self.gpu_image_bytes(self.content_band_pool.iter());
+        let cpu_upload_bytes = self.gpu_image_bytes(self.cpu_upload_pool.iter());
+        let backdrop_bbox_bytes = self.gpu_image_bytes(self.backdrop_bbox_pool.iter());
+        let bbox_layer_bytes = self.gpu_image_bytes(self.bbox_layer_pool.iter());
+        let bbox_cpu_upload_bytes = self.gpu_image_bytes(self.bbox_cpu_upload_pool.iter());
         format!(
-            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}, content_band_pool={}, cpu_upload_pool={}, backdrop_bbox_pool={}",
+            "femtovg: raw_images={} ({:.1} MB), gpu_images={} ({:.1} MB), \
+             resized_variants={} ({:.1} MB), glyph_atlas={} ({:.1} MB), \
+             framebuffer≈{:.1} MB, layer_pool={} ({:.1} MB), content_band_pool={} ({:.1} MB), \
+             cpu_upload_pool={} ({:.1} MB), backdrop_bbox_pool={} ({:.1} MB), bbox_layer_pool={} ({:.1} MB), \
+             bbox_cpu_upload_pool={} ({:.1} MB)",
             self.raw_images.len(),
             raw_bytes as f64 / 1e6,
             self.images.len(),
+            decoded_gpu_bytes as f64 / 1e6,
+            self.resized_variants.len(),
+            resized_variant_bytes as f64 / 1e6,
+            glyph_atlas_ids.len(),
+            glyph_atlas_bytes as f64 / 1e6,
+            framebuffer_bytes as f64 / 1e6,
             self.layer_pool.len(),
+            layer_pool_bytes as f64 / 1e6,
             self.content_band_pool.len(),
+            content_band_bytes as f64 / 1e6,
             self.cpu_upload_pool.len(),
-            self.backdrop_bbox_pool.len()
+            cpu_upload_bytes as f64 / 1e6,
+            self.backdrop_bbox_pool.len(),
+            backdrop_bbox_bytes as f64 / 1e6,
+            self.bbox_layer_pool.len(),
+            bbox_layer_bytes as f64 / 1e6,
+            self.bbox_cpu_upload_pool.len(),
+            bbox_cpu_upload_bytes as f64 / 1e6,
         )
     }
 
@@ -4365,6 +5714,10 @@ impl RenderBackend for FemtovgBackend {
         self.scroll_x = scroll_x;
         // ADR-016 M0.2: reset per-frame culling counters.
         self.cull_stats = (0, 0);
+        // BUG-273 срез 2: advance the filter-cache LRU clock and reset the
+        // per-frame hit counter (reported under LUMEN_FRAME_LOG=2).
+        self.filter_cache_clock = self.filter_cache_clock.wrapping_add(1);
+        self.filter_cache_hits = 0;
         self.viewport_css_w = (self.width as f64 / self.scale) as f32;
         self.viewport_css_h = (self.height as f64 / self.scale) as f32;
         // ADR-016 M3.2.1b: culling defaults to the viewport; the band content
@@ -4642,6 +5995,11 @@ impl RenderBackend for FemtovgBackend {
         for id in gradient_del {
             self.canvas.delete_image(id);
         }
+        // BUG-272 срез 18: resized image variants evicted by the LRU this frame.
+        let variant_del: Vec<_> = self.resized_variant_pending_delete.drain(..).collect();
+        for id in variant_del {
+            self.canvas.delete_image(id);
+        }
 
         let swap_result = match self.current_ctx() {
             Ok(ctx) => self
@@ -4731,19 +6089,21 @@ impl RenderBackend for FemtovgBackend {
         self.invalidate_scroll_cache();
     }
 
-    fn register_image(&mut self, src: String, image: &Image) -> Result<(), String> {
+    fn register_image(&mut self, src: String, image: Arc<Image>) -> Result<(), String> {
         use femtovg::{ImageFlags, ImageSource};
         use imgref::ImgRef;
         use rgb::RGBA8;
 
-        let rgba: Vec<RGBA8> = image_to_rgba8_vec(image);
+        let rgba: Vec<RGBA8> = image_to_rgba8_vec(&image);
         let img = ImgRef::new(&rgba, image.width as usize, image.height as usize);
         let id = self
             .canvas
             .create_image(ImageSource::Rgba(img), ImageFlags::empty())
             .map_err(|e| format!("femtovg register_image: {e:?}"))?;
         // Keep the decoded pixels for on-demand area-averaged downscale (BUG-077).
-        self.raw_images.insert(src.clone(), image.clone());
+        // BUG-272 срез 17: clone the Arc pointer, not the pixel buffer — this
+        // slot shares the caller's allocation instead of a second full copy.
+        self.raw_images.insert(src.clone(), image);
         self.images.insert(src, id);
         // ADR-016 M3.2.1b-2: a late-arriving image repaints the same display list
         // with new pixels (the content hash — over commands, not pixel data — is
@@ -4754,6 +6114,14 @@ impl RenderBackend for FemtovgBackend {
 
     fn clear_images(&mut self) {
         for (_, id) in self.images.drain() {
+            self.canvas.delete_image(id);
+        }
+        // BUG-272 срез 18: уменьшенные варианты живут отдельно — их тоже удаляем,
+        // вместе с ещё не слитой очередью вытеснений.
+        for id in self.resized_variants.drain() {
+            self.canvas.delete_image(id);
+        }
+        for id in self.resized_variant_pending_delete.drain(..) {
             self.canvas.delete_image(id);
         }
         for (_, id) in self.snapshots.drain() {
@@ -4891,6 +6259,65 @@ mod tests {
     use lumen_layout::BgSizeAxis;
     use lumen_layout::PositionComponent;
     use lumen_layout::Length;
+
+    // ─── BUG-272 срез 18: LruMap (resized-variant cache) ────────────────────
+
+    #[test]
+    fn lru_map_get_hit_and_miss() {
+        let mut c: LruMap<u32> = LruMap::new(4);
+        assert_eq!(c.get("a"), None);
+        assert_eq!(c.insert("a".into(), 10), None);
+        assert_eq!(c.get("a"), Some(10));
+        assert_eq!(c.get("b"), None);
+        assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn lru_map_evicts_least_recently_used() {
+        let mut c: LruMap<u32> = LruMap::new(2);
+        assert_eq!(c.insert("a".into(), 1), None);
+        assert_eq!(c.insert("b".into(), 2), None);
+        // At capacity; inserting "c" evicts the LRU ("a").
+        assert_eq!(c.insert("c".into(), 3), Some(1));
+        assert_eq!(c.get("a"), None);
+        assert_eq!(c.get("b"), Some(2));
+        assert_eq!(c.get("c"), Some(3));
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn lru_map_get_refreshes_recency() {
+        let mut c: LruMap<u32> = LruMap::new(2);
+        c.insert("a".into(), 1);
+        c.insert("b".into(), 2);
+        // Touch "a" so "b" becomes the least-recently-used.
+        assert_eq!(c.get("a"), Some(1));
+        // Inserting "c" now evicts "b", not "a".
+        assert_eq!(c.insert("c".into(), 3), Some(2));
+        assert_eq!(c.get("a"), Some(1));
+        assert_eq!(c.get("b"), None);
+    }
+
+    #[test]
+    fn lru_map_drain_returns_all_and_clears() {
+        let mut c: LruMap<u32> = LruMap::new(4);
+        c.insert("a".into(), 1);
+        c.insert("b".into(), 2);
+        let mut drained = c.drain();
+        drained.sort_unstable();
+        assert_eq!(drained, vec![1, 2]);
+        assert_eq!(c.len(), 0);
+        assert_eq!(c.get("a"), None);
+    }
+
+    #[test]
+    fn lru_map_cap_is_at_least_one() {
+        let mut c: LruMap<u32> = LruMap::new(0);
+        assert_eq!(c.insert("a".into(), 1), None);
+        // Capacity floored to 1: inserting a second entry evicts the first.
+        assert_eq!(c.insert("b".into(), 2), Some(1));
+        assert_eq!(c.len(), 1);
+    }
 
     // ─── ADR-016 M3.2.1b band geometry ──────────────────────────────────────
 
@@ -5106,6 +6533,78 @@ mod tests {
         assert_eq!(FemtovgBackend::matching_close(&cmds, 0), 5);
         // A bracket with no nesting closes at the very next index.
         assert_eq!(FemtovgBackend::matching_close(&cmds, 1), 2);
+    }
+
+    /// BUG-273 срез 2: only a blur-free chain carrying a colour-matrix primitive
+    /// is cache-eligible — that is the exact set of filter chains that take the
+    /// bbox (scroll-invariant, screenshot-round-trip) path in `composite_filter_layer`.
+    #[test]
+    fn filter_is_bbox_cacheable_matches_the_bbox_colour_matrix_path() {
+        use lumen_layout::FilterFn;
+        // Colour-matrix only → cacheable.
+        assert!(FemtovgBackend::filter_is_bbox_cacheable(&[FilterFn::Grayscale(1.0)]));
+        assert!(FemtovgBackend::filter_is_bbox_cacheable(&[
+            FilterFn::Brightness(0.5),
+            FilterFn::Contrast(2.0),
+        ]));
+        // Opacity is folded in with a colour-matrix filter → still cacheable
+        // (opacity alone is handled without an offscreen layer, see below).
+        assert!(FemtovgBackend::filter_is_bbox_cacheable(&[
+            FilterFn::Opacity(0.5),
+            FilterFn::Sepia(1.0),
+        ]));
+        // Any real blur forces the full-framebuffer (scroll-baked) path → NOT cacheable.
+        assert!(!FemtovgBackend::filter_is_bbox_cacheable(&[FilterFn::Blur(4.0)]));
+        assert!(!FemtovgBackend::filter_is_bbox_cacheable(&[
+            FilterFn::Blur(4.0),
+            FilterFn::Grayscale(1.0),
+        ]));
+        // Opacity-only / blur(0)-only → nothing costly to cache.
+        assert!(!FemtovgBackend::filter_is_bbox_cacheable(&[FilterFn::Opacity(0.3)]));
+        assert!(!FemtovgBackend::filter_is_bbox_cacheable(&[FilterFn::Blur(0.0)]));
+        assert!(!FemtovgBackend::filter_is_bbox_cacheable(&[]));
+    }
+
+    /// BUG-273 срез 2: the subtree hash folds every command in the bracket
+    /// (inclusive of the `PushFilter` opener and its filter chain), is stable for
+    /// identical content, and changes when any interior command changes. Scroll
+    /// is never part of a command, so a pure-scroll frame reuses the same hash.
+    #[test]
+    fn hash_filter_bracket_is_content_addressed() {
+        use lumen_core::geom::Rect;
+        use lumen_layout::{Color, FilterFn};
+        let bracket = |gray: f32, fill_x: f32| {
+            vec![
+                DisplayCommand::PushFilter {
+                    filters: vec![FilterFn::Grayscale(gray)],
+                    bounds: Some(Rect::new(10.0, 20.0, 30.0, 40.0)),
+                },
+                DisplayCommand::FillRect {
+                    rect: Rect::new(fill_x, 0.0, 5.0, 5.0),
+                    color: Color { r: 1, g: 2, b: 3, a: 255 },
+                },
+                DisplayCommand::PopFilter,
+            ]
+        };
+        let a = bracket(1.0, 0.0);
+        let b = bracket(1.0, 0.0);
+        // Identical content → identical hash (the pure-scroll reuse case).
+        assert_eq!(
+            FemtovgBackend::hash_filter_bracket(&a, 0, 2),
+            FemtovgBackend::hash_filter_bracket(&b, 0, 2),
+        );
+        // A changed interior draw → different hash (invalidates the cache).
+        let c = bracket(1.0, 7.0);
+        assert_ne!(
+            FemtovgBackend::hash_filter_bracket(&a, 0, 2),
+            FemtovgBackend::hash_filter_bracket(&c, 0, 2),
+        );
+        // A changed filter parameter → different hash.
+        let d = bracket(0.5, 0.0);
+        assert_ne!(
+            FemtovgBackend::hash_filter_bracket(&a, 0, 2),
+            FemtovgBackend::hash_filter_bracket(&d, 0, 2),
+        );
     }
 
     /// BUG-249: скруглённый клип (`overflow:hidden` + `border-radius`) теперь

@@ -50,8 +50,8 @@ pub mod vertical;
 pub use counters::{
     format_counter, format_counter_with_registry, precompute_counters,
     build_counter_style_registry, build_list_marker_text, resolve_counter_value,
-    CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
-    CounterSystem, CounterRange, QuoteSlot, RangeBound,
+    CascadeStyles, CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
+    CounterSystem, CounterRange, PrevCascade, QuoteSlot, RangeBound,
 };
 pub use color_mix::{HueInterpolationMethod, MixColorSpace, mix_colors, mix_colors_hue};
 pub use field_sizing::field_sizing_content_intrinsic;
@@ -75,7 +75,8 @@ pub use animation::{
 pub use box_tree::{
     apply_container_styles, build_iframe_document, canvas_background_color,
     collect_background_image_requests, collect_image_requests, is_open_details, layout, layout_measured,
-    layout_measured_hyp, layout_mutation_incremental, layout_streaming_incremental,
+    layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental,
+    layout_streaming_incremental,
     lay_out_incremental, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
     PseudoKind, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift, ViewBox,
 };
@@ -92,7 +93,7 @@ pub use style::{compute_selection_style, compute_style, compute_style_from_decla
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
     computed_style_to_map, find_all_by_selector, find_box_by_selector, matched_rules_for_node,
-    matches_selector, query_all, query_all_within, ComputedStyleSnapshot, MatchedRule,
+    matches_selector, query_all, query_all_scoped, query_all_within, ComputedStyleSnapshot, MatchedRule,
 };
 pub use anchor::{
     collect_anchors, register_anchor, resolve_anchor_function, resolve_inset_area,
@@ -127,7 +128,7 @@ pub use style::{
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
-    BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content,
+    BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content, CustomProps,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
     FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
@@ -7360,7 +7361,7 @@ mod tests {
             width: 200.0,
             height: Some(100.0),
             names: vec![],
-            custom_props: custom,
+            custom_props: custom.into(),
             style_props: style,
             font_size: 16.0,
             viewport: lumen_core::Size::new(1024.0, 768.0),

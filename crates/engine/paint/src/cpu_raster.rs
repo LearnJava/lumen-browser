@@ -185,7 +185,7 @@ pub(crate) fn rasterize_cpu(
     width: u32,
     height: u32,
     commands: &[DisplayCommand],
-    images: &[(String, Image)],
+    images: &[(String, std::sync::Arc<Image>)],
     _scroll_x: f32,
     _scroll_y: f32,
 ) -> Result<Image, Box<dyn std::error::Error>> {
@@ -194,8 +194,9 @@ pub(crate) fn rasterize_cpu(
     // Decoded `<img>` pixels keyed by `src`, supplied by the shell's headless
     // render pass (`render_source_to_png`). Lets `DrawImage`/`LazyImageSlot`
     // paint the real picture instead of a grey placeholder (BUG-221, TEST-18).
+    // BUG-272 срез 17: `images` carries `Arc<Image>`; deref to `&Image` for the map.
     let image_map: std::collections::HashMap<&str, &Image> =
-        images.iter().map(|(s, img)| (s.as_str(), img)).collect();
+        images.iter().map(|(s, img)| (s.as_str(), img.as_ref())).collect();
 
     let mut base = Pixmap::new(width, height)
         .ok_or("Failed to create pixmap")?;
@@ -4520,7 +4521,7 @@ mod tests {
             data: [255u8, 0, 0, 255].repeat(4),
             icc_profile: None,
         };
-        let images = vec![("red.png".to_string(), red_2x2)];
+        let images = vec![("red.png".to_string(), std::sync::Arc::new(red_2x2))];
         let cmds = vec![DisplayCommand::DrawImage {
             rect: rect(10.0, 10.0, 40.0, 40.0),
             src: "red.png".to_string(),
@@ -4598,7 +4599,7 @@ mod tests {
     /// any `background-image`/`image-set()` rendered blank in `--screenshot`.
     #[test]
     fn draw_background_image_paints_into_area() {
-        let images = vec![("blue.png".to_string(), solid_2x2([0, 0, 255, 255]))];
+        let images = vec![("blue.png".to_string(), std::sync::Arc::new(solid_2x2([0, 0, 255, 255])))];
         let area = rect(10.0, 10.0, 40.0, 40.0);
         let cmds = vec![DisplayCommand::DrawBackgroundImage {
             rect: area,
@@ -4620,7 +4621,7 @@ mod tests {
     /// painting area (geometry shared with the femtovg backend).
     #[test]
     fn draw_background_image_tiles_on_repeat() {
-        let images = vec![("g.png".to_string(), solid_2x2([0, 200, 0, 255]))];
+        let images = vec![("g.png".to_string(), std::sync::Arc::new(solid_2x2([0, 200, 0, 255])))];
         let area = rect(0.0, 0.0, 64.0, 64.0);
         let cmds = vec![DisplayCommand::DrawBackgroundImage {
             rect: area,
@@ -4645,8 +4646,8 @@ mod tests {
     #[test]
     fn draw_cross_fade_respects_progress() {
         let images = vec![
-            ("a.png".to_string(), solid_2x2([255, 0, 0, 255])),
-            ("b.png".to_string(), solid_2x2([0, 255, 0, 255])),
+            ("a.png".to_string(), std::sync::Arc::new(solid_2x2([255, 0, 0, 255]))),
+            ("b.png".to_string(), std::sync::Arc::new(solid_2x2([0, 255, 0, 255]))),
         ];
         let mk = |p: f32| {
             vec![DisplayCommand::DrawCrossFade {

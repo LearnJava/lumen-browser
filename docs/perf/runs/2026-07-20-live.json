@@ -1,0 +1,318 @@
+{
+ "date": "20260720-115807",
+ "commit": "a014c9e6",
+ "exe": "D:\\RustProjects\\lumen-browser\\.claude\\worktrees\\perf-audit-20260720\\target\\dev-release\\lumen.exe",
+ "mode": "live",
+ "timeout_s": 240,
+ "results": [
+  {
+   "slug": "example",
+   "url": "https://example.com/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 1.12,
+   "ready_s": 2.07,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 450.1,
+   "cur_mb": 435.8,
+   "cpu_s": 1.58,
+   "stderr_errors": []
+  },
+  {
+   "slug": "ya",
+   "url": "https://ya.ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 3.89,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 502.7,
+   "cur_mb": 481.1,
+   "cpu_s": 4.44,
+   "stderr_errors": [
+    "script error: JS runtime error: Unable to find RenderContext state html element with id \"render-state\"",
+    "script error: JS runtime error: Missing module: load-mini-suggest.standalone.js",
+    "✗ https://static-mon.yandex.net/static/main.js?pid=yandex.portal&cb=desktop (dns: resolve static-mon.yandex.net:443: network error: resolve static-mon.yandex.net: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+    "fetch error: network error: resolve static-mon.yandex.net:443: network error: resolve static-mon.yandex.net: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+    "✗ https://mc.yandex.ru/watch/723233 (dns: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+    "Пропуск картинки https://mc.yandex.ru/watch/723233: network error: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+    "Не декодируется https://yabs.yandex.ru/count/WImejI_zOoVX2LcV0FK80BCEEKuBlZzGNAj0r4KIgD84qUXtlDvmX-jtiZgENcSlOG0TfqhU4qAHK_hY0H5u8BX6C8E3fJjyFNJm9Y2cvMPhu_KsMgLIgLHgEAInsM6ZUxswBj_6HyOjFJYO2U0W3c03zyz7bLR3xiyqO4-pVT9eQPhiXWoDFe1i007e6p2OdTmqgyUmBIyX5hPVfb7PZ07JWG4k051w4s9Hl8Q6CCYKUGfPJq7tC6O6jheEuvtI8s11U6923ARhjE3x0yMr2aHJxzdS_MzSHahnagGRVU5uArSgbSeGF902mlP1bD_hnX4F1zxF1n7yPsOK2T0eyiXZm3D7lqjhVfiv_WK2FfbS5splxK-NElfyHJ-Dkd2g9jn05N2tuR8pp3NAKW40~2=WP0ejI_zOoVX2LaQ0HKC0DDLKp5rriRM5BtMZP20VcWK2Gt5A11NmWcSWDbfmVS7YciLY0Ig-0Iu2Um9x0bi4z0ceFM62UZDFovvGX3m-fso23lafRupXZwVovqzs-_SUSEThx8P0wO30rm0eFGcnA9u3GrXq74ia_rJLucL7r0ChveGC7Q0YehYcrIWbp81OoKYGyPC_2LAZkayy6E0hyYFvSA_p-SRfgVDxWC1Du1rc319ic7hwmZtEGtYvf-FAgs6lGCDMfgjpw3r6R8n5dRGJbkzcIrzLQ5ySmLCmRp7Y7sCxc7C5A1Wo1bWnFWPp7TAZu05uOa9CPZkiydrlz4JuG7-uI_c0jl0Uh_tYxd0Nxi4xD7uiqqvPfbUUdqTuJxdpJxiozuiZ4thnmaCPjS8_TStxNavWVsMrdMcfZql9x3NJl2w7x8b98lnIH8aYaS1A890Gn3Z07qZml83JH7yI9QyRcB7mdNryy0e-mRtpm3bS6ZH1SrF3ENdU_djjeEgJBDzvRGJJsp_bBA9978B~2?timestamp=1784537893709: формат изображения не распознан по сигнатуре",
+    "Пропуск bg-картинки data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' fill='none'%3E%3Crect width='40' height='40' fill='%23F8604A' rx='20'/%3E%3Cpath fill='%23fff' d='M22.776 31.5h4.178v-24h-6.078c-6.112 0-9.324 3.142-9.324 7.77 0 3.695 1.762 5.87 4.904 8.115L11 31.5h4.524l6.077-9.082-2.106-1.416c-2.555-1.726-3.799-3.073-3.799-5.974 0-2.555 1.796-4.282 5.215-4.282h1.864V31.5Z'/%3E%3C/svg%3E: network error: unsupported scheme: data"
+   ]
+  },
+  {
+   "slug": "hn",
+   "url": "https://news.ycombinator.com/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 7.32,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 524.2,
+   "cur_mb": 507.0,
+   "cpu_s": 6.25,
+   "stderr_errors": []
+  },
+  {
+   "slug": "w3",
+   "url": "https://www.w3.org/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 4.37,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 524.2,
+   "cur_mb": 507.0,
+   "cpu_s": 6.36,
+   "stderr_errors": [
+    "Ошибка загрузки https://www.w3.org/: network error: HTTP 403"
+   ]
+  },
+  {
+   "slug": "rust-lang",
+   "url": "https://www.rust-lang.org/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 11.46,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 584.1,
+   "cur_mb": 575.7,
+   "cpu_s": 11.72,
+   "stderr_errors": [],
+   "hung_total_s": 1.0,
+   "hung_max_streak_s": 1.0
+  },
+  {
+   "slug": "lenta",
+   "url": "https://lenta.ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 18.1,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 1,
+   "console_errors": [
+    "vite-plugin-css-injected-by-js TypeError: Cannot read properties of undefined (reading 'appendChild')"
+   ],
+   "peak_mb": 644.1,
+   "cur_mb": 616.9,
+   "cpu_s": 57.0,
+   "stderr_errors": [
+    "✗ https://ssp.rambler.ru/capirs_async.js (dns: resolve ssp.rambler.ru:443: network error: resolve ssp.rambler.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+    "Пропуск скрипта https://ssp.rambler.ru/capirs_async.js: network error: resolve ssp.rambler.ru:443: network error: resolve ssp.rambler.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'charAt')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'search')",
+    "[JS error] vite-plugin-css-injected-by-js TypeError: Cannot read properties of undefined (reading 'appendChild')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'length')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'protocol')",
+    "✗ https://counter.rambler.ru/top100.cnt?pid=80674 (dns: resolve counter.rambler.ru:443: network error: resolve counter.rambler.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))"
+   ],
+   "hung_total_s": 15.0,
+   "hung_max_streak_s": 8.0
+  },
+  {
+   "slug": "github",
+   "url": "https://github.com/",
+   "restarted": true,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "error": "tools/call: {'code': -32603, 'message': 'Wait error: automation command timed out'}",
+   "status": "HUNG",
+   "hung_total_s": 60.5,
+   "hung_max_streak_s": 60.5,
+   "stderr_errors": []
+  },
+  {
+   "slug": "stackoverflow",
+   "url": "https://stackoverflow.com/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 2.74,
+   "ready_s": 7.21,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 417.6,
+   "cur_mb": 390.0,
+   "cpu_s": 2.22,
+   "stderr_errors": [
+    "Ошибка загрузки https://stackoverflow.com/: network error: HTTP 429"
+   ]
+  },
+  {
+   "slug": "crates",
+   "url": "https://crates.io/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 13.15,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 0,
+   "console_errors": [],
+   "peak_mb": 424.0,
+   "cur_mb": 409.6,
+   "cpu_s": 2.7,
+   "stderr_errors": [
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'parentElement')"
+   ],
+   "hung_total_s": 4.0,
+   "hung_max_streak_s": 4.0
+  },
+  {
+   "slug": "docs-rs",
+   "url": "https://docs.rs/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 15.57,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 1,
+   "console_errors": [
+    "Failed to load abnormalities: TypeError: fetch: network error for /-/partial/abnormalities/"
+   ],
+   "peak_mb": 446.5,
+   "cur_mb": 444.1,
+   "cpu_s": 7.64,
+   "stderr_errors": [
+    "fetch error: invalid url: invalid url: missing scheme: \"/-/partial/abnormalities/\"",
+    "[JS error] Failed to load abnormalities: TypeError: fetch: network error for /-/partial/abnormalities/"
+   ]
+  },
+  {
+   "slug": "ria",
+   "url": "https://ria.ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 12.72,
+   "status": "OK",
+   "network_idle": false,
+   "error": "tools/call: {'code': -32603, 'message': 'Scroll error: automation command timed out'}",
+   "stderr_errors": [
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'protocol')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'length')",
+    "script error: JS runtime error: a.getElementsByTagName is not a function",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'search')",
+    "script error: JS runtime error: $ is not defined",
+    "script error: JS runtime error: jQuery is not defined",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'support')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'ajaxTransport')"
+   ],
+   "hung_total_s": 37.0,
+   "hung_max_streak_s": 37.0
+  },
+  {
+   "slug": "habr",
+   "url": "https://habr.com/ru/",
+   "restarted": true,
+   "own_tab": false,
+   "tab_error": "tools/call: {'code': -32603, 'message': 'NewTab error: automation command timed out'}",
+   "error": "tools/call: {'code': -32603, 'message': 'Navigate error: automation command timed out'}",
+   "status": "HUNG",
+   "hung_total_s": 60.0,
+   "hung_max_streak_s": 60.0,
+   "stderr_errors": []
+  },
+  {
+   "slug": "mdn",
+   "url": "https://developer.mozilla.org/en-US/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 1.06,
+   "ready_s": 7.0,
+   "status": "OK",
+   "network_idle": true,
+   "png_size": [
+    1920,
+    981
+   ],
+   "console_total": 1,
+   "console_errors": [],
+   "peak_mb": 731.8,
+   "cur_mb": 618.1,
+   "cpu_s": 31.75,
+   "stderr_errors": [
+    "[JS warn] Unable to set theme TypeError: Cannot set properties of undefined (setting 'theme')",
+    "module error: JS runtime error: Unexpected token 'export'"
+   ]
+  },
+  {
+   "slug": "rbc",
+   "url": "https://www.rbc.ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.0,
+   "ready_s": 16.96,
+   "status": "OK",
+   "network_idle": false,
+   "error": "tools/call: {'code': -32603, 'message': 'Scroll error: automation command timed out'}",
+   "stderr_errors": [
+    "✗ https://mc.yandex.ru/watch/16443139 (dns: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+    "Пропуск картинки https://mc.yandex.ru/watch/16443139: network error: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+    "✗ https://mc.yandex.ru/watch/98761308 (dns: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+    "✗ https://top-fwz1.mail.ru/counter?id=3081030;js=na (dns: resolve top-fwz1.mail.ru:443: network error: resolve top-fwz1.mail.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004))",
+    "Пропуск картинки https://mc.yandex.ru/watch/98761308: network error: resolve mc.yandex.ru:443: network error: resolve mc.yandex.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+    "Пропуск картинки https://top-fwz1.mail.ru/counter?id=3081030;js=na: network error: resolve top-fwz1.mail.ru:443: network error: resolve top-fwz1.mail.ru: Запрошенное имя верно, но данные запрошенного типа не найдены. (os error 11004)",
+    "Пропуск картинки https://www.rbc.ru/track/ssr/: network error: HTTP 404"
+   ],
+   "hung_total_s": 41.0,
+   "hung_max_streak_s": 36.5
+  }
+ ]
+}

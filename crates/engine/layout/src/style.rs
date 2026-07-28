@@ -15,7 +15,9 @@
 //! фазы со «честным» Selectors-движком.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
+use std::sync::{Arc, OnceLock};
 
 use crate::color_mix::{HueInterpolationMethod, MixColorSpace, mix_colors_hue};
 use crate::font_palette::{resolve_font_palette_overrides, ResolvedFontPalette};
@@ -28,8 +30,8 @@ use lumen_core::geom::Size;
 use lumen_core::ColorSpace;
 use lumen_css_parser::{
     parse_inline_style, AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector,
-    Declaration, DirArg, FunctionRule, MediaContext, PropertyRule, PseudoClass, PseudoElementKind, SimpleSelector, Specificity,
-    Stylesheet, SUPPORTED_PROPERTIES,
+    Declaration, DirArg, FunctionRule, MediaContext, PropertyRule, PseudoClass, PseudoElementKind, Rule, SimpleSelector, Specificity,
+    Stylesheet, StylesheetRevision, SUPPORTED_PROPERTIES,
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
 
@@ -60,6 +62,40 @@ struct CascadeIndex {
     /// `compute_style`'s matching phase on a 3000-rule real-world sheet).
     active_media: Vec<bool>,
     active_supports: Vec<bool>,
+    /// BUG-341 S10 — whether the sheet contains *any* rule whose subject is a
+    /// `::-webkit-scrollbar*` pseudo-element. `compute_style` translates those
+    /// onto `scrollbar-width`/`scrollbar-color` (CC-CSS-1) by running three
+    /// extra pseudo-element cascades on **every** element; on a sheet with no
+    /// such rule — every page that is not Lumen's own chrome — all three were
+    /// pure waste. Node-independent, so it is decided once per sheet here.
+    has_webkit_scrollbar_rules: bool,
+    /// BUG-341 S10 — whether any declaration in the sheet mentions `quote`
+    /// (`content: open-quote`, `quotes: …`). `counters::walk` probes
+    /// `::before`/`::after` on every node solely to keep the CSS Generated
+    /// Content L3 §3.2 quote-nesting counter continuous; with no quote
+    /// anywhere in the sheet that probe cannot produce a depth, so it is
+    /// skipped. Deliberately a substring test over raw declaration values: it
+    /// over-approximates (a `--quote-color` custom property arms it) and must,
+    /// because a `var()` can smuggle `open-quote` in from anywhere. `attr()`
+    /// arms it too: that value comes from the DOM, which a sheet-level
+    /// predicate cannot see.
+    has_quote_content: bool,
+    /// BUG-341 S23 — every pseudo-element name the sheet uses as the **subject**
+    /// of a selector, lowercased and deduplicated.
+    ///
+    /// `matches_complex_for_pseudo` only ever looks at the subject compound, so
+    /// a name absent from this list cannot match anywhere in the sheet and
+    /// `compute_pseudo_element_style` for it is guaranteed to return `None`.
+    /// That guarantee is what lets the callers skip whole traversals rather than
+    /// individual cascades: `apply_first_line_pseudo_styles` walks the laid-out
+    /// tree and probes `::first-line` on every block box — 123 probes with zero
+    /// hits per cycle on `chrome.html`, which has no `::first-line` rule at all,
+    /// and the largest single item of an interaction frame's pseudo stage.
+    ///
+    /// A `Vec` rather than a `HashSet`: real sheets use a handful of distinct
+    /// pseudo-elements, and a linear `eq_ignore_ascii_case` scan over ≤10 short
+    /// names beats hashing a `&str` (and needs no allocation at the call site).
+    pseudo_subjects: Vec<Box<str>>,
 }
 
 impl CascadeIndex {
@@ -71,21 +107,130 @@ impl CascadeIndex {
             supports: Vec::new(),
             active_media: Vec::new(),
             active_supports: Vec::new(),
+            has_webkit_scrollbar_rules: false,
+            has_quote_content: false,
+            pseudo_subjects: Vec::new(),
         }
     }
 
-    fn build(sheet: &Stylesheet, media_ctx: &MediaContext) -> Self {
-        Self {
-            rules: RuleIndex::build(sheet),
-            layers: sheet.layers.iter().map(|l| RuleIndex::build_from_rules(&l.rules)).collect(),
-            media: sheet.media_rules.iter().map(|m| RuleIndex::build_from_rules(&m.rules)).collect(),
-            supports: sheet.supports_rules.iter().map(|s| RuleIndex::build_from_rules(&s.rules)).collect(),
-            active_media: sheet.media_rules.iter().map(|m| m.query.matches(media_ctx)).collect(),
-            active_supports: sheet.supports_rules.iter()
-                .map(|s| s.condition.evaluate(SUPPORTED_PROPERTIES))
-                .collect(),
+    /// Builds the index, timing each of its four phases into the returned
+    /// [`CascadeIndexStats`] (BUG-341 S21 census — four clock reads per rebuild,
+    /// against a rebuild that walks every rule in the sheet several times).
+    fn build(sheet: &Stylesheet, media_ctx: &MediaContext) -> (Self, CascadeIndexStats) {
+        let t = std::time::Instant::now();
+        let rules = RuleIndex::build(sheet);
+        let rules_ns = t.elapsed().as_nanos() as u64;
+
+        let t = std::time::Instant::now();
+        let layers: Vec<RuleIndex> =
+            sheet.layers.iter().map(|l| RuleIndex::build_from_rules(&l.rules)).collect();
+        let media: Vec<RuleIndex> =
+            sheet.media_rules.iter().map(|m| RuleIndex::build_from_rules(&m.rules)).collect();
+        let supports: Vec<RuleIndex> =
+            sheet.supports_rules.iter().map(|s| RuleIndex::build_from_rules(&s.rules)).collect();
+        let blocks_ns = t.elapsed().as_nanos() as u64;
+
+        let t = std::time::Instant::now();
+        let active_media: Vec<bool> =
+            sheet.media_rules.iter().map(|m| m.query.matches(media_ctx)).collect();
+        let active_supports: Vec<bool> = sheet
+            .supports_rules
+            .iter()
+            .map(|s| s.condition.evaluate(SUPPORTED_PROPERTIES))
+            .collect();
+        let active_ns = t.elapsed().as_nanos() as u64;
+
+        let t = std::time::Instant::now();
+        let has_webkit_scrollbar_rules =
+            all_rules(sheet).any(|r| r.selectors.iter().any(selector_targets_webkit_scrollbar));
+        let has_quote_content = all_rules(sheet).any(|r| {
+            r.declarations
+                .iter()
+                .any(|d| value_mentions_quote(&d.value) || d.value.contains("attr("))
+        });
+        let mut pseudo_subjects: Vec<Box<str>> = Vec::new();
+        for rule in all_rules(sheet) {
+            for selector in &rule.selectors {
+                for name in selector_pseudo_subjects(selector) {
+                    if !pseudo_subjects.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+                        pseudo_subjects.push(name.to_ascii_lowercase().into_boxed_str());
+                    }
+                }
+            }
         }
+        let predicates_ns = t.elapsed().as_nanos() as u64;
+
+        let idx = Self {
+            rules,
+            layers,
+            media,
+            supports,
+            active_media,
+            active_supports,
+            has_webkit_scrollbar_rules,
+            has_quote_content,
+            pseudo_subjects,
+        };
+        let stats = CascadeIndexStats {
+            builds: 1,
+            build_ns: rules_ns + blocks_ns + active_ns + predicates_ns,
+            rules_ns,
+            blocks_ns,
+            active_ns,
+            predicates_ns,
+        };
+        (idx, stats)
     }
+}
+
+/// Every `Rule` in `sheet`, whichever container it sits in (top level,
+/// `@media`, `@supports`, `@layer`, `@scope`). Used for the node-independent
+/// sheet-wide predicates on [`CascadeIndex`]; a rule's container decides
+/// *whether* it applies, which is irrelevant to "does this sheet mention X at
+/// all" — over-approximating there only costs the fast path, never correctness.
+fn all_rules(sheet: &Stylesheet) -> impl Iterator<Item = &Rule> {
+    sheet
+        .rules
+        .iter()
+        .chain(sheet.media_rules.iter().flat_map(|m| m.rules.iter()))
+        .chain(sheet.supports_rules.iter().flat_map(|s| s.rules.iter()))
+        .chain(sheet.layers.iter().flat_map(|l| l.rules.iter()))
+        .chain(sheet.scope_rules.iter().flat_map(|s| s.rules.iter()))
+}
+
+/// Whether `selector`'s subject compound carries a `::-webkit-scrollbar*`
+/// pseudo-element (`::-webkit-scrollbar`, `-thumb`, `-track`), i.e. whether
+/// `apply_webkit_scrollbar_pseudos` could ever find something to apply.
+fn selector_targets_webkit_scrollbar(selector: &ComplexSelector) -> bool {
+    let subject = selector.tail.last().map_or(&selector.head, |(_, c)| c);
+    subject.parts.iter().any(|p| match p {
+        SimpleSelector::PseudoElement(PseudoElementKind::Unknown(name)) => {
+            name.to_ascii_lowercase().starts_with("-webkit-scrollbar")
+        }
+        _ => false,
+    })
+}
+
+/// Every pseudo-element name carried by `selector`'s **subject** compound.
+///
+/// The subject is the only compound `matches_complex_for_pseudo` inspects, so
+/// this is exactly the set of `pseudo` arguments for which that function can
+/// return `Some` on this selector. See [`CascadeIndex::pseudo_subjects`].
+fn selector_pseudo_subjects(selector: &ComplexSelector) -> impl Iterator<Item = &str> {
+    let subject = selector.tail.last().map_or(&selector.head, |(_, c)| c);
+    subject.parts.iter().filter_map(|p| match p {
+        SimpleSelector::PseudoElement(kind) => Some(pseudo_element_name(kind)),
+        _ => None,
+    })
+}
+
+/// Case-insensitive `value.contains("quote")` without allocating — see
+/// [`CascadeIndex::has_quote_content`].
+fn value_mentions_quote(value: &str) -> bool {
+    value
+        .as_bytes()
+        .windows(5)
+        .any(|w| w.eq_ignore_ascii_case(b"quote"))
 }
 
 /// Perf cache key fields beyond (sheet pointer, rules count) that affect
@@ -103,14 +248,6 @@ struct CascadeMediaKey {
 }
 
 impl CascadeMediaKey {
-    const NONE: Self = Self {
-        width_bits: 0,
-        height_bits: 0,
-        dark_mode: false,
-        print_active: false,
-        forced_colors: false,
-    };
-
     fn current(viewport: Size, dark_mode: bool) -> Self {
         Self {
             width_bits: viewport.width.to_bits(),
@@ -122,28 +259,378 @@ impl CascadeMediaKey {
     }
 }
 
+/// How many (sheet, media key) pairs the per-thread index cache keeps.
+///
+/// Two, because a browser frame lays out two documents on one thread — its own
+/// chrome and the page — and a single slot would make them evict each other
+/// every frame, which is exactly the per-pass rebuild BUG-341 S21 removed. A
+/// third document per thread per frame does not exist, and each slot retains an
+/// index for the process's life, so the count is deliberately not larger.
+const CASCADE_INDEX_SLOTS: usize = 2;
+
 thread_local! {
-    /// Per-thread rule-index cache. Keyed by (sheet pointer, rules count,
-    /// media key) to detect stylesheet or viewport/media-preference changes
-    /// between layout passes. Rebuilt only when the key changes; reused for
-    /// every node in the same pass (O(1) amortised).
+    /// Per-thread rule-index cache, most recently used first.
     ///
-    /// SAFETY: raw-pointer keys are vulnerable to address reuse across sessions
-    /// (freed sheet → new session → same address). Call `invalidate_rule_idx_cache`
-    /// at the start of every layout pass to prevent stale hits.
-    static RULE_IDX_CACHE: RefCell<(usize, usize, CascadeMediaKey, CascadeIndex)> =
-        RefCell::new((0, 0, CascadeMediaKey::NONE, CascadeIndex::empty()));
+    /// Keyed by ([`Stylesheet::revision`], media key): the revision changes
+    /// whenever the sheet's rules do, and the media key covers a viewport
+    /// resize or a dark-mode/print/forced-colors toggle, which decide which
+    /// `@media` blocks are active.
+    ///
+    /// The key used to be the sheet's **address** plus its rule count, and an
+    /// address is recycled the moment its sheet is freed — so the cache had to
+    /// be invalidated at the top of every layout pass and on every rayon worker
+    /// to avoid serving a freed sheet's index. That reduced it to a within-pass
+    /// cache: a census (BUG-341 S21) measured one rebuild per incremental pass
+    /// (0.14-0.22ms, 7-19% of the pass) and 33 per full pass across the worker
+    /// pool. A revision is never recycled, so no invalidation is needed and the
+    /// index now survives for as long as the sheet does.
+    static RULE_IDX_CACHE: RefCell<Vec<(StylesheetRevision, CascadeMediaKey, CascadeIndex)>> =
+        const { RefCell::new(Vec::new()) };
 }
 
-/// Invalidate the thread-local rule-index cache.
+/// Makes the [`CascadeIndex`] for `sheet` under the current media conditions the
+/// front slot of [`RULE_IDX_CACHE`], building it if this thread has not got it.
 ///
-/// Must be called at the start of every layout pass (`layout_measured_hyp`).
-/// Without this call the raw-pointer key can match a freed stylesheet when a
-/// new one is allocated at the same address, returning a stale index.
-pub fn invalidate_rule_idx_cache() {
-    RULE_IDX_CACHE.with(|cell| {
-        cell.borrow_mut().0 = 0; // pointer 0 never matches a real sheet
+/// Every lookup site calls this first and then reads slot 0, so the borrow is
+/// released between the two — a `candidates` call must not run while the cache
+/// is mutably borrowed.
+fn ensure_cascade_index(sheet: &Stylesheet, viewport: Size, dark_mode: bool) {
+    let key = (sheet.revision(), CascadeMediaKey::current(viewport, dark_mode));
+    let hit = RULE_IDX_CACHE.with(|cell| {
+        let mut slots = cell.borrow_mut();
+        match slots.iter().position(|s| (s.0, s.1) == key) {
+            Some(0) => true,
+            Some(i) => {
+                slots.swap(0, i);
+                true
+            }
+            None => false,
+        }
     });
+    if hit {
+        return;
+    }
+    // Built outside the borrow: `CascadeIndex::build` is long, and holding a
+    // `RefCell` across it would panic on any re-entrant cache read.
+    let media_ctx = media_context_from_viewport(viewport, dark_mode);
+    let idx = build_cascade_index_timed(sheet, &media_ctx);
+    RULE_IDX_CACHE.with(|cell| {
+        let mut slots = cell.borrow_mut();
+        slots.truncate(CASCADE_INDEX_SLOTS - 1);
+        slots.insert(0, (key.0, key.1, idx));
+    });
+}
+
+/// Hands the front slot's index to `f`. Call [`ensure_cascade_index`] first —
+/// with an empty cache this falls back to a scratch empty index, which matches
+/// nothing rather than matching wrongly.
+fn with_front_cascade_index<R>(f: impl FnOnce(&CascadeIndex) -> R) -> R {
+    RULE_IDX_CACHE.with(|cell| match cell.borrow().first() {
+        Some((_, _, idx)) => f(idx),
+        None => f(&CascadeIndex::empty()),
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// BUG-341 S10 test instrumentation — counts elements for which
+    /// `apply_webkit_scrollbar_pseudos` actually ran its three pseudo-element
+    /// cascades (i.e. took neither the "sheet has no such rule" nor the
+    /// "same inheritance base as the parent" fast path).
+    ///
+    /// Gated by count rather than by output on purpose: the values these
+    /// cascades produce are identical either way — that is the whole point of
+    /// the fast path — so a regression that silently reinstates the per-element
+    /// work is invisible to every differential test and shows up only as
+    /// wall-clock, where machine noise hides it (BUG-341 "S8").
+    static SCROLLBAR_PSEUDO_CASCADES: Cell<u32> = const { Cell::new(0) };
+
+    /// BUG-341 S10 test instrumentation — counts [`pseudo_inherited_style`]
+    /// calls, i.e. how often a pseudo-element's 302-field starting style was
+    /// actually built. Same reasoning as `SCROLLBAR_PSEUDO_CASCADES`: building
+    /// it and then discarding it produces exactly the same output.
+    static PSEUDO_BASE_BUILDS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Resets the BUG-341 S10 pseudo-base counter for the current thread.
+#[cfg(test)]
+pub(crate) fn reset_pseudo_base_builds() {
+    PSEUDO_BASE_BUILDS.with(|c| c.set(0));
+}
+
+/// Pseudo-element starting styles built since [`reset_pseudo_base_builds`].
+#[cfg(test)]
+pub(crate) fn pseudo_base_builds() -> u32 {
+    PSEUDO_BASE_BUILDS.with(|c| c.get())
+}
+
+/// Resets the BUG-341 S10 scrollbar-cascade counter for the current thread.
+#[cfg(test)]
+fn reset_scrollbar_pseudo_cascades() {
+    SCROLLBAR_PSEUDO_CASCADES.with(|c| c.set(0));
+}
+
+/// Elements that ran the full `::-webkit-scrollbar*` cascade since the last
+/// [`reset_scrollbar_pseudo_cascades`].
+#[cfg(test)]
+fn scrollbar_pseudo_cascades() -> u32 {
+    SCROLLBAR_PSEUDO_CASCADES.with(|c| c.get())
+}
+
+/// BUG-341 S20 — tally of [`CascadeIndex`] rebuilds.
+///
+/// Building the index walks every rule in the sheet four times over
+/// ([`RuleIndex::build`], the `@layer`/`@media`/`@supports` blocks, the two
+/// sheet-wide predicates). The counter exists because that rebuild is invisible
+/// in output and lands *inside* `precompute_counters`' profile scope, where it
+/// reads as cascade cost — it is what showed the index being rebuilt once per
+/// pass and 33 times per full pass before S21 keyed the cache by revision.
+/// It is also the gate: an index that is silently rebuilt every frame produces
+/// exactly the same styles, just slower.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CascadeIndexStats {
+    /// [`CascadeIndex::build`] calls since the last drain.
+    pub builds: u32,
+    /// Nanoseconds those calls took (the sum of the four fields below).
+    pub build_ns: u64,
+    /// Of `build_ns`: the top-level [`RuleIndex::build`].
+    pub rules_ns: u64,
+    /// Of `build_ns`: one [`RuleIndex`] per `@layer`/`@media`/`@supports` block.
+    pub blocks_ns: u64,
+    /// Of `build_ns`: evaluating which `@media`/`@supports` blocks are active.
+    pub active_ns: u64,
+    /// Of `build_ns`: the two sheet-wide predicate scans
+    /// (`has_webkit_scrollbar_rules`, `has_quote_content`).
+    pub predicates_ns: u64,
+}
+
+impl CascadeIndexStats {
+    /// Folds `other` into `self` field by field.
+    pub fn add(&mut self, other: CascadeIndexStats) {
+        self.builds += other.builds;
+        self.build_ns += other.build_ns;
+        self.rules_ns += other.rules_ns;
+        self.blocks_ns += other.blocks_ns;
+        self.active_ns += other.active_ns;
+        self.predicates_ns += other.predicates_ns;
+    }
+}
+
+thread_local! {
+    /// BUG-341 S20 instrumentation, see [`CascadeIndexStats`]. Always compiled:
+    /// the timer runs once per rebuild, not per node, and a rebuild already
+    /// costs orders of magnitude more than reading the clock.
+    static CASCADE_INDEX_STATS: Cell<CascadeIndexStats> = const {
+        Cell::new(CascadeIndexStats {
+            builds: 0,
+            build_ns: 0,
+            rules_ns: 0,
+            blocks_ns: 0,
+            active_ns: 0,
+            predicates_ns: 0,
+        })
+    };
+}
+
+/// Returns the accumulated [`CascadeIndexStats`] and resets the tally.
+///
+/// Thread-local, like [`crate::box_tree::take_box_build_stats`] and for the
+/// same two reasons. It has to *see* the rayon workers, because the cache it
+/// counts is per-thread and `build_box` fans flex/grid containers out (the S15
+/// trap — a naively thread-local tally reported one rebuild per pass where a
+/// full pass makes 33). And it must not see *other* tests, because a gate that
+/// asserts "this pass rebuilt nothing" against a process-wide counter fails
+/// whenever a concurrent test builds an index. Both hold because the fan-out
+/// closure drains each worker's tally back into the parent thread through
+/// [`add_cascade_index_stats`], exactly as the box-build tally does.
+pub fn take_cascade_index_stats() -> CascadeIndexStats {
+    CASCADE_INDEX_STATS.with(|s| s.replace(CascadeIndexStats::default()))
+}
+
+/// Folds a rayon worker's drained [`CascadeIndexStats`] into this thread's
+/// tally — see [`take_cascade_index_stats`].
+pub fn add_cascade_index_stats(other: CascadeIndexStats) {
+    CASCADE_INDEX_STATS.with(|s| {
+        let mut v = s.get();
+        v.add(other);
+        s.set(v);
+    });
+}
+
+/// BUG-341 S20 — per-pass tally of [`compute_pseudo_element_style`] calls.
+///
+/// A pseudo-element cascade is a full candidate match plus, on a hit, a
+/// 302-field starting style. S10 found three of them per element at the
+/// *cascade* stage and removed them; the same shape survives at the *box-build*
+/// stage, where every flex/grid container unconditionally asks for its own
+/// `::before` and `::after`. Counted because the answer is almost always `None`
+/// and therefore invisible in the produced tree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PseudoCascadeStats {
+    /// [`compute_pseudo_element_style`] calls that got as far as matching (i.e.
+    /// the node was an element).
+    pub calls: u32,
+    /// Of those, the ones that produced a style rather than `None`.
+    pub hits: u32,
+    /// Nanoseconds those calls took.
+    pub ns: u64,
+}
+
+impl PseudoCascadeStats {
+    /// Folds another tally into this one.
+    pub fn add(&mut self, other: PseudoCascadeStats) {
+        self.calls += other.calls;
+        self.hits += other.hits;
+        self.ns += other.ns;
+    }
+}
+
+thread_local! {
+    /// BUG-341 S20 instrumentation, see [`PseudoCascadeStats`]. Always compiled:
+    /// one clock read against a call that walks the sheet's candidate buckets.
+    ///
+    /// Thread-local, and `build_box` fans flex/grid containers out over rayon
+    /// workers (the S15 trap). **S23**: the fan-out closure now drains each
+    /// worker's tally back into the parent through [`add_pseudo_cascade_stats`],
+    /// exactly as the box-build and cascade-index tallies do — before that the
+    /// census saw only the containers built on the layout thread, which is what
+    /// made S20's reading move from 139 to 160 for no visible reason.
+    static PSEUDO_CASCADE_STATS: Cell<PseudoCascadeStats> =
+        const { Cell::new(PseudoCascadeStats { calls: 0, hits: 0, ns: 0 }) };
+}
+
+/// Gate for [`PseudoCascadeStats`]. Off by default.
+///
+/// `compute_pseudo_element_style` runs twice per element on a full pass, so an
+/// unconditional pair of clock reads here would be a per-element cost added to
+/// the very path this track exists to make cheaper — a census must not be one
+/// of the things it measures. Off, the hook costs one relaxed load.
+static PSEUDO_STATS_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Enables/disables the BUG-341 S20 pseudo-cascade census — see
+/// [`PseudoCascadeStats`]. Process-wide, like the box-build censuses.
+pub fn set_pseudo_cascade_diagnostics(on: bool) {
+    PSEUDO_STATS_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Returns the accumulated [`PseudoCascadeStats`] and resets the tally.
+pub fn take_pseudo_cascade_stats() -> PseudoCascadeStats {
+    PSEUDO_CASCADE_STATS.with(|s| s.replace(PseudoCascadeStats::default()))
+}
+
+/// Folds a rayon worker's drained [`PseudoCascadeStats`] into this thread's
+/// tally — see [`take_pseudo_cascade_stats`].
+pub fn add_pseudo_cascade_stats(other: PseudoCascadeStats) {
+    PSEUDO_CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.add(other);
+        s.set(v);
+    });
+}
+
+thread_local! {
+    /// BUG-341 S23 — the same tally, split by pseudo-element name.
+    ///
+    /// "160 calls" does not say which of the ~14 call sites made them, and the
+    /// fix for each is different. Keyed by the `pseudo` argument, which is the
+    /// one thing every call site already carries. Only filled while
+    /// [`set_pseudo_cascade_diagnostics`] is on, so the `String` keys never cost
+    /// a production pass anything.
+    static PSEUDO_CASCADE_SITES: RefCell<HashMap<String, PseudoCascadeStats>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Returns the per-pseudo split of [`PseudoCascadeStats`] and resets it.
+pub fn take_pseudo_cascade_sites() -> HashMap<String, PseudoCascadeStats> {
+    PSEUDO_CASCADE_SITES.with(|m| std::mem::take(&mut *m.borrow_mut()))
+}
+
+/// Folds a rayon worker's drained per-pseudo split into this thread's map.
+pub fn add_pseudo_cascade_sites(other: HashMap<String, PseudoCascadeStats>) {
+    PSEUDO_CASCADE_SITES.with(|m| {
+        let mut m = m.borrow_mut();
+        for (k, v) in other {
+            m.entry(k).or_default().add(v);
+        }
+    });
+}
+
+/// Folds one [`compute_pseudo_element_style`] call into the tally.
+fn note_pseudo_cascade(pseudo: &str, ns: u64, hit: bool) {
+    PSEUDO_CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.calls += 1;
+        v.hits += u32::from(hit);
+        v.ns += ns;
+        s.set(v);
+    });
+    PSEUDO_CASCADE_SITES.with(|m| {
+        let mut m = m.borrow_mut();
+        let e = m.entry(pseudo.to_string()).or_default();
+        e.calls += 1;
+        e.hits += u32::from(hit);
+        e.ns += ns;
+    });
+}
+
+/// [`CascadeIndex::build`], tallied into [`CascadeIndexStats`]. Every cache
+/// refill goes through here, so the counter cannot drift from reality.
+fn build_cascade_index_timed(sheet: &Stylesheet, media_ctx: &MediaContext) -> CascadeIndex {
+    let (idx, stats) = CascadeIndex::build(sheet, media_ctx);
+    add_cascade_index_stats(stats);
+    idx
+}
+
+/// Drops every cached [`CascadeIndex`] on the current thread.
+///
+/// Not needed for correctness — the cache is keyed by
+/// [`Stylesheet::revision`], which is never recycled — and deliberately not
+/// called on the layout path. Tests use it to measure a cold build.
+pub fn clear_rule_idx_cache() {
+    RULE_IDX_CACHE.with(|cell| cell.borrow_mut().clear());
+}
+
+/// Refreshes the thread-local [`CascadeIndex`] for `sheet` if this thread has
+/// not got it, then hands it to `f`.
+///
+/// The ensure-then-borrow dance is spelled out inline at every candidate lookup
+/// in `compute_style`; new call sites should use this instead. Do not call
+/// anything that touches `RULE_IDX_CACHE` from inside `f` — the borrow is live
+/// for its duration.
+fn with_cascade_index<R>(
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+    f: impl FnOnce(&CascadeIndex) -> R,
+) -> R {
+    ensure_cascade_index(sheet, viewport, dark_mode);
+    with_front_cascade_index(f)
+}
+
+/// CSS Generated Content L3 §3.2 — whether `sheet` can produce quote content
+/// at all, i.e. whether the `::before`/`::after` probe in `counters::walk` can
+/// yield a quote depth. See [`CascadeIndex::has_quote_content`].
+pub fn sheet_has_quote_content(sheet: &Stylesheet, viewport: Size, dark_mode: bool) -> bool {
+    with_cascade_index(sheet, viewport, dark_mode, |idx| idx.has_quote_content)
+}
+
+/// BUG-341 S23 — whether `sheet` uses `pseudo` (name without the `::`) as the
+/// subject of any selector, i.e. whether
+/// [`compute_pseudo_element_style`] for it can return anything but `None`.
+///
+/// Lets a caller skip a whole traversal instead of a single cascade: see
+/// [`CascadeIndex::pseudo_subjects`]. **`::marker` is exempt** — CSS Lists L3
+/// §2.1 synthesizes a marker style with no rule at all, so a `false` here says
+/// nothing about it; callers must not gate `marker` on this predicate.
+pub fn sheet_targets_pseudo(
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+    pseudo: &str,
+) -> bool {
+    with_cascade_index(sheet, viewport, dark_mode, |idx| {
+        idx.pseudo_subjects.iter().any(|s| s.eq_ignore_ascii_case(pseudo))
+    })
 }
 
 thread_local! {
@@ -2486,6 +2973,89 @@ pub fn parse_css_wide_keyword(value: &str) -> Option<CssWideKeyword> {
     }
 }
 
+/// Copy-on-write map of a node's CSS custom properties (`--name` → raw source
+/// text), as carried by [`ComputedStyle::custom_props`].
+///
+/// **Why a dedicated type instead of a plain `HashMap`** (BUG-341 S9): CSS
+/// Variables L1 makes *every* custom property inherited, so `compute_style`
+/// copies the parent's whole map into each child. With the 30 custom properties
+/// `assets/chrome/chrome.html` declares, that copy alone measured 3.7–4.7 µs per
+/// node against 0.31–0.46 µs for a node with an empty map — i.e. the map, not
+/// the 302 other `ComputedStyle` fields, dominated the cascade. Behind an
+/// [`Arc`] the inherit step is a refcount bump, and only the handful of nodes
+/// that actually declare a `--name` pay a real copy, through
+/// [`make_mut`](Self::make_mut).
+///
+/// The same sharing makes [`PartialEq`] cheap: two styles that inherited their
+/// properties from a common ancestor compare in one pointer comparison, which is
+/// what `graft_geometry`'s per-box style comparison relies on. The fast path is
+/// spelled out here rather than left to `Arc`'s own (unspecified) pointer
+/// short-circuit, so the cost is a property of this type and not of a standard
+/// library implementation detail.
+///
+/// Reads go through [`Deref`] to `HashMap`, so `.get`/`.contains_key`/`.values`
+/// and `&props` where a `&HashMap` is expected all work unchanged.
+#[derive(Debug, Clone)]
+pub struct CustomProps(Arc<HashMap<String, String>>);
+
+impl CustomProps {
+    /// Returns a mutable reference to the underlying map, cloning it first if
+    /// (and only if) another `ComputedStyle` still shares it — the copy-on-write
+    /// half of this type. Call sites that only read must not use this: an
+    /// unconditional `make_mut` on every node would reintroduce exactly the
+    /// per-node clone this type exists to remove.
+    pub fn make_mut(&mut self) -> &mut HashMap<String, String> {
+        Arc::make_mut(&mut self.0)
+    }
+
+    /// True when both sides are the very same allocation, i.e. one was cloned
+    /// from the other with no intervening write. Equal-but-unshared maps return
+    /// `false` — this is an identity check, not equality.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Default for CustomProps {
+    /// The empty map is a process-wide singleton, so every node in a document
+    /// that declares no custom property at all shares one allocation and
+    /// compares by pointer.
+    fn default() -> Self {
+        static EMPTY: OnceLock<Arc<HashMap<String, String>>> = OnceLock::new();
+        Self(Arc::clone(EMPTY.get_or_init(|| Arc::new(HashMap::new()))))
+    }
+}
+
+impl Deref for CustomProps {
+    type Target = HashMap<String, String>;
+
+    fn deref(&self) -> &HashMap<String, String> {
+        &self.0
+    }
+}
+
+impl PartialEq for CustomProps {
+    /// Pointer identity first (the overwhelmingly common case for inherited
+    /// maps), full map comparison only for independently built maps.
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || self.0 == other.0
+    }
+}
+
+impl Eq for CustomProps {}
+
+impl From<HashMap<String, String>> for CustomProps {
+    fn from(map: HashMap<String, String>) -> Self {
+        Self(Arc::new(map))
+    }
+}
+
+impl FromIterator<(String, String)> for CustomProps {
+    fn from_iter<I: IntoIterator<Item = (String, String)>>(iter: I) -> Self {
+        Self(Arc::new(iter.into_iter().collect()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
@@ -2756,7 +3326,9 @@ pub struct ComputedStyle {
     /// Ключ — полное имя с ведущими `--`, значение — сырой текст из source.
     /// Substitution `var(--name [, fallback])` делается lazy при применении
     /// обычных деклараций (см. `apply_declaration`).
-    pub custom_props: HashMap<String, String>,
+    ///
+    /// Shared copy-on-write (BUG-341 S9) — see [`CustomProps`] for why.
+    pub custom_props: CustomProps,
     /// CSS Lists L3 §3 — `counter-reset: name [N]?`. Каждый element задаёт
     /// (имя-счётчика, начальное-значение). Не наследуется. Пустой `Vec`
     /// при отсутствии декларации или `counter-reset: none`. Реальное
@@ -2887,7 +3459,7 @@ pub struct ComputedStyle {
     /// CSS UI L4 §6.2 — `user-select`. Inherited (по спеке).
     pub user_select: UserSelect,
     /// CSS Basic UI L4 §6 — `resize`. NOT inherited. Initial: `None`.
-    /// Phase 0: parse + store; drag-resize UI — задача P3/UI.
+    /// Drag-resize UI (grip hit-test, apply): `crates/shell/src/main.rs` (CC-CSS-4).
     pub resize: Resize,
     /// CSS Overflow L3 — `scroll-behavior`. Inherited.
     pub scroll_behavior: ScrollBehavior,
@@ -3705,17 +4277,48 @@ impl PointerEvents {
 
 /// CSS Basic UI L4 §6 — `resize`. NOT inherited. Initial: `None`.
 /// Позволяет пользователю изменять размер элемента мышью.
-/// Phase 0: parse + store; реальный drag-resize — задача P3/UI.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Resize {
     /// `none` — resize запрещён.
     #[default]
     None,
+    /// `both` — resize по обеим физическим осям.
     Both,
+    /// `horizontal` — resize только по физической ширине.
     Horizontal,
+    /// `vertical` — resize только по физической высоте.
     Vertical,
+    /// `block` — resize вдоль block-оси (логическая, зависит от `writing-mode`).
     Block,
+    /// `inline` — resize вдоль inline-оси (логическая, зависит от `writing-mode`).
     Inline,
+}
+
+impl Resize {
+    /// Разрешает логическую ось `resize` (`Block`/`Inline`) в физическую пару
+    /// `(разрешена ширина, разрешена высота)` с учётом `writing-mode`.
+    ///
+    /// В `horizontal-tb` block-ось — вертикальная, inline-ось — горизонтальная;
+    /// в вертикальных режимах (`vertical-rl`/`vertical-lr`/`sideways-rl`) — наоборот.
+    /// Используется драг-хендлером grip-а (`crates/shell/src/main.rs`), чтобы
+    /// вложенный корректно гейтить, какую из осей (`width`/`height`) двигать.
+    pub fn allowed_axes(self, writing_mode: WritingMode) -> (bool, bool) {
+        let vertical_wm = matches!(
+            writing_mode,
+            WritingMode::VerticalRl
+                | WritingMode::VerticalLr
+                | WritingMode::SidewaysRl
+                | WritingMode::SidewaysLr
+        );
+        match self {
+            Resize::None => (false, false),
+            Resize::Both => (true, true),
+            Resize::Horizontal => (true, false),
+            Resize::Vertical => (false, true),
+            Resize::Block => (vertical_wm, !vertical_wm),
+            Resize::Inline => (!vertical_wm, vertical_wm),
+        }
+    }
 }
 
 /// CSS Containment L3 §3 — `contain` property.
@@ -3789,7 +4392,9 @@ pub struct ContainerContext {
     /// The container's `container-name` values (for named queries).
     pub names: Vec<String>,
     /// Custom properties (`--*`) контейнера — для style() queries (CSS Containment L3 §4).
-    pub custom_props: HashMap<String, String>,
+    /// Shares the container's own [`CustomProps`] allocation, so building a
+    /// `ContainerContext` costs no map copy.
+    pub custom_props: CustomProps,
     /// Container's own computed style, serialized the same way as
     /// `window.getComputedStyle()` (`selector_query::computed_style_to_map`) —
     /// used to resolve `style()` queries against standard (non-custom) properties.
@@ -5900,7 +6505,7 @@ impl ComputedStyle {
             accent_color: None,
             color_scheme: ColorScheme::Normal,
             forced_color_adjust: ForcedColorAdjust::Auto,
-            custom_props: HashMap::new(),
+            custom_props: CustomProps::default(),
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
             counter_set: Vec::new(),
@@ -6109,6 +6714,28 @@ impl ComputedStyle {
     }
 }
 
+/// BUG-341 S18 — process-wide tally of full [`compute_style`] runs.
+///
+/// The cascade stage's own [`crate::counters::CascadeStats`] counts only the
+/// calls `counters::walk` makes. It cannot see the ones the box-build stage
+/// makes behind its back: `is_inline_content` / `is_inline_block` probe every
+/// child of every rebuilt container with a fresh `compute_style` instead of the
+/// `CounterMap` cache `build_box` itself uses, and non-element nodes have no
+/// cache entry at all. Process-wide (an atomic, not a thread-local) because
+/// `build_box` fans out over rayon workers — the S15 trap.
+static COMPUTE_STYLE_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Returns the number of [`compute_style`] runs since the last drain, and
+/// resets the tally (see [`COMPUTE_STYLE_CALLS`]).
+pub fn take_compute_style_calls() -> u64 {
+    COMPUTE_STYLE_CALLS.swap(0, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Bumps the [`COMPUTE_STYLE_CALLS`] tally.
+fn note_compute_style() {
+    COMPUTE_STYLE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Computes the `ComputedStyle` for `node` by running the CSS cascade.
 ///
 /// `dark_mode` is forwarded to `@media (prefers-color-scheme: dark)` matching.
@@ -6120,6 +6747,13 @@ pub fn compute_style(
     viewport: Size,
     dark_mode: bool,
 ) -> ComputedStyle {
+    // BUG-341 S10: permanent per-phase instrumentation. Same-named sibling
+    // scopes are merged by `lumen_core::profile`, so a `LUMEN_PROFILE_TREE=1`
+    // run prints one aggregated line per phase with a `×N` call count instead
+    // of one line per node. Costs a cached bool check per phase when disabled.
+    let _prof = lumen_core::profile::scope_detail("compute_style");
+    note_compute_style();
+    let prof_init = lumen_core::profile::scope_detail("cs_init");
     let mut style = ComputedStyle {
         display: default_display(doc, node),
         // Наследуемые свойства (CSS inherited properties).
@@ -6491,8 +7125,18 @@ pub fn compute_style(
     // custom-properties, у которых `inherits: false` — для них потомок
     // должен видеть либо локальную декларацию, либо initial-value, а не
     // родительское значение.
-    if !registry.is_empty() {
-        style.custom_props.retain(|key, _| {
+    //
+    // BUG-341 S9: `retain` needs a `make_mut`, which copies the inherited map —
+    // so first check whether any key would actually be dropped. Pages that
+    // register no `inherits: false` property (or declare none of the ones they
+    // do register) keep sharing the parent's allocation.
+    if !registry.is_empty()
+        && style
+            .custom_props
+            .keys()
+            .any(|key| registry.get(key.as_str()).is_some_and(|p| !p.inherits))
+    {
+        style.custom_props.make_mut().retain(|key, _| {
             registry.get(key.as_str()).is_none_or(|p| p.inherits)
         });
     }
@@ -6504,6 +7148,8 @@ pub fn compute_style(
         apply_property_initial_values(&mut style.custom_props, &registry);
         return style;
     }
+    drop(prof_init);
+    let prof_ua = lumen_core::profile::scope_detail("cs_ua_hints");
 
     // UA stylesheet: семантические элементы получают italic / bold по
     // умолчанию, CSS-декларации ниже могут это переопределить.
@@ -6612,6 +7258,8 @@ pub fn compute_style(
     // (нормального или !important) inline всегда побеждает любой селектор —
     // это «Element-Attached Styles» тир в Cascade L4 §8.1, идущий после
     // Layer/Specificity/Order, но до Importance-инверсии.
+    drop(prof_ua);
+    let prof_match = lumen_core::profile::scope_detail("cs_match");
     let inline_decls: Vec<Declaration> = doc
         .get(node)
         .get_attr("style")
@@ -6648,18 +7296,9 @@ pub fn compute_style(
     let class_attr = node_data.get_attr("class").unwrap_or("");
     let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
 
-    let sheet_ptr = sheet as *const Stylesheet as usize;
-    let sheet_rules_len = sheet.rules.len();
-    let media_key = CascadeMediaKey::current(viewport, dark_mode);
-    RULE_IDX_CACHE.with(|cell| {
-        let mut cached = cell.borrow_mut();
-        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len || cached.2 != media_key {
-            let media_ctx = media_context_from_viewport(viewport, dark_mode);
-            *cached = (sheet_ptr, sheet_rules_len, media_key, CascadeIndex::build(sheet, &media_ctx));
-        }
-    });
-    let cands = RULE_IDX_CACHE.with(|cell| {
-        cell.borrow().3.rules.candidates(node_tag, node_id, &node_classes)
+    ensure_cascade_index(sheet, viewport, dark_mode);
+    let cands = with_front_cascade_index(|idx| {
+        idx.rules.candidates(node_tag, node_id, &node_classes)
     });
 
     for &rule_idx in &cands {
@@ -6697,8 +7336,8 @@ pub fn compute_style(
         // BUG-284: candidate pre-filter (was a brute-force scan of every rule
         // in the layer for every node — dominant cascade cost on stylesheets
         // that put most rules inside layers/media/supports blocks).
-        let layer_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().3.layers[layer_i].candidates(node_tag, node_id, &node_classes)
+        let layer_cands = with_front_cascade_index(|idx| {
+            idx.layers[layer_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in layer_cands {
             let rule = &layer_rule.rules[rule_idx];
@@ -6735,7 +7374,7 @@ pub fn compute_style(
     // `media.query.matches(..)` used to run here on every node. Fetched once
     // per node (not once per block) to avoid N thread-local accesses when
     // the stylesheet has many `@media` blocks.
-    let active_media = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_media.clone());
+    let active_media = with_front_cascade_index(|idx| idx.active_media.clone());
     let mut next_rule_idx = sheet.rules.len();
     for (media_i, media) in sheet.media_rules.iter().enumerate() {
         if !active_media[media_i] {
@@ -6744,8 +7383,8 @@ pub fn compute_style(
         }
         // BUG-284: candidate pre-filter (see @layer above) — real-world
         // stylesheets often put the bulk of their rules inside @media blocks.
-        let media_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().3.media[media_i].candidates(node_tag, node_id, &node_classes)
+        let media_cands = with_front_cascade_index(|idx| {
+            idx.media[media_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
@@ -6775,14 +7414,14 @@ pub fn compute_style(
     //
     // Perf: "active" precomputed once per sheet in `CascadeIndex::active_supports`
     // (see doc comment) — `supports.condition.evaluate(..)` used to run per node.
-    let active_supports = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_supports.clone());
+    let active_supports = with_front_cascade_index(|idx| idx.active_supports.clone());
     for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
         if !active_supports[supports_i] {
             next_rule_idx += supports.rules.len();
             continue;
         }
-        let supports_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().3.supports[supports_i].candidates(node_tag, node_id, &node_classes)
+        let supports_cands = with_front_cascade_index(|idx| {
+            idx.supports[supports_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];
@@ -6808,14 +7447,12 @@ pub fn compute_style(
     }
     // CSS Cascade L6 §5 — @scope rules: apply only when node is in scope.
     for scope_rule in &sheet.scope_rules {
-        if !node_is_in_scope(doc, node, &scope_rule.root) {
-            next_rule_idx += scope_rule.rules.len();
-            continue;
-        }
-        // Scope limit: if `to (<limit>)` is set, skip nodes that are
-        // descendants of the limit selector *within* this scope.
-        if let Some(ref limit_sel) = scope_rule.limit
-            && node_is_in_scope(doc, node, limit_sel) {
+        // Donut scoping (§3): `node` is in scope when it is an inclusive
+        // descendant of the scope root but *not* of a scope limit that lies
+        // within that same root subtree. `node_in_scope` resolves root and
+        // limit together (nearest boundary wins) so a limit-matching element
+        // *above* the root no longer removes the node from scope.
+        if !node_in_scope(doc, node, &scope_rule.root, scope_rule.limit.as_deref()) {
             next_rule_idx += scope_rule.rules.len();
             continue;
         }
@@ -6934,6 +7571,8 @@ pub fn compute_style(
     matched.sort_by_key(|&(imp, inline, lp, spec, rule_idx, decl_idx, _)| {
         (imp, inline, lp, spec, rule_idx, decl_idx)
     });
+    drop(prof_match);
+    let prof_revert = lumen_core::profile::scope_detail("cs_revert_prepass");
 
     // CSS Cascade L5 §6.4.6 — `revert-layer`: a declaration whose value is
     // `revert-layer` rolls the cascaded value back to what it would be if all
@@ -6950,7 +7589,16 @@ pub fn compute_style(
     // declaration's own layer, so it cannot be applied per-declaration like
     // `inherit`/`initial`. Shorthand↔longhand reverts across layers are a known
     // limitation (grouping is by exact property name).
-    loop {
+    //
+    // BUG-341 S10: the loop below allocates a lowercased `String` key per
+    // matched declaration plus a `HashMap` just to discover, on essentially
+    // every element of every real page, that nothing declares `revert-layer`.
+    // One allocation-free scan first (measured: 1.4 ms per chrome layout pass,
+    // ~7% of the cascade stage).
+    while matched
+        .iter()
+        .any(|&(_, _, _, _, _, _, decl)| decl.value.trim().eq_ignore_ascii_case("revert-layer"))
+    {
         use std::collections::HashMap;
         // Winner per property = last occurrence in the cascade-sorted vec.
         // (lp, important, is_revert_layer)
@@ -7005,6 +7653,8 @@ pub fn compute_style(
     );
     let ua_baseline_storage: Option<ComputedStyle> = needs_ua_baseline.then(|| style.clone());
     let ua_baseline_ref: &ComputedStyle = ua_baseline_storage.as_ref().unwrap_or(inherited);
+    drop(prof_revert);
+    let prof_apply = lumen_core::profile::scope_detail("cs_apply");
 
     // Pre-pass: применяем font-size раньше, потому что em/% других свойств
     // считаются относительно computed font-size этого же элемента, а em для
@@ -7047,7 +7697,7 @@ pub fn compute_style(
                 // Invalid at computed value time — skip declaration.
                 continue;
             }
-            style.custom_props.insert(key, decl.value.clone());
+            style.custom_props.make_mut().insert(key, decl.value.clone());
         }
     }
 
@@ -7146,6 +7796,8 @@ pub fn compute_style(
     // CssColor-typed fields (border-color, background-color, etc.) now that
     // style.color_scheme is final. The `color` field (Color, not CssColor) was
     // already resolved inline in the `"color"` branch of apply_declaration.
+    drop(prof_apply);
+    let _prof_post = lumen_core::profile::scope_detail("cs_post");
     resolve_system_colors_in_style(&mut style, dark_mode);
 
     // CSS Color Adjustment L1 §3 — Forced Colors Mode: when the user preference
@@ -7185,7 +7837,112 @@ pub fn compute_style(
         _ => None,
     };
 
+    apply_webkit_scrollbar_pseudos(doc, node, sheet, &mut style, viewport, dark_mode);
+
     style
+}
+
+/// Whether a scrollbar can ever be shown for `node`, i.e. whether translating
+/// `::-webkit-scrollbar*` onto its `scrollbar-width`/`scrollbar-color` can have
+/// any effect (BUG-341 S11).
+///
+/// The condition mirrors paint's own: `lumen_paint::display_list` emits a
+/// scrollbar only for a box whose `overflow-x`/`overflow-y` is `scroll` or
+/// `auto` (`overflow: hidden` scrolls programmatically but draws no bar), and
+/// `box_tree::scrollbar_gutter_{inline,block}` reserve gutter under the same
+/// condition. The root element and `<body>` are included regardless: they are
+/// the conventional target for styling the *page* scrollbar, and it costs two
+/// elements per document to keep that idiom working if the viewport scrollbar
+/// ever starts reading its style from them.
+///
+/// **This is a deliberate behaviour change** (user decision, 2026-07-27),
+/// not a pure optimization. Before it, the translation ran on *every* element,
+/// so `::-webkit-scrollbar` rules matching a non-scrollable element wrote
+/// `scrollbar-width`/`scrollbar-color` there and — both being inherited
+/// properties — leaked down to scrollable descendants that matched no rule of
+/// their own. WebKit has no such inheritance: `::-webkit-scrollbar` styles the
+/// scrollbar of the element it matches. Lumen's leak was an artifact of
+/// translating a pseudo-element onto standard inherited properties, so
+/// narrowing is also a fidelity fix. The standard `scrollbar-width` /
+/// `scrollbar-color` properties are untouched and keep inheriting normally.
+fn element_can_have_scrollbar(doc: &Document, node: NodeId, style: &ComputedStyle) -> bool {
+    if matches!(style.overflow_x, Overflow::Scroll | Overflow::Auto)
+        || matches!(style.overflow_y, Overflow::Scroll | Overflow::Auto)
+    {
+        return true;
+    }
+    doc.get(node)
+        .element_name()
+        .is_some_and(|q| matches!(q.local.as_ref(), "html" | "body"))
+}
+
+/// CC-CSS-1: legacy WebKit scrollbar pseudo-elements (`::-webkit-scrollbar`,
+/// `::-webkit-scrollbar-thumb`, `::-webkit-scrollbar-track`) are not part of the
+/// standard cascade — `PseudoElementKind::Unknown` already parses and matches them
+/// (see `pseudo_element_matches`), so this translates their declarations onto the
+/// standard `scrollbar-width`/`scrollbar-color` fields, letting pages/chrome that
+/// only style scrollbars through the WebKit-only idiom still get a styled result.
+/// `-webkit-font-smoothing` needs no handling here: it falls through the ordinary
+/// `apply_declaration` catch-all (parsed, then silently ignored) like any other
+/// unrecognized property.
+///
+/// **Runs only for elements that can actually have a scrollbar** — see
+/// [`element_can_have_scrollbar`] and BUG-341 "S11" for the behaviour change
+/// this implies.
+fn apply_webkit_scrollbar_pseudos(
+    doc: &Document,
+    node: NodeId,
+    sheet: &Stylesheet,
+    style: &mut ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+) {
+    // BUG-341 S10: three full pseudo-element cascades per element — 55% of
+    // `compute_style` on Lumen's own chrome, and on every other sheet not one of
+    // them can match. Node-independent, so it is decided once per sheet.
+    if !with_cascade_index(sheet, viewport, dark_mode, |idx| idx.has_webkit_scrollbar_rules) {
+        return;
+    }
+    // BUG-341 S11: and of the sheets that do declare them, only scroll
+    // containers can show the result.
+    if !element_can_have_scrollbar(doc, node, style) {
+        return;
+    }
+    #[cfg(test)]
+    SCROLLBAR_PSEUDO_CASCADES.with(|c| c.set(c.get() + 1));
+    let _prof = lumen_core::profile::scope_detail("cs_scrollbar_pseudos");
+    // `scrollbar-width` (CSS Scrollbars 1 §2) has no numeric keyword — bucket the
+    // pixel width into the closest of the two sized keywords. 9px is the midpoint
+    // between `thin`'s 6px and `auto`'s 12px used-width (`display_list.rs`), and
+    // matches Lumen's own chrome reference (`docs/design/lumen-v3_3.html`).
+    if let Some(bar) =
+        compute_pseudo_element_style(doc, node, "-webkit-scrollbar", sheet, style, viewport, dark_mode)
+        && let Some(w) = bar.width.as_ref().and_then(|l| l.resolve(bar.font_size, None, viewport))
+    {
+        style.scrollbar_width = if w <= 0.0 {
+            ScrollbarWidth::None
+        } else if w <= 9.0 {
+            ScrollbarWidth::Thin
+        } else {
+            ScrollbarWidth::Auto
+        };
+    }
+    let webkit_thumb = compute_pseudo_element_style(
+        doc, node, "-webkit-scrollbar-thumb", sheet, style, viewport, dark_mode,
+    )
+    .and_then(|s| s.background_color)
+    .map(|c| c.resolve(style.color));
+    let webkit_track = compute_pseudo_element_style(
+        doc, node, "-webkit-scrollbar-track", sheet, style, viewport, dark_mode,
+    )
+    .and_then(|s| s.background_color)
+    .map(|c| c.resolve(style.color));
+    // Both sides required: `scrollbar-color`'s used value is a (thumb, track) pair,
+    // and there is no honest per-side "unset" fallback to reach for here — the UA
+    // defaults live one layer down, in `paint::display_list`.
+    if let (Some(thumb), Some(track)) = (webkit_thumb, webkit_track) {
+        style.scrollbar_color = Some((thumb, track));
+    }
 }
 
 /// CSS Color 4 §6.2 — resolve `CssColor::System` variants in all CssColor-typed
@@ -7431,23 +8188,37 @@ fn resolve_logical_properties(style: &mut ComputedStyle) {
 /// Алгоритм: последний compound должен содержать `PseudoElement(pseudo)`;
 /// остаток селектора (после удаления этой части) проверяется через
 /// существующий `matches_complex`.
+/// The name `kind` is written with, without the leading `::`.
+///
+/// BUG-341 S23: the single source of truth for the kind↔name correspondence.
+/// [`pseudo_element_matches`] and [`CascadeIndex::pseudo_subjects`] both go
+/// through it, so the sheet-level "does this pseudo appear at all" predicate
+/// cannot drift from the matcher it is meant to short-circuit — a drift that
+/// would silently drop a pseudo-element's styling, not slow a frame down.
+/// Parameterized kinds report the bare name they are spelled with: the
+/// argument (`::slotted(sel)`, `::highlight(name)`, `::picker(sel)`) is checked
+/// by the matcher, not by the name.
+fn pseudo_element_name(kind: &PseudoElementKind) -> &str {
+    match kind {
+        PseudoElementKind::Before => "before",
+        PseudoElementKind::After => "after",
+        PseudoElementKind::FirstLine => "first-line",
+        PseudoElementKind::FirstLetter => "first-letter",
+        PseudoElementKind::Slotted(_) => "slotted",
+        PseudoElementKind::Marker => "marker",
+        PseudoElementKind::Selection => "selection",
+        PseudoElementKind::Placeholder => "placeholder",
+        PseudoElementKind::Highlight(_) => "highlight",
+        PseudoElementKind::Picker(_) => "picker",
+        PseudoElementKind::Checkmark => "checkmark",
+        PseudoElementKind::PickerIcon => "picker-icon",
+        PseudoElementKind::Unknown(s) => s.as_str(),
+    }
+}
+
 /// Helper: check if a pseudo-element name matches a PseudoElementKind.
 fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
-    match kind {
-        PseudoElementKind::Before => name.eq_ignore_ascii_case("before"),
-        PseudoElementKind::After => name.eq_ignore_ascii_case("after"),
-        PseudoElementKind::FirstLine => name.eq_ignore_ascii_case("first-line"),
-        PseudoElementKind::FirstLetter => name.eq_ignore_ascii_case("first-letter"),
-        PseudoElementKind::Slotted(_) => name.eq_ignore_ascii_case("slotted"),
-        PseudoElementKind::Marker => name.eq_ignore_ascii_case("marker"),
-        PseudoElementKind::Selection => name.eq_ignore_ascii_case("selection"),
-        PseudoElementKind::Placeholder => name.eq_ignore_ascii_case("placeholder"),
-        PseudoElementKind::Highlight(_) => name.eq_ignore_ascii_case("highlight"),
-        PseudoElementKind::Picker(_) => name.eq_ignore_ascii_case("picker"),
-        PseudoElementKind::Checkmark => name.eq_ignore_ascii_case("checkmark"),
-        PseudoElementKind::PickerIcon => name.eq_ignore_ascii_case("picker-icon"),
-        PseudoElementKind::Unknown(s) => s.eq_ignore_ascii_case(name),
-    }
+    pseudo_element_name(kind).eq_ignore_ascii_case(name)
 }
 
 fn matches_complex_for_pseudo(
@@ -7530,27 +8301,22 @@ fn marker_property_applies(prop: &str) -> bool {
         )
 }
 
-/// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
+/// Builds the starting `ComputedStyle` for a pseudo-element of `parent`: every
+/// field at its initial value (CSS Pseudo-elements L4 §4 makes `display`
+/// `inline`), then every inherited property copied down from the originating
+/// element.
 ///
-/// `pseudo` — "before" или "after" (без "::"). `dark_mode` forwarded to
-/// `@media (prefers-color-scheme: dark)` matching.
-///
-/// Возвращает `None` если:
-/// - нет CSS-правил для данного псевдоэлемента на этом узле, или
-/// - вычисленный `content` равен `none` / `normal`.
-pub fn compute_pseudo_element_style(
-    doc: &Document,
-    node: NodeId,
-    pseudo: &str,
-    sheet: &Stylesheet,
-    parent: &ComputedStyle,
-    viewport: Size,
-    dark_mode: bool,
-) -> Option<ComputedStyle> {
-    if !matches!(doc.get(node).data, NodeData::Element { .. }) {
-        return None;
-    }
-
+/// BUG-341 S10: extracted from [`compute_pseudo_element_style`] so it can run
+/// *after* the cascade match rather than before it. It costs a 302-field
+/// literal plus ~50 field clones, and the overwhelmingly common outcome — no
+/// rule matches this element for this pseudo-element — threw all of it away.
+/// The profile that found it: `precompute_counters` probes `::before`/`::after`
+/// on *every* node to keep `quotes` nesting continuous (1656 calls per chrome
+/// layout pass), and `apply_webkit_scrollbar_pseudos` adds three more per
+/// element.
+fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
+    #[cfg(test)]
+    PSEUDO_BASE_BUILDS.with(|c| c.set(c.get() + 1));
     // Pseudo-elements inherit from their originating element.
     // Start from root() (all fields at initial values) then override inherited properties.
     // CSS Pseudo-elements L4 §4: default display = inline.
@@ -7625,6 +8391,64 @@ pub fn compute_pseudo_element_style(
     style.text_wrap_style = parent.text_wrap_style;
     style.interpolate_size = parent.interpolate_size;
     style.quotes = parent.quotes.clone();
+    style
+}
+
+/// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
+///
+/// `pseudo` — "before" или "after" (без "::"). `dark_mode` forwarded to
+/// `@media (prefers-color-scheme: dark)` matching.
+///
+/// Возвращает `None` если:
+/// - нет CSS-правил для данного псевдоэлемента на этом узле, или
+/// - вычисленный `content` равен `none` / `normal`.
+pub fn compute_pseudo_element_style(
+    doc: &Document,
+    node: NodeId,
+    pseudo: &str,
+    sheet: &Stylesheet,
+    parent: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+) -> Option<ComputedStyle> {
+    if !matches!(doc.get(node).data, NodeData::Element { .. }) {
+        return None;
+    }
+    // BUG-341 S20 census hook — see `PseudoCascadeStats`.
+    if !PSEUDO_STATS_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode);
+    }
+    let t_pseudo = std::time::Instant::now();
+    let out = compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode);
+    note_pseudo_cascade(pseudo, t_pseudo.elapsed().as_nanos() as u64, out.is_some());
+    out
+}
+
+/// The body of [`compute_pseudo_element_style`] — split out so the census hook
+/// above covers every exit path.
+#[allow(clippy::too_many_arguments)]
+fn compute_pseudo_element_style_inner(
+    doc: &Document,
+    node: NodeId,
+    pseudo: &str,
+    sheet: &Stylesheet,
+    parent: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+) -> Option<ComputedStyle> {
+    let _prof = lumen_core::profile::scope_detail("pseudo_style");
+
+    // BUG-341 S23: if the sheet never uses this pseudo-element as a selector
+    // subject, `matches_complex_for_pseudo` below cannot match anything and the
+    // whole cascade is a no-op. `::marker` is the one exception — it
+    // synthesizes a style out of `list-style-type` with no rule at all (CSS
+    // Lists L3 §2.1, the `matched.is_empty()` branch), so it must never be
+    // short-circuited here.
+    if !pseudo.eq_ignore_ascii_case("marker")
+        && !sheet_targets_pseudo(sheet, viewport, dark_mode, pseudo)
+    {
+        return None;
+    }
 
     // Собираем matching declarations из всех правил.
     //
@@ -7634,24 +8458,19 @@ pub fn compute_pseudo_element_style(
     // This function runs for *every* element for both "before" and "after" —
     // unlike `compute_style`, it was never indexed at all, making it one of the
     // largest un-indexed cascade costs on stylesheets with many `@media` rules.
+    //
+    // BUG-341 S10: matching runs *before* `pseudo_inherited_style` — see that
+    // function's doc comment. Nothing here reads the pseudo-element's own style.
+    let prof_match = lumen_core::profile::scope_detail("ps_match");
     let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
     let node_data = doc.get(node);
     let node_tag = node_data.element_name().map_or("", |q| q.local.as_str());
     let node_id = node_data.get_attr("id");
     let class_attr = node_data.get_attr("class").unwrap_or("");
     let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
-    let sheet_ptr = sheet as *const Stylesheet as usize;
-    let sheet_rules_len = sheet.rules.len();
-    let media_key = CascadeMediaKey::current(viewport, dark_mode);
-    RULE_IDX_CACHE.with(|cell| {
-        let mut cached = cell.borrow_mut();
-        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len || cached.2 != media_key {
-            let media_ctx = media_context_from_viewport(viewport, dark_mode);
-            *cached = (sheet_ptr, sheet_rules_len, media_key, CascadeIndex::build(sheet, &media_ctx));
-        }
-    });
-    let cands = RULE_IDX_CACHE.with(|cell| {
-        cell.borrow().3.rules.candidates(node_tag, node_id, &node_classes)
+    ensure_cascade_index(sheet, viewport, dark_mode);
+    let cands = with_front_cascade_index(|idx| {
+        idx.rules.candidates(node_tag, node_id, &node_classes)
     });
     for rule_idx in cands {
         let rule = &sheet.rules[rule_idx];
@@ -7675,15 +8494,15 @@ pub fn compute_pseudo_element_style(
     // "active" precomputed once per (sheet, viewport, dark_mode) rather than
     // re-evaluated on every element (this function runs twice per element,
     // for `::before` and `::after`).
-    let active_media = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_media.clone());
+    let active_media = with_front_cascade_index(|idx| idx.active_media.clone());
     let mut next_rule_idx = sheet.rules.len();
     for (media_i, media) in sheet.media_rules.iter().enumerate() {
         if !active_media[media_i] {
             next_rule_idx += media.rules.len();
             continue;
         }
-        let media_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().3.media[media_i].candidates(node_tag, node_id, &node_classes)
+        let media_cands = with_front_cascade_index(|idx| {
+            idx.media[media_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
@@ -7706,14 +8525,14 @@ pub fn compute_pseudo_element_style(
         next_rule_idx += media.rules.len();
     }
     // CSS Conditional Rules L3 §2 — @supports in pseudo-element context.
-    let active_supports = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_supports.clone());
+    let active_supports = with_front_cascade_index(|idx| idx.active_supports.clone());
     for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
         if !active_supports[supports_i] {
             next_rule_idx += supports.rules.len();
             continue;
         }
-        let supports_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().3.supports[supports_i].candidates(node_tag, node_id, &node_classes)
+        let supports_cands = with_front_cascade_index(|idx| {
+            idx.supports[supports_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];
@@ -7740,10 +8559,17 @@ pub fn compute_pseudo_element_style(
         // CSS Lists L3 §2.1: ::marker always generates a marker box from list-style-type
         // without any explicit CSS rule. Other pseudo-elements require a matching declaration.
         if pseudo.eq_ignore_ascii_case("marker") {
-            return Some(style);
+            let _prof_init = lumen_core::profile::scope_detail("ps_init");
+            return Some(pseudo_inherited_style(parent));
         }
         return None;
     }
+    drop(prof_match);
+    let mut style = {
+        let _prof_init = lumen_core::profile::scope_detail("ps_init");
+        pseudo_inherited_style(parent)
+    };
+    let _prof_apply = lumen_core::profile::scope_detail("ps_apply");
 
     matched.sort_by_key(|&(imp, spec, rule_idx, decl_idx, _)| (imp, spec, rule_idx, decl_idx));
 
@@ -7779,10 +8605,16 @@ pub fn compute_pseudo_element_style(
     // ::selection applies to active text selection — no content required (CSS Pseudo-elements L4 §5.6).
     // ::placeholder styles the UA-generated placeholder hint text — no content required
     // (CSS Pseudo-elements L4 §4.10).
+    // CC-CSS-1: `::-webkit-scrollbar`/`-thumb`/`-track` are legacy scrollbar-styling
+    // pseudo-elements (translated onto `scrollbar-width`/`scrollbar-color` by
+    // `apply_webkit_scrollbar_pseudos`) — no `content:` required either.
     if pseudo.eq_ignore_ascii_case("first-letter")
         || pseudo.eq_ignore_ascii_case("first-line")
         || pseudo.eq_ignore_ascii_case("selection")
         || pseudo.eq_ignore_ascii_case("placeholder")
+        || pseudo.eq_ignore_ascii_case("-webkit-scrollbar")
+        || pseudo.eq_ignore_ascii_case("-webkit-scrollbar-thumb")
+        || pseudo.eq_ignore_ascii_case("-webkit-scrollbar-track")
     {
         Some(style)
     } else if pseudo.eq_ignore_ascii_case("marker") {
@@ -7826,8 +8658,12 @@ pub fn compute_selection_style(
 /// с унаследованным значением — потому что `contains_key` уже возвращает
 /// true. Для `inherits: false` имени родительское значение было выпилено
 /// в `compute_style` через `retain`.
+/// BUG-341 S9: takes [`CustomProps`] rather than the bare map so the
+/// copy-on-write copy happens only if a value is really substituted — the common
+/// case (no `@property` rules at all, or all of them already resolved) leaves the
+/// node sharing its parent's allocation.
 fn apply_property_initial_values(
-    custom_props: &mut HashMap<String, String>,
+    custom_props: &mut CustomProps,
     registry: &HashMap<&str, &PropertyRule>,
 ) {
     for (name, p) in registry {
@@ -7841,7 +8677,7 @@ fn apply_property_initial_values(
             // не подставляет неподходящий initial (потомок без декларации
             // получит inherited или ничего).
             if validate_against_syntax(iv, &p.syntax) {
-                custom_props.insert((*name).to_string(), iv.clone());
+                custom_props.make_mut().insert((*name).to_string(), iv.clone());
             }
         }
     }
@@ -10845,6 +11681,32 @@ pub fn clear_cq_context() {
 }
 
 thread_local! {
+    /// CSS Values L4 §5.1.1 — absolute px value of one `ch` and one `ex` unit for
+    /// the box currently being laid out: `(char_width('0'), x_height)` measured at
+    /// the box's own used `font-size`. `lay_out_inner` pushes this from the active
+    /// [`crate::TextMeasurer`] before resolving the box's lengths and restores the
+    /// parent's value on exit (RAII, so it is always balanced across recursion).
+    /// `None` outside a layout pass (or when no measurer is available) — then
+    /// `Length::{Ch,Ex}` fall back to the spec default of `0.5em` (§5.1.1: assume
+    /// the "0" glyph is `0.5em` wide and the x-height is `0.5em` when the real
+    /// metric is impractical to obtain).
+    static FONT_CH_EX: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+}
+
+/// Installs the `ch`/`ex` metric context (absolute px per unit) for the box being
+/// laid out and returns the previous value so the caller can restore it (RAII).
+/// `None` clears the context, making `Length::{Ch,Ex}` use the `0.5em` fallback.
+pub fn push_ch_ex_context(ch_ex: Option<(f32, f32)>) -> Option<(f32, f32)> {
+    FONT_CH_EX.with(|c| c.replace(ch_ex))
+}
+
+/// Restores the `ch`/`ex` metric context to a value previously returned by
+/// [`push_ch_ex_context`], undoing the box's contribution once its subtree is done.
+pub fn pop_ch_ex_context(prev: Option<(f32, f32)>) {
+    FONT_CH_EX.with(|c| c.set(prev));
+}
+
+thread_local! {
     /// Raw NodeId.0 of the currently-hovered element, or `u32::MAX` if none.
     /// Set by `set_interactive_state` before layout; cleared with `clear_interactive_state`.
     /// `:hover` matches the hovered element and all its ancestors (CSS Selectors L4 §4.3).
@@ -10877,6 +11739,617 @@ pub fn set_interactive_state(
 /// Clears hover/focus/active state after layout.
 pub fn clear_interactive_state() {
     set_interactive_state(None, None, None);
+}
+
+/// `node`'s ancestor chain, root-first, `node` itself last. Empty if `node` is
+/// `None`.
+fn ancestor_chain_inclusive(doc: &Document, node: Option<NodeId>) -> Vec<NodeId> {
+    let Some(node) = node else { return Vec::new() };
+    let mut chain = Vec::new();
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        chain.push(n);
+        cur = doc.get(n).parent;
+    }
+    chain.reverse();
+    chain
+}
+
+/// BUG-341 S7 — true if a compound selector's matching result can depend on
+/// the dynamic interactive-state pseudo-classes (`:hover`/`:focus`/`:active`/
+/// `:focus-within`/`:focus-visible`), directly or through a nested selector
+/// list (`:not()`/`:is()`/`:where()`/`:host()`/the `of <selector-list>` clause
+/// of `:nth-child()`/`:nth-last-child()`). Conservative in the nested-list
+/// direction: any dynamic-state pseudo appearing anywhere in the inner list
+/// counts, regardless of the inner list's own combinators — the question this
+/// answers is only "can this compound's boolean flip", not "for which nodes".
+fn compound_depends_on_dynamic_state(compound: &CompoundSelector) -> bool {
+    compound.parts.iter().any(simple_selector_depends_on_dynamic_state)
+}
+
+fn simple_selector_depends_on_dynamic_state(part: &SimpleSelector) -> bool {
+    match part {
+        SimpleSelector::PseudoClass(pc) => pseudo_class_depends_on_dynamic_state(pc),
+        _ => false,
+    }
+}
+
+fn pseudo_class_depends_on_dynamic_state(pc: &PseudoClass) -> bool {
+    match pc {
+        PseudoClass::Hover
+        | PseudoClass::Focus
+        | PseudoClass::Active
+        | PseudoClass::FocusWithin
+        | PseudoClass::FocusVisible => true,
+        PseudoClass::Not(list) | PseudoClass::Is(list) | PseudoClass::Where(list) => {
+            list.iter().any(complex_selector_depends_on_dynamic_state)
+        }
+        PseudoClass::Host(Some(list)) => list.iter().any(complex_selector_depends_on_dynamic_state),
+        PseudoClass::NthChild(_, Some(list)) | PseudoClass::NthLastChild(_, Some(list)) => {
+            list.iter().any(complex_selector_depends_on_dynamic_state)
+        }
+        _ => false,
+    }
+}
+
+fn complex_selector_depends_on_dynamic_state(c: &ComplexSelector) -> bool {
+    compound_depends_on_dynamic_state(&c.head)
+        || c.tail.iter().any(|(_, comp)| compound_depends_on_dynamic_state(comp))
+}
+
+/// BUG-341 S7 — true if `complex` contains a `:has()` anywhere whose relative
+/// selector list depends on dynamic interactive state (`:has(:hover)` and
+/// friends). `:has()` searches *outward* from its subject (descendants and/or
+/// following siblings, depending on the relative selector's own leading
+/// combinator) — a direction this v1 narrowing pass doesn't attempt to model.
+/// Selectors matching this predicate always force the conservative
+/// widen-to-parent fanout in [`selector_needs_state_fanout`], same as before
+/// S7 (no behaviour change for stylesheets using this pattern).
+fn complex_selector_has_dynamic_has(c: &ComplexSelector) -> bool {
+    fn compound_has_dynamic_has(compound: &CompoundSelector) -> bool {
+        compound.parts.iter().any(|p| match p {
+            SimpleSelector::PseudoClass(PseudoClass::Has(list)) => {
+                list.iter().any(|rs| complex_selector_depends_on_dynamic_state(&rs.selector))
+            }
+            SimpleSelector::PseudoClass(
+                PseudoClass::Not(list) | PseudoClass::Is(list) | PseudoClass::Where(list),
+            ) => list.iter().any(complex_selector_has_dynamic_has),
+            _ => false,
+        })
+    }
+    compound_has_dynamic_has(&c.head) || c.tail.iter().any(|(_, comp)| compound_has_dynamic_has(comp))
+}
+
+/// BUG-341 S7 — true if `complex` needs the v1 widen-to-parent behaviour: a
+/// compound depending on dynamic interactive state is followed (anywhere on
+/// the path to the subject) by a sibling combinator (`+`/`~`), so a state flip
+/// on that compound's matched node could restyle a sibling or a descendant of
+/// a sibling — outside the flipped node's own subtree. A dynamic-state
+/// compound followed only by descendant/child combinators (or in subject
+/// position, with nothing after it) stays within the flipped node's own
+/// subtree and needs no widening. `:has()` selectors depending on dynamic
+/// state always widen (see [`complex_selector_has_dynamic_has`]).
+fn selector_needs_state_fanout(complex: &ComplexSelector) -> bool {
+    if complex_selector_has_dynamic_has(complex) {
+        return true;
+    }
+    let mut compounds: Vec<&CompoundSelector> = Vec::with_capacity(1 + complex.tail.len());
+    let mut combinators: Vec<Combinator> = Vec::with_capacity(complex.tail.len());
+    compounds.push(&complex.head);
+    for (comb, comp) in &complex.tail {
+        combinators.push(*comb);
+        compounds.push(comp);
+    }
+    for (i, compound) in compounds.iter().enumerate() {
+        if !compound_depends_on_dynamic_state(compound) {
+            continue;
+        }
+        if combinators[i..].iter().any(|c| matches!(c, Combinator::NextSibling | Combinator::LaterSibling)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn rules_need_state_fanout(rules: &[lumen_css_parser::Rule]) -> bool {
+    rules.iter().any(|r| r.selectors.iter().any(selector_needs_state_fanout))
+}
+
+/// BUG-341 S14 — collect every compound of `complex` whose matching result can
+/// flip with the interactive state of the *node bound to that compound*.
+///
+/// All the nested-list forms [`pseudo_class_depends_on_dynamic_state`] looks
+/// through (`:not()`/`:is()`/`:where()`/`:host()`/`:nth-child(… of …)`) evaluate
+/// their inner selector against the same subject node as the compound that
+/// carries them, so "this compound depends on dynamic state" and "the node this
+/// compound is matched against is the node whose state flips" are the same
+/// statement. `:has()` is the one exception (it binds state to a *different*
+/// node) and is excluded from the narrowing entirely — see
+/// [`StateRestyleIndex::conservative`].
+fn collect_state_compounds<'a>(complex: &'a ComplexSelector, out: &mut Vec<&'a CompoundSelector>) {
+    if compound_depends_on_dynamic_state(&complex.head) {
+        out.push(&complex.head);
+    }
+    for (_, compound) in &complex.tail {
+        if compound_depends_on_dynamic_state(compound) {
+            out.push(compound);
+        }
+    }
+}
+
+fn collect_rules_state_compounds<'a>(
+    rules: &'a [lumen_css_parser::Rule],
+    out: &mut Vec<&'a CompoundSelector>,
+) {
+    for rule in rules {
+        for selector in &rule.selectors {
+            collect_state_compounds(selector, out);
+        }
+    }
+}
+
+/// BUG-341 S14 — could `compound` match `node` *after* an interactive-state
+/// flip on `node`, ignoring what that state currently is?
+///
+/// Every part must match structurally, except the two kinds whose value this
+/// question deliberately leaves open: the dynamic-state pseudo-classes
+/// themselves (their boolean is exactly what is being flipped) and pseudo-
+/// elements (stripped by the real matcher — [`matches_complex_for_pseudo`] —
+/// before the compound is matched against an element, so treating them as
+/// matching keeps `.tab:hover::before` attributable to `.tab`).
+///
+/// Over-approximates in one direction only: a compound whose dynamic state
+/// hides inside a nested list (`:is(.tab:hover, .x)`) has *all* its state-
+/// carrying parts treated as "possible", so it matches any element. That costs
+/// narrowing, never correctness.
+fn compound_could_match_after_state_flip(
+    compound: &CompoundSelector,
+    doc: &Document,
+    node: NodeId,
+) -> bool {
+    let NodeData::Element { name, attrs } = &doc.get(node).data else {
+        return false;
+    };
+    compound.parts.iter().all(|part| match part {
+        SimpleSelector::PseudoElement(_) => true,
+        SimpleSelector::PseudoClass(pc) if pseudo_class_depends_on_dynamic_state(pc) => true,
+        other => matches_simple(other, doc, node, &name.local, attrs),
+    })
+}
+
+/// BUG-341 S7/S14 — everything [`restyle_root_set_for_state_change`] needs to
+/// know about the stylesheet in play, computed once per layout pass and reused
+/// across the three interactive-state axes (hover/focus/active) since the
+/// stylesheet's shape does not change between them.
+pub struct StateRestyleIndex<'a> {
+    /// S7 — widen each flipped node's invalidation to its parent's subtree
+    /// (some selector reaches a sibling from a dynamic-state compound).
+    needs_fanout: bool,
+    /// S14 — the per-node narrowing below is unsound for this document/sheet
+    /// pair, so every flipped node stays in the root set (pre-S14 behaviour).
+    /// Set by `:has()` depending on dynamic state (state on one node restyles
+    /// an arbitrarily distant ancestor) or by the presence of any shadow root
+    /// (shadow-tree sheets are not scanned here — same carve-out S7 made).
+    conservative: bool,
+    /// S14 — every compound in `sheet` whose match can flip with the state of
+    /// the node it is matched against ([`collect_state_compounds`]).
+    state_compounds: Vec<&'a CompoundSelector>,
+}
+
+impl StateRestyleIndex<'_> {
+    /// S7 — whether a flipped node's invalidation widens to its parent.
+    pub fn needs_fanout(&self) -> bool {
+        self.needs_fanout
+    }
+
+    /// S14 — whether per-node narrowing is disabled for this document/sheet.
+    pub fn is_conservative(&self) -> bool {
+        self.conservative
+    }
+
+    /// S14 — number of state-dependent compounds the narrowing tests each
+    /// flipped node against. Exposed for the count-based regression gates.
+    pub fn state_compound_count(&self) -> usize {
+        self.state_compounds.len()
+    }
+
+    /// S14 — can an interactive-state flip on `node` change *any* computed
+    /// style in the document?
+    ///
+    /// It can only do so through a compound that (a) depends on dynamic state
+    /// and (b) is matched against `node` itself; everything such a compound can
+    /// reach — its own subject, and descendants via `N:hover X` — is inside
+    /// `node`'s own subtree (sibling reach is what `needs_fanout` widens for,
+    /// and `:has()` reach is what `conservative` disables narrowing for). So if
+    /// no state-dependent compound can even structurally match `node`, the flip
+    /// is unobservable and `node` contributes nothing to the restyle root set.
+    pub fn state_flip_can_matter(&self, doc: &Document, node: NodeId) -> bool {
+        if self.conservative {
+            return true;
+        }
+        self.state_compounds
+            .iter()
+            .any(|c| compound_could_match_after_state_flip(c, doc, node))
+    }
+}
+
+/// BUG-341 S7 — true if any selector anywhere in `sheet` (top-level rules plus
+/// every `@layer`/`@media`/`@supports`/`@scope`/`@starting-style`/`@container`
+/// block) needs [`selector_needs_state_fanout`]'s widen-to-parent behaviour.
+/// Scans unconditionally on `@media`/`@supports`/`@container` activation (a
+/// selector inside a currently-inactive block still counts) — safe (never
+/// narrows incorrectly) and avoids threading viewport/dark-mode state into
+/// this check.
+/// Test-only: the sheet half of [`restyle_state_index`]'s `needs_fanout`
+/// computation, kept as a named predicate because the S7 unit tests below
+/// assert on it selector-shape by selector-shape. Production code takes the
+/// single fused scan in `restyle_state_index` instead.
+#[cfg(test)]
+fn stylesheet_needs_state_fanout(sheet: &Stylesheet) -> bool {
+    stylesheet_rule_groups(sheet).any(rules_need_state_fanout)
+}
+
+/// Every rule list in `sheet`, top-level plus every conditional/grouping
+/// at-rule block. Iterated unconditionally — see
+/// [`stylesheet_needs_state_fanout`] for why an inactive `@media` block still
+/// counts.
+fn stylesheet_rule_groups(sheet: &Stylesheet) -> impl Iterator<Item = &[lumen_css_parser::Rule]> {
+    std::iter::once(sheet.rules.as_slice())
+        .chain(sheet.media_rules.iter().map(|m| m.rules.as_slice()))
+        .chain(sheet.layers.iter().map(|l| l.rules.as_slice()))
+        .chain(sheet.supports_rules.iter().map(|s| s.rules.as_slice()))
+        .chain(sheet.scope_rules.iter().map(|s| s.rules.as_slice()))
+        .chain(sheet.starting_style_rules.iter().map(|s| s.rules.as_slice()))
+        .chain(sheet.container_rules.iter().map(|c| c.rules.as_slice()))
+}
+
+fn rules_have_dynamic_has(rules: &[lumen_css_parser::Rule]) -> bool {
+    rules.iter().any(|r| r.selectors.iter().any(complex_selector_has_dynamic_has))
+}
+
+/// True if `doc` has any shadow host. Shadow-tree stylesheets
+/// ([`SHADOW_SHEETS`]) are not scanned by [`stylesheet_needs_state_fanout`] —
+/// modelling their per-host scoping would need the narrowing check to run
+/// per-node instead of once per pass, deferred until a fixture demonstrates
+/// the benefit is worth that complexity. A document with any shadow root
+/// therefore always takes the conservative widen-to-parent path, matching
+/// this engine's pre-S7 behaviour exactly (no regression, just no narrowing
+/// win for shadow-DOM-heavy pages yet).
+fn document_has_shadow_roots(doc: &Document) -> bool {
+    (0..doc.len()).any(|i| doc.is_shadow_host(NodeId::from_index(i)))
+}
+
+/// BUG-341 S7/S14 — builds the [`StateRestyleIndex`] for one layout pass.
+///
+/// Computed once per interactive-state transition and reused across the
+/// hover/focus/active axes — each calls [`restyle_root_set_for_state_change`]
+/// separately, but the stylesheet/shadow-DOM shape doesn't change between them.
+/// Costs one scan of the sheet's selectors (the same scan S7 already did for
+/// `needs_fanout` alone), then one structural match per flipped node per
+/// state-dependent compound.
+pub fn restyle_state_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> StateRestyleIndex<'a> {
+    let shadow = document_has_shadow_roots(doc);
+    let mut needs_fanout = false;
+    let mut conservative = shadow;
+    let mut state_compounds = Vec::new();
+    for rules in stylesheet_rule_groups(sheet) {
+        needs_fanout |= rules_need_state_fanout(rules);
+        conservative |= rules_have_dynamic_has(rules);
+        collect_rules_state_compounds(rules, &mut state_compounds);
+    }
+    StateRestyleIndex { needs_fanout: needs_fanout || shadow, conservative, state_compounds }
+}
+
+/// BUG-341 S3/S7 — restyle root-set (brief §4) for an interactive-state
+/// transition (`:hover` / `:focus` / `:active`, each read via
+/// [`set_interactive_state`]).
+///
+/// `:hover`/`:active` match the affected element *and all its ancestors*
+/// (CSS Selectors L4 §4.3/§4.5); `:focus-within` matches an ancestor of the
+/// focused element the same way. Moving the state from `prev` to `new`
+/// therefore flips the pseudo-class boolean on every node strictly below
+/// their lowest common ancestor (the LCA's own boolean is unaffected — it was
+/// already true, and stays true, for either "some descendant is `prev`" or
+/// "some descendant is `new`").
+///
+/// `index` — from [`restyle_state_index`] — controls two independent
+/// narrowings applied to every flipped node `N`:
+///
+/// * [`StateRestyleIndex::needs_fanout`] (S7) selects how wide `N`'s
+///   invalidation is: `true` invalidates `N`'s *parent's* whole subtree (S3's
+///   conservative over-approximation, covering `N:hover + X`, `N:hover ~ X`);
+///   `false` invalidates only `N` itself — sound exactly when no selector
+///   anywhere needs the wider fanout, since a descendant combinator after a
+///   dynamic-state compound (`N:hover X`) already resolves within `N`'s own
+///   subtree without any widening.
+/// * [`StateRestyleIndex::state_flip_can_matter`] (S14) drops `N` from the set
+///   entirely when no state-dependent compound in the sheet can even match it.
+///   This is what keeps a "nothing was hovered → deep element is hovered"
+///   transition from invalidating the whole document: `:hover` does flip on
+///   every ancestor up to the root, but on a sheet whose only hover rules are
+///   `button:hover` / `.tab-row:hover` none of those ancestors can observe it.
+///
+/// Returns an empty set for a no-op transition (`prev == new`), and — since
+/// S14 — also for a transition no selector in the sheet can react to.
+pub fn restyle_root_set_for_state_change(
+    doc: &Document,
+    prev: Option<NodeId>,
+    new: Option<NodeId>,
+    index: &StateRestyleIndex<'_>,
+) -> HashSet<NodeId> {
+    let mut set = HashSet::new();
+    if prev == new {
+        return set;
+    }
+    let prev_chain = ancestor_chain_inclusive(doc, prev);
+    let new_chain = ancestor_chain_inclusive(doc, new);
+    let common = prev_chain
+        .iter()
+        .zip(new_chain.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let root_for = |n: NodeId| if index.needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n };
+    for &n in prev_chain[common..].iter().chain(new_chain[common..].iter()) {
+        if index.state_flip_can_matter(doc, n) {
+            set.insert(root_for(n));
+        }
+    }
+    set
+}
+
+/// BUG-341 S17 — true if `complex` contains a `:has()` anywhere, regardless of
+/// what it looks for.
+///
+/// `:has()` binds one node's match result to *other* nodes' state, in the one
+/// direction [`restyle_root_set_for_node_change`]'s subtree-shaped root-set
+/// cannot express (BUG-348). The pre-S17 widen-to-parent at least re-cascaded
+/// the mutated node's immediate parent, so a `:has()` on that parent happened
+/// to be re-evaluated; narrowing to the node itself would take even that away.
+/// Sheets using `:has()` therefore keep the old behaviour verbatim — this
+/// slice neither fixes nor worsens BUG-348.
+fn complex_selector_has_any_has(c: &ComplexSelector) -> bool {
+    fn compound_has_any_has(compound: &CompoundSelector) -> bool {
+        compound.parts.iter().any(|p| match p {
+            SimpleSelector::PseudoClass(PseudoClass::Has(_)) => true,
+            SimpleSelector::PseudoClass(
+                PseudoClass::Not(list) | PseudoClass::Is(list) | PseudoClass::Where(list),
+            ) => list.iter().any(complex_selector_has_any_has),
+            SimpleSelector::PseudoClass(
+                PseudoClass::NthChild(_, Some(list)) | PseudoClass::NthLastChild(_, Some(list)),
+            ) => list.iter().any(complex_selector_has_any_has),
+            _ => false,
+        })
+    }
+    compound_has_any_has(&c.head) || c.tail.iter().any(|(_, comp)| compound_has_any_has(comp))
+}
+
+/// BUG-341 S17 — true if `complex` uses `:nth-child(… of S)` /
+/// `:nth-last-child(… of S)`.
+///
+/// That form makes one element's match depend on which of its *siblings* match
+/// `S`, i.e. on a sibling's attributes, with no sibling combinator anywhere in
+/// the selector to signal it. It is the one shape
+/// [`collect_sibling_source_compounds`] cannot see, so its presence disables the
+/// narrowing wholesale.
+fn complex_selector_has_nth_of(c: &ComplexSelector) -> bool {
+    fn compound_has_nth_of(compound: &CompoundSelector) -> bool {
+        compound.parts.iter().any(|p| match p {
+            SimpleSelector::PseudoClass(
+                PseudoClass::NthChild(_, Some(_)) | PseudoClass::NthLastChild(_, Some(_)),
+            ) => true,
+            SimpleSelector::PseudoClass(
+                PseudoClass::Not(list) | PseudoClass::Is(list) | PseudoClass::Where(list),
+            ) => list.iter().any(complex_selector_has_nth_of),
+            _ => false,
+        })
+    }
+    compound_has_nth_of(&c.head) || c.tail.iter().any(|(_, comp)| compound_has_nth_of(comp))
+}
+
+/// BUG-341 S17 — collect every compound of `complex` that is followed, anywhere
+/// on the path to the subject, by a sibling combinator (`+`/`~`).
+///
+/// These are exactly the compounds through which a change on the node they
+/// match can reach *outside* that node's own subtree: `X + Y`, `X ~ Y`, and
+/// `X + Y Z` all restyle nodes that are not descendants of `X`'s match. A
+/// compound followed only by descendant/child combinators (or in subject
+/// position) resolves entirely within its own match's subtree, which the
+/// root-set already covers by putting the node itself in.
+fn collect_sibling_source_compounds<'a>(
+    complex: &'a ComplexSelector,
+    out: &mut Vec<&'a CompoundSelector>,
+) {
+    let mut compounds: Vec<&CompoundSelector> = Vec::with_capacity(1 + complex.tail.len());
+    compounds.push(&complex.head);
+    let mut combinators: Vec<Combinator> = Vec::with_capacity(complex.tail.len());
+    for (comb, comp) in &complex.tail {
+        combinators.push(*comb);
+        compounds.push(comp);
+    }
+    for (i, compound) in compounds.iter().enumerate() {
+        if combinators[i..]
+            .iter()
+            .any(|c| matches!(c, Combinator::NextSibling | Combinator::LaterSibling))
+        {
+            out.push(compound);
+        }
+    }
+}
+
+/// True when `part` is keyed on the attribute named `attr` — i.e. writing that
+/// attribute is what could flip this simple selector's result.
+fn simple_selector_keys_on_attr(part: &SimpleSelector, attr: &str) -> bool {
+    match part {
+        SimpleSelector::Class(_) => attr.eq_ignore_ascii_case("class"),
+        SimpleSelector::Id(_) => attr.eq_ignore_ascii_case("id"),
+        SimpleSelector::Attribute(a) => a.name.eq_ignore_ascii_case(attr),
+        _ => false,
+    }
+}
+
+/// BUG-341 S17 — could `compound` match `node` *after* a write to `node`'s
+/// `attr` attribute, ignoring what that attribute now holds?
+///
+/// The S14 shape ([`compound_could_match_after_state_flip`]) with the dynamic-
+/// state pseudo-classes swapped for "keyed on `attr`": every part must match
+/// structurally, except the parts whose value the write is what's in question
+/// (which are treated as possible), pseudo-elements (stripped by the real
+/// matcher before an element is tested) and pseudo-classes in general — a
+/// pseudo-class may read the mutated attribute itself (`:checked` reads
+/// `checked`, `:placeholder-shown` reads `value`) or hide an attribute-keyed
+/// selector inside a nested list, so all of them are treated as possible.
+///
+/// Over-approximates in one direction only — a compound reported as "could
+/// match" costs narrowing, never correctness.
+fn compound_could_match_after_attr_change(
+    compound: &CompoundSelector,
+    doc: &Document,
+    node: NodeId,
+    attr: &str,
+) -> bool {
+    let NodeData::Element { name, attrs } = &doc.get(node).data else {
+        return false;
+    };
+    compound.parts.iter().all(|part| match part {
+        SimpleSelector::PseudoElement(_) | SimpleSelector::PseudoClass(_) => true,
+        p if simple_selector_keys_on_attr(p, attr) => true,
+        other => matches_simple(other, doc, node, &name.local, attrs),
+    })
+}
+
+/// BUG-341 S17 — what [`restyle_root_set_for_node_change`] needs to know about
+/// the stylesheet in play, computed once per layout pass.
+///
+/// The DOM-mutation counterpart of [`StateRestyleIndex`], and built from the
+/// same single scan over every rule list in the sheet.
+pub struct NodeRestyleIndex<'a> {
+    /// Every compound in `sheet` from which a sibling combinator is reachable
+    /// ([`collect_sibling_source_compounds`]).
+    sibling_sources: Vec<&'a CompoundSelector>,
+    /// The per-node narrowing below is unsound for this document/sheet pair, so
+    /// every changed node widens to its parent (pre-S17 behaviour). Set by
+    /// `:has()` anywhere in the sheet (BUG-348's direction, deliberately left
+    /// exactly as it was), by `:nth-child(… of S)` (sibling reach with no
+    /// combinator to see it) or by the presence of any shadow root (shadow-tree
+    /// sheets are not scanned here — the same carve-out S7 made).
+    conservative: bool,
+}
+
+impl NodeRestyleIndex<'_> {
+    /// Whether per-node narrowing is disabled for this document/sheet pair.
+    pub fn is_conservative(&self) -> bool {
+        self.conservative
+    }
+
+    /// Number of sibling-reachable compounds the narrowing tests each changed
+    /// node against. Exposed for the count-based regression gates.
+    pub fn sibling_source_count(&self) -> usize {
+        self.sibling_sources.len()
+    }
+
+    /// Can a write to `node`'s `attr` attribute change the computed style of
+    /// anything *outside* `node`'s own subtree?
+    ///
+    /// Only through a compound that (a) is followed by a sibling combinator and
+    /// (b) can match `node` itself. If no such compound exists, every rule the
+    /// write can affect resolves inside `node`'s subtree, and the root-set needs
+    /// `node` alone rather than its parent.
+    pub fn attr_change_needs_fanout(&self, doc: &Document, node: NodeId, attr: &str) -> bool {
+        if self.conservative {
+            return true;
+        }
+        self.sibling_sources
+            .iter()
+            .any(|c| compound_could_match_after_attr_change(c, doc, node, attr))
+    }
+}
+
+/// BUG-341 S17 — builds the [`NodeRestyleIndex`] for one layout pass.
+///
+/// Costs one scan of the sheet's selectors (the same shape as
+/// [`restyle_state_index`]), then one structural match per changed node per
+/// sibling-reachable compound.
+pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRestyleIndex<'a> {
+    let mut conservative = document_has_shadow_roots(doc);
+    let mut sibling_sources = Vec::new();
+    for rules in stylesheet_rule_groups(sheet) {
+        for rule in rules {
+            for selector in &rule.selectors {
+                conservative |= complex_selector_has_any_has(selector);
+                conservative |= complex_selector_has_nth_of(selector);
+                collect_sibling_source_compounds(selector, &mut sibling_sources);
+            }
+        }
+    }
+    NodeRestyleIndex { sibling_sources, conservative }
+}
+
+/// BUG-341 S17 — one reported DOM mutation, as
+/// [`restyle_root_set_for_node_change`] needs to see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeChange<'a> {
+    /// The attribute named `.0` was written to, or removed from, the node. The
+    /// name is what lets the root-set ask which selectors could possibly react.
+    Attr(&'a str),
+    /// Something else changed, or the source cannot name what changed: a child
+    /// list moved (`:nth-child`, `:empty` and sibling combinators all react to
+    /// that, and no attribute name describes it), or the mutation came from a
+    /// tracker that does not record names (page-side JS). Always takes the
+    /// conservative widen-to-parent path — the pre-S17 behaviour for everything.
+    Unattributed,
+}
+
+/// BUG-341 S3/S17 — restyle root-set (brief §4) for DOM attribute/class/
+/// structural changes (chrome `bind_model` diff or a JS DOM mutation).
+///
+/// Class/attribute/structural selectors don't match ancestors *by themselves*,
+/// so the changed node's own subtree covers the node itself and every
+/// descendant selector rooted at it (`node X`). What reaches *outside* that
+/// subtree is a sibling combinator (`node + X`, `node ~ X`), which the pre-S17
+/// version covered by unconditionally invalidating the parent's whole subtree.
+///
+/// S17 asks the S14 question of that widening: which selectors could react to
+/// *this* attribute on *this* node? A `value` write on chrome's omnibox input
+/// re-cascaded all 12 elements of `div.omnibox` — and the census found all 12
+/// produced a byte-identical `ComputedStyle`, because `chrome.html` has no
+/// sibling combinator that could match `#omniInput` (in fact none at all).
+/// `index` — from [`restyle_node_index`] — is what answers that per node and
+/// per attribute name; a change reported as [`NodeChange::Unattributed`], or a
+/// sheet the index declares conservative, keeps the old widen-to-parent
+/// behaviour exactly.
+///
+/// A node with no parent (the document root) invalidates itself either way.
+///
+/// **Known gap (BUG-348):** this does *not* account for `:has()` — which this
+/// engine does implement (`PseudoClass::Has`, `style.rs`'s `matches_relative`)
+/// — so a change on a node that flips some ancestor `E`'s `:has(...)` result is
+/// not invalidated by this function at all (`E` is outside the node's parent's
+/// subtree whenever `E` is more than one level up). Unchanged by S17: a sheet
+/// containing any `:has()` is `conservative`, i.e. keeps the pre-S17 root-set
+/// verbatim. No fixture currently exercises this combination; see BUG-348 for
+/// the full writeup.
+///
+/// **Second known gap, same family:** `:indeterminate` on a radio group and
+/// `:default` on a form's submit button read *other* elements' `name`/`checked`/
+/// `type` attributes across the whole form. Like `:has()`, that reach is
+/// document-shaped rather than subtree-shaped, so neither the pre-S17
+/// widen-to-parent nor S17's narrowing expresses it — pre-existing, not
+/// introduced here.
+pub fn restyle_root_set_for_node_change<'a>(
+    doc: &Document,
+    changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
+    index: &NodeRestyleIndex<'_>,
+) -> HashSet<NodeId> {
+    changes
+        .into_iter()
+        .map(|(n, change)| {
+            let needs_fanout = match change {
+                NodeChange::Unattributed => true,
+                NodeChange::Attr(attr) => index.attr_change_needs_fanout(doc, n, attr),
+            };
+            if needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n }
+        })
+        .collect()
 }
 
 thread_local! {
@@ -10939,9 +12412,15 @@ pub fn print_media_active() -> bool {
 ///
 /// Capture a `StyleEnvSnapshot` on the layout thread immediately before
 /// spawning parallel work, then call [`StyleEnvSnapshot::install`] at the top
-/// of every rayon closure. This restores the correct state on each worker thread
-/// and calls [`invalidate_rule_idx_cache`] so the per-thread rule-index cache
-/// starts fresh (it is rebuilt lazily per worker, which is correct).
+/// of every rayon closure. This restores the correct state on each worker
+/// thread.
+///
+/// It deliberately does **not** touch the per-thread rule-index cache. It used
+/// to drop it, because that cache was keyed by the sheet's address; keyed by
+/// [`Stylesheet::revision`] it is safe to keep, and keeping it is the point —
+/// a full pass fans out repeatedly, and dropping the index on every install
+/// made each worker rebuild it every time (33 rebuilds per full pass, BUG-341
+/// S21).
 ///
 /// Shadow sheets are cloned from the current thread into the snapshot; for
 /// documents without shadow DOM this is a cheap empty-map clone.
@@ -10969,9 +12448,6 @@ impl StyleEnvSnapshot {
     }
 
     /// Install this snapshot on the **current** (worker) thread.
-    ///
-    /// Also calls [`invalidate_rule_idx_cache`] to ensure the thread's
-    /// rule-index cache is reset before any `compute_style` calls.
     pub fn install(&self) {
         HOVER_NID.with(|h| h.set(self.hover_nid));
         FOCUS_NID.with(|f| f.set(self.focus_nid));
@@ -10979,33 +12455,61 @@ impl StyleEnvSnapshot {
         FORCED_COLORS.with(|f| f.set(self.forced_colors));
         PRINT_MEDIA.with(|p| p.set(self.print_media));
         SHADOW_SHEETS.with(|m| *m.borrow_mut() = self.shadow_sheets.clone());
-        invalidate_rule_idx_cache();
     }
 }
 
-/// CSS Cascade L6 §5.1 — true when `node` is a descendant of (or is) an element
-/// matching any selector in `root_sel_str`. Empty `root_sel_str` → always true
-/// (implicit scope = document root, i.e. the rule applies everywhere).
-fn node_is_in_scope(doc: &Document, node: NodeId, root_sel_str: &str) -> bool {
-    if root_sel_str.trim().is_empty() {
-        return true;
-    }
-    let selectors = lumen_css_parser::parse_selector_list(root_sel_str);
-    if selectors.is_empty() {
+/// CSS Cascade L6 §3 — donut scoping. Returns `true` when `node` is inside the
+/// scope rooted at `root_sel_str` and bounded (below, in the tree) by the
+/// optional `limit_sel_str` (`@scope (<root>) to (<limit>)`).
+///
+/// An element is *in scope* iff it is an inclusive descendant of a scoping-root
+/// element and it is **not** an inclusive descendant of a scoping limit that
+/// lies *within that same root subtree* (the donut hole, §3.2). Root and limit
+/// are resolved in a single ancestor walk so the **nearest** boundary wins: a
+/// limit-matching element *above* the scope root does not remove `node` from
+/// scope (walking up, the root is reached first).
+///
+/// Empty `root_sel_str` (`@scope { … }` without an explicit `(<root>)`) →
+/// implicit scope = document root: every element is in scope unless it sits
+/// under a limit.
+fn node_in_scope(
+    doc: &Document,
+    node: NodeId,
+    root_sel_str: &str,
+    limit_sel_str: Option<&str>,
+) -> bool {
+    let root_empty = root_sel_str.trim().is_empty();
+    let root_selectors = if root_empty {
+        Vec::new()
+    } else {
+        lumen_css_parser::parse_selector_list(root_sel_str)
+    };
+    if !root_empty && root_selectors.is_empty() {
         return false;
     }
-    // Walk node and its ancestors; return true if any matches the scope root.
+    let limit_selectors = limit_sel_str
+        .filter(|s| !s.trim().is_empty())
+        .map(lumen_css_parser::parse_selector_list)
+        .unwrap_or_default();
+    // Walk `node` and its ancestors. The first boundary encountered decides:
+    // a limit (inclusive) → out of scope; a root (inclusive) → in scope.
     let mut cur = Some(node);
     while let Some(n) = cur {
         if n == doc.root() { break; }
-        for complex in &selectors {
+        for complex in &limit_selectors {
+            if matches_complex(complex, doc, n) {
+                return false;
+            }
+        }
+        for complex in &root_selectors {
             if matches_complex(complex, doc, n) {
                 return true;
             }
         }
         cur = doc.get(n).parent;
     }
-    false
+    // No explicit root: implicit document-root scope (only limits cut off).
+    root_empty
 }
 
 /// Returns `true` if `ancestor` is `node` itself, or a proper ancestor of `node` in the tree.
@@ -11075,6 +12579,16 @@ pub enum Length {
     Em(f32),
     /// `rem` — относительно font-size корня документа (ROOT_FONT_SIZE).
     Rem(f32),
+    /// CSS Values L4 §5.1.1 — `ch`: advance measure (width) of the "0" (U+0030)
+    /// glyph in the element's own font. Resolved to px against the font-metric
+    /// thread-local `FONT_CH_EX` (set per box by `lay_out_inner` from the active
+    /// `TextMeasurer`). When that metric is unavailable (outside a layout pass, or
+    /// no measurer), spec §5.1.1 says to assume the "0" glyph is `0.5em` wide.
+    Ch(f32),
+    /// CSS Values L4 §5.1.1 — `ex`: the used x-height of the element's own font.
+    /// Resolved via the same `FONT_CH_EX` thread-local; the spec fallback when the
+    /// metric is unavailable is `0.5em` (the assumed x-height).
+    Ex(f32),
     /// `%` — процент. Базис зависит от свойства: для `font-size` это
     /// `em_basis`, для `line-height` — текущий font-size, для
     /// margin/padding/width — containing block width (Phase 0 пока не считает,
@@ -11418,6 +12932,15 @@ impl Length {
             Length::Px(v) => Some(*v),
             Length::Em(v) => Some(*v * em_basis),
             Length::Rem(v) => Some(*v * ROOT_FONT_SIZE),
+            // CSS Values L4 §5.1.1 — `ch`/`ex` against the box's own font metrics
+            // (thread-local `FONT_CH_EX`, absolute px per unit). Outside a layout
+            // pass the metric is unavailable → spec fallback of `0.5em`.
+            Length::Ch(v) => {
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(ch, _)| *v * ch))
+            }
+            Length::Ex(v) => {
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(_, ex)| *v * ex))
+            }
             Length::Percent(v) => percent_basis.map(|b| *v / 100.0 * b),
             Length::Vh(v) => Some(*v / 100.0 * viewport.height),
             Length::Vw(v) => Some(*v / 100.0 * viewport.width),
@@ -11523,15 +13046,16 @@ fn parse_length_q(s: &str, is_quirks: bool) -> Option<Length> {
         return num.trim().parse::<f32>().ok().map(Length::Rem);
     }
     // ── Font-relative units ──────────────────────────────────────────────────
-    // `ch` = advance width of '0' glyph; Phase 0 approximation: 0.5em.
-    // `ex` = x-height; Phase 0 approximation: 0.5em.
+    // `ch` = advance width of the '0' glyph; `ex` = x-height. Both resolve to px
+    // against the box's real font metrics at layout time (`FONT_CH_EX`), with a
+    // `0.5em` spec fallback (CSS Values L4 §5.1.1).
     // `cap` = cap-height; Phase 0 approximation: 0.7em.
     // `lh` = computed line-height; Phase 0 approximation: 1.2em.
     if let Some(num) = s.strip_suffix("ch") {
-        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.5));
+        return num.trim().parse::<f32>().ok().map(Length::Ch);
     }
     if let Some(num) = s.strip_suffix("ex") {
-        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.5));
+        return num.trim().parse::<f32>().ok().map(Length::Ex);
     }
     if let Some(num) = s.strip_suffix("cap") {
         return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.7));
@@ -12018,18 +13542,14 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
     }
     let length = match unit {
         "px" => Length::Px(value),
-        "em" | "rem" | "ch" | "ex" | "cap" | "lh" => {
-            // Font-relative units: rem uses root size; ch/ex/cap/lh are
-            // approximated as em-fractions (Phase 0, no font metrics API).
-            let factor = match unit {
-                "rem" => { return Some(CalcNode::Length(Length::Rem(value))); }
-                "ch" | "ex" => 0.5,
-                "cap" => 0.7,
-                "lh" => 1.2,
-                _ => 1.0,
-            };
-            Length::Em(value * factor)
-        }
+        "rem" => Length::Rem(value),
+        // `ch`/`ex` carry their own variants (resolved against real font metrics
+        // at layout time); `cap`/`lh` stay em-approximated (Phase 0, no metric).
+        "ch" => Length::Ch(value),
+        "ex" => Length::Ex(value),
+        "em" => Length::Em(value),
+        "cap" => Length::Em(value * 0.7),
+        "lh" => Length::Em(value * 1.2),
         "vh" => Length::Vh(value),
         "vw" => Length::Vw(value),
         "vmin" => Length::Vmin(value),
@@ -19566,6 +21086,10 @@ fn resolve_font_size(
         Length::Px(v) => *v,
         Length::Em(v) => *v * parent_fs,
         Length::Rem(v) => *v * ROOT_FONT_SIZE,
+        // CSS Values L4 §5.1.1 — font-relative units on `font-size` itself refer to
+        // the *parent* font. Real ch/ex metrics for the parent are not available at
+        // computed-value time, so use the spec `0.5em` fallback against `parent_fs`.
+        Length::Ch(v) | Length::Ex(v) => *v * 0.5 * parent_fs,
         Length::Percent(v) => *v / 100.0 * parent_fs,
         Length::Vh(v) => *v / 100.0 * viewport.height,
         Length::Vw(v) => *v / 100.0 * viewport.width,
@@ -19617,7 +21141,9 @@ fn apply_line_height_value(style: &mut ComputedStyle, val: &str, em_basis: f32, 
                 style.line_height = v * ROOT_FONT_SIZE / style.font_size;
             }
             Length::Percent(v) => style.line_height = v / 100.0,
-            Length::Vh(_)
+            Length::Ch(_)
+            | Length::Ex(_)
+            | Length::Vh(_)
             | Length::Vw(_)
             | Length::Vmin(_)
             | Length::Vmax(_)
@@ -19686,6 +21212,7 @@ fn is_font_size_token(tok: &str) -> bool {
         return true;
     }
     matches!(parse_length_q(tok, false), Some(Length::Px(_) | Length::Em(_) | Length::Rem(_)
+        | Length::Ch(_) | Length::Ex(_)
         | Length::Percent(_) | Length::Vh(_) | Length::Vw(_) | Length::Vmin(_) | Length::Vmax(_)))
 }
 
@@ -21732,6 +23259,79 @@ mod tests {
     }
 
     #[test]
+    fn webkit_scrollbar_width_maps_to_scrollbar_width_keyword() {
+        // CC-CSS-1: `::-webkit-scrollbar{width}` has no standard keyword equivalent —
+        // bucketed into thin (<=9px) vs auto (>9px). The chrome reference's own
+        // 9px falls on the `thin` side of the bucket boundary.
+        // BUG-341 S11: the translation only runs for elements that can show a
+        // scrollbar, so the subject has to be a scroll container.
+        let sheet = lumen_css_parser::parse(
+            "div { overflow: auto; } div::-webkit-scrollbar { width: 9px; }",
+        );
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let did = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        assert_eq!(st.scrollbar_width, ScrollbarWidth::Thin);
+
+        let sheet = lumen_css_parser::parse(
+            "div { overflow: auto; } div::-webkit-scrollbar { width: 16px; }",
+        );
+        let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        assert_eq!(st.scrollbar_width, ScrollbarWidth::Auto);
+
+        let sheet = lumen_css_parser::parse(
+            "div { overflow: auto; } div::-webkit-scrollbar { width: 0; }",
+        );
+        let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        assert_eq!(st.scrollbar_width, ScrollbarWidth::None);
+    }
+
+    #[test]
+    fn webkit_scrollbar_thumb_track_map_to_scrollbar_color() {
+        // CC-CSS-1: `-thumb`/`-track{background}` translate onto the standard
+        // `scrollbar-color` (thumb, track) pair — chrome reference pattern.
+        let sheet = lumen_css_parser::parse(
+            "div { overflow: auto; } \
+             div::-webkit-scrollbar-thumb { background: #112233; } \
+             div::-webkit-scrollbar-track { background: #445566; }",
+        );
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let did = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        let (thumb, track) = st.scrollbar_color.expect("scrollbar-color should be set");
+        assert_eq!(thumb, Color { r: 0x11, g: 0x22, b: 0x33, a: 255 });
+        assert_eq!(track, Color { r: 0x44, g: 0x55, b: 0x66, a: 255 });
+    }
+
+    #[test]
+    fn webkit_scrollbar_thumb_without_track_leaves_scrollbar_color_unset() {
+        // Only one side declared: no honest per-side default to graft onto the
+        // missing side, so the standard `scrollbar-color` stays untouched (falls
+        // back to UA defaults in paint) rather than fabricating a track color.
+        let sheet = lumen_css_parser::parse(
+            "div { overflow: auto; } div::-webkit-scrollbar-thumb { background: #112233; }",
+        );
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let did = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        assert_eq!(st.scrollbar_color, None);
+    }
+
+    #[test]
+    fn webkit_font_smoothing_is_parsed_and_ignored() {
+        // -webkit-font-smoothing has no Lumen equivalent (rasterizer antialiasing
+        // is always on) — the declaration must not error or drop the rest of the
+        // rule; it just falls through apply_declaration's catch-all as a no-op.
+        let sheet = lumen_css_parser::parse(
+            "p { -webkit-font-smoothing: antialiased; color: rgb(1, 2, 3); }",
+        );
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(&doc, pid, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        assert_eq!(st.color, Color { r: 1, g: 2, b: 3, a: 255 });
+    }
+
+    #[test]
     fn math_properties_apply_declaration() {
         // MathML Core: оба свойства доезжают до ComputedStyle через каскад.
         let sheet = lumen_css_parser::parse("p { math-style: compact; math-depth: 2; }");
@@ -22592,6 +24192,37 @@ mod tests {
         assert_eq!(Length::Percent(50.0).resolve(16.0, None, vp()), None);
     }
 
+    // ── CSS Values L4 §5.1.1 — ch / ex font-relative units ────────────────
+    #[test]
+    fn parse_length_recognizes_ch_ex() {
+        assert_eq!(parse_length("60ch"), Some(Length::Ch(60.0)));
+        assert_eq!(parse_length("2.5ex"), Some(Length::Ex(2.5)));
+        // ch/ex are valid <font-size> tokens (font shorthand relies on this).
+        assert!(is_font_size_token("2ch"));
+        assert!(is_font_size_token("2ex"));
+    }
+
+    #[test]
+    fn length_resolve_ch_ex_fallback_is_half_em() {
+        // Outside a layout pass FONT_CH_EX is unset → spec 0.5em fallback:
+        // 10ch at em_basis 20 = 10 * 0.5 * 20 = 100.
+        pop_ch_ex_context(None);
+        assert_eq!(Length::Ch(10.0).resolve(20.0, None, vp()), Some(100.0));
+        assert_eq!(Length::Ex(4.0).resolve(20.0, None, vp()), Some(40.0));
+    }
+
+    #[test]
+    fn length_resolve_ch_ex_uses_font_metric_context() {
+        // With real metrics published (ch = 9px, ex = 7px per unit) the em_basis
+        // is ignored — the absolute per-unit px drives the result.
+        let prev = push_ch_ex_context(Some((9.0, 7.0)));
+        assert_eq!(Length::Ch(3.0).resolve(20.0, None, vp()), Some(27.0));
+        assert_eq!(Length::Ex(2.0).resolve(20.0, None, vp()), Some(14.0));
+        pop_ch_ex_context(prev);
+        // Context restored → fallback again.
+        assert_eq!(Length::Ch(1.0).resolve(20.0, None, vp()), Some(10.0));
+    }
+
     // ── viewport units ────────────────────────────────────────────────────
 
     #[test]
@@ -23097,6 +24728,480 @@ mod tests {
     }
 
     // ──────────────── CSS Variables L1: custom properties + var() ────────────────
+
+    // BUG-341 S9 — gates by *identity*, not by output.
+    //
+    // Every assertion elsewhere in this file checks what `custom_props`
+    // contains, and a per-node deep copy satisfies all of them; it is just
+    // slow. That is the exact failure mode S8 uncovered in `graft_geometry`
+    // (a reuse mechanism that reused nothing passed every differential test).
+    // So the sharing itself has to be asserted, by pointer.
+
+    // ── BUG-341 S10: per-node pseudo-element cascades ────────────────────
+    //
+    // The profile of the *incremental* path (not the full-layout profile in
+    // the brief's §1) put 55% of `compute_style` in the three
+    // `::-webkit-scrollbar*` cascades run for every element, and most of the
+    // rest of `precompute_counters` in the `::before`/`::after` probe run for
+    // every node — including nodes whose style was reused wholesale. Neither
+    // shows up in any differential test, because doing the work and throwing
+    // the result away produces identical output. Hence counter gates.
+
+    /// Elements in `html`, each with its own computed style, cascaded in
+    /// document order so parent styles are the real inherited ones.
+    fn cascade_all(html: &str, css: &str) -> Vec<(String, ComputedStyle)> {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = Size::new(800.0, 600.0);
+        let mut out = Vec::new();
+        let mut stack = vec![(doc.root(), ComputedStyle::root())];
+        while let Some((id, inherited)) = stack.pop() {
+            let style = compute_style(&doc, id, &sheet, &inherited, vp, false);
+            for &child in doc.get(id).children.iter().rev() {
+                stack.push((child, style.clone()));
+            }
+            if let Some(q) = doc.get(id).element_name() {
+                out.push((q.local.to_string(), style));
+            }
+        }
+        out
+    }
+
+    /// The one element with tag `tag` in a `cascade_all` result.
+    fn only(styles: &[(String, ComputedStyle)], tag: &str) -> ComputedStyle {
+        let mut found = styles.iter().filter(|(t, _)| t == tag);
+        let style = found.next().unwrap_or_else(|| panic!("no <{tag}> cascaded")).1.clone();
+        assert!(found.next().is_none(), "more than one <{tag}>");
+        style
+    }
+
+    #[test]
+    fn webkit_scrollbar_cascade_skipped_when_sheet_declares_none() {
+        reset_scrollbar_pseudo_cascades();
+        let styles = cascade_all(
+            "<div><p>a</p><p>b</p></div>",
+            "div { color: red; } p { margin: 1px; }",
+        );
+        assert!(styles.len() >= 4, "html/body/div/p… all cascaded");
+        assert_eq!(
+            scrollbar_pseudo_cascades(),
+            0,
+            "a sheet without a `::-webkit-scrollbar*` rule must not run the \
+             pseudo-element cascade even once"
+        );
+    }
+
+    // BUG-341 S11: the translation runs only where a scrollbar can appear.
+    // `element_can_have_scrollbar`'s doc comment has the reasoning; these pin
+    // both halves of it — that scroll containers still get styled, and that
+    // nothing else pays for (or inherits) the translation.
+
+    #[test]
+    fn webkit_scrollbar_cascade_only_for_scroll_containers() {
+        reset_scrollbar_pseudo_cascades();
+        let styles = cascade_all(
+            "<div class='sc'>a</div><section><p>b</p></section>",
+            ".sc::-webkit-scrollbar { width: 0; } .sc { overflow-y: auto; }",
+        );
+        assert_eq!(
+            only(&styles, "div").scrollbar_width,
+            ScrollbarWidth::None,
+            "a scroll container must still pick up its `::-webkit-scrollbar` rule"
+        );
+        assert_eq!(
+            only(&styles, "section").scrollbar_width,
+            ScrollbarWidth::Auto,
+            "an element outside the scroll container's subtree is untouched"
+        );
+        // `<html>` and `<body>` are in the gate unconditionally (they are the
+        // conventional page-scrollbar target), plus the one real scroll
+        // container — everything else is skipped.
+        assert_eq!(
+            scrollbar_pseudo_cascades(),
+            3,
+            "only html, body and the scroll container may cascade"
+        );
+    }
+
+    #[test]
+    fn webkit_scrollbar_translation_does_not_leak_from_a_non_scrollable_element() {
+        // The behaviour BUG-341 S11 removed: a `::-webkit-scrollbar` rule
+        // matching a *non-scrollable* element used to write the inherited
+        // `scrollbar-width` there, from where every descendant picked it up.
+        reset_scrollbar_pseudo_cascades();
+        let styles = cascade_all(
+            "<div class='plain'><p class='sc'>a</p></div>",
+            ".plain::-webkit-scrollbar { width: 0; } .sc { overflow: auto; }",
+        );
+        assert_eq!(
+            only(&styles, "div").scrollbar_width,
+            ScrollbarWidth::Auto,
+            "`.plain` cannot show a scrollbar, so its rule must not apply"
+        );
+        assert_eq!(
+            only(&styles, "p").scrollbar_width,
+            ScrollbarWidth::Auto,
+            "and the scrollable descendant, which matches no rule of its own, \
+             must not inherit it — WebKit has no such inheritance"
+        );
+    }
+
+    #[test]
+    fn webkit_scrollbar_bare_rule_still_reaches_the_page_through_body() {
+        // A bare `::-webkit-scrollbar` (the common page-scrollbar idiom, and
+        // what `assets/chrome/chrome.html` uses) matches `<body>`, which is in
+        // the gate unconditionally — so the standard inherited property carries
+        // the value down exactly as before S11. Nothing on a real page changes.
+        let styles = cascade_all(
+            "<div><p>a</p></div>",
+            "::-webkit-scrollbar { width: 9px; }",
+        );
+        assert_eq!(only(&styles, "body").scrollbar_width, ScrollbarWidth::Thin);
+        assert_eq!(only(&styles, "p").scrollbar_width, ScrollbarWidth::Thin);
+    }
+
+    #[test]
+    fn webkit_scrollbar_cascade_skipped_for_overflow_hidden() {
+        reset_scrollbar_pseudo_cascades();
+        let styles = cascade_all(
+            "<div class='clip'>a</div>",
+            ".clip::-webkit-scrollbar { width: 0; } .clip { overflow: hidden; }",
+        );
+        // `overflow: hidden` scrolls programmatically but draws no bar — the
+        // same condition paint's `emit_scrollbars` uses.
+        assert_eq!(only(&styles, "div").scrollbar_width, ScrollbarWidth::Auto);
+        assert_eq!(scrollbar_pseudo_cascades(), 2, "html and body only");
+    }
+
+    #[test]
+    fn standard_scrollbar_width_still_inherits() {
+        // The narrowing applies to the `::-webkit-scrollbar*` translation, not
+        // to the standard properties: `scrollbar-width` is inherited by CSS
+        // Scrollbars L1 §2 and must keep reaching non-scrollable descendants.
+        let styles = cascade_all("<div><p>a</p></div>", "div { scrollbar-width: thin; }");
+        assert_eq!(only(&styles, "p").scrollbar_width, ScrollbarWidth::Thin);
+    }
+
+    #[test]
+    fn webkit_scrollbar_class_qualified_rule_applies_to_its_scroll_container() {
+        reset_scrollbar_pseudo_cascades();
+        let styles = cascade_all(
+            "<div class='sb'><p>a</p></div>",
+            ".sb::-webkit-scrollbar { width: 0; } .sb { overflow: scroll; }",
+        );
+        assert_eq!(
+            only(&styles, "div").scrollbar_width,
+            ScrollbarWidth::None,
+            "`.sb::-webkit-scrollbar {{ width: 0 }}` must still suppress the bar"
+        );
+        assert_eq!(scrollbar_pseudo_cascades(), 3, "html, body and .sb");
+    }
+
+    #[test]
+    fn pseudo_base_not_built_when_no_rule_matches() {
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("p::after { color: red; }");
+        let vp = Size::new(800.0, 600.0);
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let parent = ComputedStyle::root();
+
+        reset_pseudo_base_builds();
+        assert!(
+            compute_pseudo_element_style(&doc, div, "before", &sheet, &parent, vp, false).is_none()
+        );
+        assert_eq!(
+            pseudo_base_builds(),
+            0,
+            "no `div::before` rule matches — the 302-field starting style must \
+             not be built just to be thrown away"
+        );
+
+        let p = doc.get(div).children[0];
+        reset_pseudo_base_builds();
+        assert!(
+            compute_pseudo_element_style(&doc, p, "after", &sheet, &parent, vp, false).is_none(),
+            "`content` is absent, so ::after still generates nothing"
+        );
+        assert_eq!(pseudo_base_builds(), 1, "a matching rule does build one");
+    }
+
+    #[test]
+    fn sheet_quote_content_flag_tracks_declarations() {
+        let vp = Size::new(800.0, 600.0);
+        let plain = lumen_css_parser::parse("p::before { content: 'x'; }");
+        assert!(!sheet_has_quote_content(&plain, vp, false));
+
+        let quoted = lumen_css_parser::parse("p::before { content: open-quote; }");
+        assert!(sheet_has_quote_content(&quoted, vp, false));
+
+        // Over-approximating is the point: a `var()` can carry `open-quote` in
+        // from a custom property, so any mention anywhere arms the probe.
+        let indirect = lumen_css_parser::parse(":root { --q: open-quote; }");
+        assert!(sheet_has_quote_content(&indirect, vp, false));
+    }
+
+    /// BUG-341 S23 — the predicate that lets callers skip a whole traversal.
+    ///
+    /// It must be exactly as wide as `matches_complex_for_pseudo`, which looks
+    /// only at the **subject** compound: too narrow and a pseudo-element silently
+    /// loses its styling (visible corruption, not a slow frame), too wide and
+    /// the fast path is merely missed.
+    #[test]
+    fn sheet_pseudo_subjects_cover_every_container_and_only_the_subject() {
+        let vp = Size::new(800.0, 600.0);
+
+        let plain = lumen_css_parser::parse("p { color: red; } p::before { content: 'x'; }");
+        assert!(!sheet_targets_pseudo(&plain, vp, false, "first-line"));
+        assert!(sheet_targets_pseudo(&plain, vp, false, "before"));
+
+        // A rule's container decides *whether* it applies, never whether the
+        // sheet mentions the pseudo-element at all — same reasoning as
+        // `all_rules`. Each container must arm the predicate on its own.
+        for css in [
+            "p::first-line { color: red; }",
+            "@media (min-width: 1px) { p::first-line { color: red; } }",
+            "@supports (color: red) { p::first-line { color: red; } }",
+            "@layer base { p::first-line { color: red; } }",
+        ] {
+            let sheet = lumen_css_parser::parse(css);
+            assert!(
+                sheet_targets_pseudo(&sheet, vp, false, "first-line"),
+                "`{css}` must arm the ::first-line predicate"
+            );
+        }
+
+        // Not the subject: `::first-line` cannot match through a descendant
+        // combinator, and `matches_complex_for_pseudo` never looks there either.
+        let non_subject = lumen_css_parser::parse("p::first-line span { color: red; }");
+        assert!(!sheet_targets_pseudo(&non_subject, vp, false, "first-line"));
+
+        // Case-insensitive both ways, and unknown (vendor) names carry through
+        // verbatim — that is how `::-webkit-scrollbar*` reaches the predicate.
+        let mixed = lumen_css_parser::parse("p::FIRST-LINE { color: red; } p::-WEBKIT-SCROLLBAR { width: 0; }");
+        assert!(sheet_targets_pseudo(&mixed, vp, false, "first-line"));
+        assert!(sheet_targets_pseudo(&mixed, vp, false, "-webkit-scrollbar"));
+    }
+
+    /// BUG-341 S23 — `::marker` is the exception the short-circuit must honour.
+    ///
+    /// CSS Lists L3 §2.1 synthesizes a marker style out of `list-style-type`
+    /// with no rule at all, so "the sheet does not mention `::marker`" says
+    /// nothing about whether `compute_pseudo_element_style` should return one.
+    #[test]
+    fn marker_pseudo_style_survives_a_sheet_that_never_mentions_it() {
+        let doc = lumen_html_parser::parse("<ul><li>x</li></ul>");
+        let sheet = lumen_css_parser::parse("li { color: red; }");
+        let vp = Size::new(800.0, 600.0);
+        let li = doc
+            .get(doc.get(doc.body().unwrap()).children[0])
+            .children
+            .iter()
+            .copied()
+            .find(|&n| matches!(doc.get(n).data, NodeData::Element { .. }))
+            .expect("<li>");
+        assert!(!sheet_targets_pseudo(&sheet, vp, false, "marker"));
+        assert!(
+            compute_pseudo_element_style(&doc, li, "marker", &sheet, &ComputedStyle::root(), vp, false)
+                .is_some(),
+            "::marker is generated without a rule and must not be short-circuited"
+        );
+    }
+
+    // ── BUG-341 S21: the cascade index survives the pass that built it ───────
+    //
+    // Gates by counter, not by output: an index rebuilt from scratch on every
+    // node of every pass produces byte-identical styles. Each one asserts both
+    // arms — that the index is reused when it may be, *and* that it is rebuilt
+    // when it must be — because "never reuse" and "never rebuild" are both
+    // trivially passable one-liners, and the second one is silently wrong
+    // styles rather than a slow frame.
+
+    #[test]
+    fn bug341_s21_repeated_cascades_over_one_sheet_build_the_index_once() {
+        let doc = lumen_html_parser::parse("<div class='a'><p id='x'>t</p></div>");
+        let sheet = lumen_css_parser::parse(".a { color: red } #x { color: blue }");
+        let vp = Size::new(800.0, 600.0);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        clear_rule_idx_cache();
+        let _ = take_cascade_index_stats();
+        let first = compute_style(&doc, div, &sheet, &root, vp, false);
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            1,
+            "a cold thread must index the sheet once"
+        );
+
+        for _ in 0..20 {
+            let s = compute_style(&doc, div, &sheet, &root, vp, false);
+            assert_eq!(s.color, first.color, "the reused index must match the same rules");
+        }
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            0,
+            "the index is keyed by `Stylesheet::revision`, which did not change — \
+             rebuilding it again is pure waste that no differential test can see"
+        );
+    }
+
+    #[test]
+    fn bug341_s21_a_mutated_sheet_is_reindexed_and_its_new_rules_apply() {
+        let doc = lumen_html_parser::parse("<div class='a'>t</div>");
+        let mut sheet = lumen_css_parser::parse(".a { color: red }");
+        let vp = Size::new(800.0, 600.0);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        clear_rule_idx_cache();
+        let _ = take_cascade_index_stats();
+        let before = compute_style(&doc, div, &sheet, &root, vp, false);
+        assert_eq!(take_cascade_index_stats().builds, 1);
+
+        // A rule added after the index was built. Note the added rule keeps the
+        // sheet's `rules.len()` growing, which the old address-plus-length key
+        // also caught — the point of the assertion is the *new* key: the
+        // revision moved, so the stale index cannot be served.
+        sheet.merge_from(lumen_css_parser::parse(".a { color: green }"));
+        let after = compute_style(&doc, div, &sheet, &root, vp, false);
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            1,
+            "a sheet whose rules changed must be re-indexed"
+        );
+        assert_ne!(
+            before.color, after.color,
+            "the rule added after the index was built must actually apply — this is \
+             the arm that fails if the cache is keyed by something that does not \
+             move when the sheet's content does"
+        );
+    }
+
+    #[test]
+    fn bug341_s21_a_resize_reindexes_because_it_changes_which_media_blocks_apply() {
+        let doc = lumen_html_parser::parse("<div class='a'>t</div>");
+        let sheet = lumen_css_parser::parse(
+            ".a { color: red } @media (min-width: 900px) { .a { color: green } }",
+        );
+        let narrow = Size::new(800.0, 600.0);
+        let wide = Size::new(1000.0, 600.0);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        clear_rule_idx_cache();
+        let _ = take_cascade_index_stats();
+        let a = compute_style(&doc, div, &sheet, &root, narrow, false);
+        let b = compute_style(&doc, div, &sheet, &root, wide, false);
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            2,
+            "`active_media` is baked into the index, so the viewport is part of its key"
+        );
+        assert_ne!(a.color, b.color, "the `@media` block must take effect at 1000px");
+    }
+
+    #[test]
+    fn bug341_s21_two_documents_on_one_thread_do_not_evict_each_other() {
+        // The shape a real frame has: the browser's own chrome and the page it
+        // shows are laid out on the same thread, one after the other. With a
+        // single cache slot each pass would evict the other's index and rebuild
+        // it — the per-pass rebuild this slice removed, reintroduced by the
+        // cache's size rather than by its key.
+        let doc = lumen_html_parser::parse("<div class='a'>t</div>");
+        let chrome = lumen_css_parser::parse(".a { color: red }");
+        let page = lumen_css_parser::parse(".a { color: blue }");
+        let vp = Size::new(800.0, 600.0);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        clear_rule_idx_cache();
+        let _ = take_cascade_index_stats();
+        for _ in 0..10 {
+            let c = compute_style(&doc, div, &chrome, &root, vp, false);
+            let p = compute_style(&doc, div, &page, &root, vp, false);
+            assert_ne!(c.color, p.color, "each sheet must be matched with its own index");
+        }
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            2,
+            "one index per sheet, not one per alternation"
+        );
+
+        // The eviction arm: a third sheet does push the least-recently-used one
+        // out, so the cache stays bounded rather than growing per navigation.
+        let third = lumen_css_parser::parse(".a { color: yellow }");
+        let _ = compute_style(&doc, div, &third, &root, vp, false);
+        let _ = take_cascade_index_stats();
+        let _ = compute_style(&doc, div, &chrome, &root, vp, false);
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            1,
+            "the cache holds {CASCADE_INDEX_SLOTS} sheets, so the oldest is re-indexed"
+        );
+    }
+
+    #[test]
+    fn custom_props_shared_with_parent_when_child_declares_none() {
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { --gap: 8px; }");
+        let vp = Size::new(800.0, 600.0);
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, vp, false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, vp, false);
+
+        assert_eq!(p_style.custom_props.get("--gap").map(String::as_str), Some("8px"));
+        assert!(
+            div_style.custom_props.ptr_eq(&p_style.custom_props),
+            "a child that declares no custom property must share its parent's map, \
+             not copy it — see CustomProps"
+        );
+    }
+
+    #[test]
+    fn custom_props_copy_on_write_when_child_declares_one() {
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { --gap: 8px; } p { --pad: 2px; }");
+        let vp = Size::new(800.0, 600.0);
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, vp, false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, vp, false);
+
+        assert!(
+            !div_style.custom_props.ptr_eq(&p_style.custom_props),
+            "a child that declares its own property must have forked the map"
+        );
+        // The fork must not have been visible upwards.
+        assert_eq!(p_style.custom_props.get("--gap").map(String::as_str), Some("8px"));
+        assert_eq!(p_style.custom_props.get("--pad").map(String::as_str), Some("2px"));
+        assert!(div_style.custom_props.get("--pad").is_none());
+    }
+
+    #[test]
+    fn custom_props_empty_map_is_a_shared_singleton() {
+        // Documents that declare no custom property at all must not allocate
+        // one map per node — every empty `CustomProps` is the same allocation,
+        // so `ComputedStyle`'s own `PartialEq` short-circuits on it too.
+        let a = ComputedStyle::root();
+        let b = ComputedStyle::root();
+        assert!(a.custom_props.is_empty());
+        assert!(a.custom_props.ptr_eq(&b.custom_props));
+    }
+
+    #[test]
+    fn custom_props_eq_compares_contents_when_not_shared() {
+        // The pointer check is a fast path, not the semantics: two maps built
+        // independently must still compare equal by content.
+        let a: CustomProps = [("--x".to_string(), "1".to_string())].into_iter().collect();
+        let b: CustomProps = [("--x".to_string(), "1".to_string())].into_iter().collect();
+        assert!(!a.ptr_eq(&b));
+        assert_eq!(a, b);
+        let c: CustomProps = [("--x".to_string(), "2".to_string())].into_iter().collect();
+        assert_ne!(a, c);
+    }
 
     #[test]
     fn custom_prop_stored_in_computed_style() {
@@ -29218,6 +31323,34 @@ mod tests {
         assert_eq!(style.resize, Resize::None);
     }
 
+    #[test]
+    fn resize_allowed_axes_physical() {
+        assert_eq!(Resize::None.allowed_axes(WritingMode::HorizontalTb), (false, false));
+        assert_eq!(Resize::Both.allowed_axes(WritingMode::HorizontalTb), (true, true));
+        assert_eq!(Resize::Horizontal.allowed_axes(WritingMode::HorizontalTb), (true, false));
+        assert_eq!(Resize::Vertical.allowed_axes(WritingMode::HorizontalTb), (false, true));
+        // Physical axes ignore writing-mode.
+        assert_eq!(Resize::Horizontal.allowed_axes(WritingMode::VerticalRl), (true, false));
+        assert_eq!(Resize::Vertical.allowed_axes(WritingMode::VerticalRl), (false, true));
+    }
+
+    #[test]
+    fn resize_allowed_axes_logical() {
+        // horizontal-tb: block-axis = vertical, inline-axis = horizontal.
+        assert_eq!(Resize::Block.allowed_axes(WritingMode::HorizontalTb), (false, true));
+        assert_eq!(Resize::Inline.allowed_axes(WritingMode::HorizontalTb), (true, false));
+        // vertical-rl/lr and sideways-rl/lr: block-axis = horizontal, inline-axis = vertical.
+        for wm in [
+            WritingMode::VerticalRl,
+            WritingMode::VerticalLr,
+            WritingMode::SidewaysRl,
+            WritingMode::SidewaysLr,
+        ] {
+            assert_eq!(Resize::Block.allowed_axes(wm), (true, false));
+            assert_eq!(Resize::Inline.allowed_axes(wm), (false, true));
+        }
+    }
+
     // ── line-break ────────────────────────────────────────────────────────────
 
     #[test]
@@ -31423,6 +33556,87 @@ mod tests {
     }
 
     #[test]
+    fn scope_limit_excludes_donut_hole() {
+        // CSS Cascade L6 §3.2 — `to (<limit>)` carves a donut hole: elements
+        // that are inclusive descendants of a limit *within* the scope are out.
+        let html = r#"<div class="card"><p class="a">A</p><section class="content"><p class="b">B</p></section></div>"#;
+        let sheet = lumen_css_parser::parse(
+            r#"@scope (.card) to (.content) {
+                .a { color: blue; }
+                .b { color: blue; }
+                .content { color: blue; }
+            }"#,
+        );
+        let doc = lumen_html_parser::parse(html);
+        let root = ComputedStyle::root();
+        let card = doc.get(doc.body().unwrap()).children[0];
+        let a = doc.get(card).children[0];
+        let content = doc.get(card).children[1];
+        let b = doc.get(content).children[0];
+        let vp = Size::new(400.0, 400.0);
+        // .a is above the limit → in scope.
+        assert_eq!(
+            compute_style(&doc, a, &sheet, &root, vp, false).color.b, 255,
+            ".a above the limit should be in scope"
+        );
+        // The limit element itself is inclusive → out of scope.
+        assert_eq!(
+            compute_style(&doc, content, &sheet, &root, vp, false).color.b, 0,
+            "the limit element itself should be out of scope"
+        );
+        // .b is a descendant of the limit → out of scope (the donut hole).
+        assert_eq!(
+            compute_style(&doc, b, &sheet, &root, vp, false).color.b, 0,
+            ".b inside the limit should be out of scope"
+        );
+    }
+
+    #[test]
+    fn scope_limit_above_root_does_not_exclude() {
+        // A limit-matching element that sits *above* the scope root must not
+        // remove a node from scope — walking up, the root is reached first.
+        let html = r#"<section class="content"><div class="card"><p class="a">A</p></div></section>"#;
+        let sheet = lumen_css_parser::parse(
+            r#"@scope (.card) to (.content) { .a { color: blue; } }"#,
+        );
+        let doc = lumen_html_parser::parse(html);
+        let root = ComputedStyle::root();
+        let content = doc.get(doc.body().unwrap()).children[0];
+        let card = doc.get(content).children[0];
+        let a = doc.get(card).children[0];
+        let style = compute_style(&doc, a, &sheet, &root, Size::new(400.0, 400.0), false);
+        assert_eq!(
+            style.color.b, 255,
+            ".a should stay in scope: the .content limit is above the .card root"
+        );
+    }
+
+    #[test]
+    fn scope_empty_root_with_limit_carves_hole() {
+        // `@scope { … } to (<limit>)` — implicit document-root scope still
+        // honours the limit: descendants of the limit are excluded.
+        let html = r#"<div class="wrap"><p class="a">A</p><section class="stop"><p class="b">B</p></section></div>"#;
+        let sheet = lumen_css_parser::parse(
+            r#"@scope to (.stop) { .a { color: red; } .b { color: red; } }"#,
+        );
+        let doc = lumen_html_parser::parse(html);
+        let root = ComputedStyle::root();
+        let wrap = doc.get(doc.body().unwrap()).children[0];
+        let a = doc.get(wrap).children[0];
+        let stop = doc.get(wrap).children[1];
+        let b = doc.get(stop).children[0];
+        let vp = Size::new(400.0, 400.0);
+        assert_eq!(
+            compute_style(&doc, a, &sheet, &root, vp, false).color.r, 255,
+            ".a should be in the implicit document scope"
+        );
+        assert_eq!(
+            compute_style(&doc, b, &sheet, &root, vp, false).color.r, 0,
+            ".b under the limit should be excluded even with an empty root"
+        );
+    }
+
+    #[test]
     fn fullscreen_pseudo_matches_sentinel_attr() {
         let html = r#"<div id="el" data-lumen-fullscreen="">x</div>"#;
         let css = r#":fullscreen { color: red; }"#;
@@ -33438,4 +35652,482 @@ mod anchor_positioning_tests {
         assert!(!forced_colors_active(), "forced colors must be false");
     }
 
+}
+
+// ─── BUG-341 S7: hover fan-out narrowing ────────────────────────────────────
+
+#[cfg(test)]
+mod state_fanout_tests {
+    use super::*;
+    use lumen_css_parser::parse as parse_css;
+
+    #[test]
+    fn subject_position_hover_needs_no_fanout() {
+        let sheet = parse_css(".item:hover { color: blue; }");
+        assert!(!stylesheet_needs_state_fanout(&sheet), "hover on the subject alone stays within its own node");
+    }
+
+    #[test]
+    fn descendant_of_hover_needs_no_fanout() {
+        // `.item:hover .icon` — the styled subject (`.icon`) is a descendant
+        // of the hovered node, already covered by invalidating that node's
+        // own subtree without widening to its parent.
+        let sheet = parse_css(".item:hover .icon { color: blue; }");
+        assert!(!stylesheet_needs_state_fanout(&sheet), "descendant combinator after :hover stays within the subtree");
+    }
+
+    #[test]
+    fn next_sibling_of_hover_needs_fanout() {
+        let sheet = parse_css(".item:hover + .item { color: green; }");
+        assert!(stylesheet_needs_state_fanout(&sheet), "`+` after :hover reaches outside the hovered node's subtree");
+    }
+
+    #[test]
+    fn later_sibling_of_hover_needs_fanout() {
+        let sheet = parse_css(".item:hover ~ .item { color: green; }");
+        assert!(stylesheet_needs_state_fanout(&sheet), "`~` after :hover reaches outside the hovered node's subtree");
+    }
+
+    #[test]
+    fn sibling_combinator_before_hover_needs_no_fanout() {
+        // `.a + .b:hover` — the dynamic-state compound (`.b:hover`) IS the
+        // subject; nothing follows it, so no widening is needed even though
+        // an earlier compound in the chain used a sibling combinator.
+        let sheet = parse_css(".a + .b:hover { color: red; }");
+        assert!(!stylesheet_needs_state_fanout(&sheet), "a sibling combinator before the dynamic-state compound doesn't matter");
+    }
+
+    #[test]
+    fn descendant_then_sibling_after_hover_needs_fanout() {
+        // `.item:hover .a ~ .b` — subject `.b` is a sibling of a descendant
+        // of the hovered node, still outside the hovered node's own subtree.
+        let sheet = parse_css(".item:hover .a ~ .b { color: green; }");
+        assert!(stylesheet_needs_state_fanout(&sheet), "a sibling combinator anywhere after the dynamic-state compound needs fanout");
+    }
+
+    #[test]
+    fn is_wrapping_hover_followed_by_sibling_needs_fanout() {
+        let sheet = parse_css(":is(.item:hover) ~ .item { color: green; }");
+        assert!(stylesheet_needs_state_fanout(&sheet), ":is() wrapping a dynamic-state selector must still be detected");
+    }
+
+    #[test]
+    fn not_wrapping_focus_followed_by_sibling_needs_fanout() {
+        let sheet = parse_css(".item:not(.disabled):focus ~ .item { color: green; }");
+        assert!(stylesheet_needs_state_fanout(&sheet), ":not() alongside :focus in the same compound must still be detected");
+    }
+
+    #[test]
+    fn plain_not_without_dynamic_state_needs_no_fanout() {
+        // `:not()` on its own (no dynamic pseudo inside or alongside it) must
+        // not trip the conservative fallback — only :has()-with-dynamic-state
+        // and functional pseudo-classes actually *containing* dynamic state
+        // force it.
+        let sheet = parse_css(".item:not(.disabled) ~ .item { color: red; }");
+        assert!(!stylesheet_needs_state_fanout(&sheet), "a plain :not() with no dynamic pseudo-class must not force fanout");
+    }
+
+    #[test]
+    fn has_with_dynamic_state_always_needs_fanout() {
+        // `:has()`'s search direction isn't modelled by this v1 narrowing —
+        // any dynamic-state pseudo inside it must force the conservative path.
+        let sheet = parse_css("article:has(.child:hover) { color: blue; }");
+        assert!(stylesheet_needs_state_fanout(&sheet), ":has() containing a dynamic-state pseudo must force fanout");
+    }
+
+    #[test]
+    fn has_without_dynamic_state_needs_no_fanout() {
+        let sheet = parse_css("article:has(.child) { color: blue; }");
+        assert!(!stylesheet_needs_state_fanout(&sheet), ":has() with no dynamic-state pseudo inside must not force fanout");
+    }
+
+    #[test]
+    fn rule_inside_media_block_is_scanned() {
+        let sheet = parse_css("@media (min-width: 1px) { .item:hover ~ .item { color: green; } }");
+        assert!(stylesheet_needs_state_fanout(&sheet), "selectors inside @media must be scanned too");
+    }
+
+    #[test]
+    fn shadow_root_forces_conservative_fanout() {
+        let mut doc = lumen_html_parser::parse(r#"<div id="host"></div>"#);
+        let body = doc.body().expect("body");
+        let host = doc.get(body).children[0];
+        doc.attach_shadow(host, lumen_dom::ShadowRootMode::Open);
+        let sheet = parse_css(".item:hover { color: blue; }");
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(
+            index.needs_fanout(),
+            "a document with any shadow root must stay on the conservative path (shadow selectors aren't scanned)",
+        );
+        assert!(index.is_conservative(), "a shadow root must also disable S14's per-node narrowing");
+    }
+
+    #[test]
+    fn no_shadow_root_and_safe_sheet_allows_narrowing() {
+        let doc = lumen_html_parser::parse(r#"<div class="item"></div>"#);
+        let sheet = parse_css(".item:hover { color: blue; }");
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(!index.needs_fanout(), "no shadow roots + no fanout-needing selector must narrow");
+        assert!(!index.is_conservative(), "no shadow roots + no dynamic :has() must allow per-node narrowing");
+    }
+
+    #[test]
+    fn root_set_narrows_to_flipped_nodes_when_no_fanout_needed() {
+        // Real chrome-shaped CSS: `.tab-row:hover` (subject) and
+        // `.tab-row:hover .tab-close` (descendant) — no sibling combinator
+        // anywhere, matching `assets/chrome/chrome.html`'s actual pattern.
+        let html = r#"<ul>
+            <li id="a" class="tab-row"><span class="tab-close"></span></li>
+            <li id="b" class="tab-row"><span class="tab-close"></span></li>
+        </ul>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css(
+            ".tab-row:hover { background: red; } .tab-row:hover .tab-close { display: flex; }",
+        );
+        let a = doc.find_by_id("a").expect("#a");
+        let b = doc.find_by_id("b").expect("#b");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(!index.needs_fanout(), "chrome-shaped hover CSS must not need fanout");
+
+        let roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &index);
+        assert_eq!(
+            roots,
+            [a, b].into_iter().collect::<HashSet<_>>(),
+            "narrowed root-set must be exactly the flipped nodes, not their parents",
+        );
+    }
+
+    #[test]
+    fn root_set_still_widens_to_parent_when_fanout_needed() {
+        let html = r#"<ul>
+            <li id="a" class="item"></li>
+            <li id="b" class="item"></li>
+        </ul>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css(".item:hover + .item { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let b = doc.find_by_id("b").expect("#b");
+        let parent = doc.get(a).parent.expect("#a has a parent");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(index.needs_fanout(), "sibling-combinator hover CSS must need fanout");
+
+        let roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &index);
+        assert_eq!(
+            roots,
+            [parent].into_iter().collect::<HashSet<_>>(),
+            "widened root-set must be the flipped nodes' shared parent",
+        );
+    }
+
+    // ── BUG-341 S14: per-node narrowing of the flipped ancestor chain ────────
+
+    /// The shape CC-12 hits every other cycle and the reason S14 exists: on a
+    /// "nothing was hovered → deep node is hovered" transition `:hover` really
+    /// does flip on every ancestor up to the document root, so the pre-S14
+    /// root-set contained the root and forced a whole-document re-cascade.
+    #[test]
+    fn nothing_hovered_to_deep_node_drops_ancestors_no_hover_rule_can_match() {
+        let html = r#"<main><section><div id="deep"><span>x</span></div></section></main>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css("button:hover { color: red; } .tab-row:hover .icon { display: none; }");
+        let deep = doc.find_by_id("deep").expect("#deep");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(!index.is_conservative(), "plain hover rules must allow narrowing");
+
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(deep), &index);
+        assert!(
+            roots.is_empty(),
+            "no selector can react to hover on #deep or any of its ancestors, so the whole \
+             flipped chain must drop out of the root-set, got {roots:?}",
+        );
+    }
+
+    #[test]
+    fn only_the_ancestors_a_hover_rule_can_match_stay_in_the_root_set() {
+        let html = r#"<main><button id="btn"><span id="label">x</span></button></main>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css("button:hover { color: red; }");
+        let btn = doc.find_by_id("btn").expect("#btn");
+        let label = doc.find_by_id("label").expect("#label");
+
+        let index = restyle_state_index(&doc, &sheet);
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(label), &index);
+        assert_eq!(
+            roots,
+            [btn].into_iter().collect::<HashSet<_>>(),
+            "`button:hover` can only observe the flip on the <button> itself — <main>, <body>, \
+             <html> and the document node must all drop out",
+        );
+    }
+
+    #[test]
+    fn pseudo_element_after_a_hover_compound_still_attributes_to_its_element() {
+        // `.tab:hover::before` — the real matcher strips `::before` before
+        // matching the compound against an element, so the narrowing must not
+        // let the pseudo-element part veto the match.
+        let html = r#"<ul><li id="a" class="tab"></li></ul>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css(".tab:hover::before { content: \"x\"; }");
+        let a = doc.find_by_id("a").expect("#a");
+
+        let index = restyle_state_index(&doc, &sheet);
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(a), &index);
+        assert_eq!(
+            roots,
+            [a].into_iter().collect::<HashSet<_>>(),
+            "a `::before` on a hover compound must keep its element in the root-set",
+        );
+    }
+
+    #[test]
+    fn dynamic_has_disables_per_node_narrowing() {
+        // `:has()` binds the state to a node other than the one carrying the
+        // compound, so S14's "the flip is only observable on the node it
+        // matches" argument does not hold — the whole chain must stay.
+        let html = r#"<main><section><div id="deep"></div></section></main>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css("article:has(.child:hover) { color: blue; }");
+        let deep = doc.find_by_id("deep").expect("#deep");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(index.is_conservative(), "dynamic :has() must disable narrowing");
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(deep), &index);
+        assert!(
+            roots.len() > 1,
+            "the conservative path must keep the whole flipped ancestor chain, got {roots:?}",
+        );
+    }
+
+    #[test]
+    fn shadow_root_disables_per_node_narrowing() {
+        let mut doc = lumen_html_parser::parse(r#"<div id="host"><div id="deep"></div></div>"#);
+        let host = doc.find_by_id("host").expect("#host");
+        doc.attach_shadow(host, lumen_dom::ShadowRootMode::Open);
+        let sheet = parse_css("button:hover { color: red; }");
+        let deep = doc.find_by_id("deep").expect("#deep");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(index.is_conservative(), "a shadow root must disable narrowing (shadow sheets unscanned)");
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(deep), &index);
+        assert!(!roots.is_empty(), "the conservative path must keep the flipped chain, got {roots:?}");
+    }
+
+    #[test]
+    fn state_nested_in_is_matches_conservatively() {
+        // `:is(.tab:hover, .x)` — the narrowing cannot tell which branch the
+        // state sits in, so the whole compound is treated as "could match
+        // anything". Over-approximating costs narrowing, never correctness.
+        let html = r#"<main><div id="deep"></div></main>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css(":is(.tab:hover, .x) { color: red; }");
+        let deep = doc.find_by_id("deep").expect("#deep");
+
+        let index = restyle_state_index(&doc, &sheet);
+        assert!(!index.is_conservative(), ":is() with dynamic state is not the :has() case");
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(deep), &index);
+        assert!(
+            roots.len() > 1,
+            "a compound whose state hides in a nested list must keep the whole chain, got {roots:?}",
+        );
+    }
+
+    #[test]
+    fn focus_within_on_a_matching_ancestor_stays_in_the_root_set() {
+        // `:focus-within` is the one dynamic-state pseudo that legitimately
+        // matches ancestors, and chrome.html uses exactly this shape
+        // (`.omnibox:focus-within`) — the narrowing must keep the matching
+        // ancestor while still dropping the ones above it.
+        let html = r#"<main><div id="ob" class="omnibox"><input id="inp"></div></main>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = parse_css(".omnibox:focus-within { border-color: blue; }");
+        let ob = doc.find_by_id("ob").expect("#ob");
+        let inp = doc.find_by_id("inp").expect("#inp");
+
+        let index = restyle_state_index(&doc, &sheet);
+        let roots = restyle_root_set_for_state_change(&doc, None, Some(inp), &index);
+        assert_eq!(
+            roots,
+            [ob].into_iter().collect::<HashSet<_>>(),
+            "the `.omnibox` ancestor observes `:focus-within`; nothing above it does",
+        );
+    }
+}
+
+// ─── BUG-341 S17: DOM-mutation fan-out narrowing ─────────────────────────────
+
+#[cfg(test)]
+mod node_fanout_tests {
+    use super::*;
+    use lumen_css_parser::parse as parse_css;
+    use lumen_html_parser::parse as parse_html;
+
+    /// `<ul>` with two `.item` siblings plus an unrelated subtree — the same
+    /// shape the S3/S7 differential tests use.
+    fn fixture() -> Document {
+        parse_html(
+            r#"<ul id="menu">
+                <li id="a" class="item" data-x="1">a</li>
+                <li id="b" class="item">b</li>
+            </ul>
+            <div id="unrelated"><p>x</p></div>"#,
+        )
+    }
+
+    fn roots(doc: &Document, sheet: &Stylesheet, node: NodeId, attr: &str) -> HashSet<NodeId> {
+        let index = restyle_node_index(doc, sheet);
+        restyle_root_set_for_node_change(doc, [(node, NodeChange::Attr(attr))], &index)
+    }
+
+    #[test]
+    fn a_sheet_without_sibling_combinators_narrows_to_the_node() {
+        let doc = fixture();
+        let sheet = parse_css(".item { color: black; } .item .icon { color: red; }");
+        let a = doc.find_by_id("a").expect("#a");
+        assert_eq!(
+            roots(&doc, &sheet, a, "data-x"),
+            [a].into_iter().collect::<HashSet<_>>(),
+            "no selector reaches a sibling, so the changed node's own subtree is the whole root-set",
+        );
+    }
+
+    #[test]
+    fn a_sibling_rule_keyed_on_the_changed_attribute_widens_to_the_parent() {
+        let doc = fixture();
+        let sheet = parse_css("[data-x=\"1\"] + .item { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(
+            roots(&doc, &sheet, a, "data-x"),
+            [menu].into_iter().collect::<HashSet<_>>(),
+            "writing `data-x` can flip the sibling rule — the parent's subtree covers that",
+        );
+    }
+
+    #[test]
+    fn a_sibling_rule_that_cannot_match_the_changed_node_still_narrows() {
+        // The sheet has a sibling combinator, but its left compound (`.other`)
+        // cannot match `#a` no matter what `data-x` becomes. This is the case a
+        // sheet-wide "does any selector use `+`/`~`" check would get wrong, and
+        // the reason the narrowing is per-node.
+        let doc = fixture();
+        let sheet = parse_css(".other + .item { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        assert_eq!(
+            roots(&doc, &sheet, a, "data-x"),
+            [a].into_iter().collect::<HashSet<_>>(),
+            "`.other` cannot match #a, so no sibling of #a can react to its `data-x`",
+        );
+    }
+
+    #[test]
+    fn a_class_write_widens_when_the_sibling_rule_is_class_keyed() {
+        // `.item.active + .item` — the left compound is entirely class-keyed,
+        // so a `class` write on #a could make it match. Must widen.
+        let doc = fixture();
+        let sheet = parse_css(".item.active + .item { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(roots(&doc, &sheet, a, "class"), [menu].into_iter().collect::<HashSet<_>>());
+        // …but a `data-x` write cannot: `.item.active` doesn't currently match
+        // #a and no `data-x` value can change that.
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [a].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn a_sibling_combinator_before_the_matching_compound_does_not_widen() {
+        // `[data-y] + [data-x]` — the compound `data-x` keys on is the subject;
+        // nothing follows it, so a write on it reaches nobody else.
+        let doc = fixture();
+        let sheet = parse_css("[data-y] + [data-x] { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [a].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn a_descendant_after_a_sibling_combinator_still_widens() {
+        let doc = fixture();
+        let sheet = parse_css("[data-x] ~ .item .icon { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [menu].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn a_structural_change_always_widens() {
+        // No attribute name describes "the child list moved", and
+        // `:nth-child`/`:empty`/sibling combinators all react to it.
+        let doc = fixture();
+        let sheet = parse_css(".item { color: black; }");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        let index = restyle_node_index(&doc, &sheet);
+        let parent = doc.get(menu).parent.expect("#menu has a parent");
+        assert_eq!(
+            restyle_root_set_for_node_change(&doc, [(menu, NodeChange::Unattributed)], &index),
+            [parent].into_iter().collect::<HashSet<_>>(),
+        );
+    }
+
+    #[test]
+    fn has_anywhere_in_the_sheet_disables_narrowing() {
+        // BUG-348's direction: `:has()` binds an ancestor's match to a
+        // descendant's state, which no subtree-shaped root-set expresses. S17
+        // must not make that worse, so such sheets keep the pre-S17 behaviour.
+        let doc = fixture();
+        let sheet = parse_css("ul:has(.item) { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        assert!(index.is_conservative(), ":has() anywhere must force the conservative path");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [menu].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn nth_child_of_selector_disables_narrowing() {
+        // `:nth-child(2 of .item)` makes one element's match depend on which of
+        // its *siblings* carry `.item` — sibling reach with no combinator to
+        // see it.
+        let doc = fixture();
+        let sheet = parse_css("li:nth-child(2 of .item) { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        assert!(index.is_conservative(), ":nth-child(… of …) must force the conservative path");
+    }
+
+    #[test]
+    fn a_plain_nth_child_does_not_disable_narrowing() {
+        // Positions don't move on an attribute write, so plain structural
+        // pseudo-classes are irrelevant to this narrowing (a *structural*
+        // change reports `Unattributed` and widens regardless).
+        let doc = fixture();
+        let sheet = parse_css("li:nth-child(2) { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        assert!(!index.is_conservative());
+        let a = doc.find_by_id("a").expect("#a");
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [a].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn a_pseudo_class_in_a_sibling_source_compound_is_treated_as_possible() {
+        // `.item:checked + .item` — `:checked` reads the `checked` attribute,
+        // so a `checked` write could flip the sibling rule. The narrowing must
+        // not look through pseudo-classes and conclude otherwise.
+        let doc = fixture();
+        let sheet = parse_css(".item:checked + .item { color: green; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(roots(&doc, &sheet, a, "checked"), [menu].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn media_blocks_are_scanned_too() {
+        // A sibling rule hidden inside `@media` must count — the same carve-out
+        // S7 made for `restyle_state_index`.
+        let doc = fixture();
+        let sheet = parse_css("@media (min-width: 1px) { [data-x] + .item { color: green; } }");
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [menu].into_iter().collect::<HashSet<_>>());
+    }
 }

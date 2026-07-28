@@ -26,6 +26,7 @@ use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 use crate::tab_lifecycle::state::TabState;
 use crate::tabs::strip::TabStrip;
 use crate::tabs::tree::visible_order;
@@ -260,7 +261,7 @@ pub fn build_panel(
         // Favicon placeholder.
         let icon_left = ICON_LEFT_BASE + indent;
         let icon_top = row_top + (ROW_H - ICON_SZ) * 0.5;
-        let icon_r = 2.0_f32;
+        let icon_r = radius::SM;
         out.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(icon_left, icon_top, ICON_SZ, ICON_SZ),
             radii: CornerRadii {

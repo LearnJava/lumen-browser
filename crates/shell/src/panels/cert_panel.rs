@@ -8,42 +8,16 @@
 //! When no certificate information is available (HTTP or Phase 0 stub)
 //! the panel shows a single "No certificate information" row.
 
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand};
-
-use crate::panels::themes::Palette;
-
-type DisplayList = Vec<DisplayCommand>;
-
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
-/// Panel width in CSS px (exported for anchor calculation in main.rs).
-pub const PANEL_W: f32 = 500.0;
 /// Panel height in CSS px (exported for anchor calculation in main.rs).
 pub const PANEL_H: f32 = 440.0;
 /// Header bar height.
 const HEADER_H: f32 = 36.0;
 /// Height of one data row.
 const ROW_H: f32 = 36.0;
-/// Left padding for label text inside each row.
-const PAD_H: f32 = 14.0;
-/// Column break between label and value (label occupies 0..LABEL_COL_W).
-const LABEL_COL_W: f32 = 150.0;
-/// Width of the × close button hit zone.
-const CLOSE_W: f32 = 30.0;
 /// Visible content area height.
 const CONTENT_H: f32 = PANEL_H - HEADER_H;
-
-// ── Colours ──────────────────────────────────────────────────────────────────
-// Surface colours are provided by `Palette` (theme-aware).
-// Semantic security-status colours are kept as constants — they carry critical
-// meaning that must not change with the theme.
-
-/// Colour used for the Subject CN value when the certificate is valid/secure.
-const SECURE_GREEN: Color = Color { r: 60, g: 180, b: 100, a: 255 };
-/// Colour used for the "no certificate" info row text (HTTP / unavailable).
-const NO_CERT_COL: Color = Color { r: 160, g: 120, b: 80, a: 255 };
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -128,29 +102,6 @@ impl CertPanel {
         self.scroll_y = (self.scroll_y + delta).clamp(0.0, max);
     }
 
-    /// Hit-test a pointer position relative to panel origin.
-    ///
-    /// Returns `CertHit` describing which element was hit.
-    pub fn hit_test(&self, lx: f32, ly: f32) -> CertHit {
-        if ly < HEADER_H {
-            if lx >= PANEL_W - CLOSE_W {
-                return CertHit::Close;
-            }
-            return CertHit::Header;
-        }
-        CertHit::Body
-    }
-}
-
-/// Result of a pointer hit test on the cert panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CertHit {
-    /// User clicked the × close button.
-    Close,
-    /// User clicked the panel header bar (drag area — future use).
-    Header,
-    /// User clicked inside the scrollable body.
-    Body,
 }
 
 // ── Rows ──────────────────────────────────────────────────────────────────────
@@ -206,145 +157,6 @@ fn content_scroll_max(cert: Option<&PanelCertData>) -> f32 {
     (total_h - CONTENT_H).max(0.0)
 }
 
-// ── Render helper ─────────────────────────────────────────────────────────────
-
-fn txt(
-    text: impl Into<String>,
-    x: f32,
-    y: f32,
-    w: f32,
-    font_size: f32,
-    font_weight: FontWeight,
-    color: Color,
-) -> DisplayCommand {
-    DisplayCommand::DrawText {
-        rect: Rect::new(x, y, w, font_size * 1.4),
-        text: text.into(),
-        font_size,
-        color,
-        font_family: Vec::new(),
-        font_weight,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    }
-}
-
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Append display commands for the cert panel to `buf`.
-///
-/// `px`, `py` — top-left panel origin in CSS px (window-space).
-/// `pal` — active colour palette; controls all surface/chrome colours.
-pub fn build_panel(panel: &CertPanel, buf: &mut DisplayList, px: f32, py: f32, pal: &Palette) {
-    // Panel background + border.
-    buf.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px, py, PANEL_W, PANEL_H),
-        radii: CornerRadii { tl: 6.0, tl_y: 6.0, tr: 6.0, tr_y: 6.0, bl: 6.0, bl_y: 6.0, br: 6.0, br_y: 6.0 },
-        color: pal.overlay_border,
-    });
-    buf.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
-        radii: CornerRadii { tl: 5.0, tl_y: 5.0, tr: 5.0, tr_y: 5.0, bl: 5.0, bl_y: 5.0, br: 5.0, br_y: 5.0 },
-        color: pal.overlay_bg,
-    });
-
-    // ── Header ────────────────────────────────────────────────────────────────
-    buf.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px, py, PANEL_W, HEADER_H),
-        radii: CornerRadii { tl: 5.0, tl_y: 5.0, tr: 5.0, tr_y: 5.0, bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
-        color: pal.header_bg,
-    });
-    // Lock icon (unicode padlock) + title.
-    let lock = if panel.cert.as_ref().is_some_and(|c| c.has_data()) { "\u{1F512} " } else { "\u{1F513} " };
-    let title = format!("{lock}Certificate Information");
-    buf.push(txt(title, px + PAD_H, py + HEADER_H * 0.5 - 7.0,
-        PANEL_W - CLOSE_W - PAD_H * 2.0, 13.0, FontWeight::BOLD, pal.text));
-    // Close button ×.
-    buf.push(txt("\u{00D7}", px + PANEL_W - CLOSE_W + 6.0, py + HEADER_H * 0.5 - 8.0,
-        CLOSE_W, 18.0, FontWeight::BOLD, pal.text_dim));
-
-    // Separator line below header.
-    buf.push(DisplayCommand::FillRect {
-        rect: Rect::new(px, py + HEADER_H, PANEL_W, 1.0),
-        color: pal.divider,
-    });
-
-    // ── Clip body ─────────────────────────────────────────────────────────────
-    buf.push(DisplayCommand::PushClipRect {
-        rect: Rect::new(px, py + HEADER_H, PANEL_W, CONTENT_H),
-    });
-
-    let scroll = panel.scroll_y;
-    let body_top = py + HEADER_H - scroll;
-
-    match &panel.cert {
-        Some(cert) if cert.has_data() => {
-            let rows = build_rows(cert);
-            for (i, (label, value)) in rows.iter().enumerate() {
-                let ry = body_top + i as f32 * ROW_H;
-                // Even rows use row_alt_bg; odd rows use item_bg for contrast.
-                let row_bg = if i % 2 == 0 { pal.row_alt_bg } else { pal.item_bg };
-                buf.push(DisplayCommand::FillRect {
-                    rect: Rect::new(px, ry, PANEL_W, ROW_H),
-                    color: row_bg,
-                });
-
-                // Label.
-                buf.push(txt(*label, px + PAD_H, ry + ROW_H * 0.5 - 7.0,
-                    LABEL_COL_W - PAD_H, 12.0, FontWeight::NORMAL, pal.text_dim));
-
-                // Value — truncate long fingerprints.
-                let value_text = truncate_value(value, 38);
-                // Subject CN uses SECURE_GREEN (semantic security indicator); all
-                // other values use the palette primary text colour.
-                let value_color = if *label == "Subject CN" { SECURE_GREEN } else { pal.text };
-                buf.push(txt(value_text, px + LABEL_COL_W, ry + ROW_H * 0.5 - 7.0,
-                    PANEL_W - LABEL_COL_W - PAD_H, 11.5, FontWeight::NORMAL, value_color));
-
-                // Row separator.
-                buf.push(DisplayCommand::FillRect {
-                    rect: Rect::new(px + PAD_H, ry + ROW_H - 1.0, PANEL_W - PAD_H * 2.0, 1.0),
-                    color: pal.divider,
-                });
-            }
-        }
-        _ => {
-            // No certificate — single info row.
-            buf.push(DisplayCommand::FillRect {
-                rect: Rect::new(px, body_top, PANEL_W, ROW_H),
-                color: pal.row_alt_bg,
-            });
-            buf.push(txt(
-                "No certificate information (HTTP or unavailable)",
-                px + PAD_H,
-                body_top + ROW_H * 0.5 - 7.0,
-                PANEL_W - PAD_H * 2.0,
-                12.0,
-                FontWeight::NORMAL,
-                NO_CERT_COL,
-            ));
-        }
-    }
-
-    buf.push(DisplayCommand::PopClip);
-}
-
-/// Truncate a string to at most `max_chars` Unicode scalar values, appending
-/// `"\u{2026}"` when cut.
-fn truncate_value(s: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        s.to_owned()
-    } else {
-        chars[..max_chars].iter().collect::<String>() + "\u{2026}"
-    }
-}
-
 // ── Unit tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -397,26 +209,8 @@ mod tests {
         assert!(!p.visible);
     }
 
-    #[test]
-    fn cert_panel_hit_test_close() {
-        let p = CertPanel::new();
-        let hit = p.hit_test(PANEL_W - 5.0, HEADER_H * 0.5);
-        assert_eq!(hit, CertHit::Close);
-    }
 
-    #[test]
-    fn cert_panel_hit_test_header() {
-        let p = CertPanel::new();
-        let hit = p.hit_test(10.0, HEADER_H * 0.5);
-        assert_eq!(hit, CertHit::Header);
-    }
 
-    #[test]
-    fn cert_panel_hit_test_body() {
-        let p = CertPanel::new();
-        let hit = p.hit_test(50.0, HEADER_H + 10.0);
-        assert_eq!(hit, CertHit::Body);
-    }
 
     #[test]
     fn panel_cert_data_has_data() {
@@ -431,37 +225,6 @@ mod tests {
         let cert = sample_cert();
         let rows = build_rows(&cert);
         assert_eq!(rows.len(), 9);
-    }
-
-    #[test]
-    fn build_panel_emits_commands_with_cert() {
-        let mut p = CertPanel::new();
-        p.open(Some(sample_cert()));
-        let mut buf = DisplayList::new();
-        build_panel(&p, &mut buf, 0.0, 0.0, &Palette::DARK);
-        assert!(!buf.is_empty());
-    }
-
-    #[test]
-    fn build_panel_emits_commands_no_cert() {
-        let mut p = CertPanel::new();
-        p.open(None);
-        let mut buf = DisplayList::new();
-        build_panel(&p, &mut buf, 0.0, 0.0, &Palette::DARK);
-        assert!(!buf.is_empty());
-    }
-
-    #[test]
-    fn truncate_value_short() {
-        assert_eq!(truncate_value("abc", 10), "abc");
-    }
-
-    #[test]
-    fn truncate_value_long() {
-        let s = "a".repeat(50);
-        let t = truncate_value(&s, 10);
-        assert!(t.ends_with('\u{2026}'));
-        assert!(t.chars().count() <= 11);
     }
 
     #[test]

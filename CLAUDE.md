@@ -26,15 +26,13 @@ Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 
 |---|---|
 | `CAPABILITIES.md` | **Source of truth for "what the browser can do right now"** (per-subsystem, ✅/🟡/⬜, verified against code). Read ONLY this for capability questions — not `docs/plan/*` or `STATUS-PN.md`. Update in the same commit as a feature merge. |
 | `README.md` | User-facing: install, commands, what to expect. |
-| `STATUS-P1.md` | P1 sprint: in-progress task, next items, recent merge. Read at session start if you are P1. |
-| `STATUS-P2.md` | P2 — **реактивирована 2026-07-13** для задачи P2-wpt (WPT-интеграция через wptrunner+BiDi, `docs/tasks/p2-wpt-integration.md`, срезы S1–S8). Read at session start if you are P2. |
-| `STATUS-P3.md` | P3 sprint: in-progress task, next items, recent merge. Read at session start if you are P3. |
-| `STATUS-P4.md` | P4 sprint: CSS spec compliance. Read at session start if you are P4. |
-| `STATUS-P5.md` | P5 maintenance: code-health aliases + sweep workflow. Read at session start if you are P5. |
+| `STATUS-PN.md` | **Bare pointer lines `<source>:NN` and nothing else** — one line per open task, priority top→bottom, no headers/prose/completed tasks (schema: `docs/dev-roles.md` §Task tracking schema). `<source>` = ROADMAP.md (P1/P2) · BUGS.md (P3) · CSS-SPECS.md (P4) · a code `file:line` for a `// CSS:` / `// BUG-NNN` handoff. Read yours at session start. Detail belongs in the source row, `docs/tasks/<id>.md`, or `bugs/BUG-NNN-*.md` — never here. Exception: `STATUS-P5.md`, whose source is a health sweep rather than a row list (alias→action table, format still provisional). |
 | `lumen-plan.md` | TOC index: links to 11 section files in `docs/plan/`. Read for architecture; for daily status use `STATUS-PN.md` instead. |
 | `docs/plan/` | Design doc split into 11 files: architecture, tech-stack, engine, web-apis-shell, privacy, features, knowledge, security-performance, testing, phases, meta. (The former `roadmap.md`/`history.md` were deleted 2026-07-02 — task status lives in `ROADMAP.md`, chronology in `git log`.) |
 | `CSS-SPECS.md` | Complete CSS property & spec roadmap: all W3C modules, per-property status (✅🟡⬜🚫), P4 priority queue. |
+| `docs/wpt-status.md` | WPT readiness: all 277 upstream top-level categories (scope ⬜/🚫, vendored status), plus a per-test detail table for the one vendored category (`dom/nodes`, 168 tests) with pass/fail and an assignable Владелец/Баг column. Regenerate the detail table with `tests/wpt/gen_status_md.py` after a fresh `run_report.py --all` run — read the file's own "Как обновить" section, not this line, for the exact commands. |
 | `docs/build-speed.md` | Compile-time optimization plan: current baseline, measurement protocol (S1–S5), ranked measures (stable / nightly / rejected), benchmark journal. Read before changing build config (profiles, `.cargo/config.toml`, sccache). |
+| `docs/perf-method.md` | **How to measure, gate and accept a performance change** (census before the fix, profile the path you change, gate by counter/identity not wall-clock, interleaved A/B compared on min, instrumentation traps). Distilled from the 27 slices of BUG-341. Read before a perf task; the numbers themselves stay in `bugs/BUG-NNN-*.md`. |
 | `docs/automation.md` | **All automation/introspection surfaces of the browser and when to apply them** (dump modes, `--deterministic`, MCP tools/resources, BiDi, IPC, driver-API, `LUMEN_NO_*` paint-bisect flags, known stubs). Read before writing a debugging script or a new test harness — the capability usually already exists. |
 | `docs/roadmap-trees.md` | **How to use the interactive roadmap trees** (`docs/roadmap-*.html`): open in a browser, filters/search, and how to keep them current (`ROADMAP.md` + `python scripts/gen_roadmap.py`, auto-pulls bug status from `BUGS.md`). |
 | `ROADMAP.md` | Flat, grep-friendly source of the phase/task tree (two markdown tables: phases + tasks, one task per line). Feeds `gen_roadmap.py`; replaced the old nested `docs/roadmap.json`. Bug↔task links live in its `bugs` column; CSS-module status is live-aggregated from `CSS-SPECS.md` into rows `css-specs-t0`…`t4` (note = `AUTO:CSS-SPECS:T<N>`, do not hand-edit that note). |
@@ -64,7 +62,7 @@ Full role definitions, workflows, collaboration rules, task tracking schema — 
 
 | Developer | Domain | Crates |
 |---|---|---|
-| **P1** | Feature development: any subsystem from roadmap (source → layout → paint → shell) | All crates (coordinated with P2/P4) |
+| **P1** | General feature development (source → layout → paint → shell), taken top-down off `STATUS-P1.md`. Finished tracks: DS (design system v3.3, DS-1…DS-19, `docs/design/lumen-v3_3.html`). Current: the CC track (engine chrome, CC-14/CC-15); BUG-341 (incremental restyle) is paused by user decision 2026-07-28 — resume only on explicit request | All crates (coordinated with P2/P4) |
 | **P2** | **Reactivated 2026-07-13**: leads P2-wpt (WPT via `wptrunner` + WebDriver BiDi, `docs/tasks/p2-wpt-integration.md`) and the DEVX track (dev-tooling on existing automation surfaces, `docs/automation.md`, ROADMAP.md DEVX-1…6, assigned 2026-07-16). Was reserve (since 2026-06-18). | `lumen-bidi-server`, `lumen-driver`/`lumen-mcp` (DEVX-5), Python tooling `tests/wpt/` + `graphic_tests/run.py` (DEVX-1/4) |
 | **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
@@ -109,13 +107,18 @@ cargo run -p lumen-shell -- --dump-display-list samples/page.html  # headless pa
 ```
 
 **Session start protocol:**
-1. Read `STATUS-PN.md` — pointer lines to open tasks; `git branch` shows any `p<N>-…` task in progress
-2. Run `git branch` — verify you're on main
-3. Architecture context → `docs/plan/architecture.md` §1, §3; decisions → `docs/decisions/README.md`
+1. **`git pull origin main` first, before reading STATUS files or creating a branch/worktree.** Parallel Claude Code sessions push to `origin/main` independently, so local `main` can lag behind — starting from stale state means stale `STATUS-PN.md`/`ROADMAP.md` reads and, if the lag is large, a big multi-file merge conflict later instead of a small one now. If `pull` reports a diverged history with real conflicts (not just a fast-forward), resolve them file-by-file with full understanding of both sides' intent — do not blindly take one side — and re-verify with `cargo check`/`clippy`/scoped tests for every touched crate before committing the merge.
+2. Read `STATUS-PN.md` — pointer lines to open tasks; `git branch` shows any `p<N>-…` task in progress
+3. Run `git branch` — verify you're on main
+4. Architecture context → `docs/plan/architecture.md` §1, §3; decisions → `docs/decisions/README.md`
+
+**Session end: push what you finished.** A completed task's merge commit (7-step checklist below, step 5) must be pushed to `origin/main` immediately, not left sitting local — other parallel sessions rely on seeing it to avoid duplicate/conflicting work on the same area.
 
 **Cargo output rules:** always `-p <crate>`, never `--workspace` (exception: P5). Success → 1 line. Errors → full `error[...]` block, skip all warnings. Test failure → test name + first 10 lines.
 
-**Run discipline (details in `docs/commands.md`):** one cargo run — one log file (`> .tmp/<name>.log 2>&1`, then grep the file; never re-run cargo just to re-filter output). During iteration `cargo check -p` only; one `clippy -p` + targeted tests before the commit; full gates (workspace clippy + scoped-test) run exactly once inside `/lumen-task-finish`, synchronously in the foreground — never as background tasks.
+**Run discipline (details in `docs/commands.md`):** one cargo run — one log file (`> .tmp/<name>.log 2>&1`, then grep the file; never re-run cargo just to re-filter output). During iteration `cargo check -p` only; one `clippy -p` + targeted tests before the commit; full gates (workspace clippy + scoped-test) run exactly once inside `/lumen-task-finish`, synchronously in the foreground — never as background tasks. Don't hand-run expensive crate tests before the gate — `scoped-test.sh` repeats them.
+
+**Long runs you are not blocked on** (baseline builds, `test --no-run`, the graphic pipeline) go to the background via the Bash tool's `run_in_background: true` — the harness notifies you on exit, so keep working meanwhile. Never `cmd &` **plus** `run_in_background` (silently kills the process) and never poll with `sleep N` — that pattern burned 76 of 188 minutes on 2026-07-27. Foreground-only exceptions: the final gates, and the full graphic pipeline (gdigrab needs a focused window; backgrounded, TEST-00 fails "magenta marker not found" and cascades).
 
 ---
 
@@ -136,6 +139,9 @@ python graphic_tests/run.py --bisect 100         # diagnose interaction test
 2. Add demo to `graphic_tests/1000000-final.html`
 3. Update `graphic_tests/COVERAGE.md`
 4. Add entry to `TESTS` in `graphic_tests/run.py`
+5. **If the property affects paint/rasterization**, regenerate the deterministic CPU snapshot references in the **same commit**: `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render cases::snapshot_cpu` (then review the changed PNGs are correct, not garbage). Skipping this drifts `graphic_tests/snapshots/cpu/` on unrelated pages and later red-lights the `scoped-test.sh` gate for someone else — the recurring BUG-118 / BUG-149 / BUG-297 / BUG-316 staleness.
+
+**When the full ~20-min run is required:** anything that can move pixels — paint/display list, layout geometry, a CSS property, font/text/image. For changes that cannot alter the display list (pure perf, refactors, tooling, docs) the gate is `scripts/scoped-test.sh` (includes the deterministic CPU snapshots) + `python graphic_tests/dump_golden.py`; claiming display-list neutrality requires showing an empty `dump_golden.py` diff. Details — [`docs/graphic-tests.md`](docs/graphic-tests.md).
 
 **Hard rules:** never edit test pages to work around engine limits; never change thresholds (0.5% for all); no screenshots committed.
 
@@ -192,15 +198,23 @@ Branch naming: `p<N>-<task-name>` (P1–P5 prefix mandatory). `--no-ff` required
 
 **Forbidden:** direct commit to main · force-push · rewriting history · `git config` · `--no-verify` · `git push` without explicit user request.
 
-**Every session MUST work in its own `git worktree`** — path `.claude/worktrees/<task-name>/`. Remove immediately after merge.
+**Every session MUST work in its own `git worktree`** — use your **persistent pool slot**, one per developer, instead of creating a worktree per task:
+
+```bash
+cd "$(bash scripts/worktree-pool.sh p<N>-work p<N>-task-name | tail -1)"   # occupy
+bash scripts/worktree-pool.sh list                                        # who holds what
+bash scripts/worktree-pool.sh release p<N>-work                           # free (step 3 of the checklist)
+```
+
+The slot (`.claude/worktrees/p1-work` … `p5-work`, plus `perf-base`) is created once and reused — only the branch changes, so `target/` stays warm and rebuilds are incremental. `git worktree remove` after every task deleted that cache and cost 9–15 min of cold build per task, plus 3 min for the `add` itself. Build **only `dev-release`** inside a slot (warm `dev-release` ≈ 4.7 GB; five slots on `debug` would be ~70 GB). The script refuses to switch a slot with uncommitted or unmerged work. Details — [`docs/git-workflow.md`](docs/git-workflow.md).
 
 **7-step completion checklist** (all mandatory, full details in `docs/git-workflow.md`):
 1. `cargo clippy -p <crate> -- -D warnings` + `cargo test -p <crate>`
 2. `git merge --no-ff p<N>-task-name -m "Merge …"`
-3. `git branch -d p<N>-task-name`
+3. `bash scripts/worktree-pool.sh release p<N>-work` then `git branch -d p<N>-task-name` (a slot holding the branch makes `branch -d` fail)
 4. Delete pointer line from `STATUS-PN.md`, commit
 5. `git push origin main`
-6. `git worktree remove .claude/worktrees/<task-name>`
+6. Pool slot — nothing to remove (freed in step 3). Ad-hoc worktree — `git worktree remove .claude/worktrees/<task-name>`
 
 ---
 
@@ -232,6 +246,7 @@ Update docs **in the same commit** as the code change. Use `grep -n` to find the
 | New dependency | `docs/plan/tech-stack.md` | append row |
 | Architectural decision | `docs/decisions/ADR-NNN.md` | new file from TEMPLATE.md; update index |
 | Known gotcha found/fixed | `CLAUDE.md` → "Known gotchas" | append/remove bullet |
+| Perf slice merged with a transferable lesson | `docs/perf-method.md` | append the rule (one paragraph, slice ref in brackets); per-slice numbers stay in `bugs/BUG-NNN-*.md` |
 | New public API | `SYMBOLS.md` | `python scripts/gen_symbols.py` |
 | Roadmap/bug/CSS-module status change | `ROADMAP.md` → `python scripts/gen_roadmap.py` | edit ROADMAP.md if structure changed; CSS-module status alone needs no edit — the script re-pulls it from CSS-SPECS.md |
 
@@ -263,8 +278,9 @@ Full list with phases — [docs/plan/knowledge.md](docs/plan/knowledge.md) §12.
 - **Line endings:** `.gitattributes` enforces LF. Git warning about CRLF→LF is normal.
 - **Archives in repo root are gitignored** (`/*.zip`, `/*.tar*`). Downloaded files won't accidentally get committed.
 - **Portable user data dir (`<exe_dir>/data/`).** The ad-block external-filter-list subsystem stores its data under `<exe_dir>/data/adblock/` (SQLite `adblock.db` for subscriptions + list metadata; `lists/<slug>.txt` bodies; `custom-rules.txt`) — see `shell/src/adblock.rs::browser_data_dir`. This is a **provisional** convention (user decision 2026-06-16): keep everything in the browser folder, do **not** use OS dirs (`%APPDATA%`/`~/.config`/`~/.cache`) or `lumen_cache_dir()`/`config_path()` for portable data. New subsystems needing portable data should add their own `data/<subsystem>/` subfolder via `browser_data_dir()`.
+- **`gdigrab` captures the whole desktop, not just the Lumen window — any OS focus change during a `graphic_tests/run.py` run (live-window default, SDC-4) silently corrupts every screenshot from that point on.** Found 2026-07-28 while validating SDC-4: a live-window full run showed 72/149 tests FAIL at 85–93% diff, all starting from one point onward; the "Lumen" screenshots turned out to be pictures of the Claude Code chat window itself — the OS foreground had shifted there (a chat message arrived mid-run) and `_bring_pid_to_front`'s alt-key trick never reclaimed it for the rest of the run. Not a regression from SDC-4 — the same `gdigrab`+bring-to-front mechanism was already used by the old per-test-process default, so the risk is inherent to the whole pipeline, not new. Unlike the backgrounded case (which fails loudly at TEST-00, "magenta marker not found"), a mid-run focus steal fails silently as a wall of unrelated-looking high-diff FAILs — don't diagnose those as engine regressions before checking whether anything touched the desktop (including typing into this chat) while the run was in flight. Re-run clean (no desktop interaction) before trusting a graphic-tests result with many simultaneous large-diff failures.
 - **Parallel sessions in the same working tree = disaster.** Two sessions doing `git checkout` of different branches causes git to stash one session's work. Recovery via `git stash pop` is fragile. **Solution: mandatory `git worktree`s** (see Worktree isolation above). If you find yourself on a foreign branch — check `git stash list` before running `git restore .`.
-- **~~Live-window BiDi/MCP `script.evaluate` can hang indefinitely~~ — misdiagnosis, root-caused 2026-07-17 (P2-wpt S4).** The "`script.evaluate` reports `JS context not available` forever" symptom previously attributed to an environment-dependent JS-runtime-install race was actually three separate, fully deterministic engine/shell bugs, none of them environment-flaky: [BUG-298](bugs/BUG-298-FIXED.md) (`Element`/`DocumentFragment`/`ShadowRoot`.querySelector(All) searched the whole document instead of the calling node's subtree, so any code building a detached DOM subtree and querying into it — e.g. `testharness.js`'s own results-table renderer — silently got nothing), [BUG-299](bugs/BUG-299-FIXED.md) (`Element.prototype.insertAdjacentText` was missing entirely, thrown from the same code path), and [BUG-300](bugs/BUG-300-FIXED.md) (`browsingContext.navigate`'s `DocumentReady` wait could ACK using the *previous* page's stale `layout_box` before the new page had even started loading). All three are now fixed. A genuinely still-open, narrower gap remains — [BUG-301](bugs/BUG-301-OPEN.md): `tests/wpt/run_smoke.py` (driven through the vendored `wptrunner` + `wptserve`) still times out even after these fixes, while a manual BiDi driver hitting the identical binary/test file through a plain HTTP server completes correctly — so if you hit a `script.evaluate`/harness-completion gap while driving `wptrunner` specifically, check BUG-301 first rather than re-diagnosing from scratch. `--bidi-port`/`--mcp-live-port` session-restore racing (a separate, unrelated mechanism) was already fixed by [BUG-296](bugs/BUG-296-FIXED.md).
+- **~~Live-window BiDi/MCP `script.evaluate` can hang indefinitely~~ — misdiagnosis, root-caused 2026-07-17 (P2-wpt S4).** The "`script.evaluate` reports `JS context not available` forever" symptom previously attributed to an environment-dependent JS-runtime-install race was actually three separate, fully deterministic engine/shell bugs, none of them environment-flaky: [BUG-298](bugs/BUG-298-FIXED.md) (`Element`/`DocumentFragment`/`ShadowRoot`.querySelector(All) searched the whole document instead of the calling node's subtree, so any code building a detached DOM subtree and querying into it — e.g. `testharness.js`'s own results-table renderer — silently got nothing), [BUG-299](bugs/BUG-299-FIXED.md) (`Element.prototype.insertAdjacentText` was missing entirely, thrown from the same code path), and [BUG-300](bugs/BUG-300-FIXED.md) (`browsingContext.navigate`'s `DocumentReady` wait could ACK using the *previous* page's stale `layout_box` before the new page had even started loading). All three are now fixed. The `run_smoke.py`-only follow-up timeout was [BUG-301](bugs/BUG-301-FIXED.md), **now fixed too (2026-07-18)**: `wptrunner` registers a static route for `/resources/testharnessreport.js` serving its *own* `__wptrunner_message_queue` report, which wins over the on-disk file — so Lumen's vendored report (the one that sets `window.__lumen_wpt_results`, the global `LumenTestharnessExecutor` polls) was never served under `wptrunner`+`wptserve`, hence "works manually over a plain HTTP server, times out under wptrunner". Fixed by `browsers/lumen.py::env_options` pointing `testharnessreport` at Lumen's own report file. `--bidi-port`/`--mcp-live-port` session-restore racing (a separate, unrelated mechanism) was already fixed by [BUG-296](bugs/BUG-296-FIXED.md). Gotcha when re-checking WPT: a **stale `target/dev-release/lumen.exe`** will mimic an unrelated empty-subresource-fetch bug — rebuild before trusting a `run_smoke.py` failure.
 
 When you discover a non-obvious implementation detail in a specific subsystem, add it to [`subsystems/<crate>.md`](subsystems/) under the relevant crate section (in English), not here.
 

@@ -1044,7 +1044,8 @@ fn make_text(text: String, x: f32, y: f32, w: f32, font_size: f32, color: Color)
         text,
         font_size,
         color,
-        font_family: Vec::new(),
+        // DS-4: DevTools inspector (Elements) panel text is monospace (bundled JetBrains Mono).
+        font_family: vec!["JetBrains Mono".to_string()],
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),

@@ -1102,8 +1102,22 @@ fn script_evaluate(id: i64, params: &JsonValue, state: &mut BidiState) -> Dispat
         ));
     }
 
+    // BiDi §10.2.4: `awaitPromise:true` means a promise-valued result must be
+    // awaited and its resolved value returned (or a `javascript error` on
+    // rejection). Defaults to `false` when absent/non-boolean.
+    let await_promise = params
+        .get("awaitPromise")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     let expression = params.get("expression").and_then(|v| v.as_str());
     let result = match (expression, &state.live) {
+        (Some(expr), Some(live)) if await_promise => match eval_await_promise(live, expr) {
+            Ok(rv) => rv,
+            Err(e) => {
+                return DispatchResult::single(make_error(Some(id), "javascript error", &e));
+            }
+        },
         (Some(expr), Some(live)) => match live.eval(expr) {
             Ok(json) => eval_result_to_remote_value(&json),
             Err(e) => {
@@ -1114,11 +1128,7 @@ fn script_evaluate(id: i64, params: &JsonValue, state: &mut BidiState) -> Dispat
                 ));
             }
         },
-        _ => {
-            let mut undefined = BTreeMap::new();
-            undefined.insert("type".into(), JsonValue::String("undefined".into()));
-            JsonValue::Object(undefined)
-        }
+        _ => undefined_remote_value(),
     };
 
     let mut outer = BTreeMap::new();
@@ -1136,33 +1146,113 @@ fn script_evaluate(id: i64, params: &JsonValue, state: &mut BidiState) -> Dispat
 /// `"string"` RemoteValue carrying the raw JSON text; full structural
 /// `RemoteValue` serialization (BiDi §10.1.2 LocalValue tables) is future work.
 fn eval_result_to_remote_value(json: &str) -> JsonValue {
-    let mut obj = BTreeMap::new();
     match parse_json(json) {
-        Ok(JsonValue::Null) => {
+        Ok(v) => remote_value_from_json(&v),
+        Err(_) => {
+            let mut obj = BTreeMap::new();
+            obj.insert("type".into(), JsonValue::String("string".into()));
+            obj.insert("value".into(), JsonValue::String(json.to_owned()));
+            JsonValue::Object(obj)
+        }
+    }
+}
+
+/// Map an already-parsed JSON value to a best-effort BiDi `RemoteValue`
+/// (same primitive-vs-fallback rules as [`eval_result_to_remote_value`]).
+fn remote_value_from_json(v: &JsonValue) -> JsonValue {
+    let mut obj = BTreeMap::new();
+    match v {
+        JsonValue::Null => {
             obj.insert("type".into(), JsonValue::String("null".into()));
         }
-        Ok(JsonValue::Bool(b)) => {
+        JsonValue::Bool(b) => {
             obj.insert("type".into(), JsonValue::String("boolean".into()));
-            obj.insert("value".into(), JsonValue::Bool(b));
+            obj.insert("value".into(), JsonValue::Bool(*b));
         }
-        Ok(JsonValue::Number(n)) => {
+        JsonValue::Number(n) => {
             obj.insert("type".into(), JsonValue::String("number".into()));
-            obj.insert("value".into(), JsonValue::Number(n));
+            obj.insert("value".into(), JsonValue::Number(*n));
         }
-        Ok(JsonValue::String(s)) => {
+        JsonValue::String(s) => {
             obj.insert("type".into(), JsonValue::String("string".into()));
-            obj.insert("value".into(), JsonValue::String(s));
+            obj.insert("value".into(), JsonValue::String(s.clone()));
         }
-        Ok(other) => {
+        other => {
             obj.insert("type".into(), JsonValue::String("string".into()));
             obj.insert("value".into(), JsonValue::String(other.to_string()));
         }
-        Err(_) => {
-            obj.insert("type".into(), JsonValue::String("string".into()));
-            obj.insert("value".into(), JsonValue::String(json.to_owned()));
-        }
     }
     JsonValue::Object(obj)
+}
+
+/// The BiDi `{type:"undefined"}` RemoteValue.
+fn undefined_remote_value() -> JsonValue {
+    let mut obj = BTreeMap::new();
+    obj.insert("type".into(), JsonValue::String("undefined".into()));
+    JsonValue::Object(obj)
+}
+
+/// Await a promise-valued expression for BiDi `script.evaluate` with
+/// `awaitPromise:true` (BiDi §10.2.4).
+///
+/// `AutomationCommand::Eval` is synchronous and snapshots the expression's
+/// value before the microtask queue drains, so a promise-valued expression
+/// evaluates to the unsettled promise object. V8, however, auto-runs a
+/// microtask checkpoint at the end of each eval, so this uses two eval
+/// round-trips:
+///
+/// 1. wrap the expression in `Promise.resolve(...)` and attach a settle
+///    handler that records `{state, value|error}` on a well-known global. The
+///    checkpoint runs the handler before round 1 returns.
+/// 2. read that global back and translate it into a `RemoteValue` (fulfilled)
+///    or an `Err` message (rejected → the caller emits a `javascript error`).
+///
+/// Only microtask-settleable promises resolve this way; a promise still pending
+/// on a macrotask/IO reports `state:"pending"` and falls back to the promise
+/// object (`{type:"string", value:"{}"}`), matching the non-awaited path. This
+/// limitation is acceptable because the awaited-value use cases (`Promise.resolve`,
+/// sync `async` functions) settle purely on microtasks.
+fn eval_await_promise(live: &LiveWindowSession, expr: &str) -> Result<JsonValue, String> {
+    // Round 1: evaluate the expression, record its settled outcome on a global.
+    let setup = format!(
+        "(function(){{\
+             globalThis.__lumen_bidi_await = {{ state: \"pending\" }};\
+             try {{\
+                 Promise.resolve(({expr})).then(\
+                     function(v){{ globalThis.__lumen_bidi_await = {{ state: \"fulfilled\", value: v }}; }},\
+                     function(e){{ globalThis.__lumen_bidi_await = {{ state: \"rejected\", error: (e && e.message !== undefined) ? String(e.message) : String(e) }}; }}\
+                 );\
+             }} catch (e) {{\
+                 globalThis.__lumen_bidi_await = {{ state: \"rejected\", error: (e && e.message !== undefined) ? String(e.message) : String(e) }};\
+             }}\
+             return \"pending\";\
+         }})()"
+    );
+    live.eval(&setup).map_err(|e| format!("eval: {e}"))?;
+
+    // Round 2: read the outcome the microtask checkpoint left behind.
+    let read = "(function(){ var r = globalThis.__lumen_bidi_await; \
+         try { delete globalThis.__lumen_bidi_await; } catch (e) {} return r; })()";
+    let raw = live.eval(read).map_err(|e| format!("eval: {e}"))?;
+
+    match parse_json(&raw) {
+        Ok(JsonValue::Object(map)) => match map.get("state").and_then(|v| v.as_str()) {
+            Some("fulfilled") => Ok(match map.get("value") {
+                Some(v) => remote_value_from_json(v),
+                // A missing `value` means the promise fulfilled with `undefined`
+                // (JSON serialization drops undefined-valued keys).
+                None => undefined_remote_value(),
+            }),
+            Some("rejected") => Err(format!(
+                "uncaught (in promise): {}",
+                map.get("error").and_then(|v| v.as_str()).unwrap_or("")
+            )),
+            // Still pending (needs a macrotask/IO) — fall back to the promise
+            // object, same as the non-awaited path.
+            _ => Ok(eval_result_to_remote_value("{}")),
+        },
+        _ => Ok(eval_result_to_remote_value(&raw)),
+    }
 }
 
 /// `script.callFunction` — вызвать функцию в browsing context (BiDi §10.2.5).
@@ -2041,6 +2131,32 @@ mod tests {
         LiveWindowSession::new(AutomationHandle::new(tx))
     }
 
+    /// A fake "live window" that emulates V8's `awaitPromise` two-round-trip
+    /// dance for BUG-319: the round-1 setup eval (`Promise.resolve(...).then`)
+    /// is answered `"pending"`, and the round-2 read of
+    /// `globalThis.__lumen_bidi_await` returns `settled` — the canned JSON a
+    /// real page's settle handler would have left after the microtask
+    /// checkpoint (`{state:"fulfilled",value:..}` / `{state:"rejected",..}` /
+    /// `{state:"pending"}`).
+    fn fake_live_session_await(settled: &'static str) -> LiveWindowSession {
+        use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply};
+        let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+        let settled = settled.to_owned();
+        std::thread::spawn(move || {
+            for (cmd, reply_tx) in rx {
+                let reply = match cmd {
+                    AutomationCommand::Eval(js) if js.contains("Promise.resolve") => {
+                        AutomationReply::Eval("\"pending\"".into())
+                    }
+                    AutomationCommand::Eval(_) => AutomationReply::Eval(settled.clone()),
+                    _ => AutomationReply::Ack,
+                };
+                let _ = reply_tx.send(reply);
+            }
+        });
+        LiveWindowSession::new(AutomationHandle::new(tx))
+    }
+
     #[test]
     fn navigate_with_live_window_executes_real_navigate() {
         let mut state = BidiState::with_live_session(fake_live_session());
@@ -2098,6 +2214,63 @@ mod tests {
         let result = v.get("result").unwrap().get("result").unwrap();
         assert_eq!(result.get("type").and_then(|x| x.as_str()), Some("string"));
         assert_eq!(result.get("value").and_then(|x| x.as_str()), Some("1+1"));
+    }
+
+    /// BUG-319: `awaitPromise:true` on a promise-valued expression must return
+    /// the promise's resolved `RemoteValue`, not the promise object.
+    #[test]
+    fn script_evaluate_await_promise_returns_resolved_value() {
+        let mut state =
+            BidiState::with_live_session(fake_live_session_await(r#"{"state":"fulfilled","value":42}"#));
+        let cmd = r#"{"id":1,"method":"script.evaluate","params":{"expression":"Promise.resolve(42)","awaitPromise":true}}"#;
+        let r = dispatch(cmd, &mut state);
+        let v = parse(&r.frames[0]);
+        let result = v.get("result").unwrap().get("result").unwrap();
+        assert_eq!(result.get("type").and_then(|x| x.as_str()), Some("number"));
+        assert_eq!(result.get("value").and_then(|x| x.as_number()), Some(42.0));
+    }
+
+    /// BUG-319: a promise fulfilled with `undefined` (JSON drops the `value`
+    /// key) maps to the `{type:"undefined"}` RemoteValue.
+    #[test]
+    fn script_evaluate_await_promise_undefined_fulfillment() {
+        let mut state =
+            BidiState::with_live_session(fake_live_session_await(r#"{"state":"fulfilled"}"#));
+        let cmd = r#"{"id":1,"method":"script.evaluate","params":{"expression":"Promise.resolve()","awaitPromise":true}}"#;
+        let r = dispatch(cmd, &mut state);
+        let v = parse(&r.frames[0]);
+        let result = v.get("result").unwrap().get("result").unwrap();
+        assert_eq!(result.get("type").and_then(|x| x.as_str()), Some("undefined"));
+    }
+
+    /// BUG-319: a rejected promise under `awaitPromise:true` surfaces as a
+    /// `javascript error`, not a success frame carrying the promise object.
+    #[test]
+    fn script_evaluate_await_promise_rejection_is_error() {
+        let mut state = BidiState::with_live_session(fake_live_session_await(
+            r#"{"state":"rejected","error":"boom"}"#,
+        ));
+        let cmd = r#"{"id":1,"method":"script.evaluate","params":{"expression":"Promise.reject(new Error('boom'))","awaitPromise":true}}"#;
+        let r = dispatch(cmd, &mut state);
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("javascript error"));
+        assert!(v.get("message").and_then(|x| x.as_str()).unwrap_or("").contains("boom"));
+    }
+
+    /// BUG-319: a promise still pending after the microtask checkpoint (needs a
+    /// macrotask/IO) falls back to the promise object, same as the non-awaited
+    /// path — no regression, no fabricated value.
+    #[test]
+    fn script_evaluate_await_promise_pending_falls_back_to_promise_object() {
+        let mut state =
+            BidiState::with_live_session(fake_live_session_await(r#"{"state":"pending"}"#));
+        let cmd = r#"{"id":1,"method":"script.evaluate","params":{"expression":"new Promise(function(){})","awaitPromise":true}}"#;
+        let r = dispatch(cmd, &mut state);
+        let v = parse(&r.frames[0]);
+        let result = v.get("result").unwrap().get("result").unwrap();
+        assert_eq!(result.get("type").and_then(|x| x.as_str()), Some("string"));
+        assert_eq!(result.get("value").and_then(|x| x.as_str()), Some("{}"));
     }
 
     #[test]

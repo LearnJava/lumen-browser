@@ -36,10 +36,330 @@ use crate::field_sizing::field_sizing_content_intrinsic;
 use crate::style::FieldSizing;
 use crate::TextMeasurer;
 use std::cell::Cell;
+use std::sync::Arc;
 
 // EE-3: when true, `lay_out` checks `b.dirty.is_clean()` and skips clean subtrees.
 thread_local! {
     static INCREMENTAL_LAYOUT_MODE: Cell<bool> = const { Cell::new(false) };
+}
+
+thread_local! {
+    /// BUG-341 S4 — master on/off switch for incremental box-build
+    /// (`build_box_or_reuse`'s whole-subtree clone path), mirroring
+    /// `counters::INCREMENTAL_RESTYLE`'s pattern. Off by default; S15 turns it
+    /// on around `layout_mutation_incremental_restyle` at the pipeline call
+    /// sites, alongside `counters::set_incremental_restyle`.
+    static INCREMENTAL_BOX_BUILD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Enables/disables incremental box-build reuse for subsequent
+/// [`incremental_build_box`] calls on the current thread.
+pub fn set_incremental_box_build(enabled: bool) {
+    INCREMENTAL_BOX_BUILD.with(|c| c.set(enabled));
+}
+
+/// Whether incremental box-build reuse is currently enabled on this thread.
+pub fn incremental_box_build_enabled() -> bool {
+    INCREMENTAL_BOX_BUILD.with(|c| c.get())
+}
+
+/// BUG-341 S4/S15 — per-pass tally of what the box-build stage rebuilt versus
+/// reused wholesale from the previous tree.
+///
+/// The reuse mechanism is invisible in output (a build that reuses nothing
+/// produces exactly the same tree, just slowly — the S8 lesson), and wall-clock
+/// hides a total regression inside machine noise. These counters are what the
+/// S15 gates assert on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BoxBuildStats {
+    /// `build_box` calls that really constructed a box.
+    pub built: u32,
+    /// Whole `LayoutBox` subtrees taken from the previous pass instead
+    /// (`build_box_or_reuse`'s fast path).
+    pub reused: u32,
+    /// BUG-341 S19 — boxes of the previous tree that
+    /// [`crate::incremental::extract_clean_subtrees`] had to walk to find those
+    /// subtrees: the spine above them, not the tree.
+    ///
+    /// Recorded on the calling thread (extraction runs before `build_box` fans
+    /// anything out), and always compiled — it is the counter that tells a
+    /// reuse index carved out of the previous tree from S4's `index_by_node`,
+    /// which hashed every box in it. A mechanism that regresses to the latter
+    /// still produces the same output, just slowly.
+    pub prev_index_visited: u32,
+    /// BUG-341 S20 — flex/grid containers this pass dispatched onto rayon
+    /// workers (the `RAYON_MIN_FLEX_CHILDREN` branch).
+    ///
+    /// The fan-out is invisible in output — it produces the identical tree —
+    /// and its cost is thread-pool overhead, which machine noise hides. Only a
+    /// counter can tell "the incremental path stopped dispatching workers for
+    /// subtrees it was about to move in O(1)" from "it still does, and the
+    /// timing run happened to be quiet".
+    pub fanouts: u32,
+    /// BUG-341 S25 — times the box-build stage asked what a child's `display`
+    /// is (`is_inline_content` / `is_inline_block` and the `display:none`
+    /// re-probe inside the inline-collect loop).
+    ///
+    /// Paired with [`Self::display_probe_cascades`] on purpose: the question has
+    /// to keep being asked — it decides which formatting context each child
+    /// joins — so a gate that only watched the expensive half could be passed by
+    /// deleting the probes outright.
+    pub display_probes: u32,
+    /// BUG-341 S25 — of those probes, the ones that had to run a full
+    /// `compute_style` because the cascade cache had no entry for the node.
+    ///
+    /// Pure re-derivation when it is not a genuine miss: `precompute_counters`
+    /// already cascaded the same node against the same parent style, and
+    /// `build_box_inner` builds the child's box out of *that* entry whatever the
+    /// probe says. A probe that re-runs the cascade returns the same answer, so
+    /// it is invisible in output and only a counter can hold it at zero.
+    pub display_probe_cascades: u32,
+    /// BUG-341 S25 — `CounterMap::style_arc` misses at the top of
+    /// `build_box_inner`, each of which pays a full `compute_style`.
+    ///
+    /// The cascade records elements only, so every non-element box (whitespace
+    /// text between pretty-printed tags, comments) misses by construction. Kept
+    /// alongside [`Self::display_probes`] so the two can be told apart: they are
+    /// the same cost with different causes, and only one of them is removable.
+    pub style_misses: u32,
+}
+
+thread_local! {
+    /// BUG-341 S4/S15 instrumentation: counts real `build_box` calls vs
+    /// whole-subtree reuses via `build_box_or_reuse`, so gates can assert the
+    /// incremental path actually skips work (not just that it matches a full
+    /// build's output). Always compiled — two `Cell` bumps against a stage that
+    /// costs microseconds per box — so a gate outside this crate can read it.
+    static BOX_BUILD_STATS: Cell<BoxBuildStats> = const {
+        Cell::new(BoxBuildStats {
+            built: 0,
+            reused: 0,
+            prev_index_visited: 0,
+            fanouts: 0,
+            display_probes: 0,
+            display_probe_cascades: 0,
+            style_misses: 0,
+        })
+    };
+}
+
+/// Returns the accumulated [`BoxBuildStats`] and resets the tally.
+///
+/// Thread-local, like the profiler's own tree — `build_box` fans large
+/// flex/grid containers out over rayon workers, and each of those drains its
+/// own tally back into the thread running the parent container (see the
+/// `RAYON_MIN_FLEX_CHILDREN` branch), so the count read on the layout thread is
+/// the whole tree's.
+pub fn take_box_build_stats() -> BoxBuildStats {
+    BOX_BUILD_STATS.with(|s| s.replace(BoxBuildStats::default()))
+}
+
+/// BUG-341 S18 — census hook: when on, every real `build_box` call appends the
+/// `NodeId` it built to a process-wide log, so a diagnostic can ask *which*
+/// boxes a cycle rebuilt, not merely how many.
+///
+/// Process-wide (a `Mutex`, not a thread-local) on purpose: `build_box` fans
+/// large flex/grid containers out over rayon workers, and a thread-local log
+/// would silently report only the boxes that happened to be built on the
+/// calling thread — the S15 trap. Off by default; the [`AtomicBool`] is checked
+/// before the lock so the hot path costs one relaxed load.
+static BOX_BUILD_LOG_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The log itself — see [`BOX_BUILD_LOG_ON`].
+static BOX_BUILD_LOG: std::sync::Mutex<Vec<NodeId>> = std::sync::Mutex::new(Vec::new());
+
+/// Enables/disables the BUG-341 S18 per-node build census, clearing the log.
+///
+/// Process-wide, so a test that turns it on must not run concurrently with
+/// another layout pass in the same process — the census tests are `#[ignore]`d
+/// manual diagnostics for exactly that reason.
+pub fn set_box_build_diagnostics(on: bool) {
+    if let Ok(mut log) = BOX_BUILD_LOG.lock() {
+        log.clear();
+    }
+    BOX_BUILD_LOG_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Drains the BUG-341 S18 build census — the `NodeId` of every box really built
+/// since the last drain, in completion order (see [`set_box_build_diagnostics`]).
+pub fn take_box_build_log() -> Vec<NodeId> {
+    BOX_BUILD_LOG.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default()
+}
+
+/// BUG-341 S20 census: per-built-box **inclusive** wall-clock, paired with the
+/// `NodeId` — S18's log answers *which* boxes a cycle rebuilt, this one answers
+/// *what each of them cost*.
+///
+/// Inclusive, not self-time, because `build_box` recurses (and fans large
+/// flex/grid containers out over rayon workers, where an "elapsed" reading also
+/// covers the join wait). A census that wants self-time subtracts a node's
+/// children itself — it has the document and can tell which log entries are
+/// descendants; doing that subtraction here would need a parent link the hot
+/// path does not carry. Same `Mutex`-not-thread-local reasoning as
+/// [`BOX_BUILD_LOG`] (the S15 trap), and the same [`BOX_BUILD_LOG_ON`] gate, so
+/// production pays one relaxed load.
+static BOX_BUILD_TIME_LOG: std::sync::Mutex<Vec<(NodeId, u64)>> = std::sync::Mutex::new(Vec::new());
+
+/// Gate for [`BOX_BUILD_TIME_LOG`] — deliberately **not** the S18/S19
+/// [`BOX_BUILD_LOG_ON`] flag.
+///
+/// That flag also arms the copy census, whose `count_boxes` walks every reused
+/// subtree (299 of chrome's 318 boxes on a keystroke) from inside
+/// `build_box_or_reuse` — i.e. from inside the *parent's* `build_box` call. Run
+/// together, the copy census would land squarely in the timing census's numbers
+/// and make whichever box happens to own the largest reused subtree look like
+/// the most expensive box to build. One census must not be measuring the other.
+static BOX_TIME_LOG_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Enables/disables the BUG-341 S20 per-box timing census, clearing the log.
+///
+/// Process-wide, same constraint as [`set_box_build_diagnostics`]: a test that
+/// turns it on must not run concurrently with another layout pass.
+pub fn set_box_time_diagnostics(on: bool) {
+    if let Ok(mut log) = BOX_BUILD_TIME_LOG.lock() {
+        log.clear();
+    }
+    BOX_TIME_LOG_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Drains the BUG-341 S20 per-box timing census — see [`BOX_BUILD_TIME_LOG`].
+pub fn take_box_build_time_log() -> Vec<(NodeId, u64)> {
+    BOX_BUILD_TIME_LOG.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default()
+}
+
+/// BUG-341 S18/S19 census: what one incremental box-build pass spent on
+/// *copying and indexing* the previous tree, as opposed to building boxes.
+///
+/// Only accumulated while [`set_box_build_diagnostics`] is on — both halves
+/// need their own traversal of the previous tree, which must not run in
+/// production. Drained by [`take_box_copy_stats`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BoxCopyStats {
+    /// Nanoseconds spent taking whole reusable subtrees out of the previous
+    /// tree inside `build_box_or_reuse` (a deep `clone` before S19, an O(1)
+    /// move after it).
+    pub reuse_ns: u64,
+    /// Boxes those reuses carried over — the size of the reused region,
+    /// whether it was copied or moved.
+    pub reuse_boxes: u64,
+    /// Nanoseconds spent in [`crate::incremental::extract_clean_subtrees`]
+    /// building the id→subtree index the reuses draw from.
+    pub index_ns: u64,
+    /// Boxes that index walk visited. Before S19 this was the whole previous
+    /// tree (`index_by_node` hashed every box); after it, only the spine above
+    /// the reusable subtrees.
+    pub index_boxes: u64,
+}
+
+static BOX_CLONE_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static BOX_CLONE_BOXES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static PREV_INDEX_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static PREV_INDEX_BOXES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Drains the BUG-341 S18/S19 copy census — see [`BoxCopyStats`].
+pub fn take_box_copy_stats() -> BoxCopyStats {
+    use std::sync::atomic::Ordering::Relaxed;
+    BoxCopyStats {
+        reuse_ns: BOX_CLONE_NS.swap(0, Relaxed),
+        reuse_boxes: BOX_CLONE_BOXES.swap(0, Relaxed),
+        index_ns: PREV_INDEX_NS.swap(0, Relaxed),
+        index_boxes: PREV_INDEX_BOXES.swap(0, Relaxed),
+    }
+}
+
+/// Whether the S18/S19 copy census is on — see [`set_box_build_diagnostics`].
+pub(crate) fn box_build_diagnostics_on() -> bool {
+    BOX_BUILD_LOG_ON.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Records one index-build pass in the census (see [`BoxCopyStats`]).
+pub(crate) fn note_prev_index(ns: u64, boxes: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    PREV_INDEX_NS.fetch_add(ns, Relaxed);
+    PREV_INDEX_BOXES.fetch_add(boxes, Relaxed);
+}
+
+/// Number of boxes in `b`'s subtree, inclusive — census only.
+fn count_boxes(b: &LayoutBox) -> u64 {
+    1 + b.children.iter().map(count_boxes).sum::<u64>()
+}
+
+/// BUG-341 S25 census: nanoseconds the box-build stage spent inside the
+/// `compute_style` calls tallied by [`BoxBuildStats::display_probes`] and
+/// [`BoxBuildStats::style_misses`], respectively.
+///
+/// Counted only while the S20 timing census is armed ([`BOX_TIME_LOG_ON`]) —
+/// the counts themselves are always compiled, because the S25 gate asserts on
+/// them, but a timer per probe has no business on the production path.
+/// Process-wide atomics rather than thread-locals: the probes run on rayon
+/// workers too (the S15 trap).
+static PROBE_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static STYLE_MISS_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Drains the BUG-341 S25 probe timers — see [`PROBE_NS`] / [`STYLE_MISS_NS`].
+pub fn take_box_probe_ns() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (PROBE_NS.swap(0, Relaxed), STYLE_MISS_NS.swap(0, Relaxed))
+}
+
+/// Runs `f` as the `compute_style` fallback of a `display` probe, tallying it
+/// (see [`BoxBuildStats::display_probe_cascades`]) and, when the S20 timing
+/// census is armed, timing it.
+fn note_display_probe<T>(f: impl FnOnce() -> T) -> T {
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.display_probe_cascades += 1;
+        s.set(v);
+    });
+    if !BOX_TIME_LOG_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return f();
+    }
+    let t = std::time::Instant::now();
+    let out = f();
+    PROBE_NS.fetch_add(t.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    out
+}
+
+/// Runs `f` as the `compute_style` fallback of a [`CounterMap::style_arc`] miss,
+/// tallying it (see [`BoxBuildStats::style_misses`]) and timing it under the S20
+/// census, exactly like [`note_display_probe`].
+fn note_style_miss<T>(f: impl FnOnce() -> T) -> T {
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.style_misses += 1;
+        s.set(v);
+    });
+    if !BOX_TIME_LOG_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return f();
+    }
+    let t = std::time::Instant::now();
+    let out = f();
+    STYLE_MISS_NS.fetch_add(t.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    out
+}
+
+/// Records `id` in the census log when [`set_box_build_diagnostics`] is on.
+fn note_box_built(id: NodeId) {
+    if BOX_BUILD_LOG_ON.load(std::sync::atomic::Ordering::Relaxed)
+        && let Ok(mut log) = BOX_BUILD_LOG.lock()
+    {
+        log.push(id);
+    }
+}
+
+/// Folds `d` into the current thread's [`BoxBuildStats`] tally.
+fn add_box_build_stats(d: BoxBuildStats) {
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.built += d.built;
+        v.reused += d.reused;
+        v.prev_index_visited += d.prev_index_visited;
+        v.fanouts += d.fanouts;
+        v.display_probes += d.display_probes;
+        v.display_probe_cascades += d.display_probe_cascades;
+        v.style_misses += d.style_misses;
+        s.set(v);
+    });
 }
 
 /// Layout-side gutter width for `scrollbar-width: auto` in CSS px.
@@ -168,7 +488,7 @@ fn is_picture_element(doc: &Document, id: NodeId) -> bool {
 
 /// SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
 /// to the CSS pixel rect of the `<svg>` element. All four values are in SVG user units.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ViewBox {
     /// Left edge of the SVG viewport in user units.
     pub min_x: f32,
@@ -280,7 +600,7 @@ pub enum SvgBaselineShift {
 
 /// SVG transformation data from the `transform` presentation attribute.
 /// Stores parsed transform functions in order of application.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SvgTransform {
     /// Transform matrix components: [a, b, c, d, e, f] representing the 2D transformation matrix.
     /// Default is identity matrix [1, 0, 0, 1, 0, 0].
@@ -322,7 +642,7 @@ impl SvgTransform {
 
 /// Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling).
 /// Coordinate origin: top-left of the SVG viewport.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SvgShapeKind {
     /// `<rect x y width height rx ry>`. Corner radii `rx`/`ry` default to 0 (sharp corners).
     Rect { x: f32, y: f32, width: f32, height: f32, rx: f32, ry: f32 },
@@ -919,22 +1239,46 @@ fn compute_preserve_aspect_ratio_transform(
     (sx, sy, ox - view_box.min_x * sx, oy - view_box.min_y * sy)
 }
 
+/// Best-effort CSS-px size of an `<svg>` root's own viewport, computed at box-tree-build
+/// time (before layout runs, so percentage width/height cannot resolve against a containing
+/// block yet — only the `None` percent-basis case). Mirrors the intrinsic-size fallback chain
+/// `lay_out_svg_root` uses later for the box's own rect (CSS width/height → viewBox dims → SVG
+/// default 300×150). BUG-334: this is the "current viewport" a descendant `<use>`/`<symbol>`
+/// without explicit width/height should size itself against (SVG 2 §5.7/§7.10 — the used value
+/// is 100% of the current viewport), not the target's own viewBox dimensions.
+fn svg_root_own_size(style: &ComputedStyle, view_box: Option<&ViewBox>, viewport: Size) -> Size {
+    let em = style.font_size;
+    let width = style.width.as_ref()
+        .and_then(|l| l.resolve(em, None, viewport))
+        .or_else(|| view_box.map(|vb| vb.width))
+        .unwrap_or(300.0)
+        .max(0.0);
+    let height = style.height.as_ref()
+        .and_then(|l| l.resolve(em, None, viewport))
+        .or_else(|| view_box.map(|vb| vb.height))
+        .unwrap_or(150.0)
+        .max(0.0);
+    Size { width, height }
+}
+
 /// Builds `SvgShape` and `Block` (for `<g>`) layout boxes for the SVG subtree rooted at
 /// `parent_id`. Because the HTML5 parser does not implement SVG foreign-content mode, self-
 /// closing SVG tags like `<rect/>` are treated as open tags and subsequent siblings become
 /// DOM children. This function performs a depth-first recursive scan, collecting SVG shape
 /// elements wherever they appear in the subtree.
+#[allow(clippy::too_many_arguments)]
 fn build_svg_children(
     doc: &Document,
     sheet: &Stylesheet,
     parent_id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    own_svg_size: Size,
     flat: &FlatTree,
     dark_mode: bool,
 ) -> Vec<LayoutBox> {
     let mut out = Vec::new();
-    collect_svg_shapes(doc, sheet, parent_id, inherited, viewport, flat, &mut out, dark_mode);
+    collect_svg_shapes(doc, sheet, parent_id, inherited, viewport, own_svg_size, flat, &mut out, dark_mode);
     out
 }
 
@@ -949,11 +1293,12 @@ fn collect_svg_shapes(
     parent_id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    own_svg_size: Size,
     flat: &FlatTree,
     out: &mut Vec<LayoutBox>,
     dark_mode: bool,
 ) {
-    collect_svg_shapes_impl(doc, sheet, parent_id, inherited, viewport, flat, out, dark_mode, &[]);
+    collect_svg_shapes_impl(doc, sheet, parent_id, inherited, viewport, own_svg_size, flat, out, dark_mode, &[]);
 }
 
 /// Inner recursive worker for `collect_svg_shapes`. Carries `use_stack` for cycle detection.
@@ -964,13 +1309,14 @@ fn collect_svg_shapes_impl(
     parent_id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    own_svg_size: Size,
     flat: &FlatTree,
     out: &mut Vec<LayoutBox>,
     dark_mode: bool,
     use_stack: &[NodeId],
 ) {
     for child_id in flat.children_of(doc, parent_id) {
-        process_svg_node(doc, sheet, *child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        process_svg_node(doc, sheet, *child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
     }
 }
 
@@ -983,6 +1329,7 @@ fn process_svg_node(
     child_id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    own_svg_size: Size,
     flat: &FlatTree,
     out: &mut Vec<LayoutBox>,
     dark_mode: bool,
@@ -991,7 +1338,7 @@ fn process_svg_node(
     let Some(name) = doc.get(child_id).element_name() else {
         return; // text node / comment / etc.
     };
-    let style = crate::style::compute_style(doc, child_id, sheet, inherited, viewport, dark_mode);
+    let style = Arc::new(crate::style::compute_style(doc, child_id, sheet, inherited, viewport, dark_mode));
     if style.display == crate::style::Display::None {
         return;
     }
@@ -1016,7 +1363,7 @@ fn process_svg_node(
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
             // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "circle" => {
             out.push(LayoutBox {
@@ -1032,7 +1379,7 @@ fn process_svg_node(
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "ellipse" => {
             out.push(LayoutBox {
@@ -1049,7 +1396,7 @@ fn process_svg_node(
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "line" => {
             out.push(LayoutBox {
@@ -1066,7 +1413,7 @@ fn process_svg_node(
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "path" => {
             let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
@@ -1075,7 +1422,7 @@ fn process_svg_node(
                 kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity() },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "text" | "tspan" | "textPath" => {
             // SVG text element: collect text content from this element and descendants.
@@ -1106,12 +1453,12 @@ fn process_svg_node(
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
             // Recurse for potential nested text/tspan/textPath elements.
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "g" => {
             // Group: collect children shapes, then wrap in a Block box.
             let mut group_children: Vec<LayoutBox> = Vec::new();
-            collect_svg_shapes_impl(doc, sheet, child_id, &style, viewport, flat, &mut group_children, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, &style, viewport, own_svg_size, flat, &mut group_children, dark_mode, use_stack);
             let group_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
@@ -1166,7 +1513,9 @@ fn process_svg_node(
                 && let Some(vb) = parse_view_box(doc, target_id)
             {
                 // Viewport size: `<use>` width/height win; else the symbol's own
-                // width/height; else fall back to the viewBox dims (→ identity).
+                // width/height; else BUG-334: fall back to the enclosing `<svg>`'s own
+                // CSS-resolved viewport (SVG 2 §5.7/§7.10 "100% of current viewport"),
+                // not the target's viewBox dims (that was the BUG-246-era identity bug).
                 let attr_dim = |id: NodeId, attr: &str| -> Option<f32> {
                     doc.get(id).get_attr(attr)
                         .and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok())
@@ -1174,10 +1523,10 @@ fn process_svg_node(
                 };
                 let vp_w = attr_dim(child_id, "width")
                     .or_else(|| attr_dim(target_id, "width"))
-                    .unwrap_or(vb.width);
+                    .unwrap_or(own_svg_size.width);
                 let vp_h = attr_dim(child_id, "height")
                     .or_else(|| attr_dim(target_id, "height"))
-                    .unwrap_or(vb.height);
+                    .unwrap_or(own_svg_size.height);
                 let par = parse_preserve_aspect_ratio(doc, target_id);
                 let (sx, sy, tx, ty) =
                     compute_preserve_aspect_ratio_transform(&vb, vp_w, vp_h, &par);
@@ -1186,10 +1535,10 @@ fn process_svg_node(
 
             if matches!(target_tag.as_str(), "g" | "symbol") {
                 // Container: recursively collect its children as the clone content.
-                collect_svg_shapes_impl(doc, sheet, target_id, &style, viewport, flat, &mut use_children, dark_mode, &new_stack);
+                collect_svg_shapes_impl(doc, sheet, target_id, &style, viewport, own_svg_size, flat, &mut use_children, dark_mode, &new_stack);
             } else {
                 // Single shape or other element: process the node directly.
-                process_svg_node(doc, sheet, target_id, &style, viewport, flat, &mut use_children, dark_mode, &new_stack);
+                process_svg_node(doc, sheet, target_id, &style, viewport, own_svg_size, flat, &mut use_children, dark_mode, &new_stack);
             }
 
             if !use_children.is_empty() {
@@ -1207,7 +1556,7 @@ fn process_svg_node(
             // mis-nested as its DOM children. Scan them into `out` as siblings —
             // mirror the rect/circle workaround. A `<use>`'s rendered content comes
             // from its target, never from its DOM children, so this is unambiguous.
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "polygon" | "polyline" => {
             // SVG 1.1 §9.6/§9.7: render via the `<path>` pipeline. A polygon
@@ -1222,7 +1571,7 @@ fn process_svg_node(
                 });
             }
             // Mis-nested siblings (HTML5 parser wraps them inside the self-closed shape).
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "defs" | "symbol" => {
             // `<defs>` (SVG 2 §5.5) and `<symbol>` (§5.7) are never rendered
@@ -1232,7 +1581,7 @@ fn process_svg_node(
         }
         _ => {
             // Unknown SVG element: skip self, but scan children for shapes.
-            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
     }
 }
@@ -1627,7 +1976,25 @@ pub struct LayoutBox {
     /// Border-box rectangle: (x, y) is the top-left corner after margin,
     /// (width, height) includes padding + border but NOT margin.
     pub rect: Rect,
-    pub style: ComputedStyle,
+    /// Computed style of this box, shared with the cascade cache
+    /// (`CounterMap::styles`) and with every previous-frame tree that still
+    /// holds it, behind copy-on-write.
+    ///
+    /// BUG-341 S12: this used to be an owned `ComputedStyle` — a 3.2 KB,
+    /// 302-field struct with ~30 heap-allocated fields. Every box therefore
+    /// paid a deep copy in `build_box` (from the cascade cache), a second one
+    /// in `lay_out_inner` (which snapshots the style to dodge the borrow
+    /// checker), and a third in every whole-tree `clone()` the incremental
+    /// pipeline does per frame to persist `prev`. Measured on `CC12_HOVER`:
+    /// 1.2 ms of `lay_out`'s 3.7 ms, plus 1.5 ms of per-cycle bookkeeping.
+    /// Behind an `Arc` all three become refcount bumps, and the handful of
+    /// passes that genuinely rewrite a used value (`font-size-adjust`, flex
+    /// item stretch, container queries) take the copy via
+    /// [`std::sync::Arc::make_mut`] on exactly the boxes they touch.
+    ///
+    /// Reads are unchanged: `Arc` derefs to `ComputedStyle`, so `b.style.field`
+    /// and `&b.style` (coerced to `&ComputedStyle`) both still work.
+    pub style: Arc<ComputedStyle>,
     pub kind: BoxKind,
     pub children: Vec<LayoutBox>,
     /// HTML `colspan` attribute (table cells only). Number of columns this cell spans.
@@ -2078,7 +2445,7 @@ fn extract_first_letter_float(
         let inner = LayoutBox {
             node,
             rect: Rect::ZERO,
-            style: inner_style,
+            style: Arc::new(inner_style),
             kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
             children: vec![],
             col_span: 1,
@@ -2090,7 +2457,7 @@ fn extract_first_letter_float(
         return Some(LayoutBox {
             node,
             rect: Rect::ZERO,
-            style: outer_style,
+            style: Arc::new(outer_style),
             kind: BoxKind::Block,
             children: vec![inner],
             col_span: 1,
@@ -2196,7 +2563,7 @@ fn extract_initial_letter(
         let inner = LayoutBox {
             node,
             rect: Rect::ZERO,
-            style: inner_style,
+            style: Arc::new(inner_style),
             kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
             children: vec![],
             col_span: 1,
@@ -2217,7 +2584,7 @@ fn extract_initial_letter(
         return Some(LayoutBox {
             node,
             rect: Rect::ZERO,
-            style: outer_style,
+            style: Arc::new(outer_style),
             kind: BoxKind::Block,
             children: vec![inner],
             col_span: 1,
@@ -2248,7 +2615,28 @@ fn is_first_letter_box(b: &LayoutBox) -> bool {
 /// Walks the box tree; for each block-level box that has a `::first-line` rule on
 /// its DOM node, overrides the style of every frag on the first formatted line
 /// (`is_first_line == true`).
+///
+/// BUG-341 S23: the walk is skipped outright when the sheet has no
+/// `::first-line` rule. It probed every block box in the document — 123 probes
+/// per interaction cycle on `chrome.html`, none of which could ever hit,
+/// because that sheet has no such rule. The predicate is over the same `sheet`
+/// this function would consult, so skipping is exactly behaviour-preserving.
 pub(crate) fn apply_first_line_pseudo_styles(
+    b: &mut LayoutBox,
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+) {
+    if !crate::style::sheet_targets_pseudo(sheet, viewport, dark_mode, "first-line") {
+        return;
+    }
+    apply_first_line_pseudo_styles_inner(b, doc, sheet, viewport, dark_mode);
+}
+
+/// The recursive body of [`apply_first_line_pseudo_styles`], split out so the
+/// sheet-level predicate is evaluated once per pass instead of once per box.
+fn apply_first_line_pseudo_styles_inner(
     b: &mut LayoutBox,
     doc: &Document,
     sheet: &Stylesheet,
@@ -2261,7 +2649,7 @@ pub(crate) fn apply_first_line_pseudo_styles(
         return;
     }
     for child in &mut b.children {
-        apply_first_line_pseudo_styles(child, doc, sheet, viewport, dark_mode);
+        apply_first_line_pseudo_styles_inner(child, doc, sheet, viewport, dark_mode);
     }
     if !matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
         return;
@@ -2460,7 +2848,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
         if lines.len() < 2 {
             // The whole run is the first formatted line: restyle the box in place
             // so paint uses the ::first-line font metrics for its single line box.
-            child.style = *fls;
+            child.style = Arc::new(*fls);
             i += 1;
             continue;
         }
@@ -2490,7 +2878,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
             dirty: Default::default(),
         };
         // Reuse the original box as the first-line box.
-        child.style = *fls;
+        child.style = Arc::new(*fls);
         child.rect.height = fl_h;
         child.kind = BoxKind::InlineRun {
             segments: consumed_segs,
@@ -2555,14 +2943,13 @@ fn collect_shadow_style_css(doc: &Document, id: NodeId, out: &mut String) {
 /// Invalidates the rule-index cache before the cascade so stale hits are impossible.
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     // Prevent stale RULE_IDX_CACHE hits when a new sheet lands at the same address as a freed one.
-    crate::style::invalidate_rule_idx_cache();
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
     let counters = precompute_counters(doc, sheet, viewport, &flat, false);
     let registry = build_counter_style_registry(sheet);
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false, None);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
@@ -2599,11 +2986,33 @@ pub fn layout_measured_hyp(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
 ) -> LayoutBox {
+    layout_measured_hyp_with_counters(doc, sheet, viewport, measurer, hp, dark_mode).0
+}
+
+/// Like [`layout_measured_hyp`], but also returns the [`CounterMap`] the cascade
+/// pass produced (BUG-341 S2).
+///
+/// The `CounterMap` carries the full per-node `ComputedStyle` cascade cache (its
+/// `styles` field — see [`CounterMap::styles`]) that `build_box` reused. Persisting
+/// it across interaction cycles is the foundation of the incremental cascade
+/// (BUG-341 S3+): the incremental path must reproduce this exact map for the same
+/// final state, and the `incr == full` differential tests assert that.
+///
+/// [`layout_measured_hyp`] is a thin wrapper that discards the map, so this
+/// function carries the real body and there is no behavioural difference between
+/// them.
+pub fn layout_measured_hyp_with_counters(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+) -> (LayoutBox, CounterMap) {
     let _prof = lumen_core::profile::scope("layout_measured_hyp");
     lumen_core::tracy_zone!("layout_measured_hyp");
     // Invalidate the rule-index cache before each layout pass to prevent
     // stale hits when a new stylesheet lands at the same pointer as a freed one.
-    crate::style::invalidate_rule_idx_cache();
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
@@ -2617,7 +3026,7 @@ pub fn layout_measured_hyp(
     let mut root = {
         let _prof = lumen_core::profile::scope("build_box");
         lumen_core::tracy_zone!("build_box");
-        build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode)
+        build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
     };
     propagate_canvas_background(doc, &mut root);
     // CSS Fonts L5 §4 — resolve `font-size-adjust` against the real font x-height
@@ -2639,7 +3048,7 @@ pub fn layout_measured_hyp(
         // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
         split_first_line_boxes(&mut root);
     }
-    root
+    (root, counters)
 }
 
 /// Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones.
@@ -2703,14 +3112,13 @@ pub fn layout_streaming_incremental(
     dark_mode: bool,
     prev: &LayoutBox,
 ) -> LayoutBox {
-    crate::style::invalidate_rule_idx_cache();
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
     let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
     let registry = build_counter_style_registry(sheet);
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
     propagate_canvas_background(doc, &mut root);
     apply_font_size_adjust(&mut root, measurer);
     // Every freshly-built box needs layout; graft clears the bit on reusable
@@ -2759,6 +3167,151 @@ pub fn layout_mutation_incremental(
     apply_anchor_positions(&mut root, viewport);
     split_first_line_boxes(&mut root);
     root
+}
+
+/// BUG-341 S5: incremental re-layout for a pure interactive-state transition
+/// (`:hover`/`:focus`/`:active`), combining the S3 incremental cascade with
+/// [`layout_mutation_incremental`]'s existing geometry-graft reuse.
+///
+/// Like [`layout_mutation_incremental`], but the cascade itself only
+/// re-derives `delta.dirty_roots` and their subtrees
+/// ([`crate::counters::incremental_precompute_counters`]) instead of every
+/// node — the dominant cost S1's profiling found (brief §1,
+/// `precompute_counters` at 53% of the cycle). BUG-341 S15: box-build is
+/// skipped too when [`set_incremental_box_build`] is on — whole `LayoutBox`
+/// subtrees are cloned from `prev` wherever [`CounterMap::clean_subtrees`]
+/// licenses it ([`incremental_build_box`]) — and [`crate::incremental::
+/// graft_geometry`] then reuses the layout geometry the same way it already
+/// did. With the flag off this builds fresh boxes with the plain `build_box`,
+/// exactly like [`layout_streaming_incremental`] does.
+///
+/// `delta.prev_styles` must be the [`CounterMap::styles`] this same document
+/// produced on the previous cycle (this function's own returned `CounterMap`,
+/// or [`layout_measured_hyp_with_counters`] for the first cycle). The caller
+/// is responsible for only using this entry point when nothing besides
+/// interactive state changed since `prev` — `delta.dom_content_stable` must be
+/// `true` (a DOM/attribute mutation can change content `build_box` reads,
+/// e.g. text or attribute values, in ways a style-only comparison does not
+/// catch) and `delta.dirty_roots` should come from
+/// [`crate::style::restyle_root_set_for_state_change`]. See
+/// [`crate::counters::RestyleDelta`]'s own doc comment for the full
+/// correctness precondition.
+///
+/// BUG-341 S19: `prev` is taken **by value** — this pass moves the reusable
+/// subtrees out of it into the tree it returns rather than copying them, so the
+/// previous tree does not survive the call. Callers persist the *returned* tree
+/// as the next cycle's `prev`; one that also needs the old tree afterwards must
+/// clone it before handing it over.
+///
+/// Returns the fresh `CounterMap` alongside the tree so the caller can carry
+/// its `styles()` forward as the next cycle's `prev_styles`.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_mutation_incremental_restyle(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    mut prev: LayoutBox,
+    delta: crate::counters::RestyleDelta<'_>,
+) -> (LayoutBox, CounterMap) {
+    // Stage scopes deliberately reuse `layout_measured_hyp_with_counters`'
+    // names so `LUMEN_PROFILE_TREE=1` yields a directly comparable split of
+    // the *incremental* path — BUG-341 §1's profile only ever described the
+    // full pass, and every slice since S3 has been reasoning from it.
+    let _prof = lumen_core::profile::scope("layout_mutation_incremental_restyle");
+    crate::content_visibility::reset_cv_skipped();
+    let root_style = ComputedStyle::root();
+    let flat = {
+        let _prof = lumen_core::profile::scope("build_flat_tree");
+        build_flat_tree(doc)
+    };
+    {
+        // BUG-341 S26: scoped because it is per-pass whole-document work that
+        // the delta cannot shrink — it walks every node asking `is_shadow_host`,
+        // with no `shadow_roots.is_empty()` fast path of its own (unlike
+        // `build_flat_tree`). Unscoped, it was invisible to every stage profile
+        // this track has taken.
+        let _prof = lumen_core::profile::scope("build_shadow_sheets");
+        crate::style::set_shadow_sheets(build_shadow_sheets(doc));
+    }
+    let counters = {
+        let _prof = lumen_core::profile::scope("precompute_counters");
+        crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta)
+    };
+    let registry = {
+        // BUG-341 S26: likewise per-pass, sheet-wide and delta-independent.
+        let _prof = lumen_core::profile::scope("counter_style_registry");
+        build_counter_style_registry(sheet)
+    };
+    let mut root = {
+        let _prof = lumen_core::profile::scope("build_box");
+        // BUG-341 S15: reuse whole `LayoutBox` subtrees from `prev` wherever
+        // `CounterMap::clean_subtrees` licenses it (the S4 mechanism), instead
+        // of rebuilding a tree that `graft_geometry` is about to graft straight
+        // back onto the previous geometry. S4's own measurement rejected this
+        // because `index_by_node`'s whole-prev-tree hash outweighed the ~8%
+        // `build_box` share it saved; both halves of that trade have since
+        // moved — `build_box` is now ~60% of the incremental cycle (S14's
+        // profile) and, after S13/S14, the dirty set on a chrome interaction is
+        // empty, so `clean_subtrees` licenses nearly the whole tree.
+        // BUG-341 S19: this is where `prev` is consumed — the reusable subtrees
+        // are moved into the tree being built, not copied out of it.
+        if incremental_box_build_enabled() {
+            incremental_build_box(
+                doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, &mut prev,
+            )
+        } else {
+            build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
+        }
+    };
+    {
+        // BUG-341 S26: two whole-tree walks between the build and graft stages,
+        // both previously unscoped.
+        let _prof = lumen_core::profile::scope("post_build_tree_walks");
+        propagate_canvas_background(doc, &mut root);
+        apply_font_size_adjust(&mut root, measurer);
+    }
+    {
+        let _prof = lumen_core::profile::scope("graft_geometry");
+        // Every freshly-built box needs layout; graft clears the bit on reusable
+        // subtrees so the incremental pass only re-lays-out new/changed content.
+        crate::incremental::mark_subtree_dirty(&mut root);
+        // BUG-341 S13: `prev` is a laid-out tree, so its styles carry the used
+        // values `lay_out` wrote back into them; `delta.prev_styles` is the
+        // unpolluted cascade those boxes were built from, and lets the graft
+        // tell "the author's style changed" from "layout wrote its own output
+        // here last cycle". Without it, 81 of the chrome document's 318 boxes
+        // were rejected on style every single hover flip — every one of them
+        // differing only in those used-value fields — plus 41 ancestors
+        // dragged along by the reject propagation.
+        // BUG-341 S19: `prev` is a husked tree by now — the reusable subtrees
+        // are in `root`, and every position they came from carries
+        // `DirtyBits::MOVED_OUT`. The graft skips those on the S18 claim before
+        // it ever looks at the husk, and rejects any it reaches without one.
+        // BUG-341 S24: the delta's cache was moved into `counters` and rewritten
+        // in place, so the "what was `prev` built from" view now comes from
+        // there — live entries for everything this pass reused, displaced ones
+        // for everything it recomputed.
+        crate::incremental::graft_geometry_with_cascade(&mut root, &prev, Some(counters.prev_cascade()));
+    }
+    let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+    {
+        let _prof = lumen_core::profile::scope("lay_out");
+        lay_out_incremental(
+            &mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp,
+        );
+    }
+    {
+        let _prof = lumen_core::profile::scope("post_layout_passes");
+        // Post-layout passes — same set as layout_measured_hyp/layout_mutation_incremental, same order.
+        apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
+        apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
+        apply_anchor_positions(&mut root, viewport);
+        split_first_line_boxes(&mut root);
+    }
+    (root, counters)
 }
 
 /// CSS Fonts L5 §4 — used `font-size` after applying `font-size-adjust`.
@@ -2813,7 +3366,13 @@ fn apply_font_size_adjust_to_style(style: &mut ComputedStyle, m: &dyn TextMeasur
 /// `frag.style.font_size`) pick up the scaled size from a single source. Inline
 /// text segments carry their own cloned style, so they are adjusted too.
 fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
-    apply_font_size_adjust_to_style(&mut b.style, m);
+    // BUG-341 S12: the `None` test lives here rather than only inside
+    // `apply_font_size_adjust_to_style`, because reaching for `Arc::make_mut`
+    // on a style shared with the cascade cache would deep-copy it — on every
+    // box of the document, for a property almost no box sets.
+    if !matches!(b.style.font_size_adjust, crate::style::FontSizeAdjust::None) {
+        apply_font_size_adjust_to_style(Arc::make_mut(&mut b.style), m);
+    }
     if let BoxKind::InlineRun { segments, .. } = &mut b.kind {
         for seg in segments.iter_mut() {
             apply_font_size_adjust_to_style(&mut seg.style, m);
@@ -2882,10 +3441,12 @@ fn propagate_canvas_background(doc: &Document, root: &mut LayoutBox) {
         return;
     }
 
-    let bg_color = body.style.background_color.take();
-    let bg_layers = std::mem::take(&mut body.style.background_layers);
-    html_box.style.background_color = bg_color;
-    html_box.style.background_layers = bg_layers;
+    let body_style = Arc::make_mut(&mut body.style);
+    let bg_color = body_style.background_color.take();
+    let bg_layers = std::mem::take(&mut body_style.background_layers);
+    let html_style = Arc::make_mut(&mut html_box.style);
+    html_style.background_color = bg_color;
+    html_style.background_layers = bg_layers;
 }
 
 /// CSS Backgrounds §3.11.1 — the canvas background color.
@@ -2940,10 +3501,49 @@ fn strip_invisible_controls(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// The computed `display` of `id`, as the box-build stage will see it.
+///
+/// BUG-341 S25. Every caller of this asks the same question — *which formatting
+/// context does this child join* — about a node whose style
+/// [`precompute_counters`] has already cascaded against this very `inherited`,
+/// and which `build_box_inner` will build out of that cached entry regardless
+/// of what a probe says. Re-running `compute_style` here therefore did not just
+/// cost a second cascade per element child (14 of them on a chrome keystroke,
+/// 0.21-0.25 ms of a 0.63 ms cycle): it let the probe and the box disagree.
+/// Reading the cache makes the two answers the same one by construction.
+///
+/// The `compute_style` fallback stays for the genuine misses — a full pass over
+/// a node the cascade did not visit, and any caller holding a `CounterMap` that
+/// predates the node. It is not a performance path: on chrome it never fires
+/// for an element.
+fn probe_display(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+    counters: &CounterMap,
+) -> Display {
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.display_probes += 1;
+        s.set(v);
+    });
+    match counters.style_arc(id) {
+        Some(s) => s.display,
+        None => {
+            note_display_probe(|| compute_style(doc, id, sheet, inherited, viewport, dark_mode))
+                .display
+        }
+    }
+}
+
 /// `<img>` в Phase 0 — block-level replaced element, не inline-контент:
 /// он порождает собственный `BoxKind::Image`, а не вливается в `InlineRun`.
 /// Inline-replaced (картинка внутри строки текста) — отдельная задача;
 /// до неё `<img>` всегда занимает свою строку, как `<div>`.
+#[allow(clippy::too_many_arguments)]
 fn is_inline_content(
     doc: &Document,
     sheet: &Stylesheet,
@@ -2951,6 +3551,7 @@ fn is_inline_content(
     inherited: &ComputedStyle,
     viewport: Size,
     dark_mode: bool,
+    counters: &CounterMap,
 ) -> bool {
     match &doc.get(id).data {
         // Control-only text (after BUG-120 stripping) is no more inline content
@@ -2964,7 +3565,7 @@ fn is_inline_content(
             // Phase 0 layout не делает реального flex/grid — флэт-семантика
             // блока для outer-display, но inline-family остаётся inline.
             matches!(
-                compute_style(doc, id, sheet, inherited, viewport, dark_mode).display,
+                probe_display(doc, sheet, id, inherited, viewport, dark_mode, counters),
                 Display::Inline | Display::InlineFlex | Display::InlineGrid
             )
         }
@@ -2981,6 +3582,7 @@ fn is_inline_content(
 /// FormControl`) собирается в `InlineBlockRow` и течёт горизонтально рядом с
 /// текстом и соседними контролами. Author `display:block` поверх → обычный
 /// block-бокс (эта функция вернёт false).
+#[allow(clippy::too_many_arguments)]
 fn is_inline_block(
     doc: &Document,
     sheet: &Stylesheet,
@@ -2988,12 +3590,13 @@ fn is_inline_block(
     inherited: &ComputedStyle,
     viewport: Size,
     dark_mode: bool,
+    counters: &CounterMap,
 ) -> bool {
     matches!(
         &doc.get(id).data,
         NodeData::Element { .. }
         if !is_image_element(doc, id)
-            && compute_style(doc, id, sheet, inherited, viewport, dark_mode).display
+            && probe_display(doc, sheet, id, inherited, viewport, dark_mode, counters)
                 == Display::InlineBlock
     )
 }
@@ -3039,7 +3642,7 @@ fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment
     LayoutBox {
         node,
         rect: Rect::ZERO,
-        style: anon_style(parent),
+        style: Arc::new(anon_style(parent)),
         kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None },
         children: vec![],
         col_span: 1,
@@ -3091,7 +3694,7 @@ fn build_anon_text_item(
     Some(LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        style: item_style,
+        style: Arc::new(item_style),
         kind: BoxKind::Block,
         children: vec![run],
         col_span: 1,
@@ -3164,7 +3767,7 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
     LayoutBox {
         node,
         rect: Rect::ZERO,
-        style: anon_style(parent),
+        style: Arc::new(anon_style(parent)),
         kind: BoxKind::InlineBlockRow,
         children: items,
         col_span: 1,
@@ -3503,7 +4106,7 @@ fn inject_pseudo(
             let b = LayoutBox {
                 node: parent_id,
                 rect: Rect::ZERO,
-                style: ps,
+                style: Arc::new(ps),
                 kind: BoxKind::Block,
                 children: inner,
                 col_span: 1,
@@ -3759,7 +4362,7 @@ fn inject_marker(
     children.insert(0, LayoutBox {
         node:     parent_id,
         rect:     Rect::ZERO,
-        style:    ms,
+        style:    Arc::new(ms),
         kind:     BoxKind::Marker {
             text,
             position:        style.list_style_position,
@@ -3895,7 +4498,7 @@ fn build_base_select_box(
     let trigger = LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        style: trigger_style,
+        style: Arc::new(trigger_style),
         kind: BoxKind::Block,
         children: trigger_children,
         col_span: 1,
@@ -3909,7 +4512,7 @@ fn build_base_select_box(
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        style: style.clone(),
+        style: Arc::new(style.clone()),
         // FlowRoot: establishes a BFC and lays out the trigger as a block child,
         // regardless of the select's own (inline-block) UA display.
         kind: BoxKind::FlowRoot,
@@ -3923,6 +4526,136 @@ fn build_base_select_box(
     }
 }
 
+/// BUG-341 S4 — per-node reuse decision point for incremental box-build.
+///
+/// Called wherever `build_box` recurses into a DOM child. When incremental
+/// box-build is enabled and `prev_index` still holds `id`'s subtree, **takes**
+/// that previous [`LayoutBox`] subtree instead of rebuilding it. Otherwise
+/// falls through to a normal `build_box` call (which itself threads
+/// `prev_index` down, so a dirty ancestor's clean descendants still get reused
+/// at their own level).
+///
+/// BUG-341 S19: membership in `prev_index` *is* the reuse licence — the index
+/// is built by [`crate::incremental::extract_clean_subtrees`] from exactly
+/// [`CounterMap::clean_subtrees`], so the separate `clean_subtrees` test S4-S18
+/// did here would be asking the same question twice. Each entry can be taken
+/// only once, which is also what keeps the previous tree's boxes from ending up
+/// in two places at once.
+#[allow(clippy::too_many_arguments)]
+fn build_box_or_reuse(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    prev_index: Option<&crate::incremental::ReuseIndex>,
+) -> LayoutBox {
+    // BUG-341 S15: the gate is `prev_index.is_some()`, NOT the
+    // `INCREMENTAL_BOX_BUILD` thread-local — `build_box` fans flex/grid
+    // containers out over rayon workers, whose thread-locals start at their
+    // defaults (the same trap `StyleEnvSnapshot` exists for), so a thread-local
+    // check here silently disabled reuse for every child of a container with 8+
+    // items. Chrome is built out of exactly such containers. The flag is
+    // consulted once, at `incremental_build_box`, which is what decides whether
+    // an index exists at all.
+    if let Some(idx) = prev_index
+        && let Some(cell) = idx.get(&id)
+    {
+        let taken = if box_build_diagnostics_on() {
+            use std::sync::atomic::Ordering::Relaxed;
+            let t = std::time::Instant::now();
+            let taken = cell.lock().ok().and_then(|mut slot| slot.take());
+            BOX_CLONE_NS.fetch_add(t.elapsed().as_nanos() as u64, Relaxed);
+            if let Some(b) = taken.as_ref() {
+                BOX_CLONE_BOXES.fetch_add(count_boxes(b), Relaxed);
+            }
+            taken
+        } else {
+            cell.lock().ok().and_then(|mut slot| slot.take())
+        };
+        if let Some(mut subtree) = taken {
+            BOX_BUILD_STATS.with(|s| {
+                let mut v = s.get();
+                v.reused += 1;
+                s.set(v);
+            });
+            // BUG-341 S18: tell the two stages that follow — `mark_subtree_dirty`
+            // and `graft_geometry` — that this subtree came out of `prev` itself.
+            // Both of them exist to answer "may this subtree keep the previous
+            // pass's geometry", and here the answer is known by construction, so
+            // both can honour it at the root instead of walking the copy against
+            // its own original. Only the root carries the flag: the move stops the
+            // recursion, so nothing inside it can hold a claim of its own.
+            subtree.dirty = crate::incremental::DirtyBits::REUSED_SUBTREE;
+            return subtree;
+        }
+    }
+    build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev_index)
+}
+
+/// BUG-341 S4 — incremental box-build entry point.
+///
+/// Builds the `LayoutBox` tree rooted at `id`, **moving** whole subtrees out of
+/// `prev` wherever [`CounterMap::clean_subtrees`] says it is safe to (see
+/// [`build_box_or_reuse`]) instead of calling `build_box` for them. Must
+/// reproduce a full `build_box` pass bit-for-bit for the same final state —
+/// the `incr == full` differential tests in `incremental.rs` guard this.
+///
+/// BUG-341 S19: `prev` is taken by unique reference and is **gutted** by the
+/// call — every reusable subtree ends up in the returned tree, and its old
+/// position holds a husk (see [`crate::incremental::DirtyBits::MOVED_OUT`]).
+/// The only thing a caller may still do with `prev` afterwards is hand it to
+/// [`crate::incremental::graft_geometry_with_cascade`], which recognises the
+/// husks; anything else must clone `prev` first.
+///
+/// Gated behind [`set_incremental_box_build`]: flag off (the default) makes
+/// this behave exactly like `build_box(..., None)` and leaves `prev` untouched.
+///
+/// BUG-341 S15 wired this into [`layout_mutation_incremental_restyle`], the
+/// chrome and page incremental pipelines' entry point. The full-layout entry
+/// points (`layout_measured_hyp_with_counters`, `layout_streaming_incremental`)
+/// still call `build_box` directly — they have no `RestyleDelta`, hence no
+/// `clean_subtrees`, hence nothing to reuse.
+#[allow(clippy::too_many_arguments)]
+pub fn incremental_build_box(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    prev: &mut LayoutBox,
+) -> LayoutBox {
+    if !incremental_box_build_enabled() {
+        return build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, None);
+    }
+    let t = std::time::Instant::now();
+    let (prev_index, visited) = crate::incremental::extract_clean_subtrees(prev, counters.clean_subtrees());
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.prev_index_visited += visited as u32;
+        s.set(v);
+    });
+    if box_build_diagnostics_on() {
+        note_prev_index(t.elapsed().as_nanos() as u64, visited);
+    }
+    build_box_or_reuse(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, Some(&prev_index))
+}
+
+/// BUG-341 S20 — timing shim around [`build_box_inner`].
+///
+/// Off the census path (the overwhelmingly common case) this is one relaxed
+/// atomic load and a direct call. With [`set_box_build_diagnostics`] on it
+/// records the call's inclusive wall-clock into [`BOX_BUILD_TIME_LOG`]; the
+/// timer lives here rather than inside the body so it covers every one of the
+/// body's exit paths (`build_base_select_box`'s early return among them).
 #[allow(clippy::too_many_arguments)]
 fn build_box(
     doc: &Document,
@@ -3934,15 +4667,56 @@ fn build_box(
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
     dark_mode: bool,
+    prev_index: Option<&crate::incremental::ReuseIndex>,
 ) -> LayoutBox {
+    if !BOX_TIME_LOG_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return build_box_inner(
+            doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev_index,
+        );
+    }
+    let t = std::time::Instant::now();
+    let out = build_box_inner(
+        doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev_index,
+    );
+    let ns = t.elapsed().as_nanos() as u64;
+    if let Ok(mut log) = BOX_BUILD_TIME_LOG.lock() {
+        log.push((id, ns));
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_box_inner(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    // BUG-341 S4/S19: `Some` when an incremental box-build pass is in progress —
+    // an id→owned-subtree index carved out of the previous pass's tree,
+    // consulted by `build_box_or_reuse` at every recursive call site below.
+    // `None` for the full/legacy build path (all current pipeline entry points).
+    prev_index: Option<&crate::incremental::ReuseIndex>,
+) -> LayoutBox {
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.built += 1;
+        s.set(v);
+    });
+    note_box_built(id);
     // BUG-284: `precompute_counters` already ran a full document-order cascade
     // pass over this exact tree (same `inherited` chain, same sheet/viewport/
     // dark_mode) to resolve counter-reset/increment/set — reuse its cached
     // result instead of paying for an identical `compute_style` call again.
-    let mut style = counters
-        .style_for(id)
-        .cloned()
-        .unwrap_or_else(|| compute_style(doc, id, sheet, inherited, viewport, dark_mode));
+    let mut style = counters.style_arc(id).unwrap_or_else(|| {
+        note_style_miss(|| {
+            Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode))
+        })
+    });
 
     // HTML/CSS «Customizable Select»: a `<select appearance:base-select>` renders
     // as an author-styleable widget tree instead of the opaque native control.
@@ -3972,12 +4746,12 @@ fn build_box(
                 if style.width.is_none()
                     && let Some(w) = src.intrinsic_width
                 {
-                    style.width = Some(Length::Px(w as f32));
+                    Arc::make_mut(&mut style).width = Some(Length::Px(w as f32));
                 }
                 if style.height.is_none()
                     && let Some(h) = src.intrinsic_height
                 {
-                    style.height = Some(Length::Px(h as f32));
+                    Arc::make_mut(&mut style).height = Some(Length::Px(h as f32));
                 }
                 let is_lazy = doc.get(id).get_attr("loading")
                     .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
@@ -3990,10 +4764,10 @@ fn build_box(
                 // Explicit width/height attrs applied earlier as presentational hints;
                 // fill only if still unset.
                 if style.width.is_none() {
-                    style.width = Some(Length::Px(300.0));
+                    Arc::make_mut(&mut style).width = Some(Length::Px(300.0));
                 }
                 if style.height.is_none() {
-                    style.height = Some(Length::Px(150.0));
+                    Arc::make_mut(&mut style).height = Some(Length::Px(150.0));
                 }
                 BoxKind::Video { src, poster }
             } else if is_canvas_element(doc, id) {
@@ -4011,10 +4785,10 @@ fn build_box(
                 // The bitmap dimensions act as intrinsic size; explicit CSS
                 // width/height (or presentational hints) win if already set.
                 if style.width.is_none() {
-                    style.width = Some(Length::Px(cw as f32));
+                    Arc::make_mut(&mut style).width = Some(Length::Px(cw as f32));
                 }
                 if style.height.is_none() {
-                    style.height = Some(Length::Px(ch as f32));
+                    Arc::make_mut(&mut style).height = Some(Length::Px(ch as f32));
                 }
                 BoxKind::Canvas { width: cw, height: ch }
             } else if is_audio_element(doc, id) {
@@ -4025,11 +4799,11 @@ fn build_box(
                 // With controls, UA must render a control interface; we use 40px height.
                 if controls {
                     if style.height.is_none() {
-                        style.height = Some(Length::Px(40.0));
+                        Arc::make_mut(&mut style).height = Some(Length::Px(40.0));
                     }
                 } else {
-                    style.width = Some(Length::Px(0.0));
-                    style.height = Some(Length::Px(0.0));
+                    Arc::make_mut(&mut style).width = Some(Length::Px(0.0));
+                    Arc::make_mut(&mut style).height = Some(Length::Px(0.0));
                 }
                 BoxKind::Audio { src, controls }
             } else if is_iframe_element(doc, id) {
@@ -4040,10 +4814,10 @@ fn build_box(
                 // Explicit width/height attrs applied earlier as presentational hints;
                 // fill only if still unset.
                 if style.width.is_none() {
-                    style.width = Some(Length::Px(300.0));
+                    Arc::make_mut(&mut style).width = Some(Length::Px(300.0));
                 }
                 if style.height.is_none() {
-                    style.height = Some(Length::Px(150.0));
+                    Arc::make_mut(&mut style).height = Some(Length::Px(150.0));
                 }
                 BoxKind::Iframe { src, srcdoc }
             } else if is_form_control_element(doc, id) {
@@ -4167,12 +4941,12 @@ fn build_box(
                 if style.width.is_none()
                     && let Some(w) = doc.get(id).get_attr("width").and_then(|v| v.trim().parse::<f32>().ok())
                 {
-                    style.width = Some(crate::style::Length::Px(w));
+                    Arc::make_mut(&mut style).width = Some(crate::style::Length::Px(w));
                 }
                 if style.height.is_none()
                     && let Some(h) = doc.get(id).get_attr("height").and_then(|v| v.trim().parse::<f32>().ok())
                 {
-                    style.height = Some(crate::style::Length::Px(h));
+                    Arc::make_mut(&mut style).height = Some(crate::style::Length::Px(h));
                 }
                 BoxKind::SvgRoot {
                     view_box: parse_view_box(doc, id),
@@ -4251,21 +5025,137 @@ fn build_box(
             // Threshold: only parallelize when the item count justifies the rayon
             // spawn overhead (~1–2 µs per closure on a warm thread pool).
             const RAYON_MIN_FLEX_CHILDREN: usize = 8;
-            if dom_children.len() >= RAYON_MIN_FLEX_CHILDREN {
+            // BUG-341 S20: the threshold counts the children this pass will
+            // really **build**, not the ones the container happens to have.
+            //
+            // M4.1 sized the threshold against a full pass, where every child
+            // costs a cascade plus a box build and eight of them comfortably
+            // outweigh the fan-out. On the incremental path since S15/S19 a
+            // child that is in `prev_index` costs a `Mutex` lock and a move —
+            // and on a chrome interaction nearly all of them are. Counting DOM
+            // children there dispatched a worker per reused subtree to do
+            // nothing: measured at ~1 ms of a 2.5 ms keystroke cycle, spread
+            // over `body`/`.main-col`/`.omnibox-wrap`, each of whose *own* work
+            // is ~4 µs (BUG-341 "S20" census). Same shape as S18 — the stage
+            // was deciding for itself something the reuse mechanism had already
+            // established.
+            //
+            // Non-element children are excluded from the estimate for the same
+            // reason: whitespace between pretty-printed markup never enters the
+            // reuse index (it holds elements only), yet it costs a `Skip` box or
+            // one small anonymous item — never the cascade the threshold was
+            // sized against. Counting it kept `body` above the threshold on a
+            // cycle where every one of its element children was a move.
+            //
+            // `None` (every full-layout entry point) leaves the decision at
+            // `dom_children.len()`, i.e. M4.1's behaviour byte for byte.
+            let children_to_build = match prev_index {
+                None => dom_children.len(),
+                Some(idx) => dom_children
+                    .iter()
+                    .filter(|&&c| {
+                        !idx.contains_key(&c)
+                            && matches!(doc.get(c).data, NodeData::Element { .. })
+                    })
+                    .count(),
+            };
+            if children_to_build >= RAYON_MIN_FLEX_CHILDREN {
                 use rayon::prelude::*;
                 let snap = crate::style::StyleEnvSnapshot::capture();
+                // BUG-341 S15: each closure drains the tally of whatever thread
+                // ran it into this shared counter, which is folded back into the
+                // parent's thread below. Draining is exact even when rayon
+                // work-steals a closure onto the calling thread — whatever it
+                // takes from that thread's tally comes straight back in the
+                // fold. Without it every box built under a container with 8+
+                // items was invisible to the reuse gates.
+                let par_built = std::sync::atomic::AtomicU32::new(0);
+                let par_reused = std::sync::atomic::AtomicU32::new(0);
+                // Nested containers a worker fans out again are folded back
+                // through the same drain as `built`/`reused` below.
+                let par_fanouts = std::sync::atomic::AtomicU32::new(0);
+                // BUG-341 S25: same drain for the display-probe / style-miss
+                // tallies, for the same reason as `built`/`reused` above.
+                let par_probes = std::sync::atomic::AtomicU32::new(0);
+                let par_probe_cascades = std::sync::atomic::AtomicU32::new(0);
+                let par_misses = std::sync::atomic::AtomicU32::new(0);
+                // BUG-341 S21: the cascade's rule index is per-thread too, so a
+                // worker that has not seen this sheet builds its own. Drained
+                // through the same fold as the box tallies, for the same reason
+                // — otherwise the gate that asserts a pass rebuilds no index
+                // would be blind to every rebuild a worker made.
+                let par_index_stats = std::sync::Mutex::new(crate::style::CascadeIndexStats::default());
+                // BUG-341 S23: same drain for the pseudo-element cascade census.
+                // Without it the census undercounts exactly the containers this
+                // branch exists for — every flex/grid container with 8+ items.
+                let par_pseudo_stats =
+                    std::sync::Mutex::new(crate::style::PseudoCascadeStats::default());
+                let par_pseudo_sites: std::sync::Mutex<
+                    std::collections::HashMap<String, crate::style::PseudoCascadeStats>,
+                > = std::sync::Mutex::new(std::collections::HashMap::new());
                 children = dom_children.par_iter().filter_map(|&child_id| {
                     snap.install();
-                    if wrap_text_items && matches!(doc.get(child_id).data, NodeData::Text(_)) {
-                        return build_anon_text_item(
+                    let out = if wrap_text_items && matches!(doc.get(child_id).data, NodeData::Text(_)) {
+                        build_anon_text_item(
                             doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
+                        )
+                    } else {
+                        let b = build_box_or_reuse(
+                            doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode, prev_index,
                         );
+                        if matches!(b.kind, BoxKind::Skip) { None } else { Some(b) }
+                    };
+                    let d = take_box_build_stats();
+                    use std::sync::atomic::Ordering::Relaxed;
+                    par_built.fetch_add(d.built, Relaxed);
+                    par_reused.fetch_add(d.reused, Relaxed);
+                    par_fanouts.fetch_add(d.fanouts, Relaxed);
+                    par_probes.fetch_add(d.display_probes, Relaxed);
+                    par_probe_cascades.fetch_add(d.display_probe_cascades, Relaxed);
+                    par_misses.fetch_add(d.style_misses, Relaxed);
+                    let idx_stats = crate::style::take_cascade_index_stats();
+                    par_index_stats
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .add(idx_stats);
+                    let ps_stats = crate::style::take_pseudo_cascade_stats();
+                    par_pseudo_stats
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .add(ps_stats);
+                    let ps_sites = crate::style::take_pseudo_cascade_sites();
+                    if !ps_sites.is_empty() {
+                        let mut acc = par_pseudo_sites.lock().unwrap_or_else(|e| e.into_inner());
+                        for (k, v) in ps_sites {
+                            acc.entry(k).or_default().add(v);
+                        }
                     }
-                    let b = build_box(
-                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
-                    );
-                    if matches!(b.kind, BoxKind::Skip) { None } else { Some(b) }
+                    out
                 }).collect();
+                crate::style::add_cascade_index_stats(
+                    *par_index_stats.lock().unwrap_or_else(|e| e.into_inner()),
+                );
+                crate::style::add_pseudo_cascade_stats(
+                    *par_pseudo_stats.lock().unwrap_or_else(|e| e.into_inner()),
+                );
+                crate::style::add_pseudo_cascade_sites(std::mem::take(
+                    &mut *par_pseudo_sites.lock().unwrap_or_else(|e| e.into_inner()),
+                ));
+                {
+                    use std::sync::atomic::Ordering::Relaxed;
+                    add_box_build_stats(BoxBuildStats {
+                        built: par_built.load(Relaxed),
+                        reused: par_reused.load(Relaxed),
+                        // Extraction runs once, on the thread that owns `prev`
+                        // — a worker never adds to this.
+                        prev_index_visited: 0,
+                        // This container's own dispatch, plus any a worker made.
+                        fanouts: par_fanouts.load(Relaxed) + 1,
+                        display_probes: par_probes.load(Relaxed),
+                        display_probe_cascades: par_probe_cascades.load(Relaxed),
+                        style_misses: par_misses.load(Relaxed),
+                    });
+                }
             } else {
                 for child_id in dom_children {
                     if wrap_text_items
@@ -4278,8 +5168,8 @@ fn build_box(
                         }
                         continue;
                     }
-                    let child_box = build_box(
-                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
+                    let child_box = build_box_or_reuse(
+                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode, prev_index,
                     );
                     if !matches!(child_box.kind, BoxKind::Skip) {
                         children.push(child_box);
@@ -4307,8 +5197,10 @@ fn build_box(
         let mut i = 0;
         while i < dom_children.len() {
             let child_id = dom_children[i];
-            let is_inl = is_inline_content(doc, sheet, child_id, &style, viewport, dark_mode);
-            let is_ib = !is_inl && is_inline_block(doc, sheet, child_id, &style, viewport, dark_mode);
+            let is_inl =
+                is_inline_content(doc, sheet, child_id, &style, viewport, dark_mode, counters);
+            let is_ib = !is_inl
+                && is_inline_block(doc, sheet, child_id, &style, viewport, dark_mode, counters);
 
             if is_inl || is_ib {
                 // Унифицированный сбор inline-уровневого контента: inline-элементы
@@ -4324,9 +5216,15 @@ fn build_box(
                 // split out yet. Passed through all collect_inline_segments calls in this loop.
                 let mut need_first_letter = true;
                 // CSS Pseudo-elements L4 §5.3: pre-compute ::first-line style once for this block.
-                let first_line_style =
+                // BUG-341 S23: skipped outright on a sheet that never uses
+                // `::first-line` as a selector subject — the cascade could only
+                // return `None` there, and this runs per inline-content block.
+                let first_line_style = if crate::style::sheet_targets_pseudo(sheet, viewport, dark_mode, "first-line") {
                     crate::style::compute_pseudo_element_style(doc, id, "first-line", sheet, &style, viewport, dark_mode)
-                        .map(Box::new);
+                        .map(Box::new)
+                } else {
+                    None
+                };
                 // Track whether first_line_style has been assigned to the first InlineRun.
                 let mut first_line_assigned = false;
 
@@ -4352,7 +5250,7 @@ fn build_box(
                         }
                         _ => {}
                     }
-                    if is_inline_content(doc, sheet, cid, &style, viewport, dark_mode) {
+                    if is_inline_content(doc, sheet, cid, &style, viewport, dark_mode, counters) {
                         // CSS §4.1.1 — collapsed whitespace between inline-level
                         // siblings becomes a single inter-word gap. Record it as a
                         // trailing space on the previous segment so wrap_inline_run
@@ -4369,7 +5267,8 @@ fn build_box(
                         collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters, registry, &mut need_first_letter, dark_mode);
                         had_ws = false;
                         i += 1;
-                    } else if is_inline_block(doc, sheet, cid, &style, viewport, dark_mode) {
+                    } else if is_inline_block(doc, sheet, cid, &style, viewport, dark_mode, counters)
+                    {
                         if !pending.is_empty() {
                             let mut segs = std::mem::take(&mut pending);
                             apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport, dark_mode);
@@ -4387,18 +5286,18 @@ fn build_box(
                             row_items.push(LayoutBox {
                                 node: id,
                                 rect: Rect::ZERO,
-                                style: anon_style(&style),
+                                style: Arc::new(anon_style(&style)),
                                 kind: BoxKind::InlineSpace,
                                 children: vec![],
                                 col_span: 1,
                                 row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                             });
                         }
-                        row_items.push(build_box(doc, sheet, cid, &style, viewport, flat, counters, registry, dark_mode));
+                        row_items.push(build_box_or_reuse(doc, sheet, cid, &style, viewport, flat, counters, registry, dark_mode, prev_index));
                         had_ws = false;
                         i += 1;
                     } else if matches!(doc.get(cid).data, NodeData::Element { .. })
-                        && compute_style(doc, cid, sheet, &style, viewport, dark_mode).display
+                        && probe_display(doc, sheet, cid, &style, viewport, dark_mode, counters)
                             == Display::None
                     {
                         // display:none не прерывает inline-контекст — CSS §9.2.4.
@@ -4476,7 +5375,7 @@ fn build_box(
                     }
                 }
             } else {
-                children.push(build_box(doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode));
+                children.push(build_box_or_reuse(doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode, prev_index));
                 i += 1;
             }
         }
@@ -4506,8 +5405,9 @@ fn build_box(
     }
 
     // SVG root: build SVG shape children (separate from HTML box-tree flow).
-    if matches!(kind, BoxKind::SvgRoot { .. }) {
-        children = build_svg_children(doc, sheet, id, &style, viewport, flat, dark_mode);
+    if let BoxKind::SvgRoot { view_box, .. } = &kind {
+        let own_svg_size = svg_root_own_size(&style, view_box.as_ref(), viewport);
+        children = build_svg_children(doc, sheet, id, &style, viewport, own_svg_size, flat, dark_mode);
     }
 
     // Read HTML colspan/rowspan attributes for table-cell elements.
@@ -5564,9 +6464,34 @@ fn lay_out_inner(
     // The block-children loop in the parent already advanced child_y using the
     // existing height, so the position is consistent across siblings.
     if INCREMENTAL_LAYOUT_MODE.with(|m| m.get()) && b.dirty.is_clean() {
+        let _prof = lumen_core::profile::scope_detail("lo_translate");
         crate::incremental::translate_subtree(b, start_x - b.rect.x, start_y - b.rect.y);
         return;
     }
+
+    // CSS Values L4 §5.1.1 — publish this box's real `ch`/`ex` metrics (advance of
+    // the "0" glyph and the x-height at the used font-size) so `Length::{Ch,Ex}`
+    // resolve against the actual font for this box and its descendants. The guard
+    // restores the parent's value on every return path, keeping the thread-local
+    // balanced across the recursive layout walk. Without a measurer the context is
+    // cleared, so ch/ex fall back to the spec `0.5em` assumption.
+    struct ChExGuard(Option<(f32, f32)>);
+    impl Drop for ChExGuard {
+        fn drop(&mut self) {
+            crate::style::pop_ch_ex_context(self.0);
+        }
+    }
+    let _ch_ex_guard = {
+        let _prof = lumen_core::profile::scope_detail("lo_chex");
+        let ch_ex = measurer.map(|m| {
+            let fs = b.style.font_size.max(0.0);
+            (
+                m.char_width_with_families('0', fs, &b.style.font_family),
+                m.x_height_px(fs),
+            )
+        });
+        ChExGuard(crate::style::push_ch_ex_context(ch_ex))
+    };
 
     // CSS Containment L3 §4.4 — content-visibility: auto (BB-4). When the box
     // flow position starts below the expanded viewport and the shell hasn't
@@ -5587,6 +6512,7 @@ fn lay_out_inner(
     // SVG root dispatches to its own layout algorithm: replaced-element sizing
     // from CSS width/height (or viewBox fallback), then SVG-coordinate shape positioning.
     if matches!(b.kind, BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. }) {
+        let _prof = lumen_core::profile::scope_detail("lo_svg");
         lay_out_svg_root(b, start_x, start_y, available_width, available_height, viewport);
         return;
     }
@@ -5615,7 +6541,15 @@ fn lay_out_inner(
         return;
     }
 
-    let s = b.style.clone();
+    // BUG-341 S12: an `Arc` bump, not a 3.2 KB deep copy. The scope stays
+    // because its call count is the honest "boxes fully laid out this pass"
+    // counter (`lo_translate`'s count is the ones reused from `prev`), and
+    // because a future edit that reintroduces an owned clone here would show up
+    // as this line growing from ~0.1 ms back towards the 2.3 ms it was.
+    let s = {
+        let _prof = lumen_core::profile::scope_detail("lo_style_ref");
+        Arc::clone(&b.style)
+    };
     let em = s.font_size;
     let cb = available_width;
 
@@ -7139,7 +8073,8 @@ fn lay_out_table_row(
                 c.rect.x + c.rect.width + mr
             }
         };
-        let saved_width = if use_global { b.children[i].style.width.take() } else { None };
+        let saved_width =
+            if use_global { Arc::make_mut(&mut b.children[i].style).width.take() } else { None };
         lay_out(
             &mut b.children[i],
             cell_x,
@@ -7153,7 +8088,7 @@ fn lay_out_table_row(
             false,
         );
         if use_global {
-            b.children[i].style.width = saved_width;
+            Arc::make_mut(&mut b.children[i].style).width = saved_width;
         }
     }
 
@@ -8361,9 +9296,40 @@ fn lay_out_flex(
     };
 
     // Step 1 — preliminary layout for intrinsic sizes.
+    //
+    // Only run for items whose `all_hyp` computation below actually reads
+    // `item.rect` back: column-direction items always need the item's real
+    // content height, and row-direction `auto`/`content` items with no
+    // explicit width need `item.rect.width`. Every other combination
+    // resolves its main size from the style directly (`FlexBasis::Length`)
+    // or from the existing cheap `flex_auto_base_main_width` probe (row,
+    // `auto`/`content`, no explicit width) — for those, `item.rect` is never
+    // read before the final placement pass below re-lays the item out anyway
+    // with its resolved main size. Skipping the unneeded call avoids a full
+    // recursive re-layout of the item's whole subtree that nothing reads
+    // (BUG-341: every flex item paid for two full recursive layouts instead
+    // of one, compounding multiplicatively with flex-nesting depth).
     let cb = content_width;
     for &i in &item_idxs {
-        lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
+        let needs_prelayout = {
+            let is = &children[i].style;
+            if is_column {
+                match &is.flex_basis {
+                    FlexBasis::Auto | FlexBasis::Content => true,
+                    FlexBasis::Length(_) => {
+                        is.min_height.is_none() && is.overflow_y == Overflow::Visible
+                    }
+                }
+            } else {
+                match &is.flex_basis {
+                    FlexBasis::Auto | FlexBasis::Content => is.width.is_some(),
+                    FlexBasis::Length(_) => false,
+                }
+            }
+        };
+        if needs_prelayout {
+            lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
+        }
     }
 
     // Compute hypothetical main sizes for all items (outer = including margins).
@@ -8557,12 +9523,19 @@ fn lay_out_flex(
                 // is used verbatim instead of having border+padding added on top of it
                 // for a content-box item (which double-counts the border). Mirrors the
                 // cross-axis stretch path below.
-                children[i].style.box_sizing = BoxSizing::BorderBox;
-                children[i].style.height = Some(Length::Px(inner_main));
+                let item_style = Arc::make_mut(&mut children[i].style);
+                item_style.box_sizing = BoxSizing::BorderBox;
+                item_style.height = Some(Length::Px(inner_main));
+                // BUG-294: pass the item's *margin-box* start (no margin pre-added).
+                // `lay_out_inner` unconditionally adds the box's own `margin_left`/
+                // `margin_top` to the `start_x`/`start_y` it receives, so pre-adding
+                // `m_l`/`m_t` here double-counts the margin. Every other call site in
+                // this file passes the bare margin-box origin and lets `lay_out_inner`
+                // apply the margin once.
                 lay_out(
                     &mut children[i],
-                    content_x + m_l,
-                    content_y + main_cursor + m_t,
+                    content_x,
+                    content_y + main_cursor,
                     content_width - m_l - m_r,
                     Some(inner_main),
                     measurer,
@@ -8574,13 +9547,15 @@ fn lay_out_flex(
                 main_cursor += outer_main + item_gap + jc_gap;
             } else {
                 let inner_main = (outer_main - m_l - m_r).max(0.0);
-                children[i].style.width = Some(Length::Px(inner_main));
+                Arc::make_mut(&mut children[i].style).width = Some(Length::Px(inner_main));
                 // CSS Flexbox §9.8: percentage cross sizes (e.g. height:100%) resolve
                 // against the flex container's definite cross size.
+                // BUG-294: margin-box start — `lay_out_inner` adds `m_l`/`m_t` itself
+                // (see the column arm above), so pre-adding them here double-counts.
                 lay_out(
                     &mut children[i],
-                    content_x + main_cursor + m_l,
-                    content_y + cross_cursor + m_t,
+                    content_x + main_cursor,
+                    content_y + cross_cursor,
                     inner_main,
                     explicit_cross,
                     measurer,
@@ -8681,8 +9656,9 @@ fn lay_out_flex(
                             let rx = item.rect.x;
                             let ry = item.rect.y;
                             let rw = item.rect.width;
-                            item.style.box_sizing = BoxSizing::BorderBox;
-                            item.style.height = Some(Length::Px(stretch_h));
+                            let item_style = Arc::make_mut(&mut item.style);
+                            item_style.box_sizing = BoxSizing::BorderBox;
+                            item_style.height = Some(Length::Px(stretch_h));
                             lay_out(item, rx, ry, rw, Some(stretch_h), measurer, viewport, pcb, hp, false);
                         }
                     }
@@ -9901,6 +10877,7 @@ fn wrap_inline_run(
     word_break: WordBreak,
     overflow_wrap: OverflowWrap,
 ) -> Vec<Vec<InlineFrag>> {
+    let _prof = lumen_core::profile::scope_detail("lo_wrap");
     let space_w = m.char_width(' ', container_font_size);
 
     let mut result: Vec<Vec<InlineFrag>> = Vec::new();
@@ -10903,7 +11880,7 @@ fn re_style_subtree(
     dark_mode: bool,
 ) {
     if !matches!(b.kind, BoxKind::Skip) {
-        apply_container_rules(&mut b.style, doc, b.node, sheet, ctx, viewport, dark_mode);
+        apply_container_rules(Arc::make_mut(&mut b.style), doc, b.node, sheet, ctx, viewport, dark_mode);
     }
     // Don't propagate into nested containers — they'll build their own context.
     if matches!(b.style.container_type, ContainerType::Normal) {
@@ -12493,6 +13470,212 @@ mod tests {
         } else {
             panic!("expected InlineRun");
         }
+    }
+
+    /// BUG-341 S23 gate — **by counter, on both arms**.
+    ///
+    /// `apply_first_line_pseudo_styles` used to probe `::first-line` on every
+    /// block box of the document whether or not the sheet contained such a
+    /// rule; on `chrome.html` that is 123 probes and zero hits per interaction
+    /// cycle. The fix skips the walk, so the load-bearing assertion is a
+    /// **count of probes**, which no output diff can see.
+    ///
+    /// The second arm is what makes the first one mean anything: the cheapest
+    /// way to drive the probe count to zero is to stop applying `::first-line`
+    /// altogether, so the same fixture with a rule must still probe *and* still
+    /// paint the first line green.
+    #[test]
+    fn bug341_s23_first_line_is_probed_only_by_a_sheet_that_uses_it() {
+        let html = lumen_html_parser::parse("<p>one two three four</p>");
+        let vp = lumen_core::geom::Size::new(60.0, 600.0);
+
+        fn probes(css: &str, html: &lumen_dom::Document, vp: lumen_core::geom::Size)
+            -> (u32, super::LayoutBox)
+        {
+            struct Fixed8;
+            impl super::super::TextMeasurer for Fixed8 {
+                fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+            }
+            crate::style::set_pseudo_cascade_diagnostics(true);
+            let _ = crate::style::take_pseudo_cascade_sites();
+            let root = super::layout_measured(html, &lumen_css_parser::parse(css), vp, &Fixed8);
+            let sites = crate::style::take_pseudo_cascade_sites();
+            crate::style::set_pseudo_cascade_diagnostics(false);
+            (sites.get("first-line").map_or(0, |s| s.calls), root)
+        }
+
+        // Arm 1 — no `::first-line` anywhere in the sheet: not one probe.
+        let (calls, _) = probes("p { color: blue; }", &html, vp);
+        assert_eq!(calls, 0, "sheet without ::first-line must not probe for it");
+
+        // Arm 2 — the rule is there: probed, and it still lands on line 0.
+        let (calls, root) = probes("p::first-line { color: green; }", &html, vp);
+        assert!(calls > 0, "sheet with ::first-line must still probe for it");
+        fn collect_runs<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { out.push(b); }
+            for c in &b.children { collect_runs(c, out); }
+        }
+        let mut runs = Vec::new();
+        collect_runs(&root, &mut runs);
+        let green = crate::style::Color { r: 0, g: 128, b: 0, a: 255 };
+        let first = runs.first().expect("expected an InlineRun");
+        let super::BoxKind::InlineRun { lines, .. } = &first.kind else {
+            panic!("expected InlineRun")
+        };
+        assert!(
+            lines[0].iter().all(|f| f.style.color == green),
+            "::first-line style must still reach the first line's frags",
+        );
+    }
+
+    /// BUG-341 S25 gate — **by counter, on both arms**.
+    ///
+    /// Deciding which formatting context a child joins used to run a full
+    /// `compute_style` per element child — up to three of them, since
+    /// `is_inline_content`, `is_inline_block` and the `display:none` re-probe
+    /// each cascaded the node again. `precompute_counters` had already cascaded
+    /// every one of them, and `build_box_inner` builds the child's box out of
+    /// *that* entry, so the probes were pure re-derivation: invisible in the
+    /// tree, and 0.21-0.25 ms of a 0.63 ms chrome keystroke. Arm 1 is therefore
+    /// a count, which no output diff can see.
+    ///
+    /// Arm 2 is what makes arm 1 mean anything: the cheapest way to drive the
+    /// probe count to zero is to stop asking about `display` at all, and each
+    /// of the three questions decides the shape of the tree — so the fixture
+    /// exercises all three at once. An inline and an inline-block child share
+    /// one inline context (probes 1 and 2), a `display:none` child between them
+    /// does **not** close it (probe 3, CSS 2.1 §9.2.4), and a block child does.
+    #[test]
+    fn bug341_s25_display_probes_read_the_cascade_instead_of_re_running_it() {
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let doc = lumen_html_parser::parse(
+            "<div id=host>text <span>inline</span> <b>ib</b> <i>gone</i> <span>after</span>\
+             <p>block</p></div>",
+        );
+        let sheet = lumen_css_parser::parse(
+            "span { display: inline; } b { display: inline-block; } \
+             i { display: none; } p { display: block; }",
+        );
+        let vp = lumen_core::geom::Size::new(600.0, 600.0);
+
+        let _ = super::take_box_build_stats();
+        let root = super::layout_measured(&doc, &sheet, vp, &Fixed8);
+        let stats = super::take_box_build_stats();
+
+        // Arm 1 — every element the probes asked about is in the cascade cache,
+        // so not one of them re-ran the cascade...
+        assert_eq!(
+            stats.display_probe_cascades, 0,
+            "the box-build stage must read `display` off the cascade cache, \
+             not re-run `compute_style` for it. Census: {stats:?}",
+        );
+        // ...and the questions are still being asked, which is the only reason
+        // arm 1 can be satisfied honestly.
+        assert!(
+            stats.display_probes > 0,
+            "the stage must still ask what each element child's `display` is.              Census: {stats:?}",
+        );
+        // The non-elements still miss (the cascade records elements only) —
+        // asserted so a change that empties the cache entirely cannot pass arm 1
+        // by making `style_arc` return `Some` for everything.
+        assert!(
+            stats.style_misses > 0,
+            "whitespace text nodes have no cascade entry and must still fall back",
+        );
+
+        // Arm 2 — the three decisions those probes make, on the same document.
+        fn kind_name(k: &super::BoxKind) -> &'static str {
+            match k {
+                super::BoxKind::InlineBlockRow => "InlineBlockRow",
+                super::BoxKind::InlineRun { .. } => "InlineRun",
+                super::BoxKind::Block => "Block",
+                super::BoxKind::Skip => "Skip",
+                _ => "other",
+            }
+        }
+        fn find<'a>(b: &'a super::LayoutBox, doc: &lumen_dom::Document, id: &str)
+            -> Option<&'a super::LayoutBox>
+        {
+            if doc.get(b.node).get_attr("id") == Some(id) {
+                return Some(b);
+            }
+            b.children.iter().find_map(|c| find(c, doc, id))
+        }
+        let host = find(&root, &doc, "host").expect("#host must have a box");
+        // Discriminant names only: a `BoxKind` `Debug` carries a full
+        // `ComputedStyle` per inline fragment, which buries the assertion.
+        let kinds: Vec<&'static str> = host.children.iter().map(|c| kind_name(&c.kind)).collect();
+        assert_eq!(
+            kinds.len(),
+            2,
+            "one inline context (probes 1-3) plus the block child, got {kinds:?}",
+        );
+        assert_eq!(
+            kinds[0], "InlineBlockRow",
+            "the inline and inline-block children share one row, got {kinds:?}",
+        );
+        assert_eq!(
+            kinds[1], "Block",
+            "the block child opens its own box, got {kinds:?}",
+        );
+        // `display:none` did not close the inline context: the text after it is
+        // in the same row as the text before it.
+        let texts = {
+            fn runs(b: &super::LayoutBox, out: &mut Vec<String>) {
+                if let super::BoxKind::InlineRun { segments, .. } = &b.kind {
+                    out.extend(segments.iter().map(|s| s.text.clone()));
+                }
+                for c in &b.children {
+                    runs(c, out);
+                }
+            }
+            let mut out = Vec::new();
+            runs(&host.children[0], &mut out);
+            out.concat()
+        };
+        assert!(
+            texts.contains("inline") && texts.contains("after"),
+            "a display:none sibling must not split the inline context, got {texts:?}",
+        );
+        assert!(
+            !texts.contains("gone"),
+            "the display:none child must not contribute text, got {texts:?}",
+        );
+    }
+
+    /// BUG-341 S25 — the `compute_style` fallback in `probe_display` still
+    /// answers when the cascade cache has no entry for the node.
+    ///
+    /// The cache is populated by `precompute_counters`, which every entry point
+    /// runs; a miss means a caller holding a map that predates the node. That
+    /// path has no fixture in the pipeline, so it gets one here — otherwise
+    /// deleting it would be invisible until a real document hit it.
+    #[test]
+    fn bug341_s25_display_probe_falls_back_to_the_cascade_on_a_cache_miss() {
+        let doc = lumen_html_parser::parse("<span id=s>x</span>");
+        let sheet = lumen_css_parser::parse("span { display: inline-block; }");
+        let vp = lumen_core::geom::Size::new(600.0, 600.0);
+        let span = doc.find_by_id("s").expect("fixture has a <span id=s>");
+        let empty = crate::counters::CounterMap::default();
+        let inherited = crate::style::ComputedStyle::root();
+
+        let _ = super::take_box_build_stats();
+        assert_eq!(
+            super::probe_display(&doc, &sheet, span, &inherited, vp, false, &empty),
+            super::Display::InlineBlock,
+            "an empty cache must fall back to a real cascade",
+        );
+        assert_eq!(
+            {
+                let st = super::take_box_build_stats();
+                (st.display_probes, st.display_probe_cascades)
+            },
+            (1, 1),
+            "one question asked, and with an empty cache it cost one cascade",
+        );
     }
 
     #[test]
@@ -14202,6 +15385,57 @@ mod tests {
     }
 
     #[test]
+    fn flex_row_item_margin_left_applied_once() {
+        // BUG-294: a row flex item's `margin-left` must move it 1× the margin past
+        // the preceding item's border-box edge, not 2×. item-a occupies [0,60);
+        // item-b (margin-left:10) starts at 60+10=70. The main-axis position is not
+        // rewritten by any later cross-alignment pass, so a double-add would surface
+        // directly as rect.x=80.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:300px;height:100px} #a{width:60px;height:40px} #b{width:60px;height:40px;margin-left:10px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.x, 0.0, "a.x {}", a.rect.x);
+        assert_eq!(b.rect.x, 70.0, "b.x {} (expected 70 = 0 + 60 + 10)", b.rect.x);
+    }
+
+    #[test]
+    fn flex_column_item_margin_top_applied_once() {
+        // BUG-294: a column flex item's `margin-top` must offset it 1× along the
+        // main (block) axis. item-a occupies [0,40); item-b (margin-top:10) starts at
+        // 40+10=50. Column containers skip the cross-alignment pass, so the main-axis
+        // rect.y is exactly what the layout call produced — a double-add would show
+        // as rect.y=60.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:100px;height:300px} #a{width:60px;height:40px} #b{width:60px;height:40px;margin-top:10px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.y, 0.0, "a.y {}", a.rect.y);
+        assert_eq!(b.rect.y, 50.0, "b.y {} (expected 50 = 0 + 40 + 10)", b.rect.y);
+    }
+
+    #[test]
+    fn flex_column_item_margin_left_applied_once() {
+        // BUG-294: a column flex item's `margin-left` (a cross-axis margin) must
+        // offset it 1× along the inline axis. The column arm never re-runs cross
+        // alignment, so rect.x is the layout call's output — a double-add would show
+        // as rect.x=30.
+        let html = r#"<div id="flex"><div id="a"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:100px;height:300px} #a{width:60px;height:40px;margin-left:15px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        assert_eq!(a.rect.x, 15.0, "a.x {} (expected 15 = margin-left applied once)", a.rect.x);
+    }
+
+    #[test]
     fn flex_align_content_center() {
         // center: offset=100 → line1 y=100, line2 y=150.
         let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
@@ -14915,6 +16149,36 @@ mod tests {
         assert_eq!(rects.len(), 2, "both <use> instances should clone the symbol rect; got {rects:?}");
         assert!(rects.iter().any(|r| (r.width - 40.0).abs() < 0.5), "width=40 instance should render at 40px; got {rects:?}");
         assert!(rects.iter().any(|r| (r.width - 80.0).abs() < 0.5), "width=80 instance should scale to 80px; got {rects:?}");
+    }
+
+    #[test]
+    fn svg_use_symbol_no_explicit_size_scales_to_css_icon_size() {
+        // BUG-334: an icon sprite pattern — `<use href="#s">` with no width/height
+        // attributes at all, sized purely via CSS on the enclosing `<svg>` (e.g.
+        // `.icon { width: 14px; height: 14px }`). Per SVG 2 §5.7/§7.10 the used
+        // viewport for the reference is 100% of the *enclosing* svg's own
+        // (CSS-resolved) viewport, not the symbol's viewBox dims (that was the
+        // BUG-246-era identity-scale regression this test guards against).
+        let html = "<svg class=\"icon\"><symbol id=\"s\" viewBox=\"0 0 24 24\">\
+                    <rect x=\"0\" y=\"0\" width=\"24\" height=\"24\"/></symbol>\
+                    <use href=\"#s\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("body{margin:0} .icon{width:14px;height:14px}");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn collect_rects(b: &super::LayoutBox, acc: &mut Vec<super::Rect>) {
+            if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Rect { .. }, .. }) {
+                acc.push(b.rect);
+            }
+            b.children.iter().for_each(|c| collect_rects(c, acc));
+        }
+        let mut rects = Vec::new();
+        collect_rects(&root, &mut rects);
+        assert_eq!(rects.len(), 1, "use should clone the symbol rect; got {rects:?}");
+        assert!(
+            (rects[0].width - 14.0).abs() < 0.5,
+            "icon should scale to the CSS-sized 14px viewport, not the viewBox's 24px; got {rects:?}"
+        );
     }
 
     #[test]
@@ -16544,7 +17808,7 @@ mod tests {
         let inline_box = super::LayoutBox {
             node: lumen_dom::NodeId::from_index(0),
             rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
-            style: inline_style,
+            style: std::sync::Arc::new(inline_style),
             kind: super::BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
             children: vec![],
             col_span: 1,
@@ -16560,7 +17824,7 @@ mod tests {
         let mut root = super::LayoutBox {
             node: lumen_dom::NodeId::from_index(0),
             rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
-            style: root_style,
+            style: std::sync::Arc::new(root_style),
             kind: super::BoxKind::Block,
             children: vec![inline_box],
             col_span: 1,
@@ -16599,7 +17863,7 @@ mod tests {
         let mut b = super::LayoutBox {
             node: lumen_dom::NodeId::from_index(0),
             rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
-            style: s,
+            style: std::sync::Arc::new(s),
             kind: super::BoxKind::Block,
             children: vec![],
             col_span: 1,
@@ -16633,7 +17897,7 @@ mod tests {
         let mut b = super::LayoutBox {
             node: lumen_dom::NodeId::from_index(0),
             rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
-            style: s,
+            style: std::sync::Arc::new(s),
             kind: super::BoxKind::Block,
             children: vec![],
             col_span: 1,
@@ -16756,6 +18020,345 @@ mod tests {
             let c = child_block(".p { width: 400px; height: 300px; } .c { height: 50%; }");
             assert!((c.rect.height - 150.0).abs() < 0.5, "height={}", c.rect.height);
         }
+    }
+
+    // ── BUG-341 S4: incremental box-build differential tests ───────────────────
+    //
+    // `incremental_build_box` must reproduce a full `build_box` pass bit-for-bit
+    // for the same final state (mirroring the S3 cascade differential tests in
+    // `incremental.rs`), while actually skipping work — cloning untouched
+    // subtrees from `prev` instead of rebuilding them.
+
+    #[test]
+    fn box_build_hover_transition_matches_full_and_reuses_subset() {
+        // A real interactive-state transition (hover moves between siblings)
+        // must produce a box tree bit-identical to a full rebuild of the
+        // post-transition state, while cloning the untouched `#unrelated`
+        // subtree wholesale instead of rebuilding it.
+        use lumen_dom::build_flat_tree;
+        use crate::counters::{
+            build_counter_style_registry, incremental_precompute_counters, precompute_counters,
+            set_incremental_restyle, RestyleDelta,
+        };
+        use crate::style::{
+            clear_interactive_state, restyle_root_set_for_state_change, set_interactive_state,
+            ComputedStyle,
+        };
+
+        let html = r#"<ul id="menu">
+            <li id="a" class="item">a</li>
+            <li id="b" class="item">b</li>
+            <li id="c" class="item">c</li>
+        </ul>
+        <div id="unrelated"><p>x</p><p>y</p><p>z</p></div>"#;
+        let css = r#"
+            .item { color: black; padding: 4px; }
+            .item:hover { color: blue; }
+            .item:hover + .item { color: green; }
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = Size::new(800.0, 600.0);
+        let flat = build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let registry = build_counter_style_registry(&sheet);
+
+        let a = doc.find_by_id("a").expect("#a must exist");
+        let b = doc.find_by_id("b").expect("#b must exist");
+
+        // Baseline (state a hovered) — the "prev" tree for reuse, built in full.
+        set_interactive_state(Some(a), None, None);
+        let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let mut prev_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
+        );
+
+        // Reference: full rebuild after the transition (no reuse at all).
+        set_interactive_state(Some(b), None, None);
+        let full_after_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let full_after_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &full_after_counters, &registry, false, None,
+        );
+
+        // Incremental: real transition, conservative root-set, box-build reuse on.
+        let state_index = crate::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
+        let delta = RestyleDelta {
+            prev_styles: baseline_counters.styles().clone(),
+            dirty_roots,
+            content_dirty: crate::counters::ContentDirty::Nothing,
+        };
+        set_incremental_restyle(true);
+        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+        set_incremental_restyle(false);
+
+        super::set_incremental_box_build(true);
+        let _ = super::take_box_build_stats();
+        let mut incr_tree = super::incremental_build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &mut prev_tree,
+        );
+        let bb = super::take_box_build_stats();
+        let (built, reused) = (bb.built, bb.reused);
+        super::set_incremental_box_build(false);
+        clear_interactive_state();
+
+        // Compare via laid-out geometry, not `Debug` string equality: `ComputedStyle`
+        // carries a `custom_props: HashMap<String, String>` (CSS custom properties),
+        // and `HashMap`'s `Debug` prints entries in iteration order, which two
+        // independently-computed (but content-equal) cascades need not share —
+        // `collect_rects` sidesteps that non-determinism entirely (BUG-341 S4).
+        let mut full_after_tree = full_after_tree;
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        let init_pcb = super::Rect::new(0.0, 0.0, vp.width, vp.height);
+        super::lay_out(&mut incr_tree, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
+        super::lay_out(&mut full_after_tree, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
+
+        fn collect_rects(b: &super::LayoutBox, out: &mut Vec<(lumen_dom::NodeId, super::Rect)>) {
+            out.push((b.node, b.rect));
+            for c in &b.children {
+                collect_rects(c, out);
+            }
+        }
+        let mut ra = Vec::new();
+        let mut rb = Vec::new();
+        collect_rects(&incr_tree, &mut ra);
+        collect_rects(&full_after_tree, &mut rb);
+        assert_eq!(ra.len(), rb.len(), "box count must match a full rebuild");
+        for ((na, xa), (nb, xb)) in ra.iter().zip(rb.iter()) {
+            assert_eq!(na, nb, "node order must match a full rebuild");
+            assert!(
+                (xa.x - xb.x).abs() < 0.5 && (xa.y - xb.y).abs() < 0.5
+                    && (xa.width - xb.width).abs() < 0.5 && (xa.height - xb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incremental {xa:?} vs full {xb:?}",
+            );
+        }
+        assert!(
+            reused > 0,
+            "incremental box-build reused 0 subtrees — the untouched #unrelated \
+             subtree should have been cloned wholesale, not rebuilt (built={built})",
+        );
+    }
+
+    #[test]
+    fn box_build_node_change_disables_reuse_conservatively() {
+        // A DOM class mutation is NOT `dom_content_stable` (BUG-341 S4):
+        // box-build must fall back to a full rebuild everywhere (reused == 0),
+        // never trusting style-equality alone for a content-affecting change.
+        use lumen_dom::{build_flat_tree, NodeData};
+        use crate::counters::{
+            build_counter_style_registry, incremental_precompute_counters, precompute_counters,
+            set_incremental_restyle, RestyleDelta,
+        };
+        use crate::style::{restyle_node_index, restyle_root_set_for_node_change, ComputedStyle, NodeChange};
+
+        let css = r#"
+            .item { color: black; }
+            .item.active { color: blue; }
+        "#;
+        let html = r#"<ul id="menu">
+            <li id="a" class="item">a</li>
+            <li id="b" class="item">b</li>
+        </ul>
+        <div id="unrelated"><p>x</p></div>"#;
+        let mut doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = Size::new(800.0, 600.0);
+        let flat = build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let registry = build_counter_style_registry(&sheet);
+
+        let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let mut prev_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
+        );
+
+        let a = doc.find_by_id("a").expect("#a must exist");
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(a).data {
+            for attr in attrs.iter_mut() {
+                if attr.name.local == "class" {
+                    attr.value = "item active".to_string();
+                }
+            }
+        }
+
+        let full_after_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let full_after_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &full_after_counters, &registry, false, None,
+        );
+
+        let node_index = restyle_node_index(&doc, &sheet);
+        let dirty_roots =
+            restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
+        let delta = RestyleDelta {
+            prev_styles: baseline_counters.styles().clone(),
+            dirty_roots,
+            content_dirty: crate::counters::ContentDirty::Untracked,
+        };
+        set_incremental_restyle(true);
+        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+        set_incremental_restyle(false);
+
+        super::set_incremental_box_build(true);
+        let _ = super::take_box_build_stats();
+        let mut incr_tree = super::incremental_build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &mut prev_tree,
+        );
+        let reused = super::take_box_build_stats().reused;
+        super::set_incremental_box_build(false);
+
+        // See the hover-transition test above for why geometry (not `Debug`
+        // string equality) is the correct comparison — `custom_props` HashMap
+        // iteration order isn't guaranteed equal across independent cascades.
+        let mut full_after_tree = full_after_tree;
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        let init_pcb = super::Rect::new(0.0, 0.0, vp.width, vp.height);
+        super::lay_out(&mut incr_tree, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
+        super::lay_out(&mut full_after_tree, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
+
+        fn collect_rects(b: &super::LayoutBox, out: &mut Vec<(lumen_dom::NodeId, super::Rect)>) {
+            out.push((b.node, b.rect));
+            for c in &b.children {
+                collect_rects(c, out);
+            }
+        }
+        let mut ra = Vec::new();
+        let mut rb = Vec::new();
+        collect_rects(&incr_tree, &mut ra);
+        collect_rects(&full_after_tree, &mut rb);
+        assert_eq!(ra.len(), rb.len(), "box count must match a full rebuild");
+        for ((na, xa), (nb, xb)) in ra.iter().zip(rb.iter()) {
+            assert_eq!(na, nb, "node order must match a full rebuild");
+            assert!(
+                (xa.x - xb.x).abs() < 0.5 && (xa.y - xb.y).abs() < 0.5
+                    && (xa.width - xb.width).abs() < 0.5 && (xa.height - xb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incremental {xa:?} vs full {xb:?}",
+            );
+        }
+        assert_eq!(
+            reused, 0,
+            "a DOM class mutation (ContentDirty::Untracked) must never reuse a \
+             box subtree — got {reused} reuses",
+        );
+    }
+
+    /// BUG-341 S16 gate: a text-only mutation must cost exactly the subtree that
+    /// contains it, and must not go stale.
+    ///
+    /// Before S16 the whole document was declared content-unstable by a single
+    /// boolean, so this cycle rebuilt every box. The mechanism replacing it is
+    /// the *risky* half of the slice: if the mutation source under-reports, a
+    /// reused subtree keeps the old text — visible corruption, not a slow frame.
+    /// Hence both halves are asserted here, and in this order:
+    ///
+    /// 1. **Correctness first** — every `InlineSegment`'s text in the
+    ///    incremental tree equals a full rebuild's. This is what fails if
+    ///    `ContentDirty` stops propagating up from the mutated text node.
+    /// 2. **Then the counter** — the untouched sibling subtree is cloned, and
+    ///    the mutated node's own chain is not. A mechanism that reuses nothing
+    ///    passes (1) perfectly and is simply the pre-S16 behaviour (S8's
+    ///    lesson), so only a count can tell the two apart.
+    #[test]
+    fn box_build_text_mutation_reuses_everything_but_the_mutated_chain() {
+        use lumen_dom::{build_flat_tree, NodeData};
+        use crate::counters::{
+            build_counter_style_registry, incremental_precompute_counters, precompute_counters,
+            set_incremental_restyle, ContentDirty, RestyleDelta,
+        };
+        use crate::style::ComputedStyle;
+
+        let html = r#"<div id="host"><p id="line">short</p></div>
+        <div id="unrelated"><p>x</p><p>y</p><p>z</p></div>"#;
+        let mut doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("p { color: black; }");
+        let vp = Size::new(800.0, 600.0);
+        let flat = build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let registry = build_counter_style_registry(&sheet);
+
+        let baseline_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let mut prev_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &baseline_counters, &registry, false, None,
+        );
+
+        // The mutation: text data only. No attribute, no structure, no style —
+        // precisely the case the cascade is blind to.
+        let line = doc.find_by_id("line").expect("#line must exist");
+        let text_node = *doc
+            .get(line)
+            .children
+            .first()
+            .expect("#line must have a text child");
+        match &mut doc.get_mut(text_node).data {
+            NodeData::Text(s) => *s = "a considerably longer replacement string".to_owned(),
+            other => panic!("expected a text node, got {other:?}"),
+        }
+
+        let full_after_counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let full_after_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &full_after_counters, &registry, false, None,
+        );
+
+        // A complete content report: exactly the mutated text node. No cascade
+        // dirty root at all — text cannot change selector matching.
+        let content = std::collections::HashSet::from([text_node]);
+        let delta = RestyleDelta {
+            prev_styles: baseline_counters.styles().clone(),
+            dirty_roots: std::collections::HashSet::new(),
+            content_dirty: ContentDirty::Nodes(&content),
+        };
+        set_incremental_restyle(true);
+        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+        set_incremental_restyle(false);
+
+        super::set_incremental_box_build(true);
+        let _ = super::take_box_build_stats();
+        let incr_tree = super::incremental_build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &incr_counters, &registry, false, &mut prev_tree,
+        );
+        let bb = super::take_box_build_stats();
+        super::set_incremental_box_build(false);
+
+        fn collect_text(b: &super::LayoutBox, out: &mut Vec<String>) {
+            if let super::BoxKind::InlineRun { segments, .. } = &b.kind {
+                for seg in segments {
+                    out.push(seg.text.clone());
+                }
+            }
+            for c in &b.children {
+                collect_text(c, out);
+            }
+        }
+        let mut incr_text = Vec::new();
+        let mut full_text = Vec::new();
+        collect_text(&incr_tree, &mut incr_text);
+        collect_text(&full_after_tree, &mut full_text);
+        assert_eq!(
+            incr_text, full_text,
+            "the incremental tree carries stale text — a subtree containing the mutated text \
+             node was reused. `ContentDirty` must propagate from the text node up through every \
+             ancestor's `children_clean`.",
+        );
+        assert!(
+            incr_text.iter().any(|t| t.contains("considerably longer")),
+            "sanity: the mutation must be visible in the rebuilt tree at all, got {incr_text:?}",
+        );
+
+        // The counter half: #unrelated is untouched, so it must come across as
+        // a clone; the mutated chain must not.
+        assert!(
+            bb.reused > 0,
+            "a text-only mutation must still let untouched subtrees (#unrelated) be cloned — \
+             got {bb:?}. This is the whole point of S16: pre-S16 the document-wide flag made \
+             this 0.",
+        );
+        assert!(
+            !incr_counters.clean_subtrees().contains(&line),
+            "#line contains the mutated text node and must not be marked clean",
+        );
+        assert!(
+            !incr_counters.clean_subtrees().contains(&text_node),
+            "the mutated text node itself must not be marked clean",
+        );
     }
 }
 

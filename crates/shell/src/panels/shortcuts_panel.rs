@@ -6,6 +6,7 @@
 //! as the new binding and persisted via `lumen_storage::KeyboardShortcuts`.
 
 use crate::panels::themes::Palette;
+use crate::theme_tokens::radius;
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand};
@@ -232,8 +233,8 @@ impl ShortcutsPanel {
         // Outer border.
         dl.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(ox - 1.0, oy - 1.0, PANEL_W + 2.0, PANEL_H + 2.0),
-            radii: CornerRadii { tl: 6.0, tl_y: 6.0, tr: 6.0, tr_y: 6.0,
-                                 bl: 6.0, bl_y: 6.0, br: 6.0, br_y: 6.0 },
+            radii: CornerRadii { tl: radius::LG, tl_y: radius::LG, tr: radius::LG, tr_y: radius::LG,
+                                 bl: radius::LG, bl_y: radius::LG, br: radius::LG, br_y: radius::LG },
             color: pal.overlay_border,
         });
         // Panel background.
@@ -242,10 +243,12 @@ impl ShortcutsPanel {
             color: pal.overlay_bg,
         });
 
-        // Header bar.
+        // Header bar. Inset 1px from the outer border, so its radius is the
+        // panel radius minus that inset to stay visually concentric.
+        let header_radius = radius::LG - 1.0;
         dl.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(ox, oy, PANEL_W, HEADER_H),
-            radii: CornerRadii { tl: 5.0, tl_y: 5.0, tr: 5.0, tr_y: 5.0,
+            radii: CornerRadii { tl: header_radius, tl_y: header_radius, tr: header_radius, tr_y: header_radius,
                                  bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
             color: pal.header_bg,
         });
@@ -295,8 +298,8 @@ impl ShortcutsPanel {
             let badge_x = ox + PANEL_W - PAD_H - 120.0;
             dl.push(DisplayCommand::FillRoundedRect {
                 rect: Rect::new(badge_x - 4.0, row_top + 7.0, 128.0, 22.0),
-                radii: CornerRadii { tl: 3.0, tl_y: 3.0, tr: 3.0, tr_y: 3.0,
-                                     bl: 3.0, bl_y: 3.0, br: 3.0, br_y: 3.0 },
+                radii: CornerRadii { tl: radius::MD, tl_y: radius::MD, tr: radius::MD, tr_y: radius::MD,
+                                     bl: radius::MD, bl_y: radius::MD, br: radius::MD, br_y: radius::MD },
                 color: pal.item_bg,
             });
             dl.push(txt(badge_text, badge_x, row_top + 10.0,

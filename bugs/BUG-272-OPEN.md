@@ -1,6 +1,6 @@
 # BUG-272 — ~1 ГБ RAM на lenta.ru при одной загруженной картинке (Edge целиком ~530 МБ)
 
-**Статус:** OPEN — корень найден, срез 1 (пул offscreen-слоёв femtovg) влит 2026-07-07, срез 2 (blend-mode слой в пул) влит 2026-07-08, срез 3 (blend-result CPU-композит в пул) влит 2026-07-15, срез 4 (colour-matrix filter + backdrop-filter re-upload в общий пул) влит 2026-07-15, срез 5 (backdrop-filter → bbox-сайзинг вместо full-frame) влит 2026-07-16, срез 6 (шрифтовые байты через `Arc<[u8]>` — устранение двойного хранения @font-face-шрифта) влит 2026-07-18, срез 7 (`PushOpacity` несёт `bounds`, off-viewport opacity-группы куллятся) влит 2026-07-18, срез 8 (off-viewport clip-группы `PushClipRoundedRect`/`PushClipPath` куллятся) влит 2026-07-18, срез 9 (off-viewport mask-группы `PushMask{Image,LinearGradient,RadialGradient,ConicGradient}` куллятся) влит 2026-07-18; остаточные направления ниже
+**Статус:** OPEN — корень найден, срез 1 (пул offscreen-слоёв femtovg) влит 2026-07-07, срез 2 (blend-mode слой в пул) влит 2026-07-08, срез 3 (blend-result CPU-композит в пул) влит 2026-07-15, срез 4 (colour-matrix filter + backdrop-filter re-upload в общий пул) влит 2026-07-15, срез 5 (backdrop-filter → bbox-сайзинг вместо full-frame) влит 2026-07-16, срез 6 (шрифтовые байты через `Arc<[u8]>` — устранение двойного хранения @font-face-шрифта) влит 2026-07-18, срез 7 (`PushOpacity` несёт `bounds`, off-viewport opacity-группы куллятся) влит 2026-07-18, срез 8 (off-viewport clip-группы `PushClipRoundedRect`/`PushClipPath` куллятся) влит 2026-07-18, срез 9 (off-viewport mask-группы `PushMask{Image,LinearGradient,RadialGradient,ConicGradient}` куллятся) влит 2026-07-18, срез 10 (backdrop-filter's `elem_image_id` — bbox-сайзинг вместо full-frame) влит 2026-07-18, срез 11 (`PushOpacity` — bbox-сайзинг видимого слоя, общий `bbox_layer_pool`) влит 2026-07-18, срез 12 (`PushClipRoundedRect`/`PushClipPath` — bbox-сайзинг видимого слоя) влит 2026-07-18, срез 13 (`PushMask{LinearGradient,RadialGradient,ConicGradient}` — bbox-сайзинг видимого слоя) влит 2026-07-18, срез 14 (`PushFilter`/`PushBlendMode` — bbox-сайзинг видимого слоя) влит 2026-07-19, срез 17 (femtovg `raw_images` через `Arc<Image>`) влит 2026-07-19, срез 18 (`@WxH`-варианты femtovg — LRU-эвикция) влит 2026-07-19, срез 19 (анимированный GIF — ленивое декодирование кадров вместо eager `Vec<AnimatedFrame>`) влит 2026-07-19, срез 20 (canvas2d `<img>`-битмапы `img_bitmap_store` — общий `Arc<Image>` вместо eager RGBA8-копии, ленивая конверсия) влит 2026-07-19; остаточные направления ниже
 **Компонент:** paint (femtovg backend, offscreen-слои)
 **Найден:** 2026-07-07, сравнительный замер Lumen vs Edge на lenta.ru
 **Полная запись исследования (методика, опровергнутые гипотезы):** [docs/perf-audit-lenta-2026-07.md](../docs/perf-audit-lenta-2026-07.md)
@@ -188,13 +188,539 @@ alpha, так что композит вниз даёт видимые пикс�
 --all-targets -- -D warnings` чист; `cargo test -p lumen-paint --lib` (обновлённый
 `group_bounds`-тест: все четыре `PushMask*` с `rect: r` → `Some(r)`).
 
+## Срез 10 — backdrop-filter's `elem_image_id`: bbox-сайзинг вместо full-frame (влит 2026-07-18)
+
+Пункт 3(b) остатка (последний нетронутый full-framebuffer кусок backdrop-filter пути):
+`elem_image_id` (содержимое самого элемента, `PushBackdropFilter`/`PopBackdropFilter`) сайзился
+через `acquire_layer()` (полный framebuffer) — как и `filtered_backdrop_id` до среза 5. Новый
+пул `elem_bbox_pool` (`acquire_elem_bbox_layer`/`release_elem_bbox_layer`, тот же паттерн, что
+`backdrop_bbox_pool`, но render-target с `offscreen_layer_image_flags()` — FLIP_Y нужен, это
+GPU-сэмплируемый слой) аллоцирует `elem_id` по тому же bbox, что `filt_id`
+(`filtered_backdrop_w/h`).
+
+Позиционная ловушка (нашлась не сразу — три ложных гипотезы по пути): у `elem_image_id`
+и у `filtered_backdrop_id` **разные** конвенции координат. `apply_backdrop_filters`'s crop
+индексирует скриншот через `bounds.x/y` напрямую, **без** поправки на ambient scroll/page-offset/
+вложенные `PushTransform` — существующая (не эта срез) особенность срез-5-кода, вне скоупа
+здесь. Композит шага 1 (`filtered_backdrop_id`) воспроизводит эту же (уже смещённую) позицию
+через `reset_transform()` + сырой `bounds`. Старый (full-framebuffer) `elem_image_id`, наоборот,
+рендерился с сохранённым ambient-трансформом (как любая другая команда рендерера) — то есть
+оказывался на **истинной** экранной позиции элемента, и композитился как прямая копия всего
+кадра, так что эта истинная позиция сохранялась без сдвига. Bbox-версия должна воспроизводить
+именно это старое (корректное относительно себя) поведение `elem_image_id`, а не конвенцию шага 1.
+
+Реализация: `PushBackdropFilter` захватывает `true_origin =
+self.canvas.transform().transform_point(bounds.x, bounds.y)` **до** любых изменений
+трансформа; при рендере детей в `elem_id` ambient-трансформ не сбрасывается (в отличие от
+шага 1) — поверх него лишь добавляется `translate(-true_origin/scale)`, плюс
+`canvas.scissor(bounds.x, bounds.y, bounds.width, bounds.height)` (переустановка, не
+`intersect_scissor` — унаследованный scissor от предка, испечённый в старой системе координат,
+иначе обрезает контент частично). `composite_backdrop_filter_layer` хранит `true_elem_x/y`
+в `BackdropFilterLayerEntry` и композитит `elem_image_id` по этой позиции (`reset_transform()` +
+`true_elem_x/y`, НЕ `filtered_backdrop_x/y` — иначе граница шага 1 «протекает» ровно в середину
+контента элемента, разделяя карточку на видимо-по-разному-тонированные зоны).
+
+Путь к диагнозу: A/B gdigrab (одна карточка backdrop-filter в изоляции) показал ту же нижнюю
+границу артефакта независимо от FLIP_Y (вкл/выкл), пулинга (переиспользование/всегда-свежий) и
+CPU-round-trip реаплоада вместо прямого GPU-сэмплинга — во всех трёх экспериментах байт-диф не
+менялся. Корень нашёлся дампом `apply_backdrop_filters`'s CPU-кропа (`filtered_backdrop_id`'s
+исходные пиксели) в PPM: побайтово идентичен между main и веткой (наполовину чёрный — сам по
+себе отдельный, не влияющий на этот срез артефакт срез-5-кропа при ненулевом page-offset) — то
+есть баг был не в шаге 1 и не в захвате `elem_image_id`, а исключительно в том, по какой позиции
+срез 10 его композитил обратно.
+
+Корректность: `cargo check -p lumen-paint` зелёный; `cargo clippy -p lumen-paint --all-targets
+--features backend-femtovg -- -D warnings` чист; `cargo test -p lumen-paint --features
+backend-femtovg` 937+29 passed, 0 failed. **Визуальная приёмка (A/B gdigrab
+branch-vs-main, тот же метод, что срез 5 — штатный Edge-гейт недоступен, `run.py --only 30`
+даёт `Edge screenshot missing` на этой машине):** одна изолированная карточка
+(`.tmp/bd_minimal.html`, не коммитится) — 0/2949120 отличающихся байт; TEST-30 (все 5 карточек
+backdrop-filter) — 0/2949120; TEST-103 (filter×transform, не задевает backdrop-filter) —
+0/2949120; повторный прогон TEST-30/103 — тот же результат (детерминированно). Побайтовая
+идентичность подтверждена дважды подряд для обеих сторон (main-vs-main и branch-vs-branch дают
+0 диф — не флак gdigrab).
+
+## Срез 11 — `PushOpacity`: bbox-сайзинг видимого слоя (влит 2026-07-18)
+
+Пункт 3(c) остатка, первая часть. Срез 7 куллит off-viewport opacity-группы целиком, но
+**видимый** (on-viewport) слой всё ещё аллоцировался full-framebuffer через `layer_pool`. Новый
+общий пул `bbox_layer_pool` (переименован из среза-10-специфичного `elem_bbox_pool` —
+`acquire_bbox_layer`/`release_bbox_layer`, тот же render-target-с-FLIP_Y паттерн, что использовал
+`elem_image_id`) теперь разделяется между backdrop-filter's `elem_image_id` (срез 10) и
+`PushOpacity`'s видимым слоем; срезы 12–14 переиспользуют его без изменений.
+
+Новый метод `screen_bbox_device_px(local: Rect)` — bbox-сайзинг-аналог `is_command_culled`:
+трансформирует 4 угла `bounds` (CSS px, pre-transform) текущей CTM (`self.canvas.transform()`),
+берёт AABB, домножает на `self.scale` и клэмпит к `(self.width, self.height)` активного
+render-таргета — возвращает device-px `(x0, y0, w, h)` вместо булева "виден/не виден". `None`
+(вырожденный box или AABB схлопнулся в пустоту после клэмпа) → откат на full-framebuffer слой
+через существующий `acquire_layer()`.
+
+`PushOpacity` с `Some(bounds)`: аллоцирует `bbox_layer_pool`-слой размером `(w, h)`; дети рисуются
+с сохранённым ambient-трансформом (та же конвенция, что срез-10's `true_elem_x/y` — **не**
+ambient-blind конвенция `apply_backdrop_filters`'s кропа, см. доку `BackdropFilterLayerEntry`) плюс
+доп. `translate(-x0/scale, -y0/scale)`, сдвигающим экранный origin bbox в локальный `(0, 0)` слоя;
+следом переустанавливается `scissor(bounds.x, bounds.y, bounds.width, bounds.height)` — без этого
+унаследованный от предка scissor (испечённый против старой CTM, до доп. translate) обрезал бы
+контент координатами, принадлежащими полному framebuffer, а не этому маленькому слою (тот же
+femtovg-капкан, что нашёл срез 10). `bounds` для `PushOpacity` — это собственный border-box
+элемента (`b.rect`, без учёта overflow потомков) — та же конвенция, что уже принята срезами 7–9
+для куллинга; отдельного регресса bbox-сайзинг не вносит.
+
+`composite_opacity_layer` теперь ветвится по новому полю `OpacityLayerEntry::bbox`: bbox-путь
+сначала `canvas.restore()` (снимает Push-time save+translate+scissor), затем переключает
+render-таргет и композитит по `(x0/scale, y0/scale, w/scale, h/scale)` вместо `(0, 0, css_w,
+css_h)`, освобождая слой через `release_bbox_layer(id, w, h)`; `None`-путь (full-framebuffer,
+`bounds: None` — полностраничный view-transition fade среза 7, или откат при промахе bbox/пула)
+не изменился.
+
+Уточнение по системе координат femtovg (проверено чтением исходника `femtovg-0.9.2`,
+`Canvas::set_size` кладёт `dpi` в отдельное поле `device_px_ratio`, а не в `state.transform`):
+`canvas.transform()` — чистая композиция вызовов `translate`/`scale`/`rotate`, **без** встроенного
+DPI-масштаба; значит `transform_point()` на CSS-px входе даёт CSS-px выход (та же система
+координат, что `is_command_culled`'s сравнение с `cull_css_w/h`). Поэтому `screen_bbox_device_px`
+домножает AABB на `self.scale` явно, а НЕ делит на него при последующем использовании (в отличие
+от среза-10's `true_elem_x/y / self.scale` — вероятно, латентная неточность в срезе 10,
+незамеченная т.к. headless-скриншоты рендерятся с `scale=1.0`; вне скоупа этого среза, не
+трогалась).
+
+Корректность: `cargo check -p lumen-paint` (default + `--features backend-femtovg`) зелёные;
+`cargo clippy -p lumen-paint --all-targets --features backend-femtovg -- -D warnings` чист (и без
+фичи); `cargo test -p lumen-paint --lib --features backend-femtovg` 937 passed, 0 failed, 2
+ignored. Визуальная приёмка headless-скриншотами (`LUMEN_BACKEND=femtovg`, main-vs-branch,
+`target/dev-release` main-бинарь собран раньше на этой машине): TEST-13 (visibility-opacity),
+TEST-30 (css-filter), TEST-102 (opacity × z-index stacking, включает вложенный opacity 0.6×0.5 и
+negative z-index внутри opacity-группы), `1000000-final.html` (полная демо-страница, opacity внутри
+overflow:hidden-предков) — **все побайтово идентичны main** (`ImageChops.difference` bbox=`None`).
+Синтетика (60 перекрывающихся полупрозрачных карточек 200×150, сетка 10×6) визуально корректна —
+альфа-блендинг перекрытий без сдвигов/обрезаний.
+
+## Срез 12 — `PushClipRoundedRect`/`PushClipPath`: bbox-сайзинг видимого слоя (влит 2026-07-18)
+
+Пункт 3(c) остатка, вторая часть. Тот же механизм среза 11 (`screen_bbox_device_px` +
+`acquire_bbox_layer`/`release_bbox_layer` через общий `bbox_layer_pool`), применённый к двум
+clip-опенерам — той же bbox-геометрии, что уже используется для куллинга в срезе 8
+(`group_bounds`'s `rect` для `PushClipRoundedRect`, `shape.bounding_rect()` для `PushClipPath`).
+
+`ClipEntry::RoundedRectLayer`/`PathLayer` получили новое поле `bbox: Option<(f32, f32, usize,
+usize)>` — тот же конвент, что `OpacityLayerEntry::bbox`. Push-обработчики пробуют
+`screen_bbox_device_px` → `acquire_bbox_layer(w, h)`; при `None`/промахе аллокации откатываются на
+существующий двухуровневый fallback (full-framebuffer `acquire_layer()`, а если и он промахнётся —
+плоский прямоугольный scissor, BUG-132) — вынесен в отдельные `push_clip_rounded_rect_fallback`/
+`push_clip_path_fallback`, чтобы не дублировать код на обеих ветках `match`.
+
+Важное отличие от `PushOpacity`: `transform` (матрица канвы на момент Push, которой
+`composite_clip_path_layer`/`composite_rounded_rect_clip_layer` строят экранный `path` формы клипа
+для финального `fill_path` на identity-канве) захватывается **до** bbox-`translate`/`scissor`, а
+не после — иначе путь клипа оказался бы в bbox-локальных, а не истинных screen-space координатах, и
+`fill_path` на `prev_render_target` с identity-канвой рисовал бы форму не в том месте. `bbox`-путь
+композита (`composite_clip_layer`) зеркалит `composite_opacity_layer`: сперва `canvas.restore()`
+(снимает Push-time save+translate+scissor), переключение render-таргета, затем `Paint::image` по
+`(x0/scale, y0/scale, w/scale, h/scale)` вместо `(0, 0, css_w, css_h)`, освобождение через
+`release_bbox_layer`. Путь `path` не меняется между bbox/full-framebuffer веткой — он уже в
+screen-space через `t`, а bbox по построению (`group_bounds`-геометрия) целиком накрывает всё, что
+`path` может закрасить, так что сэмплирование `Paint::image` никогда не выходит за пределы слоя.
+
+Корректность: `cargo check -p lumen-paint --features backend-femtovg` зелёный; `cargo test -p
+lumen-paint --lib --features backend-femtovg` 937 passed, 0 failed, 2 ignored. Визуальная приёмка
+headless-скриншотами (`LUMEN_BACKEND=femtovg`, main `target/dev-release` vs branch `target/release`,
+собраны на этой машине): TEST-31 (clip-path), TEST-101 (rounded overflow), `1000000-final.html` —
+**побайтово идентичны main**. Синтетика (rotate+scale rounded-rect, rotate clip-path polygon,
+вложенный `overflow: hidden` со скруглением поверх повёрнутого контента, off-viewport
+`clip-path: circle()` для проверки взаимодействия с куллингом среза 8, перекрывающиеся
+circle/ellipse клипы с opacity) — также побайтово идентична main; визуально корректна (см. подробнее
+`docs/tasks/bug-272-remaining-slices.md:54`).
+
+## Срез 13 — `PushMask{Image,LinearGradient,RadialGradient,ConicGradient}`: bbox-сайзинг видимого слоя (влит 2026-07-18)
+
+Пункт 3(c) остатка, третья часть. Тот же механизм срезов 11–12 (`screen_bbox_device_px` +
+`acquire_bbox_layer`/`release_bbox_layer` через общий `bbox_layer_pool`), применённый к трём
+gradient-mask-опенерам — той же bbox-геометрии (`rect`, масштаб-бокс маскируемого элемента), что уже
+используется для куллинга в срезе 9. `PushMaskImage` из заголовка среза layer не открывает вовсе (нет
+декодированной mask-текстуры на этом пути — approx через rect scissor, как и раньше) — тронуть было
+нечего, менять только gradient-опенеры (`push_mask_gradient_layer`, единая точка для всех трёх).
+
+`MaskLayerEntry` получила новое поле `bbox: Option<(f32, f32, usize, usize)>` — тот же конвент, что
+`OpacityLayerEntry::bbox`/`ClipEntry::{PathLayer,RoundedRectLayer}::bbox`. `push_mask_gradient_layer`
+пробует `screen_bbox_device_px` → `acquire_bbox_layer(w, h)`; при `None`/промахе аллокации
+откатывается на существующий двухуровневый fallback (full-framebuffer `acquire_layer()`, а если и он
+промахнётся — плоский прямоугольный scissor) — вынесен в `push_mask_gradient_fallback`, зеркалит
+`push_clip_rounded_rect_fallback`.
+
+Отличие от clip-срезов: `PopMask` (`composite_mask_layer`) должен сперва домножить alpha
+offscreen-слоя на градиент (`DestinationIn`-заливка `rect`), и только потом композитить —
+`fill_mask_gradient(&g, rect)` выполняется, пока Push-time `save()+translate` (bbox-путь) ещё не
+откачен, поэтому `rect` красится в той же bbox-локальной системе координат, в которой рисовалась
+маскируемая subtree — то же самое, что происходило в full-framebuffer-пути (там transform не
+транслируется, ambient-канва совпадает с экранной). Затем `composite_mask_layer` передаёт `bbox`
+дальше в `composite_opacity_layer` (уже bbox-aware с среза 11) вместо жёсткого `None` — тот
+откатывает Push-time `save()+translate+scissor` через `canvas.restore()`, переключает render-таргет и
+композитит `Paint::image` по `(x0/scale, y0/scale, w/scale, h/scale)` вместо `(0, 0, css_w, css_h)`.
+
+Корректность: `cargo check -p lumen-paint --features backend-femtovg` зелёный; `cargo test -p
+lumen-paint --lib --features backend-femtovg` 937 passed, 0 failed, 2 ignored;
+`cargo clippy -p lumen-paint --features backend-femtovg --all-targets -- -D warnings` зелёный.
+Визуальная приёмка headless-скриншотами (`--screenshot`, main vs branch, оба на `dev-release`
+профиле, собраны на этой машине): TEST-26 (mask-image: linear/radial gradient mask, control,
+mask-mode alpha/luminance), TEST-104 (mask × gradients × radius interaction) — **побайтово идентичны
+main** (`PIL.ImageChops.difference` bbox = `None` на обоих). Edge headless-скриншот в этой
+sandbox-среде не запускается вовсе (`msedge.exe --headless --screenshot=...` возвращает пустой вывод
+без создания файла что на main, что на ветке — окружение, не регрессия), поэтому `run.py`'s
+Edge-vs-Lumen путь недоступен; A/B main-vs-branch выше — эквивалентная замена для этого среза.
+
+## Срез 14 — `PushFilter`/`PushBlendMode`: bbox-сайзинг видимого слоя (влит 2026-07-19)
+
+Пункт 3(c) остатка, последняя часть. `PushBlendMode` (все режимы кроме `normal`/`plus-lighter`,
+fast-path без offscreen-слоя) переведён на тот же механизм срезов 11–13 безусловно — mix-blend это
+чистый попиксельный CPU-бленд (`mix_blend_rgba`), без чтения соседних текселей, тот же довод, что
+уже применялся к clip/mask. `PushFilter` разделён на два случая по наличию `blur()` в цепочке:
+colour-matrix-only цепочка (grayscale/sepia/brightness/invert/contrast/saturate/hue-rotate, без
+blur) — тот же безопасный bbox-путь; цепочка с `blur(sigma>0)` **остаётся full-framebuffer
+безусловно** — `filter_image`'s GPU Gaussian blur сэмплирует тексели за пределами border box
+элемента, а `bounds` не несёт запаса под `~3σ` (ни один эмиттер `PushFilter`/box-shadow/text-shadow
+его не добавляет); срез 11's перенос push-time save+translate в bbox-local пространство устраняет
+причину исходного провала BUG-076/BUG-145 (позиционирование), но не проблему недостающего
+blur-контекста за краем bbox — оставлено full-frame как явный, задокументированный компромисс,
+а не забытый TODO.
+
+Новый обобщённый пул `bbox_cpu_upload_pool`/`acquire_bbox_cpu_upload_image`/
+`release_bbox_cpu_upload_image` — тот же принцип, что `bbox_layer_pool` уже применяет к
+render-target-слоям (одна категория переменного-по-группе размера, несколько типов-потребителей):
+делит слот между `composite_filter_layer`'s colour-matrix-only bbox re-upload и
+`composite_blend_layer`'s blend-result bbox re-upload, отдельно от full-framebuffer-сайзинг
+`cpu_upload_pool` (оставленного этим же двум потребителям на их full-frame fallback-путях —
+blur-цепочка `PushFilter`, промах bbox-аллокации). Общий helper `upload_to_pool` (акквайр-агностичный
+update_image-с-фолбэком-на-create_image) убирает дублирование между двумя потребителями (третье
+место того же паттерна после `apply_backdrop_filters`).
+
+`composite_blend_layer`'s bbox-композит переиспользует `CompositeOperation::Copy` с прямоугольником
+`(x0/scale, y0/scale, w/scale, h/scale)` вместо full-canvas quad — GL блендит только реально
+растеризуемые пикселя примитива, так что пиксели вне bbox остаются нетронутыми (тот же довод, что
+уже применялся к `composite_clip_layer`'s bbox-пути, просто с другим composite-режимом).
+`FilterLayerEntry`/`BlendLayerEntry` получили поле `bbox: Option<(f32, f32, usize, usize)>` — тот
+же конвент, что `OpacityLayerEntry`/`ClipEntry::*`/`MaskLayerEntry`.
+
+Корректность: `cargo check`/`cargo clippy -p lumen-paint --all-targets --features backend-femtovg
+-- -D warnings` зелёные; `cargo test -p lumen-paint --features backend-femtovg` 937 passed, 0
+failed, 2 ignored (тот же счёт, что срезы 12/13 — новых тестов не добавлено, существующие покрывают
+геометрию через `group_bounds`/`screen_bbox_device_px` юнит-тесты). Визуальная приёмка — A/B
+gdigrab (`LUMEN_BACKEND=femtovg`, branch vs чистый merge-base `27b30624`, оба dev-release,
+собраны в одном worktree для инкрементальной пересборки; Edge headless в этой sandbox-среде
+недоступен, тот же вынужденный метод, что срезы 5/12/13): **TEST-30 (`css-filter`, вкл.
+backdrop-filter-ряд) — 0.135% (визуально пустой diff, порог 0.5% не задет)**, colour-matrix-only
+bbox-путь корректен по всем 8 цветовым фильтрам + hue-rotate, blur-ряд (full-frame, нетронут)
+идентичен. **TEST-56 (`mix-blend-mode`) — 12.767% diff branch-vs-baseline**, но расследование
+(временный `eprintln!` в `composite_blend_layer`, снят после диагностики) показало: baseline сам по
+себе **не рендерит вообще никакой** не-`normal`/`plus-lighter` blend-режим (`src_rgba.len() !=
+backdrop_rgba.len()` в `composite_blend_layer` из-за существующего, несвязанного бага —
+`acquire_layer()`/`layer_pool` сайзят full-frame слой по `self.width`/`self.height` вместо размера
+активного band-render-таргета при scroll-blit-рендере, заведено отдельно как
+[BUG-320](../BUGS.md)). Срез 14's bbox-путь для `PushBlendMode` не завязан на `self.width/height` и
+случайно обходит этот баг — branch корректно рендерит все 17 ячеек TEST-56 (визуально проверено),
+diff отражает **фикс плохого baseline**, не регрессию от этого среза.
+
+## Срез 15 — `PushMaskLayer` (SVG `<mask>` content): viewport-cull — исследовательский, фикса нет
+
+Пункт 3(c) остатка, последний класс опенера. Отличие от срезов 7–9: `PushMaskLayer`/
+`PopMaskLayer` — не самодостаточная скобка (в отличие от `PushMask{Image,Gradient}`, которые
+скиссорят/композитят **своё собственное** поддерево внутри `rect`). Как явно задокументировано
+в `DisplayCommand::PushMaskLayer`: команды между `PushMaskLayer`/`PopMaskLayer` рендерят
+**содержимое маски** в отдельный offscreen-слой, а `PopMaskLayer` применяет его как множитель
+к **родительскому** слою (`parent_pixel *= mask_value(mask_layer_pixel, mode)`), ограниченный
+`rect`. Композит `PopMaskLayer` не трогает пиксели вне `rect` — то есть чисто с точки зрения
+композит-семантики off-viewport `rect` ⇒ композит невидим, тот же довод, что уже применялся
+к `PushMask*` в срезе 9.
+
+Проверка боем показала, что вопрос не в семантике композита, а в том, что куллить нечего:
+
+1. `PushMaskLayer`/`PopMaskLayer` **не эмитируются нигде в продакшен-коде**. Единственный
+   эмиттер mask-команд — `emit_push_mask` (`display_list.rs`) — покрывает только
+   `PushMaskImage`/`PushMaskLinearGradient`/`PushMaskRadialGradient`/`PushMaskConicGradient`
+   (по `b.style.mask_image`); ветки на `PushMaskLayer` там нет. Репозиторий-wide grep
+   (`PushMaskLayer {` конструкторы) подтверждает: единственные места, где команда
+   **строится**, — юнит-тесты `display_list.rs` (не реальный контент). SVG `<mask>` с
+   произвольным rendered-содержимым (в отличие от `mask-image: url()`/градиента) — заявленная
+   в докстринге, но не подключённая end-to-end фича CSS Masking L1 §5.
+2. Как следствие, у двух бэкендов **разная** (и в одном случае — неверная относительно
+   докстринга) реализация одной и той же команды, ни разу не пройденная реальным рендером:
+   `renderer.rs` (wgpu) реализует полную семантику (отдельный offscreen-уровень
+   `mask_layer_stack`, `MaskLayerComposite`-план, множительный композит по `rect`);
+   `femtovg_backend.rs`'s `PushMaskLayer`/`PopMaskLayer` (`render_command`, строки ~4966–4976)
+   — это просто `canvas.save()` + `canvas.scissor(rect)` + `canvas.restore()`, т.е. никакого
+   отдельного mask-слоя и множительного композита нет вовсе, что противоречит докстрингу
+   и семантике, которую wgpu-путь действительно исполняет.
+3. Ни `graphic_tests/COVERAGE.md`, ни `TESTS` в `graphic_tests/run.py` не содержат отдельного
+   теста на этот путь (маски покрыты через `mask-image`/градиенты, срез 9 и раньше).
+
+Вывод: безопасный viewport-cull для `PushMaskLayer` семантически возможен (тот же аргумент
+среза 9 — композит ограничен `rect`), но добавлять его сейчас означало бы писать код куллинга
+поверх недостижимого в продакшене, ни разу не отрендеренного end-to-end пути с уже разошедшейся
+между бэкендами (и одним из них — некорректной относительно докстринга) семантикой; нет ни
+одной реальной страницы или графического теста, способных подтвердить, что cull ничего не
+ломает. Это противоречит принципу проекта «не писать код под гипотетические future
+requirements». Пункт остаётся **открытым до тех пор, пока не появится реальный эмиттер**
+SVG-`<mask>`-контента (отдельная, более крупная задача — подключить произвольное поддерево как
+источник маски, а не просто зафиксировать существующие Push/Pop-обработчики) — на этом этапе
+тот же bbox-cull-паттерн срезов 7–9, вероятнее всего, ляжет без переработки. Femtovg-бэкенда
+несоответствие докстрингу (п. 2 выше) зафиксировано здесь как находка, вне скоупа фикса этого
+среза — фиксить нечего рендерить, чинить стаб под несуществующий вызывающий код не имеет
+смысла.
+
+Корректность: изменений в коде нет (чисто исследовательский срез, как и предусмотрено брифом
+`docs/tasks/bug-272-remaining-slices.md:77-85`); `cargo check -p lumen-paint` не запускался
+повторно — код не менялся.
+
+## Срез 16 — GPU-счётчик по категориям + расследование glyph atlas (~285 МБ) — гипотеза опровергнута
+
+Пункт 1 остатка. `RenderBackend::debug_mem_report()`/`LUMEN_MEM_REPORT` до этого среза печатал
+только счётчики записей в пулах (`layer_pool=N`), не их GPU-байты, и не имел вообще никакого
+доступа к femtovg-glyph-atlas — единственному кандидату на «страничные» 285 МБ, не объяснённые
+известными Rust-хранилищами (см. п. 1 остатка). Новый `FemtovgBackend::gpu_image_bytes` суммирует
+`canvas.image_size(id).0 * .1 * 4` по набору `ImageId` — точно, не оценочно: каждая текстура,
+которую этот бэкенд создаёт, фиксированно `PixelFormat::Rgba8` (и `create_image_empty`-сайты, и
+`ImageSource::Rgba`-загрузки), так что множитель ×4 байт/пиксель не приближение. Glyph atlas стал
+измеримым через `femtovg::Canvas::debug_inspector_get_font_textures()` — метод, доступный только
+под cargo-фичей `debug_inspector` крейта `femtovg` (добавлена в `crates/engine/paint/Cargo.toml`,
+`features = []`, никаких новых транзитивных зависимостей); без неё `TextContext`, владеющий
+атласом, полностью приватен снаружи крейта femtovg, и получить даже количество текстур атласа
+было невозможно. Framebuffer/swapchain — не femtovg `ImageId` вообще (им владеет glutin/OpenGL),
+поэтому это одно-буферная RGBA8-оценка по известному размеру поверхности (`width×height×4`), а не
+измеренное значение — помечено `≈` в отчёте.
+
+**Результат на реальном lenta.ru** (`python scripts/mem_perf.py --page https://lenta.ru --tabs 2
+--tab-dwell-s 14 --hold-s 15`, `LUMEN_BACKEND=femtovg`, живое окно, `dev-release`):
+
+```
+femtovg: raw_images=1 (0.2 MB), gpu_images=1 (0.2 MB), glyph_atlas=1 (1.0 MB),
+framebuffer≈3.1 MB, layer_pool=2 (6.2 MB), content_band_pool=0 (0.0 MB),
+cpu_upload_pool=0 (0.0 MB), backdrop_bbox_pool=0 (0.0 MB), bbox_layer_pool=1 (2.9 MB),
+bbox_cpu_upload_pool=0 (0.0 MB)
+```
+
+**Glyph-atlas-гипотеза опровергнута.** Один атлас = ровно одна страница 512×512 RGBA8 = 1.0 МБ —
+femtovg переиспользует existующие страницы для глифов любого шрифта/размера/начертания через
+общий rect-packer (`Atlas::add_rect`, не привязан к конкретному фонту), новая страница заводится
+только когда все текущие исчерпаны по месту. Чтобы объяснить 285 МБ атласом, странице пришлось бы
+разрастись до ~285 страниц (~285 × ~1800 упакованных глифов ≈ пол-миллиона одновременно живых
+глифов) — не наблюдается ни на одной реальной странице, включая lenta.ru. Все femtovg-владеемые
+GPU-текстуры вместе (raw_images + gpu_images + glyph_atlas + framebuffer-оценка + все layer-пулы)
+суммарно дают **~13.6 МБ** против ~285 МБ необъяснённого прироста из исходной находки BUG-272 —
+т.е. **источник не в каком-либо femtovg `ImageId`, за которым может уследить этот бэкенд вообще**.
+Проверка на синтетике (4000 абзацев случайного текста, чередование bold/italic/regular,
+`.tmp/heavy_text_static.html`, вне репозитория — не коммитится) дала тот же результат: `glyph_
+atlas=1 (1.0 MB)` — согласуется с рассуждением про rect-packer выше, не эффект малого корпуса
+lenta.ru конкретно.
+
+Вывод: неатрибуцированный GPU-прирост, зафиксированный в исходной находке BUG-272 (и подтверждённый
+независимо в PERF-5, `docs/perf/memory.md`: GPU ≈ 60% RSS на синтетике с 6 вкладками), лежит **вне
+зоны видимости femtovg-бэкенда** — вероятные кандидаты: OpenGL-драйверные внутренние аллокации
+(shader/command-buffer кэши), реальная (>1, в отличие от однобуферной оценки этого среза)
+многобуферность swapchain/window-поверхности, либо особенность метода измерения (`Get-Counter
+'GPU Process Memory\Local Usage'` может задваивать разделяемую системную память на интегрированной
+графике — см. `docs/perf/memory.md`, "gpu_mb показан отдельно и не вычтен"). Дальнейшее
+расследование этой части упирается не в отсутствие инструмента (он теперь есть и покрывает всё,
+чем управляет паблик API `femtovg::Canvas`), а в то, что причина, скорее всего, ниже уровня
+абстракции, доступного этому крейту — нужен либо драйверный/OS-level профайлер (вне скоупа Lumen),
+либо переход на бэкенд с прямым контролем аллокаций (wgpu, уже дефолтный для windowed-режима,
+ADR-017 — задача для отдельного среза/бага, не завершения этого).
+
+Проверено: `cargo check -p lumen-paint --features backend-femtovg`, `cargo clippy -p lumen-paint
+--features backend-femtovg --all-targets -- -D warnings`, `cargo test -p lumen-paint --features
+backend-femtovg --lib` (937 passed) — все зелёные. Живая проверка (`mem_perf.py`) на
+`samples/page.html` (`glyph_atlas=1 (1.0 MB)`, `content_band_pool=1 (14.6 MB)`, остальные пулы
+0 — страница без opacity/clip/mask/blend, ожидаемо), на синтетике (см. выше) и на lenta.ru (см.
+выше) — числа во всех трёх случаях разумны и внутренне согласованы (glyph atlas не растёт с
+объёмом текста, пока не исчерпана packer-ёмкость страницы).
+
+## Срез 17 — Multi-copy image cache: `raw_images` deep-copy (femtovg) — дедуплицировано через `Arc`
+
+Пункт 4 остатка, часть 1. `FemtovgBackend::register_image` делал `self.raw_images.insert(src,
+image.clone())` — **полную копию декодированных пикселей** каждой картинки помимо той, что уже
+живёт за `Arc<Image>` в глобальном `IMAGE_CACHE` (`DecodedImageCache`) и в CPU
+`ImageDecodeCache` (`self.image_cache`). Дедуплицировано тем же приёмом, что срез 6 применил к
+шрифтовым байтам (`Arc<[u8]>` вместо `Vec<u8>`-клона):
+
+- `RenderBackend::register_image` теперь принимает `Arc<Image>`, а не `&Image` (трейт
+  `crates/engine/paint/src/backend.rs`); `FemtovgBackend::raw_images` — `HashMap<String,
+  Arc<Image>>`, регистрация клонирует **указатель**, разделяя аллокацию пикселей с вызывающей
+  стороной вместо второго экземпляра. Все пять реализаций трейта обновлены (femtovg, wgpu-обёртка,
+  cpu, vello, compare); wgpu `Renderer::register_image` (inherent-метод) оставлен на `&Image` —
+  он держит CPU-копию только под kill-switch'ем `LUMEN_NO_IMAGE_MIPS` (дефолтный mip-путь читает
+  GPU-текстуру напрямую), поэтому `WgpuBackend` разыменовывает `Arc`.
+- Shell протянут end-to-end: `fetch_and_decode_images` возвращает `Arc<Image>` — в горячей точке
+  `DecodedImage::Static(img)` теперь `Arc::clone` хэндла кэша вместо `(*img).clone()`, так что
+  `page.images` разделяет аллокацию с `IMAGE_CACHE`, а `register_image` — с обоими. Поля
+  `ParsedPage`/`LoadedPage`/`PageSnapshot::pending_images` несут `Arc<Image>`. Streaming/lazy-пути
+  используют то, что `ImageDecodeCache::insert` возвращает `ImageHandle` (`Arc<Image>`): вставляют
+  в CPU-кэш, затем регистрируют возвращённый хэндл — `raw_images` разделяет аллокацию **CPU-кэша**
+  (ноль лишних копий). Одноразовые пути (canvas-snapshot, GIF-кадры, bg-картинки) оборачивают
+  свежий декод в `Arc::new` один раз.
+- `render_to_image_cpu`/`rasterize_cpu` (headless CPU-путь) тоже приняли `&[(String, Arc<Image>)]`
+  (`img.as_ref()` при построении `image_map`). Драйверный `RenderedPage.images` оставлен owned
+  `Image` — оборачивается в `Arc::new` на границе shell'а, драйверный путь не тронут.
+
+Экономия: на главном пути загрузки (`page.images`) все три места — `IMAGE_CACHE`, `page.images`,
+`raw_images` — теперь разделяют один буфер вместо трёх копий; femtovg `raw_images` больше **не**
+держит собственный экземпляр. Изменение пиксельно-нейтрально по построению: везде, где рендер
+читает пиксели, `Arc<Image>` разыменовывается в тот же `&Image` (femtovg `register_image` —
+`image_to_rgba8_vec(&image)`, cpu_raster — `img.as_ref()`), — подтверждено попиксельно: headless
+`--screenshot` страницы с шестью `<img>` (`samples/test-04-images.html`, PNG+JPEG) на ветке vs
+main **побайтово идентичен** (`PIL.ImageChops.difference` bbox `None`), картинки рендерятся (не
+grey placeholder).
+
+Проверено: `cargo check`/`clippy -p lumen-paint` (backend-femtovg, backend-vello+compare,
+backend-cpu+cpu-render) и `-p lumen-shell`/`-p lumen-driver` — зелёные; `cargo test -p lumen-paint
+--features backend-femtovg --lib` (937 passed), `--features backend-cpu,cpu-render --lib
+cpu_raster` (62 passed, включая `draw_image_paints_decoded_pixels`/`draw_cross_fade`).
+
+## Срез 18 — Multi-copy image cache: `@WxH`-варианты — LRU-эвикция (femtovg)
+
+Пункт 4 остатка, часть 2. Оценка: femtovg держит по одной полноценной GPU-текстуре на каждый
+различный placed-размер картинки (area-averaged downscale под ключом `"src@WxH"`, BUG-077).
+
+**Дедупликация уже сделана и дальше невозможна без потери качества.** Ключ
+`format!("{src}@{tw}x{th}")` уже даёт *попадание* при точном совпадении `(source, target_w,
+target_h)` — два `<img>` одного источника в одинаковом placed-размере делят один вариант. Разные
+размеры — это честно разные пересэмплированные пиксели: свести их к одному буферу без повторного
+ресемплинга нельзя, а ресемплинг вернул бы именно тот алиасинг, ради устранения которого варианты
+существуют. Поэтому по формулировке среза («либо LRU-эвикцию, если дедупликация невозможна без
+потери качества») реализован **рычаг эвикции**, а не дальнейшая дедупликация.
+
+**Проблема, которую закрывает срез:** до этого варианты копились в общем `self.images` **без
+границы** — весь `"src@WxH"`-зоопарк жил до следующей навигации (`clear_images`). Одна картинка,
+переразмещаемая во множестве размеров за сессию (responsive-relayout, зум, анимация), накапливала
+неограниченно много осиротевших текстур.
+
+**Сделано (только femtovg-бэкенд):**
+
+- Варианты вынесены из `self.images` (там остались только оригиналы, ключ = голый `src`,
+  жизненный цикл register→clear) в отдельный `resized_variants: LruMap<femtovg::ImageId>` —
+  небольшой обобщённый LRU-кэш фиксированной ёмкости (`RESIZED_VARIANT_CACHE_CAP = 128`): `map` +
+  вектор `order` (LRU в начале), `get` помечает ключ недавним, `insert` сверх ёмкости вытесняет
+  начало и возвращает вытесненный `ImageId`. Вытесненная текстура отправляется в
+  `resized_variant_pending_delete` и удаляется после следующего `canvas.flush()` (как остальные
+  pending-delete-очереди — вытесненный id мог быть отрисован ранее в этом же кадре).
+  `clear_images` дренирует новый кэш и очередь; `debug_mem_report` (срез 16) получил отдельную
+  категорию `resized_variants`.
+- Ёмкость 128 взята с большим запасом относительно числа различных placed-размеров, видимых в
+  одном кадре, — внутрикадрового thrash'а нет, эвикция ограничивает лишь межкадровое накопление.
+
+**Пиксельная нейтральность — по построению.** Ключ, функция ресемпла (`resize_area_avg` +
+`image_to_rgba8_vec` + `create_image`) и семантика lookup для незаполненного кэша идентичны
+прежним; эвикция срабатывает только после накопления 128 различных вариантов (много больше, чем
+видимо в кадре) и лишь освобождает устаревший вариант, который при повторной надобности
+пересэмплируется идентично. `@WxH`-путь femtovg живёт только в живом окне (headless `--screenshot`
+— CPU-путь, его не задевает), поэтому визуальная приёмка = юнит-тесты логики LRU
+(`lru_map_*`, 5 шт.: hit/miss, порядок вытеснения, обновление недавности, drain, пол ёмкости) +
+полный femtovg lib-прогон без регрессий.
+
+**Область.** wgpu-бэкенд (дефолтный, ADR-017) `@WxH`-зоопарка **не имеет**: по умолчанию грузит
+оригинал с mip-цепочкой (одна текстура на `src`, downscale делает трилинейный сэмплер), а
+`"src@WxH"`-путь там — только под kill-switch'ем `LUMEN_NO_IMAGE_MIPS=1` (legacy, редкий).
+Поэтому срез сделан для femtovg (всегда-активный путь, как и срезы 10–17); legacy-wgpu-путь
+оставлен как есть — он bounded уже тем, что почти не используется.
+
+Проверено: `cargo check`/`clippy -p lumen-paint --features backend-femtovg --all-targets -D
+warnings` — зелёные; `cargo test -p lumen-paint --features backend-femtovg --lib` — 942 passed
+(937 прежних + 5 новых `lru_map_*`), 2 ignored, 0 failed.
+
+## Срез 19 — Multi-copy image cache: GIF все кадры — ленивое декодирование (image + shell)
+
+Пункт 4 остатка, часть 3. Оценка: анимированный GIF раскодировался eager'ом — `decode_gif_animated`
+разворачивал **все** кадры в `Vec<AnimatedFrame>`, каждый — полный экранный RGBA-буфер
+`width × height × 4`. Для многокадрового крупного GIF это `N × width × height × 4` резидентно, хотя
+для плавного воспроизведения в каждый момент нужен ровно один кадр.
+
+**Сделано (ленивое декодирование, `crates/engine/image/src/gif.rs`):** `AnimatedGif` больше не
+хранит пиксели. Хранятся только закодированные байты (`encoded: Arc<[u8]>`, разделяемые между
+клонами) и per-frame задержки (`delays_cs: Vec<u16>` — дешёвые метаданные, собираются один раз при
+загрузке проходным декодом в один переиспользуемый отбрасываемый буфер, пиковая память прохода —
+один кадр). Пиксели кадра декодируются по запросу через `frame_image(idx)`: forward-курсор
+(`GifCursor` за `Mutex` → `Send + Sync`) держит живой `gif::Decoder` спозиционированным, так что
+воспроизведение вперёд стоит **один декод кадра на переход**, а не `O(N)`; запрос кадра «позади»
+курсора (wrap на 0 в цикле, обратный seek) пересоздаёт декодер с начала; повтор того же кадра
+обслуживается из кэша последнего кадра. Резидентная память = закодированные байты + ~один кадр.
+
+**Мотивация формы.** GIF-кадры взаимозависимы (disposal composited поверх предыдущих) — произвольный
+доступ к кадру `N` в принципе требует последовательного декода `0..=N`, поэтому «декодировать окно»
+свелось к forward-курсору с пересозданием на откат: он даёт `O(1)`-амортизацию на forward-плейбэке
+(доминирующий сценарий: `frame_index_at` монотонно растёт, wrap на 0 раз в цикл) при резидентной
+границе в один кадр.
+
+**API-переход (shell).** Публичное поле `frames: Vec<AnimatedFrame>` убрано; сайты в
+`crates/shell/src/main.rs`/`image_cache.rs` переведены на методы: `frame_count()`,
+`frame_image(idx) -> Result<Image>`, `total_cycle_ms()`, `frame_delay_ms(idx)`, `resident_bytes()`
+(диагностика `LUMEN_MEM_REPORT` теперь считает реальный footprint, а не `N`-кадровый eager).
+Первый кадр (`frame_image(0)`) по-прежнему материализуется сразу для начальной отрисовки. Бонус:
+два прежних `(*gif).clone()` (финальный pipeline + streaming-loader) больше не копируют пиксели всех
+кадров — клон делит `Arc<[u8]>` и копирует лишь `delays_cs`. `AnimatedFrame` удалён из публичного API.
+
+**Пиксельная нейтральность — по построению.** `frame_image(idx)` воспроизводит ровно ту же
+последовательность операций декодера (`ColorOutput::RGBA`, `next_frame_info` + `read_into_buffer`
+кадр за кадром с внутренним composite/disposal), что и прежний eager-цикл до кадра `idx`, — байты
+кадра `idx` идентичны. Проверка: `cargo test -p lumen-image` — 32 passed (включая новые
+`lazy_frame_pixels_match_source`, `lazy_backward_access_resets_cursor`, `lazy_out_of_range_clamps`,
+`lazy_metadata_decoded_without_pixels`, `animated_gif_is_send_sync` — round-trip на синтетическом
+2-кадровом GIF через `gif::Encoder`); `clippy -p lumen-image`/`-p lumen-shell -D warnings` — зелёные.
+
+## Срез 20 — Multi-copy image cache: canvas2d thread-local — общий `Arc<Image>` + ленивый RGBA8 (js + shell)
+
+Пункт 4 остатка, часть 4, последний. Оценка thread-local буферов Canvas2D-пути:
+
+* **`CANVASES`** (`crates/js/src/canvas2d.rs`) — живые CPU-буферы `Context2D` каждого `<canvas>`,
+  выгружаются в рендерер как `canvas:{nid}`. Это **вывод** канваса, не декодированная картинка — он
+  не дублирует `DecodedImageCache` (тот держит только `<img src>`-ресурсы) и мутабелен кадр-к-кадру,
+  уникален на канвас. Дедупликация невозможна/небезопасна — подтверждено, буфер оставлен как есть.
+* **`IMG_BITMAPS`** (`crates/js/src/img_bitmap_store.rs`) — декодированные пиксели `<img>` для
+  `drawImage(imgElement, …)`/`createImageBitmap(img)`. **Именно здесь** была дупликация: shell после
+  `fetch_and_decode_images` **eager**'ом гонял `img.to_rgba8()` (полная RGBA8-копия + тон-маппинг) для
+  **каждого** декодированного `<img>` страницы и слал владеемый `Vec<u8>` в thread-local JS-стора —
+  притом что те же пиксели уже резидентны в `IMAGE_CACHE` (как `Arc<lumen_image::Image>`) и в
+  renderer-выгрузке (`raw_images`, срез 17). Подавляющее большинство `<img>` никогда не служат
+  `drawImage`-источником, но RGBA8-копия делалась всем.
+
+**Сделано (общий `Arc`, ленивая конверсия).** `set_img_bitmap`/`register_img_bitmaps` теперь принимают
+`Arc<lumen_image::Image>` (клон указателя через границу JS-потока — `Arc` `Send + Sync`, ноль копий
+пикселей при регистрации) вместо `(w, h, Vec<u8>)`. RGBA8-представление материализуется **лениво**
+через `to_rgba8()` при первом чтении канвасом (`with_img_bitmap`) и кэшируется в
+`RefCell<Option<Vec<u8>>>` внутри записи — повторный `drawImage` того же источника (анимация на канвасе)
+конвертирует максимум один раз. Итог: `<img>`, декодированные, но ни разу не нарисованные на канвас,
+стоят **ноль** лишних байт в JS-сторе; нарисованные — одна RGBA8-копия (как раньше, но только для них),
+а исходные пиксели `Image::data` теперь **делятся** одним `Arc` между `IMAGE_CACHE`, `raw_images` и
+JS-стором. Бонус: тон-маппинг/ICC-конверсия ушла с UI-потока (где гналась на все картинки при
+регистрации) на JS-поток и только для реально используемых.
+
+**Пиксельная нейтральность — по построению.** `to_rgba8()` вызывается на том же `Arc<Image>`, что shell
+конвертировал раньше, тем же методом — байты идентичны; сместились лишь момент (лениво) и поток
+конверсии. Проверка: `cargo test -p lumen-js` (новые `img_bitmap_store::tests` —
+`stores_and_reads_shared_bitmap`, `rgba8_materialised_lazily_and_cached`, `rgb8_source_expands_to_rgba8`,
+`missing_bitmap_returns_none`; прежние `canvas_draw_image_from_img_element*` — 3/5/9-арг drawImage — без
+изменений поведения, только конструкция битмапа через `Arc<Image>`); `clippy -p lumen-js`/`-p lumen-shell
+-D warnings` — зелёные.
+
 ## Остаток (следующие срезы)
 
-1. ~~Blend-слои (PREMULTIPLIED) вне пула~~ — закрыто срезами 2–4 (src-слой, blend-result, colour-matrix filter, backdrop-filter — все теперь в едином `cpu_upload_pool`). Glyph atlas на тексте страницы — GPU на lenta всё ещё ~509 МБ против ~224 МБ baseline (~285 МБ страничных); требует того же счётчика GPU-памяти, срезы 2–4 его не меняли (lenta не использует blend-mode/backdrop-filter/цветовые CSS-фильтры).
+1. ~~Blend-слои (PREMULTIPLIED) вне пула~~ — закрыто срезами 2–4 (src-слой, blend-result, colour-matrix filter, backdrop-filter — все теперь в едином `cpu_upload_pool`). ~~Glyph atlas на тексте страницы~~ — **срез 16 опроверг гипотезу**: новый GPU-байтовый счётчик по категориям (`debug_mem_report`, femtovg `debug_inspector` feature) показал glyph atlas = 1.0 МБ (одна страница 512×512) на реальном lenta.ru, все femtovg-владеемые текстуры вместе ~13.6 МБ — источник ~285 МБ неатрибуцированного GPU лежит вне видимости femtovg-бэкенда (драйвер/swapchain/метод измерения, см. срез 16 выше); не блокирует переход к следующим пунктам.
 2. Baseline пустого окна 224 МБ GPU — сам по себе жирный (framebuffers/шрифтовой атлас/драйвер).
-3. Слои по bounding box вместо full-frame — **срез 5 (влит) сделал backdrop-filter's `filtered_backdrop_id` bbox-сайзингом**; визуально подтверждён (A/B gdigrab branch-vs-main, TEST-30/103 побайтово идентичны — см. срез 5 выше); **срез 7 (влит) добавил `bounds` в `PushOpacity` и включил viewport-cull off-screen opacity-групп** (см. срез 7 выше); **срез 8 (влит) включил viewport-cull off-screen clip-групп** (`PushClipRoundedRect`/`PushClipPath`, см. срез 8 ниже); **срез 9 (влит) включил viewport-cull off-screen mask-групп** (`PushMask{Image,LinearGradient,RadialGradient,ConicGradient}`, см. срез 9 ниже); остаётся: (b) `elem_image_id` у backdrop-filter (всё ещё full-framebuffer через `layer_pool`), (c) сам bbox-сайзинг **видимого** слоя (аллокация размером с bbox вместо framebuffer) для `PushOpacity`/`PushClip*`/`PushMask*` (сейчас куллинг снимает только off-viewport-случай, on-viewport слой всё ещё full-framebuffer), viewport-cull для `PushMaskLayer` (SVG-`<mask>` content, сложнее — применяется к родительскому слою), а также `PushFilter`/`PushBlendMode` уже куллятся off-viewport (BUG-273 срез 1), но их видимый слой тоже full-framebuffer.
-4. Отложенные многокопийные image-кэши (см. диагностику 2026-07-07 в истории файла): femtovg `raw_images` deep-copy, `@WxH`-варианты, GIF все кадры, ~~font `bytes_store.cloned()`~~ (закрыто срезом 6 — `Arc<[u8]>`), canvas2d thread-local — актуально для image-heavy сайтов.
+3. Слои по bounding box вместо full-frame — **срез 5 (влит) сделал backdrop-filter's `filtered_backdrop_id` bbox-сайзингом**; визуально подтверждён (A/B gdigrab branch-vs-main, TEST-30/103 побайтово идентичны — см. срез 5 выше); **срез 7 (влит) добавил `bounds` в `PushOpacity` и включил viewport-cull off-screen opacity-групп** (см. срез 7 выше); **срез 8 (влит) включил viewport-cull off-screen clip-групп** (`PushClipRoundedRect`/`PushClipPath`, см. срез 8 ниже); **срез 9 (влит) включил viewport-cull off-screen mask-групп** (`PushMask{Image,LinearGradient,RadialGradient,ConicGradient}`, см. срез 9 ниже); **срез 10 (влит) сделал backdrop-filter's `elem_image_id` bbox-сайзингом** (пункт (b), см. срез 10 выше); **срез 11 (влит) сделал `PushOpacity`'s видимый слой bbox-сайзингом** через общий `bbox_layer_pool` (пункт (c), см. срез 11 выше); **срез 12 (влит) сделал `PushClipRoundedRect`/`PushClipPath`'s видимый слой bbox-сайзингом** тем же механизмом (пункт (c, продолжение), см. срез 12 выше); **срез 13 (влит) сделал gradient-mask-опенеров (`PushMask{LinearGradient,RadialGradient,ConicGradient}`) видимый слой bbox-сайзингом** тем же механизмом (`PushMaskImage` слой не открывает — тронуть было нечего, см. срез 13 выше); **срез 14 (влит) сделал `PushBlendMode`'s (безусловно) и `PushFilter`'s colour-matrix-only (без blur) видимый слой bbox-сайзингом** через новый общий `bbox_cpu_upload_pool` (пункт (c), последний, см. срез 14 выше); `PushFilter`'s blur-цепочка осознанно оставлена full-framebuffer (нет запаса под GPU-blur-сэмплинг за краем bbox — см. срез 14); **срез 15 (исследовательский, фикса нет)** установил, что `PushMaskLayer` (SVG-`<mask>` content) не эмитируется нигде в продакшене — семантически cull возможен (тот же довод, что срез 9), но писать его сейчас не над чем проверить; пункт остаётся открытым до появления реального эмиттера SVG-`<mask>`-контента (см. срез 15 выше).
+4. Отложенные многокопийные image-кэши (см. диагностику 2026-07-07 в истории файла): ~~femtovg `raw_images` deep-copy~~ (закрыто срезом 17 — трейт `register_image` принимает `Arc<Image>`, `raw_images` разделяет аллокацию с `IMAGE_CACHE`/CPU-кэшем, см. срез 17 выше), ~~`@WxH`-варианты~~ (закрыто срезом 18 — дедуп по `(source,tw,th)` уже был ключом `"src@WxH"`, дальше без потери качества невозможен; femtovg-варианты вынесены в LRU-ограниченный `resized_variants` (cap 128), wgpu-дефолт `@WxH`-зоопарка не имеет — mip-цепочка, см. срез 18 выше), ~~GIF все кадры~~ (закрыто срезом 19 — `AnimatedGif` больше не держит `N` кадров: только `Arc<[u8]>`-байты + `delays_cs`, кадры декодируются лениво через forward-курсор с резидентной границей ~один кадр, см. срез 19 выше), ~~font `bytes_store.cloned()`~~ (закрыто срезом 6 — `Arc<[u8]>`), ~~canvas2d thread-local~~ (закрыто срезом 20 — `img_bitmap_store` больше не eager-копирует RGBA8: `<img>`-битмапы для canvas `drawImage` делят `Arc<lumen_image::Image>` с `IMAGE_CACHE`/`raw_images` через границу JS-потока, RGBA8 материализуется лениво и только для реально нарисованных источников; живой `CANVASES`-буфер — вывод канваса, не дубликат `DecodedImageCache`, мутабелен и уникален → дедуп невозможен, оставлен как есть, см. срез 20 выше). **Пункт 4 полностью закрыт.**
+
+### Итог после S20 (все запланированные срезы S10–S20 влиты)
+
+Все reducible-направления по многокопийным кэшам и full-frame-слоям закрыты: пункт 1 (blend-слои —
+срезы 2–4; glyph-atlas — гипотеза опровергнута срезом 16), пункт 3 (bbox-сайзинг — срезы 5–14), пункт 4
+(image-кэши — срезы 6/17/18/19/20). **BUG-272 остаётся `OPEN`**, потому что остаток не пуст — оставшиеся
+два направления фикса в движке не имеют и задокументированы как исследовательские:
+
+* **Пункт 2 — baseline пустого окна 224 МБ GPU + ~285 МБ неатрибуцированного GPU** (срез 16 счётчиком
+  показал: все femtovg-владеемые текстуры вместе ~13.6 МБ, остальное лежит **вне видимости бэкенда** —
+  драйвер/swapchain/метод измерения). Не адресуемо на уровне движка Lumen без смены графического стека.
+* **Пункт 3 (хвост) — cull `PushMaskLayer` (SVG-`<mask>` content)** — семантически возможен, но эмиттера
+  такого контента в продакшене пока нет (срез 15), писать/проверять cull не над чем.
+
+Обе позиции — окончательно открытые с обоснованием; когда/если появится реальный эмиттер SVG-`<mask>`
+или сменится графический стек, их можно будет добить отдельной задачей.
 
 ## Инструменты (остались в коде)
 
-`LUMEN_MEM_REPORT=1` — периодический дамп размеров хранилищ в stderr (`about_to_wait`); `RenderBackend::debug_mem_report()`; `QuickJsRuntime::debug_memory_used()`; `DecodedImageCache/PrefetchCache::debug_stats()`.
+`LUMEN_MEM_REPORT=1` — периодический дамп размеров хранилищ в stderr (`about_to_wait`); `RenderBackend::debug_mem_report()` (срез 16: GPU-байты по категориям — raw_images/gpu_images/glyph_atlas/framebuffer/каждый layer-пул — не только счётчики записей); `QuickJsRuntime::debug_memory_used()`; `DecodedImageCache/PrefetchCache::debug_stats()`.

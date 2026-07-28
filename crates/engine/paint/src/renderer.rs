@@ -674,11 +674,16 @@ fn blend_channel(mode: u32, cs: f32, cd: f32) -> f32 {
     let dst = textureSample(t_dst, s_layer, in.uv);
     let mode = u.mode;
 
-    // Un-premultiply for blending (wgpu stores straight alpha in offscreen layers).
-    var cs = src.rgb;
-    var cd = dst.rgb;
+    // Un-premultiply for blending: offscreen layers accumulate PREMULTIPLIED content
+    // (each draw is composited onto them with straight-alpha ALPHA_BLENDING, which —
+    // starting from a transparent-black clear — leaves rgb scaled by alpha). The CSS
+    // Compositing L1 §8 formulas below (and blend_channel) expect straight Cs/Cd, so
+    // divide it back out; a fully-transparent source/dest has no meaningful straight
+    // color and `as_`/`ad` zero it out later in the compositing formula regardless.
     let as_ = src.a;
     let ad = dst.a;
+    var cs = select(src.rgb / as_, vec3<f32>(0.0), as_ <= 0.0);
+    var cd = select(dst.rgb / ad, vec3<f32>(0.0), ad <= 0.0);
 
     var blended: vec3<f32>;
 
@@ -1635,7 +1640,6 @@ pub struct Renderer {
     composite_bgl: wgpu::BindGroupLayout,
     blend_pipeline: wgpu::RenderPipeline,
     blend_bgl: wgpu::BindGroupLayout,
-    blend_mode_uniform: wgpu::Buffer,
     /// CSS Masking L1 §4 — mask composite pipeline + bind group layout.
     /// Used by PopMask to composite the offscreen layer using a mask image.
     mask_composite_bgl: wgpu::BindGroupLayout,
@@ -1734,6 +1738,15 @@ pub struct Renderer {
     /// `font-family` пуст или ни одно имя не нашлось через `FontProvider`.
     /// Остальные добавляются лениво при первом `DrawText` с известной family.
     faces: Vec<LoadedFace>,
+    /// `face_id` bundled Golos Text Regular (DS-4) — default chrome UI font,
+    /// used by [`Self::resolve_face_id`] when `font_family` is empty (every
+    /// chrome `DrawText` call site) or requests reserved family `"Golos Text"`.
+    chrome_face_id: Option<usize>,
+    /// `face_id` bundled Golos Text Medium (DS-4) — reserved family `"Golos Text Medium"`.
+    chrome_face_medium_id: Option<usize>,
+    /// `face_id` bundled JetBrains Mono Regular (DS-4) — reserved family
+    /// `"JetBrains Mono"`, used for the omnibox URL field and DevTools panels.
+    mono_face_id: Option<usize>,
     /// `face_id` по абсолютному пути TTF — чтобы не грузить файл повторно.
     face_id_by_path: HashMap<PathBuf, usize>,
     /// Мемоизация `resolve_face_id`: хэш `(families, weight, style)` →
@@ -1996,8 +2009,25 @@ impl Renderer {
         // preference chain below (also used when the probe is disabled or this
         // isn't Windows). `WGPU_BACKEND` env-var still overrides both.
         let probed = crate::backend_probe::pick_backend(&window).await;
+        // Windows order is Vulkan-first (2026-07-28, user decision): pipeline
+        // compilation on this Intel Iris Plus costs ~0.28 s on Vulkan against
+        // 3–7 s on DX12 for the exact same 16 pipelines (measured under
+        // `LUMEN_FRAME_LOG=1`, see `bugs/BUG-274-OPEN.md` and BUG-406) — that
+        // gap is the bulk of the "window says Not Responding on launch"
+        // report. It matches `backend_probe::pick_backend`'s own candidate
+        // order (Vulkan → GL → DX12), so the two no longer disagree.
+        //
+        // This chain is only consulted when the probe does *not* decide: the
+        // probe's accepted candidate is prepended below, so on a normal
+        // Windows launch the probe still wins. It governs when the probe is
+        // switched off (`LUMEN_NO_BACKEND_PROBE=1`) or reports `None`. In
+        // that first case the BUG-275 white-window risk is no longer screened
+        // by a real presentation check — the probe exists precisely because
+        // some Intel iGPUs present a blank Vulkan swapchain — so a machine
+        // hitting BUG-275 *and* disabling the probe now needs an explicit
+        // `WGPU_BACKEND=dx12`.
         let static_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
-            &[wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
+            &[wgpu::Backends::VULKAN, wgpu::Backends::DX12, wgpu::Backends::GL]
         } else {
             &[wgpu::Backends::PRIMARY, wgpu::Backends::GL]
         };
@@ -2005,6 +2035,11 @@ impl Renderer {
             .into_iter()
             .chain(static_prefs.iter().copied().filter(|b| Some(*b) != probed))
             .collect();
+        // BUG-274 cold-start census: bracket adapter/device acquisition and
+        // pipeline compilation separately from the probe (already logged by
+        // `backend_probe::pick_backend`) to find where the ~9s launch->first-frame
+        // gap actually goes.
+        let t_adapter0 = std::time::Instant::now();
         let mut picked = None;
         for backends in backend_prefs {
             let instance = wgpu::Instance::new(
@@ -2080,8 +2115,15 @@ impl Renderer {
             );
         }
         let gpu_fingerprint = GpuFingerprint::from_adapter_info(&adapter_info);
+        if crate::frame_log_enabled() {
+            eprintln!(
+                "[wgpu] adapter+device acquired: {:.0}ms",
+                t_adapter0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
 
-        Self::init_pipelines(
+        let t_pipelines0 = std::time::Instant::now();
+        let result = Self::init_pipelines(
             device,
             queue,
             format,
@@ -2093,7 +2135,14 @@ impl Renderer {
             scale_factor,
             target_color_space,
             gpu_fingerprint,
-        )
+        );
+        if crate::frame_log_enabled() {
+            eprintln!(
+                "[wgpu] init_pipelines: {:.0}ms",
+                t_pipelines0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        result
     }
 
     /// Creates a headless `Renderer` for off-screen rendering without a winit window.
@@ -2118,10 +2167,15 @@ impl Renderer {
         height: u32,
         target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Mirror the windowed-mode fallback chain (BUG-057/274/275) minus the
-        // probe: headless has no window to verify real presentation against, and
-        // callers (tests, `--screenshot`, driver snapshots) need deterministic
-        // backend selection run to run. `WGPU_BACKEND` still overrides.
+        // Headless keeps DX12 first — deliberately **not** the windowed chain's
+        // Vulkan-first order (2026-07-28). Callers here (tests, `--screenshot`,
+        // driver snapshots) are pixel-comparison paths that need the same
+        // adapter run to run, and there is no window to verify presentation
+        // against, so the probe cannot screen BUG-275. Startup pipeline-compile
+        // latency — the reason the windowed chain flipped (BUG-406) — does not
+        // matter for a one-shot headless render, whereas silently changing which
+        // GPU API rasterizes the reference images would. `WGPU_BACKEND` still
+        // overrides.
         let backend_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
             &[wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
         } else {
@@ -2987,12 +3041,6 @@ impl Renderer {
                 },
             ],
         });
-        let blend_mode_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("blend-mode-uniform"),
-            size: 16, // u32 mode + 3 × u32 padding = 16 bytes
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let blend_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("blend-shader"),
             source: wgpu::ShaderSource::Wgsl(BLEND_SHADER_SRC.into()),
@@ -3526,6 +3574,30 @@ impl Renderer {
 
         let atlas = GlyphAtlas::new(ATLAS_DIM);
 
+        // DS-4: bundled chrome UI faces (Golos Text + JetBrains Mono), loaded
+        // eagerly right after the default (Inter) face at index 0 — mirrors
+        // `FemtovgBackend::new`'s eager `add_font_mem` for the same fonts.
+        // A `None` id (metrics failed to parse — shouldn't happen for a
+        // bundled, CI-validated asset) just leaves `resolve_face_id` falling
+        // back to the default face 0.
+        let mut faces = vec![LoadedFace {
+            metrics: build_face_metrics(&font_bytes),
+            bytes: Arc::from(font_bytes),
+        }];
+        let push_chrome_face = |faces: &mut Vec<LoadedFace>, bytes: &'static [u8]| {
+            build_face_metrics(bytes).map(|metrics| {
+                let id = faces.len();
+                faces.push(LoadedFace { metrics: Some(metrics), bytes: Arc::from(bytes) });
+                id
+            })
+        };
+        let chrome_face_id =
+            push_chrome_face(&mut faces, crate::chrome_fonts::GOLOS_TEXT_REGULAR);
+        let chrome_face_medium_id =
+            push_chrome_face(&mut faces, crate::chrome_fonts::GOLOS_TEXT_MEDIUM);
+        let mono_face_id =
+            push_chrome_face(&mut faces, crate::chrome_fonts::JETBRAINS_MONO_REGULAR);
+
         let (depth_texture, depth_view) = {
             let (t, v) = create_depth_texture(&device, headless_w, headless_h);
             (Some(t), Some(v))
@@ -3569,7 +3641,6 @@ impl Renderer {
             composite_bgl,
             blend_pipeline,
             blend_bgl,
-            blend_mode_uniform,
             mask_composite_bgl,
             mask_composite_pipeline,
             mask_layer_alpha_pipeline,
@@ -3593,10 +3664,10 @@ impl Renderer {
              target_color_space,
              canvas_bg: None,
              atlas,
-            faces: vec![LoadedFace {
-                metrics: build_face_metrics(&font_bytes),
-                bytes: Arc::from(font_bytes),
-            }],
+            faces,
+            chrome_face_id,
+            chrome_face_medium_id,
+            mono_face_id,
             face_id_by_path: HashMap::new(),
             resolve_cache: HashMap::new(),
             font_provider: Some(Arc::new(SystemFontIndex::new())),
@@ -3682,6 +3753,25 @@ impl Renderer {
         weight: FontWeight,
         style: FontStyle,
     ) -> usize {
+        // DS-4: chrome never queries the CSS FontProvider — every chrome
+        // `DrawText` passes an empty `font_family` (page content always has a
+        // non-empty one, from the UA/author stylesheet's font-family cascade),
+        // so an empty list defaults to the bundled chrome UI face (Golos
+        // Text). Reserved bundled family names resolve directly here,
+        // independent of whether a `FontProvider` is installed at all.
+        if families.is_empty() {
+            return self.chrome_face_id.unwrap_or(0);
+        }
+        for fam in families {
+            match fam.as_str() {
+                "Golos Text" => return self.chrome_face_id.unwrap_or(0),
+                "Golos Text Medium" => {
+                    return self.chrome_face_medium_id.or(self.chrome_face_id).unwrap_or(0);
+                }
+                "JetBrains Mono" => return self.mono_face_id.unwrap_or(0),
+                _ => {}
+            }
+        }
         let Some(provider) = self.font_provider.clone() else {
             return 0;
         };
@@ -3773,6 +3863,14 @@ impl Renderer {
                 continue;
             }
             for fam in font_family {
+                // DS-4: reserved bundled chrome names resolve without the
+                // provider in `resolve_face_id` — skip them here too, else
+                // every frame re-attempts a `pick_face` lookup for hot chrome
+                // text (omnibox, DevTools) that never gets cached (the actual
+                // resolve short-circuits before reaching `resolve_cache`).
+                if matches!(fam.as_str(), "Golos Text" | "Golos Text Medium" | "JetBrains Mono") {
+                    continue;
+                }
                 let lc = fam.to_lowercase();
                 if Self::is_generic_family(&lc) {
                     continue;
@@ -6497,8 +6595,8 @@ impl Renderer {
                         continue;
                     }
                     let scrolled = translate_rect(*rect, dx, dy);
-                    let (p0, p1) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
-                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    let (p0, p1, line_len) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
+                    let resolved = resolve_gradient_stops(stops, line_len);
                     let params = build_grad_params(&resolved, p0, p1, 0, *repeating, 0.0);
                     let v_start = grad_vertices.len() as u32;
                     push_grad_quad(&mut grad_vertices, scrolled);
@@ -6511,7 +6609,7 @@ impl Renderer {
                     draw_ops.push(DrawOp::Gradient { v_start, v_count, grad_batch_idx });
                 }
                 // CSS Images L3 §3.5 — GPU radial gradient pipeline.
-                DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating, .. } => {
+                DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, radius_x, radius_y, stops, repeating } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
@@ -6520,7 +6618,10 @@ impl Renderer {
                     }
                     let scrolled = translate_rect(*rect, dx, dy);
                     let (p0, p1) = radial_gradient_uv_params(*center_x_pct, *center_y_pct);
-                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    // Px/Calc stops resolve against the larger ending-shape radius,
+                    // matching `cpu_raster::rasterize_radial_gradient` (BUG-277).
+                    let line_len = radius_x.max(*radius_y).max(1.0);
+                    let resolved = resolve_gradient_stops(stops, line_len);
                     let params = build_grad_params(&resolved, p0, p1, 1, *repeating, 0.0);
                     let v_start = grad_vertices.len() as u32;
                     push_grad_quad(&mut grad_vertices, scrolled);
@@ -6603,10 +6704,18 @@ impl Renderer {
                 // translation on the transform stack; PopScrollLayer unwinds both.
                 DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } => {
                     // Clip (same as PushClipRect, accounting for sticky dx/dy).
+                    // Apply the accumulated transform so the clip lands in screen
+                    // space (BUG-276 fix, missed here originally — BUG-335): the
+                    // clip_rect is in the PARENT's page-space, same as
+                    // PushClipRect's, and must go through the SAME transform
+                    // (captured before this push's own scroll translate is
+                    // added to the stack below) before intersecting with
+                    // clip_stack, which already holds screen-space rects.
                     let scrolled_clip = translate_rect(*clip_rect, dx, dy);
+                    let in_screen = apply_transform_to_clip(scrolled_clip, transform_stack.last());
                     let new_clip = match clip_stack.last() {
-                        Some(prev) => intersect_rects(*prev, scrolled_clip),
-                        None => scrolled_clip,
+                        Some(prev) => intersect_rects(*prev, in_screen),
+                        None => in_screen,
                     };
                     clip_stack.push(new_clip);
                     // Scroll translate: shift content by -scroll_x, -scroll_y.
@@ -6648,8 +6757,8 @@ impl Renderer {
                 DisplayCommand::PushMaskLinearGradient { rect, angle_deg, stops, repeating } => {
                     flush_batch!();
                     let scrolled = translate_rect(*rect, dx, dy);
-                    let (p0, p1) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
-                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    let (p0, p1, line_len) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
+                    let resolved = resolve_gradient_stops(stops, line_len);
                     let params = build_grad_params(&resolved, p0, p1, 0, *repeating, 0.0);
                     mask_params_stack.push(MaskPushInfo {
                         src: None,
@@ -6673,7 +6782,12 @@ impl Renderer {
                     flush_batch!();
                     let scrolled = translate_rect(*rect, dx, dy);
                     let (p0, p1) = radial_gradient_uv_params(*center_x_pct, *center_y_pct);
-                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    // Mask radial gradients stay circular (farthest-corner) — the mask
+                    // command carries no ending-shape, matching `cpu_raster::render_mask`.
+                    let mask_dx = center_x_pct.max(1.0 - center_x_pct) * scrolled.width;
+                    let mask_dy = center_y_pct.max(1.0 - center_y_pct) * scrolled.height;
+                    let line_len = mask_dx.hypot(mask_dy).max(1.0);
+                    let resolved = resolve_gradient_stops(stops, line_len);
                     let params = build_grad_params(&resolved, p0, p1, 1, *repeating, 0.0);
                     mask_params_stack.push(MaskPushInfo {
                         src: None,
@@ -7137,12 +7251,15 @@ impl Renderer {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
                     }
                 }
-                // CSS Positioning L3 §6.3 — position:sticky.
-                // Offsets computed above; stack managed here to suppress unused-var warnings.
+                // CSS Positioning L3 §6.3 — position:sticky. Bound is the nearest
+                // scrolling ancestor's scrollport (BUG-336: previously always the
+                // full viewport, so a sticky element nested in an overflow:auto/
+                // scroll container just scrolled away with it instead of pinning).
                 DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
                     if !is_overlay {
-                        let sdy = sticky_offset_dy(flow_rect, *top, *bottom, scroll_y, viewport_css_h);
-                        let sdx = sticky_offset_dx(flow_rect, *left, *right, scroll_x, viewport_css_w);
+                        let bound = sticky_bound(&clip_stack, &transform_stack, viewport_css_w, viewport_css_h);
+                        let sdy = sticky_offset_dy(flow_rect, *top, *bottom, scroll_y, bound);
+                        let sdx = sticky_offset_dx(flow_rect, *left, *right, scroll_x, bound);
                         sticky_stack.push((sdy, sdx));
                     }
                 }
@@ -7703,6 +7820,13 @@ impl Renderer {
         // Using a single shared buffer caused all passes to see the last write_buffer
         // value (wgpu batches all write_buffer calls before any encoder commands run).
         let mut filter_param_bufs: Vec<wgpu::Buffer> = Vec::new();
+        // BUG-277 slice 2: same hazard as `filter_param_bufs` above, for blend-mode
+        // composites. `self.blend_mode_uniform` used to be written via `queue.write_buffer`
+        // once per `PushBlendMode`/`PopBlendMode` pair; with 2+ such pairs in one frame
+        // (e.g. several `background-blend-mode` boxes, or one box with 2+ blended
+        // background layers) every blend render pass ended up reading whichever mode was
+        // written LAST, since all writes land before the single shared encoder submits.
+        let mut blend_mode_param_bufs: Vec<wgpu::Buffer> = Vec::new();
 
         // BUG-274: поэлементный CPU-учёт encode-фазы (LUMEN_FRAME_LOG=2) —
         // суммарное время и число элементов по каждому типу RenderPlanItem.
@@ -7815,14 +7939,13 @@ impl Renderer {
                                 scratch_copy,
                                 wgpu::Extent3d { width: dst_w, height: dst_h, depth_or_array_layers: 1 },
                             );
-                            // Write blend mode uniform (u32 mode + 3× u32 padding = 16 bytes).
+                            // Per-composite blend mode uniform (u32 mode + 3× u32 padding =
+                            // 16 bytes) — a fresh buffer per composite, not a `write_buffer`
+                            // into the shared `self.blend_mode_uniform` (see
+                            // `blend_mode_param_bufs` above for why).
                             let mode_u32 = blend_mode_to_u32(comp.mode);
                             let uniform_data: [u32; 4] = [mode_u32, 0, 0, 0];
-                            self.queue.write_buffer(
-                                &self.blend_mode_uniform,
-                                0,
-                                as_bytes(uniform_data.as_slice()),
-                            );
+                            let mode_buf = make_blend_mode_param_buf(&self.device, &uniform_data);
                             // Create per-frame blend bind group (src + scratch + sampler + uniform).
                             let src_view = &self.layer_textures[comp.from_level - 1].view;
                             let scratch_view = &self.scratch_layer.as_ref().unwrap().view;
@@ -7845,10 +7968,11 @@ impl Renderer {
                                     },
                                     wgpu::BindGroupEntry {
                                         binding: 3,
-                                        resource: self.blend_mode_uniform.as_entire_binding(),
+                                        resource: mode_buf.as_entire_binding(),
                                     },
                                 ],
                             });
+                            blend_mode_param_bufs.push(mode_buf);
                             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                 label: Some("blend-pass"),
                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -8814,7 +8938,7 @@ impl Renderer {
         width: u32,
         height: u32,
         commands: &[crate::DisplayCommand],
-        images: &[(String, lumen_image::Image)],
+        images: &[(String, std::sync::Arc<lumen_image::Image>)],
         scroll_x: f32,
         scroll_y: f32,
     ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
@@ -9001,7 +9125,10 @@ impl Renderer {
 /// CSS Positioning L3 §6.3 — computes the effective `dy` for a sticky-positioned
 /// element given its normal-flow Y position (`flow_rect.y`), `scroll_y`, and
 /// sticky insets. The element sticks when scrolling would push it past `top` or
-/// before the `bottom` limit from the viewport bottom edge.
+/// before the `bottom` limit from `bound`'s bottom edge — `bound` is the
+/// nearest scrolling ancestor's on-screen scrollport (or the full viewport when
+/// the sticky element isn't nested in one), already mapped back into this
+/// layer's pre-transform page-space by [`sticky_bound`].
 ///
 /// Returns the `dy` to apply instead of `-scroll_y` for this layer's content.
 fn sticky_offset_dy(
@@ -9009,19 +9136,21 @@ fn sticky_offset_dy(
     top: Option<f32>,
     bottom: Option<f32>,
     scroll_y: f32,
-    viewport_h: f32,
+    bound: Rect,
 ) -> f32 {
     let mut dy = -scroll_y;
-    // top: clamp screen_y to be at least `top` px from the viewport top.
+    // top: clamp screen_y to be at least `top` px from the scrollport's top edge.
     if let Some(t) = top {
         let screen_y = flow_rect.y + dy;
-        if screen_y < t {
-            dy += t - screen_y;
+        let min_y = bound.y + t;
+        if screen_y < min_y {
+            dy += min_y - screen_y;
         }
     }
-    // bottom: clamp so the element's bottom edge is at most `viewport_h - bottom` from top.
+    // bottom: clamp so the element's bottom edge is at most `bottom` px from
+    // the scrollport's bottom edge.
     if let Some(b) = bottom {
-        let max_screen_y = viewport_h - b - flow_rect.height;
+        let max_screen_y = bound.y + bound.height - b - flow_rect.height;
         let actual_screen_y = flow_rect.y + dy;
         if actual_screen_y > max_screen_y {
             dy -= actual_screen_y - max_screen_y;
@@ -9036,23 +9165,58 @@ fn sticky_offset_dx(
     left: Option<f32>,
     right: Option<f32>,
     scroll_x: f32,
-    viewport_w: f32,
+    bound: Rect,
 ) -> f32 {
     let mut dx = -scroll_x;
     if let Some(l) = left {
         let screen_x = flow_rect.x + dx;
-        if screen_x < l {
-            dx += l - screen_x;
+        let min_x = bound.x + l;
+        if screen_x < min_x {
+            dx += min_x - screen_x;
         }
     }
     if let Some(r) = right {
-        let max_screen_x = viewport_w - r - flow_rect.width;
+        let max_screen_x = bound.x + bound.width - r - flow_rect.width;
         let actual_screen_x = flow_rect.x + dx;
         if actual_screen_x > max_screen_x {
             dx -= actual_screen_x - max_screen_x;
         }
     }
     dx
+}
+
+/// CSS Positioning L3 §6.3 — the scrollport a `position:sticky` element is
+/// clamped against: the innermost active clip (nearest ancestor
+/// `overflow:auto|hidden|scroll` container, whether or not it's the one
+/// currently scrolling) if any, else the full viewport.
+///
+/// `clip_stack`/`transform_stack` entries are screen-space (post all ambient
+/// transforms), same convention as `PushClipRect`/`PushScrollLayer` clip
+/// intersection. `sticky_offset_dy`/`dx`, like every other draw command,
+/// receive their `dx`/`dy` pre-transform (applied via `translate_rect` before
+/// `transform_stack.last()` runs) — so the bound must be mapped back into that
+/// same pre-transform page-space via the *inverse* of the ambient transform.
+/// Falls back to returning the screen-space bound unchanged when there's no
+/// ambient transform, or it isn't (invertibly) affine — same conservative
+/// policy as `apply_transform_to_clip` (BUG-140).
+fn sticky_bound(
+    clip_stack: &[Rect],
+    transform_stack: &[Mat4],
+    viewport_w: f32,
+    viewport_h: f32,
+) -> Rect {
+    let screen_bound = clip_stack
+        .last()
+        .copied()
+        .unwrap_or_else(|| Rect::new(0.0, 0.0, viewport_w, viewport_h));
+    match transform_stack
+        .last()
+        .filter(|m| m.is_2d_affine())
+        .and_then(|m| m.invert_2d_affine())
+    {
+        Some(inv) => apply_transform_to_clip(screen_bound, Some(&inv)),
+        None => screen_bound,
+    }
 }
 
 /// Сдвиг rect-а по Y (CSS px). Используется в `render` для применения
@@ -9395,21 +9559,25 @@ fn resolve_gradient_stops(stops: &[GradientStop], line_len: f32) -> Vec<(f32, [f
 
 /// CSS Images L3 §3.4 — compute linear gradient line endpoints in UV [0,1] space.
 ///
-/// Returns (start_uv, end_uv) such that `t = dot(uv-start, end-start)/|end-start|²`
-/// gives t=0 at the start-color edge and t=1 at the end-color edge.
+/// Returns `(start_uv, end_uv, line_len)` such that
+/// `t = dot(uv-start, end-start)/|end-start|²` gives t=0 at the start-color
+/// edge and t=1 at the end-color edge. `line_len` is the gradient line length
+/// in CSS px (mirrors `cpu_raster::linear_uv_endpoints`) — callers must feed
+/// it to [`resolve_gradient_stops`] so `Px`/`Calc` stop positions resolve
+/// against the same length as the CPU/femtovg backends (BUG-277).
 ///
 /// CSS angle convention: 0° = "to top", 90° = "to right", 180° = "to bottom".
 /// Box dimensions `w`×`h` in CSS pixels.
-fn linear_gradient_uv_endpoints(w: f32, h: f32, angle_deg: f32) -> ([f32; 2], [f32; 2]) {
+fn linear_gradient_uv_endpoints(w: f32, h: f32, angle_deg: f32) -> ([f32; 2], [f32; 2], f32) {
     if w <= 0.0 || h <= 0.0 {
-        return ([0.0, 0.5], [1.0, 0.5]);
+        return ([0.0, 0.5], [1.0, 0.5], w.max(h).max(1.0));
     }
     let theta = angle_deg.to_radians();
     let dx = theta.sin();
     let dy = -theta.cos(); // negative because CSS y grows down
     let half_len = (w * dx.abs() + h * dy.abs()) / 2.0;
     if half_len < 1e-6 {
-        return ([0.5, 0.5], [0.5, 0.5]);
+        return ([0.5, 0.5], [0.5, 0.5], 1.0);
     }
     let cx = w / 2.0;
     let cy = h / 2.0;
@@ -9417,7 +9585,7 @@ fn linear_gradient_uv_endpoints(w: f32, h: f32, angle_deg: f32) -> ([f32; 2], [f
     let sy = (cy - dy * half_len) / h;
     let ex = (cx + dx * half_len) / w;
     let ey = (cy + dy * half_len) / h;
-    ([sx, sy], [ex, ey])
+    ([sx, sy], [ex, ey], 2.0 * half_len)
 }
 
 /// CSS Images L3 §3.5 — compute radial gradient center + semi-axes in UV [0,1] space.
@@ -10209,6 +10377,20 @@ fn make_filter_param_buf(device: &wgpu::Device, params: &FilterParamsCpu) -> wgp
         mapped_at_creation: true,
     });
     buf.slice(..).get_mapped_range_mut().copy_from_slice(as_bytes(std::slice::from_ref(params)));
+    buf.unmap();
+    buf
+}
+
+/// Создаёт отдельный UNIFORM-буфер с режимом blend одного composite pass —
+/// тот же приём и по той же причине, что [`make_filter_param_buf`] (BUG-277 срез 2).
+fn make_blend_mode_param_buf(device: &wgpu::Device, mode_padded: &[u32; 4]) -> wgpu::Buffer {
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("blend-mode-param"),
+        size: std::mem::size_of::<[u32; 4]>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: true,
+    });
+    buf.slice(..).get_mapped_range_mut().copy_from_slice(as_bytes(mode_padded.as_slice()));
     buf.unmap();
     buf
 }
@@ -11072,5 +11254,89 @@ mod tests {
         apply_affine_to_verts(&mut image, &m);
         assert!(image[0].z.abs() > 50.0,
             "rotateX must propagate depth into ImageVertex.z, got {}", image[0].z);
+    }
+
+    // ── position:sticky offset/bound tests (BUG-336) ────────────────────────
+
+    #[test]
+    fn sticky_bound_defaults_to_full_viewport_with_no_clip_or_transform() {
+        let bound = sticky_bound(&[], &[], 800.0, 600.0);
+        assert_eq!(bound, Rect::new(0.0, 0.0, 800.0, 600.0));
+    }
+
+    #[test]
+    fn sticky_offset_dy_unclamped_matches_plain_page_scroll() {
+        // No insets fire yet — behaves exactly like non-sticky content: dy = -scroll_y.
+        let flow_rect = Rect::new(0.0, 200.0, 300.0, 50.0);
+        let bound = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, 100.0, bound);
+        assert!((dy - (-100.0)).abs() < 0.01, "expected -100 (unclamped page scroll), got {dy}");
+    }
+
+    #[test]
+    fn sticky_offset_dy_sticks_to_bound_top() {
+        // Scrolled past the top inset — dy pins screen_y at bound.y + top.
+        let flow_rect = Rect::new(0.0, 200.0, 300.0, 50.0);
+        let bound = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let dy = sticky_offset_dy(&flow_rect, Some(10.0), None, 250.0, bound);
+        let screen_y = flow_rect.y + dy;
+        assert!((screen_y - 10.0).abs() < 0.01, "expected pinned screen_y=10, got {screen_y}");
+    }
+
+    #[test]
+    fn sticky_bound_narrows_to_innermost_clip_rect() {
+        // A sticky element nested inside an overflow:auto panel (its own
+        // PushScrollLayer clip, already in screen space) must clamp against
+        // that panel's scrollport, not the full viewport.
+        let clip_stack = [Rect::new(50.0, 100.0, 300.0, 200.0)];
+        let bound = sticky_bound(&clip_stack, &[], 800.0, 600.0);
+        assert_eq!(bound, Rect::new(50.0, 100.0, 300.0, 200.0));
+    }
+
+    #[test]
+    fn sticky_bound_maps_screen_clip_back_through_ambient_transform() {
+        // BUG-336: the panel's clip (screen space) sits at y=[100,300) once an
+        // ambient translate(0, 80) is active (e.g. the panel's own scroll
+        // container nested under a further shell-shift/CSS transform). The
+        // bound handed to sticky_offset_dy must be in the SAME pre-transform
+        // page-space as flow_rect — i.e. shifted back by -80.
+        let clip_stack = [Rect::new(50.0, 100.0, 300.0, 200.0)];
+        let transform_stack = [Mat4::translation_2d(0.0, 80.0)];
+        let bound = sticky_bound(&clip_stack, &transform_stack, 800.0, 600.0);
+        assert!((bound.y - 20.0).abs() < 0.01, "expected bound.y=20 (100 - 80), got {}", bound.y);
+        assert!((bound.x - 50.0).abs() < 0.01, "x untouched by a pure y-translate, got {}", bound.x);
+    }
+
+    #[test]
+    fn sticky_nested_in_scroll_container_pins_within_local_scrollport() {
+        // The BUG-336 regression scenario: `.net-table th { position:sticky;
+        // top:0 }` inside a `.dt-panel { overflow-y:auto }` whose own
+        // PushScrollLayer has already scrolled 120px (folded into the ambient
+        // ty via transform_stack, exactly like the renderer's own accumulation
+        // for PushScrollLayer). The page itself hasn't scrolled (scroll_y=0
+        // below) — before the fix, `sdy` stayed `-scroll_y == 0` regardless of
+        // the panel's own scroll, so the header just rode away with the
+        // panel's transform like ordinary content instead of pinning.
+        let clip_stack = [Rect::new(0.0, 40.0, 400.0, 240.0)]; // panel's screen-space scrollport
+        let transform_stack = [Mat4::translation_2d(0.0, -120.0)]; // panel's own scroll(-y) translate
+        let bound = sticky_bound(&clip_stack, &transform_stack, 800.0, 600.0);
+
+        // Header's flow (page-space, pre-scroll) position: early in the table,
+        // well above where the panel has scrolled to — its *unclamped* on-screen
+        // position would be flow.y + ty = 150 - 120 = 30, above the panel's
+        // visible top (40), i.e. scrolled out of view without the sticky clamp.
+        let flow_rect = Rect::new(0.0, 150.0, 400.0, 24.0);
+        let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, 0.0, bound);
+
+        // Final on-screen position = (flow.y + dy) transformed by the same
+        // ambient ty the renderer applies afterward (transform_stack.last()) —
+        // must land exactly at the panel's own visible top (40), not at the
+        // unclamped 30, and not at flow.y itself (150, ignoring scroll).
+        let ty = transform_stack[0].transform_point_2d(0.0, 0.0).1;
+        let screen_y = flow_rect.y + dy + ty;
+        assert!(
+            (screen_y - 40.0).abs() < 0.01,
+            "sticky header must pin at the panel's own scrollport top (40), got {screen_y}"
+        );
     }
 }
