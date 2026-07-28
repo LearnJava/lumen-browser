@@ -1,8 +1,30 @@
 # BUG-341: `lay_out_flex` double-lays-out every item — general engine bug, ~300× over CC-12's 2ms chrome perf-gate budget
 
-**Статус:** OPEN
+**Статус:** OPEN — **на паузе с 2026-07-28 после S27** (see below; not a silent relaxation, an explicit user decision).
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
 **Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
+
+## Paused 2026-07-28 after S27 — CC-14 explicitly unblocked by user decision
+
+Every prior slice said "CC-14 remains blocked... not silently relaxed" as a
+deliberate guard against exactly this move. This entry is that guard being
+satisfied, not bypassed: the user was shown the exact numbers and chose to
+proceed.
+
+State at pause (S27, merge `9eeda704b`, `CC12_HOVER`/`CC12_KEY` on the real
+`chrome.html`, budget 2 ms):
+
+| | min | p50 | p95 |
+|---|---|---|---|
+| HOVER | 0.28–0.36 ms | 0.32–0.40 ms | **0.94–1.28 ms — always in budget** |
+| KEY | 0.46–0.53 ms | 0.58–0.62 ms | **1.61–3.18 ms — in budget 3 of 6 rounds** |
+
+Down from ~300× budget at the bug's filing to a coin flip on the KEY arm only.
+**CC-14 (flip default) may proceed now** — its parity checklist should account
+for the fact that a keystroke-triggered relayout still overshoots the 2 ms
+budget in roughly half of interactions on this bench. **S28 and the rest of the
+BUG-341 queue are not abandoned** — resume only on explicit user request; see
+`STATUS-P1.md` and memory `project_bug341_paused_cc14_unblocked_by_decision`.
 
 ## Follow-up (P1, 2026-07-25, fourth session): profiled the *remaining* cost — the "layout-result cache" plan is insufficient; real fix is incremental **cascade** + layout
 
