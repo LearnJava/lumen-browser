@@ -196,7 +196,7 @@ mod tests {
     fn ua_defaults_can_be_overridden_by_a_later_author_rule() {
         let html = r#"<html><body><input id="omniInput"></body></html>"#;
         let (doc, mut sheet) = parse_document(html);
-        sheet.rules.extend(lumen_css_parser::parse("#omniInput{user-select:text}").rules);
+        sheet.merge_from(lumen_css_parser::parse("#omniInput{user-select:text}"));
         let root = lumen_layout::layout(&doc, &sheet, lumen_core::geom::Size::new(800.0, 600.0));
         let omni_input = doc.find_by_id("omniInput").expect("test fixture has #omniInput");
         let b = lumen_layout::find_box_by_node(&root, omni_input).expect("#omniInput must have a layout box");

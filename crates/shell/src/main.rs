@@ -11899,23 +11899,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if generation != self.load_generation { return; }
                 // PH1-2: CSS загружен параллельным потоком — мёрджим в stream_sheet.
                 // Применится в следующем paint_partial_dom (16 мс throttle).
-                let sheet = *boxed;
-                let s = &mut self.stream_sheet;
-                s.rules.extend(sheet.rules);
-                s.properties.extend(sheet.properties);
-                s.media_rules.extend(sheet.media_rules);
-                s.imports.extend(sheet.imports);
-                s.font_faces.extend(sheet.font_faces);
-                s.layer_order.extend(sheet.layer_order);
-                s.layers.extend(sheet.layers);
-                s.supports_rules.extend(sheet.supports_rules);
-                s.keyframes.extend(sheet.keyframes);
-                s.counter_styles.extend(sheet.counter_styles);
-                s.page_rules.extend(sheet.page_rules);
-                s.scope_rules.extend(sheet.scope_rules);
-                s.starting_style_rules.extend(sheet.starting_style_rules);
-                s.container_rules.extend(sheet.container_rules);
-                s.font_palette_values.extend(sheet.font_palette_values);
+                // `merge_from` also mints a new `StylesheetRevision`, which is
+                // what tells the cascade's rule-index cache that this sheet is
+                // no longer the one it indexed (BUG-341 S21). It replaced a
+                // hand-rolled field-by-field merge here that had fallen two
+                // fields behind the struct.
+                self.stream_sheet.merge_from(*boxed);
             }
             LoadEvent::ImageDecoded { src, image, animated } => {
                 // PH1-2c: картинка декодирована параллельным потоком во время
@@ -25192,6 +25181,80 @@ mod tests {
         );
     }
 
+    /// BUG-341 S21 regression gate: an interaction must not re-index the sheet.
+    ///
+    /// The cascade's `CascadeIndex` — the top-level `RuleIndex` plus one per
+    /// `@layer`/`@media`/`@supports` block plus two sheet-wide predicate scans —
+    /// was keyed by the stylesheet's **address**, which the allocator hands back
+    /// the moment a sheet is freed. To keep that key honest every layout pass
+    /// dropped the cache before its first `compute_style`, and so did every
+    /// rayon worker's `StyleEnvSnapshot::install`, which reduced a cross-pass
+    /// cache to a within-pass one: the S21 census measured one rebuild per
+    /// incremental cycle (0.14-0.22 ms, 7-19% of a cycle that had got down to
+    /// 0.74-3.0 ms) and 33 per full pass across the worker pool. Keyed by
+    /// `Stylesheet::revision`, which is minted per sheet and never recycled,
+    /// nothing needs dropping.
+    ///
+    /// A counter, not wall-clock: an index rebuilt from scratch every frame
+    /// yields byte-identical styles, so no differential test in this track can
+    /// see it, and 0.2 ms is well inside machine noise.
+    ///
+    /// Both arms. The cold pass must still build one — a cache that is never
+    /// populated also never rebuilds, and would serve an empty index (i.e. no
+    /// rule matches anything, which the `dirty_roots` assertion below and every
+    /// pixel test would catch, but not this counter).
+    #[test]
+    fn bug341_s21_interaction_cycles_do_not_reindex_the_stylesheet() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        lumen_layout::style::clear_rule_idx_cache();
+        let _ = lumen_layout::style::take_cascade_index_stats();
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        typed.push('a');
+        let _ = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
+        );
+        let cold = lumen_layout::style::take_cascade_index_stats();
+        assert!(
+            cold.builds >= 1,
+            "the first pass must index the sheet — a cache that stays empty would hand every \
+             node an index that matches nothing. Census: {cold:?}",
+        );
+
+        // Both interaction shapes CC-12 measures: a keystroke (DOM mutation)
+        // and a hover flip. Neither touches the stylesheet.
+        for i in 0..4 {
+            typed.push('a');
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None,
+                &mut state,
+            );
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, hover,
+                &mut state,
+            );
+        }
+
+        let warm = lumen_layout::style::take_cascade_index_stats();
+        assert_eq!(
+            warm.builds, 0,
+            "eight interaction cycles re-indexed the stylesheet {} time(s) ({:.3} ms) without a \
+             single rule changing. The index is keyed by `Stylesheet::revision`; something is \
+             either dropping the cache on the layout path or minting a revision for a sheet that \
+             was not mutated. Census: {warm:?}",
+            warm.builds,
+            warm.build_ns as f64 / 1e6,
+        );
+    }
+
     /// BUG-341 S14 regression gate: a hover flip no rule in the sheet can
     /// react to must re-cascade nothing at all.
     ///
@@ -26041,11 +26104,11 @@ mod tests {
     /// where the time was. It prints, per scenario and per cycle:
     ///
     /// - the whole pass's wall-clock and the pipeline `clone_tree` after it;
-    /// - the `CascadeIndex` rebuild the pass forces (`invalidate_rule_idx_cache`
-    ///   at the top of every pass drops it, so the first `compute_style` — or,
-    ///   with nothing to recompute at all, `sheet_has_quote_content` — pays for
-    ///   a full re-index of the sheet **inside** `precompute_counters`' scope,
-    ///   where it reads as cascade cost);
+    /// - the `CascadeIndex` rebuild the pass forces. When this census was
+    ///   written every pass forced one, because the cache was keyed by the
+    ///   sheet's address and had to be dropped at the top of each pass; S21
+    ///   keyed it by `Stylesheet::revision` and the column now reads zero on a
+    ///   warm thread. See `bug341_s21_cascade_index_census` for the split;
     /// - the `CounterMap` the cascade stage produced, by size, plus a replay of
     ///   rebuilding those three collections so the map's own construction cost
     ///   can be told from the traversal that fills it. Replayed rather than
@@ -26263,6 +26326,153 @@ mod tests {
                 census_describe(doc, id),
             );
         }
+    }
+
+    /// BUG-341 S21 diagnostic: how often the `CascadeIndex` is really rebuilt
+    /// per incremental pass, by whom, and how the rebuild's time splits.
+    ///
+    /// The queue named `CascadeIndex::build` the largest remaining item of the
+    /// S20 census (0.12-0.21ms every pass, on both scenarios) — but that number
+    /// came from `take_cascade_index_stats`, which was **thread-local** while
+    /// the code it counts is not: `build_box` fans flex/grid containers out over
+    /// rayon workers, and every worker's `StyleEnvSnapshot::install` drops the
+    /// per-thread index cache before doing style work. The counter is
+    /// process-wide as of this slice, so this census is the first honest count.
+    /// It prints, per scenario and per cycle:
+    ///
+    /// - the whole pass's wall-clock, so a rebuild can be read as a share of it;
+    /// - rebuild count and total nanoseconds, split into the four phases of
+    ///   `CascadeIndex::build` (top-level `RuleIndex`, the per-block indexes,
+    ///   the `@media`/`@supports` activity evaluation, the two sheet-wide
+    ///   predicate scans) — so "re-index the sheet" can be told apart from
+    ///   "re-evaluate the media queries";
+    /// - the same figures for a pass run with the box-build fan-out suppressed
+    ///   (`prev_index`-driven, so simply an incremental pass) versus a full
+    ///   pass, which is the only way to attribute rebuilds to workers;
+    /// - the sheet's shape (rule and block counts), because the rebuild is
+    ///   linear in it and `chrome.html` is not a large sheet.
+    ///
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s21_cascade_index_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S21) — see doc comment for run command"]
+    fn bug341_s21_cascade_index_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        eprintln!(
+            "[s21-census] sheet: rules={} media_blocks={} (Σ{} rules) layers={} supports={} scope={}",
+            sheet.rules.len(),
+            sheet.media_rules.len(),
+            sheet.media_rules.iter().map(|m| m.rules.len()).sum::<usize>(),
+            sheet.layers.len(),
+            sheet.supports_rules.len(),
+            sheet.scope_rules.len(),
+        );
+
+        for scenario in ["KEY", "HOVER"] {
+            let mut state = Cc12IncrementalState::default();
+            let mut typed = String::new();
+            for i in 0..6 {
+                let (model, hover) = if scenario == "KEY" {
+                    typed.push('a');
+                    (cc12_bench_model(&typed), None)
+                } else {
+                    (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+                };
+                let report = i >= 4;
+                let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+                lumen_layout::set_interactive_state(hover, None, None);
+                let _ = lumen_layout::style::take_cascade_index_stats();
+                let t_pass = std::time::Instant::now();
+                let (layout, counters) = match state.prev_pristine_layout.take() {
+                    Some(prev) => {
+                        let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
+                        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+                        let mut dirty_roots = std::collections::HashSet::new();
+                        for (was, now) in [
+                            (prev_hover, hover),
+                            (prev_focus, None),
+                            (prev_active, None),
+                        ] {
+                            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                                &doc, was, now, &state_index,
+                            ));
+                        }
+                        let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                            &doc,
+                            chrome_node_changes(&touched),
+                            &node_index,
+                        ));
+                        let delta = lumen_layout::counters::RestyleDelta {
+                            prev_styles: &state.prev_cascade_styles,
+                            dirty_roots,
+                            content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        };
+                        lumen_layout::counters::set_incremental_restyle(true);
+                        lumen_layout::box_tree::set_incremental_box_build(true);
+                        let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                        );
+                        lumen_layout::box_tree::set_incremental_box_build(false);
+                        lumen_layout::counters::set_incremental_restyle(false);
+                        result
+                    }
+                    None => lumen_layout::layout_measured_hyp_with_counters(
+                        &doc, &sheet, viewport, &measurer, &hyp, false,
+                    ),
+                };
+                let pass_ns = t_pass.elapsed().as_nanos() as u64;
+                let idx = lumen_layout::style::take_cascade_index_stats();
+                let bb = lumen_layout::box_tree::take_box_build_stats();
+
+                if report {
+                    eprintln!(
+                        "[s21-census] {scenario} cycle={i} pass={:.3}ms | index rebuilds={} \
+                         {:.3}ms ({:.1}% of pass) = rules {:.3} + blocks {:.3} + active {:.3} \
+                         + predicates {:.3} | fanouts={} built={} reused={}",
+                        pass_ns as f64 / 1e6,
+                        idx.builds,
+                        idx.build_ns as f64 / 1e6,
+                        100.0 * idx.build_ns as f64 / pass_ns.max(1) as f64,
+                        idx.rules_ns as f64 / 1e6,
+                        idx.blocks_ns as f64 / 1e6,
+                        idx.active_ns as f64 / 1e6,
+                        idx.predicates_ns as f64 / 1e6,
+                        bb.fanouts,
+                        bb.built,
+                        bb.reused,
+                    );
+                }
+
+                state.prev_pristine_layout = Some(layout);
+                state.prev_cascade_styles = counters.styles().clone();
+                state.prev_interactive = (hover, None, None);
+                lumen_layout::clear_interactive_state();
+            }
+        }
+
+        // A full pass for contrast: it fans out over rayon (M4.1), so its
+        // rebuild count is the worker count plus one, and it is the number the
+        // thread-local counter could never see.
+        let _ = lumen_layout::style::take_cascade_index_stats();
+        let t = std::time::Instant::now();
+        let _ = lumen_layout::layout_measured_hyp_with_counters(
+            &doc, &sheet, viewport, &measurer, &hyp, false,
+        );
+        let full_ns = t.elapsed().as_nanos() as u64;
+        let idx = lumen_layout::style::take_cascade_index_stats();
+        eprintln!(
+            "[s21-census] FULL pass={:.3}ms | index rebuilds={} {:.3}ms (Σ over all threads)",
+            full_ns as f64 / 1e6,
+            idx.builds,
+            idx.build_ns as f64 / 1e6,
+        );
     }
 
     /// Number of element nodes in `id`'s subtree, inclusive — the "how wide is

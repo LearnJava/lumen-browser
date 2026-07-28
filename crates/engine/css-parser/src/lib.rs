@@ -24,7 +24,8 @@ pub use parser::{
     MediaReducedData, MediaReducedTransparency, MediaScripting,
     MediaQueryClause, MediaRule, NthSpec, PageRule, PropertyRule, PseudoClass, PseudoElementKind, RelativeSelector,
     Rule, ScopeRule,
-    SimpleSelector, Specificity, StartingStyleRule, Stylesheet, SupportsCondition, SupportsRule,
+    SimpleSelector, Specificity, StartingStyleRule, Stylesheet, StylesheetRevision,
+    SupportsCondition, SupportsRule,
 };
 
 /// CSS properties recognised by Lumen's layout engine.

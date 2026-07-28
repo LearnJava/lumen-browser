@@ -31,7 +31,7 @@ use lumen_core::ColorSpace;
 use lumen_css_parser::{
     parse_inline_style, AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector,
     Declaration, DirArg, FunctionRule, MediaContext, PropertyRule, PseudoClass, PseudoElementKind, Rule, SimpleSelector, Specificity,
-    Stylesheet, SUPPORTED_PROPERTIES,
+    Stylesheet, StylesheetRevision, SUPPORTED_PROPERTIES,
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
 
@@ -96,24 +96,62 @@ impl CascadeIndex {
         }
     }
 
-    fn build(sheet: &Stylesheet, media_ctx: &MediaContext) -> Self {
-        Self {
-            rules: RuleIndex::build(sheet),
-            layers: sheet.layers.iter().map(|l| RuleIndex::build_from_rules(&l.rules)).collect(),
-            media: sheet.media_rules.iter().map(|m| RuleIndex::build_from_rules(&m.rules)).collect(),
-            supports: sheet.supports_rules.iter().map(|s| RuleIndex::build_from_rules(&s.rules)).collect(),
-            active_media: sheet.media_rules.iter().map(|m| m.query.matches(media_ctx)).collect(),
-            active_supports: sheet.supports_rules.iter()
-                .map(|s| s.condition.evaluate(SUPPORTED_PROPERTIES))
-                .collect(),
-            has_webkit_scrollbar_rules: all_rules(sheet)
-                .any(|r| r.selectors.iter().any(selector_targets_webkit_scrollbar)),
-            has_quote_content: all_rules(sheet).any(|r| {
-                r.declarations
-                    .iter()
-                    .any(|d| value_mentions_quote(&d.value) || d.value.contains("attr("))
-            }),
-        }
+    /// Builds the index, timing each of its four phases into the returned
+    /// [`CascadeIndexStats`] (BUG-341 S21 census — four clock reads per rebuild,
+    /// against a rebuild that walks every rule in the sheet several times).
+    fn build(sheet: &Stylesheet, media_ctx: &MediaContext) -> (Self, CascadeIndexStats) {
+        let t = std::time::Instant::now();
+        let rules = RuleIndex::build(sheet);
+        let rules_ns = t.elapsed().as_nanos() as u64;
+
+        let t = std::time::Instant::now();
+        let layers: Vec<RuleIndex> =
+            sheet.layers.iter().map(|l| RuleIndex::build_from_rules(&l.rules)).collect();
+        let media: Vec<RuleIndex> =
+            sheet.media_rules.iter().map(|m| RuleIndex::build_from_rules(&m.rules)).collect();
+        let supports: Vec<RuleIndex> =
+            sheet.supports_rules.iter().map(|s| RuleIndex::build_from_rules(&s.rules)).collect();
+        let blocks_ns = t.elapsed().as_nanos() as u64;
+
+        let t = std::time::Instant::now();
+        let active_media: Vec<bool> =
+            sheet.media_rules.iter().map(|m| m.query.matches(media_ctx)).collect();
+        let active_supports: Vec<bool> = sheet
+            .supports_rules
+            .iter()
+            .map(|s| s.condition.evaluate(SUPPORTED_PROPERTIES))
+            .collect();
+        let active_ns = t.elapsed().as_nanos() as u64;
+
+        let t = std::time::Instant::now();
+        let has_webkit_scrollbar_rules =
+            all_rules(sheet).any(|r| r.selectors.iter().any(selector_targets_webkit_scrollbar));
+        let has_quote_content = all_rules(sheet).any(|r| {
+            r.declarations
+                .iter()
+                .any(|d| value_mentions_quote(&d.value) || d.value.contains("attr("))
+        });
+        let predicates_ns = t.elapsed().as_nanos() as u64;
+
+        let idx = Self {
+            rules,
+            layers,
+            media,
+            supports,
+            active_media,
+            active_supports,
+            has_webkit_scrollbar_rules,
+            has_quote_content,
+        };
+        let stats = CascadeIndexStats {
+            builds: 1,
+            build_ns: rules_ns + blocks_ns + active_ns + predicates_ns,
+            rules_ns,
+            blocks_ns,
+            active_ns,
+            predicates_ns,
+        };
+        (idx, stats)
     }
 }
 
@@ -169,14 +207,6 @@ struct CascadeMediaKey {
 }
 
 impl CascadeMediaKey {
-    const NONE: Self = Self {
-        width_bits: 0,
-        height_bits: 0,
-        dark_mode: false,
-        print_active: false,
-        forced_colors: false,
-    };
-
     fn current(viewport: Size, dark_mode: bool) -> Self {
         Self {
             width_bits: viewport.width.to_bits(),
@@ -188,17 +218,76 @@ impl CascadeMediaKey {
     }
 }
 
+/// How many (sheet, media key) pairs the per-thread index cache keeps.
+///
+/// Two, because a browser frame lays out two documents on one thread — its own
+/// chrome and the page — and a single slot would make them evict each other
+/// every frame, which is exactly the per-pass rebuild BUG-341 S21 removed. A
+/// third document per thread per frame does not exist, and each slot retains an
+/// index for the process's life, so the count is deliberately not larger.
+const CASCADE_INDEX_SLOTS: usize = 2;
+
 thread_local! {
-    /// Per-thread rule-index cache. Keyed by (sheet pointer, rules count,
-    /// media key) to detect stylesheet or viewport/media-preference changes
-    /// between layout passes. Rebuilt only when the key changes; reused for
-    /// every node in the same pass (O(1) amortised).
+    /// Per-thread rule-index cache, most recently used first.
     ///
-    /// SAFETY: raw-pointer keys are vulnerable to address reuse across sessions
-    /// (freed sheet → new session → same address). Call `invalidate_rule_idx_cache`
-    /// at the start of every layout pass to prevent stale hits.
-    static RULE_IDX_CACHE: RefCell<(usize, usize, CascadeMediaKey, CascadeIndex)> =
-        RefCell::new((0, 0, CascadeMediaKey::NONE, CascadeIndex::empty()));
+    /// Keyed by ([`Stylesheet::revision`], media key): the revision changes
+    /// whenever the sheet's rules do, and the media key covers a viewport
+    /// resize or a dark-mode/print/forced-colors toggle, which decide which
+    /// `@media` blocks are active.
+    ///
+    /// The key used to be the sheet's **address** plus its rule count, and an
+    /// address is recycled the moment its sheet is freed — so the cache had to
+    /// be invalidated at the top of every layout pass and on every rayon worker
+    /// to avoid serving a freed sheet's index. That reduced it to a within-pass
+    /// cache: a census (BUG-341 S21) measured one rebuild per incremental pass
+    /// (0.14-0.22ms, 7-19% of the pass) and 33 per full pass across the worker
+    /// pool. A revision is never recycled, so no invalidation is needed and the
+    /// index now survives for as long as the sheet does.
+    static RULE_IDX_CACHE: RefCell<Vec<(StylesheetRevision, CascadeMediaKey, CascadeIndex)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Makes the [`CascadeIndex`] for `sheet` under the current media conditions the
+/// front slot of [`RULE_IDX_CACHE`], building it if this thread has not got it.
+///
+/// Every lookup site calls this first and then reads slot 0, so the borrow is
+/// released between the two — a `candidates` call must not run while the cache
+/// is mutably borrowed.
+fn ensure_cascade_index(sheet: &Stylesheet, viewport: Size, dark_mode: bool) {
+    let key = (sheet.revision(), CascadeMediaKey::current(viewport, dark_mode));
+    let hit = RULE_IDX_CACHE.with(|cell| {
+        let mut slots = cell.borrow_mut();
+        match slots.iter().position(|s| (s.0, s.1) == key) {
+            Some(0) => true,
+            Some(i) => {
+                slots.swap(0, i);
+                true
+            }
+            None => false,
+        }
+    });
+    if hit {
+        return;
+    }
+    // Built outside the borrow: `CascadeIndex::build` is long, and holding a
+    // `RefCell` across it would panic on any re-entrant cache read.
+    let media_ctx = media_context_from_viewport(viewport, dark_mode);
+    let idx = build_cascade_index_timed(sheet, &media_ctx);
+    RULE_IDX_CACHE.with(|cell| {
+        let mut slots = cell.borrow_mut();
+        slots.truncate(CASCADE_INDEX_SLOTS - 1);
+        slots.insert(0, (key.0, key.1, idx));
+    });
+}
+
+/// Hands the front slot's index to `f`. Call [`ensure_cascade_index`] first —
+/// with an empty cache this falls back to a scratch empty index, which matches
+/// nothing rather than matching wrongly.
+fn with_front_cascade_index<R>(f: impl FnOnce(&CascadeIndex) -> R) -> R {
+    RULE_IDX_CACHE.with(|cell| match cell.borrow().first() {
+        Some((_, _, idx)) => f(idx),
+        None => f(&CascadeIndex::empty()),
+    })
 }
 
 #[cfg(test)]
@@ -247,34 +336,84 @@ fn scrollbar_pseudo_cascades() -> u32 {
     SCROLLBAR_PSEUDO_CASCADES.with(|c| c.get())
 }
 
-/// BUG-341 S20 — per-pass tally of [`CascadeIndex`] rebuilds.
+/// BUG-341 S20 — tally of [`CascadeIndex`] rebuilds.
 ///
-/// [`invalidate_rule_idx_cache`] is called at the top of every layout pass, so
-/// the index — which walks every rule in the sheet four times over
+/// Building the index walks every rule in the sheet four times over
 /// ([`RuleIndex::build`], the `@layer`/`@media`/`@supports` blocks, the two
-/// sheet-wide predicates) — is rebuilt on the first `compute_style` of every
-/// frame, whether or not the sheet changed. The counter exists because that
-/// rebuild is invisible in output and lands *inside* `precompute_counters`'
-/// profile scope, where it reads as cascade cost.
+/// sheet-wide predicates). The counter exists because that rebuild is invisible
+/// in output and lands *inside* `precompute_counters`' profile scope, where it
+/// reads as cascade cost — it is what showed the index being rebuilt once per
+/// pass and 33 times per full pass before S21 keyed the cache by revision.
+/// It is also the gate: an index that is silently rebuilt every frame produces
+/// exactly the same styles, just slower.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CascadeIndexStats {
     /// [`CascadeIndex::build`] calls since the last drain.
     pub builds: u32,
-    /// Nanoseconds those calls took.
+    /// Nanoseconds those calls took (the sum of the four fields below).
     pub build_ns: u64,
+    /// Of `build_ns`: the top-level [`RuleIndex::build`].
+    pub rules_ns: u64,
+    /// Of `build_ns`: one [`RuleIndex`] per `@layer`/`@media`/`@supports` block.
+    pub blocks_ns: u64,
+    /// Of `build_ns`: evaluating which `@media`/`@supports` blocks are active.
+    pub active_ns: u64,
+    /// Of `build_ns`: the two sheet-wide predicate scans
+    /// (`has_webkit_scrollbar_rules`, `has_quote_content`).
+    pub predicates_ns: u64,
+}
+
+impl CascadeIndexStats {
+    /// Folds `other` into `self` field by field.
+    pub fn add(&mut self, other: CascadeIndexStats) {
+        self.builds += other.builds;
+        self.build_ns += other.build_ns;
+        self.rules_ns += other.rules_ns;
+        self.blocks_ns += other.blocks_ns;
+        self.active_ns += other.active_ns;
+        self.predicates_ns += other.predicates_ns;
+    }
 }
 
 thread_local! {
     /// BUG-341 S20 instrumentation, see [`CascadeIndexStats`]. Always compiled:
     /// the timer runs once per rebuild, not per node, and a rebuild already
     /// costs orders of magnitude more than reading the clock.
-    static CASCADE_INDEX_STATS: Cell<CascadeIndexStats> =
-        const { Cell::new(CascadeIndexStats { builds: 0, build_ns: 0 }) };
+    static CASCADE_INDEX_STATS: Cell<CascadeIndexStats> = const {
+        Cell::new(CascadeIndexStats {
+            builds: 0,
+            build_ns: 0,
+            rules_ns: 0,
+            blocks_ns: 0,
+            active_ns: 0,
+            predicates_ns: 0,
+        })
+    };
 }
 
 /// Returns the accumulated [`CascadeIndexStats`] and resets the tally.
+///
+/// Thread-local, like [`crate::box_tree::take_box_build_stats`] and for the
+/// same two reasons. It has to *see* the rayon workers, because the cache it
+/// counts is per-thread and `build_box` fans flex/grid containers out (the S15
+/// trap — a naively thread-local tally reported one rebuild per pass where a
+/// full pass makes 33). And it must not see *other* tests, because a gate that
+/// asserts "this pass rebuilt nothing" against a process-wide counter fails
+/// whenever a concurrent test builds an index. Both hold because the fan-out
+/// closure drains each worker's tally back into the parent thread through
+/// [`add_cascade_index_stats`], exactly as the box-build tally does.
 pub fn take_cascade_index_stats() -> CascadeIndexStats {
     CASCADE_INDEX_STATS.with(|s| s.replace(CascadeIndexStats::default()))
+}
+
+/// Folds a rayon worker's drained [`CascadeIndexStats`] into this thread's
+/// tally — see [`take_cascade_index_stats`].
+pub fn add_cascade_index_stats(other: CascadeIndexStats) {
+    CASCADE_INDEX_STATS.with(|s| {
+        let mut v = s.get();
+        v.add(other);
+        s.set(v);
+    });
 }
 
 /// BUG-341 S20 — per-pass tally of [`compute_pseudo_element_style`] calls.
@@ -342,52 +481,35 @@ fn note_pseudo_cascade(ns: u64, hit: bool) {
 /// [`CascadeIndex::build`], tallied into [`CascadeIndexStats`]. Every cache
 /// refill goes through here, so the counter cannot drift from reality.
 fn build_cascade_index_timed(sheet: &Stylesheet, media_ctx: &MediaContext) -> CascadeIndex {
-    let t = std::time::Instant::now();
-    let idx = CascadeIndex::build(sheet, media_ctx);
-    CASCADE_INDEX_STATS.with(|s| {
-        let mut v = s.get();
-        v.builds += 1;
-        v.build_ns += t.elapsed().as_nanos() as u64;
-        s.set(v);
-    });
+    let (idx, stats) = CascadeIndex::build(sheet, media_ctx);
+    add_cascade_index_stats(stats);
     idx
 }
 
-/// Invalidate the thread-local rule-index cache.
+/// Drops every cached [`CascadeIndex`] on the current thread.
 ///
-/// Must be called at the start of every layout pass (`layout_measured_hyp`).
-/// Without this call the raw-pointer key can match a freed stylesheet when a
-/// new one is allocated at the same address, returning a stale index.
-pub fn invalidate_rule_idx_cache() {
-    RULE_IDX_CACHE.with(|cell| {
-        cell.borrow_mut().0 = 0; // pointer 0 never matches a real sheet
-    });
+/// Not needed for correctness — the cache is keyed by
+/// [`Stylesheet::revision`], which is never recycled — and deliberately not
+/// called on the layout path. Tests use it to measure a cold build.
+pub fn clear_rule_idx_cache() {
+    RULE_IDX_CACHE.with(|cell| cell.borrow_mut().clear());
 }
 
-/// Refreshes the thread-local [`CascadeIndex`] for `sheet` if the cache key
-/// changed, then hands it to `f`.
+/// Refreshes the thread-local [`CascadeIndex`] for `sheet` if this thread has
+/// not got it, then hands it to `f`.
 ///
-/// The rebuild-then-borrow dance predates this helper and is spelled out inline
-/// at every candidate lookup in `compute_style`; new call sites should use this
-/// instead. Do not call anything that touches `RULE_IDX_CACHE` from inside `f` —
-/// the borrow is live for its duration.
+/// The ensure-then-borrow dance is spelled out inline at every candidate lookup
+/// in `compute_style`; new call sites should use this instead. Do not call
+/// anything that touches `RULE_IDX_CACHE` from inside `f` — the borrow is live
+/// for its duration.
 fn with_cascade_index<R>(
     sheet: &Stylesheet,
     viewport: Size,
     dark_mode: bool,
     f: impl FnOnce(&CascadeIndex) -> R,
 ) -> R {
-    let sheet_ptr = sheet as *const Stylesheet as usize;
-    let sheet_rules_len = sheet.rules.len();
-    let media_key = CascadeMediaKey::current(viewport, dark_mode);
-    RULE_IDX_CACHE.with(|cell| {
-        let mut cached = cell.borrow_mut();
-        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len || cached.2 != media_key {
-            let media_ctx = media_context_from_viewport(viewport, dark_mode);
-            *cached = (sheet_ptr, sheet_rules_len, media_key, build_cascade_index_timed(sheet, &media_ctx));
-        }
-    });
-    RULE_IDX_CACHE.with(|cell| f(&cell.borrow().3))
+    ensure_cascade_index(sheet, viewport, dark_mode);
+    with_front_cascade_index(f)
 }
 
 /// CSS Generated Content L3 §3.2 — whether `sheet` can produce quote content
@@ -7060,18 +7182,9 @@ pub fn compute_style(
     let class_attr = node_data.get_attr("class").unwrap_or("");
     let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
 
-    let sheet_ptr = sheet as *const Stylesheet as usize;
-    let sheet_rules_len = sheet.rules.len();
-    let media_key = CascadeMediaKey::current(viewport, dark_mode);
-    RULE_IDX_CACHE.with(|cell| {
-        let mut cached = cell.borrow_mut();
-        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len || cached.2 != media_key {
-            let media_ctx = media_context_from_viewport(viewport, dark_mode);
-            *cached = (sheet_ptr, sheet_rules_len, media_key, build_cascade_index_timed(sheet, &media_ctx));
-        }
-    });
-    let cands = RULE_IDX_CACHE.with(|cell| {
-        cell.borrow().3.rules.candidates(node_tag, node_id, &node_classes)
+    ensure_cascade_index(sheet, viewport, dark_mode);
+    let cands = with_front_cascade_index(|idx| {
+        idx.rules.candidates(node_tag, node_id, &node_classes)
     });
 
     for &rule_idx in &cands {
@@ -7109,8 +7222,8 @@ pub fn compute_style(
         // BUG-284: candidate pre-filter (was a brute-force scan of every rule
         // in the layer for every node — dominant cascade cost on stylesheets
         // that put most rules inside layers/media/supports blocks).
-        let layer_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().3.layers[layer_i].candidates(node_tag, node_id, &node_classes)
+        let layer_cands = with_front_cascade_index(|idx| {
+            idx.layers[layer_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in layer_cands {
             let rule = &layer_rule.rules[rule_idx];
@@ -7147,7 +7260,7 @@ pub fn compute_style(
     // `media.query.matches(..)` used to run here on every node. Fetched once
     // per node (not once per block) to avoid N thread-local accesses when
     // the stylesheet has many `@media` blocks.
-    let active_media = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_media.clone());
+    let active_media = with_front_cascade_index(|idx| idx.active_media.clone());
     let mut next_rule_idx = sheet.rules.len();
     for (media_i, media) in sheet.media_rules.iter().enumerate() {
         if !active_media[media_i] {
@@ -7156,8 +7269,8 @@ pub fn compute_style(
         }
         // BUG-284: candidate pre-filter (see @layer above) — real-world
         // stylesheets often put the bulk of their rules inside @media blocks.
-        let media_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().3.media[media_i].candidates(node_tag, node_id, &node_classes)
+        let media_cands = with_front_cascade_index(|idx| {
+            idx.media[media_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
@@ -7187,14 +7300,14 @@ pub fn compute_style(
     //
     // Perf: "active" precomputed once per sheet in `CascadeIndex::active_supports`
     // (see doc comment) — `supports.condition.evaluate(..)` used to run per node.
-    let active_supports = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_supports.clone());
+    let active_supports = with_front_cascade_index(|idx| idx.active_supports.clone());
     for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
         if !active_supports[supports_i] {
             next_rule_idx += supports.rules.len();
             continue;
         }
-        let supports_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().3.supports[supports_i].candidates(node_tag, node_id, &node_classes)
+        let supports_cands = with_front_cascade_index(|idx| {
+            idx.supports[supports_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];
@@ -8215,18 +8328,9 @@ fn compute_pseudo_element_style_inner(
     let node_id = node_data.get_attr("id");
     let class_attr = node_data.get_attr("class").unwrap_or("");
     let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
-    let sheet_ptr = sheet as *const Stylesheet as usize;
-    let sheet_rules_len = sheet.rules.len();
-    let media_key = CascadeMediaKey::current(viewport, dark_mode);
-    RULE_IDX_CACHE.with(|cell| {
-        let mut cached = cell.borrow_mut();
-        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len || cached.2 != media_key {
-            let media_ctx = media_context_from_viewport(viewport, dark_mode);
-            *cached = (sheet_ptr, sheet_rules_len, media_key, build_cascade_index_timed(sheet, &media_ctx));
-        }
-    });
-    let cands = RULE_IDX_CACHE.with(|cell| {
-        cell.borrow().3.rules.candidates(node_tag, node_id, &node_classes)
+    ensure_cascade_index(sheet, viewport, dark_mode);
+    let cands = with_front_cascade_index(|idx| {
+        idx.rules.candidates(node_tag, node_id, &node_classes)
     });
     for rule_idx in cands {
         let rule = &sheet.rules[rule_idx];
@@ -8250,15 +8354,15 @@ fn compute_pseudo_element_style_inner(
     // "active" precomputed once per (sheet, viewport, dark_mode) rather than
     // re-evaluated on every element (this function runs twice per element,
     // for `::before` and `::after`).
-    let active_media = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_media.clone());
+    let active_media = with_front_cascade_index(|idx| idx.active_media.clone());
     let mut next_rule_idx = sheet.rules.len();
     for (media_i, media) in sheet.media_rules.iter().enumerate() {
         if !active_media[media_i] {
             next_rule_idx += media.rules.len();
             continue;
         }
-        let media_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().3.media[media_i].candidates(node_tag, node_id, &node_classes)
+        let media_cands = with_front_cascade_index(|idx| {
+            idx.media[media_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
@@ -8281,14 +8385,14 @@ fn compute_pseudo_element_style_inner(
         next_rule_idx += media.rules.len();
     }
     // CSS Conditional Rules L3 §2 — @supports in pseudo-element context.
-    let active_supports = RULE_IDX_CACHE.with(|cell| cell.borrow().3.active_supports.clone());
+    let active_supports = with_front_cascade_index(|idx| idx.active_supports.clone());
     for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
         if !active_supports[supports_i] {
             next_rule_idx += supports.rules.len();
             continue;
         }
-        let supports_cands = RULE_IDX_CACHE.with(|cell| {
-            cell.borrow().3.supports[supports_i].candidates(node_tag, node_id, &node_classes)
+        let supports_cands = with_front_cascade_index(|idx| {
+            idx.supports[supports_i].candidates(node_tag, node_id, &node_classes)
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];
@@ -12168,9 +12272,15 @@ pub fn print_media_active() -> bool {
 ///
 /// Capture a `StyleEnvSnapshot` on the layout thread immediately before
 /// spawning parallel work, then call [`StyleEnvSnapshot::install`] at the top
-/// of every rayon closure. This restores the correct state on each worker thread
-/// and calls [`invalidate_rule_idx_cache`] so the per-thread rule-index cache
-/// starts fresh (it is rebuilt lazily per worker, which is correct).
+/// of every rayon closure. This restores the correct state on each worker
+/// thread.
+///
+/// It deliberately does **not** touch the per-thread rule-index cache. It used
+/// to drop it, because that cache was keyed by the sheet's address; keyed by
+/// [`Stylesheet::revision`] it is safe to keep, and keeping it is the point —
+/// a full pass fans out repeatedly, and dropping the index on every install
+/// made each worker rebuild it every time (33 rebuilds per full pass, BUG-341
+/// S21).
 ///
 /// Shadow sheets are cloned from the current thread into the snapshot; for
 /// documents without shadow DOM this is a cheap empty-map clone.
@@ -12198,9 +12308,6 @@ impl StyleEnvSnapshot {
     }
 
     /// Install this snapshot on the **current** (worker) thread.
-    ///
-    /// Also calls [`invalidate_rule_idx_cache`] to ensure the thread's
-    /// rule-index cache is reset before any `compute_style` calls.
     pub fn install(&self) {
         HOVER_NID.with(|h| h.set(self.hover_nid));
         FOCUS_NID.with(|f| f.set(self.focus_nid));
@@ -12208,7 +12315,6 @@ impl StyleEnvSnapshot {
         FORCED_COLORS.with(|f| f.set(self.forced_colors));
         PRINT_MEDIA.with(|p| p.set(self.print_media));
         SHADOW_SHEETS.with(|m| *m.borrow_mut() = self.shadow_sheets.clone());
-        invalidate_rule_idx_cache();
     }
 }
 
@@ -24507,7 +24613,6 @@ mod tests {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let vp = Size::new(800.0, 600.0);
-        invalidate_rule_idx_cache();
         let mut out = Vec::new();
         let mut stack = vec![(doc.root(), ComputedStyle::root())];
         while let Some((id, inherited)) = stack.pop() {
@@ -24657,7 +24762,6 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><p>x</p></div>");
         let sheet = lumen_css_parser::parse("p::after { color: red; }");
         let vp = Size::new(800.0, 600.0);
-        invalidate_rule_idx_cache();
         let div = doc.get(doc.body().unwrap()).children[0];
         let parent = ComputedStyle::root();
 
@@ -24685,18 +24789,148 @@ mod tests {
     fn sheet_quote_content_flag_tracks_declarations() {
         let vp = Size::new(800.0, 600.0);
         let plain = lumen_css_parser::parse("p::before { content: 'x'; }");
-        invalidate_rule_idx_cache();
         assert!(!sheet_has_quote_content(&plain, vp, false));
 
         let quoted = lumen_css_parser::parse("p::before { content: open-quote; }");
-        invalidate_rule_idx_cache();
         assert!(sheet_has_quote_content(&quoted, vp, false));
 
         // Over-approximating is the point: a `var()` can carry `open-quote` in
         // from a custom property, so any mention anywhere arms the probe.
         let indirect = lumen_css_parser::parse(":root { --q: open-quote; }");
-        invalidate_rule_idx_cache();
         assert!(sheet_has_quote_content(&indirect, vp, false));
+    }
+
+    // ── BUG-341 S21: the cascade index survives the pass that built it ───────
+    //
+    // Gates by counter, not by output: an index rebuilt from scratch on every
+    // node of every pass produces byte-identical styles. Each one asserts both
+    // arms — that the index is reused when it may be, *and* that it is rebuilt
+    // when it must be — because "never reuse" and "never rebuild" are both
+    // trivially passable one-liners, and the second one is silently wrong
+    // styles rather than a slow frame.
+
+    #[test]
+    fn bug341_s21_repeated_cascades_over_one_sheet_build_the_index_once() {
+        let doc = lumen_html_parser::parse("<div class='a'><p id='x'>t</p></div>");
+        let sheet = lumen_css_parser::parse(".a { color: red } #x { color: blue }");
+        let vp = Size::new(800.0, 600.0);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        clear_rule_idx_cache();
+        let _ = take_cascade_index_stats();
+        let first = compute_style(&doc, div, &sheet, &root, vp, false);
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            1,
+            "a cold thread must index the sheet once"
+        );
+
+        for _ in 0..20 {
+            let s = compute_style(&doc, div, &sheet, &root, vp, false);
+            assert_eq!(s.color, first.color, "the reused index must match the same rules");
+        }
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            0,
+            "the index is keyed by `Stylesheet::revision`, which did not change — \
+             rebuilding it again is pure waste that no differential test can see"
+        );
+    }
+
+    #[test]
+    fn bug341_s21_a_mutated_sheet_is_reindexed_and_its_new_rules_apply() {
+        let doc = lumen_html_parser::parse("<div class='a'>t</div>");
+        let mut sheet = lumen_css_parser::parse(".a { color: red }");
+        let vp = Size::new(800.0, 600.0);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        clear_rule_idx_cache();
+        let _ = take_cascade_index_stats();
+        let before = compute_style(&doc, div, &sheet, &root, vp, false);
+        assert_eq!(take_cascade_index_stats().builds, 1);
+
+        // A rule added after the index was built. Note the added rule keeps the
+        // sheet's `rules.len()` growing, which the old address-plus-length key
+        // also caught — the point of the assertion is the *new* key: the
+        // revision moved, so the stale index cannot be served.
+        sheet.merge_from(lumen_css_parser::parse(".a { color: green }"));
+        let after = compute_style(&doc, div, &sheet, &root, vp, false);
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            1,
+            "a sheet whose rules changed must be re-indexed"
+        );
+        assert_ne!(
+            before.color, after.color,
+            "the rule added after the index was built must actually apply — this is \
+             the arm that fails if the cache is keyed by something that does not \
+             move when the sheet's content does"
+        );
+    }
+
+    #[test]
+    fn bug341_s21_a_resize_reindexes_because_it_changes_which_media_blocks_apply() {
+        let doc = lumen_html_parser::parse("<div class='a'>t</div>");
+        let sheet = lumen_css_parser::parse(
+            ".a { color: red } @media (min-width: 900px) { .a { color: green } }",
+        );
+        let narrow = Size::new(800.0, 600.0);
+        let wide = Size::new(1000.0, 600.0);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        clear_rule_idx_cache();
+        let _ = take_cascade_index_stats();
+        let a = compute_style(&doc, div, &sheet, &root, narrow, false);
+        let b = compute_style(&doc, div, &sheet, &root, wide, false);
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            2,
+            "`active_media` is baked into the index, so the viewport is part of its key"
+        );
+        assert_ne!(a.color, b.color, "the `@media` block must take effect at 1000px");
+    }
+
+    #[test]
+    fn bug341_s21_two_documents_on_one_thread_do_not_evict_each_other() {
+        // The shape a real frame has: the browser's own chrome and the page it
+        // shows are laid out on the same thread, one after the other. With a
+        // single cache slot each pass would evict the other's index and rebuild
+        // it — the per-pass rebuild this slice removed, reintroduced by the
+        // cache's size rather than by its key.
+        let doc = lumen_html_parser::parse("<div class='a'>t</div>");
+        let chrome = lumen_css_parser::parse(".a { color: red }");
+        let page = lumen_css_parser::parse(".a { color: blue }");
+        let vp = Size::new(800.0, 600.0);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        clear_rule_idx_cache();
+        let _ = take_cascade_index_stats();
+        for _ in 0..10 {
+            let c = compute_style(&doc, div, &chrome, &root, vp, false);
+            let p = compute_style(&doc, div, &page, &root, vp, false);
+            assert_ne!(c.color, p.color, "each sheet must be matched with its own index");
+        }
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            2,
+            "one index per sheet, not one per alternation"
+        );
+
+        // The eviction arm: a third sheet does push the least-recently-used one
+        // out, so the cache stays bounded rather than growing per navigation.
+        let third = lumen_css_parser::parse(".a { color: yellow }");
+        let _ = compute_style(&doc, div, &third, &root, vp, false);
+        let _ = take_cascade_index_stats();
+        let _ = compute_style(&doc, div, &chrome, &root, vp, false);
+        assert_eq!(
+            take_cascade_index_stats().builds,
+            1,
+            "the cache holds {CASCADE_INDEX_SLOTS} sheets, so the oldest is re-indexed"
+        );
     }
 
     #[test]
