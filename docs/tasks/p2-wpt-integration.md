@@ -374,7 +374,7 @@ option isn't lost — do not fold it into this task's scope.
       broken — too large for a hand-maintained `.ini`, bug to file when DOMTokenList is worked) and
       the constructor/`createComment`/`createTextNode` tests that end in `TIMEOUT` (BUG-314 family +
       cross-global iframe subtests the BiDi-only executor doesn't drive yet). Port note (Windows):
-      `config.json` moved off the WPT default 8000/8001 to 8300/8301 (the 8000-range fell into a
+      `config.json` moved off the WPT default 8000/8001 to 18300/18301 (the 8000-range fell into a
       Windows dynamic excluded-port range → `WinError 10013`).
 - [x] Async subset (S6) admitted, `awaitPromise` behavior verified against the implementation —
       **done 2026-07-18.** Three `promise_test`/`async_test`-based `dom/nodes/MutationObserver-*`
@@ -397,7 +397,7 @@ option isn't lost — do not fold it into this task's scope.
       executor deliberately uses `awaitPromise=false` + polls `window.__lumen_wpt_results` (async
       tests complete via the page's own event loop + testharness completion callback).
 - [x] Suite runs fully offline — **done 2026-07-18.** `run_suite.py` drives the whole curated
-      subset through the vendored `wptserve` bound to `127.0.0.1:8300/8301` (`tests/wpt/config.json`);
+      subset through the vendored `wptserve` bound to `127.0.0.1:18300/18301` (`tests/wpt/config.json`);
       the tree under `tools/`/`tests/wpt/` is a committed snapshot (`tests/wpt/VENDOR.md`), not a
       submodule or a runtime clone, so a full green run makes **zero** network calls to
       `github.com/web-platform-tests/wpt` or any WPT CDN (verified: 21 tests / 64 checks, 0 unexpected,

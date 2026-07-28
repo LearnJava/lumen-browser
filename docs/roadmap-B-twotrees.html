@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 73,
+  "open": 79,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 345,
+ "total_bugs": 351,
  "phases": [
   {
    "id": "P0",
@@ -2240,9 +2240,17 @@
       {
        "id": "WPT-VENDOR-fledge",
        "title": "WPT: вендорить + прогнать категорию `fledge`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/fledge/`, 77 файлов: всё дерево под `tentative/`, у категории нет `META.yml`/`WEB_FEATURES.yml`; 34 `.window.js` + 2 `.html` = 36 исполняемых файлов, `resources/` из 29 хелперов и 18 Python-эндпоинтов wptserve, `third_party/` с cbor-js/hpke-js/noble-ed25519, `incrementer.wasm` — первый `.wasm` в репозитории, 3 `.headers`), скоуп 🚫 (ad-tech, Privacy Sandbox), включена по постоянному решению пользователя. `run_report.py --all --root fledge --recursive` — **3 ч 16 мин 34 с, 2/183 harness OK, 1/2 сабтеста** (179 TIMEOUT, 2 ERROR, 2 Test OK). Главный методологический результат: предсказатель стоимости по `grep -rl testdriver` здесь ИНВЕРТИРУЕТСЯ — все 35 тестовых файлов тянут `testdriver.js`, что предсказывало мгновенную стену SKIP, а SKIP-ов ноль, потому что в `MANIFEST.json` флаг `testdriver: true` стоит у 0 из 183 id: он выставляется по `<script src=…testdriver.js>` в HTML, а `.window.js`/`.any.js` подключают тот же файл строкой `// META: script=…`, которая в флаг не превращается. Отсюда полный ~65-секундный TIMEOUT на каждый id по HTTPS-порт-гэпу и 3 ч вместо минут; считать долю testdriver надо по манифесту, а не по грепу. Сигнал дали ровно два не-HTTPS id: `insecure-context.window.html` — Test OK 1/1 PASS (проходит именно потому, что API Protected Audience в Lumen нет вовсе), и `fetch-ad-auction-headers-insecure-context…http.html` — Test OK 0/1, падение на BUG-347 (`fetch()` не резолвит относительные URL), а не на fledge. Оба исполнившихся теста отравили следующий за собой id — BUG-380, находка прогона: исполнитель не проверяет исход `browsingContext.navigate` и не чистит `window.__lumen_wpt_results`, поэтому при неудачной навигации отдаёт результаты предыдущего теста и роняет `AssertionError` вместо TIMEOUT. Сам fledge в движке не реализован ни строкой, поэтому проба `--dump-layout` шла на уровень выше — по объектам, на которых стоят тесты категории: BUG-375 (у `URL` работает один сеттер из десяти: `prop()` ставит пустую функцию вместо отсутствующего сеттера, поэтому `url.search = …` теряется молча даже в strict mode — а именно так строит каждый URL центральный хелпер категории; плюс односторонний `searchParams`, константные `username`/`password`), BUG-376 (`window.location = 'url'` затирает объект `Location` строкой вместо навигации; присваивание компонентам `location` не навигирует и рассинхронизирует объект с `href`), BUG-377 (`Node.baseURI` отсутствует у всех типов узлов, `'baseURI' in document` === false — `fledge-util.sub.js` падает на третьей строке), BUG-378 (604 внутренних имени движка — own-свойства `window`, 592 перечисляемы, все записываемы; перезапись `window._lumen_get_attr` подменяет `Element.getAttribute` для всей страницы — общий случай BUG-371), BUG-379 (защита от детекта автоматизации сама является отпечатком: создаёт 15 маркеров как неустранимые own-свойства, которых в Chrome/Firefox нет ни одного). Побочно: порты wptserve переехали с 8300/8301 на 18300/18301 — старые попадали в эфемерный диапазон машины (1024-15000) и были заняты посторонним процессом, что стоило трёх упавших прогонов. `CAPABILITIES.md` поправлена в трёх местах (URL ✅→🟡, Location, фингерпринт глобала)",
+       "bugs": [
+        "BUG-375",
+        "BUG-376",
+        "BUG-377",
+        "BUG-378",
+        "BUG-379",
+        "BUG-380"
+       ]
       },
       {
        "id": "WPT-VENDOR-focus",
@@ -6455,6 +6463,48 @@
    "status": "open",
    "title": "File System Access выставлен как три несвязанных ES5-конструктора вместо WebIDL-иерархии, 10 независимых расхождений (все — вывод пробы): нет базового `FileSyst…",
    "component": "js (`crates/js/src/filesystem_access.rs:499-711` — `FSAL_SHIM` целиком)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-375": {
+   "status": "open",
+   "title": "",
+   "component": "js (`crates/js/src/dom.rs:10755-10790` — IIFE аксессоров `URL.prototype`, ключевая строка `dom.rs:10759`: `set: setter",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-376": {
+   "status": "open",
+   "title": "`window.location = 'url'` не навигирует, а **затирает объект `Location` строкой**: `location` объявлен как `var`, т.е. записываемое data-свойство глобала вместо…",
+   "component": "js (`crates/js/src/dom.rs:7412-7428` — литерал `var location = {…}`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-377": {
+   "status": "open",
+   "title": "`Node.baseURI` (DOM Standard §4.4) не реализован ни для одного типа узла: `document.baseURI`, `body.baseURI`, `documentElement.baseURI`, `textNode.baseURI` — `u…",
+   "component": "js (`crates/js/src/dom.rs` — ни живой `document`, ни `_lumen_build_detached_document`, ни фабрики узлов; `grep -n baseURI crates/js/src/` даёт ноль)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-378": {
+   "status": "open",
+   "title": "604 внутренних имени движка — own-свойства `window` (всего own-свойств 1308), 592 из них перечисляемы обычным `for (k in window)`; среди них не только функции,…",
+   "component": "js (регистрация нативов из Rust — `ctx.globals().set`/`rt.register_native`/`reg!` в ~25 модулях `crates/js/src/`, 468 различных имён `_lumen*`; и объявления верхнего уровня `var`/`function _lumen_…` внутри `WEB_API_SHIM`, `crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-379": {
+   "status": "open",
+   "title": "Защита от детекта автоматизации сама является отпечатком: цикл по `_automationGlobals` **создаёт** все 15 маркеров (`__playwright`, `__pwInitScripts`, `__seleni…",
+   "component": "js (`crates/js/src/surface_api.rs:163-181`, устанавливается на обоих движках: `lib.rs:944`, `v8_runtime.rs:3950`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-380": {
+   "status": "open",
+   "title": "`LumenTestharnessExecutor` не проверяет исход `browsing_context.navigate` и не очищает `window.__lumen_wpt_results` между тестами, а browsing context переисполь…",
+   "component": "tests/wpt tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py:110-150` — `_run_testharness`)",
    "date": null,
    "debtor": false
   }
