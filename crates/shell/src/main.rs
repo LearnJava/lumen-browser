@@ -1197,7 +1197,6 @@ fn run_window_mode(
             })
         },
         settings_panel: panels::settings_panel::SettingsPanel::new(),
-        settings_hover: None,
         adblock_store: std::sync::Arc::clone(&adblock_store),
         shortcuts_panel: {
             let ks = lumen_storage::KeyboardShortcuts::open_in_memory()
@@ -8506,10 +8505,6 @@ struct Lumen {
     /// stores other than `settings_store` (HTTP/3 → `fingerprint.toml`,
     /// ad-block subscriptions → `AdblockStore`, spellcheck locale → `SPELL_DICTS`).
     settings_panel: panels::settings_panel::SettingsPanel,
-    /// Cursor position (window CSS px) while the settings panel is visible,
-    /// used to render a hover tooltip next to the pointer. `None` when the
-    /// panel is hidden or the cursor is outside it.
-    settings_hover: Option<(f32, f32)>,
     /// Persistent ad-block filter-list store (`<exe_dir>/data/adblock/adblock.db`).
     ///
     /// Opened once at startup ([`config::init_adblock`]); shared with the
@@ -13922,19 +13917,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     self.pending_pointer_moves.push((x_css, y_css));
                 }
-                // Settings panel: update hover position for tooltip rendering.
-                if self.settings_panel.visible {
-                    let dpr = self
-                        .renderer
-                        .as_ref()
-                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
-                        .max(1e-6);
-                    self.settings_hover = Some((
-                        (position.x as f32) / dpr,
-                        (position.y as f32) / dpr,
-                    ));
-                    self.request_redraw();
-                }
+                // CC-15-4: the settings-panel hover tracker lived here — it fed
+                // only `settings_panel::tooltip_for`/`build_tooltip`, both
+                // deleted with the legacy paint, so every `CursorMoved` while
+                // the panel was open cost a `request_redraw()` for nothing.
                 // CC-4: update tab context-menu hover highlight.
                 if self.tab_context_menu.is_open() {
                     let dpr = self
@@ -13989,7 +13975,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::CursorLeft { .. } => {
                 self.cursor_position = None;
-                self.settings_hover = None;
                 self.resize_active = None; // Clear resize when cursor leaves window
                 // Clear hover state when cursor leaves the window.
                 if self.hovered_nid.is_some() {
@@ -16488,33 +16473,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // legacy *paint* below is gated.
                 if self.shields.visible {
                     self.shields.refresh();
-                    // CC-10: gated off the flag — under `LUMEN_CSS_CHROME=1`
-                    // this is `#permPopover`, rendered by the engine chrome
-                    // since CC-9 (`bind_popover`). Missed in CC-9 itself.
-                    if !self.css_chrome_enabled {
-                        let tab_h = toolbar::CHROME_H;
-                        let win_w = self.viewport_width_css();
-                        let mut sh_cmds = panels::shields_panel::build_panel(
-                            &self.shields,
-                            win_w,
-                            tab_h,
-                            &pal,
-                        );
-                        overlay_buf.append(&mut sh_cmds);
-                    }
-                }
-
-                // Permission popover (7C.2): top-left overlay anchored below the
-                // tab bar. CC-10: gated off the flag — same `#permPopover`
-                // engine renderer as shields above, missed in CC-9.
-                if self.permission.visible && !self.css_chrome_enabled {
-                    let tab_h = toolbar::CHROME_H;
-                    let mut perm_cmds = panels::permission_panel::build_panel(
-                        &self.permission,
-                        tab_h,
-                        &pal,
-                    );
-                    overlay_buf.append(&mut perm_cmds);
                 }
 
                 // Note viewer overlay (§12.2, GG-2): floating annotation panel.
@@ -16525,52 +16483,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     });
                     let mut nv_cmds = panels::note_viewer::build_note_viewer(&self.note_viewer, win_size, &pal);
                     overlay_buf.append(&mut nv_cmds);
-                }
-
-                // AI sidebar panel (§12.8, GG-1): cross-dockable AI assistant.
-                // CC-10b: gated off the flag — under `LUMEN_CSS_CHROME=1`
-                // this is `#rsBodyAi` inside `#rightSidebar`, rendered by the
-                // engine chrome (`bind_right_sidebar`).
-                if self.ai_panel.visible && !self.css_chrome_enabled {
-                    let tab_h = toolbar::CHROME_H;
-                    let win_h = self.viewport_height_css() + tab_h;
-                    let ai_w = self
-                        .panel_layout
-                        .width_for(panel_layout::ID_AI, panels::ai_panel::PANEL_WIDTH);
-                    let ai_side = self.sidebar_dock_side(panel_layout::ID_AI);
-                    let ai_x = self.dock_origin_x(ai_side, ai_w);
-                    let mut ai_cmds = panels::ai_panel::build_panel(
-                        &self.ai_panel,
-                        ai_x,
-                        tab_h,
-                        win_h,
-                        &pal,
-                        ai_w,
-                    );
-                    overlay_buf.append(&mut ai_cmds);
-                }
-
-                // Sidebar web panel (7D.3): cross-dockable secondary viewport.
-                // CC-10b: gated off the flag — under `LUMEN_CSS_CHROME=1`
-                // this is `#rsBodyWeb` inside `#rightSidebar`, rendered by
-                // the engine chrome (`bind_right_sidebar`).
-                if self.sidebar.visible && !self.css_chrome_enabled {
-                    let tab_h = toolbar::CHROME_H;
-                    let win_h = self.viewport_height_css() + tab_h;
-                    let sb_w = self
-                        .panel_layout
-                        .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
-                    let sb_side = self.sidebar_dock_side(panel_layout::ID_SIDEBAR);
-                    let sb_x = self.dock_origin_x(sb_side, sb_w);
-                    let mut sb_cmds = panels::sidebar_panel::build_panel(
-                        &self.sidebar,
-                        sb_x,
-                        tab_h,
-                        win_h,
-                        &pal,
-                        sb_w,
-                    );
-                    overlay_buf.append(&mut sb_cmds);
                 }
 
                 // Workspace switcher bar (7A.3): bottom-docked horizontal strip.
@@ -16590,18 +16502,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut ws_cmds);
                 }
 
-                // Bookmark manager panel (task #22): floating overlay anchored
-                // under the toolbar. Drawn above page/other overlays, below the
-                // tab bar. CC-10b: gated off the flag — under
-                // `LUMEN_CSS_CHROME=1` this is `#view-bookmarks`, rendered by
-                // the engine chrome (`bind_bookmarks`).
-                if self.bookmark_panel.visible && !self.css_chrome_enabled {
-                    let (ax, ay) = self.bookmark_anchor();
-                    let mut bm_cmds =
-                        panels::bookmark_panel::build_panel(&self.bookmark_panel, ax, ay, &pal);
-                    overlay_buf.append(&mut bm_cmds);
-                }
-
                 // Accessibility settings panel (E-2): centred overlay, Ctrl+Shift+Q.
                 if self.a11y_panel.visible {
                     let win_w = self.viewport_width_css();
@@ -16612,51 +16512,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut a11y_cmds);
                 }
 
-                // Print dialog (E-1): centred overlay, Ctrl+P. CC-10: gated
-                // off the flag — under `LUMEN_CSS_CHROME=1` this is
-                // `#printOverlay`, open/close-only rendered by the engine
-                // chrome (the design's plain `<select>`/checkbox form fields
-                // carry no `data-action`/id hooks to bind real `PrintPanel`
-                // field data to — out of this slice's DoD, same class of gap
-                // as CC-9's per-download-card buttons).
-                if self.print_panel.visible && !self.css_chrome_enabled {
-                    let win_w = self.viewport_width_css();
-                    let win_h = self.viewport_height_css();
-                    let pp_x = (win_w - panels::print_panel::PANEL_W) * 0.5;
-                    let pp_y = (win_h - panels::print_panel::PANEL_H) * 0.5;
-                    // Dim backdrop behind the modal.
-                    overlay_buf.push(lumen_paint::DisplayCommand::FillRect {
-                        rect: lumen_core::geom::Rect::new(0.0, 0.0, win_w, win_h),
-                        color: lumen_layout::Color { r: 0, g: 0, b: 0, a: 110 },
-                    });
-                    let mut pp_cmds =
-                        panels::print_panel::build_panel(&self.print_panel, pp_x, pp_y, &pal);
-                    overlay_buf.append(&mut pp_cmds);
-                }
-
-                // Settings panel (task D-7): centred overlay, Ctrl+, gear button, or about:settings.
-                // CC-10b: gated off the flag — under `LUMEN_CSS_CHROME=1`
-                // this is `#view-settings`, rendered by the engine chrome
-                // (`bind_settings`).
-                if self.settings_panel.visible && !self.css_chrome_enabled {
-                    let win_w = self.viewport_width_css();
-                    let win_h = self.viewport_height_css();
-                    let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
-                    let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
-                    panels::settings_panel::build_panel(&self.settings_panel, &mut overlay_buf, sp_x, sp_y, &pal);
-                    // Hover tooltip: immediate, no delay (matches the tab-strip pattern).
-                    if let Some((mx, my)) = self.settings_hover
-                        && let Some(text) = panels::settings_panel::tooltip_for(
-                            &self.settings_panel, mx, my, sp_x, sp_y,
-                        )
-                    {
-                        let mut tip_cmds = panels::settings_panel::build_tooltip(
-                            text, mx, my, win_w, win_h, &pal,
-                        );
-                        overlay_buf.append(&mut tip_cmds);
-                    }
-                }
-
                 // Keyboard shortcuts panel (§D-4): centred floating overlay.
                 if self.shortcuts_panel.visible {
                     let win_w = self.viewport_width_css();
@@ -16664,39 +16519,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
                     let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
                     self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y, &pal);
-                }
-
-                // Certificate viewer panel (§D-1): centred floating overlay.
-                // CC-10: gated off the flag — under `LUMEN_CSS_CHROME=1` this
-                // is `#certOverlay`, rendered by the engine chrome
-                // (`bind_cert`).
-                if self.cert_panel.visible && !self.css_chrome_enabled {
-                    let win_w = self.viewport_width_css();
-                    let win_h = self.viewport_height_css();
-                    let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
-                    let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
-                    panels::cert_panel::build_panel(&self.cert_panel, &mut overlay_buf, cp_x, cp_y, &pal);
-                }
-
-                // History panel (task D-5): centred floating overlay.
-                // CC-10b: gated off the flag — under `LUMEN_CSS_CHROME=1`
-                // this is `#view-history`, rendered by the engine chrome
-                // (`bind_history`).
-                if self.history_panel.visible && !self.css_chrome_enabled {
-                    let win_w = self.viewport_width_css();
-                    let tab_h = toolbar::CHROME_H;
-                    // DS-16: banner + shrunk body while Anonymous is active.
-                    let is_anon = active_profile_name
-                        .as_deref()
-                        .is_some_and(panels::profile_menu::is_anonymous);
-                    let mut hist_cmds = panels::history_panel::build_panel(
-                        &self.history_panel,
-                        win_w,
-                        tab_h,
-                        &pal,
-                        is_anon,
-                    );
-                    overlay_buf.append(&mut hist_cmds);
                 }
 
                 // §12.3 Read-later panel: right-docked overlay.
@@ -16765,24 +16587,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_h = self.window_height_css();
                     let mut menu_cmds = self.page_context_menu.build_overlay(win_w, win_h);
                     overlay_buf.append(&mut menu_cmds);
-                }
-
-                // Command palette (task #23): modal — drawn above everything,
-                // including the tab bar, with a full-window dimming scrim.
-                // CC-10: gated off the flag — under `LUMEN_CSS_CHROME=1` this
-                // is `#cpOverlay`, rendered by the engine chrome
-                // (`bind_palette`).
-                if self.command_palette.visible && !self.css_chrome_enabled {
-                    let win_w = self.viewport_width_css();
-                    let win_h =
-                        self.viewport_height_css() + toolbar::CHROME_H;
-                    let mut cp_cmds = panels::command_palette::build_panel(
-                        &self.command_palette,
-                        win_w,
-                        win_h,
-                        &pal,
-                    );
-                    overlay_buf.append(&mut cp_cmds);
                 }
 
                 // Focus mode widget (task #25): floating Pomodoro card with an

@@ -11,13 +11,6 @@
 
 use std::collections::HashMap;
 
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-
-use crate::panels::settings_panel::wrap_text;
-use crate::panels::themes::Palette;
-
 // ── Visual constants ─────────────────────────────────────────────────────────
 
 /// Width of the floating permission panel in CSS px.
@@ -42,26 +35,8 @@ const PAD_X: f32 = 10.0;
 /// the current disclaimer wording; grows automatically if the string is
 /// ever edited, since [`wrap_text`] output is capped at 3 lines here.
 const FINE_PRINT_H: f32 = 56.0;
-/// Disclaimer shown at the bottom of the panel: grants made here never
-/// persist across sessions (design-system rule — no "remember" checkbox
-/// in the popover; permanent grants live in about:settings/privacy).
-const FINE_PRINT_TEXT: &str =
-    "Разрешение действует только для этого сеанса. Навсегда — about:settings/privacy.";
 
-// Semantic action-state colors — carry meaning (Allow=green / Deny=red / Ask=amber).
-const ALLOW_FG: Color = Color { r: 60, g: 200, b: 120, a: 255 };
-const DENY_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-const ASK_FG: Color = Color { r: 160, g: 140, b: 60, a: 255 };
-const ALLOW_BG: Color = Color { r: 25, g: 70, b: 45, a: 255 };
-const DENY_BG: Color = Color { r: 80, g: 30, b: 30, a: 255 };
-const ASK_BG: Color = Color { r: 65, g: 58, b: 22, a: 255 };
-
-const FONT_SZ: f32 = 11.0;
-const FONT_SZ_SM: f32 = 10.0;
-const PANEL_RADIUS: f32 = crate::theme_tokens::radius::LG;
-const BTN_RADIUS: f32 = crate::theme_tokens::radius::MD;
 const BTN_W: f32 = 54.0;
-const BTN_H: f32 = 18.0;
 
 // ── Permission types ──────────────────────────────────────────────────────────
 
@@ -86,26 +61,6 @@ impl PermissionKind {
         PermissionKind::Notifications,
         PermissionKind::Clipboard,
     ];
-
-    /// Short display name for the permission row label.
-    pub fn label(self) -> &'static str {
-        match self {
-            PermissionKind::Camera => "Camera",
-            PermissionKind::Microphone => "Microphone",
-            PermissionKind::Notifications => "Notifications",
-            PermissionKind::Clipboard => "Clipboard",
-        }
-    }
-
-    /// Emoji icon shown to the left of the label.
-    pub fn icon(self) -> &'static str {
-        match self {
-            PermissionKind::Camera => "📷",
-            PermissionKind::Microphone => "🎤",
-            PermissionKind::Notifications => "🔔",
-            PermissionKind::Clipboard => "📋",
-        }
-    }
 }
 
 /// Grant state for a single permission on a single origin.
@@ -122,15 +77,6 @@ pub enum PermissionState {
 }
 
 impl PermissionState {
-    /// Label shown on the toggle button.
-    pub fn label(self) -> &'static str {
-        match self {
-            PermissionState::Allow => "Allow",
-            PermissionState::Deny => "Deny",
-            PermissionState::Ask => "Ask",
-        }
-    }
-
     /// Cycle to the next state: Ask → Allow → Deny → Ask.
     pub fn cycle(self) -> Self {
         match self {
@@ -279,226 +225,11 @@ pub fn hit_test(
     Some(PermissionHit::Empty)
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build the display list for the permission floating panel.
-///
-/// The panel is anchored at the top-left of the window, offset by
-/// `tab_bar_h` from the top.  `pal` controls all surface / chrome colors;
-/// semantic action colors (Allow/Deny/Ask) are hard-coded and independent of
-/// the theme.
-pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32, pal: &Palette) -> DisplayList {
-    let (px, py) = panel_origin(tab_bar_h);
-    let mut out = DisplayList::with_capacity(30);
-    let radii = uniform_radii(PANEL_RADIUS);
-
-    // Background + border.
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px, py, PANEL_W, PANEL_H),
-        radii,
-        color: pal.overlay_border,
-    });
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
-        radii: uniform_radii(PANEL_RADIUS - 1.0),
-        color: pal.overlay_bg,
-    });
-
-    // Header: lock icon + origin label + close "×".
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + PAD_X, py + 6.0, 16.0, 16.0),
-        text: "🔒".to_owned(),
-        font_size: 13.0,
-        color: pal.text_dim,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-    let origin_label = panel
-        .current_origin
-        .as_deref()
-        .unwrap_or("(no origin)");
-    let origin_text = truncate_label(origin_label, 24);
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + PAD_X + 18.0, py + 8.0, PANEL_W - 54.0, FONT_SZ * 1.3),
-        text: origin_text,
-        font_size: FONT_SZ,
-        color: pal.text,
-        font_family: Vec::new(),
-        font_weight: FontWeight::BOLD,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Close "×" button.
-    let close_x = px + PANEL_W - 18.0;
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(close_x, py + 6.0, 14.0, FONT_SZ * 1.2),
-        text: "×".to_owned(),
-        font_size: FONT_SZ,
-        color: pal.text_dim,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Divider line between header and rows.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(px + 1.0, py + HEADER_H - 1.0, PANEL_W - 2.0, 1.0),
-        color: pal.divider,
-    });
-
-    // Permission rows.
-    for (i, &kind) in PermissionKind::ALL.iter().enumerate() {
-        let row_top = py + HEADER_H + i as f32 * ROW_H;
-        let state = panel.state_for(kind);
-
-        // Icon.
-        out.push(DisplayCommand::DrawText {
-            rect: Rect::new(px + PAD_X, row_top + 7.0, 16.0, 16.0),
-            text: kind.icon().to_owned(),
-            font_size: 12.0,
-            color: pal.text,
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        });
-
-        // Label.
-        out.push(DisplayCommand::DrawText {
-            rect: Rect::new(px + PAD_X + 18.0, row_top + 9.0, 90.0, FONT_SZ_SM * 1.3),
-            text: kind.label().to_owned(),
-            font_size: FONT_SZ_SM,
-            color: pal.text,
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        });
-
-        // Toggle button: coloured badge on the right.
-        let (btn_fg, btn_bg) = state_colors(state);
-        let btn_x = px + PANEL_W - PAD_X - BTN_W;
-        let btn_y = row_top + (ROW_H - BTN_H) / 2.0;
-        out.push(DisplayCommand::FillRoundedRect {
-            rect: Rect::new(btn_x, btn_y, BTN_W, BTN_H),
-            radii: uniform_radii(BTN_RADIUS),
-            color: btn_bg,
-        });
-        out.push(DisplayCommand::DrawText {
-            rect: Rect::new(btn_x + 6.0, btn_y + 3.0, BTN_W - 12.0, FONT_SZ_SM * 1.2),
-            text: state.label().to_owned(),
-            font_size: FONT_SZ_SM,
-            color: btn_fg,
-            font_family: Vec::new(),
-            font_weight: FontWeight::BOLD,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        });
-    }
-
-    // Divider + session-only fine print, anchored to the bottom of the rows.
-    let rows_bottom = py + HEADER_H + PermissionKind::ALL.len() as f32 * ROW_H;
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(px + 1.0, rows_bottom, PANEL_W - 2.0, 1.0),
-        color: pal.divider,
-    });
-
-    const CHAR_W: f32 = FONT_SZ_SM * 0.62;
-    let max_chars = (((PANEL_W - PAD_X * 2.0) / CHAR_W).floor() as usize).max(12);
-    let line_h = FONT_SZ_SM * 1.3;
-    for (i, line) in wrap_text(FINE_PRINT_TEXT, max_chars).into_iter().enumerate() {
-        out.push(DisplayCommand::DrawText {
-            rect: Rect::new(
-                px + PAD_X,
-                rows_bottom + 8.0 + i as f32 * line_h,
-                PANEL_W - PAD_X * 2.0,
-                line_h,
-            ),
-            text: line,
-            font_size: FONT_SZ_SM,
-            color: pal.text_dim,
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        });
-    }
-
-    out
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Top-left corner of the permission panel in CSS px.
 fn panel_origin(tab_bar_h: f32) -> (f32, f32) {
     (PANEL_LEFT_MARGIN, tab_bar_h + PANEL_TOP_OFFSET)
-}
-
-fn uniform_radii(r: f32) -> CornerRadii {
-    CornerRadii {
-        tl: r, tl_y: r,
-        tr: r, tr_y: r,
-        br: r, br_y: r,
-        bl: r, bl_y: r,
-    }
-}
-
-/// Foreground and background colours for a permission state toggle button.
-fn state_colors(state: PermissionState) -> (Color, Color) {
-    match state {
-        PermissionState::Allow => (ALLOW_FG, ALLOW_BG),
-        PermissionState::Deny => (DENY_FG, DENY_BG),
-        PermissionState::Ask => (ASK_FG, ASK_BG),
-    }
-}
-
-/// Truncate a label to at most `max_chars` characters, appending "…" if needed.
-fn truncate_label(s: &str, max_chars: usize) -> String {
-    let count = s.chars().count();
-    if count <= max_chars {
-        return s.to_owned();
-    }
-    let truncated: String = s.chars().take(max_chars - 1).collect();
-    format!("{truncated}…")
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -647,58 +378,4 @@ mod tests {
         assert_eq!(hit, Some(PermissionHit::Empty));
     }
 
-    // ── Rendering ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn build_panel_emits_commands() {
-        let p = make_panel(Some("https://example.com"));
-        let dl = build_panel(&p, TAB_H, &Palette::DARK);
-        assert!(!dl.is_empty());
-    }
-
-    #[test]
-    fn build_panel_shows_origin() {
-        let p = make_panel(Some("https://example.com"));
-        let dl = build_panel(&p, TAB_H, &Palette::DARK);
-        let has_origin = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("example.com"))
-        });
-        assert!(has_origin, "panel must render the current origin");
-    }
-
-    #[test]
-    fn build_panel_shows_all_kinds() {
-        let p = make_panel(Some("https://example.com"));
-        let dl = build_panel(&p, TAB_H, &Palette::DARK);
-        for kind in PermissionKind::ALL {
-            let found = dl.iter().any(|c| {
-                matches!(c, DisplayCommand::DrawText { text, .. } if text == kind.label())
-            });
-            assert!(found, "panel must show row for {:?}", kind);
-        }
-    }
-
-    #[test]
-    fn build_panel_shows_allow_label_after_grant() {
-        let mut p = make_panel(Some("https://example.com"));
-        p.cycle_permission(PermissionKind::Camera);
-        let dl = build_panel(&p, TAB_H, &Palette::DARK);
-        let has_allow = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == "Allow")
-        });
-        assert!(has_allow, "panel must show Allow button after granting camera");
-    }
-
-    #[test]
-    fn truncate_short_label() {
-        assert_eq!(truncate_label("example.com", 24), "example.com");
-    }
-
-    #[test]
-    fn truncate_long_label() {
-        let long = "a".repeat(30);
-        let t = truncate_label(&long, 24);
-        assert!(t.chars().count() <= 24);
-        assert!(t.ends_with('…'));
-    }
 }

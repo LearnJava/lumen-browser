@@ -19,15 +19,12 @@
 //! └─────────────────────────────────────────────┘
 //! ```
 //!
-//! State lives on `Lumen`. [`hit_test`] classifies clicks; [`build_panel`] renders.
+//! State lives on `Lumen`; [`hit_test`] classifies clicks. The legacy
+//! display-list renderer was removed in CC-15-4 - under the engine chrome the
+//! panel is `#view-history`.
 //! Data is loaded from `lumen_storage::History` on every open / delete / search.
 
 use std::cmp::Reverse;
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-use crate::panels::themes::Palette;
-use crate::theme_tokens::{badge, radius};
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
@@ -55,36 +52,14 @@ const FOOTER_H: f32 = 36.0;
 /// Height of the "history not saved" banner (DS-16, `.hist-banner` in the
 /// design reference), shown between the search box and the body while
 /// Anonymous is the active profile. `0.0` when hidden — the body area grows
-/// to fill the reclaimed space (see [`build_panel`]/[`hit_test`]).
+/// to fill the reclaimed space (see [`hit_test`]).
 const BANNER_H: f32 = 26.0;
-/// Banner copy — matches the DS-16 brief's wording verbatim.
-const ANONYMOUS_BANNER_TEXT: &str = "История не сохраняется — Анонимный профиль";
 
 /// Outer padding.
 const PAD: f32 = 10.0;
 
 /// Width of the "×" delete zone per row.
 const DELETE_W: f32 = 26.0;
-
-/// Maximum title characters before ellipsis.
-const TITLE_MAX_CHARS: usize = 52;
-
-/// Maximum URL characters before ellipsis.
-const URL_MAX_CHARS: usize = 60;
-
-// ── Colours ──────────────────────────────────────────────────────────────────
-//
-// Semantic status colours — kept as hard-coded consts because they carry
-// meaning (danger / destructive action) and must not change with the theme.
-
-/// Close-button × glyph: dim red, signals a dismissible chrome action.
-const CLOSE_TEXT: Color = Color { r: 180, g: 90, b: 90, a: 255 };
-/// Per-row delete × glyph: red danger indicator.
-const DELETE_TEXT: Color = Color { r: 170, g: 80, b: 80, a: 255 };
-/// "Очистить всё" button fill: destructive-action red.
-const CLEAR_BTN_BG: Color = Color { r: 140, g: 50, b: 50, a: 200 };
-/// Text on the destructive-action button.
-const CLEAR_BTN_TEXT: Color = Color { r: 240, g: 200, b: 200, a: 255 };
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -125,8 +100,6 @@ pub struct HistoryPanel {
     pub query: String,
     /// Ordered display rows (groups + entries) for the current view.
     pub rows: Vec<HistoryRow>,
-    /// Hovered row index into `rows` (for hover highlight), or `None`.
-    pub hover_row: Option<usize>,
 }
 
 impl Default for HistoryPanel {
@@ -137,7 +110,6 @@ impl Default for HistoryPanel {
             search_active: false,
             query: String::new(),
             rows: Vec::new(),
-            hover_row: None,
         }
     }
 }
@@ -241,7 +213,7 @@ pub enum HistoryHit {
 ///
 /// `(px, py)` is the panel's top-left corner. `is_anonymous` (DS-16) reports
 /// whether the banner is currently drawn above the body, so row coordinates
-/// stay in sync with [`build_panel`].
+/// stay in sync with the banner-aware geometry above.
 pub fn hit_test(
     panel: &HistoryPanel,
     mx: f32,
@@ -301,330 +273,13 @@ pub fn hit_test(
     HistoryHit::Inside
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build the panel display list.
-///
-/// `(win_w, toolbar_h)` — full window width and toolbar height in CSS px.
-/// `pal` — active chrome palette; drives all surface colours. `is_anonymous`
-/// (DS-16) draws the "history not saved" banner below the search box and
-/// shrinks the body area to make room for it — mirrors `hit_test`.
-pub fn build_panel(
-    panel: &HistoryPanel,
-    win_w: f32,
-    toolbar_h: f32,
-    pal: &Palette,
-    is_anonymous: bool,
-) -> DisplayList {
-    let mut dl: DisplayList = Vec::new();
-    if !panel.visible {
-        return dl;
-    }
-
-    // Position: centred horizontally, anchored below toolbar.
-    let px = (win_w - PANEL_W) * 0.5;
-    let py = toolbar_h + 4.0;
-
-    // ── Outer border + background ────────────────────────────────────────────
-    dl.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px, py, PANEL_W, PANEL_H),
-        radii: uniform_radii(radius::LG),
-        color: pal.overlay_border,
-    });
-    // Inner content is inset 1px from the border, so its radius is the panel
-    // radius minus that inset to stay visually concentric with the outer edge.
-    let inner_radius = radius::LG - 1.0;
-    dl.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
-        radii: uniform_radii(inner_radius),
-        color: pal.overlay_bg,
-    });
-
-    // ── Header ───────────────────────────────────────────────────────────────
-    dl.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px, py, PANEL_W, HEADER_H),
-        radii: CornerRadii {
-            tl: inner_radius,
-            tl_y: inner_radius,
-            tr: inner_radius,
-            tr_y: inner_radius,
-            bl: 0.0,
-            bl_y: 0.0,
-            br: 0.0,
-            br_y: 0.0,
-        },
-        color: pal.header_bg,
-    });
-    let count = panel.rows.iter().filter(|r| matches!(r, HistoryRow::Entry(_))).count();
-    let header_label = if count == 0 {
-        "History".to_owned()
-    } else {
-        format!("History ({count})")
-    };
-    dl.push(make_text(
-        header_label,
-        px + PAD,
-        py + 9.0,
-        200.0,
-        13.0,
-        FontWeight::BOLD,
-        pal.text,
-    ));
-    dl.push(make_text(
-        "×".to_owned(),
-        px + PANEL_W - 22.0,
-        py + 8.0,
-        20.0,
-        15.0,
-        FontWeight::BOLD,
-        CLOSE_TEXT,
-    ));
-    dl.push(DisplayCommand::FillRect {
-        rect: Rect::new(px, py + HEADER_H - 1.0, PANEL_W, 1.0),
-        color: pal.divider,
-    });
-
-    // ── Search box ───────────────────────────────────────────────────────────
-    let sx = px + PAD;
-    let sy = py + HEADER_H + 5.0;
-    let sw = PANEL_W - 2.0 * PAD;
-    let sh = SEARCH_H - 10.0;
-    let stxt = if panel.search_active { pal.text } else { pal.text_dim };
-    dl.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(sx, sy, sw, sh),
-        radii: uniform_radii(radius::MD),
-        color: pal.input_bg,
-    });
-    let search_display = if panel.query.is_empty() {
-        if panel.search_active { String::new() } else { "Search history…".to_owned() }
-    } else {
-        panel.query.clone()
-    };
-    dl.push(make_text(search_display, sx + 6.0, sy + 4.0, sw - 12.0, 12.0, FontWeight::NORMAL, stxt));
-
-    // ── Banner (DS-16) ───────────────────────────────────────────────────────
-    let banner_h = if is_anonymous {
-        let by = py + HEADER_H + SEARCH_H;
-        dl.push(DisplayCommand::FillRect {
-            rect: Rect::new(px + 1.0, by, PANEL_W - 2.0, BANNER_H),
-            color: pal.item_bg,
-        });
-        dl.push(make_text(
-            ANONYMOUS_BANNER_TEXT.to_owned(),
-            px + PAD,
-            by + 7.0,
-            PANEL_W - 2.0 * PAD,
-            11.0,
-            FontWeight::NORMAL,
-            badge::YELLOW,
-        ));
-        BANNER_H
-    } else {
-        0.0
-    };
-
-    // ── Body ─────────────────────────────────────────────────────────────────
-    let body_top = py + HEADER_H + SEARCH_H + banner_h;
-    let body_h = PANEL_H - HEADER_H - SEARCH_H - FOOTER_H - banner_h;
-    dl.push(DisplayCommand::PushClipRect { rect: Rect::new(px, body_top, PANEL_W, body_h) });
-
-    if panel.rows.is_empty() {
-        dl.push(make_text(
-            "No browsing history yet.".to_owned(),
-            px + PAD,
-            body_top + 20.0,
-            PANEL_W - 2.0 * PAD,
-            12.0,
-            FontWeight::NORMAL,
-            pal.text_dim,
-        ));
-    } else {
-        let scroll = panel.scroll_y;
-        let mut cursor = 0.0_f32;
-        let mut entry_idx = 0_usize;
-
-        for row in &panel.rows {
-            let h = row_height(row);
-            let ry = body_top + cursor - scroll;
-            if ry + h >= body_top && ry <= body_top + body_h {
-                match row {
-                    HistoryRow::Group(label) => {
-                        dl.push(DisplayCommand::FillRect {
-                            rect: Rect::new(px, ry, PANEL_W, GROUP_H),
-                            color: pal.header_bg,
-                        });
-                        dl.push(make_text(
-                            label.clone(),
-                            px + PAD,
-                            ry + 4.0,
-                            PANEL_W - 2.0 * PAD,
-                            10.5,
-                            FontWeight::BOLD,
-                            pal.text_dim,
-                        ));
-                    }
-                    HistoryRow::Entry(item) => {
-                        let row_bg = if entry_idx.is_multiple_of(2) {
-                            pal.item_bg
-                        } else {
-                            pal.row_alt_bg
-                        };
-                        let row_bg = if panel.hover_row == Some(entry_idx) {
-                            pal.item_selected_bg
-                        } else {
-                            row_bg
-                        };
-                        dl.push(DisplayCommand::FillRect {
-                            rect: Rect::new(px, ry, PANEL_W, ROW_H),
-                            color: row_bg,
-                        });
-
-                        // Title (or URL fallback).
-                        let title = if item.title.is_empty() {
-                            truncate_str(&item.url, TITLE_MAX_CHARS)
-                        } else {
-                            truncate_str(&item.title, TITLE_MAX_CHARS)
-                        };
-                        let title_w = PANEL_W - 2.0 * PAD - DELETE_W - 50.0;
-                        dl.push(make_text(
-                            title,
-                            px + PAD,
-                            ry + 7.0,
-                            title_w,
-                            12.0,
-                            FontWeight::NORMAL,
-                            pal.text,
-                        ));
-
-                        // URL.
-                        let url_w = PANEL_W - 2.0 * PAD - DELETE_W - 50.0;
-                        let url_short = truncate_str(&item.url, URL_MAX_CHARS);
-                        dl.push(make_text(
-                            url_short,
-                            px + PAD,
-                            ry + 24.0,
-                            url_w,
-                            10.5,
-                            FontWeight::NORMAL,
-                            pal.accent,
-                        ));
-
-                        // Time (HH:MM).
-                        let time_str = format_time_hhmm(item.visit_date);
-                        dl.push(make_text(
-                            time_str,
-                            px + PANEL_W - DELETE_W - PAD - 38.0,
-                            ry + 14.0,
-                            36.0,
-                            10.0,
-                            FontWeight::NORMAL,
-                            pal.text_dim,
-                        ));
-
-                        // Delete button.
-                        dl.push(make_text(
-                            "×".to_owned(),
-                            px + PANEL_W - DELETE_W + 2.0,
-                            ry + 14.0,
-                            20.0,
-                            14.0,
-                            FontWeight::BOLD,
-                            DELETE_TEXT,
-                        ));
-
-                        // Row separator.
-                        dl.push(DisplayCommand::FillRect {
-                            rect: Rect::new(px + PAD, ry + ROW_H - 1.0, PANEL_W - 2.0 * PAD, 1.0),
-                            color: pal.divider,
-                        });
-                        entry_idx += 1;
-                    }
-                }
-            }
-            cursor += h;
-        }
-    }
-
-    dl.push(DisplayCommand::PopClip);
-
-    // ── Footer ────────────────────────────────────────────────────────────────
-    let fy = py + PANEL_H - FOOTER_H;
-    dl.push(DisplayCommand::FillRect { rect: Rect::new(px, fy, PANEL_W, FOOTER_H), color: pal.overlay_bg });
-    dl.push(DisplayCommand::FillRect {
-        rect: Rect::new(px, fy, PANEL_W, 1.0),
-        color: pal.divider,
-    });
-
-    // "Очистить всё" button.
-    let btn_x = px + PANEL_W - PAD - 90.0;
-    let btn_y = fy + 7.0;
-    dl.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(btn_x, btn_y, 88.0, 22.0),
-        radii: uniform_radii(radius::MD),
-        color: CLEAR_BTN_BG,
-    });
-    dl.push(make_text(
-        "Очистить всё".to_owned(),
-        btn_x + 5.0,
-        btn_y + 4.0,
-        78.0,
-        11.0,
-        FontWeight::NORMAL,
-        CLEAR_BTN_TEXT,
-    ));
-
-    dl
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn make_text(
-    text: String,
-    x: f32,
-    y: f32,
-    w: f32,
-    font_size: f32,
-    weight: FontWeight,
-    color: Color,
-) -> DisplayCommand {
-    DisplayCommand::DrawText {
-        rect: Rect::new(x, y, w, font_size * 1.4),
-        text,
-        font_size,
-        color,
-        font_family: Vec::new(),
-        font_weight: weight,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    }
-}
-
-fn uniform_radii(r: f32) -> CornerRadii {
-    CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, bl: r, bl_y: r, br: r, br_y: r }
-}
-
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    let mut out = String::with_capacity(max_chars + 1);
-    for (i, c) in s.chars().enumerate() {
-        if i == max_chars {
-            out.push('…');
-            return out;
-        }
-        out.push(c);
-    }
-    out
-}
 
 /// Format a Unix timestamp (seconds) as "HH:MM".
 ///
 /// `pub(crate)` (not just module-private) since `Lumen::chrome_model_snapshot`
 /// (CC-10b, `main.rs`) formats `#view-history`'s `.hist-time` the same way
-/// `build_panel` does for the legacy overlay.
+/// the deleted legacy overlay renderer did.
 pub(crate) fn format_time_hhmm(unix_secs: i64) -> String {
     if unix_secs < 0 {
         return "--:--".to_owned();
@@ -817,43 +472,6 @@ mod tests {
         let entry_y = py + HEADER_H + SEARCH_H + BANNER_H + GROUP_H + 5.0;
         let hit = hit_test(&panel, px + 50.0, entry_y, px, py, true);
         assert_eq!(hit, HistoryHit::Navigate("https://a.com".to_owned()));
-    }
-
-    #[test]
-    fn build_panel_empty_no_crash() {
-        let panel = HistoryPanel::new();
-        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK, false);
-        assert!(dl.is_empty()); // panel is not visible
-    }
-
-    #[test]
-    fn build_panel_visible_has_commands() {
-        let mut panel = HistoryPanel::new();
-        panel.toggle();
-        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK, false);
-        assert!(!dl.is_empty());
-    }
-
-    #[test]
-    fn build_panel_draws_banner_when_anonymous() {
-        let mut panel = HistoryPanel::new();
-        panel.toggle();
-        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK, true);
-        let has_banner = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == ANONYMOUS_BANNER_TEXT)
-        });
-        assert!(has_banner);
-    }
-
-    #[test]
-    fn build_panel_no_banner_when_not_anonymous() {
-        let mut panel = HistoryPanel::new();
-        panel.toggle();
-        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK, false);
-        let has_banner = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == ANONYMOUS_BANNER_TEXT)
-        });
-        assert!(!has_banner);
     }
 
     #[test]

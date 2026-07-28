@@ -23,11 +23,6 @@ use std::sync::{Arc, Mutex};
 
 use lumen_core::event::Event;
 use lumen_core::ext::EventSink;
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-
-use crate::panels::themes::Palette;
 
 // ── Visual constants ─────────────────────────────────────────────────────────
 
@@ -39,22 +34,6 @@ pub const PANEL_H: f32 = 90.0;
 const PANEL_TOP_OFFSET: f32 = 4.0;
 /// Right margin from the window edge (CSS px).
 const PANEL_RIGHT_MARGIN: f32 = 8.0;
-
-// Semantic indicator colours — meaning-bearing, theme-invariant.
-/// Shield icon / status text colour when shields are enabled.
-const SHIELD_ON: Color = Color { r: 60, g: 200, b: 120, a: 255 };
-/// Shield icon / status text colour when shields are disabled.
-const SHIELD_OFF: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-/// Toggle-strip background when the action is "Disable for this site" (destructive).
-const TOGGLE_BG_ON: Color = Color { r: 30, g: 90, b: 55, a: 255 };
-/// Toggle-strip background when the action is "Enable for this site" (constructive).
-const TOGGLE_BG_OFF: Color = Color { r: 90, g: 35, b: 35, a: 255 };
-/// Close-button foreground — soft-red muted action indicator.
-const CLOSE_FG: Color = Color { r: 140, g: 80, b: 80, a: 255 };
-
-const FONT_SZ: f32 = 11.0;
-const FONT_SZ_SM: f32 = 10.0;
-const PANEL_RADIUS: f32 = crate::theme_tokens::radius::LG;
 
 // ── Blocked log ───────────────────────────────────────────────────────────────
 
@@ -221,186 +200,6 @@ pub fn hit_test(
     Some(ShieldsHit::Empty)
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build the display list for the shields floating panel.
-///
-/// The panel is anchored at the top-right of the window, offset by
-/// `tab_bar_h` from the top.  Surface colours are drawn from `pal`; semantic
-/// indicator colours (shield green/red, toggle tracks) remain hard-coded.
-pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32, pal: &Palette) -> DisplayList {
-    let (px, py) = panel_origin(window_w, tab_bar_h);
-    let mut out = DisplayList::with_capacity(20);
-    let radii = uniform_radii(PANEL_RADIUS);
-
-    // Background + border.
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px, py, PANEL_W, PANEL_H),
-        radii,
-        color: pal.overlay_border,
-    });
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
-        radii: uniform_radii(PANEL_RADIUS - 1.0),
-        color: pal.overlay_bg,
-    });
-
-    // Close "×" button (top-right).
-    let close_x = px + PANEL_W - 18.0;
-    let close_y = py + 5.0;
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(close_x, close_y, 14.0, FONT_SZ * 1.2),
-        text: "×".to_owned(),
-        font_size: FONT_SZ,
-        color: CLOSE_FG,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Shield icon + status.
-    let shield_color = if panel.enabled { SHIELD_ON } else { SHIELD_OFF };
-    let status_label = if panel.enabled { "SHIELDS ON" } else { "SHIELDS OFF" };
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + 10.0, py + 6.0, 16.0, 16.0),
-        text: "🛡".to_owned(),
-        font_size: 14.0,
-        color: shield_color,
-        font_family: Vec::new(),
-        font_weight: FontWeight::BOLD,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + 30.0, py + 8.0, 100.0, FONT_SZ * 1.3),
-        text: status_label.to_owned(),
-        font_size: FONT_SZ,
-        color: shield_color,
-        font_family: Vec::new(),
-        font_weight: FontWeight::BOLD,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Domain row.
-    let domain_label = panel
-        .current_domain
-        .as_deref()
-        .unwrap_or("(no domain)");
-    let domain_text = truncate_label(domain_label, 26);
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + 10.0, py + 26.0, PANEL_W - 20.0, FONT_SZ_SM * 1.3),
-        text: domain_text,
-        font_size: FONT_SZ_SM,
-        color: pal.text_dim,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Blocked-count row (DS-18): number in `accent` (bundled JetBrains Mono),
-    // label in `text_dim` — matches `.shield-stat .num`/`.lbl` in the design
-    // reference. Only a single honest counter is shown: the merged
-    // EasyList+EasyPrivacy filter classifies rules by list format
-    // ("easylist"/"hosts"), not by tracker-vs-ad intent, so a trackers/ads
-    // split would be fabricated data, not a real breakdown.
-    let blocked_num = panel.blocked_total_count().to_string();
-    let num_w = (blocked_num.chars().count() as f32 * 9.0).max(14.0);
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(px + 10.0, py + 39.0, num_w, FONT_SZ * 1.3),
-        text: blocked_num,
-        font_size: FONT_SZ,
-        color: pal.accent,
-        font_family: vec!["JetBrains Mono".to_string()],
-        font_weight: FontWeight::BOLD,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(
-            px + 10.0 + num_w + 4.0,
-            py + 40.0,
-            (PANEL_W - 20.0 - num_w - 4.0).max(0.0),
-            FONT_SZ_SM * 1.3,
-        ),
-        text: "запросов заблокировано".to_owned(),
-        font_size: FONT_SZ_SM,
-        color: pal.text_dim,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Toggle button (bottom strip).
-    let toggle_label = if panel.enabled {
-        "Disable for this site"
-    } else {
-        "Enable for this site"
-    };
-    let toggle_bg = if panel.enabled { TOGGLE_BG_OFF } else { TOGGLE_BG_ON };
-    let toggle_fg = if panel.enabled { SHIELD_OFF } else { SHIELD_ON };
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(px + 1.0, py + PANEL_H - 25.0, PANEL_W - 2.0, 24.0),
-        radii: uniform_radii(PANEL_RADIUS - 1.0),
-        color: toggle_bg,
-    });
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(
-            px + 10.0,
-            py + PANEL_H - 20.0,
-            PANEL_W - 20.0,
-            FONT_SZ * 1.2,
-        ),
-        text: toggle_label.to_owned(),
-        font_size: FONT_SZ,
-        color: toggle_fg,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    out
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Top-left corner of the shields panel in CSS px.
@@ -408,25 +207,6 @@ fn panel_origin(window_w: f32, tab_bar_h: f32) -> (f32, f32) {
     let px = (window_w - PANEL_W - PANEL_RIGHT_MARGIN).max(0.0);
     let py = tab_bar_h + PANEL_TOP_OFFSET;
     (px, py)
-}
-
-fn uniform_radii(r: f32) -> CornerRadii {
-    CornerRadii {
-        tl: r, tl_y: r,
-        tr: r, tr_y: r,
-        br: r, br_y: r,
-        bl: r, bl_y: r,
-    }
-}
-
-/// Truncate a label to at most `max_chars` characters, appending "…" if needed.
-fn truncate_label(s: &str, max_chars: usize) -> String {
-    let count = s.chars().count();
-    if count <= max_chars {
-        return s.to_owned();
-    }
-    let truncated: String = s.chars().take(max_chars - 1).collect();
-    format!("{truncated}…")
 }
 
 /// Extract the hostname from an HTTP/HTTPS URL string.
@@ -625,91 +405,6 @@ mod tests {
         assert_eq!(hit, Some(ShieldsHit::Empty));
     }
 
-    // ── Rendering ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn build_panel_emits_commands() {
-        let p = make_panel_visible(true, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
-        assert!(!dl.is_empty());
-    }
-
-    #[test]
-    fn build_panel_shields_on_label() {
-        let p = make_panel_visible(true, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
-        let has_on = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("ON"))
-        });
-        assert!(has_on, "panel must show SHIELDS ON when enabled");
-    }
-
-    #[test]
-    fn build_panel_shields_off_label() {
-        let p = make_panel_visible(false, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
-        let has_off = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("OFF"))
-        });
-        assert!(has_off, "panel must show SHIELDS OFF when disabled");
-    }
-
-    #[test]
-    fn build_panel_shows_domain() {
-        let p = make_panel_visible(true, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
-        let has_domain = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("example.com"))
-        });
-        assert!(has_domain);
-    }
-
-    #[test]
-    fn build_panel_blocked_number_uses_accent_color() {
-        let log = make_log();
-        {
-            let mut guard = log.lock().unwrap();
-            guard.record("https://tracker.example.com/pixel");
-            guard.record("https://ads.example.com/ad.js");
-        }
-        let mut p = ShieldsPanel::new(log);
-        p.visible = true;
-        p.current_domain = Some("example.com".to_owned());
-        p.refresh();
-        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
-        let has_accent_count = dl.iter().any(|c| {
-            matches!(
-                c,
-                DisplayCommand::DrawText { text, color, .. }
-                    if text == "2" && *color == Palette::DARK.accent
-            )
-        });
-        assert!(has_accent_count, "blocked count must render in accent colour");
-    }
-
-    #[test]
-    fn build_panel_blocked_label_uses_text_dim_and_no_breakdown() {
-        let p = make_panel_visible(true, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
-        let has_dim_label = dl.iter().any(|c| {
-            matches!(
-                c,
-                DisplayCommand::DrawText { text, color, .. }
-                    if text.contains("заблокировано") && *color == Palette::DARK.text_dim
-            )
-        });
-        assert!(has_dim_label, "blocked-count label must use text_dim colour");
-
-        let has_breakdown = dl.iter().any(|c| {
-            matches!(
-                c,
-                DisplayCommand::DrawText { text, .. }
-                    if text.contains("трекер") || text.contains("реклам")
-            )
-        });
-        assert!(!has_breakdown, "must not fabricate a trackers/ads split");
-    }
-
     // ── ShieldCountSink ──────────────────────────────────────────────────────
 
     #[test]
@@ -737,16 +432,4 @@ mod tests {
         assert_eq!(guard.total, 1);
     }
 
-    #[test]
-    fn truncate_label_short() {
-        assert_eq!(truncate_label("example.com", 26), "example.com");
-    }
-
-    #[test]
-    fn truncate_label_long() {
-        let long = "a".repeat(30);
-        let t = truncate_label(&long, 26);
-        assert!(t.chars().count() <= 26);
-        assert!(t.ends_with('…'));
-    }
 }
