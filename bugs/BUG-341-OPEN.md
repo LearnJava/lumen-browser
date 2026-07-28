@@ -2777,6 +2777,146 @@ longer a copy or a map:
 Same discipline. Census first: this was the sixth slice in a row to run one,
 and the fifth where it moved the target.
 
+## S21 — the cascade index that could not outlive the pass that built it
+
+### The census, first
+
+`bug341_s21_cascade_index_census` (`#[ignore]`d) — the seventh in a row, and
+the **first to confirm the queue's premise** rather than move it. It also
+doubled the size of the finding, because the counter S20 read it with was
+thread-local while the code it counts is not (the S15 trap, third appearance):
+`build_box` fans flex/grid containers onto rayon, and every worker's
+`StyleEnvSnapshot::install` dropped that worker's index cache too. Making the
+tally see the workers is what turned "one rebuild per pass" into this:
+
+| pass | rebuilds | Σ time | share of pass |
+|---|---:|---:|---:|
+| KEY, incremental cycle | 1 | 0.16-0.22 ms | 7-13 % |
+| HOVER, incremental cycle | 1 | 0.14-0.21 ms | 14-19 % |
+| full pass | **33** | **7.57 ms** (Σ over the worker pool) | of a 27.3 ms pass |
+
+Split of one rebuild on `chrome.html` (373 rules, no `@media`/`@layer`/
+`@supports` blocks): the top-level `RuleIndex::build` 0.08-0.11 ms and the two
+sheet-wide predicate scans (`has_webkit_scrollbar_rules`, `has_quote_content`)
+0.07-0.11 ms — roughly half each; the per-block indexes and the `@media`
+activity evaluation are zero because this sheet has no blocks. On a HOVER cycle,
+which re-cascades **zero** nodes since S14, the re-index was the single largest
+item in the whole pass.
+
+### What was wrong
+
+The cache key was the stylesheet's **address** (plus its rule count and a media
+key). An address is not an identity: the allocator hands it straight back when
+the sheet is freed, so a freed sheet's index could be served to whatever landed
+at the same place next. The defence was `invalidate_rule_idx_cache()` at the top
+of every layout pass — 28 call sites — and the same call inside
+`StyleEnvSnapshot::install` on every rayon worker. Both are correct, and
+together they reduce a cross-pass cache to a within-pass one: the index is
+rebuilt on the first `compute_style` of every frame, on every thread that does
+style work, whether or not the sheet changed.
+
+Note the shape. This is not a cache that was mis-sized or mis-keyed for
+performance — it was **keyed by something that cannot be an identity**, and
+every mitigation that follows from that is a mitigation of the key.
+
+### The fix
+
+`lumen_css_parser::StylesheetRevision` — a process-unique `u64` minted for
+every `Stylesheet` that comes into existence (`parse`, `Default`, `Clone`) and
+never reused. `Clone` and `PartialEq` are hand-written for it: a clone is a
+separate sheet its owner may mutate independently, so it gets its **own**
+revision; equality is content, so it ignores the revision. The cache key becomes
+(revision, media key), and the invalidation is deleted outright — the function
+is gone, not made a no-op.
+
+The cache holds **two** slots, not one. A browser frame lays out two documents
+on one thread — its own chrome and the page — and one slot would make them evict
+each other every frame, which is the same per-pass rebuild reintroduced through
+the cache's size instead of its key. A third sheet evicts the least recently
+used one, so the cache stays bounded rather than growing per navigation.
+
+### The invariant, and who guards it
+
+A revision-keyed cache is sound only while *"revision unchanged ⇒ rules
+unchanged"* holds. Breaking that promise produces **visibly wrong styles**, not
+a slow frame, and it breaks the day someone three crates away adds an innocuous
+`sheet.rules.push(..)` — so it is not left to review:
+
+- `Stylesheet::merge_from` performs the whole merge and mints a new revision;
+  `Stylesheet::mark_mutated` is the escape hatch for direct field access.
+- `every_stylesheet_mutation_in_the_workspace_announces_itself` (lumen-css-parser)
+  walks the workspace sources and fails the build on any
+  `push`/`extend`/`insert`/… into a rule container outside `parser.rs`. Only
+  files that name `Stylesheet` are scanned — the field names (`rules`,
+  `imports`, `properties`) are ordinary words other types use. Verified red by
+  reinstating the mutation it was written for. Same shape as `lumen_chrome`'s
+  `every_dom_mutation_in_model_rs_goes_through_a_tracked_primitive` (S16).
+
+`merge_from` also replaced a hand-rolled field-by-field merge in
+`LoadEvent::CssLoaded`, which had fallen two fields behind the struct — a
+streamed `@color-profile` or `@function` was silently dropped. Its exhaustive
+destructuring pattern makes the next added field a compile error rather than a
+silent omission.
+
+### Gates — by counter
+
+An index rebuilt from scratch on every node of every pass produces byte-identical
+styles, so nothing in the differential suite can see it, and 0.2 ms is well
+inside machine noise. Each gate asserts **both** arms, because "never reuse" and
+"never rebuild" are equally trivial one-liners and the second one serves an
+empty index, i.e. wrong styles:
+
+- `bug341_s21_repeated_cascades_over_one_sheet_build_the_index_once` — cold
+  build is 1, twenty more cascades add 0.
+- `bug341_s21_a_mutated_sheet_is_reindexed_and_its_new_rules_apply` — the
+  soundness arm: a rule merged in after the index was built must apply.
+- `bug341_s21_a_resize_reindexes_because_it_changes_which_media_blocks_apply`.
+- `bug341_s21_two_documents_on_one_thread_do_not_evict_each_other` — ten
+  alternations build two indexes; a third sheet does evict.
+- `bug341_s21_interaction_cycles_do_not_reindex_the_stylesheet` (lumen-shell,
+  runs by default) — the real chrome pipeline: cold pass ≥ 1, eight keystroke
+  and hover cycles exactly 0.
+
+`CascadeIndexStats` stayed thread-local but the rayon fan-out now drains each
+worker's tally into the parent thread, exactly as `BoxBuildStats` does. A
+process-wide counter is accurate but unusable as a gate: "this pass rebuilt
+nothing" fails whenever a concurrent test builds an index.
+
+### Measurement
+
+Interleaved A/B ×3, by min (`cc12_chrome_perf_gate`):
+
+| scenario | main | S21 |
+|---|---|---|
+| `CC12_HOVER` | 0.82 / 0.85 / 0.88 ms | **0.78 / 0.70 / 0.77 ms** |
+| `CC12_KEY` | 1.17 / 1.25 / 1.27 ms | **1.12 / 1.15 / 1.10 ms** |
+
+Groups do not overlap on either scenario (≈10-13 % and ≈5-13 %). The first A/B
+run was discarded: both arms had launched from the branch worktree — S9's `cd`
+gotcha, in its exact documented form.
+
+Census after the slice: **0 rebuilds** on every incremental cycle and on the
+full pass. The full pass's 33 rebuilds / 7.57 ms of aggregate worker CPU are
+gone as a **count**; its wall-clock was not measured A/B, so no claim is made
+for it. `dump_golden.py` 12/12 with no diff.
+
+CC-12 gate: unchanged in shape from S20 — both scenarios inside budget by min,
+red on p95 only.
+
+### What S22 should look at
+
+The census table minus this slice's item. Both remaining entries are the ones
+S20 listed, unchanged:
+
+- ~0.16-0.34 ms — the pipeline's `layout.clone()`, with the design S19
+  described (make `take_content_area` restorable so the live tree can be
+  relinquished at the top of the next pass).
+- ~0.09-0.17 ms — the `CounterMap` rebuilt from scratch.
+
+Neither has been re-measured since S20's census, and every slice that trusted an
+un-remeasured note has paid for it (S19's `index_by_node`, S20's `clone_tree`).
+Census first.
+
 ## Repro
 
 ```bash
@@ -2789,4 +2929,5 @@ cargo test -p lumen-shell --profile dev-release bug341_s17_keystroke_restyle_cen
 cargo test -p lumen-shell --profile dev-release bug341_s18_keystroke_box_build_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s19_copy_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s20_stage_census -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census -- --ignored --nocapture
 ```
