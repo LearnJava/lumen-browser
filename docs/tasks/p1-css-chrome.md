@@ -483,13 +483,53 @@ Palette-константы») недооценивала масштаб — то
 | Срез | Размер | Что делает |
 |---|---|---|
 | CC-15-1 | XS | done (2026-07-28, P1) — закрыл [BUG-403](../../bugs/BUG-403-FIXED.md): `profile_menu.rs` закреплён легаси-навсегда (не привязан к `ChromeModel`), рендер поповера вынесен из легаси-only ветки в безусловный блок, обе точки геометрии (рендер + hit-test) переведены с `toolbar::CHROME_H` на `self.page_offset()`. Разблокировал CC-15-3 |
-| CC-15-2 | S | Убрать безусловный расчёт `hovered_tab_idx` (`main.rs:13880-13902`), потребитель которого уже гейтирован |
-| CC-15-3 | M | Вырезать функции покраски/hit-теста из `toolbar.rs`/`tabs/strip.rs` + их гейтированные вызовы в `main.rs`; геометрические константы/data-типы остаются на месте |
+| CC-15-2 | S | done (2026-07-28, P1) — расчёт `hovered_tab_idx` на `CursorMoved` обёрнут в `if !self.css_chrome_enabled`, совпадающий с гейтом единственного потребителя (тултип таб-бара); сброс на `CursorLeft` остался безусловным |
+| CC-15-3 | M | done (2026-07-28, P1) — вырезаны покраска/hit-test `toolbar.rs`/`tabs/strip.rs` и их транзитивные вызываемые (`tabs/archive.rs`, `address_bar.rs`) + гейтированные вызовы в `main.rs`, −2100 строк; см. §CC-15-3 ниже |
 | CC-15-4 | S | Удалить 10 подтверждённо-гейтированных `panels/*`-билдеров (bookmark/print/settings/cert/history/command_palette/ai/sidebar/shields/permission) |
 | CC-15-5 | XS | Убрать 3 орфанных поля `Palette` (`toolbar_bg`/`tab_sleep_bg`/`tab_hibernate_bg`) — перепроверить грепом на момент исполнения, не по этому списку |
 | CC-15-6 | M | Финал: удалить rollback-флаг `LUMEN_LEGACY_CHROME`/`css_chrome_enabled` целиком — самый рискованный срез |
 
 Полные формулировки со ссылками на строки — в ROADMAP.md, строки CC-15/CC-15-1…CC-15-6.
+
+#### CC-15-3 — что удалено, что оставлено и почему
+
+Удалено (все — внутри легаси-гейта `!self.focus.active && !self.css_chrome_enabled`, т.е. мертвы во
+время исполнения с флипа CC-14 у всех, кроме `LUMEN_LEGACY_CHROME=1`):
+
+* `toolbar.rs` — `build_toolbar`, `push_btn`, `push_avatar`, `hit_test`, `ToolbarHit`,
+  `ToolbarActive`, `omnibox_rects` + визуальные константы. Осталось: `CHROME_H`, `CLUSTER_PAD`,
+  `avatar_x()`.
+* `tabs/strip.rs` — `build_tab_bar`, `build_tab_tooltip`, `build_layout_toggle_btn`,
+  `build_settings_btn`, `hit_test_layout_btn`, `hit_test_settings_btn`.
+* `tabs/archive.rs` — `build_button`, `build_panel`, `hit_test_button` (транзитивно: вызывались
+  только из удалённого блока покраски/диспатча).
+* `address_bar.rs` — `build_inline_field`, `build_dropdown`, `FieldRects`, `corners`, `push_icon`,
+  `OmniboxSuggestion::tag()` + их константы. Модуль стал чисто состоянием.
+* `main.rs` — блок покраски легаси-хрома и парные ветки `MouseInput` (левый клик по таб-бару и
+  тулбару).
+
+Оставлено вопреки исходной формулировке среза:
+
+* `strip::hit_test` / `TabHit` — их читает **живой, негейтированный** обработчик правого клика по
+  вкладке (контекстное меню вкладки). Он же — второй сайт класса [BUG-404](../../bugs/BUG-404-OPEN.md)
+  (легаси-геометрия в живом коде); дописан туда. Удалять только вместе с его фиксом.
+* `archive::hit_test_panel` — негейтированный путь «клик вне панели».
+
+Побочные фиксы (без них удаление молча потеряло бы поведение):
+
+* `Lumen::persist_tab_layout()` — удалённая кнопка переключателя раскладки была единственным
+  вызывающим `settings_store.set_tab_layout` вне apply-снапшота settings-панели; два оставшихся входа
+  (`KeyCommand::ToggleVerticalTabs`, `PaletteAction::ToggleVerticalTabs`) сами не сохраняли выбор.
+* DS-6 `address_bar::chrome_suggestion_text()` — `chrome_model_snapshot` строил
+  `ChromeSuggestionModel` из сырых `label()`/`sub_label()`, тогда как удалённый `build_dropdown`
+  прогонял обе строки через `guard_display_text`. Т.е. с флипа CC-14 омоглифный хост в подсказке
+  истории/закладки доезжал до экрана в Unicode-форме. Восстановлено + 2 unit-теста взамен удалённых
+  legacy-рендер-тестов.
+
+Найденные пробелы паритета (данные оставлены под `#[allow(dead_code, reason = "BUG-NNN: …")]`, не
+удалены): [BUG-408](../../bugs/BUG-408-OPEN.md) — панель авто-архива вкладок недостижима;
+[BUG-409](../../bugs/BUG-409-OPEN.md) — группы вкладок не отображаются;
+[BUG-410](../../bugs/BUG-410-OPEN.md) — строка dropdown потеряла текстовый тег типа.
 
 ## Этап E — компайл-тайм оптимизации (опционально, после флипа)
 
