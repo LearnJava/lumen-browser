@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 93,
+  "open": 94,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 365,
+ "total_bugs": 366,
  "phases": [
   {
    "id": "P0",
@@ -2321,9 +2321,12 @@
       {
        "id": "WPT-VENDOR-geolocation",
        "title": "WPT: вендорить + прогнать категорию `geolocation`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/geolocation/`, 28 файлов: `META.yml`, `WEB_FEATURES.yml`, 22 `*.https(.sub).html`/`*.https.window.js`, 1 `.http.html`, `resources/`, `support.js`, `LICENSE-WPT.md`), скоуп ⬜ (кандидат). `run_report.py --all --root geolocation --recursive` — **1 мин 58 с, 1/20 harness OK, 4/4 сабтестов** (12 SKIP по testdriver.js, 6 TIMEOUT на HTTPS-порт-гэпе того же класса, что `WebCryptoAPI`/`ai`/`ambient-light`, 1 ERROR — session-reuse артефакт класса BUG-380: `permission.https.html` получил результаты предыдущего `non-secure-contexts.http.html`). Единственный исполнившийся тест (`non-secure-contexts.http.html`, единственный не-`.https.` файл категории) прошёл полностью — подтверждает, что `getCurrentPosition`/`watchPosition` корректно и асинхронно отклоняют запрос с `PERMISSION_DENIED` в небезопасном контексте. Основная находка получена не прогоном, а чтением `GEO_SHIM` (`crates/js/src/geolocation.rs`): BUG-395 (`getCurrentPosition`/`watchPosition` никогда не бросают `TypeError` на отсутствующий/невалидный success-колбэк — три вендоренных `*_TypeError.https.html` теста проверяют это напрямую, но недостижимы прогоном из-за HTTPS-порт-гэпа, не testdriver). `clearWatch` соответствует спеке (не бросает на невалидный id) — регрессии нет.",
+       "bugs": [
+        "BUG-395"
+       ]
       },
       {
        "id": "WPT-VENDOR-geolocation-sensor",
@@ -6613,6 +6616,13 @@
    "status": "open",
    "title": "`Sensor`/подклассы (`Accelerometer` и др.) не наследуются от глобального `EventTarget` (`instanceof EventTarget` → `false`, своя реализация `addEventListener`)…",
    "component": "js (`crates/js/src/generic_sensor.rs:32-78` — приватный `_SensorEventTarget`, `Sensor` без guard на прямой вызов)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-395": {
+   "status": "open",
+   "title": "`getCurrentPosition()`/`watchPosition()` никогда не бросают `TypeError` на отсутствующий/`null`/невалидный success-колбэк (WebIDL: обязательный аргумент) — `typ…",
+   "component": "js (`crates/js/src/geolocation.rs:129-155` — `GEO_SHIM`, `getCurrentPosition`/`watchPosition`)",
    "date": null,
    "debtor": false
   }
