@@ -47,3 +47,36 @@ guard that resets the thread-local to its previous value on drop (the existing
 `push_font_ch_ex`/pop pair at style.rs:10945-10958 looks like it's meant to do this via
 `replace`/`set(prev)` — check every call site actually pairs push with pop, including on
 early-return/panic paths in whichever test or code path leaves a stale value behind).
+
+## Update 2026-07-29 (P4, gate of p4-content-url) — no longer flaky, now deterministic
+
+Both tests now fail **unconditionally**, including run alone with `--exact`
+(`--test-threads=1` makes no difference). The order-dependent/thread-reuse framing above
+no longer matches observed behaviour, so do not spend time chasing a stale `FONT_CH_EX`
+thread-local as the cause.
+
+Observed on clean `main` (`10c804259`) with nothing else in the working tree:
+
+```
+cargo test -p lumen-layout --lib -- --exact \
+    style::tests::ch_approximated_as_half_em style::tests::ex_approximated_as_half_em
+→ test result: FAILED. 0 passed; 2 failed; 3345 filtered out
+```
+
+The assertion is now a **stale expectation**, not a leak: both tests expect the cascade to
+fold the unit into `Em` (`2ch` → `Em(1.0)`, `4ex` → `Em(2.0)`), but the cascade stores the
+authored unit verbatim — actual values are `Ch(2.0)` and `Ex(4.0)`. `Length::Ch`/`Length::Ex`
+are now first-class variants resolved later, at `resolve()` time, against `FONT_CH_EX`
+(style.rs:12936-12942) with the `0.5em` fallback still applied there when it is unset.
+So the *behaviour* the tests were written to protect moved from cascade time to resolve
+time, and the assertions were never updated.
+
+**Revised fix direction:** re-point both tests at the resolved value instead of the stored
+`Length` (assert `resolve()` yields the `0.5em`-fallback px outside a layout pass), rather
+than adding an RAII guard. Verify against the real `resolve()` path before rewriting — the
+approximation constant belongs to `resolve()` now.
+
+**Impact unchanged:** still a red `scripts/scoped-test.sh` for any task touching
+`lumen-layout` (2 failures out of 3351), and still not attributable to the branch under
+test. Confirmed independent of `p4-content-url`: `cascade_at` reaches only `compute_style`
+plus the HTML/CSS parsers, none of which that branch modifies.
