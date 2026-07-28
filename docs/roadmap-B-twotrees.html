@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 107,
+  "open": 108,
   "fixed": 273,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 380,
+ "total_bugs": 381,
  "phases": [
   {
    "id": "P0",
@@ -3967,13 +3967,6 @@
          ]
         },
         {
-         "id": "CC-15-4",
-         "title": "CC-15-4: Удаление гейтированных panels/*",
-         "status": "planned",
-         "size": "S",
-         "note": "Удалить 10 подтверждённо-гейтированных `panels/*`-билдеров (`bookmark_panel`/`print_panel`/`settings_panel`/`cert_panel`/`history_panel`/`command_palette`/`ai_panel`/`sidebar_panel`/`shields_panel`/`permission_panel`) + их гейтированные вызовы в main.rs; по одному-два файла за подсрез при необходимости. Перед удалением каждого — грепом убедиться, что тип модуля (напр. `PanelCertData`, `SettingsSection`) не читается легаси-навсегда кодом. После CC-15-1"
-        },
-        {
          "id": "CC-15-5",
          "title": "CC-15-5: Чистка неиспользуемых полей Palette",
          "status": "planned",
@@ -6811,6 +6804,13 @@
    "component": "shell (`chrome_model_snapshot`, `address_bar.rs`), chrome (`ChromeSuggestionModel`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-411": {
+   "status": "open",
+   "title": "Движковый поповер переносит из легаси-панелей щитов/разрешений только счётчик заблокированных и первые две строки разрешений: домен текущей страницы и индикатор…",
+   "component": "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7255,6 +7255,9 @@
    "BUG-068",
    "BUG-147",
    "BUG-148"
+  ],
+  "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)": [
+   "BUG-411"
   ],
   "shell (`main.rs` — дренаж `window.open()` popup-запросов + `location.href`)": [
    "BUG-293"

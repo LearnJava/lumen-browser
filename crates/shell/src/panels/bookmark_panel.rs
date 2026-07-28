@@ -22,7 +22,8 @@
 //! Toggled with `Ctrl+Shift+O`.  The panel is a self-contained overlay (it does
 //! not change the page viewport size), following the ad-hoc panel convention of
 //! [`super::workspace_panel`] / [`super::sidebar_panel`]: state lives on `Lumen`,
-//! [`hit_test`] classifies clicks, and [`build_panel`] returns a [`DisplayList`].
+//! [`hit_test`] classifies clicks. The legacy display-list renderer was removed
+//! in CC-15-4 - under the engine chrome the panel is `#view-bookmarks`.
 //!
 //! **Folder filter.** The left column lists "All" plus every distinct folder.
 //! Clicking one filters the bookmark list (and the active search query).
@@ -34,13 +35,6 @@
 //! ([`BookmarkPanel::begin_drag`]); releasing over a folder in the left column
 //! moves the bookmark into that folder (persisted via `Bookmarks::set_folder`).
 //! Releasing elsewhere opens the bookmark instead (a plain click).
-
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-use crate::theme_tokens::radius;
-
-use crate::panels::themes::Palette;
 
 // ── Visual constants ─────────────────────────────────────────────────────────
 
@@ -70,15 +64,6 @@ const PAD: f32 = 8.0;
 
 /// Width of the trailing "×" delete zone on a bookmark row.
 const DELETE_W: f32 = 22.0;
-
-/// Semantic color: URL link text — kept hard-coded (not a surface chrome token).
-const TEXT_URL: Color = Color { r: 110, g: 150, b: 220, a: 255 };
-/// Semantic color: delete "×" foreground — kept hard-coded (status/danger).
-const DELETE_FG: Color = Color { r: 190, g: 90, b: 90, a: 255 };
-
-const FONT_SZ: f32 = 12.0;
-const FONT_SZ_SM: f32 = 10.5;
-const RADIUS: f32 = crate::theme_tokens::radius::LG;
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -296,228 +281,6 @@ pub fn hit_test(panel: &BookmarkPanel, x: f32, y: f32, ax: f32, ay: f32) -> Opti
     Some(BookmarkHit::Empty)
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build the display list for the panel anchored at `(ax, ay)` (top-left).
-/// `pal` provides the active theme's surface colors.
-pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32, pal: &Palette) -> DisplayList {
-    let mut out = DisplayList::with_capacity(32 + panel.entries.len() * 4);
-    let radii = uniform_radii(RADIUS);
-
-    // Panel background + 1px border.
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(ax, ay, PANEL_WIDTH, PANEL_HEIGHT),
-        radii,
-        color: pal.overlay_border,
-    });
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(ax + 1.0, ay + 1.0, PANEL_WIDTH - 2.0, PANEL_HEIGHT - 2.0),
-        radii,
-        color: pal.overlay_bg,
-    });
-
-    // Header.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(ax + 1.0, ay + 1.0, PANEL_WIDTH - 2.0, HEADER_H - 1.0),
-        color: pal.header_bg,
-    });
-    out.push(text(
-        ax + PAD,
-        ay + (HEADER_H - FONT_SZ * 1.3) * 0.5,
-        PANEL_WIDTH - HEADER_H - PAD,
-        "Bookmarks",
-        FONT_SZ,
-        pal.text,
-        FontWeight::BOLD,
-    ));
-    out.push(text(
-        ax + PANEL_WIDTH - HEADER_H + 6.0,
-        ay + (HEADER_H - FONT_SZ * 1.3) * 0.5,
-        HEADER_H,
-        "×",
-        FONT_SZ + 1.0,
-        pal.text_dim,
-        FontWeight::NORMAL,
-    ));
-
-    // Search box.
-    let search_top = ay + HEADER_H + PAD;
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(ax + PAD, search_top, PANEL_WIDTH - 2.0 * PAD, SEARCH_H),
-        radii: uniform_radii(radius::MD),
-        color: pal.input_bg,
-    });
-    let (search_text, search_col) = if panel.search.is_empty() {
-        ("Search bookmarks…".to_owned(), pal.text_dim)
-    } else {
-        (panel.search.clone(), pal.text)
-    };
-    out.push(text(
-        ax + PAD + 8.0,
-        search_top + (SEARCH_H - FONT_SZ * 1.3) * 0.5,
-        PANEL_WIDTH - 2.0 * PAD - 16.0,
-        &search_text,
-        FONT_SZ,
-        search_col,
-        FontWeight::NORMAL,
-    ));
-
-    // Body region.
-    let body_top = search_top + SEARCH_H + PAD;
-    let body_h = ay + PANEL_HEIGHT - PAD - body_top;
-    let folder_col_x = ax;
-
-    // Folder column background.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(folder_col_x + 1.0, body_top, FOLDER_COL_W - 1.0, body_h),
-        color: pal.row_alt_bg,
-    });
-
-    // Folder rows: "All", then each folder.
-    let draw_folder_row = |out: &mut DisplayList, idx: usize, label: &str, selected: bool| {
-        let ry = body_top + idx as f32 * FOLDER_ROW_H;
-        if selected {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(folder_col_x + 1.0, ry, FOLDER_COL_W - 1.0, FOLDER_ROW_H),
-                color: pal.item_selected_bg,
-            });
-        }
-        let col = if selected { pal.accent } else { pal.text_dim };
-        out.push(text(
-            folder_col_x + PAD,
-            ry + (FOLDER_ROW_H - FONT_SZ_SM * 1.3) * 0.5,
-            FOLDER_COL_W - PAD - 4.0,
-            &truncate(label, 16),
-            FONT_SZ_SM,
-            col,
-            FontWeight::NORMAL,
-        ));
-    };
-    draw_folder_row(&mut out, 0, "All", panel.selected_folder.is_none());
-    for (i, f) in panel.folders.iter().enumerate() {
-        // Stop drawing folder rows that would overflow the body.
-        if (i as f32 + 2.0) * FOLDER_ROW_H > body_h {
-            break;
-        }
-        let selected = panel.selected_folder.as_ref() == Some(f);
-        draw_folder_row(&mut out, i + 1, f, selected);
-    }
-
-    // Bookmark list (right of the folder column), clipped + scrolled.
-    let list_x = ax + FOLDER_COL_W;
-    let list_w = PANEL_WIDTH - FOLDER_COL_W - PAD;
-    out.push(DisplayCommand::PushClipRect {
-        rect: Rect::new(list_x, body_top, list_w, body_h),
-    });
-
-    let visible = panel.visible_entries();
-    if visible.is_empty() {
-        out.push(text(
-            list_x + 10.0,
-            body_top + 12.0,
-            list_w - 20.0,
-            "No bookmarks",
-            FONT_SZ,
-            pal.text_dim,
-            FontWeight::NORMAL,
-        ));
-    }
-    for (i, entry) in visible.iter().enumerate() {
-        let ry = body_top + i as f32 * BM_ROW_H - panel.scroll_y;
-        // Cull rows fully outside the clip rect.
-        if ry + BM_ROW_H < body_top || ry > body_top + body_h {
-            continue;
-        }
-        let dragged = panel.drag == Some(entry.id);
-        if dragged {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(list_x, ry, list_w, BM_ROW_H),
-                color: pal.item_bg,
-            });
-        }
-        // Title line.
-        let title = if entry.title.is_empty() { entry.url.as_str() } else { entry.title.as_str() };
-        out.push(text(
-            list_x + 6.0,
-            ry + 5.0,
-            list_w - DELETE_W - 8.0,
-            &truncate(title, 48),
-            FONT_SZ,
-            pal.text,
-            FontWeight::NORMAL,
-        ));
-        // URL line.
-        out.push(text(
-            list_x + 6.0,
-            ry + 5.0 + FONT_SZ * 1.4,
-            list_w - DELETE_W - 8.0,
-            &truncate(&entry.url, 52),
-            FONT_SZ_SM,
-            TEXT_URL,
-            FontWeight::NORMAL,
-        ));
-        // Delete "×".
-        out.push(text(
-            list_x + list_w - DELETE_W + 4.0,
-            ry + (BM_ROW_H - FONT_SZ * 1.3) * 0.5,
-            DELETE_W,
-            "×",
-            FONT_SZ,
-            DELETE_FG,
-            FontWeight::NORMAL,
-        ));
-        // Row separator.
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(list_x, ry + BM_ROW_H - 1.0, list_w, 1.0),
-            color: pal.divider,
-        });
-    }
-
-    out.push(DisplayCommand::PopClip);
-    out
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Build a `DrawText` command with the panel's default font settings.
-fn text(x: f32, y: f32, w: f32, s: &str, size: f32, color: Color, weight: FontWeight) -> DisplayCommand {
-    DisplayCommand::DrawText {
-        rect: Rect::new(x, y, w.max(0.0), size * 1.4),
-        text: s.to_owned(),
-        font_size: size,
-        color,
-        font_family: Vec::new(),
-        font_weight: weight,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    }
-}
-
-/// Uniform corner radii.
-fn uniform_radii(r: f32) -> CornerRadii {
-    CornerRadii {
-        tl: r, tl_y: r,
-        tr: r, tr_y: r,
-        br: r, br_y: r,
-        bl: r, bl_y: r,
-    }
-}
-
-/// Truncate a label to at most `max_chars` characters, appending "…" if cut.
-fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_owned();
-    }
-    let mut out: String = s.chars().take(max_chars.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -704,47 +467,4 @@ mod tests {
         assert_eq!(hit, Some(BookmarkHit::DeleteBookmark(first_id)));
     }
 
-    // ── Rendering ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn build_panel_emits_commands() {
-        let p = sample();
-        let dl = build_panel(&p, AX, AY, &Palette::DARK);
-        assert!(!dl.is_empty());
-        // Clip is balanced.
-        let pushes = dl.iter().filter(|c| matches!(c, DisplayCommand::PushClipRect { .. })).count();
-        let pops = dl.iter().filter(|c| matches!(c, DisplayCommand::PopClip)).count();
-        assert_eq!(pushes, pops);
-    }
-
-    #[test]
-    fn build_panel_draws_titles_and_folders() {
-        let p = sample();
-        let dl = build_panel(&p, AX, AY, &Palette::DARK);
-        let has = |needle: &str| {
-            dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == needle))
-        };
-        assert!(has("Bookmarks"));
-        assert!(has("All"));
-        assert!(has("Rust"));
-    }
-
-    #[test]
-    fn build_panel_empty_list_shows_placeholder() {
-        let mut p = BookmarkPanel::new();
-        p.visible = true;
-        p.set_data(vec![]);
-        let dl = build_panel(&p, AX, AY, &Palette::DARK);
-        let has_placeholder = dl
-            .iter()
-            .any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "No bookmarks"));
-        assert!(has_placeholder);
-    }
-
-    #[test]
-    fn truncate_long_label() {
-        let s = truncate("abcdefghijklmnop", 6);
-        assert_eq!(s.chars().count(), 6);
-        assert!(s.ends_with('…'));
-    }
 }
