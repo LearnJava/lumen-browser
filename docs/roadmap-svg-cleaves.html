@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 94,
+  "open": 95,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 366,
+ "total_bugs": 367,
  "phases": [
   {
    "id": "P0",
@@ -2331,16 +2331,19 @@
       {
        "id": "WPT-VENDOR-geolocation-sensor",
        "title": "WPT: вендорить + прогнать категорию `geolocation-sensor`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/geolocation-sensor/`, 3 файла: `META.yml`, `historical.https.html`, `LICENSE-WPT.md` — `WEB_FEATURES.yml` у категории нет), скоуп 🚫 (датчик устройства), включена по постоянному решению пользователя (тот же класс, что `accelerometer`/`gamepad`/`generic-sensor`). `run_report.py --all --root geolocation-sensor --recursive` — **33 с, 0/1 harness OK, 0/0 сабтестов** (1 TIMEOUT, HTTPS-порт-гэп) — самая маленькая категория backlog-а: единственный файл — «historical» regression-тест, проверяющий, что `GeolocationSensor` (спека переведена W3C в Discontinued Draft) НЕ появился в `window`. Headless `--mcp-port`/`eval`-проба подтвердила: `'GeolocationSensor' in window` → `false`, имя нигде не встречается в `crates/`. Единственная категория с положительным результатом пробы без единой находки — Lumen корректно не реализует свёрнутый черновик, багов не заведено"
       },
       {
        "id": "WPT-VENDOR-gif",
        "title": "WPT: вендорить + прогнать категорию `gif`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/gif/`, 4 файла: `META.yml`, reftest-пара `reset-no-gce-1.html`+`reset-no-gce-ref.html`, `reset-no-gce.gif`, `LICENSE-WPT.md` — `WEB_FEATURES.yml` у категории нет), скоуп ⬜ (кандидат). `run_report.py --all --root gif --recursive` — **~24 с, 0/0**: единственный тест — reftest, неподдерживаемый тип для минимального экзекьютора. Проба напрямую на декодере Lumen (`lumen-image`, `include_bytes!`+`cargo test`) на фикстуре `reset-no-gce.gif` (2×2, 3 кадра, тестирует disposal-метод без предшествующего GCE у третьего кадра) дала BUG-396: `decode_gif_animated` падает `DecodeError(\"invalid code in LZW stream\")` на кадре 1 — воспроизведено с RGBA и с индексированным выводом; независимый Pillow-декодер на побайтово идентичном файле декодирует все 3 кадра корректно (красный→прозрачный→зелёный, как в апстримном комментарии). Дефект в зависимости `gif` v0.14.2 (`Cargo.lock`), не в `gif.rs`",
+       "bugs": [
+        "BUG-396"
+       ]
       },
       {
        "id": "WPT-VENDOR-gpc",
@@ -6623,6 +6626,13 @@
    "status": "open",
    "title": "`getCurrentPosition()`/`watchPosition()` никогда не бросают `TypeError` на отсутствующий/`null`/невалидный success-колбэк (WebIDL: обязательный аргумент) — `typ…",
    "component": "js (`crates/js/src/geolocation.rs:129-155` — `GEO_SHIM`, `getCurrentPosition`/`watchPosition`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-396": {
+   "status": "open",
+   "title": "GIF-декодер отклоняет спек-валидный кадр без предшествующего Graphic Control Extension: `tests/wpt/gif/reset-no-gce.gif` (2×2, 3 кадра) падает `DecodeError(\"inv…",
+   "component": "image (`crates/engine/image/src/gif.rs:339-393` — `decode_gif_animated`, зависимость `gif` крейт v0.14.2)",
    "date": null,
    "debtor": false
   }
