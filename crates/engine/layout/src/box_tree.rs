@@ -4819,6 +4819,14 @@ fn build_box_inner(
                 // — otherwise the gate that asserts a pass rebuilds no index
                 // would be blind to every rebuild a worker made.
                 let par_index_stats = std::sync::Mutex::new(crate::style::CascadeIndexStats::default());
+                // BUG-341 S23: same drain for the pseudo-element cascade census.
+                // Without it the census undercounts exactly the containers this
+                // branch exists for — every flex/grid container with 8+ items.
+                let par_pseudo_stats =
+                    std::sync::Mutex::new(crate::style::PseudoCascadeStats::default());
+                let par_pseudo_sites: std::sync::Mutex<
+                    std::collections::HashMap<String, crate::style::PseudoCascadeStats>,
+                > = std::sync::Mutex::new(std::collections::HashMap::new());
                 children = dom_children.par_iter().filter_map(|&child_id| {
                     snap.install();
                     let out = if wrap_text_items && matches!(doc.get(child_id).data, NodeData::Text(_)) {
@@ -4841,11 +4849,29 @@ fn build_box_inner(
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .add(idx_stats);
+                    let ps_stats = crate::style::take_pseudo_cascade_stats();
+                    par_pseudo_stats
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .add(ps_stats);
+                    let ps_sites = crate::style::take_pseudo_cascade_sites();
+                    if !ps_sites.is_empty() {
+                        let mut acc = par_pseudo_sites.lock().unwrap_or_else(|e| e.into_inner());
+                        for (k, v) in ps_sites {
+                            acc.entry(k).or_default().add(v);
+                        }
+                    }
                     out
                 }).collect();
                 crate::style::add_cascade_index_stats(
                     *par_index_stats.lock().unwrap_or_else(|e| e.into_inner()),
                 );
+                crate::style::add_pseudo_cascade_stats(
+                    *par_pseudo_stats.lock().unwrap_or_else(|e| e.into_inner()),
+                );
+                crate::style::add_pseudo_cascade_sites(std::mem::take(
+                    &mut *par_pseudo_sites.lock().unwrap_or_else(|e| e.into_inner()),
+                ));
                 {
                     use std::sync::atomic::Ordering::Relaxed;
                     add_box_build_stats(BoxBuildStats {

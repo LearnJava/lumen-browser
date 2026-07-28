@@ -435,15 +435,25 @@ pub struct PseudoCascadeStats {
     pub ns: u64,
 }
 
+impl PseudoCascadeStats {
+    /// Folds another tally into this one.
+    pub fn add(&mut self, other: PseudoCascadeStats) {
+        self.calls += other.calls;
+        self.hits += other.hits;
+        self.ns += other.ns;
+    }
+}
+
 thread_local! {
     /// BUG-341 S20 instrumentation, see [`PseudoCascadeStats`]. Always compiled:
     /// one clock read against a call that walks the sheet's candidate buckets.
     ///
     /// Thread-local, and `build_box` fans flex/grid containers out over rayon
-    /// workers (the S15 trap), so a census reading this from the layout thread
-    /// sees only the containers built there. That is enough for attribution —
-    /// the chrome document's rebuilt spine is built on the calling thread — but
-    /// it is not a count of the whole document.
+    /// workers (the S15 trap). **S23**: the fan-out closure now drains each
+    /// worker's tally back into the parent through [`add_pseudo_cascade_stats`],
+    /// exactly as the box-build and cascade-index tallies do — before that the
+    /// census saw only the containers built on the layout thread, which is what
+    /// made S20's reading move from 139 to 160 for no visible reason.
     static PSEUDO_CASCADE_STATS: Cell<PseudoCascadeStats> =
         const { Cell::new(PseudoCascadeStats { calls: 0, hits: 0, ns: 0 }) };
 }
@@ -467,14 +477,58 @@ pub fn take_pseudo_cascade_stats() -> PseudoCascadeStats {
     PSEUDO_CASCADE_STATS.with(|s| s.replace(PseudoCascadeStats::default()))
 }
 
+/// Folds a rayon worker's drained [`PseudoCascadeStats`] into this thread's
+/// tally — see [`take_pseudo_cascade_stats`].
+pub fn add_pseudo_cascade_stats(other: PseudoCascadeStats) {
+    PSEUDO_CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.add(other);
+        s.set(v);
+    });
+}
+
+thread_local! {
+    /// BUG-341 S23 — the same tally, split by pseudo-element name.
+    ///
+    /// "160 calls" does not say which of the ~14 call sites made them, and the
+    /// fix for each is different. Keyed by the `pseudo` argument, which is the
+    /// one thing every call site already carries. Only filled while
+    /// [`set_pseudo_cascade_diagnostics`] is on, so the `String` keys never cost
+    /// a production pass anything.
+    static PSEUDO_CASCADE_SITES: RefCell<HashMap<String, PseudoCascadeStats>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Returns the per-pseudo split of [`PseudoCascadeStats`] and resets it.
+pub fn take_pseudo_cascade_sites() -> HashMap<String, PseudoCascadeStats> {
+    PSEUDO_CASCADE_SITES.with(|m| std::mem::take(&mut *m.borrow_mut()))
+}
+
+/// Folds a rayon worker's drained per-pseudo split into this thread's map.
+pub fn add_pseudo_cascade_sites(other: HashMap<String, PseudoCascadeStats>) {
+    PSEUDO_CASCADE_SITES.with(|m| {
+        let mut m = m.borrow_mut();
+        for (k, v) in other {
+            m.entry(k).or_default().add(v);
+        }
+    });
+}
+
 /// Folds one [`compute_pseudo_element_style`] call into the tally.
-fn note_pseudo_cascade(ns: u64, hit: bool) {
+fn note_pseudo_cascade(pseudo: &str, ns: u64, hit: bool) {
     PSEUDO_CASCADE_STATS.with(|s| {
         let mut v = s.get();
         v.calls += 1;
         v.hits += u32::from(hit);
         v.ns += ns;
         s.set(v);
+    });
+    PSEUDO_CASCADE_SITES.with(|m| {
+        let mut m = m.borrow_mut();
+        let e = m.entry(pseudo.to_string()).or_default();
+        e.calls += 1;
+        e.hits += u32::from(hit);
+        e.ns += ns;
     });
 }
 
@@ -8292,7 +8346,7 @@ pub fn compute_pseudo_element_style(
     }
     let t_pseudo = std::time::Instant::now();
     let out = compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode);
-    note_pseudo_cascade(t_pseudo.elapsed().as_nanos() as u64, out.is_some());
+    note_pseudo_cascade(pseudo, t_pseudo.elapsed().as_nanos() as u64, out.is_some());
     out
 }
 

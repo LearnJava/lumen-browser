@@ -26295,6 +26295,7 @@ mod tests {
                 lumen_layout::set_interactive_state(hover, None, None);
                 let _ = lumen_layout::style::take_cascade_index_stats();
                 let _ = lumen_layout::style::take_pseudo_cascade_stats();
+                let _ = lumen_layout::style::take_pseudo_cascade_sites();
                 let t_pass = std::time::Instant::now();
                 let (layout, counters) = match state.prev_pristine_layout.take() {
                     Some(prev) => {
@@ -26337,6 +26338,7 @@ mod tests {
                 let pass_ns = t_pass.elapsed().as_nanos() as u64;
                 let idx_stats = lumen_layout::style::take_cascade_index_stats();
                 let ps_stats = lumen_layout::style::take_pseudo_cascade_stats();
+                let ps_sites = lumen_layout::style::take_pseudo_cascade_sites();
                 let cs = lumen_layout::counters::take_cascade_stats();
                 let bb = lumen_layout::box_tree::take_box_build_stats();
                 let times = lumen_layout::box_tree::take_box_build_time_log();
@@ -26362,6 +26364,16 @@ mod tests {
                         bb.reused,
                         bb.fanouts,
                     );
+                    let mut sites: Vec<_> = ps_sites.into_iter().collect();
+                    sites.sort_by(|a, b| b.1.ns.cmp(&a.1.ns));
+                    for (name, st) in &sites {
+                        eprintln!(
+                            "[s20-census]   pseudo ::{name} calls={} hits={} {:.3}ms",
+                            st.calls,
+                            st.hits,
+                            st.ns as f64 / 1e6,
+                        );
+                    }
                     census_report_counter_map(&counters);
                     census_report_built_boxes(&doc, &times);
                 }
