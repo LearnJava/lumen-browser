@@ -429,8 +429,27 @@ BUG-341 — жёсткий блокер для CC-14 (флип дефолта) �
 
 3 новых теста `cargo test -p lumen-a11y` (134/134) + workspace clippy зелёные. Живой смоук `LUMEN_CSS_CHROME=1` без падений. После CC-10 (используется CC-8's `#hbarTabs`)
 
-### CC-14 (M): Флип дефолта
-По чек-листу паритета (все ежедневные сценарии: навигация, вкладки, панели, темы, DPI/zoom, split view — явный список составить в срезе) перевернуть флаг: движковый хром по умолчанию, `LUMEN_LEGACY_CHROME=1` — откат. Обновить `CAPABILITIES.md`, README. **DoD:** дефолтная сборка — движковый хром; rollback-флаг работает.
+### CC-14 (M): Флип дефолта — done (2026-07-28, P1)
+
+**Явный чек-лист паритета.** Столбец «Статус» различает две категории по риску-5 этого брифа: **движковый** — сценарий уже рендерится/обрабатывается `chrome_doc` под флагом (мигрирован одним из срезов CC-6…CC-13, `bind_model`/hit_test-код гейтится `self.css_chrome_enabled`/`!self.css_chrome_enabled` парами в `main.rs`); **legacy-оверлей навсегда** — код вообще не гейтится флагом, значит флип дефолта его поведение не меняет ни на бит (риск неизменности = 0 механически, не по осмотру).
+
+| Категория | Сценарий | Статус | Чем подтверждено |
+|---|---|---|---|
+| Навигация | адресная строка (ввод/навигация/подсказки `#omniDropdown`), lock-иконка/`#certOverlay` | движковый (CC-9/CC-10) | `cargo test -p lumen-chrome` (bind_model-тесты `cert.open`/omnibox), `cargo test -p lumen-a11y` (combobox role, CC-13) |
+| Навигация | back/forward/reload | не хром-специфично (тулбар-кнопки те же `ChromeAction`, не завязаны на конкретный рендер-путь страницы) | `cargo test -p lumen-chrome` (`ChromeAction` dispatch) |
+| Вкладки | верт. `#sbTabs` / гориз. `#hbarTabs`, переключение layout, tree-line отступ, container/workspace цвет | движковый (CC-6/CC-8) | `cargo test -p lumen-chrome` 61/61 |
+| Вкладки | drag-переупорядочивание | вне DoD CC-8 (задокументированный пробел, не регрессия этого среза) | CC-8 closure note в этом файле |
+| Панели | bookmarks/history/settings views, downloads, permission popover, AI/Web `#rightSidebar`, find bar, command palette `#cpOverlay`, print `#printOverlay`, cert `#certOverlay`, profile menu | движковый (CC-9/CC-10/CC-10b) | per-срез `cargo test -p lumen-chrome`/`-p lumen-shell`; `!self.css_chrome_enabled`-гейт на каждый legacy-путь подтверждён построчным greп'ом `main.rs` в этом срезе |
+| Панели | DevTools console/inspector/network/sources, a11y-панель, shortcuts-панель, reader view, source view, split view, ~30 не покрытых макетом панелей (риск 5) | legacy-оверлей навсегда | их код не содержит `css_chrome_enabled`-условия вообще — флип структурно не может их затронуть |
+| Темы | light/dark (`i-moon`/`i-sun`), профильные акценты (`body[data-profile]`), `--ws-color` workspaces | движковый, `:root`/custom-properties из эталона | §2 этого брифа: CSS-покрытие ~87 свойств мокапа, все критичные реализованы |
+| DPI/zoom | resize окна, `--viewport WxH` | движковый через `chrome_page_host_rect`, пересчитывается в `relayout_chrome_host` каждый кадр | `graphic_tests/run.py` TEST-00 калибрует crop offset заново на каждый прогон — некорректная геометрия хром-контента проявилась бы как провал калибровки, не только визуально |
+| Split view | `Ctrl+\` | вообще не гейтится флагом (фича контент-области, не хрома) | `page_offset()`/`chrome_page_host_rect` — единый источник смещения страницы с CC-5, split view делит уже смещённую контент-область |
+
+**Найдено и исправлено в этом срезе:** `resolve_automation_target` ([main.rs:23923](../../crates/shell/src/main.rs)) — координатный пересчёт для MCP/BiDi `click`/`type` (`Target::Point`/`NodeId`/`Selector`) — жёстко использовал legacy `toolbar::CHROME_H` + `left_dock()`-офсет вместо уже существующего единого источника `page_offset()` (CC-5). Раньше это было безопасно: `css_chrome_enabled` был `false` по умолчанию, и обе формулы совпадали. После флипа дефолта это дало бы систематический промах координат во всех MCP/BiDi-скриптах (`scroll_perf.py`, `input_perf.py`, wptrunner-плагин, любой будущий live-driving тест) — особенно при открытом AI/Web-сайдбаре, чья ширина входит в `chrome_page_host_rect.x`, но исключена из `left_dock()` под флагом (CC-10b). Исправлено — теперь делегирует `self.page_offset()`. Не покрыто отдельным unit-тестом: `Lumen` — монолитная структура без тестового конструктора (никакой существующий тест не собирает её целиком), риск закрыт живой сборкой + существующим `cargo test -p lumen-shell` (не даёт регресса самого метода) и тем, что оба вызывающих места (`Click`/`Type` в `AutomationCommand`) используют тот же путь, что и обычный мышиный клик через `page_offset()`.
+
+**Флип:** `crates/shell/src/main.rs` — `css_chrome_enabled` теперь `true`, если `LUMEN_LEGACY_CHROME` не равен `"1"` (было: `true`, если `LUMEN_CSS_CHROME == "1"`). `LUMEN_CSS_CHROME` как имя переменной выведено из употребления (та же схема, что ADR-018 заменил `--features quickjs` без сохранения старого имени) — единственный потребитель (комментарий в `scripts/gen_chrome_assets.py`) не исполняемый код.
+
+`cargo test -p lumen-chrome` 61/61, `cargo test -p lumen-shell` (полный прогон, дефолт — движковый хром), `cargo test -p lumen-a11y` — все зелёные; `cargo clippy -p lumen-shell --all-targets -- -D warnings` зелёный; `python graphic_tests/run.py --continue-on-fail` (мандатно — флип может двигать пиксели: TEST-00 калибруется по новой геометрии хрома каждый прогон). **DoD:** дефолтная сборка — движковый хром; `LUMEN_LEGACY_CHROME=1` откатывает к legacy побайтово (тот же код-путь, что раньше был дефолтом).
 
 ### CC-15…(серия S): Удаление legacy
 По образцу S12b (V8-миграция): слайсами удалить `toolbar.rs`-билдер, `tabs/strip.rs`-рендер, DisplayList-код `panels/*`, `Palette`-константы (остаётся только то, что не покрыто макетом — см. риск №5). Финал — удалить rollback-флаг.

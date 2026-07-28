@@ -64,8 +64,8 @@ pipeline pages use.
 | Stage | Mechanism |
 |---|---|
 | Opt-in development (CC-1…CC-13) | `LUMEN_CSS_CHROME=1` env var; default window behaviour unchanged pixel-for-pixel; engine chrome and legacy panels may co-render (painter's order in `overlay_buf` already supports layering) |
-| Parity checklist (CC-14) | Explicit day-to-day scenario list (navigation, tabs, panels, themes, DPI/zoom, split view) verified under the flag |
-| Default flip (CC-14) | `LUMEN_CSS_CHROME` default flips to on; `LUMEN_LEGACY_CHROME=1` becomes the rollback opt-out — same shape as ADR-018's `--features quickjs` rollback window |
+| Parity checklist (CC-14) | Explicit day-to-day scenario list (navigation, tabs, panels, themes, DPI/zoom, split view) verified under the flag — see `docs/tasks/p1-css-chrome.md` §CC-14 for the table and what was found (a latent MCP/BiDi coordinate-offset bug, `resolve_automation_target`, fixed in the same slice) |
+| **Default flip (CC-14, done 2026-07-28)** | Engine chrome is now the default; `LUMEN_LEGACY_CHROME=1` is the rollback opt-out — same shape as ADR-018's `--features quickjs` rollback window. `LUMEN_CSS_CHROME` as an env var name is retired (mirrors how ADR-018 didn't keep the pre-cutover flag's name either) |
 | Legacy deletion (CC-15) | Slice-by-slice removal of `toolbar.rs`'s builder, `tabs/strip.rs`'s renderer, `panels/*`'s `DisplayCommand` code, and `Palette` constants not covered by the mock-up (chrome surfaces the mock-up doesn't reach — reader view, source view, split view, real DevTools panels, ~30 panels total — stay legacy overlays indefinitely per the brief's risk #5), by the same pattern S12b used to delete `rquickjs` after ADR-018 |
 
 ### Fate of the DS track
@@ -99,10 +99,16 @@ surfaces, per risk #5 above).
   during that window; text metrics for chrome UI move from femtovg's manual layout to the engine's text
   measurer, so pixel-level differences from legacy are expected and accepted (parity with the mock-up
   matters more than parity with legacy).
-- **Future:** CC-12's perf gate is the concrete revisit trigger — if the ≤2 ms budget cannot be met
-  even after `layout_mutation_incremental` and targeted optimization, the default flip (CC-14) is
-  blocked and this decision must be revisited (e.g. fall back to a narrower engine-rendered scope,
-  or reopen ADR-015's Variant B evaluation). `docs/tasks/p1-css-chrome.md` is the living execution
+- **Future:** CC-12's perf gate was the concrete revisit trigger — if the ≤2 ms budget could not be met
+  even after `layout_mutation_incremental` and targeted optimization, the default flip (CC-14) would be
+  blocked and this decision revisited (e.g. fall back to a narrower engine-rendered scope, or reopen
+  ADR-015's Variant B evaluation). In practice `layout_mutation_incremental` (BUG-341, 27 slices) brought
+  the gate from ~300× budget down to HOVER always-in-budget and KEY in-budget on p50/typical but still
+  over on p95 in about half of interaction rounds — **not fully green**. The user made an explicit,
+  conscious decision on 2026-07-28 to proceed with CC-14 anyway rather than block further on BUG-341
+  (paused, resumable on request) — a deliberate trade-off, not a silently relaxed gate; see
+  `bugs/BUG-341-OPEN.md` and `docs/tasks/p1-css-chrome.md` §CC-14 for the numbers at the time of the
+  decision. `docs/tasks/p1-css-chrome.md` is the living execution
   log for CC-1…CC-17.
 
 ## Relationships

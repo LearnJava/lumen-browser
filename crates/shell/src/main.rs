@@ -885,10 +885,12 @@ fn run_window_mode(
         .collect();
     let active_profile_id = profiles_registry.active().ok().flatten().map(|p| p.id);
 
-    // CC-4 (docs/tasks/p1-css-chrome.md): opt-in engine-drawn chrome host, read
-    // once at startup like `LUMEN_ENGINE_THREAD` (`spawn_engine_thread_if_enabled`
-    // above) — default off, so shell behavior is byte-identical without the flag.
-    let css_chrome_enabled = std::env::var("LUMEN_CSS_CHROME").as_deref() == Ok("1");
+    // CC-14 (docs/tasks/p1-css-chrome.md): engine-drawn chrome is now the
+    // default (flipped from CC-4's opt-in `LUMEN_CSS_CHROME=1`, same
+    // flag-strategy idiom as ADR-018's V8 cutover) — `LUMEN_LEGACY_CHROME=1`
+    // is the rollback opt-out, read once at startup like `LUMEN_ENGINE_THREAD`
+    // (`spawn_engine_thread_if_enabled` above).
+    let css_chrome_enabled = std::env::var("LUMEN_LEGACY_CHROME").as_deref() != Ok("1");
 
     let mut app = Lumen {
         display_list: Vec::new(),
@@ -23909,17 +23911,25 @@ impl Lumen {
         /// target by exactly `toolbar::CHROME_H` (real pixel offset validated with
         /// a manual BiDi click→navigate scenario; DS-9 widened the offset from
         /// the tab-bar-only height to include the new toolbar row).
+        ///
+        /// CC-14: the offset itself is [`Self::page_offset`], not a hardcoded
+        /// `(left_dock width, toolbar::CHROME_H)` pair — under
+        /// `LUMEN_CSS_CHROME=1` the content area's real origin is
+        /// `chrome_page_host_rect`'s, which can differ from the legacy
+        /// toolbar/sidebar geometry (e.g. the web/AI sidebar occupies chrome
+        /// layout width but is excluded from `left_dock()` under the flag,
+        /// see [`Self::dockable_sidebars`]). Using the wrong offset here would
+        /// silently misfire every MCP/BiDi click/type once engine chrome is
+        /// the default, since `page_offset()` is otherwise the single source
+        /// of truth for this conversion (real mouse input already uses it).
         fn resolve_automation_target(&self, target: &lumen_driver::Target) -> Option<(f32, f32)> {
             use lumen_driver::Target;
-            let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
+            let (offset_x, offset_y) = self.page_offset();
             let page_to_viewport = |px: f32, py: f32| {
-                (
-                    px - self.scroll_x + panel_x_offset,
-                    py - self.scroll_y + toolbar::CHROME_H,
-                )
+                (px - self.scroll_x + offset_x, py - self.scroll_y + offset_y)
             };
             match target {
-                Target::Point { x, y } => Some((x + panel_x_offset, y + toolbar::CHROME_H)),
+                Target::Point { x, y } => Some((x + offset_x, y + offset_y)),
                 Target::NodeId(id) => {
                     let lb = self.layout_box.as_ref()?;
                     let node = lumen_dom::NodeId::from_index(*id as usize);

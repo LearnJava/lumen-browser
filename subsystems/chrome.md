@@ -61,8 +61,9 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   mouse-drag text-selection feature exists anywhere in Lumen yet (page or chrome) — `Selection`/
   `SelectionHighlight` are wired only to the JS `window.getSelection()` shim — so this is a
   forward-looking default, not something end-to-end-testable via a real drag today.
-- **CC-4 runtime host** (`crates/shell/src/main.rs`, behind `LUMEN_CSS_CHROME=1` read once at
-  startup — `run_window_mode`'s `css_chrome_enabled`): [`parse_document`] parses
+- **CC-4 runtime host** (`crates/shell/src/main.rs`, originally behind `LUMEN_CSS_CHROME=1` read once
+  at startup — `run_window_mode`'s `css_chrome_enabled`, now the default since CC-14, see below):
+  [`parse_document`] parses
   `chrome_preview::HTML` once into `Lumen::chrome_doc: Option<(Document, Stylesheet)>`.
   `relayout_chrome_host()` — called once from `resumed()` (first window size) and again on every
   `WindowEvent::Resized` — runs `layout_measured_hyp` over the full window size (bundled Inter
@@ -316,6 +317,19 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   rule; with the name in hand, that rule only widens the nodes its left compound can actually match.
   `structural` stays conservative — no attribute name describes "the child list moved", and
   `:nth-child`/`:empty`/sibling combinators all react to it. See BUG-341 "S17".
+
+- **CC-14: default flip** (`crates/shell/src/main.rs`): `css_chrome_enabled` is now `true` unless
+  `LUMEN_LEGACY_CHROME=1` — engine chrome ships by default; the opt-in `LUMEN_CSS_CHROME=1` flag CC-4
+  introduced is retired (same shape as ADR-018's V8 cutover, see ADR-021). Explicit parity checklist
+  (navigation/tabs/panels/themes/DPI-zoom/split-view, mapped to which scenarios are engine-rendered vs.
+  permanently-legacy-overlay) and what it found — a latent MCP/BiDi coordinate bug in
+  `resolve_automation_target` (hardcoded `toolbar::CHROME_H`/`left_dock()` instead of the existing
+  single-source-of-truth `page_offset()`, harmless while the flag defaulted off, would have silently
+  misfired every automated click/type once engine chrome became default — fixed in the same slice) —
+  documented in `docs/tasks/p1-css-chrome.md` §CC-14, not duplicated here. `cargo test -p lumen-chrome`
+  (61/61), `cargo test -p lumen-shell` (1721+1/1722), `cargo test -p lumen-a11y` (23+134/157) green;
+  `python graphic_tests/run.py --continue-on-fail` run against the new default (mandatory — the flip can
+  move pixels near TEST-00's magenta calibration).
 
 ## Deferred
 
