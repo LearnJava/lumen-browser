@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 65,
+  "open": 67,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 337,
+ "total_bugs": 339,
  "phases": [
   {
    "id": "P0",
@@ -2205,9 +2205,13 @@
       {
        "id": "WPT-VENDOR-fenced-frame",
        "title": "WPT: вендорить + прогнать категорию `fenced-frame`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/fenced-frame/`, 400 файлов: `META.yml`/`WEB_FEATURES.yml`/`README.md`, 198 корневых `.html`-тестов (197 из них `.https.`, единственный не-https — `insecure-context.html`), 8 файлов `.headers` (COOP/COEP, client-hints, default-enabled-features), `resources/` — 190 хелперов, wptserve-эндпоинтов и вложенных страниц, `LICENSE-WPT.md`), скоуп 🚫 (Fenced Frames, ad-tech / Privacy Sandbox), включена по постоянному решению пользователя. `run_report.py --all --root fenced-frame --recursive` — **51 мин 48 с**, 198 файлов дали 199 id (единственное variant-раскрытие — `allow-attribute-src.https.html` с `?type=fencedframe`/`?type=iframe`), **1/199 harness OK, 1/2 сабтеста**. Категория — сумма двух уже известных гэпов исполнителя без единого нового: 54 SKIP (`Executor does not support testdriver.js`; ровно те 54 корневых теста, что тянут `testdriver.js`) + 143 TIMEOUT HTTPS-порт-гэпа (`invalid url: invalid port: \"None\"`) + 1 ERROR (session-reuse артефакт: результат пришёл с URL предыдущего теста) — то есть тот же однородный SKIP-вал, что на `fedcm`, но здесь testdriver покрывает лишь 27% файлов, поэтому оставшиеся 73% успели упереться в HTTPS-порт и растянули прогон с 44 с до 52 мин. Выполнился ровно один тест — `insecure-context.html`: 1/2, причём прошедший сабтест ложноположителен по своей природе (`assert_throws_js(TypeError, () => navigator.canLoadAdAuctionFencedFrame())` зелен просто потому, что метода нет), а упавший — `ReferenceError: token is not defined`, 404 на невендоренный `/common/utils.js` (тот же survey-gap, что `beacon`). Внекатегорийные зависимости обширны и не вендорены: `/common/utils.js` (201 файл), `/common/dispatcher/dispatcher.js` (129), `/common/get-host-info.sub.js` (86), `/resources/testdriver*.js` (59/44), `/fetch/local-network-access/resources/support.sub.js` (5), `/webauthn/helpers.js` (2). Сам Fenced Frames в Lumen не реализован (`HTMLFencedFrameElement`/`FencedFrameConfig`/`Fence`/`window.fence`/`navigator.deprecatedReplaceInEmbedderURL` — все `undefined`), багом это не заведено — честный feature detection на 🚫-скоупе. Две находки дала проба `--dump-layout` уровнем выше, в общем для всего DOM объекте-обёртке узла: BUG-367 (живой `Element` расходится с WebIDL по 4 пунктам — нет `localName`/`prefix`, `tagName` апперкейсится и в SVG-namespace, внутренний `__nid__` перечислим и записываем (перезапись перенаправляет `appendChild` на другой узел), все ~120 членов на инстансе вместо прототипа) и BUG-368 (`innerHTML` — текстовая заглушка «Phase 0» на обоих движках: геттер = `textContent`, сеттер кладёт разметку одним текстовым узлом; при этом `CAPABILITIES.md` числит его в «DOM — ✅ full read/write»)",
+       "bugs": [
+        "BUG-367",
+        "BUG-368"
+       ]
       },
       {
        "id": "WPT-VENDOR-fetch",
@@ -6385,6 +6389,20 @@
    "status": "open",
    "title": "`navigator.credentials` нарушает WebIDL по пяти пунктам сразу. (1) Методы `create`/`get`/`preventSilentAccess`/`store` присвоены самому инстансу (`credentials.r…",
    "component": "js (`crates/js/src/credentials.rs:358-418` — тело шима `CredentialsContainer`; `crates/js/src/digital_credentials.rs:42-44` — утечка `_get_original`; установка — `crates/js/src/v8_runtime.rs:3881`/`3886`, `crates/js/src/lib.rs:1053`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-367": {
+   "status": "open",
+   "title": "Живая обёртка `Element` (то, что отдают `getElementById`/`querySelector`/`createElement`/`firstChild` для **любого** узла документа) расходится с WebIDL по четы…",
+   "component": "js (`crates/js/src/dom.rs:5516-5880` — литерал `_lumen_build_element`, общая фабрика живых обёрток узлов; `dom.rs:5521` `__nid__`; `dom.rs:5522-5523` `tagName`/`nodeName`; `dom.rs:4599-4612` `_lumen_element_prototype_for`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-368": {
+   "status": "open",
+   "title": "`innerHTML` на живом DOM — текстовая заглушка на обоих движках, обе половины помечены в коде как «Phase 0»: геттер возвращает `collect_text_content` (буквально…",
+   "component": "js (`crates/js/src/v8_runtime.rs:1386-1407` — привязки на дефолтном V8; `crates/js/src/dom.rs:878-899` — те же на rquickjs; потребители — `dom.rs:5546-5547`, `4255-4256`, `4322-4323`, `6307`/`6313`)",
    "date": null,
    "debtor": false
   }
