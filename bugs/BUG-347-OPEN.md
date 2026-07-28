@@ -70,3 +70,31 @@ implemented, modulo BUG-346's dot-segment gap) instead of `Url::parse(url)`. Re-
 `run_report.py --all --root custom-elements --recursive` plus a targeted check of the four
 categories that hit this earlier (`browsing-topics`, `client-hints`,
 `connection-allowlist`, `cors`) to confirm.
+
+## Измеренный вес (WPT-VENDOR-fetch, 2026-07-28)
+
+Прогон вендоренной категории `fetch` (`run_report.py --all --root fetch
+--recursive`, 1 ч 22 мин, 176/481 harness OK, 364/2692 сабтеста) — самая
+профильная проверка для этого бага из возможных, и она первая даёт ему
+измеримый вес:
+
+```
+fetch error: invalid url: invalid url: missing scheme: "..."      201 строка
+```
+
+Примеры из лога: `"../resources/bad-chunk-encoding.py?count=1"`,
+`"../../../xhr/resources/header-content-length.asis"`,
+`"xhr/resources/echo-headers.py"` — то есть весь спектр относительных форм.
+
+Это доминирующий класс отказов категории наравне с HTTPS-порт-гэпом (147) и
+survey-gap по `/common/*`. Значительная часть из 118 тестов, у которых harness
+поднялся, но прошло **0** сабтестов, отваливается именно здесь: тело теста
+целиком состоит из `fetch()` по относительному пути.
+
+Фикс стоит делать вместе с [BUG-346](BUG-346-OPEN.md) (тот же прогон даёт ему 69
+собственных 404) и с пунктом A2 [BUG-370](BUG-370-OPEN.md) (`new Request('rel').url`
+не абсолютизируется — соседняя строка того же шима, `dom.rs:9027`).
+
+Верификация после фикса: `run_report.py --all --root fetch --recursive`,
+ожидание — исчезновение строк `missing scheme` (до фикса 201) и рост
+`176/481 harness OK` / `364/2692 сабтеста`.

@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 67,
+  "open": 69,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 339,
+ "total_bugs": 341,
  "phases": [
   {
    "id": "P0",
@@ -2216,9 +2216,13 @@
       {
        "id": "WPT-VENDOR-fetch",
        "title": "WPT: вендорить + прогнать категорию `fetch`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/fetch/`, 985 файлов: 23 подкатегории, 313 `.html`/`.htm`, 179 `.any.js`, 65 `.window.js`, 78 Python-эндпоинтов wptserve, 48 `.headers`), скоуп ⬜ (кандидат). `run_report.py --all --root fetch --recursive` — **1 ч 22 мин 48 с, 176/481 harness OK, 364/2692 сабтеста** — на два порядка лучше любой другой вендоренной категории (`fenced-frame` 1/199, `fedcm` 0/81): это первая категория со скоупом ⬜, чьё API реально реализовано, поэтому тесты не отсекаются гэпами исполнителя, а проверяют движок. Исходы: 168 `Test OK` с разбором сабтестов, 42 `Test TIMEOUT` с частичными, 190 TIMEOUT, 56 ERROR, 16 SKIP (testdriver — всего 3% файлов), 1 PRECONDITION_FAILED; полностью зелёных 13. Главный результат прогона — измеримый вес двух уже заведённых багов: BUG-347 (`fetch()` не резолвит относительные URL) — 201 строка `missing scheme`, это самая профильная для него категория; BUG-346 (`Url::resolve()` не схлопывает `..`) — впервые бьёт по внутрикатегорийному вендоренному файлу: 69 ответов 404 на `/fetch/api/*/../resources/utils.js`, хотя файл лежит на диске; он же определяет `RESOURCES_DIR`/`dirname`/`stringToArray`/`requestForbiddenHeaders`, т.е. все `is not defined` в логе — его следствие, а один фикс разблокирует хелпер всей подкатегории `api/` (178 тестов). Остальное — HTTPS-порт-гэп (147) и survey-gap по `/common/*` (главные: `get-host-info.sub.js` 67, `utils.js` 64, `subset-tests-by-key.js` 24). Две собственные находки пробы `--dump-layout`, впервые в этом бэклоге подтверждённые результатами самих тестов, а не заменяющие их: BUG-369 (`Headers` не итерируем, `entries`/`keys`/`values` отдают массивы, `new Headers(headers)` теряет заголовки, нет валидации/guard/`getSetCookie`, `_map`/`_key` торчат наружу — `headers-record` 0/13, `headers-no-cors` 0/8, `header-setcookie` 2/24, `header-values-normalize` 1/62) и BUG-370 (у `Request` нет Body-mixin вовсе, `url` не абсолютизируется, нет `Response.json()`, `Response.error().type` = `default`, `Response.redirect()` без `Location`, нулевая валидация — `request-consume` 0/45, `response-static-redirect` 0/11, `response-form-data` 0/14)",
+       "bugs": [
+        "BUG-369",
+        "BUG-370"
+       ]
       },
       {
        "id": "WPT-VENDOR-file-system-access",
@@ -6403,6 +6407,20 @@
    "status": "open",
    "title": "`innerHTML` на живом DOM — текстовая заглушка на обоих движках, обе половины помечены в коде как «Phase 0»: геттер возвращает `collect_text_content` (буквально…",
    "component": "js (`crates/js/src/v8_runtime.rs:1386-1407` — привязки на дефолтном V8; `crates/js/src/dom.rs:878-899` — те же на rquickjs; потребители — `dom.rs:5546-5547`, `4255-4256`, `4322-4323`, `6307`/`6313`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-369": {
+   "status": "open",
+   "title": "`Headers` — ES5-конструктор поверх массива `this._map`, а не WebIDL-интерфейс; расходится с Fetch §2.2 по 8 пунктам. Главный: **не итерируем** — `Symbol.iterato…",
+   "component": "js (`crates/js/src/dom.rs:8845-8881` — конструктор `Headers` и весь его прототип: `_key` 8856, `append` 8857, `set` 8861, `get` 8866, `entries`/`keys`/`values` 8879-8881)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-370": {
+   "status": "open",
+   "title": "`Request`/`Response` — Phase-0-приближения (признано в комментарии `dom.rs:9025`). `Request` **не имеет Body-mixin вовсе**: `text`/`json`/`blob`/`arrayBuffer`/`…",
+   "component": "js (`crates/js/src/dom.rs:8908-8925` — конструктор `Response`; `8967-9007` — Body-mixin; `9008-9024` — `clone`/`error`/`redirect`; `9026-9046` — `Request`)",
    "date": null,
    "debtor": false
   }

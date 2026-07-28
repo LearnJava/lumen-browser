@@ -62,3 +62,36 @@ the `Self::parse` call in `Url::resolve()` (and likely in `Url::parse` too, for 
 URLs written with `..` directly). Re-run `run_report.py --all --root custom-elements
 --recursive` afterward — the `reactions/`/`reactions/customized-builtins/` subtrees should
 go from mostly TIMEOUT to running their actual test bodies.
+
+## Измеренный вес (WPT-VENDOR-fetch, 2026-07-28)
+
+Прогон вендоренной категории `fetch` (`run_report.py --all --root fetch
+--recursive`, 1 ч 22 мин, 176/481 harness OK) дал этому багу первую **числовую**
+оценку — и вскрыл более острый случай, чем `custom-elements`: здесь `..` ломает
+не невендоренный внешний хелпер, а **внутрикатегорийный файл, который лежит на
+диске**.
+
+69 ответов 404 на путях вида:
+
+```
+/fetch/api/cors/../resources/utils.js       20
+/fetch/api/basic/../resources/utils.js      18
+/fetch/api/redirect/../resources/utils.js    8
+/fetch/api/response/../resources/utils.js    6
+/fetch/api/policies/../resources/utils.js    5
+/fetch/api/request/../resources/utils.js     4
+```
+
+При этом `tests/wpt/fetch/api/resources/utils.js` вендорен и читаем — 404 целиком
+порождён несхлопнутым `..`.
+
+Этот файл — общий хелпер самой крупной подкатегории (`fetch/api/`, 178 тестов из
+481) и определяет `RESOURCES_DIR`, `dirname`, `stringToArray`,
+`requestForbiddenHeaders`. Поэтому **все** ошибки `… is not defined` в логе
+прогона (`RESOURCES_DIR` 12, `dirname` 6, `stringToArray` 1,
+`requestForbiddenHeaders` 1) — одно и то же последствие этого бага, а не
+отдельные дыры.
+
+Верифицировать фикс удобнее всего именно здесь: `run_report.py --all --root
+fetch --recursive` и проверка, что 404 на `*/../resources/utils.js` исчезли
+(до фикса — 69).
