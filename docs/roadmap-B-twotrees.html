@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 69,
+  "open": 73,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 341,
+ "total_bugs": 345,
  "phases": [
   {
    "id": "P0",
@@ -2227,9 +2227,15 @@
       {
        "id": "WPT-VENDOR-file-system-access",
        "title": "WPT: вендорить + прогнать категорию `file-system-access`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/file-system-access/`, 43 файла: `META.yml`/`WEB_FEATURES.yml`/`README.md`, **5** исполняемых тестов, 29 `local_*-manual.https.html`, `resources/` с двумя хелперами и sandbox-страницей, `script-tests/`, `LICENSE-WPT.md`), скоуп ⬜ (кандидат). Соотношение 29 ручных к 5 исполняемым — определяющее свойство: пикер по спеке требует пользовательского выбора файла, поэтому почти всё апстримовое дерево неавтоматизируемо; здесь, в отличие от `eyedropper`/`accname`/`core-aam`/`dpub-aam`/`editing`, глоб `run_report.py` и wptrunner сходятся (оба дают 5), потому что все ручные файлы несут суффикс `-manual` в имени, а не лежат в каталоге `manual/`. `run_report.py --all --root file-system-access --recursive` — **2 мин 30 с, 0/5 harness OK, 0/0 сабтестов**: все 5 id `.https.`, все 5 TIMEOUT по HTTPS-порт-гэпу. Ни одного SKIP: `testdriver.js` тянут 29 из 42 файлов, но все 29 — те самые `-manual`, которых манифест не отбирает, поэтому категория до testdriver-ветки не доходит вовсе и стоит 2.5 мин против 52 мин у `fenced-frame` при сопоставимой доле testdriver-файлов. Прогон сигнала не дал, но проба `--dump-layout` окупилась необычно хорошо, потому что API в Lumen **реализован** (`crates/js/src/filesystem_access.rs`, оба движка) — четыре находки. BUG-371: все 10 нативных привязок (`__lumen_file_read_text`, `_lumen_dir_entries`, `_lumen_writable_write_text` и др.) — обычные свойства `window`, а реестры выданных файлов/каталогов/save-handle процесс-глобальны и нумеруются с 1, поэтому любая страница перебором id читает файлы, выданные другому origin, эскалируется от каталога к чтению файлов внутри него (`_lumen_dir_get_file` сам выпускает новый токен) и перехватывает чужой save-handle до его закрытия; документированная модель безопасности («JS only receives an opaque token») верна буквально и не защищает. BUG-372: в движке ДВА класса с именем `FileSystemDirectoryHandle` — `storage_manager.rs` определяет заглушку внутри IIFE и экспортирует под всегда-истинным guard-ом, после чего `window`-имя затирается настоящим классом, но `getDirectory()` резолвит имя по замыканию и продолжает отдавать заглушку с непересекающимся набором методов; её `removeEntry()` резолвится успехом, ничего не удаляя, а `getFileHandle(name,{create:true})` отдаёт голый литерал без `getFile`; это ровно то, что измеряет вендоренный `getDirectory.https.any.js`. BUG-373: все 9 `new DOMException(...)` в модуле переданы аргументами наоборот (в движке порядок `(message, name)`, как в `dom.rs` и всех прочих шимах), поэтому `e.name === 'AbortError'` никогда не истинно и отмена пикера неотличима от ошибки. BUG-374: три несвязанных ES5-конструктора вместо WebIDL-иерархии — нет базового `FileSystemHandle`, конструкторы публично вызываемы, `name`/`kind` записываемы, `entries()` раздаёт handle-ы с занулёнными id, каталог не async-итерируем, `FileSystemWritableFileStream` не наследует `WritableStream` (`seek`/`truncate` — пустые промисы), опции пикеров и пользовательская активация не проверяются вовсе, что даёт 37 из 37 сабтестов `showPicker-errors.https.window.js`. `CAPABILITIES.md` переведена по File System Access с ✅ на 🟡",
+       "bugs": [
+        "BUG-371",
+        "BUG-372",
+        "BUG-373",
+        "BUG-374"
+       ]
       },
       {
        "id": "WPT-VENDOR-fledge",
@@ -6421,6 +6427,34 @@
    "status": "open",
    "title": "`Request`/`Response` — Phase-0-приближения (признано в комментарии `dom.rs:9025`). `Request` **не имеет Body-mixin вовсе**: `text`/`json`/`blob`/`arrayBuffer`/`…",
    "component": "js (`crates/js/src/dom.rs:8908-8925` — конструктор `Response`; `8967-9007` — Body-mixin; `9008-9024` — `clone`/`error`/`redirect`; `9026-9046` — `Request`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-371": {
+   "status": "open",
+   "title": "Все 10 нативных привязок File System Access / file-input — обычные свойства `window` (проба: `typeof __lumen_file_read_text === 'function'` на любой странице),…",
+   "component": "js (`crates/js/src/filesystem_access.rs:324-405` и `:418-486` — регистрация восьми нативов; `crates/js/src/file_input.rs:104-130` и `:155-171` — ещё двух; реестры `file_input.rs:38/45`, `filesystem_access.rs:88/118`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-372": {
+   "status": "open",
+   "title": "В движке **два** разных класса с именем `FileSystemDirectoryHandle`, и `navigator.storage.getDirectory()` отдаёт не тот: `storage_manager.rs` определяет заглушк…",
+   "component": "js (`crates/js/src/storage_manager.rs:40-61` заглушечный класс в IIFE, `:99-104` `getDirectory`; `crates/js/src/filesystem_access.rs:574-659` настоящий класс; порядок `crates/js/src/lib.rs:1294`→`:1332`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-373": {
+   "status": "open",
+   "title": "Все 9 `new DOMException(...)` в модуле переданы аргументами наоборот. Конструктор в движке стандартного порядка `(message, name)` — так он используется в `dom.r…",
+   "component": "js (`crates/js/src/filesystem_access.rs` строки 561, 628, 630, 643, 645, 653, 667, 679, 693)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-374": {
+   "status": "open",
+   "title": "File System Access выставлен как три несвязанных ES5-конструктора вместо WebIDL-иерархии, 10 независимых расхождений (все — вывод пробы): нет базового `FileSyst…",
+   "component": "js (`crates/js/src/filesystem_access.rs:499-711` — `FSAL_SHIM` целиком)",
    "date": null,
    "debtor": false
   }
