@@ -11,7 +11,7 @@
     python graphic_tests/run.py --no-cache          # принудительная пересъёмка Edge-скриншотов
     python graphic_tests/run.py --bisect 100        # юнит-зависимости interaction-теста + сам тест
     python graphic_tests/run.py --ipc               # захват Lumen по IPC (CPU-снимок), без gdigrab (TAB-7)
-    python graphic_tests/run.py --live               # одно живое окно на весь прогон, gdigrab-снимок (SDC-3)
+    python graphic_tests/run.py --per-test-process  # opt-out из живого окна: kill+relaunch на каждый тест
     python graphic_tests/run.py --paint-bisect 100  # DEVX-4: diff% при отключении каждого LUMEN_NO_* флага
 
 Workflow:
@@ -29,17 +29,22 @@ Edge-эталон, ffmpeg-crop и diff-метрика — те же. NB: CPU-б�
 паритете с femtovg по border-radius/gradients/images (BUG-221), поэтому --ipc
 опционален, а gdigrab остаётся дефолтным захватом.
 
-Режим --live (SDC-3): один процесс/окно lumen на весь прогон вместо kill+relaunch
-на каждый тест (то был главный источник расхода времени и гонок фокуса — «magenta
-marker not found»). Управление окном — MCP (`--mcp-live-port`, SDC-2) через
-LiveWindowSession: `tools/call navigate` грузит страницу, `tools/call
-wait{condition:document_ready}` даёт настоящий сигнал готовности вместо
-`time.sleep(LUMEN_WAIT_SEC)`. Сам пиксельный снимок — по-прежнему gdigrab
-настоящего femtovg-окна (не CPU-путь MCP `resource://screenshot`, у которого тот
-же разрыв паритета, что и у --ipc), поэтому --live совместим с реальным JS
-(TEST-57, 129-138 — им нужен настоящий движок, не CPU-снимок без исполнения
-скриптов). TEST-00 калибрует crop offset один раз за прогон, как и раньше —
-окно/процесс просто не пересоздаётся между тестами.
+Живое окно — режим по умолчанию (SDC-4, ранее SDC-3 за флагом --live): один
+процесс/окно lumen на весь прогон вместо kill+relaunch на каждый тест (то был
+главный источник расхода времени и гонок фокуса — «magenta marker not found»).
+Управление окном — MCP (`--mcp-live-port`, SDC-2) через LiveWindowSession:
+`tools/call navigate` грузит страницу, `tools/call wait{condition:document_ready}`
+даёт настоящий сигнал готовности вместо `time.sleep(LUMEN_WAIT_SEC)`. Сам
+пиксельный снимок — по-прежнему gdigrab настоящего femtovg-окна (не CPU-путь MCP
+`resource://screenshot`, у которого тот же разрыв паритета, что и у --ipc),
+поэтому этот режим совместим с реальным JS (TEST-57, 129-138 — им нужен настоящий
+движок, не CPU-снимок без исполнения скриптов). TEST-00 калибрует crop offset
+один раз за прогон, как и раньше — окно/процесс просто не пересоздаётся между
+тестами. `--per-test-process` возвращает старое поведение (kill+relaunch на
+каждый тест) как явный opt-out — diagnostic fallback, если живое окно ведёт себя
+нестабильно; `--paint-bisect` использует kill+relaunch сам, независимо от флага
+(нужен свежий процесс на каждый `LUMEN_NO_*` флаг). `--live` остался как no-op
+алиас для обратной совместимости.
 
 DEVX-1: живое окно запускается с `--deterministic --viewport 1024x720` — первое
 замораживает Date.now()/Math.random()/rAF timestamp (убирает флейк в TEST-57,
@@ -1701,10 +1706,13 @@ def main() -> int:
                         help='Захват Lumen через `--ipc-server` (детерминированный CPU-снимок по TCP) '
                              'вместо gdigrab — без окна/ffmpeg-grab/магента-калибровки (TAB-7)')
     parser.add_argument('--live', action='store_true',
-                        help='Один процесс/окно lumen на весь прогон вместо kill+relaunch на каждый тест: '
-                             'Navigate+wait(document_ready) через `--mcp-live-port` (SDC-2), '
-                             'снимок по-прежнему через gdigrab (SDC-3). Совместим с реальным JS '
-                             '(TEST-57, 129-138), в отличие от --ipc.')
+                        help='Не-op: --live — режим по умолчанию с SDC-4, флаг оставлен для '
+                             'обратной совместимости старых команд/скриптов.')
+    parser.add_argument('--per-test-process', action='store_true',
+                        help='SDC-4 opt-out: kill+relaunch процесса lumen на каждый тест вместо одного '
+                             'живого окна на весь прогон (старый дефолт до SDC-3/4). Diagnostic fallback, '
+                             'если живое окно ведёт себя нестабильно; --paint-bisect всегда использует '
+                             'эту стратегию сам, независимо от флага.')
     parser.add_argument('--bisect', metavar='ID',
                         help='Прогнать юнит-зависимости interaction-теста (DEPS), затем сам тест; '
                              'вердикт: сломано свойство или взаимодействие')
@@ -1714,13 +1722,16 @@ def main() -> int:
                              'таблица diff%% — какая оптимизация меняет картинку')
     args = parser.parse_args()
 
-    if args.ipc and args.live:
-        print('--ipc и --live взаимоисключающие (два разных способа захвата Lumen).')
+    if args.ipc and args.per_test_process:
+        print('--ipc и --per-test-process взаимоисключающие (--ipc уже держит один процесс '
+              'на весь прогон, TAB-7).')
         return 2
-    if args.paint_bisect and (args.ipc or args.live):
-        print('--paint-bisect несовместим с --ipc/--live: нужен свежий процесс Lumen на '
-              'каждый LUMEN_NO_* флаг, чтобы переменная окружения гарантированно применилась.')
+    if args.paint_bisect and args.ipc:
+        print('--paint-bisect несовместим с --ipc: нужен свежий процесс Lumen на '
+              'каждый LUMEN_NO_* флаг, чтобы переменная окружения гарантированно применилась '
+              '(--paint-bisect использует kill+relaunch сам, --ipc для него бессмыслен).')
         return 2
+    use_live = not args.ipc and not args.per_test_process
 
     os.makedirs(SHOTS, exist_ok=True)
     preflight()
@@ -1744,10 +1755,12 @@ def main() -> int:
         atexit.register(_IPC_CLIENT.shutdown)
         print(f'IPC-сервер готов (вкладка {_IPC_TAB}); gdigrab/магента-калибровка отключены.')
 
-    # Live-window режим (SDC-3): один раз поднимаем настоящее окно lumen
-    # (--mcp-live-port) и держим его на весь прогон вместо kill+relaunch на
-    # каждый тест. gdigrab/магента-калибровка остаются (см. capture_lumen_live).
-    if args.live:
+    # Live-window режим (SDC-3, дефолт с SDC-4): один раз поднимаем настоящее
+    # окно lumen (--mcp-live-port) и держим его на весь прогон вместо
+    # kill+relaunch на каждый тест. gdigrab/магента-калибровка остаются (см.
+    # capture_lumen_live). --per-test-process (opt-out) или --ipc пропускают
+    # этот блок и используют свои стратегии захвата ниже/в run_one.
+    if use_live:
         global _LIVE_CLIENT
         port = _free_tcp_port()
         print(f'Live-режим: запуск lumen --mcp-live-port {port}...')
