@@ -264,7 +264,7 @@ def add_data_actions(html: str) -> str:
 # so `lumen_a11y::build_ax_tree` — the same builder that already reads ARIA
 # off web pages — derives real chrome accessibility nodes (tab list, tabs,
 # toolbar, address bar) straight from this markup, replacing the hand-rolled
-# `lumen_a11y::chrome` synthetic snapshot (DS-17) when `LUMEN_CSS_CHROME=1`.
+# `lumen_a11y::chrome` synthetic snapshot (DS-17).
 # Keyed off `id`/`data-testid`/`data-action` — all already stable, either
 # native to the reference or synthesized by `add_data_actions` above (this
 # function must run after it).

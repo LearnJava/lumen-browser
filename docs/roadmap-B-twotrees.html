@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 108,
+  "open": 112,
   "fixed": 273,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 381,
+ "total_bugs": 385,
  "phases": [
   {
    "id": "P0",
@@ -3976,9 +3976,15 @@
         {
          "id": "CC-15-6",
          "title": "CC-15-6: Удаление rollback-флага",
-         "status": "planned",
+         "status": "done",
          "size": "M",
-         "note": "Финал: удалить флаг отката `LUMEN_LEGACY_CHROME` (`css_chrome_enabled`, его вычисление main.rs:893, все оставшиеся `if`/`else`/`&&`-ветки) — только когда срезам CC-15-3..CC-15-5 больше нечего откатывать на легаси-стороне этих веток. Самый рискованный срез, по аналогии с финальным удалением rollback-пути в S12b. После CC-15-3, CC-15-4, CC-15-5"
+         "note": "Закрыто (2026-07-28, P1). Удалены переменная окружения `LUMEN_LEGACY_CHROME`, поле `css_chrome_enabled` и все 24 его ветки: легаси-стороны выброшены, движковые оставлены как единственный путь (`page_offset`/`point_over_chrome`/hover/active/click-роутинг/курсор/анимации хрома/оффсеты рендера). `chrome_doc` теперь всегда `Some`; `dockable_sidebars` уменьшена с 4 записей до 2 — `ID_AI`/`ID_SIDEBAR` перестали быть записями вместо записей с вечным `visible:false`. Удаление гейта сделало недостижимым легаси-хит-тест семь панелей — clippy перечислил каскад, он снят: `find.rs` (весь bar-overlay: `BarOverlay`/`build_bar_overlay`/`append_bar`/`BAR_*`, 2 highlight-теста переведены на `build_page_with_highlights`), `bookmark`/`print`/`settings`/`cert`/`history`/`ai`/`sidebar` (`hit_test`, `*Hit`-энумы, layout-константы, `SettingsSection`, их тесты) и в `main.rs` — `bookmark_anchor`/`history_panel_anchor`/`finish_bookmark_drop`/цепочка drag-and-drop закладок. Одно поведение перенесено, а не потеряно: индикатор `ERR` невалидного regex ушёл в `ChromeFindModel::count_label` (иначе невалидный паттерн выглядел бы как «0 совпадений»). Четыре пробела паритета заведены багами — BUG-412 (цвет ERR), BUG-413 (`#printOverlay` ничего не печатает), BUG-414 (`#view-settings` не пишет ни одной настройки), BUG-415 (нет действий над записями истории/закладок); их данные оставлены под `#[allow(dead_code, reason=…)]` со ссылкой на баг. `cargo clippy -p lumen-shell --all-targets -- -D warnings` зелёный, `cargo test -p lumen-shell` 1559/1559 (было 1619 — минус тесты удалённых хит-тестов). После CC-15-3, CC-15-4, CC-15-5",
+         "bugs": [
+          "BUG-412",
+          "BUG-413",
+          "BUG-414",
+          "BUG-415"
+         ]
         }
        ]
       },
@@ -6809,6 +6815,34 @@
    "status": "open",
    "title": "Движковый поповер переносит из легаси-панелей щитов/разрешений только счётчик заблокированных и первые две строки разрешений: домен текущей страницы и индикатор…",
    "component": "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-412": {
+   "status": "open",
+   "title": "Движковый `#findBar` не отличает невалидный regex-паттерн от «0 совпадений» цветом: легаси-бар писал `ERR` красным (`BAR_ERR`) против приглушённого `0/0`, у `.f…",
+   "component": "chrome (`assets/chrome/chrome.html` `#findCount`, `ChromeFindModel`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-413": {
+   "status": "open",
+   "title": "Печать из UI не работает: обе кнопки подвала движкового `#printOverlay` — `data-action=\"close-modal\"`, контролы `.print-settings` (принтер/страницы/ориентация/м…",
+   "component": "chrome (`#printOverlay`), shell (`panels/print_panel.rs`, `dispatch_chrome_action`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-414": {
+   "status": "open",
+   "title": "Движковые настройки только отображают: `ToggleSwitch` — no-op с CC-9 (все шесть `.toggle` эталона несут один `data-action` без различающего атрибута), а выбора…",
+   "component": "chrome (`#view-settings`, `ChromeAction::ToggleSwitch`), shell (`panels/settings_panel.rs`, `panels/themes.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-415": {
+   "status": "open",
+   "title": "Над записями истории и закладок нет ни одного действия: грep `data-action` внутри `#view-history` пуст, внутри `#view-bookmarks` — только навигационные `archive…",
+   "component": "chrome (`#view-history`, `#view-bookmarks`), shell (`panels/history_panel.rs`, `panels/bookmark_panel.rs`)",
    "date": null,
    "debtor": false
   }

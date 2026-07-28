@@ -12011,7 +12011,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         self.window = Some(window);
         self.renderer = Some(renderer);
         // CC-4: first chrome layout pass, now that the renderer knows the
-        // window's initial size. No-op off `LUMEN_CSS_CHROME`.
+        // window's initial size.
         self.relayout_chrome_host();
 
         // GG-4: Restore vertical-tab layout from persisted settings.
@@ -13561,7 +13561,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 self.relayout();
                 // CC-4: re-lay-out the engine-drawn chrome at the new window
-                // size. No-op off `LUMEN_CSS_CHROME`.
+                // size.
                 self.relayout_chrome_host();
                 // HTML §8.1.5.1, шаг 13: ResizeObserver delivery.
                 // JS-observers are delivered inside relayout() via deliver_layout_observers().
@@ -22964,11 +22964,10 @@ impl Lumen {
         /// the tab-bar-only height to include the new toolbar row).
         ///
         /// CC-14: the offset itself is [`Self::page_offset`], not a hardcoded
-        /// `(left_dock width, toolbar::CHROME_H)` pair — under
-        /// `LUMEN_CSS_CHROME=1` the content area's real origin is
-        /// `chrome_page_host_rect`'s, which can differ from the legacy
-        /// toolbar/sidebar geometry (e.g. the web/AI sidebar occupies chrome
-        /// layout width but is excluded from `left_dock()` under the flag,
+        /// `(left_dock width, toolbar::CHROME_H)` pair — the content area's
+        /// real origin is `chrome_page_host_rect`'s, which can differ from the
+        /// legacy toolbar/sidebar geometry (e.g. the web/AI sidebar occupies
+        /// chrome layout width but is not a `left_dock()` entry at all,
         /// see [`Self::dockable_sidebars`]). Using the wrong offset here would
         /// silently misfire every MCP/BiDi click/type once engine chrome is
         /// the default, since `page_offset()` is otherwise the single source

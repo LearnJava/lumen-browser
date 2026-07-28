@@ -487,7 +487,7 @@ Palette-константы») недооценивала масштаб — то
 | CC-15-3 | M | done (2026-07-28, P1) — вырезаны покраска/hit-test `toolbar.rs`/`tabs/strip.rs` и их транзитивные вызываемые (`tabs/archive.rs`, `address_bar.rs`) + гейтированные вызовы в `main.rs`, −2100 строк; см. §CC-15-3 ниже |
 | CC-15-4 | S | Удалить 10 подтверждённо-гейтированных `panels/*`-билдеров (bookmark/print/settings/cert/history/command_palette/ai/sidebar/shields/permission) |
 | CC-15-5 | XS | done (2026-07-28, P1) — перепроверка грепом подтвердила ровно эти 3 поля из 17 как орфанные (`toolbar_bg`/`tab_sleep_bg`/`tab_hibernate_bg`, 0 читателей вне `themes.rs`); удалены объявления, инициализаторы `DARK`/`LIGHT` и строки `desaturated()` |
-| CC-15-6 | M | Финал: удалить rollback-флаг `LUMEN_LEGACY_CHROME`/`css_chrome_enabled` целиком — самый рискованный срез |
+| CC-15-6 | M | done (2026-07-28, P1) — rollback-флаг `LUMEN_LEGACY_CHROME`/`css_chrome_enabled` удалён целиком вместе с каскадом ставшего мёртвым легаси-хит-теста; см. §CC-15-6 ниже |
 
 Полные формулировки со ссылками на строки — в ROADMAP.md, строки CC-15/CC-15-1…CC-15-6.
 
@@ -550,3 +550,52 @@ Palette-константы») недооценивала масштаб — то
 5. **Хром-функциональность вне макета** (reader view, source view, split view, hints, spellcheck-меню, реальные DevTools-панели, ~30 панелей — макет покрывает не все): остаются legacy-оверлеями поверх движкового хрома неограниченно долго; мигрируются по мере расширения эталона новыми версиями.
 6. **Два независимых набора interactive-thread-locals не существует** — один на процесс: ставить/чистить `set_interactive_state` строго вокруг каждого прохода (страница и хром — разные проходы) — дисциплина, закрепить комментом в хосте CC-4.
 7. **DPI/zoom/split view** — layout хрома в CSS-px по масштабу окна; проверяется в чек-листе CC-14.
+
+#### CC-15-6 — что удалено, что перенесено и что заведено багами
+
+**Флаг.** `std::env::var("LUMEN_LEGACY_CHROME")`, поле `Lumen::css_chrome_enabled` и все 24 его
+ветки. Правило одно: `css_chrome_enabled == true` → берём движковую сторону, легаси-сторону
+выбрасываем. Затронуты `page_offset()`, `point_over_chrome()`, hover/active-трекинг хрома на
+`CursorMoved`/`MouseInput`, click-роутинг, `update_cursor_icon`, тик анимаций/переходов хрома,
+оффсеты страницы в рендере (свёрнуты в вызов `page_offset()` — раньше это была вторая копия той же
+формулы), find-bar overlay, панель загрузок и семь `MouseInput`-веток панелей.
+
+Два места изменили форму, а не только ветку:
+
+* `chrome_doc` — теперь всегда `Some` (`Option` оставлен: через него читают 20+ мест, разворачивать
+  его — отдельная механическая правка вне DoD). Побочно это делает недостижимой DS-17-ветку
+  `chrome_ax_nodes` (синтетический a11y-снапшот) — она осталась `None`-рукавом `Option`, о чём
+  сказано в её doc-комментарии.
+* `dockable_sidebars()` — с `[…; 4]` до `[…; 2]`. `ID_AI`/`ID_SIDEBAR` были записями с вечным
+  `visible: false` (CC-10b: их ширину уже учитывает `chrome_page_host_rect`), теперь их просто нет.
+
+**Каскад мёртвого кода.** Удаление гейта сделало недостижимыми легаси-хит-тесты — приём CC-15-4
+(«удалить гейт → clippy сам перечислит мёртвое») дал 84 предупреждения за один прогон. Снято:
+`find.rs` (`BarOverlay`, `build_bar_overlay`, `build_with_overlay`, `append_bar`, все `BAR_*`;
+два теста подсветки переведены с удалённого `build_with_overlay` на `build_page_with_highlights`),
+`panels/{bookmark,print,settings,cert,history,ai,sidebar}_panel.rs` (`hit_test`, `*Hit`-энумы,
+layout-константы, `SettingsSection` целиком, `SidebarPanel::close`, их тесты),
+`main.rs` (`bookmark_anchor`, `history_panel_anchor`, `finish_bookmark_drop`, drag-механика закладок
+`BookmarkPanel::{drag, begin_drag, take_drag}`).
+
+**Перенесено, а не потеряно.** Легаси find-bar в regex-режиме показывал `ERR` вместо счётчика при
+невалидном паттерне. Движковый `#findBar` этого не знал — без переноса невалидный паттерн стал бы
+неотличим от «0 совпадений». `chrome_model_snapshot` теперь пишет `ERR` в
+`ChromeFindModel::count_label` (это и удержало `find::is_valid_regex_pattern` живой). Цветовой
+акцент (`BAR_ERR`) не перенесён — [BUG-412](../../bugs/BUG-412-OPEN.md).
+
+**Заведено багами** (все — регрессии флипа CC-14, не этого среза: панели перестали рисоваться ещё
+тогда, CC-15-4 сняла их покраску, CC-15-6 — хит-тест):
+
+| Баг | Что недоступно в движковом хроме |
+|---|---|
+| [BUG-412](../../bugs/BUG-412-OPEN.md) | цветовое выделение `ERR` в `#findCount` (косметика) |
+| [BUG-413](../../bugs/BUG-413-OPEN.md) | `#printOverlay` не печатает (обе кнопки — `close-modal`) и не связан с настройками печати |
+| [BUG-414](../../bugs/BUG-414-OPEN.md) | `#view-settings` не изменяет ни одной настройки (`ToggleSwitch` — no-op с CC-9) |
+| [BUG-415](../../bugs/BUG-415-OPEN.md) | нет действий над записями истории/закладок (переход, удаление, очистка, фильтр по папке, drag-refile) |
+
+Данные, оставшиеся без читателей из-за этих пробелов, помечены
+`#[allow(dead_code, reason = "BUG-NNN: …")]` — тем же приёмом, что CC-15-3/CC-15-4.
+
+**Гейт.** `cargo clippy -p lumen-shell --all-targets -- -D warnings` + `cargo test -p lumen-shell`
+1559/1559 (было 1619 — минус тесты удалённых хит-тестов), плюс полный гейт `/lumen-task-finish`.
