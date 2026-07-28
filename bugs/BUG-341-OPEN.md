@@ -3584,6 +3584,145 @@ flip.
   `style_arc` misses on non-elements) stand unchanged and remain below the noise
   floor.
 
+## S27 — the walk entered the document to talk about one node
+
+Branch `p1-bug341-s27`. The general case of S26: that slice removed the traversal
+for the cycle whose delta names *nobody*, and this one removes it for every
+subtree the delta cannot reach.
+
+### Census first (eleventh in a row), and it confirmed the queue's note
+
+`bug341_s27_walk_census` (lumen-shell, `--ignored`) times the traversal per pass
+(`CascadeStats::walk_ns`) and prints the spine the delta implies, computed from
+the same two node sets the delta carries — so the size of the proposed traversal
+was known before a line of it was written. On the CC-12 keystroke cycle:
+
+| | before S27 |
+|---|---|
+| nodes entered | **1740** of 1743 |
+| nodes re-cascaded | **1** |
+| `walk` | 0.14-0.55 ms, **31-40 %** of the pass |
+| spine implied by the delta | **11** nodes + 1 forced subtree |
+
+Everything the walk did to the other 1739 nodes — reuse the carried style, report
+itself clean, record a `clean_subtrees` entry — is already implied for any subtree
+holding neither a dirty root nor a content-mutated node. That is the S26 argument
+per subtree.
+
+**The replay is split by operation** (the S26 lesson), because the choice was
+between two traversal shapes rather than between traversing and not:
+
+| replay over the real document | cost |
+|---|---|
+| bare recursion, 1743 nodes | 0.012-0.017 ms |
+| recursion + one map restamp per element (828) | 0.037-0.044 ms |
+
+So the cheapest shape that still keeps the S24 ordinal exact costs ~0.04 ms —
+~6 % of the pass, **below what the A/B protocol resolves on this machine**
+(~10-15 %). Deciding that before writing the code is S24's rule, and the decision
+went the other way from the one the queue floated: the ordinal is kept exact and
+paid for, because leaving it stale and teaching `reuse`/`finish_pass` to tolerate
+that trades a slow frame for a stale style.
+
+### What the slice does
+
+`counters::restyle_spine` builds the **ancestor closure** of the delta's two node
+sets — not the sets themselves, because a node's dirtiness has to be visible to
+everything above it (an ancestor of a content-mutated node must drop out of
+`clean_subtrees`, and a dirty root must be reached before its subtree can be
+forced). `skip_clean_subtree`, called at both of `walk`'s recursion points,
+declines to enter a child outside that closure and pays it the one thing the pass
+still owes it: `CascadeStyles::confirm` restamps the entry's pass ordinal without
+reading a style, running a selector match or touching the counter state. Exactly
+one `clean_subtrees` insert per skipped subtree, not one per element — the set's
+only consumer (`incremental::extract_clean_subtrees`) stops at the topmost member
+it meets, the same argument as S26's `carried_unchanged`.
+
+**Four pass-wide conditions**, any of which keeps the pre-S27 traversal verbatim:
+`ContentDirty::Untracked` (no spine can narrow "anything may have changed"); a
+composed tree that is not the DOM tree (`FlatTree::is_plain` — the closure walks
+`Node::parent`); quote content in the sheet (`quote_depth` is a running
+document-order counter); generated content recorded by the previous pass
+(`nodes`/`quotes` are rebuilt by the walk, not carried — S26's licence, per
+subtree).
+
+**Three per-position conditions**, and the second is the one that is easy to
+miss: an ancestor is re-cascading (`child_force`); **the parent is
+content-mutated** — its child list may have *gained* that child from elsewhere in
+the document, and no delta names the arriving node, only the parent that received
+it, so skipping it would keep a style cascaded under a different inherited chain;
+the counter stacks are non-empty at this position (`counter-increment` without a
+reset leaks forward across siblings, so this is checked per position, not per
+pass).
+
+### Gates — by counter, each on both arms
+
+Counter gates, not differential ones, for the S8 reason: a walk that enters the
+whole document produces byte-identical output, so only a count separates the two
+shapes.
+
+- `bug341_s27_a_keystroke_walks_its_own_chain_not_the_document` (lumen-shell, runs
+  by default) — the real `chrome.html` on four arms: the cold pass still walks
+  everything; the keystroke enters under a quarter of it; the keystroke still
+  re-cascades something (zeroing the visit count by never cascading passes arm
+  one and renders a stale document); `confirm_misses == 0`; and the carried cache
+  is neither swept nor shrunk. **Verified red without the licence: 1740 of 1740
+  nodes instead of 55.**
+- `bug341_s27_a_walk_only_enters_the_spine_of_its_delta` (lumen-layout) — the same
+  shape on a synthetic two-branch fixture, plus the map's size after the skip.
+- `bug341_s27_a_skipped_subtree_still_pays_the_pass_ordinal` — two cycles naming
+  nodes in *different* branches, so the second walks into what the first skipped.
+  A skip that forgets to restamp gets its subtree swept at `finish_pass` and
+  re-cascaded on the next cycle: identical output, one document-sized recompute
+  per interaction.
+- `bug341_s27_children_of_a_content_mutated_node_are_never_skipped` — gated by
+  comparison against the delta's own spine length, not a flat count.
+- `bug341_s27_a_document_with_counters_is_still_walked_in_full` — both arms: no
+  subtree skipped, *and* `counter()` still resolves to 1/2/3.
+- `mutation_incremental_restyle_spine_skip_matches_full` (lumen-layout) — the
+  differential half, and it asserts `skipped_subtrees > 0` **first**: a
+  differential test over a mechanism that skipped nothing passes trivially and
+  would keep passing after the licence was widened to something wrong.
+
+### Measurement — interleaved A/B ×6 against main (`95c197360`)
+
+| | main | S27 |
+|---|---|---|
+| `CC12_KEY` min | 0.52 / 0.49 / 0.56 / 0.58 / 0.51 / 0.59 | **0.48 / 0.46 / 0.51 / 0.48 / 0.53 / 0.48** |
+| `CC12_KEY` p50 | 0.67 / 0.58 / 0.64 / 0.74 / 0.56 / 0.98 | **0.58 / 0.58 / 0.58 / 0.58 / 0.62 / 0.59** |
+| `CC12_HOVER` min | 0.32 / 0.33 / 0.35 / 0.32 / 0.29 / 0.37 | 0.30 / 0.36 / 0.33 / 0.28 / 0.29 / 0.30 |
+
+`CC12_KEY` is lower in **five rounds out of six** by min (paired −6…−17 %) and by
+p50, and its p50 spread collapses (0.58-0.62 against main's 0.56-0.98) — but the
+min groups only just touch, so as in S26 the paired comparison is the claim and
+the counter is the proof: nodes entered **1740 → 55**, subtrees skipped **0 → 12**,
+`walk` 0.14-0.55 → **0.05-0.09 ms**, `recomputed` still exactly 1. Six rounds
+rather than three because the census again predicted an effect near the protocol's
+resolution.
+
+`CC12_HOVER` — **no claim, and none was expected**: S26 already skips its walk
+entirely (`visited == 0`), so there is nothing left for a spine to narrow.
+
+Gate CC-12 is where S25 and S26 left it — `CC12_KEY` p95 in budget in 3 of 6
+rounds (1.61-3.18 ms against main's 1.58-3.57), i.e. still a coin flip, and this
+machine ran noisier than during S26. `dump_golden.py` 12/12 with no diff.
+
+### What S28 should look at
+
+- **`CascadeStats::confirmed` is now the largest per-node count in the pass**
+  (~800 restamps on a keystroke, ~0.04 ms by the replay above). It exists only to
+  keep the S24 ordinal exact. Removing it means making "an entry exists iff the
+  immediately preceding pass visited that node" a property the map maintains
+  without a per-element visit — e.g. by versioning subtrees rather than entries.
+  Below the protocol's resolution today; decide with a counter, not wall-clock.
+- **Dense keying for the `NodeId`-keyed collections** — S26's note, and S19's
+  lesson applies literally: re-measure it now, because the spine walk removed most
+  of the 4200 lookups it was priced against.
+- The `Arc::clone` per reused element is gone on skipped subtrees (S26's note
+  predicted this) and remains only on the spine, where the count is now ~11.
+- Both entries from S25's list (`clean_subtrees` built from scratch, `style_arc`
+  misses on non-elements) stand unchanged and remain below the noise floor.
+
 ## Repro
 
 ```bash

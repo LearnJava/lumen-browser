@@ -596,7 +596,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/devtools/src/ws.rs:104` **fn** `read_text_frame` — Прочитать один WebSocket фрейм (RFC 6455 §5.2)
 `crates/devtools/src/ws.rs:125` **fn** `write_text_frame` — Отправить text фрейм (server→client, без маски)
 
-## lumen-dom  (227 symbols)
+## lumen-dom  (228 symbols)
 
 `crates/engine/dom/src/contenteditable.rs:10` **enum** `DomCommand` — A single, reversible DOM modification
 `crates/engine/dom/src/contenteditable.rs:40` **struct** `PasteData` — Data from a paste operation (clipboard or drag-drop)
@@ -785,34 +785,35 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:2316` **struct** `AnchorInfo` — Информация об якорной ссылке (`<a href>`), найденной в документе
 `crates/engine/dom/src/lib.rs:2349` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
 `crates/engine/dom/src/lib.rs:2359` **fn** `children_of` — Composed-tree children of `id`
-`crates/engine/dom/src/lib.rs:2383` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
-`crates/engine/dom/src/lib.rs:2478` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:2502` **struct** `IframeInfo` — Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения
-`crates/engine/dom/src/lib.rs:2558` **fn** `collect_iframes` — Собрать все `<iframe>` элементы документа с их sandbox-ограничениями
-`crates/engine/dom/src/lib.rs:2569` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
-`crates/engine/dom/src/lib.rs:2588` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
-`crates/engine/dom/src/lib.rs:2619` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
-`crates/engine/dom/src/lib.rs:2642` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
-`crates/engine/dom/src/lib.rs:2661` **fn** `trusted` — Construct a trusted input event (native input pipeline or automation
-`crates/engine/dom/src/lib.rs:2672` **fn** `untrusted` — Construct an untrusted input event (synthesized by page script via
-`crates/engine/dom/src/lib.rs:2693` **enum** `CompositionEventType` — Type of IME composition event (UI Events §5.2.5)
-`crates/engine/dom/src/lib.rs:2704` **fn** `as_str` — The canonical DOM event name per UI Events §5.2.5
-`crates/engine/dom/src/lib.rs:2718` **struct** `CompositionData` — Data for a `compositionstart` / `compositionupdate` / `compositionend` event
-`crates/engine/dom/src/lib.rs:2745` **struct** `CompositionEvent` — An IME composition event (compositionstart / update / end)
-`crates/engine/dom/src/lib.rs:2764` **fn** `new` — Create a new trusted composition event (native IME pipeline)
-`crates/engine/dom/src/lib.rs:2776` **fn** `untrusted` — Create an untrusted composition event (synthesized by page script)
-`crates/engine/dom/src/lib.rs:2787` **fn** `start` — Create a `compositionstart` event with initial IME text
-`crates/engine/dom/src/lib.rs:2802` **fn** `update` — Create a `compositionupdate` event for interim preedit text
-`crates/engine/dom/src/lib.rs:2817` **fn** `end` — Create a `compositionend` event for final committed text
-`crates/engine/dom/src/lib.rs:2845` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
-`crates/engine/dom/src/lib.rs:2887` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
-`crates/engine/dom/src/lib.rs:2945` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
-`crates/engine/dom/src/lib.rs:2999` **fn** `insert_paragraph_break`
-`crates/engine/dom/src/lib.rs:3028` **fn** `node_text_content` — Returns the full text content of `node` — concatenation of all descendant text nodes
-`crates/engine/dom/src/lib.rs:3041` **fn** `locate_text_offset_range` — Locate the text node and local byte range covering `[start, end)` of
-`crates/engine/dom/src/lib.rs:3085` **fn** `node_child_count` — Number of direct DOM children of `node`
-`crates/engine/dom/src/lib.rs:3094` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
-`crates/engine/dom/src/lib.rs:3106` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
+`crates/engine/dom/src/lib.rs:2384` **fn** `is_plain` — Whether the composed tree *is* the DOM tree — no shadow host or slot
+`crates/engine/dom/src/lib.rs:2396` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
+`crates/engine/dom/src/lib.rs:2491` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/lib.rs:2515` **struct** `IframeInfo` — Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения
+`crates/engine/dom/src/lib.rs:2571` **fn** `collect_iframes` — Собрать все `<iframe>` элементы документа с их sandbox-ограничениями
+`crates/engine/dom/src/lib.rs:2582` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
+`crates/engine/dom/src/lib.rs:2601` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
+`crates/engine/dom/src/lib.rs:2632` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
+`crates/engine/dom/src/lib.rs:2655` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
+`crates/engine/dom/src/lib.rs:2674` **fn** `trusted` — Construct a trusted input event (native input pipeline or automation
+`crates/engine/dom/src/lib.rs:2685` **fn** `untrusted` — Construct an untrusted input event (synthesized by page script via
+`crates/engine/dom/src/lib.rs:2706` **enum** `CompositionEventType` — Type of IME composition event (UI Events §5.2.5)
+`crates/engine/dom/src/lib.rs:2717` **fn** `as_str` — The canonical DOM event name per UI Events §5.2.5
+`crates/engine/dom/src/lib.rs:2731` **struct** `CompositionData` — Data for a `compositionstart` / `compositionupdate` / `compositionend` event
+`crates/engine/dom/src/lib.rs:2758` **struct** `CompositionEvent` — An IME composition event (compositionstart / update / end)
+`crates/engine/dom/src/lib.rs:2777` **fn** `new` — Create a new trusted composition event (native IME pipeline)
+`crates/engine/dom/src/lib.rs:2789` **fn** `untrusted` — Create an untrusted composition event (synthesized by page script)
+`crates/engine/dom/src/lib.rs:2800` **fn** `start` — Create a `compositionstart` event with initial IME text
+`crates/engine/dom/src/lib.rs:2815` **fn** `update` — Create a `compositionupdate` event for interim preedit text
+`crates/engine/dom/src/lib.rs:2830` **fn** `end` — Create a `compositionend` event for final committed text
+`crates/engine/dom/src/lib.rs:2858` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
+`crates/engine/dom/src/lib.rs:2900` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
+`crates/engine/dom/src/lib.rs:2958` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
+`crates/engine/dom/src/lib.rs:3012` **fn** `insert_paragraph_break`
+`crates/engine/dom/src/lib.rs:3041` **fn** `node_text_content` — Returns the full text content of `node` — concatenation of all descendant text nodes
+`crates/engine/dom/src/lib.rs:3054` **fn** `locate_text_offset_range` — Locate the text node and local byte range covering `[start, end)` of
+`crates/engine/dom/src/lib.rs:3098` **fn** `node_child_count` — Number of direct DOM children of `node`
+`crates/engine/dom/src/lib.rs:3107` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
+`crates/engine/dom/src/lib.rs:3119` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
 `crates/engine/dom/src/vtt.rs:7` **struct** `VttCueSettings` — Настройки позиционирования cue (WebVTT §6.3). Phase 0: сырые строки значений
 `crates/engine/dom/src/vtt.rs:16` **struct** `VttCue`
 `crates/engine/dom/src/vtt.rs:28` **enum** `VttError`
@@ -1896,52 +1897,52 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/counters.rs:46` **type** `CounterSnapshot` — Per-element counter stacks snapshot
 `crates/engine/layout/src/counters.rs:51` **enum** `QuoteSlot` — Generated-content slot of an element that can carry `open-quote` /
 `crates/engine/layout/src/counters.rs:88` **struct** `CascadeStyles` — BUG-341 S24 — the per-node cascade cache, carried from one pass to the next
-`crates/engine/layout/src/counters.rs:195` **fn** `passes_lived` — How many passes have written into this cache — 0 for one that has only
-`crates/engine/layout/src/counters.rs:200` **fn** `swept_last_pass` — Whether the pass that just finished had to evict — see the `swept` field
-`crates/engine/layout/src/counters.rs:206` **fn** `generated_content` — Whether the pass that filled this cache produced any counter snapshot or
-`crates/engine/layout/src/counters.rs:219` **fn** `get` — The style this cache holds for `id`, if any
-`crates/engine/layout/src/counters.rs:224` **fn** `contains_key` — Whether this cache holds an entry for `id`
-`crates/engine/layout/src/counters.rs:229` **fn** `len` — Number of nodes this cache holds a style for
-`crates/engine/layout/src/counters.rs:234` **fn** `is_empty` — Whether this cache is empty
-`crates/engine/layout/src/counters.rs:239` **fn** `keys` — Iterate the nodes this cache holds a style for, in arbitrary order
-`crates/engine/layout/src/counters.rs:244` **fn** `iter` — Iterate `(node, style)` pairs in arbitrary order
-`crates/engine/layout/src/counters.rs:261` **fn** `from_plain` — A cache holding exactly `styles`, as though one pass had just written it
-`crates/engine/layout/src/counters.rs:316` **struct** `PrevCascade` — BUG-341 S24 — the cascade as it stood *before* the current pass, for
-`crates/engine/layout/src/counters.rs:329` **fn** `get` — The style the previous pass cascaded for `id`, if it had one
-`crates/engine/layout/src/counters.rs:337` **fn** `contains_key` — Whether the previous pass cascaded a style for `id` at all
-`crates/engine/layout/src/counters.rs:345` **fn** `unchanged` — A view over a cascade the current pass has not displaced anything from
-`crates/engine/layout/src/counters.rs:357` **struct** `CounterMap` — Document-order snapshot of CSS generated-content state
-`crates/engine/layout/src/counters.rs:465` **fn** `counters` — Returns the counter snapshot for `id`, if any
-`crates/engine/layout/src/counters.rs:471` **fn** `quote_depths` — Returns the ordered quote-depth indices for the given `(id, slot)`'s
-`crates/engine/layout/src/counters.rs:477` **fn** `style_for` — Returns the `ComputedStyle` this map's traversal computed for `id`, if
-`crates/engine/layout/src/counters.rs:485` **fn** `prev_cascade` — BUG-341 S24 — the cascade as the *previous* pass left it, for the graft
-`crates/engine/layout/src/counters.rs:495` **fn** `replaced_styles` — What this pass displaced from the carried cache (BUG-341 S24): for every
-`crates/engine/layout/src/counters.rs:514` **fn** `into_styles` — Hand the carried cascade cache on to the next pass (BUG-341 S24)
-`crates/engine/layout/src/counters.rs:526` **fn** `style_arc` — Like [`Self::style_for`], but hands back the shared allocation itself
-`crates/engine/layout/src/counters.rs:535` **fn** `styles` — Returns the full per-node `ComputedStyle` cascade cache (BUG-341 S2)
-`crates/engine/layout/src/counters.rs:547` **fn** `counter_snapshot_count` — How many per-node counter snapshots this map actually stores
-`crates/engine/layout/src/counters.rs:554` **fn** `clean_subtrees` — Returns the whole-subtree-unchanged node set (BUG-341 S4) — see the
-`crates/engine/layout/src/counters.rs:637` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
-`crates/engine/layout/src/counters.rs:669` **struct** `RestyleDelta` — BUG-341 S3 — incremental-cascade root-set + reuse cache (brief §3/§4)
-`crates/engine/layout/src/counters.rs:740` **enum** `ContentDirty` — BUG-341 S16 — per-node DOM-content dirtiness for one incremental cycle
-`crates/engine/layout/src/counters.rs:769` **fn** `tracked` — Whether this cycle has a complete per-node content-mutation record, and
-`crates/engine/layout/src/counters.rs:776` **fn** `contains` — Whether `id`'s own content may have changed this cycle. `true` for
-`crates/engine/layout/src/counters.rs:787` **fn** `nothing_changed` — BUG-341 S26 — whether this record positively states that *no* node's
-`crates/engine/layout/src/counters.rs:805` **fn** `incremental_precompute_counters` — BUG-341 S3 — incremental cascade: like [`precompute_counters`], but reuses
-`crates/engine/layout/src/counters.rs:903` **fn** `set_incremental_restyle` — Enables/disables the incremental cascade for subsequent
-`crates/engine/layout/src/counters.rs:908` **fn** `incremental_restyle_enabled` — Whether the incremental cascade is currently enabled on this thread
-`crates/engine/layout/src/counters.rs:921` **struct** `CascadeStats` — BUG-341 S3/S17 — per-pass tally of what the cascade stage recomputed versus
-`crates/engine/layout/src/counters.rs:951` **fn** `take_cascade_stats` — Returns the accumulated [`CascadeStats`] and resets the tally
-`crates/engine/layout/src/counters.rs:1176` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
-`crates/engine/layout/src/counters.rs:1243` **enum** `CounterSystem` — Numbering algorithm for a `@counter-style` rule — CSS Counter Styles L3 §4
-`crates/engine/layout/src/counters.rs:1262` **struct** `RangeBound` — Counter range bound: `None` means ±infinite (CSS Counter Styles L3 §5)
-`crates/engine/layout/src/counters.rs:1271` **enum** `CounterRange` — Range descriptor value (CSS Counter Styles L3 §5)
-`crates/engine/layout/src/counters.rs:1280` **struct** `CounterStyleDef` — Parsed `@counter-style` rule — CSS Counter Styles L3 §2
-`crates/engine/layout/src/counters.rs:1318` **type** `CounterStyleRegistry` — Maps counter style names to their parsed `CounterStyleDef`
-`crates/engine/layout/src/counters.rs:1321` **fn** `build_counter_style_registry` — Build a `CounterStyleRegistry` from all `@counter-style` rules in a stylesheet
-`crates/engine/layout/src/counters.rs:1600` **fn** `format_counter_with_registry` — Format a counter value using the registry (custom `@counter-style`) first,
-`crates/engine/layout/src/counters.rs:1770` **fn** `resolve_counter_value` — CSS Counter Styles L3 §2 — format counter `n` using a resolved `CounterStyleDef`
-`crates/engine/layout/src/counters.rs:1783` **fn** `build_list_marker_text` — CSS Lists L3 §2.1 — canonical wiring point for `list-style-type` + `@counter-style`
+`crates/engine/layout/src/counters.rs:221` **fn** `passes_lived` — How many passes have written into this cache — 0 for one that has only
+`crates/engine/layout/src/counters.rs:226` **fn** `swept_last_pass` — Whether the pass that just finished had to evict — see the `swept` field
+`crates/engine/layout/src/counters.rs:232` **fn** `generated_content` — Whether the pass that filled this cache produced any counter snapshot or
+`crates/engine/layout/src/counters.rs:245` **fn** `get` — The style this cache holds for `id`, if any
+`crates/engine/layout/src/counters.rs:250` **fn** `contains_key` — Whether this cache holds an entry for `id`
+`crates/engine/layout/src/counters.rs:255` **fn** `len` — Number of nodes this cache holds a style for
+`crates/engine/layout/src/counters.rs:260` **fn** `is_empty` — Whether this cache is empty
+`crates/engine/layout/src/counters.rs:265` **fn** `keys` — Iterate the nodes this cache holds a style for, in arbitrary order
+`crates/engine/layout/src/counters.rs:270` **fn** `iter` — Iterate `(node, style)` pairs in arbitrary order
+`crates/engine/layout/src/counters.rs:287` **fn** `from_plain` — A cache holding exactly `styles`, as though one pass had just written it
+`crates/engine/layout/src/counters.rs:342` **struct** `PrevCascade` — BUG-341 S24 — the cascade as it stood *before* the current pass, for
+`crates/engine/layout/src/counters.rs:355` **fn** `get` — The style the previous pass cascaded for `id`, if it had one
+`crates/engine/layout/src/counters.rs:363` **fn** `contains_key` — Whether the previous pass cascaded a style for `id` at all
+`crates/engine/layout/src/counters.rs:371` **fn** `unchanged` — A view over a cascade the current pass has not displaced anything from
+`crates/engine/layout/src/counters.rs:383` **struct** `CounterMap` — Document-order snapshot of CSS generated-content state
+`crates/engine/layout/src/counters.rs:491` **fn** `counters` — Returns the counter snapshot for `id`, if any
+`crates/engine/layout/src/counters.rs:497` **fn** `quote_depths` — Returns the ordered quote-depth indices for the given `(id, slot)`'s
+`crates/engine/layout/src/counters.rs:503` **fn** `style_for` — Returns the `ComputedStyle` this map's traversal computed for `id`, if
+`crates/engine/layout/src/counters.rs:511` **fn** `prev_cascade` — BUG-341 S24 — the cascade as the *previous* pass left it, for the graft
+`crates/engine/layout/src/counters.rs:521` **fn** `replaced_styles` — What this pass displaced from the carried cache (BUG-341 S24): for every
+`crates/engine/layout/src/counters.rs:540` **fn** `into_styles` — Hand the carried cascade cache on to the next pass (BUG-341 S24)
+`crates/engine/layout/src/counters.rs:552` **fn** `style_arc` — Like [`Self::style_for`], but hands back the shared allocation itself
+`crates/engine/layout/src/counters.rs:561` **fn** `styles` — Returns the full per-node `ComputedStyle` cascade cache (BUG-341 S2)
+`crates/engine/layout/src/counters.rs:573` **fn** `counter_snapshot_count` — How many per-node counter snapshots this map actually stores
+`crates/engine/layout/src/counters.rs:580` **fn** `clean_subtrees` — Returns the whole-subtree-unchanged node set (BUG-341 S4) — see the
+`crates/engine/layout/src/counters.rs:663` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
+`crates/engine/layout/src/counters.rs:697` **struct** `RestyleDelta` — BUG-341 S3 — incremental-cascade root-set + reuse cache (brief §3/§4)
+`crates/engine/layout/src/counters.rs:768` **enum** `ContentDirty` — BUG-341 S16 — per-node DOM-content dirtiness for one incremental cycle
+`crates/engine/layout/src/counters.rs:797` **fn** `tracked` — Whether this cycle has a complete per-node content-mutation record, and
+`crates/engine/layout/src/counters.rs:804` **fn** `contains` — Whether `id`'s own content may have changed this cycle. `true` for
+`crates/engine/layout/src/counters.rs:815` **fn** `nothing_changed` — BUG-341 S26 — whether this record positively states that *no* node's
+`crates/engine/layout/src/counters.rs:833` **fn** `incremental_precompute_counters` — BUG-341 S3 — incremental cascade: like [`precompute_counters`], but reuses
+`crates/engine/layout/src/counters.rs:1108` **fn** `set_incremental_restyle` — Enables/disables the incremental cascade for subsequent
+`crates/engine/layout/src/counters.rs:1113` **fn** `incremental_restyle_enabled` — Whether the incremental cascade is currently enabled on this thread
+`crates/engine/layout/src/counters.rs:1126` **struct** `CascadeStats` — BUG-341 S3/S17 — per-pass tally of what the cascade stage recomputed versus
+`crates/engine/layout/src/counters.rs:1194` **fn** `take_cascade_stats` — Returns the accumulated [`CascadeStats`] and resets the tally
+`crates/engine/layout/src/counters.rs:1448` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
+`crates/engine/layout/src/counters.rs:1515` **enum** `CounterSystem` — Numbering algorithm for a `@counter-style` rule — CSS Counter Styles L3 §4
+`crates/engine/layout/src/counters.rs:1534` **struct** `RangeBound` — Counter range bound: `None` means ±infinite (CSS Counter Styles L3 §5)
+`crates/engine/layout/src/counters.rs:1543` **enum** `CounterRange` — Range descriptor value (CSS Counter Styles L3 §5)
+`crates/engine/layout/src/counters.rs:1552` **struct** `CounterStyleDef` — Parsed `@counter-style` rule — CSS Counter Styles L3 §2
+`crates/engine/layout/src/counters.rs:1590` **type** `CounterStyleRegistry` — Maps counter style names to their parsed `CounterStyleDef`
+`crates/engine/layout/src/counters.rs:1593` **fn** `build_counter_style_registry` — Build a `CounterStyleRegistry` from all `@counter-style` rules in a stylesheet
+`crates/engine/layout/src/counters.rs:1872` **fn** `format_counter_with_registry` — Format a counter value using the registry (custom `@counter-style`) first,
+`crates/engine/layout/src/counters.rs:2042` **fn** `resolve_counter_value` — CSS Counter Styles L3 §2 — format counter `n` using a resolved `CounterStyleDef`
+`crates/engine/layout/src/counters.rs:2055` **fn** `build_list_marker_text` — CSS Lists L3 §2.1 — canonical wiring point for `list-style-type` + `@counter-style`
 `crates/engine/layout/src/field_sizing.rs:47` **fn** `field_sizing_content_intrinsic` — Computes content-based intrinsic dimensions for an HTML form control under
 `crates/engine/layout/src/font_palette.rs:20` **struct** `PaletteColorOverride` — Resolved CPAL color override: `(palette_index, color)`
 `crates/engine/layout/src/font_palette.rs:38` **fn** `resolve_font_palette_overrides` — Resolves `@font-palette-values` overrides for a given element
@@ -5647,4 +5648,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5570 symbols in 24 crates*
+*Total: 5571 symbols in 24 crates*
