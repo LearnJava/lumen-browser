@@ -80,6 +80,22 @@ struct CascadeIndex {
     /// arms it too: that value comes from the DOM, which a sheet-level
     /// predicate cannot see.
     has_quote_content: bool,
+    /// BUG-341 S23 — every pseudo-element name the sheet uses as the **subject**
+    /// of a selector, lowercased and deduplicated.
+    ///
+    /// `matches_complex_for_pseudo` only ever looks at the subject compound, so
+    /// a name absent from this list cannot match anywhere in the sheet and
+    /// `compute_pseudo_element_style` for it is guaranteed to return `None`.
+    /// That guarantee is what lets the callers skip whole traversals rather than
+    /// individual cascades: `apply_first_line_pseudo_styles` walks the laid-out
+    /// tree and probes `::first-line` on every block box — 123 probes with zero
+    /// hits per cycle on `chrome.html`, which has no `::first-line` rule at all,
+    /// and the largest single item of an interaction frame's pseudo stage.
+    ///
+    /// A `Vec` rather than a `HashSet`: real sheets use a handful of distinct
+    /// pseudo-elements, and a linear `eq_ignore_ascii_case` scan over ≤10 short
+    /// names beats hashing a `&str` (and needs no allocation at the call site).
+    pseudo_subjects: Vec<Box<str>>,
 }
 
 impl CascadeIndex {
@@ -93,6 +109,7 @@ impl CascadeIndex {
             active_supports: Vec::new(),
             has_webkit_scrollbar_rules: false,
             has_quote_content: false,
+            pseudo_subjects: Vec::new(),
         }
     }
 
@@ -131,6 +148,16 @@ impl CascadeIndex {
                 .iter()
                 .any(|d| value_mentions_quote(&d.value) || d.value.contains("attr("))
         });
+        let mut pseudo_subjects: Vec<Box<str>> = Vec::new();
+        for rule in all_rules(sheet) {
+            for selector in &rule.selectors {
+                for name in selector_pseudo_subjects(selector) {
+                    if !pseudo_subjects.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+                        pseudo_subjects.push(name.to_ascii_lowercase().into_boxed_str());
+                    }
+                }
+            }
+        }
         let predicates_ns = t.elapsed().as_nanos() as u64;
 
         let idx = Self {
@@ -142,6 +169,7 @@ impl CascadeIndex {
             active_supports,
             has_webkit_scrollbar_rules,
             has_quote_content,
+            pseudo_subjects,
         };
         let stats = CascadeIndexStats {
             builds: 1,
@@ -180,6 +208,19 @@ fn selector_targets_webkit_scrollbar(selector: &ComplexSelector) -> bool {
             name.to_ascii_lowercase().starts_with("-webkit-scrollbar")
         }
         _ => false,
+    })
+}
+
+/// Every pseudo-element name carried by `selector`'s **subject** compound.
+///
+/// The subject is the only compound `matches_complex_for_pseudo` inspects, so
+/// this is exactly the set of `pseudo` arguments for which that function can
+/// return `Some` on this selector. See [`CascadeIndex::pseudo_subjects`].
+fn selector_pseudo_subjects(selector: &ComplexSelector) -> impl Iterator<Item = &str> {
+    let subject = selector.tail.last().map_or(&selector.head, |(_, c)| c);
+    subject.parts.iter().filter_map(|p| match p {
+        SimpleSelector::PseudoElement(kind) => Some(pseudo_element_name(kind)),
+        _ => None,
     })
 }
 
@@ -571,6 +612,25 @@ fn with_cascade_index<R>(
 /// yield a quote depth. See [`CascadeIndex::has_quote_content`].
 pub fn sheet_has_quote_content(sheet: &Stylesheet, viewport: Size, dark_mode: bool) -> bool {
     with_cascade_index(sheet, viewport, dark_mode, |idx| idx.has_quote_content)
+}
+
+/// BUG-341 S23 — whether `sheet` uses `pseudo` (name without the `::`) as the
+/// subject of any selector, i.e. whether
+/// [`compute_pseudo_element_style`] for it can return anything but `None`.
+///
+/// Lets a caller skip a whole traversal instead of a single cascade: see
+/// [`CascadeIndex::pseudo_subjects`]. **`::marker` is exempt** — CSS Lists L3
+/// §2.1 synthesizes a marker style with no rule at all, so a `false` here says
+/// nothing about it; callers must not gate `marker` on this predicate.
+pub fn sheet_targets_pseudo(
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+    pseudo: &str,
+) -> bool {
+    with_cascade_index(sheet, viewport, dark_mode, |idx| {
+        idx.pseudo_subjects.iter().any(|s| s.eq_ignore_ascii_case(pseudo))
+    })
 }
 
 thread_local! {
@@ -8128,23 +8188,37 @@ fn resolve_logical_properties(style: &mut ComputedStyle) {
 /// Алгоритм: последний compound должен содержать `PseudoElement(pseudo)`;
 /// остаток селектора (после удаления этой части) проверяется через
 /// существующий `matches_complex`.
+/// The name `kind` is written with, without the leading `::`.
+///
+/// BUG-341 S23: the single source of truth for the kind↔name correspondence.
+/// [`pseudo_element_matches`] and [`CascadeIndex::pseudo_subjects`] both go
+/// through it, so the sheet-level "does this pseudo appear at all" predicate
+/// cannot drift from the matcher it is meant to short-circuit — a drift that
+/// would silently drop a pseudo-element's styling, not slow a frame down.
+/// Parameterized kinds report the bare name they are spelled with: the
+/// argument (`::slotted(sel)`, `::highlight(name)`, `::picker(sel)`) is checked
+/// by the matcher, not by the name.
+fn pseudo_element_name(kind: &PseudoElementKind) -> &str {
+    match kind {
+        PseudoElementKind::Before => "before",
+        PseudoElementKind::After => "after",
+        PseudoElementKind::FirstLine => "first-line",
+        PseudoElementKind::FirstLetter => "first-letter",
+        PseudoElementKind::Slotted(_) => "slotted",
+        PseudoElementKind::Marker => "marker",
+        PseudoElementKind::Selection => "selection",
+        PseudoElementKind::Placeholder => "placeholder",
+        PseudoElementKind::Highlight(_) => "highlight",
+        PseudoElementKind::Picker(_) => "picker",
+        PseudoElementKind::Checkmark => "checkmark",
+        PseudoElementKind::PickerIcon => "picker-icon",
+        PseudoElementKind::Unknown(s) => s.as_str(),
+    }
+}
+
 /// Helper: check if a pseudo-element name matches a PseudoElementKind.
 fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
-    match kind {
-        PseudoElementKind::Before => name.eq_ignore_ascii_case("before"),
-        PseudoElementKind::After => name.eq_ignore_ascii_case("after"),
-        PseudoElementKind::FirstLine => name.eq_ignore_ascii_case("first-line"),
-        PseudoElementKind::FirstLetter => name.eq_ignore_ascii_case("first-letter"),
-        PseudoElementKind::Slotted(_) => name.eq_ignore_ascii_case("slotted"),
-        PseudoElementKind::Marker => name.eq_ignore_ascii_case("marker"),
-        PseudoElementKind::Selection => name.eq_ignore_ascii_case("selection"),
-        PseudoElementKind::Placeholder => name.eq_ignore_ascii_case("placeholder"),
-        PseudoElementKind::Highlight(_) => name.eq_ignore_ascii_case("highlight"),
-        PseudoElementKind::Picker(_) => name.eq_ignore_ascii_case("picker"),
-        PseudoElementKind::Checkmark => name.eq_ignore_ascii_case("checkmark"),
-        PseudoElementKind::PickerIcon => name.eq_ignore_ascii_case("picker-icon"),
-        PseudoElementKind::Unknown(s) => s.eq_ignore_ascii_case(name),
-    }
+    pseudo_element_name(kind).eq_ignore_ascii_case(name)
 }
 
 fn matches_complex_for_pseudo(
@@ -8363,6 +8437,18 @@ fn compute_pseudo_element_style_inner(
     dark_mode: bool,
 ) -> Option<ComputedStyle> {
     let _prof = lumen_core::profile::scope_detail("pseudo_style");
+
+    // BUG-341 S23: if the sheet never uses this pseudo-element as a selector
+    // subject, `matches_complex_for_pseudo` below cannot match anything and the
+    // whole cascade is a no-op. `::marker` is the one exception — it
+    // synthesizes a style out of `list-style-type` with no rule at all (CSS
+    // Lists L3 §2.1, the `matched.is_empty()` branch), so it must never be
+    // short-circuited here.
+    if !pseudo.eq_ignore_ascii_case("marker")
+        && !sheet_targets_pseudo(sheet, viewport, dark_mode, pseudo)
+    {
+        return None;
+    }
 
     // Собираем matching declarations из всех правил.
     //
@@ -24852,6 +24938,73 @@ mod tests {
         // from a custom property, so any mention anywhere arms the probe.
         let indirect = lumen_css_parser::parse(":root { --q: open-quote; }");
         assert!(sheet_has_quote_content(&indirect, vp, false));
+    }
+
+    /// BUG-341 S23 — the predicate that lets callers skip a whole traversal.
+    ///
+    /// It must be exactly as wide as `matches_complex_for_pseudo`, which looks
+    /// only at the **subject** compound: too narrow and a pseudo-element silently
+    /// loses its styling (visible corruption, not a slow frame), too wide and
+    /// the fast path is merely missed.
+    #[test]
+    fn sheet_pseudo_subjects_cover_every_container_and_only_the_subject() {
+        let vp = Size::new(800.0, 600.0);
+
+        let plain = lumen_css_parser::parse("p { color: red; } p::before { content: 'x'; }");
+        assert!(!sheet_targets_pseudo(&plain, vp, false, "first-line"));
+        assert!(sheet_targets_pseudo(&plain, vp, false, "before"));
+
+        // A rule's container decides *whether* it applies, never whether the
+        // sheet mentions the pseudo-element at all — same reasoning as
+        // `all_rules`. Each container must arm the predicate on its own.
+        for css in [
+            "p::first-line { color: red; }",
+            "@media (min-width: 1px) { p::first-line { color: red; } }",
+            "@supports (color: red) { p::first-line { color: red; } }",
+            "@layer base { p::first-line { color: red; } }",
+        ] {
+            let sheet = lumen_css_parser::parse(css);
+            assert!(
+                sheet_targets_pseudo(&sheet, vp, false, "first-line"),
+                "`{css}` must arm the ::first-line predicate"
+            );
+        }
+
+        // Not the subject: `::first-line` cannot match through a descendant
+        // combinator, and `matches_complex_for_pseudo` never looks there either.
+        let non_subject = lumen_css_parser::parse("p::first-line span { color: red; }");
+        assert!(!sheet_targets_pseudo(&non_subject, vp, false, "first-line"));
+
+        // Case-insensitive both ways, and unknown (vendor) names carry through
+        // verbatim — that is how `::-webkit-scrollbar*` reaches the predicate.
+        let mixed = lumen_css_parser::parse("p::FIRST-LINE { color: red; } p::-WEBKIT-SCROLLBAR { width: 0; }");
+        assert!(sheet_targets_pseudo(&mixed, vp, false, "first-line"));
+        assert!(sheet_targets_pseudo(&mixed, vp, false, "-webkit-scrollbar"));
+    }
+
+    /// BUG-341 S23 — `::marker` is the exception the short-circuit must honour.
+    ///
+    /// CSS Lists L3 §2.1 synthesizes a marker style out of `list-style-type`
+    /// with no rule at all, so "the sheet does not mention `::marker`" says
+    /// nothing about whether `compute_pseudo_element_style` should return one.
+    #[test]
+    fn marker_pseudo_style_survives_a_sheet_that_never_mentions_it() {
+        let doc = lumen_html_parser::parse("<ul><li>x</li></ul>");
+        let sheet = lumen_css_parser::parse("li { color: red; }");
+        let vp = Size::new(800.0, 600.0);
+        let li = doc
+            .get(doc.get(doc.body().unwrap()).children[0])
+            .children
+            .iter()
+            .copied()
+            .find(|&n| matches!(doc.get(n).data, NodeData::Element { .. }))
+            .expect("<li>");
+        assert!(!sheet_targets_pseudo(&sheet, vp, false, "marker"));
+        assert!(
+            compute_pseudo_element_style(&doc, li, "marker", &sheet, &ComputedStyle::root(), vp, false)
+                .is_some(),
+            "::marker is generated without a rule and must not be short-circuited"
+        );
     }
 
     // ── BUG-341 S21: the cascade index survives the pass that built it ───────
