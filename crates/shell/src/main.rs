@@ -26365,7 +26365,7 @@ mod tests {
                         bb.fanouts,
                     );
                     let mut sites: Vec<_> = ps_sites.into_iter().collect();
-                    sites.sort_by(|a, b| b.1.ns.cmp(&a.1.ns));
+                    sites.sort_by_key(|(_, st)| std::cmp::Reverse(st.ns));
                     for (name, st) in &sites {
                         eprintln!(
                             "[s20-census]   pseudo ::{name} calls={} hits={} {:.3}ms",
