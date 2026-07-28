@@ -1,13 +1,11 @@
-//! Адресная строка: состояние омнибокса и его сборка в display list.
+//! Адресная строка: состояние омнибокса.
 //!
-//! DS-10 — омнибокс постоянно виден как инлайн-поле в центре тулбара
-//! (`toolbar.rs`), а не как Ctrl+L-оверлей поверх всего окна. Этот модуль не
-//! знает о геометрии тулбара (кластеры кнопок, `CHROME_H`) — `toolbar.rs`
-//! считает раскладку (`omnibox_rects`) и передаёт сюда уже готовые `Rect`-ы;
-//! здесь только состояние (`AddressBarState`) и чистый рендер по этим rect-ам:
-//! `build_inline_field` — всегда видимое поле (не в фокусе — текущий URL,
-//! в фокусе — редактируемый ввод), `build_dropdown` — список подсказок,
-//! рисуется отдельно (anchored под тулбаром) только пока бар открыт.
+//! DS-10 — омнибокс постоянно виден как инлайн-поле в центре тулбара, читаемое
+//! движковым хромом (CC-7/CC-9: `chrome_omnibox_value` и
+//! `OmniboxSuggestion::{commit_value,label,sub_label,tag_color}`). Этот модуль
+//! хранит только состояние (`AddressBarState`) — своей отрисовки у него больше
+//! нет (CC-15-3: легаси-инлайн-поле/dropdown были единственным вызывающим
+//! кодом, удалённым вместе с `toolbar::build_toolbar`).
 //!
 //! Commit-семантика: Enter → `take_commit()` возвращает URL/запрос и сбрасывает
 //! состояние. Caller обязан обработать навигацию или запрос.
@@ -28,59 +26,33 @@
 //! DS-6 — IDN homograph-spoof guard: любой URL-текст, попадающий на экран
 //! (поле ввода, label/sub_label подсказок) или в `commit()`, проходит через
 //! `guard_display_text()` → `lumen_core::idn::display_host` (DS-5). Если
-//! хост признан спуф-риском, отображается/коммитится его Punycode-форма,
-//! а под полем ввода рисуется красная строка-предупреждение.
+//! хост признан спуф-риском, отображается/коммитится его Punycode-форма.
 
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-use lumen_core::geom::Rect;
+use lumen_layout::Color;
 use lumen_core::idn::{HostDisplay, SpoofReason, display_host};
 use lumen_core::url::Url;
 
-use crate::panels::themes::Palette;
-use crate::theme_tokens::radius;
-
 // ── Визуальные константы ──────────────────────────────────────────────────────
 //
-// Surface/text colours are theme-driven via [`Palette`] (passed into
-// `build_inline_field`/`build_dropdown`). The focus ring and caret follow
-// `pal.accent` (design-system prototype: `.omnibox:focus-within{
-// border-color:var(--accent) }`), so both track the active profile's accent
-// colour. The result-tag legend below stays theme-invariant by design: it is
-// a fixed per-category colour code (history/notes/tabs/…), same rationale as
-// the lifecycle/container colours excluded from `Palette` in `tabs/strip.rs`.
+// CC-15-3: the inline field/dropdown painters (`build_inline_field`,
+// `build_dropdown`) were removed once the engine-drawn chrome (CC-4) made
+// their sole caller (`toolbar::build_toolbar` and the legacy tab-bar paint
+// block in `main.rs`) dead code. `chrome_omnibox_value`/`commit_value`/
+// `label`/`sub_label`/`tag_color` stay — CC-7/CC-9 read them for the
+// engine-chrome `#omniInput`/`#omniDropdown` equivalents.
 
-/// Tag accent for FTS-history omnibox results — historically shared the same
-/// blue as the focus ring; kept as its own constant now that the ring reads
-/// `pal.accent` instead.
+/// Tag accent for FTS-history omnibox results — read by `tag_color()` (CC-9:
+/// also used by `Lumen::chrome_model_snapshot` for `#omniDropdown`'s
+/// `.dd-icon` swatch color).
 const HISTORY_TAG: Color = Color { r: 60, g: 120, b: 220, a: 255 };
 /// Green tag accent for search-query omnibox results.
 const ITEM_TAG: Color = Color { r: 72, g: 150, b: 90, a: 255 };
 
-/// Font size of the field's own text (URL / editable input) — the design
-/// reference's `.omnibox input{ font-size:12.5px }`, rounded to a value the
-/// bundled fonts render cleanly at.
-const FONT: f32 = 13.0;
-/// Высота одной строки в dropdown.
-const ITEM_H: f32 = 36.0;
-const ITEM_LABEL_SZ: f32 = 13.0;
-const ITEM_SUB_SZ: f32 = 11.0;
-const ITEM_PAD: f32 = 8.0;
 /// Максимум строк в dropdown. Also the cap `Lumen::chrome_model_snapshot`
 /// applies to `#omniDropdown`'s rebuilt row list (CC-9).
 pub(crate) const MAX_VISIBLE: usize = 7;
 /// Максимальная длина строки ввода. Защита от случайной paste-атаки.
 const MAX_INPUT_LEN: usize = 2048;
-/// Высота красной строки-предупреждения о спуфинге (DS-6), рисуется под
-/// полем ввода перед dropdown, если он есть.
-const WARN_H: f32 = 22.0;
-
-/// Фон строки-предупреждения о спуфинге — фиксированный красный вне
-/// зависимости от темы (сигнал безопасности должен быть читаем в обеих
-/// палитрах, та же логика что у `HISTORY_TAG`/`ITEM_TAG` выше).
-const SPOOF_WARNING_BG: Color = Color { r: 130, g: 24, b: 24, a: 235 };
-/// Цвет текста поверх `SPOOF_WARNING_BG`.
-const SPOOF_WARNING_TEXT: Color = Color { r: 255, g: 220, b: 220, a: 255 };
 
 // ── IDN spoof guard (DS-6) ──────────────────────────────────────────────────
 
@@ -120,9 +92,9 @@ fn spoof_warning_message(reason: SpoofReason) -> &'static str {
 }
 
 /// CC-7 (`docs/tasks/p1-css-chrome.md`): chrome-DOM equivalent of the value
-/// [`build_inline_field`] draws — the not-focused/focused branching (current
-/// URL vs. live input or selected suggestion), IDN-guarded, minus glyph-rect
-/// placement. Returned `value` is written into `#omniInput`'s `value`
+/// the removed `build_inline_field` drew — the not-focused/focused branching
+/// (current URL vs. live input or selected suggestion), IDN-guarded, minus
+/// glyph-rect placement. Returned `value` is written into `#omniInput`'s `value`
 /// attribute (`lumen_chrome::OmniboxModel::value`); empty lets the asset's
 /// own `placeholder` attribute show through, so unlike the legacy overlay
 /// this never needs an "about:blank"/"Введите URL…" text fallback.
@@ -137,6 +109,19 @@ pub(crate) fn chrome_omnibox_value(state: &AddressBarState, current_url: &str) -
     };
     let (guarded, reason) = guard_display_text(display_input);
     (guarded, reason.map(spoof_warning_message))
+}
+
+/// DS-6 guard for one `#omniDropdown` row (CC-9): returns the IDN-guarded
+/// `(label, sub_label)` pair to write into `ChromeSuggestionModel`.
+///
+/// The removed legacy `build_dropdown` ran both strings through
+/// `guard_display_text` before drawing them; the engine-chrome snapshot read
+/// `label()`/`sub_label()` raw, so a homograph host in a history/bookmark hit
+/// reached the screen in its Unicode form. Routing the snapshot through this
+/// helper restores the invariant stated at the top of this module — every
+/// URL-bearing string that reaches the screen is punycode-guarded.
+pub(crate) fn chrome_suggestion_text(s: &OmniboxSuggestion) -> (String, String) {
+    (guard_display_text(s.label()).0, guard_display_text(s.sub_label()).0)
 }
 
 // ── Omnibox prefix ────────────────────────────────────────────────────────────
@@ -227,7 +212,14 @@ pub enum OmniboxSuggestion {
     SearchQuery {
         /// Исходная строка запроса (case-preserved).
         query: String,
-        /// Частота использования — отображается как подсказка.
+        /// Частота использования — показывалась легаси-dropdown'ом как тег
+        /// `×N`.
+        ///
+        /// BUG-410: `#omniDropdown` (CC-9) переносит из подсказки только
+        /// `label`/`sub_label`/`tag_color`, но не текстовый тег, поэтому с
+        /// удалением легаси-рендера (CC-15-3) поле осталось без читателя.
+        /// Данные сохранены — их потребит миграция тега в движковый хром.
+        #[allow(dead_code, reason = "BUG-410: тег строки dropdown ещё не перенесён в движковый хром")]
         frequency: i64,
     },
     /// Результат FTS5-поиска по списку «прочитать позже» (§12.3, `@read-later`).
@@ -339,23 +331,6 @@ impl OmniboxSuggestion {
                 if !snippet.is_empty() { snippet } else { url }
             }
             OmniboxSuggestion::Ai { .. } => "",
-        }
-    }
-
-    /// Короткий тег-маркер типа для правой части строки.
-    /// Для `SearchQuery` включает счётчик использований если > 1.
-    fn tag(&self) -> String {
-        match self {
-            OmniboxSuggestion::HistoryFts { .. } => "история".to_string(),
-            OmniboxSuggestion::Note { .. } => "заметка".to_string(),
-            OmniboxSuggestion::SearchQuery { frequency, .. } if *frequency > 1 => {
-                format!("×{frequency}")
-            }
-            OmniboxSuggestion::SearchQuery { .. } => "запрос".to_string(),
-            OmniboxSuggestion::ReadLater { .. } => "позже".to_string(),
-            OmniboxSuggestion::Tab { .. } => "вкладка".to_string(),
-            OmniboxSuggestion::Bookmark { .. } => "закладка".to_string(),
-            OmniboxSuggestion::Ai { .. } => "ai".to_string(),
         }
     }
 
@@ -517,326 +492,6 @@ impl AddressBarState {
     }
 }
 
-// ── Рендер ────────────────────────────────────────────────────────────────────
-
-/// Rects for the always-visible chrome of the inline omnibox field. Computed
-/// by `toolbar::omnibox_rects` (which owns the toolbar's cluster layout) —
-/// this module only draws into them, it has no knowledge of button-cluster
-/// geometry.
-#[derive(Debug, Clone, Copy)]
-pub struct FieldRects {
-    /// The field's own background/border box.
-    pub field: Rect,
-    /// TLS padlock icon-button, left-aligned inside `field`.
-    pub lock: Rect,
-    /// Text area between `lock` and `star` — host / editable input + caret.
-    pub text: Rect,
-    /// Bookmark ("star") icon-button.
-    pub star: Rect,
-    /// Shields icon-button, right-aligned inside `field`.
-    pub shield: Rect,
-}
-
-/// Uniform corner radii helper (mirrors the identically-named private helper
-/// in other chrome modules, e.g. `toolbar.rs`, `page_context_menu.rs`).
-fn corners(r: f32) -> CornerRadii {
-    CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r }
-}
-
-/// Push one icon glyph centered in `rect`, no background (lock/star/shield
-/// inside the omnibox — unlike toolbar's nav/action buttons, these never
-/// render a highlighted "on" background).
-fn push_icon(out: &mut DisplayList, rect: Rect, glyph: &str, color: Color) {
-    out.push(DisplayCommand::DrawText {
-        rect,
-        text: glyph.to_owned(),
-        font_size: rect.height.min(rect.width),
-        color,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-}
-
-/// Собирает display list всегда-видимого поля омнибокса: фон+рамка (accent
-/// кольцо в фокусе — design-system `.omnibox:focus-within{
-/// border-color:var(--accent) }`), замок/звезда/щит и текст. Не в фокусе —
-/// `current_url` (IDN-guarded); в фокусе — живой ввод/выделенная подсказка +
-/// курсор, как раньше в overlay, и (если хост спуф-риск) красная строка
-/// предупреждения под полем.
-///
-/// Не рисует dropdown — см. `build_dropdown`.
-pub fn build_inline_field(
-    state: &AddressBarState,
-    current_url: &str,
-    rects: &FieldRects,
-    pal: &Palette,
-) -> DisplayList {
-    let focused = state.is_open();
-    let mut out = DisplayList::with_capacity(8);
-
-    // Рамка (на 1px шире с каждой стороны, тот же приём что был у overlay-бара).
-    let border_color = if focused { pal.accent } else { pal.divider };
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(
-            rects.field.x - 1.0,
-            rects.field.y - 1.0,
-            rects.field.width + 2.0,
-            rects.field.height + 2.0,
-        ),
-        radii: corners(radius::MD + 1.0),
-        color: border_color,
-    });
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: rects.field,
-        radii: corners(radius::MD),
-        color: if focused { pal.overlay_bg } else { pal.input_bg },
-    });
-
-    push_icon(&mut out, rects.lock, "\u{1F512}", pal.text_dim);
-    push_icon(&mut out, rects.star, "\u{2606}", pal.text_dim);
-    push_icon(&mut out, rects.shield, "\u{1F6E1}", pal.text_dim);
-
-    // Отображаем строку выделенной подсказки в input field если она выбрана.
-    let sugg = state.suggestions();
-    let display_input = if let Some(idx) = state.selected_idx() {
-        sugg.get(idx).map(|s| s.commit_value()).unwrap_or(state.input())
-    } else {
-        state.input()
-    };
-    let is_empty = focused && display_input.is_empty();
-    let (display_text, text_color, spoof_reason) = if !focused {
-        let (guarded, reason) = guard_display_text(current_url);
-        let text = if guarded.is_empty() { "about:blank".to_string() } else { guarded };
-        (text, pal.text, reason)
-    } else if is_empty {
-        ("Введите URL или поисковый запрос…".to_string(), pal.text_dim, None)
-    } else {
-        let (guarded, reason) = guard_display_text(display_input);
-        (guarded, pal.text, reason)
-    };
-
-    let text_margin = 4.0;
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(
-            rects.text.x + text_margin,
-            rects.text.y + (rects.text.height - FONT * 1.2) * 0.5,
-            (rects.text.width - text_margin * 2.0).max(0.0),
-            FONT * 1.2,
-        ),
-        text: display_text,
-        font_size: FONT,
-        color: text_color,
-        // DS-4: omnibox URL text is monospace (bundled JetBrains Mono) while
-        // focused; not focused it stays the default chrome UI font (Golos
-        // Text, resolved from empty font_family) matching the rest of the row.
-        font_family: if focused { vec!["JetBrains Mono".to_string()] } else { Vec::new() },
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    // Курсор — вертикальная линия. Только в фокусе, не рисуется если выбрана подсказка.
-    if focused && !is_empty && state.selected_idx().is_none() {
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(
-                rects.text.x + rects.text.width - text_margin - 2.0,
-                rects.text.y + (rects.text.height - FONT * 1.2) * 0.5,
-                2.0,
-                FONT * 1.2,
-            ),
-            color: Color { a: 220, ..pal.accent },
-        });
-    }
-
-    // ─ Спуфинг-предупреждение (DS-6) ────────────────────────────────────────
-
-    if focused && let Some(reason) = spoof_reason {
-        let warn_y = rects.field.y + rects.field.height + 4.0;
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(rects.field.x, warn_y, rects.field.width, WARN_H),
-            color: SPOOF_WARNING_BG,
-        });
-        out.push(DisplayCommand::DrawText {
-            rect: Rect::new(
-                rects.field.x + 8.0,
-                warn_y + (WARN_H - ITEM_SUB_SZ * 1.3) * 0.5,
-                (rects.field.width - 16.0).max(0.0),
-                ITEM_SUB_SZ * 1.3,
-            ),
-            text: spoof_warning_message(reason).to_string(),
-            font_size: ITEM_SUB_SZ,
-            color: SPOOF_WARNING_TEXT,
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        });
-    }
-
-    out
-}
-
-/// Собирает display list dropdown-подсказок. Вызывается только пока
-/// `state.is_open()`; anchored под тулбаром (`dropdown_top` = `toolbar::
-/// CHROME_H`, а не сразу под полем — DS-10 шаг 3), шириной поля `field`.
-/// Пустой список, если подсказок нет.
-pub fn build_dropdown(
-    state: &AddressBarState,
-    field: Rect,
-    dropdown_top: f32,
-    pal: &Palette,
-) -> DisplayList {
-    let sugg = state.suggestions();
-    let n_visible = sugg.len().min(MAX_VISIBLE);
-    if n_visible == 0 {
-        return DisplayList::new();
-    }
-    let drop_h = n_visible as f32 * ITEM_H;
-    let drop_x = field.x;
-    let drop_w = field.width;
-    let drop_y = dropdown_top;
-
-    let mut out = DisplayList::with_capacity(2 + n_visible * 4);
-
-    // Граница dropdown.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(drop_x - 1.0, drop_y, drop_w + 2.0, drop_h + 1.0),
-        color: pal.overlay_border,
-    });
-    // Фон dropdown.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(drop_x, drop_y, drop_w, drop_h),
-        color: pal.item_bg,
-    });
-
-    for (i, s) in sugg.iter().take(n_visible).enumerate() {
-        let iy = drop_y + i as f32 * ITEM_H;
-        let selected = state.selected_idx() == Some(i);
-
-        if selected {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(drop_x, iy, drop_w, ITEM_H),
-                color: pal.item_selected_bg,
-            });
-        }
-
-        // DS-6: подсказки часто несут URL в label/sub_label (история,
-        // вкладки, закладки) — прогоняем их через тот же спуф-guard, что и
-        // основное поле ввода, чтобы дропдаун не подсвечивал спуф-домен.
-        let label = guard_display_text(s.label()).0;
-        let sub = guard_display_text(s.sub_label()).0;
-        let tag = s.tag(); // String
-
-        let has_sub = !sub.is_empty();
-        if has_sub {
-            // Двухстрочный layout: label сверху, sub снизу.
-            out.push(DisplayCommand::DrawText {
-                rect: Rect::new(
-                    drop_x + ITEM_PAD,
-                    iy + 4.0,
-                    drop_w - ITEM_PAD * 3.0 - 60.0,
-                    ITEM_LABEL_SZ * 1.3,
-                ),
-                text: label,
-                font_size: ITEM_LABEL_SZ,
-                color: pal.text,
-                font_family: Vec::new(),
-                font_weight: FontWeight::NORMAL,
-                font_style: FontStyle::Normal,
-                font_variation_axes: Vec::new(),
-                font_features: Vec::new(),
-                font_palette: None,
-                tab_size: 0.0,
-                highlight_name: None,
-                text_orientation: None,
-            });
-            out.push(DisplayCommand::DrawText {
-                rect: Rect::new(
-                    drop_x + ITEM_PAD,
-                    iy + 4.0 + ITEM_LABEL_SZ * 1.3 + 1.0,
-                    drop_w - ITEM_PAD * 3.0 - 60.0,
-                    ITEM_SUB_SZ * 1.3,
-                ),
-                text: sub,
-                font_size: ITEM_SUB_SZ,
-                color: pal.text_dim,
-                font_family: Vec::new(),
-                font_weight: FontWeight::NORMAL,
-                font_style: FontStyle::Normal,
-                font_variation_axes: Vec::new(),
-                font_features: Vec::new(),
-                font_palette: None,
-                tab_size: 0.0,
-                highlight_name: None,
-                text_orientation: None,
-            });
-        } else {
-            // Одна строка по центру высоты строки.
-            out.push(DisplayCommand::DrawText {
-                rect: Rect::new(
-                    drop_x + ITEM_PAD,
-                    iy + (ITEM_H - ITEM_LABEL_SZ * 1.3) * 0.5,
-                    drop_w - ITEM_PAD * 3.0 - 60.0,
-                    ITEM_LABEL_SZ * 1.3,
-                ),
-                text: label,
-                font_size: ITEM_LABEL_SZ,
-                color: pal.text,
-                font_family: Vec::new(),
-                font_weight: FontWeight::NORMAL,
-                font_style: FontStyle::Normal,
-                font_variation_axes: Vec::new(),
-                font_features: Vec::new(),
-                font_palette: None,
-                tab_size: 0.0,
-                highlight_name: None,
-                text_orientation: None,
-            });
-        }
-
-        // Тег справа.
-        out.push(DisplayCommand::DrawText {
-            rect: Rect::new(
-                drop_x + drop_w - 58.0,
-                iy + (ITEM_H - ITEM_SUB_SZ * 1.3) * 0.5,
-                54.0,
-                ITEM_SUB_SZ * 1.3,
-            ),
-            text: tag,
-            font_size: ITEM_SUB_SZ,
-            color: s.tag_color(),
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        });
-    }
-
-    out
-}
-
 // ── Тесты ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -927,67 +582,6 @@ mod tests {
         assert!(s.input().len() <= MAX_INPUT_LEN);
     }
 
-    /// Fixed field geometry for tests — mirrors what `toolbar::omnibox_rects`
-    /// would produce, but without depending on that module.
-    fn test_rects() -> FieldRects {
-        FieldRects {
-            field: Rect::new(100.0, 2.0, 680.0, 32.0),
-            lock: Rect::new(108.0, 7.0, 22.0, 22.0),
-            text: Rect::new(138.0, 2.0, 550.0, 32.0),
-            star: Rect::new(720.0, 7.0, 22.0, 22.0),
-            shield: Rect::new(750.0, 7.0, 22.0, 22.0),
-        }
-    }
-
-    #[test]
-    fn field_shows_input_text_when_open() {
-        let s = {
-            let mut x = AddressBarState::default();
-            x.open("https://example.com");
-            x
-        };
-        let dl = build_inline_field(&s, "https://example.com", &test_rects(), &Palette::DARK);
-        let has_text = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("example.com"))
-        });
-        assert!(has_text);
-    }
-
-    #[test]
-    fn field_shows_placeholder_when_open_and_empty() {
-        let s = {
-            let mut x = AddressBarState::default();
-            x.open("");
-            x
-        };
-        let dl = build_inline_field(&s, "", &test_rects(), &Palette::DARK);
-        let has_placeholder = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("URL"))
-        });
-        assert!(has_placeholder);
-    }
-
-    #[test]
-    fn field_shows_current_url_when_not_focused() {
-        let s = AddressBarState::default();
-        let dl = build_inline_field(&s, "https://example.com/page", &test_rects(), &Palette::DARK);
-        let has_text = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("example.com/page"))
-        });
-        assert!(has_text);
-    }
-
-    #[test]
-    fn field_has_border_rect_as_first_cmd_when_focused() {
-        let s = {
-            let mut x = AddressBarState::default();
-            x.open("x");
-            x
-        };
-        let dl = build_inline_field(&s, "x", &test_rects(), &Palette::DARK);
-        assert!(matches!(dl[0], DisplayCommand::FillRoundedRect { color, .. } if color == Palette::DARK.accent));
-    }
-
     #[test]
     fn chrome_omnibox_value_shows_current_url_when_not_focused() {
         let s = AddressBarState::default();
@@ -1025,11 +619,36 @@ mod tests {
         assert!(warning.is_some());
     }
 
+    /// DS-6 for the engine-chrome dropdown: replaces the deleted
+    /// `dropdown_suggestion_url_is_punycode_guarded`, which asserted the same
+    /// invariant against the legacy `build_dropdown` display list.
     #[test]
-    fn field_border_is_not_accent_when_not_focused() {
-        let s = AddressBarState::default();
-        let dl = build_inline_field(&s, "https://example.com", &test_rects(), &Palette::DARK);
-        assert!(matches!(dl[0], DisplayCommand::FillRoundedRect { color, .. } if color == Palette::DARK.divider));
+    fn chrome_suggestion_text_is_punycode_guarded() {
+        let s = OmniboxSuggestion::HistoryFts {
+            url: "https://аpple.com/".into(),
+            title: String::new(),
+            snippet: String::new(),
+        };
+        let (label, sub_label) = chrome_suggestion_text(&s);
+        assert!(label.contains("xn--pple-43d.com"), "label must be punycode-guarded: {label}");
+        assert!(
+            sub_label.contains("xn--pple-43d.com"),
+            "sub_label must be punycode-guarded: {sub_label}"
+        );
+    }
+
+    /// A safe host must survive the guard unchanged — the negative half of
+    /// the deleted `field_has_no_warning_strip_for_safe_input`.
+    #[test]
+    fn chrome_suggestion_text_leaves_safe_host_untouched() {
+        let s = OmniboxSuggestion::HistoryFts {
+            url: "https://google.com/search".into(),
+            title: "Google".into(),
+            snippet: String::new(),
+        };
+        let (label, sub_label) = chrome_suggestion_text(&s);
+        assert_eq!(label, "Google");
+        assert_eq!(sub_label, "https://google.com/search");
     }
 
     // ── Omnibox prefix ────────────────────────────────────────────────────────
@@ -1132,24 +751,6 @@ mod tests {
         assert_eq!(s.selected_idx(), Some(0));
         s.append_str("u");
         assert_eq!(s.selected_idx(), None);
-    }
-
-    #[test]
-    fn dropdown_rendered_for_suggestions() {
-        let mut s = AddressBarState::default();
-        s.open("rust");
-        s.set_suggestions(vec![
-            OmniboxSuggestion::HistoryFts {
-                url: "https://rust-lang.org".into(),
-                title: "Rust Programming Language".into(),
-                snippet: "Systems programming".into(),
-            },
-            OmniboxSuggestion::SearchQuery { query: "rust async".into(), frequency: 5 },
-        ]);
-        let dl = build_dropdown(&s, test_rects().field, 40.0, &Palette::DARK);
-        let text_count = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).count();
-        // label1 + sub1 + tag1 + label2 + tag2 >= 5
-        assert!(text_count >= 5);
     }
 
     // ── @notes prefix ─────────────────────────────────────────────────────────
@@ -1395,47 +996,5 @@ mod tests {
         s.select_next();
         s.commit();
         assert_eq!(s.take_commit(), Some("https://xn--pple-43d.com/".to_owned()));
-    }
-
-    #[test]
-    fn field_shows_warning_strip_for_spoofed_input() {
-        let mut s = AddressBarState::default();
-        s.open("https://аpple.com/login");
-        let dl = build_inline_field(&s, "https://аpple.com/login", &test_rects(), &Palette::DARK);
-        let has_warning = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Punycode"))
-        });
-        assert!(has_warning);
-        let has_punycode_url = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("xn--pple-43d.com"))
-        });
-        assert!(has_punycode_url);
-    }
-
-    #[test]
-    fn field_has_no_warning_strip_for_safe_input() {
-        let mut s = AddressBarState::default();
-        s.open("https://google.com");
-        let dl = build_inline_field(&s, "https://google.com", &test_rects(), &Palette::DARK);
-        let has_warning = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Punycode"))
-        });
-        assert!(!has_warning);
-    }
-
-    #[test]
-    fn dropdown_suggestion_url_is_punycode_guarded() {
-        let mut s = AddressBarState::default();
-        s.open("a");
-        s.set_suggestions(vec![OmniboxSuggestion::HistoryFts {
-            url: "https://аpple.com/".into(),
-            title: String::new(),
-            snippet: String::new(),
-        }]);
-        let dl = build_dropdown(&s, test_rects().field, 40.0, &Palette::DARK);
-        let has_punycode_label = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("xn--pple-43d.com"))
-        });
-        assert!(has_punycode_label);
     }
 }

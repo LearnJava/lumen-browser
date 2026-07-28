@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 104,
+  "open": 107,
   "fixed": 273,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 377,
+ "total_bugs": 380,
  "phases": [
   {
    "id": "P0",
@@ -3956,9 +3956,15 @@
         {
          "id": "CC-15-3",
          "title": "CC-15-3: Покраска/hit-test toolbar.rs + tabs/strip.rs",
-         "status": "planned",
+         "status": "done",
          "size": "M",
-         "note": "Вырезать функции покраски/hit-теста из `toolbar.rs` (`build_toolbar`/`push_btn`/`push_avatar`/`hit_test`/`ToolbarHit`/`ToolbarActive`) и `tabs/strip.rs` (`build_tab_bar`/`build_tab_tooltip`/`hit_test`/`hit_test_layout_btn`/`build_layout_toggle_btn`/`hit_test_settings_btn`/`build_settings_btn`/`TabHit`) + их гейтированные вызовы в main.rs (блок `!self.focus.active && !self.css_chrome_enabled`, main.rs:16869-16983, и парные `MouseInput`-ветки). НЕ трогать: `CHROME_H`, `avatar_x()`, `TAB_BAR_HEIGHT`, `DRAG_THRESHOLD`, `LAYOUT_BTN_W`, `SETTINGS_BTN_W`, `TabStrip`/`TabEntry`/`TabDragState`/`TabLayout` — читаются безусловно (`content_layout_viewport()`, `resumed()`, keep-forever-панели). После CC-15-1, CC-15-2"
+         "note": "Закрыто (2026-07-28, P1). Удалены покраска/hit-test легаси-хрома: `toolbar.rs` (`build_toolbar`/`push_btn`/`push_avatar`/`hit_test`/`ToolbarHit`/`ToolbarActive`/`omnibox_rects`), `tabs/strip.rs` (`build_tab_bar`/`build_tab_tooltip`/`build_layout_toggle_btn`/`build_settings_btn`/`hit_test_layout_btn`/`hit_test_settings_btn`), плюс их транзитивные вызываемые — `tabs/archive.rs` (`build_button`/`build_panel`/`hit_test_button`) и `address_bar.rs` (`build_inline_field`/`build_dropdown`/`FieldRects`/`tag()`), и гейтированные вызовы в main.rs (блок покраски + парные `MouseInput`-ветки). −2100 строк, geometry-константы и типы данных по строке задачи не тронуты. Отклонение от строки задачи: `strip::hit_test`/`TabHit` НЕ удалены — их читает живой негейтированный обработчик правого клика по вкладке (контекстное меню), это второй сайт класса BUG-404, дописан в bugs/BUG-404-OPEN.md; `archive::hit_test_panel` оставлен по той же причине (негейтированный клик-вне). Два побочных фикса, без которых удаление молча теряло поведение: `persist_tab_layout()` (удалённая кнопка раскладки была единственным вызывающим `set_tab_layout` вне settings-панели — теперь сохраняют `KeyCommand::ToggleVerticalTabs`/`PaletteAction::ToggleVerticalTabs`) и DS-6 `address_bar::chrome_suggestion_text()` (снапшот `#omniDropdown` читал `label`/`sub_label` сырыми, тогда как удалённый `build_dropdown` прогонял их через `guard_display_text` — омоглифный хост доезжал до экрана в Unicode-форме; +2 unit-теста взамен удалённых). Заведены BUG-408 (панель архива), BUG-409 (цвета групп вкладок), BUG-410 (текстовый тег строки dropdown) — фичи легаси-хрома, не перенесённые в движковый; их данные оставлены под `#[allow(dead_code, reason=…)]` со ссылкой на баг. `cargo clippy -p lumen-shell --all-targets` зелёный, `cargo test -p lumen-shell` 1673/1673 (было 1722 — минус тесты удалённых покрасок). После CC-15-1, CC-15-2",
+         "bugs": [
+          "BUG-404",
+          "BUG-408",
+          "BUG-409",
+          "BUG-410"
+         ]
         },
         {
          "id": "CC-15-4",
@@ -6782,6 +6788,27 @@
    "status": "open",
    "title": "Компиляция 16 wgpu-пайплайнов при старте стоит **3.0–7.0 с на DX12 против 0.26–0.40 с на Vulkan** — одно железо (Intel Iris Plus), один процесс, одни шейдеры; п…",
    "component": "paint (`Renderer::init_pipelines`, `crates/engine/paint/src/renderer.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-408": {
+   "status": "open",
+   "title": "Панель авто-архива вкладок (7A.5) недостижима под движковым хромом: авто-архивация через 12 ч простоя работает и вкладка исчезает из полосы, но кнопка-переключа…",
+   "component": "shell (`crates/shell/src/tabs/archive.rs`, `crates/shell/src/main.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-409": {
+   "status": "open",
+   "title": "Группы вкладок не отображаются в движковом хроме: модель (`TabGroup`, цвет, свёрнутость, команды меню) жива, но `ChromeTabModel` несёт только `container_color`/…",
+   "component": "shell (`crates/shell/src/tabs/groups.rs`, `strip.rs`), chrome (`ChromeTabModel`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-410": {
+   "status": "open",
+   "title": "Строка dropdown омнибокса потеряла текстовый тег типа («история»/«заметка»/«вкладка»/… и `×N` для частого запроса): `ChromeSuggestionModel` (CC-9) переносит тол…",
+   "component": "shell (`chrome_model_snapshot`, `address_bar.rs`), chrome (`ChromeSuggestionModel`)",
    "date": null,
    "debtor": false
   }

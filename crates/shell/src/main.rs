@@ -1004,7 +1004,6 @@ fn run_window_mode(
         cursor_position: None,
         pending_pointer_moves: Vec::new(),
         hovered_nid: None,
-        hovered_tab_idx: None,
         active_nid: None,
         scroll_drag: None,
         scroll_anim: None,
@@ -7790,10 +7789,6 @@ struct Lumen {
     /// Updated on every `CursorMoved`; triggers relayout when it changes so
     /// `:hover` rules re-evaluate. `None` when cursor is outside the content area.
     hovered_nid: Option<NodeId>,
-    /// Tab bar: index of the hovered tab for displaying tier-tooltip. Updated on
-    /// every `CursorMoved` when cursor is over the tab bar (y < TAB_BAR_HEIGHT).
-    /// `None` when cursor is outside the tab bar or no tabs exist.
-    hovered_tab_idx: Option<usize>,
     /// DOM node whose mouse button is currently held down (CSS `:active` target).
     /// Set on `MouseInput(Pressed)`, cleared on `MouseInput(Released)`.
     active_nid: Option<NodeId>,
@@ -9161,11 +9156,17 @@ impl Lumen {
             .iter()
             .take(address_bar::MAX_VISIBLE)
             .enumerate()
-            .map(|(idx, s)| lumen_chrome::ChromeSuggestionModel {
-                idx,
-                label: s.label().to_owned(),
-                sub_label: s.sub_label().to_owned(),
-                color: Self::chrome_hex_color(s.tag_color()),
+            .map(|(idx, s)| {
+                // CC-15-3/DS-6: punycode-guard both strings, as the legacy
+                // `build_dropdown` did — without this a homograph host in a
+                // history/bookmark hit renders in its Unicode form.
+                let (label, sub_label) = address_bar::chrome_suggestion_text(s);
+                lumen_chrome::ChromeSuggestionModel {
+                    idx,
+                    label,
+                    sub_label,
+                    color: Self::chrome_hex_color(s.tag_color()),
+                }
             })
             .collect();
         let dropdown = lumen_chrome::ChromeDropdownModel {
@@ -13921,32 +13922,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     self.pending_pointer_moves.push((x_css, y_css));
                 }
-                // Tab bar: update hovered_tab_idx for tooltip rendering.
-                // Only consumed by the legacy tab-bar tooltip (below,
-                // `!self.css_chrome_enabled`) — skip the hit-test entirely
-                // under the default engine-drawn chrome (CC-15-2).
-                if !self.css_chrome_enabled {
-                    let dpr = self
-                        .renderer
-                        .as_ref()
-                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
-                        .max(1e-6);
-                    let x_css = (position.x as f32) / dpr;
-                    let y_css = (position.y as f32) / dpr;
-                    let win_w = self.viewport_width_css();
-                    self.hovered_tab_idx = if y_css < tabs::strip::TAB_BAR_HEIGHT {
-                        let tab_area_w = win_w
-                            - tabs::archive::ARCHIVE_BTN_W
-                            - tabs::strip::LAYOUT_BTN_W
-                            - tabs::strip::SETTINGS_BTN_W;
-                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
-                            tabs::strip::TabHit::Tab(idx) => Some(idx),
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    };
-                }
                 // Settings panel: update hover position for tooltip rendering.
                 if self.settings_panel.visible {
                     let dpr = self
@@ -14014,7 +13989,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::CursorLeft { .. } => {
                 self.cursor_position = None;
-                self.hovered_tab_idx = None;
                 self.settings_hover = None;
                 self.resize_active = None; // Clear resize when cursor leaves window
                 // Clear hover state when cursor leaves the window.
@@ -14320,224 +14294,56 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // those stay positioned within the page-content rect) is
                     // left unhandled here and falls through unchanged to the
                     // panel checks below.
-                    if self.css_chrome_enabled {
-                        if self.point_over_chrome(x_css, y_css) {
-                            let hit = self.chrome_hit_test(x_css, y_css);
-                            self.chrome_active_nid = hit.as_ref().map(|r| r.node);
-                            self.relayout_chrome_host();
-                            if let Some(hit) = hit {
-                                // CC-7: `.omnibox`/`#omniInput` carries no
-                                // `data-action` (nothing to translate an
-                                // `onfocus` handler from — the frozen design
-                                // reference has none either, see CC-7 in
-                                // docs/tasks/p1-css-chrome.md) — special-cased
-                                // here exactly like the legacy
-                                // `toolbar::ToolbarHit::Omnibox` branch it
-                                // mirrors: a no-op while already open so an
-                                // in-progress edit/dropdown selection isn't reset.
-                                let omni_input = self
-                                    .chrome_doc
-                                    .as_ref()
-                                    .and_then(|(doc, _)| doc.find_by_id(lumen_chrome::ids::OMNI_INPUT));
-                                if omni_input.is_some_and(|id| hit.path.contains(&id)) {
-                                    if !self.address_bar.is_open() {
-                                        self.hint.close();
-                                        let current = self.current_display_url().to_owned();
-                                        self.address_bar.open(&current);
-                                        // CC-7: the relayout above ran before
-                                        // `open()` — redo it so the
-                                        // `:focus-within` ring/caret show on
-                                        // this same click, not one input
-                                        // later (see the matching comment in
-                                        // `Self::handle_address_bar_key`).
-                                        self.relayout_chrome_host();
-                                    }
-                                } else if let Some((nid, action)) = self.chrome_action_at(&hit) {
-                                    self.dispatch_chrome_action(nid, action, event_loop);
-                                }
-                            }
-                            self.request_redraw();
-                            return;
-                        }
-                    } else if y_css < tabs::strip::TAB_BAR_HEIGHT {
-                        let win_w = self.viewport_width_css();
-                        // Archive panel: close on click-outside before checking button.
-                        if self.archive.visible {
-                            match tabs::archive::hit_test_panel(
-                                &self.archive,
-                                x_css,
-                                y_css,
-                                win_w,
-                                toolbar::CHROME_H,
-                            ) {
-                                Some(tabs::archive::ArchiveHit::Restore(id)) => {
-                                    if let Some(entry) = self.archive.take(id)
-                                        && !entry.url.is_empty()
-                                    {
-                                        self.navigate_to(PageSource::Url(entry.url));
-                                    }
-                                    self.archive.close();
-                                    self.request_redraw();
-                                    return;
-                                }
-                                Some(tabs::archive::ArchiveHit::Dismiss(id)) => {
-                                    self.archive.take(id);
-                                    self.request_redraw();
-                                    return;
-                                }
-                                Some(tabs::archive::ArchiveHit::Inside) => {
-                                    self.request_redraw();
-                                    return;
-                                }
-                                Some(tabs::archive::ArchiveHit::Outside) => {
-                                    self.archive.close();
-                                    self.request_redraw();
-                                }
-                                None => {}
-                            }
-                        }
-                        // Archive toolbar button (rightmost 36 px of the tab bar).
-                        if tabs::archive::hit_test_button(
-                            x_css,
-                            y_css,
-                            win_w,
-                            tabs::strip::TAB_BAR_HEIGHT,
-                        ) {
-                            self.archive.toggle();
-                            self.request_redraw();
-                            return;
-                        }
-                        // Layout toggle button (GG-4): between tabs and archive button.
-                        let layout_btn_x = win_w
-                            - tabs::archive::ARCHIVE_BTN_W
-                            - tabs::strip::LAYOUT_BTN_W;
-                        if tabs::strip::hit_test_layout_btn(x_css, y_css, layout_btn_x) {
-                            self.vertical_tabs.toggle();
-                            let new_layout = if self.vertical_tabs.visible {
-                                tabs::strip::TabLayout::Vertical
-                            } else {
-                                tabs::strip::TabLayout::Horizontal
-                            };
-                            let _ = self.settings_store.set_tab_layout(new_layout.as_str());
-                            self.request_redraw();
-                            return;
-                        }
-                        // Settings gear button: between tabs and layout toggle.
-                        let settings_btn_x = layout_btn_x - tabs::strip::SETTINGS_BTN_W;
-                        if tabs::strip::hit_test_settings_btn(x_css, y_css, settings_btn_x) {
-                            if self.settings_panel.visible {
-                                self.close_settings_panel();
-                            } else {
-                                self.open_settings_panel();
-                            }
-                            self.request_redraw();
-                            return;
-                        }
-                        // Tab area: pass effective width (excluding archive + layout + settings buttons).
-                        let tab_area_w = win_w
-                            - tabs::archive::ARCHIVE_BTN_W
-                            - tabs::strip::LAYOUT_BTN_W
-                            - tabs::strip::SETTINGS_BTN_W;
-                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
-                            tabs::strip::TabHit::Tab(idx) => {
-                                // Record a potential drag; switch tab only if no drag occurs
-                                // (resolved on MouseInput Release).
-                                self.tab_drag = Some(tabs::strip::TabDragState {
-                                    src_idx: idx,
-                                    press_x: x_css,
-                                    ghost_x: x_css,
-                                    active: false,
-                                });
-                                self.switch_tab(idx);
-                            }
-                            tabs::strip::TabHit::Close(idx) => {
-                                self.close_tab(idx, event_loop);
-                            }
-                            tabs::strip::TabHit::Adblock(idx) => {
-                                // Per-tab toggle: flip this tab's flag independently.
-                                if let Some(tab) = self.tab_strip.tabs.get_mut(idx) {
-                                    tab.adblock = !tab.adblock;
-                                    let now_on = tab.adblock;
-                                    println!(
-                                        "Ad-block вкладки {idx}: {}",
-                                        if now_on { "включён" } else { "отключён" }
-                                    );
-                                    // If this is the active tab, the filter governing its
-                                    // page fetches must reflect the new flag now — sync the
-                                    // process-global toggle and reload.
-                                    if idx == self.tab_strip.active {
-                                        lumen_network::set_global_adblock_enabled(now_on);
-                                        self.reload();
-                                    }
-                                }
-                                self.request_redraw();
-                            }
-                            tabs::strip::TabHit::Empty => {}
-                        }
-                        return;
-                    }
-                    // Toolbar (DS-9) occupies y = TAB_BAR_HEIGHT..toolbar::CHROME_H —
-                    // dispatch before any panel anchored below it.
-                    else if y_css < toolbar::CHROME_H {
-                        let win_w = self.viewport_width_css();
-                        match toolbar::hit_test(x_css, y_css, win_w) {
-                            toolbar::ToolbarHit::Profile => {
-                                self.profile_menu.toggle();
-                                if self.profile_menu.visible {
-                                    self.refresh_profile_menu_entries();
-                                }
-                            }
-                            toolbar::ToolbarHit::Back => self.navigate_back(),
-                            toolbar::ToolbarHit::Forward => self.navigate_forward(),
-                            toolbar::ToolbarHit::Reload => {
-                                // Mirrors `KeyCommand::Reload`: routed through the
-                                // UserInteraction task source rather than called
-                                // directly (HTML §8.1.4).
-                                let flag = Rc::clone(&self.pending_reload);
-                                self.runtime.handle().queue_task(
-                                    runtime::TaskSource::UserInteraction,
-                                    move || { flag.set(true); },
-                                );
-                            }
-                            toolbar::ToolbarHit::Omnibox => {
-                                // DS-10: click focuses the inline field, same as
-                                // Ctrl+L/F6. A no-op while already focused — `open()`
-                                // would otherwise reset the in-progress input/dropdown.
+                    if self.css_chrome_enabled
+                        && self.point_over_chrome(x_css, y_css)
+                    {
+                        let hit = self.chrome_hit_test(x_css, y_css);
+                        self.chrome_active_nid = hit.as_ref().map(|r| r.node);
+                        self.relayout_chrome_host();
+                        if let Some(hit) = hit {
+                            // CC-7: `.omnibox`/`#omniInput` carries no
+                            // `data-action` (nothing to translate an
+                            // `onfocus` handler from — the frozen design
+                            // reference has none either, see CC-7 in
+                            // docs/tasks/p1-css-chrome.md) — special-cased
+                            // here exactly like the legacy
+                            // `toolbar::ToolbarHit::Omnibox` branch it
+                            // mirrors: a no-op while already open so an
+                            // in-progress edit/dropdown selection isn't reset.
+                            let omni_input = self
+                                .chrome_doc
+                                .as_ref()
+                                .and_then(|(doc, _)| doc.find_by_id(lumen_chrome::ids::OMNI_INPUT));
+                            if omni_input.is_some_and(|id| hit.path.contains(&id)) {
                                 if !self.address_bar.is_open() {
                                     self.hint.close();
                                     let current = self.current_display_url().to_owned();
                                     self.address_bar.open(&current);
+                                    // CC-7: the relayout above ran before
+                                    // `open()` — redo it so the
+                                    // `:focus-within` ring/caret show on
+                                    // this same click, not one input
+                                    // later (see the matching comment in
+                                    // `Self::handle_address_bar_key`).
+                                    self.relayout_chrome_host();
                                 }
+                            } else if let Some((nid, action)) = self.chrome_action_at(&hit) {
+                                self.dispatch_chrome_action(nid, action, event_loop);
                             }
-                            toolbar::ToolbarHit::Lock => {
-                                let cert = self.cert_info.clone();
-                                self.cert_panel.toggle(cert);
-                            }
-                            toolbar::ToolbarHit::Star => self.bookmark_current_page(),
-                            toolbar::ToolbarHit::Shield => self.shields.toggle(),
-                            toolbar::ToolbarHit::Find => {
-                                self.hint.close();
-                                self.find.open();
-                            }
-                            toolbar::ToolbarHit::WebSidebar => self.sidebar.toggle(),
-                            toolbar::ToolbarHit::AiSidebar => {
-                                self.ai_panel.toggle();
-                                self.relayout_chrome();
-                            }
-                            toolbar::ToolbarHit::Downloads => self.downloads.toggle_visible(),
-                            toolbar::ToolbarHit::DevTools => self.devtools_console.toggle(),
-                            toolbar::ToolbarHit::Settings => {
-                                if self.settings_panel.visible {
-                                    self.close_settings_panel();
-                                } else {
-                                    self.open_settings_panel();
-                                }
-                            }
-                            toolbar::ToolbarHit::Empty => {}
                         }
                         self.request_redraw();
                         return;
                     }
+                    // CC-15-3: the legacy tab-bar/toolbar left-click dispatch
+                    // (tab switch/close/adblock, archive/layout/settings
+                    // buttons, toolbar buttons) lived here under
+                    // `!self.css_chrome_enabled` — removed along with the
+                    // paint/hit-test functions it called. Under the default
+                    // engine-drawn chrome this was already unreachable
+                    // (routed through `chrome_hit_test` above instead); under
+                    // the `LUMEN_LEGACY_CHROME=1` rollback flag a click in
+                    // the tab-bar/toolbar area now falls through unhandled to
+                    // the checks below, same as any other page-content click.
                     // Archive panel: close on click below tab bar when open.
                     if self.archive.visible {
                         let win_w = self.viewport_width_css();
@@ -16906,121 +16712,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut rl_cmds);
                 }
 
-                // Tab bar: viewport-locked strip at y=0..TAB_BAR_HEIGHT.
-                // Rendered last → always on top of all other overlays.
-                // Hidden in focus mode (task #25) for a distraction-free view;
-                // the page transform offset is left unchanged so toggling focus
-                // mode never reflows content (the strip shows page background).
-                // CC-4 (docs/tasks/p1-css-chrome.md): under `LUMEN_CSS_CHROME=1`
-                // the engine-drawn chrome (painted above) already covers this
-                // whole strip — the legacy tab-bar/toolbar builders (and their
-                // attached layout-toggle/settings/archive buttons, which are
-                // positioned relative to this same strip) do not run, so the
-                // two chromes never overlap.
-                if !self.focus.active && !self.css_chrome_enabled {
-                    let win_w = self.viewport_width_css();
-                    // Tab strip uses the area to the left of the settings/layout/archive buttons.
-                    let tab_area_w = win_w
-                        - tabs::archive::ARCHIVE_BTN_W
-                        - tabs::strip::LAYOUT_BTN_W
-                        - tabs::strip::SETTINGS_BTN_W;
-                    let mut tab_cmds = tabs::strip::build_tab_bar(
-                        &self.tab_strip,
-                        tab_area_w,
-                        &pal,
-                        self.tab_drag.as_ref(),
-                        self.workspace_panel.active_accent(),
-                    );
-                    overlay_buf.append(&mut tab_cmds);
-                    // Tab tier tooltip on hover.
-                    if let Some(idx) = self.hovered_tab_idx
-                        && let Some(tab) = self.tab_strip.tabs.get(idx) {
-                            let tab_w = tab_area_w / self.tab_strip.tabs.len().max(1) as f32;
-                            let tab_center_x = (idx as f32 + 0.5) * tab_w;
-                            if let Some(mut tooltip_cmds) = tabs::strip::build_tab_tooltip(
-                                tab,
-                                tab_center_x,
-                                toolbar::CHROME_H,
-                            ) {
-                                overlay_buf.append(&mut tooltip_cmds);
-                            }
-                        }
-                    // Layout toggle button (GG-4): between tabs and archive button.
-                    let layout_btn_x = win_w
-                        - tabs::archive::ARCHIVE_BTN_W
-                        - tabs::strip::LAYOUT_BTN_W;
-                    let tab_layout = tabs::strip::TabLayout::from_str(
-                        &self.settings_store.tab_layout(),
-                    );
-                    let mut layout_btn = tabs::strip::build_layout_toggle_btn(tab_layout, layout_btn_x, &pal);
-                    overlay_buf.append(&mut layout_btn);
-                    // Settings gear button: between tabs and layout toggle.
-                    let settings_btn_x = layout_btn_x - tabs::strip::SETTINGS_BTN_W;
-                    let mut settings_btn = tabs::strip::build_settings_btn(
-                        settings_btn_x,
-                        self.settings_panel.visible,
-                        &pal,
-                    );
-                    overlay_buf.append(&mut settings_btn);
-                    // Archive toolbar button (rightmost 36 px of tab bar).
-                    let mut arch_btn = tabs::archive::build_button(
-                        &self.archive,
-                        win_w,
-                        tabs::strip::TAB_BAR_HEIGHT,
-                    );
-                    overlay_buf.append(&mut arch_btn);
-                    // Archive panel: floating drop-down anchored below the button.
-                    let mut arch_panel = tabs::archive::build_panel(
-                        &self.archive,
-                        win_w,
-                        toolbar::CHROME_H,
-                    );
-                    overlay_buf.append(&mut arch_panel);
-                    // Permanent toolbar (DS-9): nav cluster + right action cluster.
-                    // Rendered after the tab bar/archive so it always sits on top.
-                    let toolbar_active = toolbar::ToolbarActive {
-                        find: self.find.is_open(),
-                        web_sidebar: self.sidebar.visible,
-                        ai_sidebar: self.ai_panel.visible,
-                        downloads: self.downloads.visible,
-                        devtools: self.devtools_console.visible,
-                        settings: self.settings_panel.visible,
-                        downloads_has_active: self.downloads.active_count() > 0,
-                    };
-                    // DS-14: avatar badge — active profile's colour + initial
-                    // letter, falling back to the resolved accent/"?" while no
-                    // profile is cached yet (e.g. mid-startup).
-                    let avatar_entry = self.profile_menu.active_entry();
-                    let avatar = toolbar::AvatarBadge {
-                        letter: avatar_entry
-                            .and_then(|e| e.name.chars().next())
-                            .map(|c| c.to_string())
-                            .unwrap_or_else(|| "?".to_owned()),
-                        color: avatar_entry.map(|e| e.color).unwrap_or(pal.accent),
-                    };
-                    let mut toolbar_cmds = toolbar::build_toolbar(
-                        win_w,
-                        &pal,
-                        toolbar_active,
-                        &self.address_bar,
-                        self.current_display_url(),
-                        &avatar,
-                    );
-                    overlay_buf.append(&mut toolbar_cmds);
-                    // Inline omnibox (DS-10): suggestion dropdown, anchored below
-                    // the toolbar row (not directly under the field — DS-10 step
-                    // 3) — drawn after the field so it always sits on top.
-                    if self.address_bar.is_open() {
-                        let field = toolbar::omnibox_rects(win_w).field;
-                        let mut dropdown_cmds = address_bar::build_dropdown(
-                            &self.address_bar,
-                            field,
-                            toolbar::CHROME_H,
-                            &pal,
-                        );
-                        overlay_buf.append(&mut dropdown_cmds);
-                    }
-                }
+                // CC-15-3: the legacy tab-bar/toolbar paint block (viewport-
+                // locked strip at y=0..TAB_BAR_HEIGHT, gated
+                // `!self.focus.active && !self.css_chrome_enabled`) lived
+                // here — removed along with `tabs::strip::build_tab_bar`/
+                // `build_tab_tooltip`/`build_layout_toggle_btn`/
+                // `build_settings_btn` and `toolbar::build_toolbar`. Under
+                // the default engine-drawn chrome this never ran (CC-4); under
+                // `LUMEN_LEGACY_CHROME=1` the tab bar/toolbar row is no longer
+                // painted at all.
 
                 // Profile switcher dropdown (DS-14): BUG-403 — kept as a
                 // legacy overlay always (CC-15-1, `docs/tasks/p1-css-chrome.md`
@@ -18840,6 +18540,7 @@ impl Lumen {
             }
             KeyCommand::ToggleVerticalTabs => {
                 self.vertical_tabs.toggle();
+                self.persist_tab_layout();
                 // Viewport width changes — re-layout the current page (ADR-016
                 // M2.2b: chrome-inset change, off-thread when the engine is on).
                 self.relayout_chrome();
@@ -20552,6 +20253,25 @@ impl Lumen {
         self.navigate_to(PageSource::from_arg(Some(&value)));
     }
 
+    /// Persist the current tab-strip layout (horizontal/vertical) into
+    /// `browser_settings`.
+    ///
+    /// CC-15-3: the legacy tab-bar layout-toggle button was the only caller of
+    /// `set_tab_layout` outside the settings panel's snapshot apply — removing
+    /// its paint/hit-test would have silently dropped persistence from the two
+    /// remaining toggle entry points (`KeyCommand::ToggleVerticalTabs`,
+    /// `PaletteAction::ToggleVerticalTabs`), which never persisted on their
+    /// own. Both now route through here so the choice survives a restart the
+    /// same way the removed button made it.
+    fn persist_tab_layout(&self) {
+        let layout = if self.vertical_tabs.visible {
+            tabs::strip::TabLayout::Vertical
+        } else {
+            tabs::strip::TabLayout::Horizontal
+        };
+        let _ = self.settings_store.set_tab_layout(layout.as_str());
+    }
+
     /// Запрашивает подсказки для текущего ввода в адресной строке.
     ///
     /// `@history <query>` → FTS5-поиск по истории страниц.
@@ -22028,6 +21748,7 @@ impl Lumen {
                 PaletteAction::BookmarkCurrentPage => self.bookmark_current_page(),
                 PaletteAction::ToggleVerticalTabs => {
                     self.vertical_tabs.toggle();
+                    self.persist_tab_layout();
                     // ADR-016 M2.2b: async-safe chrome-inset relayout.
                     self.relayout_chrome();
                 }
