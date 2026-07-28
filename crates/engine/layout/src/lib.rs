@@ -50,8 +50,8 @@ pub mod vertical;
 pub use counters::{
     format_counter, format_counter_with_registry, precompute_counters,
     build_counter_style_registry, build_list_marker_text, resolve_counter_value,
-    CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
-    CounterSystem, CounterRange, QuoteSlot, RangeBound,
+    CascadeStyles, CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
+    CounterSystem, CounterRange, PrevCascade, QuoteSlot, RangeBound,
 };
 pub use color_mix::{HueInterpolationMethod, MixColorSpace, mix_colors, mix_colors_hue};
 pub use field_sizing::field_sizing_content_intrinsic;

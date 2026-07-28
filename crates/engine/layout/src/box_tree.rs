@@ -3105,7 +3105,7 @@ pub fn layout_mutation_incremental_restyle(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
     mut prev: LayoutBox,
-    delta: &crate::counters::RestyleDelta<'_>,
+    delta: crate::counters::RestyleDelta<'_>,
 ) -> (LayoutBox, CounterMap) {
     // Stage scopes deliberately reuse `layout_measured_hyp_with_counters`'
     // names so `LUMEN_PROFILE_TREE=1` yields a directly comparable split of
@@ -3164,7 +3164,11 @@ pub fn layout_mutation_incremental_restyle(
         // are in `root`, and every position they came from carries
         // `DirtyBits::MOVED_OUT`. The graft skips those on the S18 claim before
         // it ever looks at the husk, and rejects any it reaches without one.
-        crate::incremental::graft_geometry_with_cascade(&mut root, &prev, Some(delta.prev_styles));
+        // BUG-341 S24: the delta's cache was moved into `counters` and rewritten
+        // in place, so the "what was `prev` built from" view now comes from
+        // there — live entries for everything this pass reused, displaced ones
+        // for everything it recomputed.
+        crate::incremental::graft_geometry_with_cascade(&mut root, &prev, Some(counters.prev_cascade()));
     }
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     {
@@ -17680,12 +17684,12 @@ mod tests {
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
         let delta = RestyleDelta {
-            prev_styles: baseline_counters.styles(),
+            prev_styles: baseline_counters.styles().clone(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Nothing,
         };
         set_incremental_restyle(true);
-        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
         set_incremental_restyle(false);
 
         super::set_incremental_box_build(true);
@@ -17786,12 +17790,12 @@ mod tests {
         let dirty_roots =
             restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
         let delta = RestyleDelta {
-            prev_styles: baseline_counters.styles(),
+            prev_styles: baseline_counters.styles().clone(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Untracked,
         };
         set_incremental_restyle(true);
-        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
         set_incremental_restyle(false);
 
         super::set_incremental_box_build(true);
@@ -17898,12 +17902,12 @@ mod tests {
         // dirty root at all — text cannot change selector matching.
         let content = std::collections::HashSet::from([text_node]);
         let delta = RestyleDelta {
-            prev_styles: baseline_counters.styles(),
+            prev_styles: baseline_counters.styles().clone(),
             dirty_roots: std::collections::HashSet::new(),
             content_dirty: ContentDirty::Nodes(&content),
         };
         set_incremental_restyle(true);
-        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        let incr_counters = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
         set_incremental_restyle(false);
 
         super::set_incremental_box_build(true);

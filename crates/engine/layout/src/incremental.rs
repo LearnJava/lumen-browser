@@ -410,8 +410,13 @@ pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
 /// ancestors down with them — 122 boxes re-laid-out per hover flip, none of
 /// which had actually changed.
 ///
-/// `prev_cascade` is the [`crate::counters::CounterMap::styles`] map of the pass
-/// that produced `prev`. When the freshly-cascaded box still holds *the same
+/// `prev_cascade` is the cascade of the pass that produced `prev`
+/// ([`crate::counters::CounterMap::prev_cascade`] — since BUG-341 S24 that map
+/// is carried and rewritten in place, so the previous value of a recomputed
+/// node comes from the displaced-entry record rather than from a separate map;
+/// asking the live map alone would report every recomputed node as *unchanged*,
+/// which is precisely the set this function must reject). When the
+/// freshly-cascaded box still holds *the same
 /// allocation* that map recorded for its node, the cascade demonstrably produced
 /// an identical style for it this cycle, so whatever `prev`'s box-level style
 /// has accumulated since is layout output, not an author-visible change, and the
@@ -426,7 +431,7 @@ pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
 pub fn graft_geometry_with_cascade(
     new: &mut LayoutBox,
     prev: &LayoutBox,
-    prev_cascade: Option<&std::collections::HashMap<NodeId, std::sync::Arc<crate::style::ComputedStyle>>>,
+    prev_cascade: Option<crate::counters::PrevCascade<'_>>,
 ) -> bool {
     bump_graft(|s| s.visited += 1);
     // BUG-341 S18: this subtree was cloned wholesale out of `prev` by
@@ -1200,7 +1205,8 @@ mod tests {
         cascade.insert(node, std::sync::Arc::clone(&cascade_style));
         cascade.insert(NodeId::from_index(1), std::sync::Arc::clone(&cascade_style));
 
-        let all_clean = graft_geometry_with_cascade(&mut fresh, &prev_root, Some(&cascade));
+        let cascade = crate::counters::CascadeStyles::from_plain(cascade);
+        let all_clean = graft_geometry_with_cascade(&mut fresh, &prev_root, Some(crate::counters::PrevCascade::unchanged(&cascade)));
 
         assert!(all_clean, "a used-value-only difference must not defeat the graft");
         assert!(fresh.children[0].dirty.is_clean());
@@ -1239,7 +1245,8 @@ mod tests {
         let mut cascade = std::collections::HashMap::new();
         cascade.insert(node, prev_cascade_style);
 
-        let all_clean = graft_geometry_with_cascade(&mut fresh, &prev_root, Some(&cascade));
+        let cascade = crate::counters::CascadeStyles::from_plain(cascade);
+        let all_clean = graft_geometry_with_cascade(&mut fresh, &prev_root, Some(crate::counters::PrevCascade::unchanged(&cascade)));
 
         assert!(!all_clean, "a real cascade change must still be rejected");
         assert!(fresh.children[0].dirty.is_dirty(), "the re-cascaded box must be re-laid-out");
@@ -1476,10 +1483,10 @@ mod tests {
             !dirty_roots.is_empty(),
             "the `.card`/`.item` ancestors carry hover rules — narrowing them away would be wrong",
         );
-        let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
         );
         set_incremental_restyle(false);
 
@@ -1507,6 +1514,115 @@ mod tests {
                 && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
                 "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
         }
+    }
+
+    /// BUG-341 S24 gate: the pass must hand the graft the style `prev` was
+    /// built from, not the one it just replaced it with.
+    ///
+    /// Since the cascade cache is carried and rewritten in place, the live entry
+    /// for a recomputed node holds *this* pass's value — and the freshly built
+    /// box holds the very same allocation. Ask the live map alone and every
+    /// recomputed node passes the graft's pointer test, i.e. exactly the nodes
+    /// whose style changed keep last pass's geometry under a new style: a
+    /// wrongly sized box, not a slow frame. `CounterMap::replaced_styles` is
+    /// what closes that, so the gate asserts its contents directly rather than
+    /// only the geometry the differential tests already cover — a record that
+    /// silently stopped being written would still produce correct geometry
+    /// *here* only because this fixture's changed node is also rebuilt for
+    /// other reasons.
+    ///
+    /// Both arms. The first: the displaced entry really holds the pre-change
+    /// value. The second: a node the pass did **not** recompute must stay out of
+    /// the record — a "record" that simply copied the whole map would satisfy
+    /// arm one while putting back the per-pass copy this slice removed.
+    #[test]
+    fn bug341_s24_the_pass_records_the_style_it_displaced_for_the_graft() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle};
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use crate::style::{clear_interactive_state, restyle_root_set_for_state_change, set_interactive_state};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = r#"<div class="card"><p id="a" class="item">one</p><p id="b">two</p></div>"#;
+        // `.item:hover` changes a *geometric* property, so a graft that wrongly
+        // reuses the box shows up as a wrong rect and not merely a wrong colour.
+        let css = ".card { padding: 3px; } .item { height: 20px; } .item:hover { height: 40px; }";
+        let doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+        let a = doc.find_by_id("a").expect("#a must exist");
+        let b = doc.find_by_id("b").expect("#b must exist");
+
+        clear_interactive_state();
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+        let a_before = std::sync::Arc::clone(&prev_counters.styles()[&a]);
+        let b_before = std::sync::Arc::clone(&prev_counters.styles()[&b]);
+
+        set_interactive_state(Some(a), None, None);
+        let state_index = crate::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(a), &state_index);
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.into_styles(),
+            dirty_roots,
+            content_dirty: crate::counters::ContentDirty::Nothing,
+        };
+        set_incremental_restyle(true);
+        let (incr, counters) = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
+        );
+        set_incremental_restyle(false);
+        clear_interactive_state();
+
+        // Arm one — the record holds what `prev` was built from, and the live
+        // map holds this pass's value. If these two were the same entry the
+        // graft's pointer test would call `#a` unchanged.
+        let displaced = counters
+            .replaced_styles()
+            .get(&a)
+            .expect("#a re-cascaded, so its previous entry was displaced and must be recorded");
+        assert!(
+            std::sync::Arc::ptr_eq(displaced, &a_before),
+            "the displaced entry must be the allocation the previous pass cascaded for #a",
+        );
+        assert_eq!(
+            displaced.height,
+            Some(crate::style::Length::Px(20.0)),
+            "the record must hold the *pre*-hover height; holding the new one would make the \
+             graft reuse #a's old geometry under its new style",
+        );
+        assert_eq!(
+            counters.styles()[&a].height,
+            Some(crate::style::Length::Px(40.0)),
+            "the live cache must hold this pass's value",
+        );
+
+        // Arm two — the record is the difference, not a copy of the map. `#b`
+        // was reused verbatim, so nothing was displaced for it.
+        assert!(
+            !counters.replaced_styles().contains_key(&b),
+            "#b was reused, not recomputed — recording it would mean the pass is copying the \
+             whole previous cache again, which is exactly what this slice removed",
+        );
+        assert!(
+            std::sync::Arc::ptr_eq(&counters.styles()[&b], &b_before),
+            "#b's entry must be the same allocation the previous pass produced",
+        );
+
+        // The consequence: #a really was re-laid-out at its new height.
+        let mut rects = Vec::new();
+        collect_rects(&incr, &mut rects);
+        let a_rect = rects
+            .iter()
+            .find(|(n, _)| *n == a)
+            .map(|(_, r)| *r)
+            .expect("#a must have a box");
+        assert!(
+            (a_rect.height - 40.0).abs() < 0.5,
+            "#a kept a stale geometry ({a_rect:?}) — the graft was told the wrong previous style",
+        );
     }
 
     // ── BUG-341 S15: incremental box-build wired into the restyle path ─────
@@ -1588,12 +1704,12 @@ mod tests {
         let state_index = restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
         let delta =
-            RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+            RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         set_incremental_box_build(true);
         let _ = take_box_build_stats();
         let (_incr, _c) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
         );
         let stats = take_box_build_stats();
         set_incremental_box_build(false);
@@ -1659,14 +1775,14 @@ mod tests {
         let state_index = restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
         let delta = RestyleDelta {
-            prev_styles: prev_counters.styles(),
+            prev_styles: prev_counters.styles().clone(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Nothing,
         };
         let flat = build_flat_tree(&doc);
         set_incremental_restyle(true);
         let counters =
-            incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+            incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
         let registry = build_counter_style_registry(&sheet);
         set_incremental_box_build(true);
         let _ = take_box_build_stats();
@@ -1784,11 +1900,11 @@ mod tests {
         let state_index = restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
         let delta =
-            RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+            RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         set_incremental_box_build(true);
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
         );
         set_incremental_box_build(false);
         set_incremental_restyle(false);
@@ -1837,7 +1953,7 @@ mod tests {
         clear_interactive_state();
 
         let delta = RestyleDelta {
-            prev_styles: prev_counters.styles(),
+            prev_styles: prev_counters.styles().clone(),
             dirty_roots: std::collections::HashSet::new(),
             content_dirty: crate::counters::ContentDirty::Untracked,
         };
@@ -1845,7 +1961,7 @@ mod tests {
         set_incremental_box_build(true);
         let _ = take_box_build_stats();
         let _ = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
         );
         let stats = take_box_build_stats();
         set_incremental_box_build(false);
@@ -1903,10 +2019,10 @@ mod tests {
         set_interactive_state(Some(b), None, None);
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
-        let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
         );
         set_incremental_restyle(false);
 
@@ -1954,10 +2070,10 @@ mod tests {
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, None, &state_index);
         assert!(dirty_roots.is_empty(), "no-op transition must yield an empty root-set");
-        let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
         );
         set_incremental_restyle(false);
         clear_interactive_state();
@@ -2032,10 +2148,10 @@ mod tests {
         let node_index = restyle_node_index(&doc, &sheet);
         let dirty_roots =
             restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
-        let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
         );
         set_incremental_restyle(false);
 
@@ -2120,13 +2236,13 @@ mod tests {
         );
 
         let delta = RestyleDelta {
-            prev_styles: prev_counters.styles(),
+            prev_styles: prev_counters.styles().clone(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Untracked,
         };
         set_incremental_restyle(true);
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
         );
         set_incremental_restyle(false);
 
@@ -2203,10 +2319,10 @@ mod tests {
         let node_index = restyle_node_index(&doc, &sheet);
         let dirty_roots =
             restyle_root_set_for_node_change(&doc, [(menu, NodeChange::Unattributed)], &node_index);
-        let delta = RestyleDelta { prev_styles: prev_counters.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
-            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, &delta,
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
         );
         set_incremental_restyle(false);
 
@@ -2380,11 +2496,11 @@ mod tests {
 
         set_incremental_restyle(true);
         let delta = RestyleDelta {
-            prev_styles: prev.styles(),
+            prev_styles: prev.styles().clone(),
             dirty_roots: Default::default(),
             content_dirty: crate::counters::ContentDirty::Nothing,
         };
-        let result = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        let result = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
         set_incremental_restyle(false);
         result
     }
@@ -2441,11 +2557,11 @@ mod tests {
 
         set_incremental_restyle(true);
         let delta = RestyleDelta {
-            prev_styles: prev.styles(),
+            prev_styles: prev.styles().clone(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Nothing,
         };
-        let incr = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        let incr = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
         set_incremental_restyle(false);
 
         let clean = doc.find_by_id("b").expect("#b exists");
@@ -2644,10 +2760,10 @@ mod tests {
         // Incremental: same transition, conservative root-set derived from it.
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
-        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+        let delta = RestyleDelta { prev_styles: baseline.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         take_cascade_stats();
-        let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
         let recomputed = take_cascade_stats().recomputed as usize;
         set_incremental_restyle(false);
         clear_interactive_state();
@@ -2714,10 +2830,10 @@ mod tests {
             restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
         // BUG-341 S4: a DOM class mutation is NOT `dom_content_stable` — box-build
         // reuse must not trust style-equality alone here (see `RestyleDelta` doc).
-        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
+        let delta = RestyleDelta { prev_styles: baseline.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked };
         set_incremental_restyle(true);
         take_cascade_stats();
-        let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, &delta);
+        let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
         let recomputed = take_cascade_stats().recomputed as usize;
         set_incremental_restyle(false);
 
