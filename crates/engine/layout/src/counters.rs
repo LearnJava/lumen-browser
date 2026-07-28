@@ -99,12 +99,37 @@ pub struct CascadeStyles {
     /// put the O(document) cost this slice removes straight back, while
     /// producing byte-identical output — the S8 failure mode exactly.
     swept: bool,
+    /// BUG-341 S26 — whether the pass that filled this cache recorded any
+    /// counter snapshot or quote depth ([`CounterMap::nodes`] /
+    /// [`CounterMap::quotes`]).
+    ///
+    /// It rides here because this is the one thing an interaction cycle already
+    /// carries from pass to pass, so the fact costs no plumbing through the
+    /// shell and page pipelines. It is what licenses
+    /// [`incremental_precompute_counters`]'s no-op path: those two collections
+    /// are rebuilt by the walk rather than carried, so a pass that does not walk
+    /// hands back empty ones. That is only equivalent when the previous pass had
+    /// nothing in them — and a document that *does* use `counter-increment` or
+    /// `open-quote` would otherwise silently lose its generated content, i.e.
+    /// visible corruption rather than a slow frame.
+    ///
+    /// Deliberately not a predicate over the stylesheet (the S10/S23 shape):
+    /// `counter-reset` and friends can be set from a `style` attribute, which no
+    /// sheet-wide scan can see. Recording what the pass actually produced has no
+    /// such hole.
+    generated_content: bool,
 }
 
 impl CascadeStyles {
     /// An empty cache sized for a document of `elements` styled elements.
     fn with_capacity(elements: usize) -> Self {
-        Self { entries: HashMap::with_capacity(elements), pass: 0, visited: 0, swept: false }
+        Self {
+            entries: HashMap::with_capacity(elements),
+            pass: 0,
+            visited: 0,
+            swept: false,
+            generated_content: false,
+        }
     }
 
     /// Start writing a new pass into this carried cache.
@@ -176,6 +201,20 @@ impl CascadeStyles {
         self.swept
     }
 
+    /// Whether the pass that filled this cache produced any counter snapshot or
+    /// quote depth (BUG-341 S26) — see the `generated_content` field.
+    pub fn generated_content(&self) -> bool {
+        self.generated_content
+    }
+
+    /// Record what the pass that just filled `map` produced (BUG-341 S26).
+    ///
+    /// Called by both cascade entry points once their walk is done, so the fact
+    /// travels with the cache to the pass that may skip walking.
+    fn note_generated_content(&mut self, any: bool) {
+        self.generated_content = any;
+    }
+
     /// The style this cache holds for `id`, if any.
     pub fn get(&self, id: &NodeId) -> Option<&Arc<ComputedStyle>> {
         self.entries.get(id).map(|(style, _)| style)
@@ -225,6 +264,10 @@ impl CascadeStyles {
             pass: 0,
             visited: 0,
             swept: false,
+            // Conservative: a hand-assembled cascade cannot vouch for what the
+            // document's generated content looks like, so it never licenses the
+            // no-op path.
+            generated_content: true,
         }
     }
 }
@@ -379,6 +422,34 @@ impl CounterMap {
         }
     }
 
+    /// BUG-341 S26 — the map a walk over an unchanged document would have
+    /// produced, without walking it. See [`incremental_precompute_counters`].
+    ///
+    /// `clean_subtrees` holds the document root's **element** children and
+    /// nothing else, which is not a shortcut but the exact outcome: a walk would
+    /// put every one of the document's elements in the set, and the set's only
+    /// consumer, [`crate::incremental::extract_clean_subtrees`], stops at the
+    /// topmost member it meets and moves that whole subtree. On any document
+    /// that is `<html>`. Non-elements are excluded for the same reason the walk
+    /// excludes them: it records a node as clean only on its element branch, so
+    /// a doctype or comment child of the root is not in the set a walk would
+    /// build, and admitting one here would hand the reuse index a box the
+    /// mechanism has never had to handle.
+    ///
+    /// `nodes`, `quotes` and `replaced_styles` stay empty: the first two because
+    /// the licence for this path is that the previous pass produced none, the
+    /// third because nothing was recomputed, so nothing was displaced.
+    fn carried_unchanged(doc: &Document, flat: &FlatTree, styles: CascadeStyles) -> Self {
+        let roots = flat.children_of(doc, doc.root());
+        let mut clean_subtrees = HashSet::with_capacity(roots.len());
+        for &child in roots {
+            if matches!(doc.get(child).data, NodeData::Element { .. }) {
+                clean_subtrees.insert(child);
+            }
+        }
+        Self { styles, clean_subtrees, ..Self::default() }
+    }
+
     /// BUG-341 S24 — a map that continues the carried cascade cache `styles`
     /// instead of starting a new one.
     fn continuing(mut styles: CascadeStyles, elements: usize) -> Self {
@@ -423,6 +494,17 @@ impl CounterMap {
     /// that re-cascaded, how many really ended up with a different style".
     pub fn replaced_styles(&self) -> &HashMap<NodeId, Arc<ComputedStyle>> {
         &self.replaced_styles
+    }
+
+    /// BUG-341 S26 — stamp the carried cache with whether this pass produced any
+    /// generated content, so a later pass knows whether it may skip its walk.
+    ///
+    /// Called by both cascade entry points, never by the no-op path itself: that
+    /// path did not walk, so it has nothing new to say and must leave the fact
+    /// exactly as the pass that did walk left it.
+    fn record_generated_content(&mut self) {
+        let any = !self.nodes.is_empty() || !self.quotes.is_empty();
+        self.styles.note_generated_content(any);
     }
 
     /// Hand the carried cascade cache on to the next pass (BUG-341 S24).
@@ -566,6 +648,7 @@ pub fn precompute_counters(
     };
     let mut map = CounterMap::with_capacity(doc.node_count());
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false);
+    map.record_generated_content();
     map
 }
 
@@ -614,6 +697,30 @@ pub struct RestyleDelta<'a> {
     /// edge case for v1 (see BUG-341 "S4" notes) rather than blocking the
     /// common case on a full counter-snapshot equality check.
     pub content_dirty: ContentDirty<'a>,
+}
+
+impl RestyleDelta<'_> {
+    /// BUG-341 S26 — whether this delta states that nothing at all changed.
+    ///
+    /// Not "nothing much": every one of the three inputs the cascade reads must
+    /// positively say so. An empty root set means no node's selector match can
+    /// have flipped; [`ContentDirty::nothing_changed`] means no node's text,
+    /// children or attributes moved; and a non-empty carried cache means there
+    /// is a previous cascade to keep at all (the first incremental pass after a
+    /// full one gets its map from that full pass, so this is only false when
+    /// there is genuinely nothing to reuse).
+    ///
+    /// When it holds, `walk` provably does nothing but restate its input: every
+    /// element takes the reuse branch, every node reports itself clean, and the
+    /// map it hands back has the same styles it was given. See
+    /// [`incremental_precompute_counters`] for why that is *equivalent* to not
+    /// walking rather than merely similar.
+    fn is_noop(&self) -> bool {
+        self.dirty_roots.is_empty()
+            && self.content_dirty.nothing_changed()
+            && !self.prev_styles.is_empty()
+            && !self.prev_styles.generated_content()
+    }
 }
 
 /// BUG-341 S16 — per-node DOM-content dirtiness for one incremental cycle.
@@ -673,6 +780,17 @@ impl ContentDirty<'_> {
             ContentDirty::Nodes(set) => set.contains(&id),
         }
     }
+
+    /// BUG-341 S26 — whether this record positively states that *no* node's
+    /// content changed. [`ContentDirty::Untracked`] is never that: "unknown"
+    /// reads as "dirty" here as everywhere else.
+    pub fn nothing_changed(&self) -> bool {
+        match self {
+            ContentDirty::Untracked => false,
+            ContentDirty::Nothing => true,
+            ContentDirty::Nodes(set) => set.is_empty(),
+        }
+    }
 }
 
 /// BUG-341 S3 — incremental cascade: like [`precompute_counters`], but reuses
@@ -703,20 +821,55 @@ pub fn incremental_precompute_counters(
         map.replaced_styles = delta.prev_styles.into_plain();
         return map;
     }
+    // BUG-341 S26 — the delta says nothing changed, so the walk would restate
+    // its own input.
+    //
+    // This is not a heuristic and adds no trust the pass did not already place
+    // in the delta. Feed `walk` an empty `dirty_roots` and a content record that
+    // names nobody and every branch is forced: `force` starts false and can only
+    // be set by `must_recompute`, which can only be set by a miss in the carried
+    // cache — impossible for a node the previous pass wrote — so every element
+    // takes the reuse branch, every node reports itself clean, and the map handed
+    // back holds the same styles it was given, restamped. The one output that is
+    // *not* a restatement is `nodes`/`quotes`, which the walk rebuilds rather
+    // than carries; hence the `generated_content` half of the licence.
+    //
+    // Not walking also leaves the pass ordinal where it was, which is exactly
+    // right: `CascadeStyles`' invariant is "an entry exists iff the immediately
+    // preceding pass *visited* that node", and this pass visited nobody. The
+    // next pass to walk therefore still sees its entries as one pass old.
+    if delta.is_noop() {
+        let _prof = lumen_core::profile::scope("cascade_noop");
+        return CounterMap::carried_unchanged(doc, flat, delta.prev_styles);
+    }
     let root_style = ComputedStyle::root();
-    let mut ctx = CounterCtx {
-        quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
-        ..CounterCtx::default()
+    // BUG-341 S26: the stage's three parts are scoped separately because only
+    // the middle one is proportional to the delta — the prologue is sheet-wide
+    // and the epilogue is proportional to the *document*. A stage total cannot
+    // tell "the cascade is expensive" from "the bookkeeping around it is".
+    let (mut ctx, mut map, incr) = {
+        let _prof = lumen_core::profile::scope("cascade_prologue");
+        let ctx = CounterCtx {
+            quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
+            ..CounterCtx::default()
+        };
+        // BUG-341 S23: the previous pass's cache is the best available estimate of
+        // how many entries this one will hold — closer than `node_count`, which
+        // counts text and comment nodes too. S24: and it *is* this pass's cache.
+        let elements = delta.prev_styles.len();
+        let RestyleDelta { prev_styles, dirty_roots, content_dirty } = delta;
+        let map = CounterMap::continuing(prev_styles, elements);
+        (ctx, map, IncrRestyle { dirty_roots, content_dirty })
     };
-    // BUG-341 S23: the previous pass's cache is the best available estimate of
-    // how many entries this one will hold — closer than `node_count`, which
-    // counts text and comment nodes too. S24: and it *is* this pass's cache.
-    let elements = delta.prev_styles.len();
-    let RestyleDelta { prev_styles, dirty_roots, content_dirty } = delta;
-    let mut map = CounterMap::continuing(prev_styles, elements);
-    let incr = IncrRestyle { dirty_roots, content_dirty };
-    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(&incr), false);
-    map.styles.finish_pass();
+    {
+        let _prof = lumen_core::profile::scope("cascade_walk");
+        walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(&incr), false);
+    }
+    {
+        let _prof = lumen_core::profile::scope("cascade_finish_pass");
+        map.styles.finish_pass();
+    }
+    map.record_generated_content();
     map
 }
 
@@ -770,6 +923,16 @@ pub struct CascadeStats {
     pub recomputed: u32,
     /// Elements that took their `Arc<ComputedStyle>` from `prev_styles`.
     pub reused: u32,
+    /// BUG-341 S26 — every node `walk` *entered*, elements and non-elements
+    /// alike. `recomputed + reused` counts only elements, so a stage total that
+    /// does not divide by them says nothing about the traversal itself: on the
+    /// chrome document the walk enters roughly three times as many nodes as it
+    /// cascades, and after S14/S17 it re-derives the style of one of them.
+    pub visited: u32,
+    /// BUG-341 S26 — inserts into [`CounterMap::clean_subtrees`]. One per clean
+    /// element, i.e. nearly one per element in the steady state; the set is
+    /// rebuilt from scratch every pass.
+    pub clean_inserts: u32,
 }
 
 thread_local! {
@@ -779,8 +942,9 @@ thread_local! {
     /// `walk` is a plain recursion on the calling thread (unlike `build_box`,
     /// which fans out over rayon workers — S15's trap), so a thread-local tally
     /// here really does see the whole document.
-    static CASCADE_STATS: Cell<CascadeStats> =
-        const { Cell::new(CascadeStats { recomputed: 0, reused: 0 }) };
+    static CASCADE_STATS: Cell<CascadeStats> = const {
+        Cell::new(CascadeStats { recomputed: 0, reused: 0, visited: 0, clean_inserts: 0 })
+    };
 }
 
 /// Returns the accumulated [`CascadeStats`] and resets the tally.
@@ -796,6 +960,24 @@ fn note_cascade(recomputed: bool) {
         } else {
             v.reused += 1;
         }
+        s.set(v);
+    });
+}
+
+/// BUG-341 S26 — one node entered by `walk`, of any kind.
+fn note_visit() {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.visited += 1;
+        s.set(v);
+    });
+}
+
+/// BUG-341 S26 — one insert into `CounterMap::clean_subtrees`.
+fn note_clean_insert() {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.clean_inserts += 1;
         s.set(v);
     });
 }
@@ -853,6 +1035,7 @@ fn walk(
     // for non-element nodes, which carry no style of their own). Aggregated
     // bottom-up into `map.clean_subtrees` — see that field's doc comment.
 ) -> bool {
+    note_visit();
     match &doc.get(id).data {
         // Text / comment / doctype / fragment — no counter properties, no children.
         // BUG-341 S4/S16: a text node carries no style, so the cascade has
@@ -978,6 +1161,7 @@ fn walk(
     let subtree_clean = !must_recompute && !content_dirty && children_clean;
     if subtree_clean && incr.is_some_and(|d| d.content_dirty.tracked()) {
         map.clean_subtrees.insert(id);
+        note_clean_insert();
     }
     subtree_clean
 }
@@ -1898,6 +2082,137 @@ mod tests {
         };
         assert_eq!(value(lis[0]), Some(1), "first <li> must still see n=1");
         assert_eq!(value(lis[1]), Some(2), "second <li> must still see n=2");
+    }
+
+    /// BUG-341 S26 gate — **by counter, on both arms**, and the second arm is
+    /// the one that guards against visible corruption.
+    ///
+    /// A cycle whose delta says nothing changed must not enter `walk` at all.
+    /// That is unobservable in the output by construction — the walk's whole
+    /// contribution on such a cycle is to restate its input — so only a counter
+    /// can tell "did not walk" from "walked and reused everything", which is the
+    /// S8 lesson applied to a stage instead of to a reuse mechanism.
+    ///
+    /// Arm two: the map's `nodes`/`quotes` collections are rebuilt by the walk,
+    /// not carried, so a pass that skips the walk hands back empty ones. On a
+    /// document that uses counters that would silently render every `counter()`
+    /// as nothing — visible corruption, not a slow frame. The licence is the
+    /// `generated_content` bit the previous pass stamped into the carried cache,
+    /// and this arm is what proves the bit is actually consulted: without it,
+    /// arm one passes and the counter text disappears.
+    #[test]
+    fn bug341_s26_an_unchanged_cycle_skips_the_walk_unless_it_generates_content() {
+        let vp = Size::new(800.0, 600.0);
+
+        // One cycle over `html`/`css` whose delta says nothing changed, run on
+        // the cache a full pass produced. Returns (nodes walk entered, the map).
+        let unchanged_cycle = |html: &str, css: &str| {
+            let doc = lumen_html_parser::parse(html);
+            let sheet = lumen_css_parser::parse(css);
+            let flat = lumen_dom::build_flat_tree(&doc);
+            let full = precompute_counters(&doc, &sheet, vp, &flat, false);
+            let delta = RestyleDelta {
+                prev_styles: full.into_styles(),
+                dirty_roots: HashSet::new(),
+                content_dirty: ContentDirty::Nothing,
+            };
+            set_incremental_restyle(true);
+            let _ = take_cascade_stats();
+            let map = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+            let stats = take_cascade_stats();
+            set_incremental_restyle(false);
+            (stats, map, doc)
+        };
+
+        // Arm 1 — no generated content: the walk is skipped outright.
+        let (stats, map, doc) = unchanged_cycle("<div><p>a</p><p>b</p></div>", "p { color: red; }");
+        assert_eq!(
+            stats.visited, 0,
+            "a cycle with an empty root set, no content mutation and a carried cache re-walked \
+             {} node(s) to conclude what the delta already stated. Every element would take the \
+             reuse branch and every node report itself clean, so the output is identical either \
+             way — which is precisely why this has to be a counter.",
+            stats.visited,
+        );
+        assert_eq!(stats.recomputed, 0, "and it must not have re-cascaded anything");
+        // The set the skipped walk still has to produce: the document's element
+        // children, which is what the reuse index stops at.
+        let html_el = doc
+            .get(doc.root())
+            .children
+            .iter()
+            .copied()
+            .find(|&c| matches!(doc.get(c).data, NodeData::Element { .. }))
+            .expect("fixture must have a root element");
+        assert!(
+            map.clean_subtrees().contains(&html_el),
+            "the skipped walk must still license reuse of the root element's subtree, or the box \
+             stage rebuilds the whole tree it was about to move"
+        );
+
+        // Arm 2 — the same shape of cycle on a document that *does* generate
+        // content must walk, and must still know its counter values.
+        let (stats, map, doc) = unchanged_cycle(
+            "<ol><li>a</li><li>b</li></ol>",
+            "ol { counter-reset: n 0; } li { counter-increment: n; } li::before { content: counter(n); }",
+        );
+        assert!(
+            stats.visited > 0,
+            "a document whose previous pass recorded counter snapshots must keep walking — the \
+             snapshots are rebuilt by the walk, not carried, so skipping it hands the box stage \
+             an empty counter map and every `counter()` renders as nothing"
+        );
+        let mut ids = Vec::new();
+        fn all_ids(doc: &Document, id: NodeId, out: &mut Vec<NodeId>) {
+            out.push(id);
+            for &c in &doc.get(id).children {
+                all_ids(doc, c, out);
+            }
+        }
+        all_ids(&doc, doc.root(), &mut ids);
+        let lis: Vec<NodeId> = ids
+            .into_iter()
+            .filter(|&id| doc.get(id).element_name().is_some_and(|q| q.local.as_str() == "li"))
+            .collect();
+        assert_eq!(lis.len(), 2, "fixture must hold two <li>");
+        let value = |id: NodeId| map.counters(id).and_then(|s| s.get("n")).and_then(|v| v.last()).copied();
+        assert_eq!(value(lis[0]), Some(1), "first <li> must still see n=1 after the cycle");
+        assert_eq!(value(lis[1]), Some(2), "second <li> must still see n=2 after the cycle");
+    }
+
+    /// BUG-341 S26 gate: and a cycle that *does* carry a change must still walk.
+    ///
+    /// Separate from the test above because it guards a different failure: the
+    /// cheapest way to zero the visit counter is to stop cascading altogether,
+    /// which arm one of the test above cannot see.
+    #[test]
+    fn bug341_s26_a_cycle_with_a_real_change_still_walks() {
+        let vp = Size::new(800.0, 600.0);
+        let doc = lumen_html_parser::parse("<div id=a><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("p { color: red; }");
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let full = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let target = doc.find_by_id("a").expect("fixture must have #a");
+
+        let mut dirty_roots = HashSet::new();
+        dirty_roots.insert(target);
+        let delta = RestyleDelta {
+            prev_styles: full.into_styles(),
+            dirty_roots,
+            content_dirty: ContentDirty::Nothing,
+        };
+        set_incremental_restyle(true);
+        let _ = take_cascade_stats();
+        let _ = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+        let stats = take_cascade_stats();
+        set_incremental_restyle(false);
+
+        assert!(
+            stats.visited > 0 && stats.recomputed > 0,
+            "a delta naming a dirty root must still reach the cascade — visited={} recomputed={}",
+            stats.visited,
+            stats.recomputed,
+        );
     }
 
     // ── Custom counter style tests ────────────────────────────────────────────

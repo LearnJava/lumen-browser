@@ -25484,10 +25484,15 @@ mod tests {
         }
         assert_eq!(
             state.prev_cascade_styles.passes_lived(),
-            8,
-            "eight interaction cycles must have written into one and the same map. A lower \
-             number means some pass handed the pipeline a freshly built map instead of the one \
-             it was given — byte-identical styles at the cost this slice removed.",
+            4,
+            "the interaction cycles that really cascade must have written into one and the same \
+             map. A lower number means some pass handed the pipeline a freshly built map instead \
+             of the one it was given — byte-identical styles at the cost S24 removed. Four and \
+             not eight since BUG-341 S26: the four hover cycles present an empty delta, and a \
+             pass that skips its walk deliberately leaves the ordinal alone — it visited nobody, \
+             so 'the immediately preceding pass to visit this node' is still the keystroke \
+             before it, which is exactly what keeps the entries reusable. \
+             `bug341_s26_hover_cycles_do_not_re_walk_the_cascade` gates that half.",
         );
         assert_eq!(
             state.prev_cascade_styles.len(),
@@ -25518,6 +25523,86 @@ mod tests {
             assert!(
                 doc.get(*nid).parent.is_some() || *nid == doc.root(),
                 "the carried cache still holds {nid:?}, which is detached from the document",
+            );
+        }
+    }
+
+    /// BUG-341 S26 regression gate: an interaction cycle whose delta says
+    /// nothing changed must not walk the document to find that out.
+    ///
+    /// The census that opened this slice split the incremental pass by stage for
+    /// the first time and found the cascade *traversal* — not `compute_style`,
+    /// which by then ran once per keystroke and never on a hover — to be 50-75 %
+    /// of the whole pass on both CC-12 scenarios. On a hover flip, S14 had
+    /// already emptied the root set and S16 reported no content mutation, so the
+    /// walk entered all 1 740 nodes of the chrome document, reused all 828
+    /// styles, declared all 828 elements clean, and handed back the map it was
+    /// given. Every one of those answers was already in the delta.
+    ///
+    /// A counter, not wall-clock, for the usual reason (the S8 lesson): a walk
+    /// that reuses everything produces byte-identical output, so no differential
+    /// test in this track can tell it from not walking at all.
+    ///
+    /// Both arms, and the second is load-bearing: the cheapest way to drive the
+    /// visit count to zero is to stop cascading altogether, which arm one alone
+    /// would happily accept.
+    #[test]
+    fn bug341_s26_hover_cycles_do_not_re_walk_the_cascade() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        // Cold pass — a full cascade, which must walk everything.
+        let _ = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
+        );
+        let cold = lumen_layout::counters::take_cascade_stats();
+        assert!(
+            cold.visited > 100,
+            "the cold pass must walk the whole document, got visited={}",
+            cold.visited,
+        );
+
+        for i in 0..4 {
+            // Arm 2 — a keystroke really mutates the omnibox, so the cascade
+            // stage must still run.
+            typed.push('a');
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None,
+                &mut state,
+            );
+            let key = lumen_layout::counters::take_cascade_stats();
+            assert!(
+                key.visited > 0 && key.recomputed > 0,
+                "keystroke cycle {i} skipped the cascade entirely (visited={} recomputed={}) — \
+                 the omnibox's own value attribute changed, so a node really does need \
+                 re-cascading. Zeroing the visit counter by never cascading passes arm one and \
+                 renders a stale document.",
+                key.visited,
+                key.recomputed,
+            );
+
+            // Arm 1 — a hover flip on the sidebar: S14 leaves the root set
+            // empty and the model is unchanged, so the delta states outright
+            // that nothing changed.
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, hover,
+                &mut state,
+            );
+            let hov = lumen_layout::counters::take_cascade_stats();
+            assert_eq!(
+                hov.visited, 0,
+                "hover cycle {i} walked {} node(s) although its delta named no dirty root and no \
+                 content mutation. Every element would take the reuse branch and every node \
+                 report itself clean — the stage's whole output on such a cycle is a restatement \
+                 of its input, and it was the largest single item in the pass.",
+                hov.visited,
             );
         }
     }
@@ -26571,7 +26656,8 @@ mod tests {
                     eprintln!(
                         "[s20-census] {scenario} cycle={i} pass={:.3}ms clone_tree={:.3}ms | \
                          cascade_index rebuilds={} {:.3}ms | pseudo={} hits={} {:.3}ms | \
-                         cascade recomputed={} reused={} | boxes built={} reused={} fanouts={} | \
+                         cascade recomputed={} reused={} visited={} clean_inserts={} | \
+                         boxes built={} reused={} fanouts={} | \
                          display_probes={} cascaded={} {:.3}ms style_misses={} {:.3}ms",
                         pass_ns as f64 / 1e6,
                         clone_tree_ns as f64 / 1e6,
@@ -26582,6 +26668,8 @@ mod tests {
                         ps_stats.ns as f64 / 1e6,
                         cs.recomputed,
                         cs.reused,
+                        cs.visited,
+                        cs.clean_inserts,
                         bb.built,
                         bb.reused,
                         bb.fanouts,
@@ -26661,10 +26749,43 @@ mod tests {
         }
         let clean_ns = t.elapsed().as_nanos() as u64;
 
+        // BUG-341 S26: the reuse path itself. One hash lookup plus an `Arc`
+        // clone per element is what a pass that recomputes *nothing* still
+        // pays, and no earlier census separated it from `compute_style`. Uses
+        // the same map, so the probe sequence and load factor are production's.
+        // BUG-341 S26: the reuse path, split into the two things it does per
+        // element — the hash lookup that finds the entry, and the `Arc::clone`
+        // that takes it. The first attempt at this replay measured them together
+        // and read as "the hash barely matters": `Arc::clone` touches the
+        // refcount word of a 3.2 KB `ComputedStyle`, one cold cache line per
+        // element and 2.6 MB of working set per pass, which swamped the hash on
+        // both sides of the comparison being made. Split, it is the clone that
+        // costs 2-4× the lookup — and the walk never reads the style it is
+        // counting a reference to.
+        let ids: Vec<lumen_dom::NodeId> = styles.keys().copied().collect();
+        let t = std::time::Instant::now();
+        let mut sink = 0usize;
+        for id in &ids {
+            if let Some(s) = styles.get(id) {
+                sink ^= std::sync::Arc::as_ptr(s) as usize;
+            }
+        }
+        let lookup_ns = t.elapsed().as_nanos() as u64;
+        assert!(sink != 0 || ids.is_empty(), "lookup replay must not be optimised away");
+
+        // The refcount half on its own: clone every entry, then drop the lot.
+        let t = std::time::Instant::now();
+        let clones: Vec<std::sync::Arc<lumen_layout::style::ComputedStyle>> =
+            ids.iter().filter_map(|id| styles.get(id).map(std::sync::Arc::clone)).collect();
+        let arc_ns = t.elapsed().as_nanos() as u64;
+        assert_eq!(clones.len(), ids.len(), "arc replay must clone every entry");
+        drop(clones);
+
         eprintln!(
             "[s20-census]   CounterMap: carried passes={} swept={} displaced={} | \
              styles={} ({:.3}ms replay AVOIDED) snapshots={} ({:.3}ms replay) \
-             clean_subtrees={} ({:.3}ms replay) — total replay {:.3}ms",
+             clean_subtrees={} ({:.3}ms replay) reuse_lookups={} \
+             (lookup {:.3}ms / arc_clone {:.3}ms) — total replay {:.3}ms",
             styles.passes_lived(),
             styles.swept_last_pass(),
             counters.replaced_styles().len(),
@@ -26674,6 +26795,9 @@ mod tests {
             nodes_ns as f64 / 1e6,
             clean_replay.len(),
             clean_ns as f64 / 1e6,
+            ids.len(),
+            lookup_ns as f64 / 1e6,
+            arc_ns as f64 / 1e6,
             (styles_ns + nodes_ns + clean_ns) as f64 / 1e6,
         );
     }

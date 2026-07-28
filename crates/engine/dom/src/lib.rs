@@ -2357,6 +2357,15 @@ impl FlatTree {
     /// Returns DOM children when no shadow override exists (fast path for
     /// ordinary elements in non-shadow documents).
     pub fn children_of<'a>(&'a self, doc: &'a Document, id: NodeId) -> &'a [NodeId] {
+        // BUG-341 S26: whether this document has *any* composed-tree override is
+        // a fact about the document, not about `id`, and for every page without
+        // Shadow DOM the answer is "no". Without this line each call still hashed
+        // `id` to find that out — one SipHash per node per traversal, and the
+        // cascade, box build and a11y tree all traverse per pass. Measured at
+        // ~13 ns a lookup over the chrome document's 828 elements.
+        if self.overrides.is_empty() {
+            return doc.get(id).children.as_slice();
+        }
         self.overrides
             .get(&id)
             .map(Vec::as_slice)

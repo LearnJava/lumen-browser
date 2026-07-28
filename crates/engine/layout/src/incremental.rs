@@ -2072,8 +2072,21 @@ mod tests {
         assert!(dirty_roots.is_empty(), "no-op transition must yield an empty root-set");
         let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
+        let _ = crate::counters::take_cascade_stats();
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
+        );
+        // BUG-341 S26: this is the differential half of that slice's gate — the
+        // pass below skipped the cascade walk outright, and the geometry
+        // comparison that follows is what says the skip was equivalent and not
+        // merely cheaper. The counter is asserted here so a future change that
+        // silently puts the walk back is caught by the test that proves the
+        // skip correct, not only by the one that proves it happens.
+        assert_eq!(
+            crate::counters::take_cascade_stats().visited,
+            0,
+            "an unchanged cycle must reach `layout_mutation_incremental_restyle`'s no-op cascade \
+             path — see `bug341_s26_an_unchanged_cycle_skips_the_walk_unless_it_generates_content`",
         );
         set_incremental_restyle(false);
         clear_interactive_state();
