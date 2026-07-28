@@ -3263,7 +3263,8 @@ this is that prediction coming true, not a surprise.
 `dump_golden.py` 12/12 with no diff. The CC-12 gate is where S23 left it —
 inside budget by min on both scenarios, formally red on `CC12_KEY`'s p95.
 
-### What S25 should look at
+### What S25 should look at (written by S24; see the S25 section for what the
+### census actually found)
 
 - **`clean_subtrees`, still built from scratch** — 818-828 inserts per pass,
   0.013-0.016 ms. The set is closed downward (a node is clean iff its whole
@@ -3289,6 +3290,144 @@ code that a counter gate is a sufficient report.** Nine censuses in, the habit
 of running one first is established; what it does not yet do is ask whether the
 number it produced is large enough for the protocol that will have to confirm it.
 
+## S25 — `display` read off the cascade instead of derived a second time
+
+### Census first (tenth in a row), and it moved the item
+
+The queue pointed at "the box-build stage on KEY — 28 boxes, ~0.32 ms of
+self-time, of which `div.omnibox-wrap` alone is 0.13-0.17 ms", and named
+`clean_subtrees` as the other candidate. The census neither confirmed nor
+refuted that shape: it *relocated* it. The stage's self-time was not spread over
+28 boxes at all — it was concentrated in a per-child probe that never appears in
+a box-build log, because it is not a box.
+
+`build_box_inner`'s child loop asks, for every element child, which formatting
+context that child joins. It asked with a **full cascade**, up to three times per
+child: `is_inline_content` ran `compute_style` and looked at `.display`,
+`is_inline_block` ran it again, and the `display:none` branch inside the
+inline-collect loop ran it a third time. New counters (`BoxBuildStats::
+display_probes` / `display_probe_cascades`, plus a ns pair behind the S20 census
+gate) sized it:
+
+| | HOVER | KEY |
+|---|---|---|
+| whole pass | 0.291 / 0.756 ms | 0.625 / 0.651 ms |
+| `display` probes | 2 | 14 |
+| ...their `compute_style` cost | **0.068-0.082 ms** | **0.206-0.254 ms** |
+| `style_arc` misses (non-elements) | 3 | 16 |
+| ...their `compute_style` cost | 0.002-0.009 ms | 0.012-0.038 ms |
+| box-build Σself | 0.046-0.101 ms | 0.263-0.376 ms |
+| ...of which `div.omnibox-wrap` | — | 0.114-0.212 ms |
+
+So the probes are ~25 % of a hover cycle and ~33-40 % of a keystroke cycle,
+comfortably above the ±10-15 % noise floor — and `div.omnibox-wrap`'s
+"self-time" was almost entirely them: three element children (`.omnibox`,
+`#omniWarn`, `#omniDropdown`, the last two `display:none`) at two to three
+cascades each.
+
+The census also **refuted** the S18-era note that non-element children are the
+box-build stage's per-node cost. They do miss the cascade cache by construction
+(it records elements only), but a text node matches no selector, so those 16
+`compute_style` calls are 0.012 ms — below the protocol's resolution, and not
+worth a slice. That distinction is why the two counters are separate: same cost,
+different cause, and only one of them is removable.
+
+Two probes are only two probes, but on HOVER one of them is `<html>` — the
+element that carries the whole design system's custom properties, the single
+most expensive cascade in the document. It was re-run every hover frame purely
+to be told it is not inline.
+
+### Why the probe was wrong, not merely slow
+
+`precompute_counters` cascades every element in document order against exactly
+the parent style the probe passes as `inherited`, and `build_box_inner` builds
+the child's box out of **that** cached entry (`counters.style_arc(id)`),
+whatever the probe answered. The probe was therefore re-deriving a value the
+pass already held — and, because it derived it independently, the two could
+disagree: the probe could route a child into an inline context while the box it
+then built said `display: block`. Reading the cache does not just remove a
+cascade, it makes the two answers the same one by construction.
+
+### The fix
+
+`box_tree::probe_display` — cache first, `compute_style` only on a genuine miss
+— behind all four probe call sites (`is_inline_content`, `is_inline_block`, and
+the `display:none` branch), which now take the `CounterMap` the stage already
+has in hand. The fallback stays: a caller holding a map that predates the node
+must still get a real answer, and on chrome it never fires for an element.
+
+### Gates — by counter, each on both arms
+
+- `bug341_s25_the_box_build_stage_reads_display_off_the_cascade_cache`
+  (lumen-shell, runs by default): the cold pass and eight interaction cycles of
+  both CC-12 shapes must spend **zero** cascades on probes, and must still be
+  asking (`display_probes > 0`). The second arm is load-bearing — the cheapest
+  way to zero the first is to stop asking about `display` at all, which puts
+  every child in the wrong formatting context. Verified to redden: reverting the
+  cache lookup fails it at 106 probes / 106 cascades on the cold pass.
+- `bug341_s25_display_probes_read_the_cascade_instead_of_re_running_it`
+  (lumen-layout): the *answers*, on a fixture that exercises all three probes at
+  once — an inline and an inline-block child share one row, a `display:none`
+  child between them does not close the inline context (CSS 2.1 §9.2.4), and a
+  block child opens its own box. Verified to redden: a `probe_display` that
+  returns a constant gives `#host` nine children instead of two.
+- `bug341_s25_display_probe_falls_back_to_the_cascade_on_a_cache_miss` — the
+  miss path has no fixture in the pipeline, so deleting it would otherwise be
+  invisible until a real document hit it.
+
+### Measurement
+
+Interleaved A/B x3 against `main` (e2fb76b12), by min:
+
+| | main | S25 |
+|---|---|---|
+| `CC12_KEY` min | 0.73 / 0.84 / 0.87 ms | **0.57 / 0.60 / 0.60 ms** (≈22-31 %) |
+| `CC12_KEY` p50 | 0.98 / 0.91 / 0.97 ms | **0.65 / 0.65 / 0.63 ms** (≈30 %) |
+| `CC12_KEY` p95 | 2.67 / 2.68 / 2.50 ms | 1.91 / 1.85 / 2.38 ms |
+| `CC12_HOVER` min | 0.39 / 0.48 / 0.48 ms | 0.40 / 0.42 / 0.45 ms |
+| `CC12_HOVER` p50 | 0.46 / 0.52 / 0.56 ms | 0.52 / 0.45 / 0.48 ms |
+
+`CC12_KEY`'s min and p50 groups do not overlap on any round; the claim is made
+there. `CC12_HOVER` overlaps on every row and **no claim is made for it** — its
+two probes were ~0.07 ms of a ~0.42 ms cycle, i.e. ~17 %, right on the
+protocol's resolution, which is what the census predicted.
+
+The CC-12 gate itself (p95 < 2 ms) has stopped being reliably red: over six runs
+on the branch `CC12_KEY` p95 came in at 1.91 / 1.85 / 2.38 / 2.25 / 2.50 /
+1.82 ms — three of six inside budget, where `main` was 2.50-2.68 in all three of
+its rounds. `CC12_HOVER` p95 was inside budget in all six. So the gate is still
+**formally red** (it fails intermittently on `CC12_KEY` p95), but it is now a
+coin flip rather than a standing 1.25-1.35x overshoot.
+
+Stage census after the slice: box-build Σself `KEY` 0.263-0.376 → **0.061-0.171
+ms**, `HOVER` 0.046-0.101 → **0.004 ms**; `div.omnibox-wrap` self 0.114-0.212 →
+**0.004-0.032 ms**; `display_probe_cascades` 14/2 → **0/0**. A side effect worth
+recording: the removed cascades were also running the `::-webkit-scrollbar*`
+pseudo-element cascades, so the S23 pseudo counter falls too — `KEY` 37 calls →
+19, `HOVER` 6 → **0**.
+
+`dump_golden.py` 12/12 with no diff.
+
+### What S26 should look at
+
+- **`clean_subtrees`, still built from scratch** — unchanged from S24's note
+  above (818-828 inserts, 0.013-0.016 ms), including its trap: membership is
+  elements-only and load-bearing, because `extract_clean_subtrees` queries
+  `clean.contains(&box.node)` and an anonymous flex wrapper is keyed by a *text*
+  node the cascade never visits. Below the noise floor — a counter gate is the
+  only report it can have.
+- **`style_arc` misses on non-elements** — 16 per keystroke, 0.012-0.038 ms.
+  Each builds a 302-field `ComputedStyle` for a box that is `BoxKind::Skip`.
+  Removing it means giving a Skip box a style it does not need, which is a
+  question about `LayoutBox`'s invariants, not about the cascade. Also below the
+  noise floor.
+- **what is left is the pass itself.** After S25 no single named item on either
+  scenario is above the protocol's resolution: the two above sum to under
+  0.06 ms of a ~0.4 ms cycle. The next slice that wants a wall-clock claim needs
+  a *new* census axis, not another entry from this list — and the one axis never
+  yet split is where the remaining `precompute_counters` time goes on a pass that
+  recomputes exactly one node.
+
 ## Repro
 
 ```bash
@@ -3303,6 +3442,11 @@ cargo test -p lumen-shell --profile dev-release bug341_s19_copy_census -- --igno
 cargo test -p lumen-shell --profile dev-release bug341_s20_stage_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census -- --ignored --nocapture
 ```
+
+S25 extended the same census again rather than adding one: it now reports the
+per-cycle `display` probe count, how many of those had to run a cascade, and the
+same split for `style_arc` misses — the `display_probes=N cascaded=M` field on
+each cycle line.
 
 S22 re-used `bug341_s20_stage_census` unchanged — it already prints both items
 the queue named.
