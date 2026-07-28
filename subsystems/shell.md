@@ -20,9 +20,8 @@
   `text_dim`←`TEXT_SECONDARY`, `divider`←`STROKE`,
   `accent`←`theme_tokens::profile::PERSONAL`); the remaining Lumen-only roles
   (`header_bg`, `row_alt_bg`, `item_bg`, `item_selected_bg`, `overlay_border`,
-  `tab_inactive_bg`, `tab_sleep_bg`, `tab_hibernate_bg`) are pinned to the
-  nearest surface tier with the mapping decision documented per field in
-  `themes.rs`. One deliberate deviation from the DS-2 brief's literal
+  `tab_inactive_bg`) are pinned to the nearest surface tier with the mapping
+  decision documented per field in `themes.rs`. One deliberate deviation from the DS-2 brief's literal
   `overlay_bg←OVERLAY_BG` instruction: `Palette::overlay_bg` is the *opaque*
   floating-panel/dropdown surface used by ~20 panels (the prototype's
   `.dropdown`/`.popover`/`.modal` all use `--surface-0`), not the translucent
@@ -159,7 +158,9 @@
   is intentionally empty, landing in DS-10. Buttons whose panel is open render
   lit (`Palette::item_selected_bg` + `accent` icon via a new `FillRoundedRect`
   highlight); `Palette` gained a `toolbar_bg` field (`SURFACE_0`, one tier
-  darker than `tab_bar_bg`). `hit_test` is dispatched in `main.rs`'s mouse
+  darker than `tab_bar_bg`) — removed again in CC-15-5 once the engine chrome
+  became the only toolbar renderer and the legacy painter was cut out.
+  `hit_test` is dispatched in `main.rs`'s mouse
   handler right after the tab-bar block, calling the same handler bodies as
   the corresponding `KeyCommand` arms (Reload queues via
   `TaskSource::UserInteraction` like `KeyCommand::Reload`; toggles call

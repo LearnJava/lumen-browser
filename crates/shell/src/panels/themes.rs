@@ -176,10 +176,10 @@ impl ShellTheme {
 /// `docs/tasks/p1-design-v3.md`). The design-system prototype only names surface
 /// roles for tab strip, omnibox and floating panels/dropdowns/modals — roles with
 /// no direct prototype element (`header_bg`, `row_alt_bg`, `item_bg`,
-/// `item_selected_bg`, `tab_sleep_bg`, `tab_hibernate_bg`) are pinned to the
-/// *nearest* surface tier and documented per-field below; the 3-tier token set
-/// is deliberately coarser than the 16-field bespoke palette it replaces, so
-/// several roles now legitimately share one physical shade.
+/// `item_selected_bg`) are pinned to the *nearest* surface tier and documented
+/// per-field below; the 3-tier token set is deliberately coarser than the
+/// 16-field bespoke palette it replaces, so several roles now legitimately
+/// share one physical shade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
     /// Background of the horizontal tab strip bar.
@@ -188,10 +188,6 @@ pub struct Palette {
     pub tab_active_bg: Color,
     /// Background of an inactive tab.
     pub tab_inactive_bg: Color,
-    /// Background of a sleeping (BackgroundOld / T2) tab — a dimmer signal.
-    pub tab_sleep_bg: Color,
-    /// Background of a hibernated (T3) tab — the deepest dim.
-    pub tab_hibernate_bg: Color,
     /// Background of a floating overlay panel (address bar, find bar).
     pub overlay_bg: Color,
     /// Background of a panel's title / header bar — one step distinct from
@@ -207,11 +203,6 @@ pub struct Palette {
     pub item_bg: Color,
     /// Background of the selected dropdown / list item.
     pub item_selected_bg: Color,
-    /// Background of the permanent toolbar strip (`.toolbar` in the prototype).
-    /// One tier darker than [`tab_bar_bg`](Self::tab_bar_bg) — `SURFACE_0`
-    /// rather than `SURFACE_1` — so the toolbar reads as slightly recessed
-    /// below the tab strip, matching the prototype.
-    pub toolbar_bg: Color,
     /// Primary chrome text colour.
     pub text: Color,
     /// Secondary / dimmed chrome text colour.
@@ -233,12 +224,6 @@ impl Palette {
         // through to the strip's own `SURFACE_1`, so an inactive tab is the
         // same tier as the bar it sits on.
         tab_inactive_bg: theme_tokens::dark::SURFACE_1,
-        // No prototype equivalent (sleeping/hibernated tabs are Lumen-only
-        // states, signalled there only via favicon opacity). Nearest darker
-        // tier so the dim reads as "receded"; sleep vs. hibernate distinction
-        // is carried entirely by the "z"/"Z" badge glyph, not the background.
-        tab_sleep_bg: theme_tokens::dark::SURFACE_0,
-        tab_hibernate_bg: theme_tokens::dark::SURFACE_0,
         // `.dropdown` / `.popover` / `.modal` background in the prototype —
         // NOT `--overlay-bg` (that token is the translucent scrim *behind* a
         // modal, `.modal-overlay`; Lumen's `overlay_bg` field predates DS-1 and
@@ -255,8 +240,6 @@ impl Palette {
         // `.dd-row:hover` background in the prototype (no distinct "selected"
         // state exists there, only hover — reused for the selected item too).
         item_selected_bg: theme_tokens::dark::SURFACE_2,
-        // `.toolbar` background in the prototype.
-        toolbar_bg: theme_tokens::dark::SURFACE_0,
         text: theme_tokens::dark::TEXT_PRIMARY,
         text_dim: theme_tokens::dark::TEXT_SECONDARY,
         divider: theme_tokens::dark::STROKE,
@@ -268,8 +251,6 @@ impl Palette {
         tab_bar_bg: theme_tokens::light::SURFACE_1,
         tab_active_bg: theme_tokens::light::SURFACE_2,
         tab_inactive_bg: theme_tokens::light::SURFACE_1,
-        tab_sleep_bg: theme_tokens::light::SURFACE_0,
-        tab_hibernate_bg: theme_tokens::light::SURFACE_0,
         overlay_bg: theme_tokens::light::SURFACE_0,
         header_bg: theme_tokens::light::SURFACE_1,
         row_alt_bg: theme_tokens::light::SURFACE_1,
@@ -277,7 +258,6 @@ impl Palette {
         input_bg: theme_tokens::light::SURFACE_1,
         item_bg: theme_tokens::light::SURFACE_1,
         item_selected_bg: theme_tokens::light::SURFACE_2,
-        toolbar_bg: theme_tokens::light::SURFACE_0,
         text: theme_tokens::light::TEXT_PRIMARY,
         text_dim: theme_tokens::light::TEXT_SECONDARY,
         divider: theme_tokens::light::STROKE,
@@ -295,8 +275,6 @@ impl Palette {
             tab_bar_bg: desaturate(self.tab_bar_bg),
             tab_active_bg: desaturate(self.tab_active_bg),
             tab_inactive_bg: desaturate(self.tab_inactive_bg),
-            tab_sleep_bg: desaturate(self.tab_sleep_bg),
-            tab_hibernate_bg: desaturate(self.tab_hibernate_bg),
             overlay_bg: desaturate(self.overlay_bg),
             header_bg: desaturate(self.header_bg),
             row_alt_bg: desaturate(self.row_alt_bg),
@@ -304,7 +282,6 @@ impl Palette {
             input_bg: desaturate(self.input_bg),
             item_bg: desaturate(self.item_bg),
             item_selected_bg: desaturate(self.item_selected_bg),
-            toolbar_bg: desaturate(self.toolbar_bg),
             text: desaturate(self.text),
             text_dim: desaturate(self.text_dim),
             divider: desaturate(self.divider),

@@ -486,7 +486,7 @@ Palette-константы») недооценивала масштаб — то
 | CC-15-2 | S | done (2026-07-28, P1) — расчёт `hovered_tab_idx` на `CursorMoved` обёрнут в `if !self.css_chrome_enabled`, совпадающий с гейтом единственного потребителя (тултип таб-бара); сброс на `CursorLeft` остался безусловным |
 | CC-15-3 | M | done (2026-07-28, P1) — вырезаны покраска/hit-test `toolbar.rs`/`tabs/strip.rs` и их транзитивные вызываемые (`tabs/archive.rs`, `address_bar.rs`) + гейтированные вызовы в `main.rs`, −2100 строк; см. §CC-15-3 ниже |
 | CC-15-4 | S | Удалить 10 подтверждённо-гейтированных `panels/*`-билдеров (bookmark/print/settings/cert/history/command_palette/ai/sidebar/shields/permission) |
-| CC-15-5 | XS | Убрать 3 орфанных поля `Palette` (`toolbar_bg`/`tab_sleep_bg`/`tab_hibernate_bg`) — перепроверить грепом на момент исполнения, не по этому списку |
+| CC-15-5 | XS | done (2026-07-28, P1) — перепроверка грепом подтвердила ровно эти 3 поля из 17 как орфанные (`toolbar_bg`/`tab_sleep_bg`/`tab_hibernate_bg`, 0 читателей вне `themes.rs`); удалены объявления, инициализаторы `DARK`/`LIGHT` и строки `desaturated()` |
 | CC-15-6 | M | Финал: удалить rollback-флаг `LUMEN_LEGACY_CHROME`/`css_chrome_enabled` целиком — самый рискованный срез |
 
 Полные формулировки со ссылками на строки — в ROADMAP.md, строки CC-15/CC-15-1…CC-15-6.
