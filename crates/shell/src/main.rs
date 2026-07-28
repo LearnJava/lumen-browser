@@ -13922,7 +13922,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.pending_pointer_moves.push((x_css, y_css));
                 }
                 // Tab bar: update hovered_tab_idx for tooltip rendering.
-                {
+                // Only consumed by the legacy tab-bar tooltip (below,
+                // `!self.css_chrome_enabled`) — skip the hit-test entirely
+                // under the default engine-drawn chrome (CC-15-2).
+                if !self.css_chrome_enabled {
                     let dpr = self
                         .renderer
                         .as_ref()

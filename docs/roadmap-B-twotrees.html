@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 103,
+  "open": 104,
   "fixed": 273,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 376,
+ "total_bugs": 377,
  "phases": [
   {
    "id": "P0",
@@ -3949,9 +3949,9 @@
         {
          "id": "CC-15-2",
          "title": "CC-15-2: Мёртвый расчёт hovered_tab_idx",
-         "status": "planned",
+         "status": "done",
          "size": "S",
-         "note": "Убрать безусловный (негейтированный) расчёт `hovered_tab_idx` на каждый `CursorMoved` (main.rs:13880-13902, зовёт `tabs::strip::hit_test`/`TAB_BAR_HEIGHT`/`LAYOUT_BTN_W`/`SETTINGS_BTN_W`), потребитель которого (тултип таб-бара, main.rs:16885) сам уже гейтирован `!css_chrome_enabled` — мёртвая работа на каждый кадр под дефолтным хромом"
+         "note": "Закрыто (2026-07-28, P1). Расчёт `hovered_tab_idx` на каждый `CursorMoved` (main.rs, зовёт `tabs::strip::hit_test`/`TAB_BAR_HEIGHT`/`LAYOUT_BTN_W`/`SETTINGS_BTN_W`) обёрнут в `if !self.css_chrome_enabled`, совпадающий с гейтом единственного потребителя (тултип таб-бара) — мёртвая работа под дефолтным движковым хромом устранена; сброс на `CursorLeft` остался безусловным (дешёвый `= None`, не требует гейта). `cargo check -p lumen-shell` зелёный, сигнатур не менялось"
         },
         {
          "id": "CC-15-3",
@@ -6777,6 +6777,13 @@
    "component": "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-406": {
+   "status": "open",
+   "title": "Компиляция 16 wgpu-пайплайнов при старте стоит **3.0–7.0 с на DX12 против 0.26–0.40 с на Vulkan** — одно железо (Intel Iris Plus), один процесс, одни шейдеры; п…",
+   "component": "paint (`Renderer::init_pipelines`, `crates/engine/paint/src/renderer.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7135,6 +7142,9 @@
   ],
   "paint (WgpuBackend/Renderer) / shell (streaming первого кадра)": [
    "BUG-274"
+  ],
+  "paint (`Renderer::init_pipelines`, `crates/engine/paint/src/renderer.rs`)": [
+   "BUG-406"
   ],
   "paint (`Renderer::new_async`, выбор wgpu-бэкенда)": [
    "BUG-275"
