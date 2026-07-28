@@ -14748,6 +14748,84 @@ mod tests {
         assert!(urls.contains(&"b.png".to_string()));
     }
 
+    // ── CSS Generated Content L3 §2.1 — content: url() ────────────────────────
+
+    /// Собирает пары `(text, img_src)` из всех `InlineRun`-сегментов дерева.
+    fn inline_segments_of(b: &LayoutBox) -> Vec<(String, Option<String>)> {
+        let mut out = Vec::new();
+        fn walk(b: &LayoutBox, out: &mut Vec<(String, Option<String>)>) {
+            if let crate::box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
+                for s in segments {
+                    out.push((s.text.clone(), s.img_src.clone()));
+                }
+            }
+            for c in &b.children {
+                walk(c, out);
+            }
+        }
+        walk(b, &mut out);
+        out
+    }
+
+    /// `content: url(...)` на `::before` → генерирует inline-replaced image-сегмент.
+    #[test]
+    fn content_url_before_emits_image_segment() {
+        let root = layout_with(
+            "<body><p>x</p></body>",
+            "p::before { content: url(icon.png); }",
+        );
+        let segs = inline_segments_of(&root);
+        assert!(
+            segs.iter().any(|(t, img)| img.as_deref() == Some("icon.png") && t.is_empty()),
+            "expected a generated image segment for icon.png, got {segs:?}"
+        );
+    }
+
+    /// Сгенерированная `content: url(...)` картинка попадает в фетч-запросы: у неё
+    /// нет DOM-элемента, поэтому обычный `collect_image_requests` её не видит —
+    /// её подбирает post-layout background-проход.
+    #[test]
+    fn collect_bg_image_generated_content_url() {
+        let root = layout_with(
+            "<body><p>x</p></body>",
+            "p::before { content: url(icon.png); }",
+        );
+        let urls = collect_background_image_requests(&root);
+        assert_eq!(urls, vec!["icon.png".to_string()]);
+    }
+
+    /// Реальный inline `<img>` НЕ попадает в background-проход: у него есть DOM-узел,
+    /// его грузит `collect_image_requests`. Двойной фетч (и поломка `loading=lazy`)
+    /// недопустимы — сегменты `<img>` несут собственный `NodeId`, а не sentinel-0.
+    #[test]
+    fn collect_bg_image_ignores_real_img() {
+        let root = layout_with(
+            r#"<body><p><img src="real.png"></p></body>"#,
+            "",
+        );
+        assert!(
+            collect_background_image_requests(&root).is_empty(),
+            "real <img> must not be collected by the background pass"
+        );
+    }
+
+    /// Смешанный `content: "A" url(i.png) "B"` → текст «A», картинка i.png, текст «B»
+    /// как отдельные сегменты (url() разрывает текстовый run).
+    #[test]
+    fn content_url_mixed_with_text_splits_segments() {
+        let root = layout_with(
+            "<body><p>x</p></body>",
+            r#"p::before { content: "A" url(i.png) "B"; }"#,
+        );
+        let segs = inline_segments_of(&root);
+        assert!(segs.iter().any(|(t, img)| t == "A" && img.is_none()), "text A missing: {segs:?}");
+        assert!(
+            segs.iter().any(|(t, img)| img.as_deref() == Some("i.png") && t.is_empty()),
+            "image i.png missing: {segs:?}"
+        );
+        assert!(segs.iter().any(|(t, img)| t == "B" && img.is_none()), "text B missing: {segs:?}");
+    }
+
     // ── CSS Positioned Layout L3 — position: relative / absolute / fixed ──
 
     /// `position: relative; top: 20px; left: 30px` — визуальный сдвиг относительно

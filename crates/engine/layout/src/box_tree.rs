@@ -1862,6 +1862,23 @@ fn collect_bg_image_inner(b: &LayoutBox, out: &mut Vec<String>) {
     {
         out.push(src.clone());
     }
+    // CSS Generated Content L3 §2.1: `content: url(...)` produces an inline-replaced
+    // image segment that the shell would otherwise never fetch — unlike `<img>`, it
+    // has no DOM element for `collect_image_requests` to walk. Such segments are
+    // tagged with `source_node == NodeId::from_index(0)` ("no DOM origin"), which
+    // distinguishes them from real inline `<img>` frags (already fetched, and
+    // possibly `loading="lazy"`). Piggy-back on the post-layout background pass.
+    if let BoxKind::InlineRun { segments, .. } = &b.kind {
+        for seg in segments {
+            if let Some(src) = &seg.img_src
+                && seg.source_node == NodeId::from_index(0)
+                && !src.is_empty()
+                && !out.iter().any(|u| u == src)
+            {
+                out.push(src.clone());
+            }
+        }
+    }
     for child in &b.children {
         collect_bg_image_inner(child, out);
     }
@@ -4042,6 +4059,7 @@ fn inject_pseudo(
     ps: Option<ComputedStyle>,
     is_before: bool,
     doc: &Document,
+    viewport: Size,
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
     blockify: bool,
@@ -4055,7 +4073,7 @@ fn inject_pseudo(
         | Display::InlineBlock
             if !blockify =>
         {
-            let segs = content_to_inline_segments(&ps, doc, parent_id, slot, counters, registry);
+            let segs = content_to_inline_segments(&ps, doc, parent_id, slot, viewport, counters, registry);
             if segs.is_empty() {
                 return;
             }
@@ -4079,7 +4097,7 @@ fn inject_pseudo(
         }
         _ => {
             // Block-level pseudo-element.
-            let inner_segs = content_to_inline_segments(&ps, doc, parent_id, slot, counters, registry);
+            let inner_segs = content_to_inline_segments(&ps, doc, parent_id, slot, viewport, counters, registry);
             let inner = if inner_segs.is_empty() {
                 vec![]
             } else {
@@ -4116,6 +4134,7 @@ fn content_to_inline_segments(
     doc: &Document,
     owner_id: NodeId,
     slot: QuoteSlot,
+    viewport: Size,
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
 ) -> Vec<InlineSegment> {
@@ -4125,9 +4144,34 @@ fn content_to_inline_segments(
     let snap = counters.counters(owner_id);
     let qdepths = counters.quote_depths(owner_id, slot);
     let mut qi = 0usize;
-    let text: String = items
-        .iter()
-        .filter_map(|item| match item {
+    let mut out: Vec<InlineSegment> = Vec::new();
+    // Text-producing items concatenate into a single run; a `url()` item flushes
+    // the pending run and emits its own inline-replaced image segment.
+    let mut text = String::new();
+
+    for item in items {
+        // CSS Generated Content L3 §2.1 — a `url()` value is an inline-replaced
+        // image. It interrupts the surrounding text run and becomes its own image
+        // segment (mirrors the inline-`<img>` path in `collect_inline_segments`).
+        if let ContentItem::Url(url) = item {
+            if !text.is_empty() {
+                out.push(make_content_text_segment(style, owner_id, std::mem::take(&mut text)));
+            }
+            if !url.is_empty() {
+                let em = style.font_size;
+                // No intrinsic size is known before the image is fetched, so honour
+                // an explicit `width` and otherwise fall back to `2em` — the same
+                // placeholder the inline-`<img>` path uses for undecoded images.
+                let w = style
+                    .width
+                    .as_ref()
+                    .and_then(|l| l.resolve(em, None, viewport))
+                    .unwrap_or(em * 2.0);
+                out.push(make_content_image_segment(style, url.clone(), w));
+            }
+            continue;
+        }
+        let piece = match item {
             ContentItem::String(s) => Some(s.clone()),
             ContentItem::Counter { name, style: list_style } => {
                 let val = snap
@@ -4165,15 +4209,28 @@ fn content_to_inline_segments(
                 qi += 1;
                 style.quotes.pair_for_depth(depth).map(|(_, c)| c.to_string())
             }
-            // no-open-quote / no-close-quote only advance depth (handled in the
-            // precompute pass) and emit nothing.
+            // url() is handled above; no-open-quote / no-close-quote only advance
+            // depth (handled in the precompute pass) and emit nothing.
             _ => None,
-        })
-        .collect();
-    if text.is_empty() {
-        return vec![];
+        };
+        if let Some(piece) = piece {
+            text.push_str(&piece);
+        }
     }
-    vec![InlineSegment {
+    if !text.is_empty() {
+        out.push(make_content_text_segment(style, owner_id, text));
+    }
+    out
+}
+
+/// Builds a plain-text `InlineSegment` for generated (`content`) text.
+/// `source_node` is the owning element so Selection/Range can map back to it.
+fn make_content_text_segment(
+    style: &ComputedStyle,
+    owner_id: NodeId,
+    text: String,
+) -> InlineSegment {
+    InlineSegment {
         text,
         style: style.clone(),
         pre_space: 0.0,
@@ -4186,7 +4243,33 @@ fn content_to_inline_segments(
         pseudo_kind: PseudoKind::None,
         source_node: owner_id,
         source_char_offset: 0,
-    }]
+    }
+}
+
+/// Builds an inline-replaced image `InlineSegment` for a `content: url(...)` item.
+/// `source_node` is `NodeId::from_index(0)` ("no DOM origin"): a generated image is
+/// not a selectable text node, and `collect_background_image_requests` keys on this
+/// sentinel to recognise generated-content images that still need fetching +
+/// registering (real inline `<img>` frags carry their element's own `NodeId`).
+fn make_content_image_segment(
+    style: &ComputedStyle,
+    url: String,
+    width: f32,
+) -> InlineSegment {
+    InlineSegment {
+        text: String::new(),
+        style: style.clone(),
+        pre_space: 0.0,
+        post_space: 0.0,
+        is_element_box: true,
+        img_src: Some(url),
+        img_is_lazy: false,
+        img_width: width,
+        forced_break: false,
+        pseudo_kind: PseudoKind::None,
+        source_node: NodeId::from_index(0),
+        source_char_offset: 0,
+    }
 }
 
 /// Builds inline segments for a pseudo-element and applies its own box model
@@ -4203,7 +4286,7 @@ fn push_pseudo_inline_segs(
     registry: &CounterStyleRegistry,
     out: &mut Vec<InlineSegment>,
 ) {
-    let mut segs = content_to_inline_segments(ps, doc, owner_id, slot, counters, registry);
+    let mut segs = content_to_inline_segments(ps, doc, owner_id, slot, viewport, counters, registry);
     if segs.is_empty() {
         return;
     }
@@ -5107,8 +5190,8 @@ fn build_box_inner(
                 let after_ps = compute_pseudo_element_style(
                     doc, id, "after", sheet, &style, viewport, dark_mode,
                 );
-                inject_pseudo(id, &mut children, before_ps, true, doc, counters, registry, true);
-                inject_pseudo(id, &mut children, after_ps, false, doc, counters, registry, true);
+                inject_pseudo(id, &mut children, before_ps, true, doc, viewport, counters, registry, true);
+                inject_pseudo(id, &mut children, after_ps, false, doc, viewport, counters, registry, true);
             }
         } else {
         let mut i = 0;
@@ -5303,8 +5386,8 @@ fn build_box_inner(
                 compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode);
             let after_ps =
                 compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode);
-            inject_pseudo(id, &mut children, before_ps, true, doc, counters, registry, false);
-            inject_pseudo(id, &mut children, after_ps, false, doc, counters, registry, false);
+            inject_pseudo(id, &mut children, before_ps, true, doc, viewport, counters, registry, false);
+            inject_pseudo(id, &mut children, after_ps, false, doc, viewport, counters, registry, false);
             // CSS Lists L3 §2.1 — inject ::marker for list items.
             // ::marker comes before ::before in document order.
             if style.display == Display::ListItem {
