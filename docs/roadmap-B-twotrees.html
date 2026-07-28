@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 90,
+  "open": 93,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 362,
+ "total_bugs": 365,
  "phases": [
   {
    "id": "P0",
@@ -2318,16 +2318,23 @@
       {
        "id": "WPT-VENDOR-gamepad",
        "title": "WPT: вендорить + прогнать категорию `gamepad`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (геймпады)"
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/gamepad/`, 15 файлов: `META.yml`, `WEB_FEATURES.yml`, 6 `*-manual(.https).html`, 7 не-manual тестовых файлов, `LICENSE-WPT.md`), скоуп 🚫 (аппаратный API), включена по постоянному решению пользователя. `run_report.py --all --root gamepad --recursive` — **1 мин 7 с, 1/6 harness OK, 0/3 сабтеста** (глоб дал 7 id, wptrunner отобрал 6 — `permissions-policy-gamepad.html` верно классифицирован манифестом как `support`-фикстура без `testharness.js`, не разрыв). Ни одного `testdriver.js`-файла в категории. Единственный исполнившийся тест с результатом (`gamepad-supported-by-permissions-policy.html`) падает на уже заведённый BUG-361 (`permissionsPolicy.features()` → `[]`); `idlharness-extensions.https.window.html` — сессионный артефакт класса BUG-380; `idlharness.window.html` — невендоренные `WebIDLParser.js`/`idlharness.js`, не Lumen-баг; `gamepad-default-permissions-policy.https.sub.html` — обычный HTTPS-порт-гэп. Два TIMEOUT (`gamepad-permissions-policy-event-listener.html`, `not-fully-active.html`) подтверждены прямой пробой `--mcp-live-port`/`eval` как уже известный пробел «`<iframe>` без browsing context» (BUG-381/383 из `focus`): у `srcdoc`-iframe `onload` не срабатывает, `postMessage` изнутри не доходит, `contentWindow`/`contentDocument` — настоящий `null` (`typeof` вводит в заблуждение, отдавая `\"object\"`). Та же проба, направленная на саму Gamepad API (реализована, Phase 0, `crates/js/src/gamepad.rs`) дала новую находку: BUG-392 (`getGamepads()` всегда 4 `null`-слота вместо спекового 0 до подключения устройства; `ongamepadconnected`/`ongamepaddisconnected` отсутствуют как event-handler IDL-атрибуты на `Window`)",
+       "bugs": [
+        "BUG-392"
+       ]
       },
       {
        "id": "WPT-VENDOR-generic-sensor",
        "title": "WPT: вендорить + прогнать категорию `generic-sensor`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (базовый API)"
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/generic-sensor/`, 11 файлов: `META.yml`, `WEB_FEATURES.yml`, 3 исполняемых файла верхнего уровня — `SensorErrorEvent-constructor.https.html`, `generic-sensor-permission.https.html`, `idlharness.https.window.js` — плюс 3 общих `.js`-хелпера, используемых всей Sensor-семьёй категорий (`generic-sensor-tests.js`, `generic-sensor-iframe-tests.sub.js`, `generic-sensor-permissions-policy-test.sub.js`, уже частично протянуты через уже вендоренную `accelerometer`), `resources/` из 2 файлов, `LICENSE-WPT.md`), скоуп 🚫 (базовый API аппаратных датчиков), включена по постоянному решению пользователя (тот же класс, что `accelerometer`/`gamepad`/`fledge`). `run_report.py --all --root generic-sensor --recursive` — **53 с, 0/3 harness OK, 0/0 сабтестов** (1 SKIP по testdriver.js — `generic-sensor-permission.https.html`, 2 TIMEOUT на HTTPS-порт-гэпе — `SensorErrorEvent-constructor.https.html`, `idlharness.https.window.js`), самая дешёвая и однородная по составу категория backlog-а на сегодня: files == ids, ни одного variant-а. API реализован (Phase 0, `crates/js/src/generic_sensor.rs`, базовый `Sensor` + все 8 конкретных датчиков), поэтому проба `--mcp-port`/`eval` (headless, без окна — категория целиком синхронная, не требует живого event loop) дала две находки прямо по недостижимым прогоном тестам: BUG-393 (`SensorErrorEvent`-конструктор не проверяет обязательный `error` в init dict и не бросает `TypeError` — воспроизводит ровно assert из `SensorErrorEvent-constructor.https.html`) и BUG-394 (`Sensor`/подклассы используют приватный `_SensorEventTarget` вместо глобального шимового `EventTarget`, `instanceof EventTarget` → `false`; `new Sensor()` конструируется напрямую, хотя в IDL нет конструктора — оба факта проверяет недостижимый `idlharness.https.window.js`). `CAPABILITIES.md` не тронут — по тому же прецеденту, что `gamepad` (BUG-392): находки целиком внутренние для вне-скоуп аппаратного API, не задевают инфраструктуру, которую CAPABILITIES.md документирует",
+       "bugs": [
+        "BUG-393",
+        "BUG-394"
+       ]
       },
       {
        "id": "WPT-VENDOR-geolocation",
@@ -6603,6 +6610,27 @@
    "status": "open",
    "title": "`Element.matches()`/`querySelector(All)`/`closest()` никогда не бросают `SyntaxError` DOMException на невалидный или неподдерживаемый селектор (`:halfscreen` и…",
    "component": "layout (`crates/engine/layout/src/selector_query.rs:335-422` — `query_all`/`query_all_within`/`query_all_scoped`/`matches_selector`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-392": {
+   "status": "open",
+   "title": "`navigator.getGamepads()` всегда возвращает 4 слота (все `null`) вместо требуемых спекой 0 до первого подключения устройства; `ongamepadconnected`/`ongamepaddis…",
+   "component": "js (`crates/js/src/gamepad.rs:112` — `_gamepads` init, `:118-124` — `getGamepads`, `:147-151` — экспорт глобалов)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-393": {
+   "status": "open",
+   "title": "`new SensorErrorEvent('error')` не бросает `TypeError`, хотя `error` — обязательный член `SensorErrorEventInit` по спеке; конструктор молча подставляет `null`.…",
+   "component": "js (`crates/js/src/generic_sensor.rs:56-59` — конструктор `SensorErrorEvent`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-394": {
+   "status": "open",
+   "title": "`Sensor`/подклассы (`Accelerometer` и др.) не наследуются от глобального `EventTarget` (`instanceof EventTarget` → `false`, своя реализация `addEventListener`)…",
+   "component": "js (`crates/js/src/generic_sensor.rs:32-78` — приватный `_SensorEventTarget`, `Sensor` без guard на прямой вызов)",
    "date": null,
    "debtor": false
   }
