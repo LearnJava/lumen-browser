@@ -1,17 +1,12 @@
-//! Tab strip: per-tab metadata and rendering.
+//! Tab strip: per-tab metadata and hit-testing.
 //!
 //! `TabStrip` holds the list of open tabs and the active index.
-//! `build_tab_bar` produces a viewport-locked `DisplayList` for the strip area.
-//! `hit_test` maps CSS-px (x, y) → `TabHit` for mouse dispatch.
-//!
-//! Visual constants follow a dark-chrome aesthetic consistent with
-//! `address_bar.rs` and `find.rs`.
+//! `hit_test` maps CSS-px (x, y) → `TabHit` for mouse dispatch — still used
+//! unconditionally by the tab right-click context menu (CC-15-3: the
+//! `build_tab_bar`/`build_tab_tooltip` paint path and the layout-toggle/
+//! settings-button paint+hit-test pairs were removed once the engine-drawn
+//! chrome (CC-4) made them dead code under the default config).
 
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
-
-use crate::panels::themes::Palette;
 use crate::tab_lifecycle::state::TabState;
 use crate::tabs::containers::ContainerKind;
 use crate::tabs::groups::{GroupColor, TabGroup};
@@ -23,9 +18,6 @@ pub const TAB_BAR_HEIGHT: f32 = 36.0;
 
 /// Pixels the cursor must travel before a press becomes a drag.
 pub const DRAG_THRESHOLD: f32 = 6.0;
-
-/// Width of the drop-indicator bar rendered between tabs during a drag.
-const DROP_INDICATOR_W: f32 = 3.0;
 
 /// Width of the vertical-tab layout toggle button in CSS px.
 /// Rendered at the right edge of the tab strip, between the tabs and the
@@ -42,33 +34,15 @@ pub const SETTINGS_BTN_W: f32 = 28.0;
 /// the user does not hit close by mistake).
 const ADBLOCK_CB_SZ: f32 = 12.0;
 
-/// Background colour of the ad-block checkbox when blocking is enabled.
-const ADBLOCK_ON_BG: Color = Color { r: 46, g: 160, b: 80, a: 255 };
-/// Background colour of the ad-block checkbox when blocking is disabled.
-const ADBLOCK_OFF_BG: Color = Color { r: 70, g: 72, b: 80, a: 255 };
-
 /// `[left, right)` x-range of a tab's ad-block checkbox, given the tab's own
 /// left edge. Placed at the left edge (inset by `TAB_PAD`), before the title.
-/// Mirrors the geometry used in [`build_tab_bar`] and [`hit_test`] so painting
-/// and hit-testing stay in sync.
+/// Mirrors the geometry used by [`hit_test`] so hit-testing matches where the
+/// checkbox used to be painted.
 fn adblock_cb_x_range(tab_left: f32) -> (f32, f32) {
     let cb_left = tab_left + TAB_PAD;
     (cb_left, cb_left + ADBLOCK_CB_SZ)
 }
 
-/// Colour of the vertical drop-indicator bar.
-const DROP_INDICATOR_COLOR: Color = Color { r: 255, g: 255, b: 255, a: 180 };
-
-const CLOSE_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-
-/// Badge colour for BackgroundOld tier — amber "z" sleep icon.
-/// Indicator colour for a pinned tab (CC-4) — cyan dot at the tab's left edge.
-const PIN_COLOR: Color = Color { r: 90, g: 200, b: 220, a: 255 };
-const BADGE_OLD_COLOR: Color = Color { r: 255, g: 168, b: 0, a: 210 };
-/// Badge colour for Hibernated tier — grey "Z" sleep icon.
-const BADGE_HIBERNATE_COLOR: Color = Color { r: 110, g: 110, b: 120, a: 210 };
-
-const FONT_SZ: f32 = 12.0;
 /// Minimum tab button width in CSS px.
 const TAB_MIN_W: f32 = 80.0;
 /// Maximum tab button width in CSS px.
@@ -77,22 +51,6 @@ const TAB_MAX_W: f32 = 200.0;
 const TAB_PAD: f32 = 10.0;
 /// Close-button glyph size.
 const CLOSE_SZ: f32 = 14.0;
-/// Gap between text area right edge and close-button left edge.
-const CLOSE_MARGIN: f32 = 4.0;
-/// Font size for the "Z"/"z" sleep-icon badge on T2/T3 tabs.
-const BADGE_Z_SZ: f32 = 9.0;
-/// Width of the container accent strip in CSS px (7D.2, DS-13). Drawn as a
-/// rounded vertical bar along the left edge of each tab button when its
-/// `container` is not `ContainerKind::None`.
-const CONTAINER_STRIP_WIDTH: f32 = 3.0;
-/// Vertical inset of the container strip from the tab's top/bottom edge
-/// (DS-13: "высота вкладки минус 2×2 px").
-const CONTAINER_STRIP_INSET: f32 = 2.0;
-/// Height of the tab-group accent bar in CSS px (CC-6). Drawn at the bottom
-/// edge of a grouped tab in its group's [`GroupColor`].
-const GROUP_BAR_HEIGHT: f32 = 3.0;
-/// Width of the collapsed-group chip marker (a square swatch) in CSS px.
-const COLLAPSE_CHIP_W: f32 = 10.0;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -134,8 +92,7 @@ pub struct TabEntry {
     /// "Close others" / "Close to the right" bulk operations. Default `false`.
     pub pinned: bool,
     /// Id of the [`TabGroup`] this tab belongs to (CC-6), or `None` when the
-    /// tab is ungrouped. Drives the coloured group accent bar and collapse
-    /// visibility in [`build_tab_bar`].
+    /// tab is ungrouped. Drives collapse visibility (see [`TabStrip::visible_indices`]).
     pub group_id: Option<usize>,
     /// Whether the built-in ad/tracker request filter is active for this tab.
     ///
@@ -245,9 +202,7 @@ impl TabStrip {
 
     /// Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op.
     ///
-    /// Triggers a visual change on the next `build_tab_bar` call — the
-    /// border-top strip swaps colour or appears/disappears. Cookie/storage
-    /// isolation rewiring is the caller's responsibility (see
+    /// Cookie/storage isolation rewiring is the caller's responsibility (see
     /// `ContainerStore::get_or_create`).
     pub fn set_tab_container(&mut self, idx: usize, container: ContainerKind) {
         if let Some(tab) = self.tabs.get_mut(idx) {
@@ -469,7 +424,11 @@ impl TabStrip {
     }
 
     /// The colour of the group `id`, or `None` for an unknown group.
+    ///
+    /// BUG-409: unread since CC-15-3 removed the legacy strip painter — see
+    /// [`GroupColor::color`] for why the group palette is kept.
     #[must_use]
+    #[allow(dead_code, reason = "BUG-409: цвета групп вкладок ещё не перенесены в движковый хром")]
     pub fn group_color(&self, id: usize) -> Option<GroupColor> {
         self.group(id).map(|g| g.color)
     }
@@ -589,95 +548,6 @@ impl TabLayout {
     }
 }
 
-/// Returns `true` if `(x, y)` falls inside the layout-mode toggle button.
-///
-/// The button is `LAYOUT_BTN_W` wide, positioned at `btn_x..btn_x + LAYOUT_BTN_W`
-/// in the tab bar row (`y ∈ 0..TAB_BAR_HEIGHT`).  `btn_x` is typically
-/// `win_w − archive_btn_w − LAYOUT_BTN_W`.
-pub fn hit_test_layout_btn(x: f32, y: f32, btn_x: f32) -> bool {
-    (btn_x..btn_x + LAYOUT_BTN_W).contains(&x) && (0.0..TAB_BAR_HEIGHT).contains(&y)
-}
-
-/// Build a display list for the vertical-tab layout toggle button.
-///
-/// `btn_x` — CSS-px x coordinate of the button's left edge (positioned between
-/// the tab strip and the archive button).  `tab_layout` controls the highlight:
-/// the button background is lit when [`TabLayout::Vertical`] is active.
-/// `pal` supplies the theme palette so the button matches the tab strip.
-pub fn build_layout_toggle_btn(tab_layout: TabLayout, btn_x: f32, pal: &Palette) -> DisplayList {
-    let is_active = tab_layout == TabLayout::Vertical;
-    let bg = if is_active { pal.item_selected_bg } else { pal.tab_bar_bg };
-    let icon_color = pal.text_dim;
-    const ICON_SZ: f32 = 12.0;
-    let icon_x = btn_x + (LAYOUT_BTN_W - ICON_SZ) * 0.5;
-    let icon_y = (TAB_BAR_HEIGHT - ICON_SZ * 1.2) * 0.5;
-    vec![
-        DisplayCommand::FillRect {
-            rect: Rect::new(btn_x, 0.0, LAYOUT_BTN_W, TAB_BAR_HEIGHT),
-            color: bg,
-        },
-        DisplayCommand::DrawText {
-            rect: Rect::new(icon_x, icon_y, ICON_SZ, ICON_SZ * 1.2),
-            text: "\u{2630}".to_owned(), // ☰ trigram for heaven / hamburger
-            font_size: ICON_SZ,
-            color: icon_color,
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        },
-    ]
-}
-
-/// Returns `true` if `(x, y)` falls inside the settings gear button.
-///
-/// The button is `SETTINGS_BTN_W` wide, positioned at `btn_x..btn_x + SETTINGS_BTN_W`
-/// in the tab bar row (`y ∈ 0..TAB_BAR_HEIGHT`). `btn_x` is typically
-/// `win_w − archive_btn_w − LAYOUT_BTN_W − SETTINGS_BTN_W`.
-pub fn hit_test_settings_btn(x: f32, y: f32, btn_x: f32) -> bool {
-    (btn_x..btn_x + SETTINGS_BTN_W).contains(&x) && (0.0..TAB_BAR_HEIGHT).contains(&y)
-}
-
-/// Build a display list for the settings gear button (opens `about:settings`).
-///
-/// `btn_x` — CSS-px x coordinate of the button's left edge (positioned between
-/// the tab strip and the layout-toggle button). `active` lights the background
-/// while the settings page is open, mirroring the layout button's highlight.
-/// `pal` supplies the theme palette so the button matches the tab strip.
-pub fn build_settings_btn(btn_x: f32, active: bool, pal: &Palette) -> DisplayList {
-    let bg = if active { pal.item_selected_bg } else { pal.tab_bar_bg };
-    let icon_color = pal.text_dim;
-    const ICON_SZ: f32 = 12.0;
-    let icon_x = btn_x + (SETTINGS_BTN_W - ICON_SZ) * 0.5;
-    let icon_y = (TAB_BAR_HEIGHT - ICON_SZ * 1.2) * 0.5;
-    vec![
-        DisplayCommand::FillRect {
-            rect: Rect::new(btn_x, 0.0, SETTINGS_BTN_W, TAB_BAR_HEIGHT),
-            color: bg,
-        },
-        DisplayCommand::DrawText {
-            rect: Rect::new(icon_x, icon_y, ICON_SZ, ICON_SZ * 1.2),
-            text: "\u{2699}".to_owned(), // ⚙ gear
-            font_size: ICON_SZ,
-            color: icon_color,
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        },
-    ]
-}
-
 /// Returns the `[left, right)` x-range of tab `idx` given `n_tabs` tabs and
 /// a `window_w`-wide window.
 fn tab_x_range(idx: usize, n_tabs: usize, window_w: f32) -> (f32, f32) {
@@ -715,288 +585,6 @@ pub fn hit_test(strip: &TabStrip, x: f32, y: f32, window_w: f32) -> TabHit {
         }
     }
     TabHit::Empty
-}
-
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build a viewport-locked display list for the tab bar.
-///
-/// `drag` — during a drag-and-drop operation, renders the drop indicator.
-/// `ws_accent` — active workspace's colour (DS-12, level-1 hierarchy marker);
-/// overrides `pal.accent` for the active-tab indicator (bottom 2 px bar) when
-/// `Some`. `None` when no workspace is selected — falls back to `pal.accent`.
-///
-/// Appended to the overlay buffer each frame; rendered on top of page content
-/// at y = 0..`TAB_BAR_HEIGHT`.
-///
-/// Lifecycle badge rendering:
-/// - `TabState::BackgroundOld` → amber dot at top-right corner of the tab button.
-/// - `TabState::Hibernated`    → grey dot at top-right corner of the tab button.
-/// - All other states          → no badge rendered.
-pub fn build_tab_bar(
-    strip: &TabStrip,
-    window_w: f32,
-    pal: &Palette,
-    drag: Option<&TabDragState>,
-    ws_accent: Option<Color>,
-) -> DisplayList {
-    // Lay out over the *visible* tabs: members of a collapsed group (except the
-    // chip) are skipped. With no collapsed groups this is `0..tabs.len()`.
-    let visible = strip.visible_indices();
-    let n = visible.len();
-    let mut out = DisplayList::with_capacity(4 + n * 7);
-
-    // Background strip.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(0.0, 0.0, window_w, TAB_BAR_HEIGHT),
-        color: pal.tab_bar_bg,
-    });
-
-    for (slot, &i) in visible.iter().enumerate() {
-        let tab = &strip.tabs[i];
-        let (left, right) = tab_x_range(slot, n, window_w);
-        let is_active = i == strip.active;
-
-        // Tab background: T2/T3 use darker backgrounds as fade-opacity signal.
-        let bg = if is_active {
-            pal.tab_active_bg
-        } else {
-            match tab.tab_state {
-                TabState::BackgroundOld => pal.tab_sleep_bg,
-                TabState::Hibernated => pal.tab_hibernate_bg,
-                _ => pal.tab_inactive_bg,
-            }
-        };
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(left, 0.0, right - left, TAB_BAR_HEIGHT),
-            color: bg,
-        });
-
-        // Tab-group accent bar (CC-6): a coloured strip along the bottom of a
-        // grouped tab in its group's colour. Drawn before the active accent so
-        // the active 2 px bar still reads on top for a grouped active tab.
-        if let Some(gid) = tab.group_id
-            && let Some(gc) = strip.group_color(gid)
-        {
-            let col = gc.color();
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(left, TAB_BAR_HEIGHT - GROUP_BAR_HEIGHT, right - left, GROUP_BAR_HEIGHT),
-                color: col,
-            });
-            // Collapsed-group chip: a small square swatch near the left edge of
-            // the leftmost (chip) tab, signalling the group is folded.
-            if strip.is_collapsed(gid) {
-                out.push(DisplayCommand::FillRect {
-                    rect: Rect::new(left + 4.0, (TAB_BAR_HEIGHT - COLLAPSE_CHIP_W) * 0.5, COLLAPSE_CHIP_W, COLLAPSE_CHIP_W),
-                    color: col,
-                });
-            }
-        }
-
-        // Active tab accent bar at the bottom (DS-12: workspace colour, level-1
-        // hierarchy marker — semantic exception to token-only rule).
-        if is_active {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(left, TAB_BAR_HEIGHT - 2.0, right - left, 2.0),
-                color: ws_accent.unwrap_or(pal.accent),
-            });
-        }
-
-        // Container accent strip (7D.2, DS-13). 3 px wide rounded bar along
-        // the left edge of the tab, inset 2 px top/bottom. Skipped for
-        // ContainerKind::None. `ContainerKind` colours are unchanged.
-        if let Some(color) = tab.container.border_color() {
-            let r = crate::theme_tokens::radius::SM;
-            out.push(DisplayCommand::FillRoundedRect {
-                rect: Rect::new(
-                    left,
-                    CONTAINER_STRIP_INSET,
-                    CONTAINER_STRIP_WIDTH,
-                    TAB_BAR_HEIGHT - 2.0 * CONTAINER_STRIP_INSET,
-                ),
-                radii: CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r },
-                color,
-            });
-        }
-
-        // Pinned indicator (CC-4): a small cyan dot near the tab's left edge.
-        if tab.pinned {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(left + 4.0, TAB_BAR_HEIGHT * 0.5 - 2.5, 5.0, 5.0),
-                color: PIN_COLOR,
-            });
-        }
-
-        // Tab right divider (skip last tab).
-        if i + 1 < n {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(right - 1.0, 4.0, 1.0, TAB_BAR_HEIGHT - 8.0),
-                color: pal.divider,
-            });
-        }
-
-        // Lifecycle badge — "Z" glyph at top-right corner (sleep icon).
-        // BackgroundOld → amber lowercase "z"; Hibernated → grey uppercase "Z".
-        let badge_info: Option<(&str, Color)> = match tab.tab_state {
-            TabState::BackgroundOld => Some(("z", BADGE_OLD_COLOR)),
-            TabState::Hibernated => Some(("Z", BADGE_HIBERNATE_COLOR)),
-            _ => None,
-        };
-        if let Some((glyph, color)) = badge_info {
-            // Position: top-right of the tab, inset 3px from right edge, 3px from top.
-            let bx = right - BADGE_Z_SZ - 3.0;
-            let by = 3.0;
-            out.push(DisplayCommand::DrawText {
-                rect: Rect::new(bx, by, BADGE_Z_SZ, BADGE_Z_SZ * 1.2),
-                text: glyph.to_owned(),
-                font_size: BADGE_Z_SZ,
-                color,
-                font_family: Vec::new(),
-                font_weight: FontWeight::BOLD,
-                font_style: FontStyle::Italic,
-                font_variation_axes: Vec::new(),
-                font_features: Vec::new(),
-                font_palette: None,
-                tab_size: 0.0,
-                highlight_name: None,
-                text_orientation: None,
-            });
-        }
-
-        // Close button — ×
-        let close_right = right - TAB_PAD;
-        let close_left = close_right - CLOSE_SZ;
-        let close_cy = (TAB_BAR_HEIGHT - CLOSE_SZ * 1.2) * 0.5;
-        out.push(DisplayCommand::DrawText {
-            rect: Rect::new(close_left, close_cy, CLOSE_SZ, CLOSE_SZ * 1.2),
-            text: "×".to_owned(),
-            font_size: CLOSE_SZ,
-            color: CLOSE_FG,
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        });
-
-        // Per-tab ad-block checkbox — small square at the tab's left edge,
-        // before the title (away from the × so closing isn't hit by mistake).
-        // Green + check mark when blocking is enabled, grey when disabled.
-        let (cb_left, cb_right) = adblock_cb_x_range(left);
-        let cb_y = (TAB_BAR_HEIGHT - ADBLOCK_CB_SZ) * 0.5;
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(cb_left, cb_y, ADBLOCK_CB_SZ, ADBLOCK_CB_SZ),
-            color: if tab.adblock { ADBLOCK_ON_BG } else { ADBLOCK_OFF_BG },
-        });
-        if tab.adblock {
-            out.push(DisplayCommand::DrawText {
-                rect: Rect::new(cb_left + 1.0, cb_y - 1.0, ADBLOCK_CB_SZ, ADBLOCK_CB_SZ * 1.3),
-                text: "\u{2713}".to_owned(), // ✓ check mark
-                font_size: 10.0,
-                color: Color { r: 255, g: 255, b: 255, a: 255 },
-                font_family: Vec::new(),
-                font_weight: FontWeight::BOLD,
-                font_style: FontStyle::Normal,
-                font_variation_axes: Vec::new(),
-                font_features: Vec::new(),
-                font_palette: None,
-                tab_size: 0.0,
-                highlight_name: None,
-                text_orientation: None,
-            });
-        }
-
-        // Tab title — starts after the checkbox, extends toward the × button.
-        let text_x = cb_right + CLOSE_MARGIN;
-        let text_w = (close_left - CLOSE_MARGIN - text_x).max(0.0);
-        let text_y = (TAB_BAR_HEIGHT - FONT_SZ * 1.3) * 0.5;
-        let text_color = if is_active { pal.text } else { pal.text_dim };
-        out.push(DisplayCommand::DrawText {
-            rect: Rect::new(text_x, text_y, text_w, FONT_SZ * 1.3),
-            text: tab.title.clone(),
-            font_size: FONT_SZ,
-            color: text_color,
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        });
-    }
-
-    // Drop indicator: vertical bar at the target insertion gap, shown only
-    // while a drag is active (cursor moved past threshold).
-    if let Some(d) = drag
-        && d.active {
-            let tab_w = (window_w / n as f32).clamp(TAB_MIN_W, TAB_MAX_W);
-            let target = d.drop_target(n, window_w);
-            let ix = target as f32 * tab_w - DROP_INDICATOR_W * 0.5;
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(ix, 2.0, DROP_INDICATOR_W, TAB_BAR_HEIGHT - 4.0),
-                color: DROP_INDICATOR_COLOR,
-            });
-        }
-
-    out
-}
-
-/// Build a small tooltip overlay for a tab with a non-Active tier badge.
-///
-/// Returns `None` if the hovered tab has no tier badge (Active / BackgroundRecent).
-/// Tooltip displays above the tab bar with context about the tab state.
-pub fn build_tab_tooltip(
-    tab: &TabEntry,
-    tab_center_x: f32,
-    tab_bar_bottom: f32,
-) -> Option<DisplayList> {
-    let msg = match tab.tab_state {
-        TabState::BackgroundOld => "Вкладка фоновая — потребляет меньше памяти",
-        TabState::Hibernated => "Вкладка спит — клик восстановит (~1 сек)",
-        _ => return None,
-    };
-
-    const TT_W: f32 = 240.0;
-    const TT_H: f32 = 28.0;
-    const PAD: f32 = 8.0;
-    const RADIUS: f32 = crate::theme_tokens::radius::MD;
-    const FONT_SZ: f32 = 11.0;
-
-    let x = (tab_center_x - TT_W / 2.0).max(4.0);
-    let y = tab_bar_bottom + 4.0;
-
-    let bg = Color { r: 38, g: 38, b: 42, a: 235 };
-    let text_color = Color { r: 255, g: 255, b: 255, a: 255 };
-
-    Some(vec![
-        DisplayCommand::FillRoundedRect {
-            rect: Rect::new(x, y, TT_W, TT_H),
-            radii: CornerRadii { tl: RADIUS, tl_y: RADIUS, tr: RADIUS, tr_y: RADIUS, br: RADIUS, br_y: RADIUS, bl: RADIUS, bl_y: RADIUS },
-            color: bg,
-        },
-        DisplayCommand::DrawText {
-            rect: Rect::new(x + PAD, y + TT_H / 2.0 - FONT_SZ * 0.4, TT_W - 2.0 * PAD, FONT_SZ * 1.2),
-            text: msg.to_string(),
-            font_size: FONT_SZ,
-            color: text_color,
-            font_family: Vec::new(),
-            font_weight: FontWeight::NORMAL,
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        },
-    ])
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1093,91 +681,6 @@ mod tests {
         assert_eq!(hit, TabHit::Empty);
     }
 
-    #[test]
-    fn build_tab_bar_emits_commands() {
-        let s = TabStrip::new();
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        assert!(!dl.is_empty());
-        let has_title = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
-        });
-        assert!(has_title);
-    }
-
-    #[test]
-    fn build_tab_bar_no_badge_for_active() {
-        let s = TabStrip::new(); // single Active tab
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        // Active tab must not emit a sleep-icon badge (no "Z"/"z" glyph).
-        let has_sleep_badge = dl.iter().any(|c| match c {
-            DisplayCommand::DrawText { text, .. } => text == "Z" || text == "z",
-            _ => false,
-        });
-        assert!(!has_sleep_badge, "Active tab must not render a sleep badge");
-    }
-
-    #[test]
-    fn build_tab_bar_badge_for_background_old() {
-        let mut s = TabStrip::new();
-        s.push_blank(0.0);
-        s.set_tab_state(0, TabState::BackgroundOld);
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        // Amber "z" glyph badge for BackgroundOld tier.
-        let has_z = dl.iter().any(|c| match c {
-            DisplayCommand::DrawText { text, color, .. } => {
-                text == "z" && color.r == BADGE_OLD_COLOR.r && color.g == BADGE_OLD_COLOR.g
-            }
-            _ => false,
-        });
-        assert!(has_z, "BackgroundOld tab must render amber 'z' badge");
-    }
-
-    #[test]
-    fn build_tab_bar_badge_for_hibernated() {
-        let mut s = TabStrip::new();
-        s.push_blank(0.0);
-        s.set_tab_state(0, TabState::Hibernated);
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        // Grey "Z" glyph badge for Hibernated tier.
-        let has_z = dl.iter().any(|c| match c {
-            DisplayCommand::DrawText { text, color, .. } => {
-                text == "Z" && color.r == BADGE_HIBERNATE_COLOR.r && color.g == BADGE_HIBERNATE_COLOR.g
-            }
-            _ => false,
-        });
-        assert!(has_z, "Hibernated tab must render grey 'Z' badge");
-    }
-
-    #[test]
-    fn build_tab_bar_fade_bg_for_background_old() {
-        let mut s = TabStrip::new();
-        s.push_blank(0.0); // index 0 — active
-        s.push_blank(0.0); // index 1 — inactive BackgroundOld
-        s.set_tab_state(1, TabState::BackgroundOld);
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        // T2 background must use the palette's sleep tone, not the inactive one.
-        let has_t2_bg = dl.iter().any(|c| match c {
-            DisplayCommand::FillRect { color, .. } => *color == Palette::DARK.tab_sleep_bg,
-            _ => false,
-        });
-        assert!(has_t2_bg, "BackgroundOld inactive tab must use dimmed T2 background");
-    }
-
-    #[test]
-    fn build_tab_bar_fade_bg_for_hibernated() {
-        let mut s = TabStrip::new();
-        s.push_blank(0.0); // index 0 — active
-        s.push_blank(0.0); // index 1 — inactive Hibernated
-        s.set_tab_state(1, TabState::Hibernated);
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        // T3 background must use the palette's hibernate tone.
-        let has_t3_bg = dl.iter().any(|c| match c {
-            DisplayCommand::FillRect { color, .. } => *color == Palette::DARK.tab_hibernate_bg,
-            _ => false,
-        });
-        assert!(has_t3_bg, "Hibernated inactive tab must use dimmed T3 background");
-    }
-
     // ── Container strip tests (7D.2) ─────────────────────────────────────────
 
     #[test]
@@ -1213,148 +716,6 @@ mod tests {
         let mut s = TabStrip::new();
         s.set_tab_container(99, ContainerKind::Personal); // must not panic
         assert_eq!(s.tabs[0].container, ContainerKind::None);
-    }
-
-    /// Helper: count `FillRoundedRect` commands whose rect matches the
-    /// container accent strip — width equals `CONTAINER_STRIP_WIDTH` and
-    /// origin `y == CONTAINER_STRIP_INSET`.
-    fn count_container_strips(dl: &DisplayList, expected_color: Color) -> usize {
-        dl.iter()
-            .filter(|c| match c {
-                DisplayCommand::FillRoundedRect { rect, color, .. } => {
-                    (rect.width - CONTAINER_STRIP_WIDTH).abs() < f32::EPSILON
-                        && (rect.y - CONTAINER_STRIP_INSET).abs() < f32::EPSILON
-                        && *color == expected_color
-                }
-                _ => false,
-            })
-            .count()
-    }
-
-    #[test]
-    fn build_tab_bar_renders_strip_for_work() {
-        let mut s = TabStrip::new();
-        s.set_tab_container(0, ContainerKind::Work);
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        let expected = ContainerKind::Work.border_color().expect("Work has colour");
-        assert_eq!(count_container_strips(&dl, expected), 1);
-    }
-
-    #[test]
-    fn build_tab_bar_renders_strip_for_personal() {
-        let mut s = TabStrip::new();
-        s.set_tab_container(0, ContainerKind::Personal);
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        let expected = ContainerKind::Personal.border_color().expect("Personal has colour");
-        assert_eq!(count_container_strips(&dl, expected), 1);
-    }
-
-    #[test]
-    fn build_tab_bar_renders_strip_for_finance() {
-        let mut s = TabStrip::new();
-        s.set_tab_container(0, ContainerKind::Finance);
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        let expected = ContainerKind::Finance.border_color().expect("Finance has colour");
-        assert_eq!(count_container_strips(&dl, expected), 1);
-    }
-
-    #[test]
-    fn build_tab_bar_renders_strip_for_shopping() {
-        let mut s = TabStrip::new();
-        s.set_tab_container(0, ContainerKind::Shopping);
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        let expected = ContainerKind::Shopping.border_color().expect("Shopping has colour");
-        assert_eq!(count_container_strips(&dl, expected), 1);
-    }
-
-    #[test]
-    fn build_tab_bar_renders_strip_for_custom_rgb() {
-        let mut s = TabStrip::new();
-        s.set_tab_container(0, ContainerKind::Custom(200, 50, 100));
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        let expected = Color { r: 200, g: 50, b: 100, a: 255 };
-        assert_eq!(count_container_strips(&dl, expected), 1);
-    }
-
-    #[test]
-    fn build_tab_bar_no_strip_for_none_container() {
-        let s = TabStrip::new(); // single tab, ContainerKind::None
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        // No FillRoundedRect of CONTAINER_STRIP_WIDTH may exist when container is None.
-        let strips = dl
-            .iter()
-            .filter(|c| match c {
-                DisplayCommand::FillRoundedRect { rect, .. } => {
-                    (rect.width - CONTAINER_STRIP_WIDTH).abs() < f32::EPSILON
-                        && (rect.y - CONTAINER_STRIP_INSET).abs() < f32::EPSILON
-                }
-                _ => false,
-            })
-            .count();
-        assert_eq!(strips, 0, "ContainerKind::None must not render a strip");
-    }
-
-    #[test]
-    fn build_tab_bar_strip_only_for_tabs_with_container() {
-        let mut s = TabStrip::new();
-        s.push_blank(0.0);
-        s.push_blank(0.0);
-        s.set_tab_container(1, ContainerKind::Work);
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        let work_color = ContainerKind::Work.border_color().expect("Work has colour");
-        // Exactly one Work-coloured strip (tab 1); tabs 0 and 2 have None.
-        assert_eq!(count_container_strips(&dl, work_color), 1);
-    }
-
-    #[test]
-    fn tooltip_none_for_active_tab() {
-        let tab = TabEntry {
-            id: 0,
-            title: "Test".to_owned(),
-            tab_state: TabState::Active,
-            opener_id: None,
-            container: ContainerKind::None,
-            last_activated_ms: 0.0,
-            pinned: false,
-            group_id: None,
-            adblock: true,
-        };
-        assert!(build_tab_tooltip(&tab, 100.0, 36.0).is_none());
-    }
-
-    #[test]
-    fn tooltip_some_for_hibernated_tab() {
-        let tab = TabEntry {
-            id: 0,
-            title: "Test".to_owned(),
-            tab_state: TabState::Hibernated,
-            opener_id: None,
-            container: ContainerKind::None,
-            last_activated_ms: 0.0,
-            pinned: false,
-            group_id: None,
-            adblock: true,
-        };
-        let cmds = build_tab_tooltip(&tab, 100.0, 36.0);
-        assert!(cmds.is_some());
-        // Tooltip must have at least background + text.
-        assert!(cmds.unwrap().len() >= 2);
-    }
-
-    #[test]
-    fn tooltip_some_for_background_old() {
-        let tab = TabEntry {
-            id: 0,
-            title: "Test".to_owned(),
-            tab_state: TabState::BackgroundOld,
-            opener_id: None,
-            container: ContainerKind::None,
-            last_activated_ms: 0.0,
-            pinned: false,
-            group_id: None,
-            adblock: true,
-        };
-        assert!(build_tab_tooltip(&tab, 100.0, 36.0).is_some());
     }
 
     // ── move_tab tests ───────────────────────────────────────────────────────
@@ -1570,64 +931,6 @@ mod tests {
         assert_eq!(drag.drop_target(5, 1000.0), 2);
     }
 
-    #[test]
-    fn build_tab_bar_drop_indicator_when_active_drag() {
-        let mut s = TabStrip::new();
-        s.push_blank(0.0);
-        let drag = TabDragState { src_idx: 0, press_x: 0.0, ghost_x: 100.0, active: true };
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, Some(&drag), None);
-        // Drop indicator must produce a FillRect
-        let has_indicator = dl.iter().any(|c| match c {
-            DisplayCommand::FillRect { color, .. } => *color == DROP_INDICATOR_COLOR,
-            _ => false,
-        });
-        assert!(has_indicator, "active drag must render a drop indicator");
-    }
-
-    #[test]
-    fn build_tab_bar_no_indicator_when_drag_not_active() {
-        let s = TabStrip::new();
-        let drag = TabDragState { src_idx: 0, press_x: 0.0, ghost_x: 100.0, active: false };
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, Some(&drag), None);
-        let has_indicator = dl.iter().any(|c| match c {
-            DisplayCommand::FillRect { color, .. } => *color == DROP_INDICATOR_COLOR,
-            _ => false,
-        });
-        assert!(!has_indicator, "inactive drag must not render a drop indicator");
-    }
-
-    #[test]
-    fn build_tab_bar_accent_color_used_for_active_tab() {
-        let s = TabStrip::new(); // one active tab
-        let custom_accent = Color { r: 230, g: 59, b: 111, a: 255 }; // rose
-        let pal = Palette { accent: custom_accent, ..Palette::DARK };
-        let dl = build_tab_bar(&s, 1024.0, &pal, None, None);
-        let has_accent = dl.iter().any(|c| match c {
-            DisplayCommand::FillRect { color, .. } => *color == custom_accent,
-            _ => false,
-        });
-        assert!(has_accent, "active tab must use the provided accent color");
-    }
-
-    #[test]
-    fn build_tab_bar_ws_accent_overrides_pal_accent() {
-        let s = TabStrip::new(); // one active tab
-        let pal_accent = Color { r: 230, g: 59, b: 111, a: 255 }; // rose
-        let ws_accent = Color { r: 31, g: 157, b: 85, a: 255 }; // workspace green
-        let pal = Palette { accent: pal_accent, ..Palette::DARK };
-        let dl = build_tab_bar(&s, 1024.0, &pal, None, Some(ws_accent));
-        let has_ws_accent = dl.iter().any(|c| match c {
-            DisplayCommand::FillRect { color, .. } => *color == ws_accent,
-            _ => false,
-        });
-        let has_pal_accent = dl.iter().any(|c| match c {
-            DisplayCommand::FillRect { color, .. } => *color == pal_accent,
-            _ => false,
-        });
-        assert!(has_ws_accent, "active tab must use the workspace accent when provided");
-        assert!(!has_pal_accent, "workspace accent must override the palette accent");
-    }
-
     // ── Tab group tests (CC-6) ───────────────────────────────────────────────
 
     #[test]
@@ -1748,41 +1051,6 @@ mod tests {
     }
 
     #[test]
-    fn build_tab_bar_draws_group_accent_bar() {
-        let mut s = strip_with_n(2);
-        let g = s.create_group("G", GroupColor::Green);
-        s.assign_to_group(0, g);
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        let green = GroupColor::Green.color();
-        let has_group_bar = dl.iter().any(|c| match c {
-            DisplayCommand::FillRect { rect, color } => {
-                (rect.height - GROUP_BAR_HEIGHT).abs() < f32::EPSILON
-                    && (rect.y - (TAB_BAR_HEIGHT - GROUP_BAR_HEIGHT)).abs() < f32::EPSILON
-                    && *color == green
-            }
-            _ => false,
-        });
-        assert!(has_group_bar, "grouped tab must render its group accent bar");
-    }
-
-    #[test]
-    fn build_tab_bar_no_group_bar_for_ungrouped() {
-        let s = strip_with_n(2);
-        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None, None);
-        let bars = dl
-            .iter()
-            .filter(|c| match c {
-                DisplayCommand::FillRect { rect, .. } => {
-                    (rect.height - GROUP_BAR_HEIGHT).abs() < f32::EPSILON
-                        && (rect.y - (TAB_BAR_HEIGHT - GROUP_BAR_HEIGHT)).abs() < f32::EPSILON
-                }
-                _ => false,
-            })
-            .count();
-        assert_eq!(bars, 0, "ungrouped tabs must not render a group bar");
-    }
-
-    #[test]
     fn hit_test_collapsed_group_maps_to_chip() {
         let mut s = strip_with_n(4); // 4 tabs
         let g = s.create_group("G", GroupColor::Blue);
@@ -1796,55 +1064,5 @@ mod tests {
         assert_eq!(visible, vec![0, 1, 3]);
         let hit = hit_test(&s, 250.0, 18.0, 1024.0);
         assert_eq!(hit, TabHit::Tab(1));
-    }
-
-    // ── TabLayout / layout toggle button (GG-4) ──────────────────────────────
-
-    #[test]
-    fn layout_toggle_hit_inside_button() {
-        // btn_x = 500.0; button occupies [500, 528).
-        let btn_x = 500.0_f32;
-        assert!(hit_test_layout_btn(510.0, 18.0, btn_x));
-    }
-
-    #[test]
-    fn layout_toggle_hit_outside_button() {
-        let btn_x = 500.0_f32;
-        // Left of button.
-        assert!(!hit_test_layout_btn(499.0, 18.0, btn_x));
-        // Right of button.
-        assert!(!hit_test_layout_btn(btn_x + LAYOUT_BTN_W + 1.0, 18.0, btn_x));
-        // Below tab bar.
-        assert!(!hit_test_layout_btn(510.0, TAB_BAR_HEIGHT + 1.0, btn_x));
-    }
-
-    #[test]
-    fn build_layout_toggle_btn_emits_icon_text() {
-        let dl = build_layout_toggle_btn(TabLayout::Horizontal, 700.0, &Palette::DARK);
-        let has_icon = dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { .. }));
-        assert!(has_icon, "toggle button must emit an icon glyph");
-    }
-
-    // ── Settings gear button ──────────────────────────────────────────────────
-
-    #[test]
-    fn settings_btn_hit_inside_button() {
-        let btn_x = 470.0_f32;
-        assert!(hit_test_settings_btn(480.0, 18.0, btn_x));
-    }
-
-    #[test]
-    fn settings_btn_hit_outside_button() {
-        let btn_x = 470.0_f32;
-        assert!(!hit_test_settings_btn(469.0, 18.0, btn_x));
-        assert!(!hit_test_settings_btn(btn_x + SETTINGS_BTN_W + 1.0, 18.0, btn_x));
-        assert!(!hit_test_settings_btn(480.0, TAB_BAR_HEIGHT + 1.0, btn_x));
-    }
-
-    #[test]
-    fn build_settings_btn_emits_icon_text() {
-        let dl = build_settings_btn(700.0, false, &Palette::DARK);
-        let has_icon = dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { .. }));
-        assert!(has_icon, "settings button must emit an icon glyph");
     }
 }
