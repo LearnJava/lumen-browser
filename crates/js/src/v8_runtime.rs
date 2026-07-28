@@ -5086,7 +5086,7 @@ mod tests {
                 &node_index,
             )
         };
-        let delta = RestyleDelta { prev_styles: baseline_counters.styles(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Untracked };
+        let delta = RestyleDelta { prev_styles: baseline_counters.styles().clone(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Untracked };
 
         // BUG-341 S19: the incremental pass consumes `prev` (it moves the
         // reusable subtrees into the tree it returns), and the geometry
@@ -5095,7 +5095,7 @@ mod tests {
         set_incremental_restyle(true);
         let (incr, _incr_counters) = {
             let d = doc.lock().unwrap();
-            layout_mutation_incremental_restyle(&d, &sheet, vp, &FixedMeasurer, &hp, false, prev, &delta)
+            layout_mutation_incremental_restyle(&d, &sheet, vp, &FixedMeasurer, &hp, false, prev, delta)
         };
         set_incremental_restyle(false);
 

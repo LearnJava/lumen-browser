@@ -917,7 +917,7 @@ fn run_window_mode(
         chrome_transition_scheduler: TransitionScheduler::new(),
         chrome_prev_styles: HashMap::new(),
         chrome_content_area_detached: None,
-        chrome_prev_cascade_styles: HashMap::new(),
+        chrome_prev_cascade_styles: lumen_layout::CascadeStyles::default(),
         chrome_prev_interactive: (None, None, None),
         chrome_prev_viewport: None,
         chrome_prev_forced_colors: false,
@@ -5176,7 +5176,7 @@ struct PageSnapshot {
     /// with `layout_box` (same producer, same invalidation rule) so a tab
     /// switch back to this snapshot cannot resurrect a cache that no longer
     /// matches the restored tree.
-    page_prev_cascade_styles: Option<HashMap<NodeId, std::sync::Arc<ComputedStyle>>>,
+    page_prev_cascade_styles: Option<lumen_layout::CascadeStyles>,
     page_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
     anim_frame: Option<lumen_layout::AnimationFrame>,
     layout_box: Option<lumen_layout::LayoutBox>,
@@ -6346,7 +6346,7 @@ fn relayout_page_incremental_restyle(
     // BUG-341 S19: consumed — the reusable subtrees are moved out of it into
     // the tree returned. See `layout_mutation_incremental_restyle`.
     prev: lumen_layout::LayoutBox,
-    delta: &lumen_layout::counters::RestyleDelta<'_>,
+    delta: lumen_layout::counters::RestyleDelta<'_>,
 ) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
     compute_layout_incremental_restyle(
         &src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts, prev, delta,
@@ -6366,7 +6366,7 @@ fn compute_layout_incremental_restyle(
     // BUG-341 S19: consumed — the reusable subtrees are moved out of it into
     // the tree returned. See `layout_mutation_incremental_restyle`.
     prev: lumen_layout::LayoutBox,
-    delta: &lumen_layout::counters::RestyleDelta<'_>,
+    delta: lumen_layout::counters::RestyleDelta<'_>,
 ) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     if web_fonts.is_empty() {
@@ -7527,7 +7527,7 @@ struct Lumen {
     /// pre-adjust styles the cascade itself produced, or the incremental
     /// cascade's `incr == full` correctness gate (BUG-341 brief §4) would
     /// compare against the wrong reference.
-    chrome_prev_cascade_styles: HashMap<NodeId, std::sync::Arc<ComputedStyle>>,
+    chrome_prev_cascade_styles: lumen_layout::CascadeStyles,
     /// BUG-341 S5: `(hover, focus, active)` node ids from the previous pass —
     /// `restyle_root_set_for_state_change`'s `prev` argument for each axis, so
     /// a hover/focus/active transition can compute its conservative dirty
@@ -7585,7 +7585,7 @@ struct Lumen {
     /// `try_relayout_raf_incremental` falls back to the existing
     /// full-cascade-plus-graft path (`layout_mutation_incremental`) whenever
     /// this is `None`.
-    page_prev_cascade_styles: Option<HashMap<NodeId, std::sync::Arc<ComputedStyle>>>,
+    page_prev_cascade_styles: Option<lumen_layout::CascadeStyles>,
     /// Interactive state (`hovered_nid`/`focused_node`/`active_nid`) at the
     /// moment `page_prev_cascade_styles` was captured — the `prev` side of the
     /// next call's `restyle_root_set_for_state_change`. Only meaningful when
@@ -8959,7 +8959,7 @@ impl Lumen {
                     &node_index,
                 ));
                 let delta = lumen_layout::counters::RestyleDelta {
-                    prev_styles: &self.chrome_prev_cascade_styles,
+                    prev_styles: std::mem::take(&mut self.chrome_prev_cascade_styles),
                     dirty_roots,
                     // BUG-341 S16: `bind_model_tracked` enumerates every node
                     // whose content it mutated (see `ChromeMutations::content`
@@ -8983,7 +8983,7 @@ impl Lumen {
                     &*self.hyp_provider,
                     self.dark_mode,
                     prev,
-                    &delta,
+                    delta,
                 );
                 lumen_layout::box_tree::set_incremental_box_build(false);
                 lumen_layout::counters::set_incremental_restyle(false);
@@ -9003,7 +9003,7 @@ impl Lumen {
         // call's incremental path (BUG-341 S5). Its box-tree counterpart is no
         // longer copied here — S22 records `take_content_area`'s removals
         // below instead and undoes them at the top of the next pass.
-        self.chrome_prev_cascade_styles = cascade_styles.styles().clone();
+        self.chrome_prev_cascade_styles = cascade_styles.into_styles();
         self.chrome_prev_viewport = Some(viewport);
         self.chrome_prev_interactive = new_interactive;
         self.chrome_prev_forced_colors = forced_colors;
@@ -9927,7 +9927,7 @@ impl Lumen {
         // tree instead of copying them), and only this shape lets the compiler
         // see that the fallback below runs exactly when the move did not.
         let (new_dl, new_lb, fresh_cascade_styles) = if !touched.unattributed
-            && let Some(prev_styles) = self.page_prev_cascade_styles.as_ref()
+            && let Some(prev_styles) = self.page_prev_cascade_styles.take()
         {
             let (prev_hover, prev_focus, prev_active) = self.page_prev_interactive;
             let doc = src.document.lock().unwrap();
@@ -9973,11 +9973,11 @@ impl Lumen {
             // just above.
             lumen_layout::box_tree::set_incremental_box_build(true);
             let (dl, lb, counters) = relayout_page_incremental_restyle(
-                src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, prev_lb, &delta,
+                src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, prev_lb, delta,
             );
             lumen_layout::box_tree::set_incremental_box_build(false);
             lumen_layout::counters::set_incremental_restyle(false);
-            (dl, lb, Some(counters.styles().clone()))
+            (dl, lb, Some(counters.into_styles()))
         } else {
             let (dl, lb) = relayout_page_incremental(
                 src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb,
@@ -24744,8 +24744,7 @@ mod tests {
     #[derive(Default)]
     struct Cc12IncrementalState {
         prev_pristine_layout: Option<lumen_layout::LayoutBox>,
-        prev_cascade_styles:
-            HashMap<lumen_dom::NodeId, std::sync::Arc<lumen_layout::style::ComputedStyle>>,
+        prev_cascade_styles: lumen_layout::CascadeStyles,
         prev_interactive: (Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>),
         /// BUG-341 S18: run the cycle with whole-subtree box reuse (S15) off,
         /// so the box tree is rebuilt and `graft_geometry` really compares it
@@ -24812,7 +24811,7 @@ mod tests {
                     &node_index,
                 ));
                 let delta = lumen_layout::counters::RestyleDelta {
-                    prev_styles: &state.prev_cascade_styles,
+                    prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                     dirty_roots,
                     // BUG-341 S16 — mirrors `relayout_chrome_host` exactly, so
                     // the bench measures the production reuse decision.
@@ -24821,7 +24820,7 @@ mod tests {
                 lumen_layout::counters::set_incremental_restyle(true);
                 lumen_layout::box_tree::set_incremental_box_build(!state.box_reuse_off);
                 let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
-                    doc, sheet, viewport, measurer, hyp, false, prev, &delta,
+                    doc, sheet, viewport, measurer, hyp, false, prev, delta,
                 );
                 lumen_layout::box_tree::set_incremental_box_build(false);
                 lumen_layout::counters::set_incremental_restyle(false);
@@ -24836,7 +24835,7 @@ mod tests {
         // cycle, which no stage profile inside `lumen-layout` can show.
         let t_layout = t0.elapsed().as_secs_f64() * 1000.0;
         let t2 = std::time::Instant::now();
-        state.prev_cascade_styles = counters.styles().clone();
+        state.prev_cascade_styles = counters.into_styles();
         let t_clone_styles = t2.elapsed().as_secs_f64() * 1000.0;
         let t3 = std::time::Instant::now();
         let _dl = paint_ordered(&layout);
@@ -25475,12 +25474,12 @@ mod tests {
         // reproduces the full post-transition cascade bit-for-bit.
         lumen_layout::set_interactive_state(Some(sidebar), None, None);
         let delta = RestyleDelta {
-            prev_styles: none_map.styles(),
+            prev_styles: none_map.styles().clone(),
             dirty_roots,
             content_dirty: lumen_layout::counters::ContentDirty::Nothing,
         };
         set_incremental_restyle(true);
-        let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, &delta);
+        let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);
         set_incremental_restyle(false);
         lumen_layout::clear_interactive_state();
         assert_eq!(
@@ -25576,12 +25575,12 @@ mod tests {
 
         let _ = take_cascade_stats();
         let delta = RestyleDelta {
-            prev_styles: before.styles(),
+            prev_styles: before.styles().clone(),
             dirty_roots,
             content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
         };
         set_incremental_restyle(true);
-        let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, &delta);
+        let incr = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);
         set_incremental_restyle(false);
         let stats = take_cascade_stats();
         assert_eq!(
@@ -25770,7 +25769,7 @@ mod tests {
                         }
                     }
                     let delta = lumen_layout::counters::RestyleDelta {
-                        prev_styles: &state.prev_cascade_styles,
+                        prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                         dirty_roots,
                         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
                     };
@@ -25778,7 +25777,7 @@ mod tests {
                     lumen_layout::box_tree::set_incremental_box_build(true);
                     let _ = lumen_layout::counters::take_cascade_stats();
                     let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
-                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
                     );
                     lumen_layout::box_tree::set_incremental_box_build(false);
                     lumen_layout::counters::set_incremental_restyle(false);
@@ -25793,18 +25792,21 @@ mod tests {
 
             // Ground truth: of the nodes that re-cascaded, how many actually
             // ended up with a different `ComputedStyle`?
+            //
+            // BUG-341 S24: read off the displaced-entry record rather than by
+            // diffing this pass's map against the previous one — the two are
+            // now the same map, and `replaced_styles` holds exactly the
+            // "recomputed, and here is what it had before" pairs this census
+            // used to reconstruct. Nodes with no previous entry (freshly
+            // inserted) are absent from both, as before.
             let mut changed = Vec::new();
             let mut identical = Vec::new();
-            for (nid, style) in counters.styles() {
-                if let Some(prev) = state.prev_cascade_styles.get(nid) {
-                    if std::sync::Arc::ptr_eq(prev, style) {
-                        continue; // reused, not recomputed
-                    }
-                    if **prev == **style {
-                        identical.push(*nid);
-                    } else {
-                        changed.push(*nid);
-                    }
+            for (nid, prev) in counters.replaced_styles() {
+                let style = &counters.styles()[nid];
+                if **prev == **style {
+                    identical.push(*nid);
+                } else {
+                    changed.push(*nid);
                 }
             }
             if i == 3 {
@@ -25832,7 +25834,7 @@ mod tests {
             );
 
             state.prev_pristine_layout = Some(layout.clone());
-            state.prev_cascade_styles = counters.styles().clone();
+            state.prev_cascade_styles = counters.into_styles();
             lumen_layout::clear_interactive_state();
         }
     }
@@ -25968,14 +25970,14 @@ mod tests {
                         &node_index,
                     );
                     let delta = lumen_layout::counters::RestyleDelta {
-                        prev_styles: &state.prev_cascade_styles,
+                        prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                         dirty_roots,
                         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
                     };
                     lumen_layout::counters::set_incremental_restyle(true);
                     lumen_layout::box_tree::set_incremental_box_build(true);
                     let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
-                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
                     );
                     lumen_layout::box_tree::set_incremental_box_build(false);
                     lumen_layout::counters::set_incremental_restyle(false);
@@ -26117,7 +26119,7 @@ mod tests {
             }
 
             state.prev_pristine_layout = Some(layout.clone());
-            state.prev_cascade_styles = counters.styles().clone();
+            state.prev_cascade_styles = counters.into_styles();
             lumen_layout::clear_interactive_state();
         }
     }
@@ -26189,14 +26191,14 @@ mod tests {
                             &node_index,
                         ));
                         let delta = lumen_layout::counters::RestyleDelta {
-                            prev_styles: &state.prev_cascade_styles,
+                            prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                             dirty_roots,
                             content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
                         };
                         lumen_layout::counters::set_incremental_restyle(true);
                         lumen_layout::box_tree::set_incremental_box_build(true);
                         let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
-                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
                         );
                         lumen_layout::box_tree::set_incremental_box_build(false);
                         lumen_layout::counters::set_incremental_restyle(false);
@@ -26231,7 +26233,7 @@ mod tests {
                 }
                 lumen_layout::box_tree::set_box_build_diagnostics(false);
                 state.prev_pristine_layout = Some(persisted);
-                state.prev_cascade_styles = counters.styles().clone();
+                state.prev_cascade_styles = counters.into_styles();
                 state.prev_interactive = (hover, None, None);
                 lumen_layout::clear_interactive_state();
             }
@@ -26318,14 +26320,14 @@ mod tests {
                             &node_index,
                         ));
                         let delta = lumen_layout::counters::RestyleDelta {
-                            prev_styles: &state.prev_cascade_styles,
+                            prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                             dirty_roots,
                             content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
                         };
                         lumen_layout::counters::set_incremental_restyle(true);
                         lumen_layout::box_tree::set_incremental_box_build(true);
                         let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
-                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
                         );
                         lumen_layout::box_tree::set_incremental_box_build(false);
                         lumen_layout::counters::set_incremental_restyle(false);
@@ -26381,7 +26383,7 @@ mod tests {
                 lumen_layout::box_tree::set_box_time_diagnostics(false);
                 lumen_layout::style::set_pseudo_cascade_diagnostics(false);
                 state.prev_pristine_layout = Some(persisted);
-                state.prev_cascade_styles = counters.styles().clone();
+                state.prev_cascade_styles = counters.into_styles();
                 state.prev_interactive = (hover, None, None);
                 lumen_layout::clear_interactive_state();
             }
@@ -26571,14 +26573,14 @@ mod tests {
                             &node_index,
                         ));
                         let delta = lumen_layout::counters::RestyleDelta {
-                            prev_styles: &state.prev_cascade_styles,
+                            prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                             dirty_roots,
                             content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
                         };
                         lumen_layout::counters::set_incremental_restyle(true);
                         lumen_layout::box_tree::set_incremental_box_build(true);
                         let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
-                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
                         );
                         lumen_layout::box_tree::set_incremental_box_build(false);
                         lumen_layout::counters::set_incremental_restyle(false);
@@ -26612,7 +26614,7 @@ mod tests {
                 }
 
                 state.prev_pristine_layout = Some(layout);
-                state.prev_cascade_styles = counters.styles().clone();
+                state.prev_cascade_styles = counters.into_styles();
                 state.prev_interactive = (hover, None, None);
                 lumen_layout::clear_interactive_state();
             }
@@ -26769,14 +26771,21 @@ mod tests {
         let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), &state_index);
         let dirty_count = dirty_roots.len();
-        let delta = RestyleDelta { prev_styles: baseline.styles(), dirty_roots, content_dirty: lumen_layout::counters::ContentDirty::Nothing };
         set_incremental_restyle(true);
         let mut incr_stats = lumen_paint::FrameStats::new();
         let mut last_incr_map = None;
         for i in 0..WARMUP + SAMPLES {
             lumen_layout::set_interactive_state(Some(tab_b), None, None);
+            // BUG-341 S24: the cache is consumed by the pass, so each sample
+            // gets its own copy of the same baseline — built outside the timed
+            // region, exactly like the `prev` tree copy the S4 bench below makes.
+            let delta = RestyleDelta {
+                prev_styles: baseline.styles().clone(),
+                dirty_roots: dirty_roots.clone(),
+                content_dirty: lumen_layout::counters::ContentDirty::Nothing,
+            };
             let t0 = std::time::Instant::now();
-            let map = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, &delta);
+            let map = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             if i >= WARMUP {
                 incr_stats.record(ms as f32);
@@ -26896,18 +26905,19 @@ mod tests {
 
         let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(tab_a), Some(tab_b), &state_index);
-        let delta = RestyleDelta {
-            prev_styles: baseline.styles(),
-            dirty_roots,
-            content_dirty: lumen_layout::counters::ContentDirty::Nothing,
-        };
         set_incremental_restyle(true);
         set_incremental_box_build(true);
         let mut incr_stats = lumen_paint::FrameStats::new();
         let mut last_incr_tree = None;
         for i in 0..WARMUP + SAMPLES {
             lumen_layout::set_interactive_state(Some(tab_b), None, None);
-            let map = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, &delta);
+            // BUG-341 S24: one fresh cache per sample, like the `prev` copy below.
+            let delta = RestyleDelta {
+                prev_styles: baseline.styles().clone(),
+                dirty_roots: dirty_roots.clone(),
+                content_dirty: lumen_layout::counters::ContentDirty::Nothing,
+            };
+            let map = incremental_precompute_counters(&doc, &sheet, viewport, &flat, false, delta);
             // See the full-rebuild loop above: one fresh `prev` per sample.
             let mut prev_copy = prev_tree.clone();
             let t0 = std::time::Instant::now();
@@ -27129,10 +27139,7 @@ mod tests {
         let viewport = Size::new(1280.0, 800.0);
 
         let mut live: Option<(lumen_layout::LayoutBox, Option<ContentAreaDetachment>)> = None;
-        let mut prev_cascade_styles: HashMap<
-            lumen_dom::NodeId,
-            std::sync::Arc<lumen_layout::style::ComputedStyle>,
-        > = HashMap::new();
+        let mut prev_cascade_styles = lumen_layout::CascadeStyles::default();
         let mut typed = String::new();
         let mut last = (0, 0);
         let mut last_boxes = 0;
@@ -27157,14 +27164,14 @@ mod tests {
                         .into_iter()
                         .collect();
                     let delta = lumen_layout::counters::RestyleDelta {
-                        prev_styles: &prev_cascade_styles,
+                        prev_styles: std::mem::take(&mut prev_cascade_styles),
                         dirty_roots,
                         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
                     };
                     lumen_layout::counters::set_incremental_restyle(true);
                     lumen_layout::box_tree::set_incremental_box_build(true);
                     let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
-                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                        &doc, &sheet, viewport, &measurer, &hyp, false, prev, delta,
                     );
                     lumen_layout::box_tree::set_incremental_box_build(false);
                     lumen_layout::counters::set_incremental_restyle(false);
@@ -27182,7 +27189,7 @@ mod tests {
                 .and_then(|id| take_content_area(&mut layout, id, &S22_SALVAGE_IDS, &doc))
                 .map(|(_rect, d)| d);
             live = Some((layout, detached));
-            prev_cascade_styles = counters.styles().clone();
+            prev_cascade_styles = counters.into_styles();
             lumen_layout::clear_interactive_state();
         }
         (last.0, last.1, last_boxes)

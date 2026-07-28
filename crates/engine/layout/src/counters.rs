@@ -55,6 +55,232 @@ pub enum QuoteSlot {
     After,
 }
 
+/// BUG-341 S24 — the per-node cascade cache, carried from one pass to the next.
+///
+/// Before this slice every pass built its own map: a hover flip reused all 828
+/// of the previous pass's `Arc<ComputedStyle>`s and then inserted all 828 into a
+/// fresh `HashMap`, which the pipeline cloned wholesale so it could serve as the
+/// next cycle's `prev_styles`. Three full-size passes over the document to end
+/// up with the map it started from. The map is now moved into the pass
+/// ([`RestyleDelta::prev_styles`]) and moved back out inside its [`CounterMap`],
+/// with only the recomputed entries rewritten — the S19 answer applied to the
+/// cascade cache instead of the box tree.
+///
+/// # Why entries carry a pass ordinal
+///
+/// The pre-S24 map had one property everything downstream relied on without
+/// naming it: **an entry exists iff the immediately preceding pass visited that
+/// node**. Absence is what forces a recompute for a node that was detached and
+/// re-attached, or moved to a new parent, since the style it would otherwise
+/// reuse was computed under a different inherited chain. A map that simply
+/// accumulates entries forever loses exactly that property (`lumen_dom` never
+/// frees a node or reuses a [`NodeId`], so a *stale* entry is not a wrong-node
+/// hazard — it is a wrong-*pass* one).
+///
+/// So each entry is stamped with the ordinal of the pass that wrote or confirmed
+/// it, and [`Self::finish_pass`] drops the ones this pass did not touch whenever
+/// the counts disagree — a sweep that costs what the old rebuild always cost,
+/// on the rare pass where something was actually removed, and nothing at all on
+/// the steady state. The invariant it maintains is the one above, stated
+/// exactly: after a pass, `entries` holds precisely the elements that pass
+/// walked, all stamped with its ordinal.
+#[derive(Debug, Default, Clone)]
+pub struct CascadeStyles {
+    /// `NodeId` → (style, ordinal of the pass that last wrote or confirmed it).
+    entries: HashMap<NodeId, (Arc<ComputedStyle>, u32)>,
+    /// Ordinal of the pass currently writing into this map, or of the last one
+    /// to have finished. Wraps; see [`Self::reuse`] for why that is harmless.
+    pass: u32,
+    /// Elements the current pass has visited so far — the reference
+    /// [`Self::finish_pass`] compares `entries.len()` against.
+    visited: usize,
+}
+
+impl CascadeStyles {
+    /// An empty cache sized for a document of `elements` styled elements.
+    fn with_capacity(elements: usize) -> Self {
+        Self { entries: HashMap::with_capacity(elements), pass: 0, visited: 0 }
+    }
+
+    /// Start writing a new pass into this carried cache.
+    fn begin_pass(&mut self) {
+        self.pass = self.pass.wrapping_add(1);
+        self.visited = 0;
+    }
+
+    /// Take `id`'s entry from the previous pass, restamping it as visited.
+    ///
+    /// `None` when there is nothing to reuse — no entry at all, or one the
+    /// *immediately* preceding pass did not write. Both mean the same thing to
+    /// the caller ("recompute"), which is why the ordinal can wrap without
+    /// consequence: a mismatch only ever costs a recompute, and
+    /// [`Self::finish_pass`] keeps the map exact so a mismatch cannot happen in
+    /// the first place.
+    ///
+    /// One hash lookup, where the pre-S24 shape needed three (`contains_key`
+    /// for the decision, an index for the value, an insert into the fresh map).
+    fn reuse(&mut self, id: NodeId) -> Option<Arc<ComputedStyle>> {
+        let pass = self.pass;
+        let entry = self.entries.get_mut(&id)?;
+        if entry.1.wrapping_add(1) != pass {
+            return None;
+        }
+        entry.1 = pass;
+        self.visited += 1;
+        Some(Arc::clone(&entry.0))
+    }
+
+    /// Record a freshly computed style for `id`, returning the entry it
+    /// displaced (the previous pass's style for that node), if any.
+    ///
+    /// The displaced value is what [`CounterMap::replaced_styles`] keeps for the
+    /// graft — see that field.
+    fn write(&mut self, id: NodeId, style: Arc<ComputedStyle>) -> Option<Arc<ComputedStyle>> {
+        self.visited += 1;
+        self.entries.insert(id, (style, self.pass)).map(|(prev, _)| prev)
+    }
+
+    /// Close the pass: drop every entry it did not visit.
+    ///
+    /// Skipped entirely when the counts already agree, which is every pass that
+    /// removed no node — the whole point of carrying the map. When they do
+    /// disagree the sweep is O(entries), i.e. exactly what rebuilding the map
+    /// used to cost unconditionally.
+    fn finish_pass(&mut self) {
+        if self.entries.len() == self.visited {
+            return;
+        }
+        let pass = self.pass;
+        self.entries.retain(|_, (_, stamp)| *stamp == pass);
+    }
+
+    /// The style this cache holds for `id`, if any.
+    pub fn get(&self, id: &NodeId) -> Option<&Arc<ComputedStyle>> {
+        self.entries.get(id).map(|(style, _)| style)
+    }
+
+    /// Whether this cache holds an entry for `id`.
+    pub fn contains_key(&self, id: &NodeId) -> bool {
+        self.entries.contains_key(id)
+    }
+
+    /// Number of nodes this cache holds a style for.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether this cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Iterate the nodes this cache holds a style for, in arbitrary order.
+    pub fn keys(&self) -> impl Iterator<Item = &NodeId> {
+        self.entries.keys()
+    }
+
+    /// Iterate `(node, style)` pairs in arbitrary order.
+    pub fn iter(&self) -> impl Iterator<Item = (&NodeId, &Arc<ComputedStyle>)> {
+        self.entries.iter().map(|(id, (style, _))| (id, style))
+    }
+
+    /// This cache's contents as a plain map, dropping the pass stamps.
+    ///
+    /// Only used where a *snapshot* rather than the carrier is wanted — the
+    /// flag-off fallback in [`incremental_precompute_counters`]. Carrying the
+    /// map is the whole point everywhere else.
+    fn into_plain(self) -> HashMap<NodeId, Arc<ComputedStyle>> {
+        self.entries.into_iter().map(|(id, (style, _))| (id, style)).collect()
+    }
+
+    /// A cache holding exactly `styles`, as though one pass had just written it.
+    ///
+    /// For callers that assemble a cascade by hand rather than by walking a
+    /// document — the graft's unit gates, which care about one or two nodes.
+    pub fn from_plain(styles: HashMap<NodeId, Arc<ComputedStyle>>) -> Self {
+        Self {
+            entries: styles.into_iter().map(|(id, style)| (id, (style, 0))).collect(),
+            pass: 0,
+            visited: 0,
+        }
+    }
+}
+
+impl std::ops::Index<&NodeId> for CascadeStyles {
+    type Output = Arc<ComputedStyle>;
+
+    fn index(&self, id: &NodeId) -> &Arc<ComputedStyle> {
+        self.get(id).expect("no cascade entry for node")
+    }
+}
+
+impl<'a> IntoIterator for &'a CascadeStyles {
+    type Item = (&'a NodeId, &'a Arc<ComputedStyle>);
+    type IntoIter = Box<dyn Iterator<Item = Self::Item> + 'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.iter())
+    }
+}
+
+impl PartialEq for CascadeStyles {
+    /// Compares the cascade *result*, not the bookkeeping: the pass ordinals are
+    /// an artefact of how many passes a map has lived through, and the
+    /// `incr == full` differential tests compare a carried map against a
+    /// freshly built one by construction.
+    fn eq(&self, other: &Self) -> bool {
+        self.entries.len() == other.entries.len()
+            && self
+                .entries
+                .iter()
+                .all(|(id, (style, _))| other.get(id).is_some_and(|o| style == o))
+    }
+}
+
+impl Eq for CascadeStyles {}
+
+/// BUG-341 S24 — the cascade as it stood *before* the current pass, for
+/// [`crate::incremental::graft_geometry_with_cascade`].
+///
+/// Since S24 the live map holds this pass's values, so "what did the box in
+/// `prev` get built from" is answered by the displaced entries first and the
+/// live map second: a node this pass recomputed is in `replaced`, and every node
+/// it reused is unchanged in `current` by definition.
+#[derive(Clone, Copy)]
+pub struct PrevCascade<'a> {
+    /// This pass's cache — correct for every node the pass did not recompute.
+    current: &'a CascadeStyles,
+    /// What the pass displaced — correct for every node it did recompute.
+    /// `None` when `current` *is* the previous cascade, untouched.
+    replaced: Option<&'a HashMap<NodeId, Arc<ComputedStyle>>>,
+}
+
+impl<'a> PrevCascade<'a> {
+    /// The style the previous pass cascaded for `id`, if it had one.
+    ///
+    /// Takes `self` by value (the type is [`Copy`]) so the borrow it hands back
+    /// is tied to the maps, not to a copy of the two pointers.
+    pub fn get(self, id: &NodeId) -> Option<&'a Arc<ComputedStyle>> {
+        self.replaced.and_then(|r| r.get(id)).or_else(|| self.current.get(id))
+    }
+
+    /// Whether the previous pass cascaded a style for `id` at all.
+    ///
+    /// The distinction matters to the graft's last-resort probe for anonymous
+    /// boxes, which are keyed by a text node the cascade never visits.
+    pub fn contains_key(&self, id: &NodeId) -> bool {
+        self.replaced.is_some_and(|r| r.contains_key(id)) || self.current.contains_key(id)
+    }
+
+    /// A view over a cascade the current pass has not displaced anything from.
+    ///
+    /// For callers holding the previous pass's cache directly rather than the
+    /// [`CounterMap`] that rewrote it.
+    pub fn unchanged(current: &'a CascadeStyles) -> Self {
+        Self { current, replaced: None }
+    }
+}
+
 /// Document-order snapshot of CSS generated-content state.
 ///
 /// Holds both the per-element counter snapshots (after own reset/increment,
@@ -78,10 +304,29 @@ pub struct CounterMap {
     /// BUG-341 S9: behind an [`Arc`] because this map has three consumers that
     /// each used to deep-copy a whole `ComputedStyle` per node — the incremental
     /// cascade's reuse path (`walk` below), the per-cycle snapshot the pipeline
-    /// keeps for the next delta (`CounterMap::styles().clone()`), and this map's
-    /// own insert. All three are now refcount bumps. Nothing mutates a cached
-    /// style in place, so the sharing is unobservable.
-    styles: HashMap<NodeId, Arc<ComputedStyle>>,
+    /// keeps for the next delta, and this map's own insert. All three are now
+    /// refcount bumps. Nothing mutates a cached style in place, so the sharing
+    /// is unobservable.
+    ///
+    /// BUG-341 S24: and the map itself is now *carried* from pass to pass
+    /// ([`CascadeStyles`]) rather than rebuilt — see that type's doc comment.
+    styles: CascadeStyles,
+    /// BUG-341 S24 — for every entry this pass overwrote, the value it replaced.
+    ///
+    /// Carrying `styles` across passes means a recomputed node's *previous*
+    /// style is no longer sitting in a separate map for
+    /// [`crate::incremental::graft_geometry_with_cascade`] to compare against:
+    /// the entry now holds this pass's value, and the freshly built box holds
+    /// the very same allocation, so the graft's pointer test would report
+    /// "unchanged" for exactly the nodes whose style *did* change — a box kept
+    /// at last pass's geometry under a new style, i.e. visible corruption.
+    ///
+    /// So the pass records what it displaced instead of preserving a whole copy
+    /// of what it did not (the S22 shape): one entry per recomputed node — one
+    /// on a keystroke cycle, none on a hover flip — read through
+    /// [`CounterMap::prev_cascade`]. Dropped with this `CounterMap`; only
+    /// `styles` travels on.
+    replaced_styles: HashMap<NodeId, Arc<ComputedStyle>>,
     /// BUG-341 S4: `NodeId`s whose own `ComputedStyle` AND entire descendant
     /// subtree are byte-identical to the previous pass (`walk`'s
     /// `must_recompute` was `false` for every node in the subtree), and
@@ -105,7 +350,18 @@ impl CounterMap {
     /// without counters or quotes never inserts into them at all.
     fn with_capacity(elements: usize) -> Self {
         Self {
-            styles: HashMap::with_capacity(elements),
+            styles: CascadeStyles::with_capacity(elements),
+            clean_subtrees: HashSet::with_capacity(elements),
+            ..Self::default()
+        }
+    }
+
+    /// BUG-341 S24 — a map that continues the carried cascade cache `styles`
+    /// instead of starting a new one.
+    fn continuing(mut styles: CascadeStyles, elements: usize) -> Self {
+        styles.begin_pass();
+        Self {
+            styles,
             clean_subtrees: HashSet::with_capacity(elements),
             ..Self::default()
         }
@@ -128,6 +384,32 @@ impl CounterMap {
         self.styles.get(&id).map(|s| &**s)
     }
 
+    /// BUG-341 S24 — the cascade as the *previous* pass left it, for the graft.
+    ///
+    /// See [`Self::replaced_styles`] for why this is not simply [`Self::styles`]
+    /// any more.
+    pub fn prev_cascade(&self) -> PrevCascade<'_> {
+        PrevCascade { current: &self.styles, replaced: Some(&self.replaced_styles) }
+    }
+
+    /// What this pass displaced from the carried cache (BUG-341 S24): for every
+    /// node it recomputed, the style the previous pass had cascaded for it.
+    ///
+    /// The graft reads it through [`Self::prev_cascade`]; exposed on its own so
+    /// a census can ask the question it is the exact answer to — "of the nodes
+    /// that re-cascaded, how many really ended up with a different style".
+    pub fn replaced_styles(&self) -> &HashMap<NodeId, Arc<ComputedStyle>> {
+        &self.replaced_styles
+    }
+
+    /// Hand the carried cascade cache on to the next pass (BUG-341 S24).
+    ///
+    /// The pipeline persists this as the next cycle's
+    /// [`RestyleDelta::prev_styles`]; it used to clone the whole map to do so.
+    pub fn into_styles(self) -> CascadeStyles {
+        self.styles
+    }
+
     /// Like [`Self::style_for`], but hands back the shared allocation itself.
     ///
     /// BUG-341 S12: `build_box` stores the cascade result straight into
@@ -145,7 +427,7 @@ impl CounterMap {
     /// The map the full cascade produced, keyed by `NodeId`. It is the reference
     /// the incremental cascade (BUG-341 S3+) must reproduce bit-for-bit; the
     /// `incr == full` differential tests compare two such maps directly.
-    pub fn styles(&self) -> &HashMap<NodeId, Arc<ComputedStyle>> {
+    pub fn styles(&self) -> &CascadeStyles {
         &self.styles
     }
 
@@ -281,7 +563,13 @@ pub fn precompute_counters(
 pub struct RestyleDelta<'a> {
     /// The previous cascade's per-node style cache — [`CounterMap::styles`]
     /// from an earlier full or incremental pass over the same document.
-    pub prev_styles: &'a HashMap<NodeId, Arc<ComputedStyle>>,
+    ///
+    /// BUG-341 S24: **moved in**, not borrowed. The pass rewrites the entries it
+    /// recomputes in place and hands the same map back inside its
+    /// [`CounterMap`]; a caller that needs the previous cascade afterwards
+    /// reads it through [`CounterMap::prev_cascade`], which also knows what this
+    /// pass displaced.
+    pub prev_styles: CascadeStyles,
     /// Root nodes whose entire subtree must be re-cascaded.
     pub dirty_roots: HashSet<NodeId>,
     /// BUG-341 S16: which nodes had their *content* — the things `build_box`
@@ -379,13 +667,18 @@ pub fn incremental_precompute_counters(
     viewport: Size,
     flat: &FlatTree,
     dark_mode: bool,
-    delta: &RestyleDelta<'_>,
+    delta: RestyleDelta<'_>,
 ) -> CounterMap {
     if !incremental_restyle_enabled() {
         // Flag off (the default): behave exactly like a full cascade so a
         // caller can wire this entry point in ahead of the flag ever being
-        // flipped on (S5) without changing behaviour.
-        return precompute_counters(doc, sheet, viewport, flat, dark_mode);
+        // flipped on (S5) without changing behaviour. BUG-341 S24: the carried
+        // cache still has to reach the graft as "what `prev` was built from" —
+        // a full pass displaces the whole of it, which is exactly what
+        // `replaced_styles` means.
+        let mut map = precompute_counters(doc, sheet, viewport, flat, dark_mode);
+        map.replaced_styles = delta.prev_styles.into_plain();
+        return map;
     }
     let root_style = ComputedStyle::root();
     let mut ctx = CounterCtx {
@@ -394,10 +687,28 @@ pub fn incremental_precompute_counters(
     };
     // BUG-341 S23: the previous pass's cache is the best available estimate of
     // how many entries this one will hold — closer than `node_count`, which
-    // counts text and comment nodes too.
-    let mut map = CounterMap::with_capacity(delta.prev_styles.len());
-    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(delta), false);
+    // counts text and comment nodes too. S24: and it *is* this pass's cache.
+    let elements = delta.prev_styles.len();
+    let RestyleDelta { prev_styles, dirty_roots, content_dirty } = delta;
+    let mut map = CounterMap::continuing(prev_styles, elements);
+    let incr = IncrRestyle { dirty_roots, content_dirty };
+    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(&incr), false);
+    map.styles.finish_pass();
     map
+}
+
+/// BUG-341 S24 — what `walk` still needs from a [`RestyleDelta`] once its
+/// `prev_styles` have been moved into the map being written.
+///
+/// Splitting the delta this way is what lets the reuse path be a single
+/// `get_mut` on the map: the "is there anything to reuse" question and the reuse
+/// itself are now one lookup into one collection, instead of two lookups into a
+/// borrowed map plus an insert into a fresh one.
+struct IncrRestyle<'a> {
+    /// See [`RestyleDelta::dirty_roots`].
+    dirty_roots: HashSet<NodeId>,
+    /// See [`RestyleDelta::content_dirty`].
+    content_dirty: ContentDirty<'a>,
 }
 
 thread_local! {
@@ -509,7 +820,7 @@ fn walk(
     // behaviour, byte-for-byte unchanged). `Some` = incremental cascade —
     // nodes outside `force`/`dirty_roots` reuse `prev_styles` instead of
     // calling `compute_style`. See `RestyleDelta`.
-    incr: Option<&RestyleDelta<'_>>,
+    incr: Option<&IncrRestyle<'_>>,
     // Set once an ancestor (or this node itself, via `dirty_roots`) forced a
     // recompute — propagates down the rest of the subtree unconditionally
     // (brief §4: "root-set and their style-descendants").
@@ -544,26 +855,35 @@ fn walk(
         NodeData::Element { .. } => {} // handled below
     }
 
-    let must_recompute = match incr {
-        None => true,
-        Some(delta) => {
-            force || delta.dirty_roots.contains(&id) || !delta.prev_styles.contains_key(&id)
+    // BUG-341 S9: a refcount bump, not a `ComputedStyle` deep copy — this is
+    // the reuse path, taken for every node outside the dirty root set.
+    // BUG-341 S24: and it reads *and* restamps the carried cache in one lookup,
+    // where S3-S23 asked the previous map twice and then inserted into a fresh
+    // one. `None` here means "nothing to reuse" for either reason — no entry, or
+    // one the immediately preceding pass did not write (see
+    // `CascadeStyles::reuse`).
+    let reused = match incr {
+        None => None,
+        Some(delta) if force || delta.dirty_roots.contains(&id) => None,
+        Some(_) => map.styles.reuse(id),
+    };
+    let must_recompute = reused.is_none();
+    note_cascade(must_recompute);
+    let style: Arc<ComputedStyle> = match reused {
+        Some(style) => style,
+        None => {
+            let style = Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode));
+            // BUG-284: cache so `build_box`'s own `compute_style(id, ...)` call
+            // (same doc/sheet/viewport/dark_mode, same `inherited` chain) can
+            // reuse this result instead of recomputing an identical cascade.
+            // BUG-341 S24: keep whatever this displaced — the graft still needs
+            // to see the style `prev`'s box was built from (`replaced_styles`).
+            if let Some(displaced) = map.styles.write(id, Arc::clone(&style)) {
+                map.replaced_styles.insert(id, displaced);
+            }
+            style
         }
     };
-    note_cascade(must_recompute);
-    let style: Arc<ComputedStyle> = if must_recompute {
-        Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode))
-    } else {
-        // Safe: `must_recompute` is false only when `incr` is `Some` and
-        // `prev_styles` contains `id` (checked in the match arm above).
-        // BUG-341 S9: a refcount bump, not a `ComputedStyle` deep copy — this
-        // is the reuse path, taken for every node outside the dirty root set.
-        Arc::clone(&incr.unwrap().prev_styles[&id])
-    };
-    // BUG-284: cache so `build_box`'s own `compute_style(id, ...)` call (same
-    // doc/sheet/viewport/dark_mode, same `inherited` chain) can reuse this
-    // result instead of recomputing an identical cascade.
-    map.styles.insert(id, Arc::clone(&style));
 
     // CSS Lists L3 §4: counter-reset first, then counter-increment, then counter-set.
     ctx.apply_reset(&style.counter_reset);
