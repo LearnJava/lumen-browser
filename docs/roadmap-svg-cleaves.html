@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 87,
+  "open": 88,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 359,
+ "total_bugs": 360,
  "phases": [
   {
    "id": "P0",
@@ -2279,9 +2279,12 @@
       {
        "id": "WPT-VENDOR-fs",
        "title": "WPT: вендорить + прогнать категорию `fs`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/fs/`, 88 файлов: `META.yml`, `README.md` — `WEB_FEATURES.yml` у категории нет, 42 исполняемых файла верхнего уровня, `resources/` из 17 хелперов, `script-tests/` из 20 общих сценариев, `LICENSE-WPT.md`), скоуп ⬜ (кандидат). Категория — File System API (синхронный доступ/observer/move), не путать с уже вендоренной `file-system-access` (picker-based, BUG-371..374): пересечение только в общих классах `FileSystemFileHandle`/`FileSystemDirectoryHandle`. `run_report.py --all --root fs --recursive` — **21 мин, 0/32 harness OK, 0/0 сабтестов** (32 TIMEOUT): все 42 файла категории — `.https.`, `testdriver.js` не встречается ни разу, вариантов нет — чистая HTTPS-порт-гэп стена без единого исполнившегося теста, самый однородный ценник среди WPT-VENDOR категорий на сегодня. Проба через `--mcp-live-port` (headless дал бы ложный «не резолвилось» на промисах — async-код требует живого event loop) дала два результата: BUG-389 (новый) — вся API-поверхность, вокруг которой построена категория, отсутствует целиком: `FileSystemSyncAccessHandle`, `FileSystemObserver`, общий базовый `FileSystemHandle`, `FileSystemHandle.prototype.move()` — везде `typeof === 'undefined'`; и независимое подтверждение уже заведённого BUG-372 (`navigator.storage.getDirectory()` отдаёт теневой `FileSystemDirectoryHandle`, не `instanceof` реального класса) — тот же дефект, что нашла категория `file-system-access`, воспроизведён здесь другой пробой",
+       "bugs": [
+        "BUG-389"
+       ]
       },
       {
        "id": "WPT-VENDOR-fullscreen",
@@ -6557,6 +6560,13 @@
    "status": "open",
    "title": "Forced Colors Mode форсирует `color`/`background-color`/`border-*-color`/`outline-color`/`caret-color` верно (подтверждено WPT: `forced-colors-mode-27.html` 1/1…",
    "component": "layout (`crates/engine/layout/src/style.rs:7996` — `apply_forced_colors_mode`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-389": {
+   "status": "open",
+   "title": "`FileSystemSyncAccessHandle`, `FileSystemObserver`, общий базовый `FileSystemHandle`, `FileSystemHandle.prototype.move()` — не реализованы вовсе (`typeof` = `un…",
+   "component": "js (`crates/js/src/filesystem_access.rs`, `crates/js/src/storage_manager.rs`)",
    "date": null,
    "debtor": false
   }
