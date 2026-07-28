@@ -929,13 +929,6 @@ fn run_window_mode(
         .collect();
     let active_profile_id = profiles_registry.active().ok().flatten().map(|p| p.id);
 
-    // CC-14 (docs/tasks/p1-css-chrome.md): engine-drawn chrome is now the
-    // default (flipped from CC-4's opt-in `LUMEN_CSS_CHROME=1`, same
-    // flag-strategy idiom as ADR-018's V8 cutover) — `LUMEN_LEGACY_CHROME=1`
-    // is the rollback opt-out, read once at startup like `LUMEN_ENGINE_THREAD`
-    // (`spawn_engine_thread_if_enabled` above).
-    let css_chrome_enabled = std::env::var("LUMEN_LEGACY_CHROME").as_deref() != Ok("1");
-
     let mut app = Lumen {
         display_list: Vec::new(),
         tile_grid: lumen_paint::TileGrid::default_size(),
@@ -950,8 +943,7 @@ fn run_window_mode(
         window: None,
         display_color_profile: platform::display_color_profile::PlatformDisplayColorProfile::new(),
         renderer: None,
-        css_chrome_enabled,
-        chrome_doc: css_chrome_enabled.then(|| lumen_chrome::parse_document(chrome_preview::HTML)),
+        chrome_doc: Some(lumen_chrome::parse_document(chrome_preview::HTML)),
         chrome_layout: None,
         chrome_page_host_rect: None,
         chrome_hovered_nid: None,
@@ -7460,16 +7452,15 @@ struct Lumen {
     #[allow(dead_code)] // потребитель появится при P3 wiring (ph3-color-management Step 1)
     display_color_profile: platform::display_color_profile::PlatformDisplayColorProfile,
     renderer: Option<Box<dyn RenderBackend>>,
-    /// CC-4 (docs/tasks/p1-css-chrome.md): the engine-drawn browser chrome, kept
-    /// behind `LUMEN_CSS_CHROME=1` (read once at startup — see
-    /// [`css_chrome_enabled`]). `None` off the flag, leaving every other field
-    /// below `None`/unread and shell behavior byte-identical to before CC-4.
-    css_chrome_enabled: bool,
     /// CC-4: chrome document + stylesheet, parsed once at startup via
     /// [`lumen_chrome::parse_document`] from `chrome_preview::HTML` — the same
     /// bytes `build.rs` already CSS-gated. Only relaid out on resize
     /// ([`Lumen::relayout_chrome_host`]); the asset has no dynamic content yet
     /// (`ChromeModel` DOM mutation is CC-6), so nothing else invalidates it.
+    ///
+    /// CC-15-6: always `Some` since the `LUMEN_LEGACY_CHROME` rollback flag was
+    /// deleted — the `Option` is now only the shape every accessor already reads
+    /// through, not a live "no engine chrome" mode.
     chrome_doc: Option<(lumen_dom::Document, lumen_css_parser::Stylesheet)>,
     /// CC-4: `LayoutBox` + display list of the last `relayout_chrome_host` pass,
     /// painted at the front of `overlay_buf` every frame (legacy panels/tab-bar/
@@ -7526,7 +7517,7 @@ struct Lumen {
     /// because `chrome_doc` and the page `Document` number `NodeId`s
     /// independently (both start at 0), so a shared scheduler would collide
     /// entries between the two trees. Ticked on every `RedrawRequested`
-    /// alongside the page scheduler, gated on [`Self::css_chrome_enabled`].
+    /// alongside the page scheduler.
     /// Unlike the page scheduler, never `.clear()`-ed: `chrome_doc`'s nodes
     /// persist for the process lifetime (no reload/navigation equivalent for
     /// chrome), so clearing on every [`Self::relayout_chrome_host`] call —
@@ -8849,10 +8840,9 @@ impl Lumen {
     }
 
     /// CC-4 (docs/tasks/p1-css-chrome.md): re-lays-out and re-paints the
-    /// engine-drawn chrome document at the current window size. No-op when
-    /// `LUMEN_CSS_CHROME` is off ([`Self::css_chrome_enabled`] false —
-    /// `chrome_doc` is `None`) or the renderer/window is not ready yet
-    /// (mirrors the degenerate-size guard in [`Self::relayout_viewport`]).
+    /// engine-drawn chrome document at the current window size. No-op when the
+    /// renderer/window is not ready yet (mirrors the degenerate-size guard in
+    /// [`Self::relayout_viewport`]).
     ///
     /// Called once the renderer has a first non-zero size and again on every
     /// `WindowEvent::Resized`. The chrome asset has no dynamic content yet
@@ -9176,7 +9166,17 @@ impl Lumen {
         let find = lumen_chrome::ChromeFindModel {
             open: self.find.is_open(),
             value: self.find.query().to_owned(),
-            count_label: if find_matches_len == 0 {
+            // CC-15-6: the "ERR" state is carried over from the deleted legacy
+            // bar (`find::append_bar`) — without it an invalid regex is
+            // indistinguishable from "no matches" (`0/0`). Text only: the
+            // legacy bar also painted it red (`BAR_ERR`), the asset has no
+            // error class for `#findCount` (see BUG-419).
+            count_label: if self.find.is_regex_mode()
+                && !self.find.query().is_empty()
+                && !find::is_valid_regex_pattern(self.find.query())
+            {
+                "ERR".to_owned()
+            } else if find_matches_len == 0 {
                 "0/0".to_owned()
             } else {
                 format!("{}/{}", self.find.active_index() + 1, find_matches_len)
@@ -9425,33 +9425,23 @@ impl Lumen {
     /// the render-time page transform share, so a click/hover always lands
     /// on the same page element the frame actually painted there.
     ///
-    /// Under `LUMEN_CSS_CHROME=1` this is [`Self::chrome_page_host_rect`]'s
-    /// origin (falling back to `(0, CHROME_H)` before the first chrome
-    /// layout exists, mirroring [`Self::relayout_chrome_host`]'s own
-    /// degenerate-size guard — that frame paints the page flush with the
-    /// window too). Off the flag it is the legacy left-docked-panel width /
-    /// `toolbar::CHROME_H` pair.
+    /// This is [`Self::chrome_page_host_rect`]'s origin, falling back to
+    /// `(0, CHROME_H)` before the first chrome layout exists, mirroring
+    /// [`Self::relayout_chrome_host`]'s own degenerate-size guard — that frame
+    /// paints the page flush with the window too.
     fn page_offset(&self) -> (f32, f32) {
-        if self.css_chrome_enabled {
-            self.chrome_page_host_rect
-                .map(|r| (r.x, r.y))
-                .unwrap_or((0.0, toolbar::CHROME_H))
-        } else {
-            (self.left_dock().map_or(0.0, |(_, w)| w), toolbar::CHROME_H)
-        }
+        self.chrome_page_host_rect
+            .map(|r| (r.x, r.y))
+            .unwrap_or((0.0, toolbar::CHROME_H))
     }
 
     /// CC-5: `true` when `(x_css, y_css)` falls outside the page-content
     /// rect — i.e. over an opaque chrome furniture area (sidebar, toolbar,
-    /// tab strip) — under `LUMEN_CSS_CHROME=1`. Always `false` off the flag.
-    /// A `None` [`Self::chrome_page_host_rect`] (no chrome layout yet)
-    /// counts as "over chrome": mirrors [`Self::relayout_chrome_host`]'s
+    /// tab strip). A `None` [`Self::chrome_page_host_rect`] (no chrome layout
+    /// yet) counts as "over chrome": mirrors [`Self::relayout_chrome_host`]'s
     /// guard — nothing is painted at the page rect either in that frame, so
     /// there is no page underneath to click through to yet.
     fn point_over_chrome(&self, x_css: f32, y_css: f32) -> bool {
-        if !self.css_chrome_enabled {
-            return false;
-        }
         match self.chrome_page_host_rect {
             Some(r) => {
                 x_css < r.x || x_css >= r.right() || y_css < r.y || y_css >= r.bottom()
@@ -9462,8 +9452,7 @@ impl Lumen {
 
     /// CC-5: hit-tests [`Self::chrome_layout`] at window-CSS coordinates —
     /// the chrome document paints at the window origin, no scroll/page
-    /// transform involved. `None` off the flag or before the first chrome
-    /// layout exists.
+    /// transform involved. `None` before the first chrome layout exists.
     fn chrome_hit_test(&self, x_css: f32, y_css: f32) -> Option<lumen_paint::HitTestResult> {
         let (layout, _) = self.chrome_layout.as_ref()?;
         hit_test(Point::new(x_css, y_css), layout)
@@ -11876,13 +11865,12 @@ impl Lumen {
     }
 
     /// Chrome AX siblings for [`Self::update_platform_ax_tree`]/
-    /// `automation_a11y_tree` — CC-13: under `LUMEN_CSS_CHROME=1` (`chrome_doc`
-    /// is `Some`) these come from the engine-rendered chrome `Document` via
-    /// `lumen_a11y::chrome::chrome_root_from_document` (real ARIA roles off
-    /// `assets/chrome/chrome.html`, injected at generation time). Off the
-    /// flag this falls back to the DS-17 synthetic snapshot. Never both —
-    /// same "one or the other" gating CC-10a's invisible-legacy-panel bug
-    /// taught (see CLAUDE.md known gotchas).
+    /// `automation_a11y_tree` — CC-13: these come from the engine-rendered
+    /// chrome `Document` via `lumen_a11y::chrome::chrome_root_from_document`
+    /// (real ARIA roles off `assets/chrome/chrome.html`, injected at generation
+    /// time). The DS-17 synthetic-snapshot fallback below is unreachable since
+    /// CC-15-6 removed the rollback flag ([`Self::chrome_doc`] is always
+    /// `Some`); it is kept only as the `None`-arm of that `Option`.
     fn chrome_ax_nodes(&self) -> Vec<lumen_a11y::AXNode> {
         if let Some((doc, _)) = &self.chrome_doc {
             let flat_tree = lumen_dom::build_flat_tree(doc);
@@ -12023,7 +12011,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         self.window = Some(window);
         self.renderer = Some(renderer);
         // CC-4: first chrome layout pass, now that the renderer knows the
-        // window's initial size. No-op off `LUMEN_CSS_CHROME`.
+        // window's initial size.
         self.relayout_chrome_host();
 
         // GG-4: Restore vertical-tab layout from persisted settings.
@@ -13573,7 +13561,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 self.relayout();
                 // CC-4: re-lay-out the engine-drawn chrome at the new window
-                // size. No-op off `LUMEN_CSS_CHROME`.
+                // size.
                 self.relayout_chrome_host();
                 // HTML §8.1.5.1, шаг 13: ResizeObserver delivery.
                 // JS-observers are delivered inside relayout() via deliver_layout_observers().
@@ -13833,17 +13821,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // `point_over_chrome`/`chrome_hit_test` both answer "no
                     // chrome" once the pointer is over the page, so moving out
                     // of the sidebar/toolbar correctly clears this again.
-                    if self.css_chrome_enabled {
-                        let new_chrome_hovered = if self.point_over_chrome(x_css, y_css) {
-                            self.chrome_hit_test(x_css, y_css).map(|r| r.node)
-                        } else {
-                            None
-                        };
-                        if new_chrome_hovered != self.chrome_hovered_nid {
-                            self.chrome_hovered_nid = new_chrome_hovered;
-                            self.relayout_chrome_host();
-                            self.request_redraw();
-                        }
+                    let new_chrome_hovered = if self.point_over_chrome(x_css, y_css) {
+                        self.chrome_hit_test(x_css, y_css).map(|r| r.node)
+                    } else {
+                        None
+                    };
+                    if new_chrome_hovered != self.chrome_hovered_nid {
+                        self.chrome_hovered_nid = new_chrome_hovered;
+                        self.relayout_chrome_host();
+                        self.request_redraw();
                     }
                     // Pointer Events L3 §4.1: buffer this raw sample instead of
                     // dispatching immediately. Flushed as one coalesced
@@ -13852,21 +13838,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     self.pending_pointer_moves.push((x_css, y_css));
                     // CC-5: `point_over_chrome` replaces the legacy `y_css <
-                    // toolbar::CHROME_H` gate under the flag — that constant no
-                    // longer describes where the chrome's opaque area ends
+                    // toolbar::CHROME_H` gate — that constant no longer
+                    // describes where the chrome's opaque area ends
                     // (variable-width sidebar, differently-sized toolbar row).
-                    // Off the flag this is byte-identical to the original check.
-                    let new_hovered = if self.css_chrome_enabled {
-                        if self.point_over_chrome(x_css, y_css) {
-                            None
-                        } else {
-                            let (page_x, page_y) = self.page_point(x_css, y_css);
-                            self.layout_box
-                                .as_ref()
-                                .and_then(|lb| hit_test(Point::new(page_x, page_y), lb))
-                                .map(|r| r.node)
-                        }
-                    } else if y_css < toolbar::CHROME_H {
+                    let new_hovered = if self.point_over_chrome(x_css, y_css) {
                         None
                     } else {
                         let (page_x, page_y) = self.page_point(x_css, y_css);
@@ -14085,7 +14060,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // `active_nid` handling above but scoped to `chrome_layout`
                     // (see `relayout_chrome_host`'s doc comment for why the two
                     // documents can't share interactive thread-locals).
-                    if self.css_chrome_enabled && self.point_over_chrome(x_css, y_css) {
+                    if self.point_over_chrome(x_css, y_css) {
                         self.chrome_active_nid = self.chrome_hit_test(x_css, y_css).map(|r| r.node);
                         self.relayout_chrome_host();
                         self.request_redraw();
@@ -14266,22 +14241,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // CC-5 (docs/tasks/p1-css-chrome.md): under the flag the
-                    // engine-drawn chrome (CC-4) already covers the whole
-                    // top-strip/sidebar area the two legacy hit-testers below
-                    // assume — falling through to both would double-count the
-                    // same physical click (nothing paints the legacy geometry
-                    // to click on, yet their y/x-range checks don't know
-                    // that). Route exclusively through the chrome hit-test +
-                    // `data-action` dispatch instead; a click outside the
-                    // chrome's own opaque area (i.e. on real page content,
-                    // including any floating popover panel drawn above it —
-                    // those stay positioned within the page-content rect) is
-                    // left unhandled here and falls through unchanged to the
+                    // CC-5 (docs/tasks/p1-css-chrome.md): the engine-drawn
+                    // chrome (CC-4) covers the whole top-strip/sidebar area the
+                    // legacy hit-testers below assume — falling through to both
+                    // would double-count the same physical click (nothing
+                    // paints the legacy geometry to click on, yet their y/x-range
+                    // checks don't know that). Route exclusively through the
+                    // chrome hit-test + `data-action` dispatch instead; a click
+                    // outside the chrome's own opaque area (i.e. on real page
+                    // content, including any floating popover panel drawn above
+                    // it — those stay positioned within the page-content rect)
+                    // is left unhandled here and falls through unchanged to the
                     // panel checks below.
-                    if self.css_chrome_enabled
-                        && self.point_over_chrome(x_css, y_css)
-                    {
+                    if self.point_over_chrome(x_css, y_css) {
                         let hit = self.chrome_hit_test(x_css, y_css);
                         self.chrome_active_nid = hit.as_ref().map(|r| r.node);
                         self.relayout_chrome_host();
@@ -14321,14 +14293,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                     // CC-15-3: the legacy tab-bar/toolbar left-click dispatch
                     // (tab switch/close/adblock, archive/layout/settings
-                    // buttons, toolbar buttons) lived here under
-                    // `!self.css_chrome_enabled` — removed along with the
-                    // paint/hit-test functions it called. Under the default
-                    // engine-drawn chrome this was already unreachable
-                    // (routed through `chrome_hit_test` above instead); under
-                    // the `LUMEN_LEGACY_CHROME=1` rollback flag a click in
-                    // the tab-bar/toolbar area now falls through unhandled to
-                    // the checks below, same as any other page-content click.
+                    // buttons, toolbar buttons) lived here — removed along with
+                    // the paint/hit-test functions it called, unreachable since
+                    // CC-4 routed those clicks through `chrome_hit_test` above.
                     // Archive panel: close on click below tab bar when open.
                     if self.archive.visible {
                         let win_w = self.viewport_width_css();
@@ -14613,59 +14580,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Bookmark manager panel (task #22): floating overlay.
-                    // CC-10b: gated off the flag — its paint is (`#view-bookmarks`
-                    // is the engine equivalent), and without this a click here
-                    // would silently swallow a click meant for the real page
-                    // content now visible underneath (same click-eating class
-                    // CC-5 fixed for the legacy tab-strip/toolbar).
-                    if self.bookmark_panel.visible && !self.css_chrome_enabled {
-                        let (ax, ay) = self.bookmark_anchor();
-                        if let Some(hit) = panels::bookmark_panel::hit_test(
-                            &self.bookmark_panel,
-                            x_css,
-                            y_css,
-                            ax,
-                            ay,
-                        ) {
-                            use panels::bookmark_panel::BookmarkHit;
-                            match hit {
-                                BookmarkHit::Close => {
-                                    self.bookmark_panel.visible = false;
-                                    self.bookmark_panel.search_active = false;
-                                }
-                                BookmarkHit::FocusSearch => {
-                                    self.bookmark_panel.search_active = true;
-                                }
-                                BookmarkHit::SelectFolder(folder) => {
-                                    self.bookmark_panel.selected_folder = folder;
-                                    self.bookmark_panel.scroll_y = 0.0;
-                                }
-                                BookmarkHit::DeleteBookmark(id) => {
-                                    if let Some(url) = self
-                                        .bookmark_panel
-                                        .entries
-                                        .iter()
-                                        .find(|e| e.id == id)
-                                        .map(|e| e.url.clone())
-                                    {
-                                        let _ = self.bookmarks.delete(&url);
-                                        self.refresh_bookmarks();
-                                    }
-                                }
-                                BookmarkHit::Bookmark(id) => {
-                                    // Begin a potential drag; open vs. re-file is
-                                    // resolved on the matching mouse release.
-                                    self.bookmark_panel.begin_drag(id);
-                                }
-                                BookmarkHit::Empty => {
-                                    self.bookmark_panel.search_active = false;
-                                }
-                            }
-                            self.request_redraw();
-                            return;
-                        }
-                    }
+                    // CC-10b/CC-15-6: the legacy bookmark-manager overlay's click
+                    // hit-test lived here, gated off the rollback flag —
+                    // `#view-bookmarks` in the engine chrome owns it now.
 
                     // Accessibility settings panel (E-2): centred overlay.
                     if self.a11y_panel.visible {
@@ -14720,213 +14637,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Print dialog (E-1): centred overlay, Ctrl+P.
-                    // CC-10b: gated off the flag — found alongside the
-                    // history/bookmarks/settings gap this slice fixes, same
-                    // click-eating class CC-5 fixed for the legacy tab-strip/
-                    // toolbar (CC-10a gated this panel's *paint* but missed
-                    // its click hit-test).
-                    if self.print_panel.visible && !self.css_chrome_enabled {
-                        let win_w = self.viewport_width_css();
-                        let win_h = self.viewport_height_css();
-                        use panels::print_panel::PrintHit;
-                        let hit = panels::print_panel::hit_test(
-                            &self.print_panel,
-                            x_css,
-                            y_css,
-                            win_w,
-                            win_h,
-                        );
-                        match hit {
-                            PrintHit::Close | PrintHit::Cancel => {
-                                self.print_panel.close();
-                            }
-                            PrintHit::Print => {
-                                let path = std::path::PathBuf::from(
-                                    self.print_panel.output_path.clone()
-                                );
-                                let source = self.source.clone();
-                                let sink = Arc::clone(&self.event_sink);
-                                let (margin_tb, margin_lr) = self.print_panel.margin_px();
-                                let scale = self.print_panel.scale;
-                                let print_backgrounds = self.print_panel.print_backgrounds;
-                                if let Err(e) = do_print_to_pdf_with_opts(
-                                    &source,
-                                    &path,
-                                    sink,
-                                    margin_tb,
-                                    margin_lr,
-                                    scale,
-                                    print_backgrounds,
-                                ) {
-                                    eprintln!("Ошибка печати: {e}");
-                                }
-                                self.print_panel.close();
-                            }
-                            PrintHit::PaperSize(s) => {
-                                self.print_panel.paper = s;
-                            }
-                            PrintHit::Orientation(o) => {
-                                self.print_panel.orientation = o;
-                            }
-                            PrintHit::Margins(m) => {
-                                self.print_panel.margins = m;
-                            }
-                            PrintHit::ScaleDecrease => {
-                                self.print_panel.scale = (self.print_panel.scale - 10).max(50);
-                            }
-                            PrintHit::ScaleIncrease => {
-                                self.print_panel.scale = (self.print_panel.scale + 10).min(200);
-                            }
-                            PrintHit::PageRangeField => {
-                                self.print_panel.editing_field =
-                                    Some(panels::print_panel::PrintField::PageRange);
-                            }
-                            PrintHit::ColorMode(c) => {
-                                self.print_panel.color_mode = c;
-                            }
-                            PrintHit::Backgrounds(on) => {
-                                self.print_panel.print_backgrounds = on;
-                            }
-                            PrintHit::OutputPathField => {
-                                self.print_panel.editing_field =
-                                    Some(panels::print_panel::PrintField::OutputPath);
-                            }
-                            PrintHit::Inside => { /* swallow */ }
-                            PrintHit::Outside => {
-                                self.print_panel.close();
-                            }
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy print-dialog click hit-test lived
+                    // here, gated off the rollback flag — the engine chrome's own
+                    // print panel owns it now.
 
-                    // Settings panel (task D-7): centred overlay. CC-10b:
-                    // gated off the flag — same click-eating class as the
-                    // print/cert modals above (`#view-settings` is the
-                    // engine equivalent).
-                    if self.settings_panel.visible && !self.css_chrome_enabled {
-                        let win_w = self.viewport_width_css();
-                        let win_h = self.viewport_height_css();
-                        let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
-                        let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
-                        use panels::settings_panel::SettingsHit;
-                        let hit = panels::settings_panel::hit_test(
-                            &self.settings_panel,
-                            x_css,
-                            y_css,
-                            sp_x,
-                            sp_y,
-                        );
-                        match hit {
-                            SettingsHit::Close => {
-                                self.close_settings_panel();
-                            }
-                            SettingsHit::TabSelect(sec) => {
-                                self.settings_panel.section = sec;
-                                self.settings_panel.scroll_y = 0.0;
-                            }
-                            SettingsHit::ToggleShields => {
-                                self.settings_panel.draft.shields_enabled =
-                                    !self.settings_panel.draft.shields_enabled;
-                            }
-                            SettingsHit::ToggleDoh => {
-                                self.settings_panel.draft.doh_enabled =
-                                    !self.settings_panel.draft.doh_enabled;
-                            }
-                            SettingsHit::SetFingerprintMode(mode) => {
-                                self.settings_panel.draft.fingerprint_mode = mode;
-                            }
-                            SettingsHit::SetTheme(base) => {
-                                // Preserve the existing accent when changing the base.
-                                let current = panels::themes::ShellTheme::parse(
-                                    &self.settings_panel.draft.theme,
-                                );
-                                let new_theme = panels::themes::ShellTheme {
-                                    base: panels::themes::ShellTheme::parse(&base).base,
-                                    accent: current.accent,
-                                };
-                                self.settings_panel.draft.theme = new_theme.to_settings_str();
-                                self.shell_theme = new_theme;
-                            }
-                            SettingsHit::SetAccent(accent_key) => {
-                                // Preserve the existing base when changing the accent.
-                                let current = panels::themes::ShellTheme::parse(
-                                    &self.settings_panel.draft.theme,
-                                );
-                                let new_theme = panels::themes::ShellTheme {
-                                    base: current.base,
-                                    accent: panels::themes::AccentPreset::from_key(&accent_key),
-                                };
-                                self.settings_panel.draft.theme = new_theme.to_settings_str();
-                                self.shell_theme = new_theme;
-                            }
-                            SettingsHit::FontSizeDecrease => {
-                                self.settings_panel.draft.font_size =
-                                    (self.settings_panel.draft.font_size - 2.0).max(8.0);
-                            }
-                            SettingsHit::FontSizeIncrease => {
-                                self.settings_panel.draft.font_size =
-                                    (self.settings_panel.draft.font_size + 2.0).min(36.0);
-                            }
-                            SettingsHit::SetTabLayout(mode) => {
-                                self.settings_panel.draft.tab_layout = mode;
-                            }
-                            SettingsHit::FocusHomepage => {
-                                self.settings_panel.focused_input =
-                                    Some(panels::settings_panel::SettingInput::Homepage);
-                            }
-                            SettingsHit::FocusDownloadPath => {
-                                self.settings_panel.focused_input =
-                                    Some(panels::settings_panel::SettingInput::DownloadPath);
-                            }
-                            SettingsHit::ResetPanelLayout => {
-                                self.settings_panel.draft.panel_layout = String::new();
-                            }
-                            SettingsHit::ToggleHttp3 => {
-                                self.settings_panel.http3_draft = !self.settings_panel.http3_draft;
-                            }
-                            SettingsHit::ToggleSubscription(url) => {
-                                if let Some(sub) = self
-                                    .settings_panel
-                                    .adblock_subs
-                                    .iter()
-                                    .find(|s| s.url == url)
-                                {
-                                    let _ = self.adblock_store.set_subscription(
-                                        &sub.url, &sub.title, !sub.enabled,
-                                    );
-                                }
-                                self.settings_panel.adblock_subs =
-                                    self.adblock_store.list_subscriptions().unwrap_or_default();
-                                let count = adblock::load_and_install(&self.adblock_store);
-                                eprintln!("adblock: список переключён, фильтр обновлён ({count} правил)");
-                            }
-                            SettingsHit::RefreshAdblockNow => {
-                                let store = std::sync::Arc::clone(&self.adblock_store);
-                                let http = config::global().apply_http(lumen_network::HttpClient::new());
-                                std::thread::Builder::new()
-                                    .name("adblock-manual-refresh".to_owned())
-                                    .spawn(move || {
-                                        if adblock::refresh(&store, &http) {
-                                            let count = adblock::load_and_install(&store);
-                                            eprintln!(
-                                                "adblock: списки обновлены вручную, фильтр обновлён ({count} правил)"
-                                            );
-                                        } else {
-                                            eprintln!("adblock: обновление вручную — изменений нет");
-                                        }
-                                    })
-                                    .ok();
-                            }
-                            SettingsHit::Inside => { /* swallow */ }
-                            SettingsHit::Outside => {
-                                self.close_settings_panel();
-                            }
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy settings-panel click hit-test lived
+                    // here, gated off the rollback flag — `#view-settings` in the
+                    // engine chrome owns it now.
 
                     // Keyboard shortcuts panel (§D-4): centred overlay.
                     if self.shortcuts_panel.visible {
@@ -14956,91 +14673,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Certificate viewer panel (§D-1): centred overlay.
-                    // CC-10b: gated off the flag — same click-eating gap as
-                    // the print dialog above.
-                    if self.cert_panel.visible && !self.css_chrome_enabled {
-                        let win_w = self.viewport_width_css();
-                        let win_h = self.viewport_height_css();
-                        let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
-                        let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
-                        let lx = x_css - cp_x;
-                        let ly = y_css - cp_y;
-                        if (0.0..panels::cert_panel::PANEL_W).contains(&lx)
-                            && (0.0..panels::cert_panel::PANEL_H).contains(&ly)
-                        {
-                            use panels::cert_panel::CertHit;
-                            match self.cert_panel.hit_test(lx, ly) {
-                                CertHit::Close | CertHit::Header => {
-                                    self.cert_panel.close();
-                                }
-                                CertHit::Body => { /* swallow */ }
-                            }
-                        } else {
-                            self.cert_panel.close();
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy certificate-panel click hit-test
+                    // lived here, gated off the rollback flag — the engine chrome's
+                    // own cert popover owns it now.
 
-                    // History panel (task D-5): centred floating overlay.
-                    // CC-10b: gated off the flag — same click-eating class as
-                    // the print/cert/settings modals above (`#view-history`
-                    // is the engine equivalent).
-                    if self.history_panel.visible && !self.css_chrome_enabled {
-                        let (px, py) = self.history_panel_anchor();
-                        use panels::history_panel::HistoryHit;
-                        let hit = panels::history_panel::hit_test(
-                            &self.history_panel,
-                            x_css,
-                            y_css,
-                            px,
-                            py,
-                            self.active_profile_is_anonymous(),
-                        );
-                        match hit {
-                            HistoryHit::Close => {
-                                self.history_panel.visible = false;
-                                self.history_panel.search_active = false;
-                            }
-                            HistoryHit::FocusSearch => {
-                                self.history_panel.search_active = true;
-                            }
-                            HistoryHit::ClearAll => {
-                                let _ = self.history_store.clear();
-                                let _ = self.history_fts.clear();
-                                self.refresh_history();
-                            }
-                            HistoryHit::Delete(id) => {
-                                if let Some(url) = self
-                                    .history_panel
-                                    .rows
-                                    .iter()
-                                    .find_map(|r| {
-                                        if let panels::history_panel::HistoryRow::Entry(e) = r {
-                                            if e.id == id { Some(e.url.clone()) } else { None }
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                {
-                                    let _ = self.history_store.delete(&url);
-                                    self.refresh_history();
-                                }
-                            }
-                            HistoryHit::Navigate(url) => {
-                                self.history_panel.visible = false;
-                                self.navigate_to(PageSource::Url(url));
-                            }
-                            HistoryHit::Inside => { /* swallow */ }
-                            HistoryHit::Outside => {
-                                self.history_panel.visible = false;
-                                self.history_panel.search_active = false;
-                            }
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy history-panel click hit-test lived
+                    // here, gated off the rollback flag — `#view-history` in the
+                    // engine chrome owns it now.
 
                     // Note viewer overlay (§12.2, GG-2): click [×] to close.
                     if self.note_viewer.visible {
@@ -15060,86 +14699,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
-                    // AI sidebar panel (§12.8): cross-dockable AI assistant.
-                    // CC-10b: gated off the flag — same click-eating class as
-                    // above (`#rsBodyAi` inside `#rightSidebar` is the engine
-                    // equivalent; editing/scrolling it isn't wired yet, see
-                    // `dispatch_chrome_action`'s `ToggleSwitch` doc comment
-                    // for the same class of scope cut).
-                    if self.ai_panel.visible && !self.css_chrome_enabled {
-                        let tab_h = toolbar::CHROME_H;
-                        let win_h = self.viewport_height_css() + tab_h;
-                        let ai_w = self
-                            .panel_layout
-                            .width_for(panel_layout::ID_AI, panels::ai_panel::PANEL_WIDTH);
-                        let ai_side = self.sidebar_dock_side(panel_layout::ID_AI);
-                        let ai_x = self.dock_origin_x(ai_side, ai_w);
-                        if let Some(hit) = panels::ai_panel::hit_test(
-                            &self.ai_panel,
-                            x_css,
-                            y_css,
-                            ai_x,
-                            tab_h,
-                            win_h,
-                            ai_w,
-                        ) {
-                            match hit {
-                                panels::ai_panel::AiHit::Close => {
-                                    self.ai_panel.close();
-                                    // Async-safe (M2.2b-6): mouse-click close is the
-                                    // counterpart of the `ToggleAiPanel` keyboard toggle
-                                    // routed off-thread in M2.2b-3 — chrome-inset shift,
-                                    // no page-geometry read (just redraw + `return`).
-                                    self.relayout_chrome();
-                                    self.request_redraw();
-                                }
-                                panels::ai_panel::AiHit::Input
-                                | panels::ai_panel::AiHit::Response
-                                | panels::ai_panel::AiHit::Header => {}
-                            }
-                            return;
-                        }
-                    }
+                    // CC-10b/CC-15-6: the legacy AI-sidebar click hit-test lived
+                    // here, gated off the rollback flag — `#rightSidebar` in the
+                    // engine chrome owns it now.
 
-                    // Sidebar web panel (7D.3): cross-dockable panel.
-                    // CC-10b: gated off the flag — same click-eating class as
-                    // the AI sidebar above (`#rsBodyWeb` is the engine
-                    // equivalent; its real embedded webview content isn't
-                    // representable there, see `ChromeSidebarTab::Web`'s doc
-                    // comment).
-                    if self.sidebar.visible && !self.css_chrome_enabled {
-                        let tab_h = toolbar::CHROME_H;
-                        let win_h = self.viewport_height_css() + tab_h;
-                        let sb_w = self
-                            .panel_layout
-                            .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
-                        let sb_side = self.sidebar_dock_side(panel_layout::ID_SIDEBAR);
-                        let sb_x = self.dock_origin_x(sb_side, sb_w);
-                        if let Some(hit) = panels::sidebar_panel::hit_test(
-                            &self.sidebar,
-                            x_css,
-                            y_css,
-                            sb_x,
-                            tab_h,
-                            win_h,
-                            sb_w,
-                        ) {
-                            match hit {
-                                panels::sidebar_panel::SidebarHit::Close => {
-                                    self.sidebar.close();
-                                    // Async-safe (M2.2b-6): mouse-click close is the
-                                    // counterpart of `open_sidebar_page` routed off-thread
-                                    // in M2.2b-2 — chrome-inset shift, no page-geometry
-                                    // read (just redraw + `return`).
-                                    self.relayout_chrome();
-                                    self.request_redraw();
-                                }
-                                panels::sidebar_panel::SidebarHit::Content
-                                | panels::sidebar_panel::SidebarHit::Header => {}
-                            }
-                            return;
-                        }
-                    }
+                    // CC-10b/CC-15-6: the legacy web-sidebar click hit-test lived
+                    // here, gated off the rollback flag — `#rightSidebar` in the
+                    // engine chrome owns it now.
 
                     // Workspace switcher bar (7A.3): clicks in the bottom bar area.
                     if self.workspace_panel.visible {
@@ -15351,13 +14917,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             }
                             self.request_redraw();
                         }
-                    // Bookmark drag-and-drop: if a bookmark drag is in progress,
-                    // resolve the drop target. Dropping on a folder re-files the
-                    // bookmark; dropping anywhere else opens it (a plain click).
-                    if let Some(id) = self.bookmark_panel.take_drag() {
-                        self.finish_bookmark_drop(id);
-                        self.request_redraw();
-                    }
+                    // CC-15-6: the bookmark drag-drop release handler lived here.
+                    // Its only drag source was the legacy overlay's press
+                    // hit-test, removed with the rollback flag — the engine
+                    // `#view-bookmarks` has no drag source yet (BUG-422).
                     // End a PiP window drag (task #21).
                     if self.pip.dragging() {
                         self.pip.end_drag();
@@ -15809,8 +15372,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // freeze_content_ticks: chrome isn't affected by page
                 // fast-scroll degradation (its own document doesn't scroll
                 // with the page).
-                if self.css_chrome_enabled
-                    && let (Some((c_lb, _)), Some((_, c_sheet))) = (&self.chrome_layout, &self.chrome_doc)
+                if let (Some((c_lb, _)), Some((_, c_sheet))) = (&self.chrome_layout, &self.chrome_doc)
                 {
                     let vp = lumen_layout::Viewport {
                         width: self.viewport_width_css(),
@@ -16027,27 +15589,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             &self.find,
                             &matches,
                         );
-                        // CC-9: the bar itself is gated off the flag — under
-                        // `LUMEN_CSS_CHROME=1` it's rendered by the engine
-                        // chrome instead (`#findBar`, bound in
-                        // `Self::relayout_chrome_host`), mirroring the CC-5
-                        // gate a few lines below for the tab-bar/toolbar/
-                        // dropdown. The highlighted-page overlay above is
-                        // page content, not chrome, and stays unconditional.
-                        let bar = if self.css_chrome_enabled {
-                            Vec::new()
-                        } else {
-                            let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                                let s = w.inner_size();
-                                (s.width, s.height)
-                            });
-                            find::build_bar_overlay(
-                                &self.find,
-                                matches.len(),
-                                find::BarOverlay { window_size: win_size },
-                            )
-                        };
-                        (Some(page), bar)
+                        // CC-9/CC-15-6: the find bar itself is drawn by the
+                        // engine chrome (`#findBar`, bound in
+                        // `Self::relayout_chrome_host`) — the legacy overlay
+                        // builder was deleted with the rollback flag. The
+                        // highlighted-page overlay above is page content, not
+                        // chrome, and stays unconditional.
+                        (Some(page), Vec::new())
                     } else {
                         (None, Vec::new())
                     };
@@ -16329,21 +15877,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut hint_cmds);
                 }
 
-                // Download panel: viewport-locked bottom-right panel.
-                // Rendered before the tab bar so it appears below the tab strip.
-                // CC-10: gated off the flag — under `LUMEN_CSS_CHROME=1` this
-                // is `#downloadsPanel`, rendered by the engine chrome since
-                // CC-9 (`bind_downloads`). This gate was missed in CC-9
-                // itself (both renderers painted simultaneously under the
-                // flag until now).
-                if self.downloads.visible && !self.css_chrome_enabled {
-                    let win_size = (
-                        self.viewport_width_css() as u32,
-                        self.window_height_css() as u32,
-                    );
-                    let mut dl_cmds = download::build_download_bar(&self.downloads, win_size, &pal);
-                    overlay_buf.append(&mut dl_cmds);
-                }
+                // CC-10/CC-15-6: the legacy download-panel overlay lived here,
+                // gated off the rollback flag — `#downloadsPanel` in the engine
+                // chrome (`bind_downloads`, CC-9) is the only renderer now.
 
                 // DevTools JS console panel: bottom overlay, toggled by F12.
                 if self.devtools_console.visible {
@@ -16535,14 +16071,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 // CC-15-3: the legacy tab-bar/toolbar paint block (viewport-
-                // locked strip at y=0..TAB_BAR_HEIGHT, gated
-                // `!self.focus.active && !self.css_chrome_enabled`) lived
-                // here — removed along with `tabs::strip::build_tab_bar`/
-                // `build_tab_tooltip`/`build_layout_toggle_btn`/
-                // `build_settings_btn` and `toolbar::build_toolbar`. Under
-                // the default engine-drawn chrome this never ran (CC-4); under
-                // `LUMEN_LEGACY_CHROME=1` the tab bar/toolbar row is no longer
-                // painted at all.
+                // locked strip at y=0..TAB_BAR_HEIGHT) lived here — removed
+                // along with `tabs::strip::build_tab_bar`/`build_tab_tooltip`/
+                // `build_layout_toggle_btn`/`build_settings_btn` and
+                // `toolbar::build_toolbar`. Under the engine-drawn chrome
+                // (CC-4) it never ran.
 
                 // Profile switcher dropdown (DS-14): BUG-403 — kept as a
                 // legacy overlay always (CC-15-1, `docs/tasks/p1-css-chrome.md`
@@ -16814,22 +16347,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // borrow so the page transform can shift right of it. Cross-dock
                 // aware across all four sidebars (tabs / AI / web).
                 //
-                // CC-4 (docs/tasks/p1-css-chrome.md): under `LUMEN_CSS_CHROME=1`
-                // both offsets instead come from the engine-drawn chrome's
-                // `#contentArea` rect (the brief's "#page-host") — replacing the
-                // legacy `left_dock()` width / `toolbar::CHROME_H` pair, which is
-                // never read in this branch. Falls back to `(0.0, CHROME_H)` only
-                // if the chrome layout is not ready yet (first resize still
-                // pending), matching `relayout_chrome_host`'s own degenerate-size
-                // guard — this frame paints the page flush with the window until
-                // the next resize event supplies a chrome layout.
-                let (page_x_offset, page_y_offset) = if self.css_chrome_enabled {
-                    self.chrome_page_host_rect
-                        .map(|r| (r.x, r.y))
-                        .unwrap_or((0.0, toolbar::CHROME_H))
-                } else {
-                    (self.left_dock().map_or(0.0, |(_, w)| w), toolbar::CHROME_H)
-                };
+                // CC-4 (docs/tasks/p1-css-chrome.md): both offsets come from the
+                // engine-drawn chrome's `#contentArea` rect (the brief's
+                // "#page-host") — the same [`Self::page_offset`] every input path
+                // reads, so a click lands on the element actually painted there.
+                let (page_x_offset, page_y_offset) = self.page_offset();
 
                 // CSS Backgrounds §3.11.1: clear the whole surface to the canvas
                 // background (the root element's propagated background color) so the
@@ -20958,19 +20480,19 @@ impl Lumen {
         (self.viewport_width_css() - left_offset - right_offset).max(0.0)
     }
 
-    /// All four cross-dockable docked sidebars as `(persist id, visible, default
+    /// The cross-dockable docked sidebars as `(persist id, visible, default
     /// width)`, in side-resolution priority order (outermost first). Each can be
     /// flipped to either window edge; [`Self::left_dock`] / [`Self::right_dock`]
     /// pick the first visible one whose effective side matches.
     ///
-    /// CC-10b: `ID_AI`/`ID_SIDEBAR` report `visible: false` under
-    /// `LUMEN_CSS_CHROME=1` even when `self.ai_panel`/`self.sidebar` are
-    /// visible — under the flag they paint as `#rightSidebar`, a real flex
-    /// sibling of `#contentArea` in the engine chrome layout, so
-    /// `chrome_page_host_rect` (`Self::page_offset`) already reflects its
-    /// width. Without this, `Self::page_content_width_css`'s horizontal
-    /// scroll-clamp bound would subtract the same width twice.
-    fn dockable_sidebars(&self) -> [(&'static str, bool, f32); 4] {
+    /// CC-10b/CC-15-6: `ID_AI`/`ID_SIDEBAR` are **not** listed — they paint as
+    /// `#rightSidebar`, a real flex sibling of `#contentArea` in the engine
+    /// chrome layout, so `chrome_page_host_rect` ([`Self::page_offset`]) already
+    /// reflects their width. Listing them would make
+    /// [`Self::page_content_width_css`]'s horizontal scroll-clamp bound subtract
+    /// the same width twice. (They were entries reporting `visible: false` while
+    /// the `LUMEN_LEGACY_CHROME` rollback flag existed.)
+    fn dockable_sidebars(&self) -> [(&'static str, bool, f32); 2] {
         [
             (
                 panel_layout::ID_VERTICAL_TABS,
@@ -20981,16 +20503,6 @@ impl Lumen {
                 panel_layout::ID_TREE_TABS,
                 self.tree_tabs.visible,
                 panels::tree_tabs::PANEL_WIDTH,
-            ),
-            (
-                panel_layout::ID_AI,
-                self.ai_panel.visible && !self.css_chrome_enabled,
-                panels::ai_panel::PANEL_WIDTH,
-            ),
-            (
-                panel_layout::ID_SIDEBAR,
-                self.sidebar.visible && !self.css_chrome_enabled,
-                panels::sidebar_panel::PANEL_WIDTH,
             ),
         ]
     }
@@ -21415,14 +20927,6 @@ impl Lumen {
         self.history_panel.set_items(items);
     }
 
-    /// Top-left corner of the history panel in window-space CSS px.
-    fn history_panel_anchor(&self) -> (f32, f32) {
-        let win_w = self.viewport_width_css();
-        let px = (win_w - panels::history_panel::PANEL_W) * 0.5;
-        let py = toolbar::CHROME_H + 4.0;
-        (px, py)
-    }
-
     /// Rebuild the command-palette item list: curated commands, every bookmark,
     /// and — when the query is non-empty — matching history pages (FTS).
     ///
@@ -21668,48 +21172,6 @@ impl Lumen {
         "AI module not enabled — rebuild with `cargo build --features ai` \
          (requires a local Ollama daemon, see ADR-019)."
             .to_owned()
-    }
-
-    /// Top-left anchor of the bookmark panel overlay (just under the tab bar).
-    fn bookmark_anchor(&self) -> (f32, f32) {
-        (8.0, toolbar::CHROME_H + 4.0)
-    }
-
-    /// Resolve a bookmark drag release: dropping on a folder re-files the
-    /// bookmark (`Bookmarks::set_folder`), dropping elsewhere opens it.
-    fn finish_bookmark_drop(&mut self, id: i64) {
-        let Some(cursor) = self.cursor_position else { return };
-        let dpr = self
-            .renderer
-            .as_ref()
-            .map_or(1.0_f32, |r| r.scale_factor() as f32)
-            .max(1e-6);
-        let x_css = (cursor.x as f32) / dpr;
-        let y_css = (cursor.y as f32) / dpr;
-        let Some(url) = self
-            .bookmark_panel
-            .entries
-            .iter()
-            .find(|e| e.id == id)
-            .map(|e| e.url.clone())
-        else {
-            return;
-        };
-        let (ax, ay) = self.bookmark_anchor();
-        match panels::bookmark_panel::hit_test(&self.bookmark_panel, x_css, y_css, ax, ay) {
-            Some(panels::bookmark_panel::BookmarkHit::SelectFolder(folder)) => {
-                // Re-file: `None` (the "All" row) moves the bookmark to root.
-                let target = folder.unwrap_or_default();
-                let _ = self.bookmarks.set_folder(&url, &target);
-                self.refresh_bookmarks();
-            }
-            _ => {
-                // Released over the same row / list / outside: treat as a click.
-                self.bookmark_panel.visible = false;
-                self.bookmark_panel.search_active = false;
-                self.navigate_to(PageSource::from_arg(Some(&url)));
-            }
-        }
     }
 
     /// Максимальный валидный scroll_y: ничего не скроллим, если контент
@@ -22184,7 +21646,7 @@ impl Lumen {
         // horizontal-resize cursor, ahead of scrollbar/page/chrome hover.
         let desired = if self.panel_resize.is_some() || self.resize_edge_at(x_css, y_css).is_some() {
             CursorIcon::EwResize
-        } else if self.css_chrome_enabled && self.point_over_chrome(x_css, y_css) {
+        } else if self.point_over_chrome(x_css, y_css) {
             // CC-5: the engine-drawn chrome owns the cursor over its own
             // opaque area (sidebar, toolbar, tab strip) — ahead of
             // scrollbar/page hit-test below, which assume page coordinates.
@@ -23502,11 +22964,10 @@ impl Lumen {
         /// the tab-bar-only height to include the new toolbar row).
         ///
         /// CC-14: the offset itself is [`Self::page_offset`], not a hardcoded
-        /// `(left_dock width, toolbar::CHROME_H)` pair — under
-        /// `LUMEN_CSS_CHROME=1` the content area's real origin is
-        /// `chrome_page_host_rect`'s, which can differ from the legacy
-        /// toolbar/sidebar geometry (e.g. the web/AI sidebar occupies chrome
-        /// layout width but is excluded from `left_dock()` under the flag,
+        /// `(left_dock width, toolbar::CHROME_H)` pair — the content area's
+        /// real origin is `chrome_page_host_rect`'s, which can differ from the
+        /// legacy toolbar/sidebar geometry (e.g. the web/AI sidebar occupies
+        /// chrome layout width but is not a `left_dock()` entry at all,
         /// see [`Self::dockable_sidebars`]). Using the wrong offset here would
         /// silently misfire every MCP/BiDi click/type once engine chrome is
         /// the default, since `page_offset()` is otherwise the single source

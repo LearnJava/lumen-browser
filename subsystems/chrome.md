@@ -366,6 +366,32 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   domain nor the shields on/off indicator, and has rows only for Camera/Microphone — Notifications
   and Clipboard are unreachable from the UI).
 
+- **CC-15-5: three orphan `Palette` fields removed** (`crates/shell/src/panels/themes.rs`):
+  `toolbar_bg`, `tab_sleep_bg`, `tab_hibernate_bg` — the only fields of the 17 with no reader outside
+  `themes.rs` after CC-15-3 took out `toolbar.rs`/`tabs/strip.rs` paint. The remaining 14 are live
+  (the keep-forever `vertical_tabs`/`tree_tabs`/`note_viewer` overlays read them).
+
+- **CC-15-6: rollback flag removed** (`crates/shell/src/main.rs` + seven `panels/*`, `find.rs`):
+  the `LUMEN_LEGACY_CHROME` env var and the `css_chrome_enabled` field are gone, along with all 24
+  branches they gated — every legacy side deleted, every engine side kept as the only path
+  (`page_offset`, `point_over_chrome`, chrome hover/active tracking, click routing, cursor icon,
+  the chrome animation/transition tick, the render-time page offsets — the last of which was a
+  second copy of `page_offset()`'s formula and now calls it). Two shape changes: `chrome_doc` is
+  always `Some` (the `Option` stays — 20+ readers go through it — which leaves `chrome_ax_nodes`'
+  DS-17 synthetic fallback as an unreachable `None`-arm), and `dockable_sidebars()` shrank from 4
+  entries to 2 (`ID_AI`/`ID_SIDEBAR` were entries with a permanent `visible: false` since CC-10b;
+  entries with no purpose, not sidebars with no width). Removing the gate made seven panels' legacy
+  `hit_test` unreachable — the CC-15-4 method ("delete the gate, let clippy enumerate the dead")
+  produced 84 warnings in one pass, all swept: `find.rs`'s whole bar overlay, the panels'
+  `hit_test`/`*Hit`/layout constants/`SettingsSection`, and `main.rs`'s `bookmark_anchor`/
+  `history_panel_anchor`/`finish_bookmark_drop` plus the bookmark drag machinery. One behaviour was
+  ported rather than dropped: the legacy find bar's `ERR` marker for an invalid regex now goes into
+  `ChromeFindModel::count_label` (without it an invalid pattern reads as "0 matches"). Four parity
+  gaps filed — BUG-419 (no colour for that `ERR`), BUG-420 (`#printOverlay` prints nothing and binds
+  no print setting), BUG-421 (`#view-settings` writes no setting — `ToggleSwitch` has been a no-op
+  since CC-9), BUG-422 (no actions on history/bookmark entries) — with the now-readerless state kept
+  under `#[allow(dead_code, reason = "BUG-NNN: …")]`.
+
 ## Deferred
 
 - **`<template>` markup + `templates::IDS` population**: the frozen design reference has none —

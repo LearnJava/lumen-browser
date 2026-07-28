@@ -28,9 +28,6 @@ use std::cmp::Reverse;
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
-/// Panel width in CSS px.
-pub const PANEL_W: f32 = 480.0;
-
 /// Total panel height in CSS px.
 pub const PANEL_H: f32 = 500.0;
 
@@ -48,18 +45,6 @@ const ROW_H: f32 = 44.0;
 
 /// Footer height (clear-all button).
 const FOOTER_H: f32 = 36.0;
-
-/// Height of the "history not saved" banner (DS-16, `.hist-banner` in the
-/// design reference), shown between the search box and the body while
-/// Anonymous is the active profile. `0.0` when hidden — the body area grows
-/// to fill the reclaimed space (see [`hit_test`]).
-const BANNER_H: f32 = 26.0;
-
-/// Outer padding.
-const PAD: f32 = 10.0;
-
-/// Width of the "×" delete zone per row.
-const DELETE_W: f32 = 26.0;
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -189,89 +174,6 @@ fn row_height(row: &HistoryRow) -> f32 {
 }
 
 // ── Hit testing ───────────────────────────────────────────────────────────────
-
-/// Result of a click inside the history panel.
-#[derive(Debug, Clone, PartialEq)]
-pub enum HistoryHit {
-    /// Click on the header "×" close button.
-    Close,
-    /// Click on the search box area.
-    FocusSearch,
-    /// Click on the "Очистить всё" button.
-    ClearAll,
-    /// Click on the "×" delete button of an entry (entry id).
-    Delete(i64),
-    /// Click on an entry row body → navigate to URL.
-    Navigate(String),
-    /// Click lands inside the panel but no specific action.
-    Inside,
-    /// Click lands outside the panel.
-    Outside,
-}
-
-/// Classify a click at `(mx, my)` in window-space CSS px.
-///
-/// `(px, py)` is the panel's top-left corner. `is_anonymous` (DS-16) reports
-/// whether the banner is currently drawn above the body, so row coordinates
-/// stay in sync with the banner-aware geometry above.
-pub fn hit_test(
-    panel: &HistoryPanel,
-    mx: f32,
-    my: f32,
-    px: f32,
-    py: f32,
-    is_anonymous: bool,
-) -> HistoryHit {
-    if mx < px || mx > px + PANEL_W || my < py || my > py + PANEL_H {
-        return HistoryHit::Outside;
-    }
-    // Header.
-    if my < py + HEADER_H {
-        if mx >= px + PANEL_W - 28.0 {
-            return HistoryHit::Close;
-        }
-        return HistoryHit::Inside;
-    }
-    // Search box.
-    if my < py + HEADER_H + SEARCH_H {
-        return HistoryHit::FocusSearch;
-    }
-    let banner_h = if is_anonymous { BANNER_H } else { 0.0 };
-    // Banner (DS-16).
-    if my < py + HEADER_H + SEARCH_H + banner_h {
-        return HistoryHit::Inside;
-    }
-    // Footer.
-    let footer_y = py + PANEL_H - FOOTER_H;
-    if my >= footer_y {
-        let btn_x = px + PANEL_W - PAD - 90.0;
-        if mx >= btn_x {
-            return HistoryHit::ClearAll;
-        }
-        return HistoryHit::Inside;
-    }
-    // Body rows.
-    let body_top = py + HEADER_H + SEARCH_H + banner_h;
-    let local_y = my - body_top + panel.scroll_y;
-    let mut cursor = 0.0_f32;
-    for row in &panel.rows {
-        let h = row_height(row);
-        if local_y < cursor + h {
-            return match row {
-                HistoryRow::Group(_) => HistoryHit::Inside,
-                HistoryRow::Entry(item) => {
-                    if mx >= px + PANEL_W - DELETE_W - PAD {
-                        HistoryHit::Delete(item.id)
-                    } else {
-                        HistoryHit::Navigate(item.url.clone())
-                    }
-                }
-            };
-        }
-        cursor += h;
-    }
-    HistoryHit::Inside
-}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -412,67 +314,7 @@ mod tests {
         assert_eq!(panel.scroll_y, 0.0);
     }
 
-    #[test]
-    fn hit_test_outside() {
-        let panel = HistoryPanel::new();
-        let hit = hit_test(&panel, 0.0, 0.0, 200.0, 100.0, false);
-        assert_eq!(hit, HistoryHit::Outside);
-    }
-
-    #[test]
-    fn hit_test_close_button() {
-        let panel = HistoryPanel::new();
-        let px = 100.0_f32;
-        let py = 50.0_f32;
-        // Close button is at px + PANEL_W - 28.0 to px + PANEL_W, within header height.
-        let hit = hit_test(&panel, px + PANEL_W - 10.0, py + 5.0, px, py, false);
-        assert_eq!(hit, HistoryHit::Close);
-    }
-
-    #[test]
-    fn hit_test_search_box() {
-        let panel = HistoryPanel::new();
-        let px = 100.0_f32;
-        let py = 50.0_f32;
-        let hit = hit_test(&panel, px + 50.0, py + HEADER_H + 5.0, px, py, false);
-        assert_eq!(hit, HistoryHit::FocusSearch);
-    }
-
-    #[test]
-    fn hit_test_clear_all() {
-        let panel = HistoryPanel::new();
-        let px = 100.0_f32;
-        let py = 50.0_f32;
-        // Clear button is in footer, right side.
-        let hit = hit_test(&panel, px + PANEL_W - PAD - 5.0, py + PANEL_H - 15.0, px, py, false);
-        assert_eq!(hit, HistoryHit::ClearAll);
-    }
-
     // ── DS-16: Anonymous banner ──────────────────────────────────────────────
-
-    #[test]
-    fn hit_test_banner_is_inside_not_search_or_body() {
-        let panel = HistoryPanel::new();
-        let px = 100.0_f32;
-        let py = 50.0_f32;
-        // Just below the search box, inside the banner band — only present
-        // when `is_anonymous` is true.
-        let by = py + HEADER_H + SEARCH_H + 2.0;
-        assert_eq!(hit_test(&panel, px + 50.0, by, px, py, true), HistoryHit::Inside);
-    }
-
-    #[test]
-    fn hit_test_entry_row_respects_banner_offset() {
-        let mut panel = HistoryPanel::new();
-        panel.set_items(vec![make_item(1, "https://a.com", "A", 86400 * 100)]);
-        let px = 100.0_f32;
-        let py = 50.0_f32;
-        // Rows: Group(GROUP_H), then Entry(ROW_H). With the banner shown the
-        // entry row starts BANNER_H further down than without it.
-        let entry_y = py + HEADER_H + SEARCH_H + BANNER_H + GROUP_H + 5.0;
-        let hit = hit_test(&panel, px + 50.0, entry_y, px, py, true);
-        assert_eq!(hit, HistoryHit::Navigate("https://a.com".to_owned()));
-    }
 
     #[test]
     fn format_day_label_today() {
