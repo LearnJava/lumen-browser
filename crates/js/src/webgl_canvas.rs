@@ -216,7 +216,11 @@ pub use webgl::{ARRAY_BUFFER, COLOR_BUFFER_BIT, FRAGMENT_SHADER, TRIANGLES, VERT
 
 /// JavaScript shim: builds a functional WebGL context object that forwards to
 /// the `_lumen_webgl_*` natives, and intercepts
-/// `document.createElement('canvas')` to attach `getContext`.
+/// `document.createElement('canvas')` to extend `getContext` with the WebGL
+/// context types. The interception must *delegate* every other `contextType`
+/// to the accessor the element factory (`dom.rs::WEB_API_SHIM`) already
+/// installed — this shim runs last, so anything it overwrites outright is gone
+/// for good (BUG-348).
 const WEBGL_SHIM: &str = r#"(function() {
   var _vendor   = (typeof _LUMEN_GPU_VENDOR   !== 'undefined') ? _LUMEN_GPU_VENDOR   : 'WebKit';
   var _renderer = (typeof _LUMEN_GPU_RENDERER !== 'undefined') ? _LUMEN_GPU_RENDERER : 'Generic GPU';
@@ -461,6 +465,12 @@ const WEBGL_SHIM: &str = r#"(function() {
 
   function _addCanvasStubs(el) {
     var _ctx = null;
+    // BUG-348: the element factory (`dom.rs::WEB_API_SHIM`) has already installed the
+    // working '2d'/'bitmaprenderer'/'webgpu' accessor on `el`; this wrapper adds the
+    // WebGL context types ON TOP of it. Returning null for everything else used to
+    // shadow that accessor permanently — Canvas 2D was dead for every canvas built
+    // with `document.createElement`.
+    var _origGetContext = (typeof el.getContext === 'function') ? el.getContext : null;
     el.getContext = function(contextType) {
       var t = ('' + (contextType || '')).toLowerCase();
       if (t === 'webgl' || t === 'webgl2' || t === 'experimental-webgl') {
@@ -474,11 +484,21 @@ const WEBGL_SHIM: &str = r#"(function() {
         }
         return _ctx;
       }
-      return null;
+      // HTML LS §4.12.4: a canvas carries at most one context. Once WebGL has been
+      // handed out for this element, every other type answers null instead of
+      // falling through to the factory's '2d'/'bitmaprenderer'/'webgpu' branches.
+      if (_ctx) return null;
+      return _origGetContext ? _origGetContext.apply(this || el, arguments) : null;
     };
-    // Blank data URL — prevents canvas pixel-hash fingerprinting.
-    el.toDataURL = function() { return 'data:,'; };
-    el.toBlob = function(cb) { if (typeof cb === 'function') cb(null); };
+    // Blank data URL — prevents canvas pixel-hash fingerprinting (ADR-007). Installed
+    // only as a fallback: the element factory's own toDataURL already returns a blank
+    // 1×1 PNG, a valid image where 'data:,' is not, and must not be clobbered either.
+    if (typeof el.toDataURL !== 'function') {
+      el.toDataURL = function() { return 'data:,'; };
+    }
+    if (typeof el.toBlob !== 'function') {
+      el.toBlob = function(cb) { if (typeof cb === 'function') cb(null); };
+    }
   }
 
   if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
@@ -746,12 +766,21 @@ mod tests {
         }
     }
 
+    /// Stand-in for `dom.rs::WEB_API_SHIM`'s element factory: the element it hands
+    /// back already carries the non-WebGL `getContext` branches and the blank-PNG
+    /// `toDataURL`, which is exactly what [`WEBGL_SHIM`]'s `createElement` wrapper
+    /// must preserve (BUG-348).
     fn install_minimal_dom(ctx: &rquickjs::Ctx) {
         ctx.eval::<(), _>(
             r#"var document = {
   createElement: function(tag) {
     return { _tag: tag, width: 8, height: 8,
-             getAttribute: function(){ return ''; }, setAttribute: function(){} };
+             getAttribute: function(){ return ''; }, setAttribute: function(){},
+             getContext: function(t) {
+               return (('' + t).toLowerCase() === '2d') ? { __base_2d: true, canvas: this } : null;
+             },
+             toDataURL: function(){ return 'data:image/png;base64,BASE'; },
+             toBlob: function(cb){ if (typeof cb === 'function') cb('base-blob'); } };
   }
 };"#,
         )
@@ -775,16 +804,73 @@ gl !== null && typeof gl.drawArrays === 'function' && typeof gl.createBuffer ===
         });
     }
 
+    /// BUG-348 regression: the WebGL wrapper must hand every non-WebGL
+    /// `contextType` back to the accessor installed by the element factory
+    /// (`this` preserved — `dom.rs`'s '2d' branch builds the context from it).
+    /// It used to return `null` for all of them, killing Canvas 2D outright.
     #[test]
-    fn get_context_2d_returns_null() {
+    fn get_context_2d_delegates_to_element_factory() {
         let (_rt, ctx) = make_ctx();
         ctx.with(|ctx| {
             install_minimal_dom(&ctx);
             install_webgl_canvas(&ctx, &fp()).unwrap();
             let ok: bool = ctx
-                .eval("document.createElement('canvas').getContext('2d') === null")
+                .eval(
+                    r#"var c = document.createElement('canvas');
+var ctx2d = c.getContext('2d');
+ctx2d !== null && ctx2d.__base_2d === true && ctx2d.canvas === c"#,
+                )
                 .unwrap();
             assert!(ok);
+        });
+    }
+
+    /// One context per canvas (HTML LS §4.12.4): delegation to the element factory
+    /// stops once this canvas has been given a WebGL context.
+    #[test]
+    fn get_context_2d_is_null_after_webgl() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            install_webgl_canvas(&ctx, &fp()).unwrap();
+            let ok: bool = ctx
+                .eval(
+                    r#"var c = document.createElement('canvas');
+c.getContext('webgl');
+c.getContext('2d') === null"#,
+                )
+                .unwrap();
+            assert!(ok);
+        });
+    }
+
+    /// A `contextType` neither side handles still returns `null` (HTML LS §4.12.4).
+    #[test]
+    fn get_context_unknown_type_returns_null() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            install_webgl_canvas(&ctx, &fp()).unwrap();
+            let ok: bool = ctx
+                .eval("document.createElement('canvas').getContext('bogus') === null")
+                .unwrap();
+            assert!(ok);
+        });
+    }
+
+    /// BUG-348 (same clobber, second victim): the element factory's `toDataURL`
+    /// already returns a blank 1×1 PNG; the WebGL wrapper must not replace it
+    /// with the non-image `'data:,'`.
+    #[test]
+    fn canvas_privacy_stubs_do_not_clobber_element_factory() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            install_webgl_canvas(&ctx, &fp()).unwrap();
+            let url: String = ctx
+                .eval("document.createElement('canvas').toDataURL()")
+                .unwrap();
+            assert_eq!(url, "data:image/png;base64,BASE");
         });
     }
 
@@ -821,11 +907,25 @@ gl.getParameter(ext.UNMASKED_VENDOR_WEBGL)"#,
         });
     }
 
+    /// Privacy fallback (ADR-007): when the element factory offers no `toDataURL`
+    /// of its own, this shim's blank stub is what a page sees — never real pixels.
+    /// (With the production factory present its blank 1×1 PNG wins instead — see
+    /// `canvas_privacy_stubs_do_not_clobber_element_factory`.)
     #[test]
-    fn to_data_url_is_blank() {
+    fn to_data_url_is_blank_without_element_factory_stub() {
         let (_rt, ctx) = make_ctx();
         ctx.with(|ctx| {
             install_minimal_dom(&ctx);
+            ctx.eval::<(), _>(
+                r#"var _base = document.createElement;
+document.createElement = function(tag) {
+  var el = _base(tag);
+  delete el.toDataURL;
+  delete el.toBlob;
+  return el;
+};"#,
+            )
+            .unwrap();
             install_webgl_canvas(&ctx, &fp()).unwrap();
             let url: String = ctx
                 .eval("document.createElement('canvas').toDataURL()")
@@ -910,16 +1010,19 @@ gl.getAttribLocation(p, 'a_pos')"#,
         });
     }
 
+    /// The WebGL stubs are attached to `<canvas>` only. (The element factory puts a
+    /// `getContext` on *every* element — harmless, it answers `null` off-canvas — so
+    /// the discriminator is the WebGL context, not the presence of the method.)
     #[test]
-    fn non_canvas_has_no_get_context() {
+    fn non_canvas_gets_no_webgl_stub() {
         let (_rt, ctx) = make_ctx();
         ctx.with(|ctx| {
             install_minimal_dom(&ctx);
             install_webgl_canvas(&ctx, &fp()).unwrap();
-            let has: bool = ctx
-                .eval("typeof document.createElement('div').getContext === 'function'")
+            let stubbed: bool = ctx
+                .eval("document.createElement('div').getContext('webgl') !== null")
                 .unwrap();
-            assert!(!has);
+            assert!(!stubbed);
         });
     }
 
