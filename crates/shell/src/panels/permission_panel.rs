@@ -1,11 +1,16 @@
 //! Per-site permission popover (7C.2): floating panel anchored below the tab
 //! bar on the left side of the window (where a lock icon would sit).
 //!
-//! Shows the allow/deny/ask state for four browser permissions —
-//! Camera, Microphone, Notifications, Clipboard — for the current page origin.
-//! Each row has a toggle button that cycles the state.  The panel does not
-//! persist state across sessions (in-memory only); a `StorageBackend` hook-up
-//! is a future task.
+//! Models the allow/deny/ask state for four browser permissions — Camera,
+//! Microphone, Notifications, Clipboard — for the current page origin. State is
+//! in-memory only (no cross-session persistence); a `StorageBackend` hook-up is
+//! a future task.
+//!
+//! The legacy display-list renderer was removed in CC-15-4 — under the engine
+//! chrome the rows live in `#permPopover`, which the frozen design gives only
+//! two of (Camera, Microphone), leaving Notifications/Clipboard unreachable
+//! from the UI: `BUG-411`. `hit_test` is kept (still called ungated, a
+//! `BUG-404` site).
 //!
 //! Toggled with `Ctrl+Shift+P`.
 

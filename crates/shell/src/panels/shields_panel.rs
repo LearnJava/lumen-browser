@@ -1,9 +1,12 @@
 //! Shields toolbar widget (7C.4): floating panel anchored below the tab bar at
 //! the top-right corner of the window.
 //!
-//! The panel shows a shield icon, the current domain, whether shields are
-//! enabled for that domain, and the number of blocked requests for the
-//! current page.  Clicking the shield toggles protection on/off.
+//! The legacy display-list renderer was removed in CC-15-4 — under the engine
+//! chrome (default since CC-14) the popover is `#permPopover`, which binds only
+//! the blocked-request counter. The domain readout and the shields on/off
+//! indicator this module still models are therefore not shown anywhere:
+//! `BUG-411`. `hit_test` is deliberately kept (still called ungated, itself a
+//! `BUG-404` site) — see those two bug files before deleting anything here.
 //!
 //! Toggled with `Ctrl+Shift+S`.
 //!
