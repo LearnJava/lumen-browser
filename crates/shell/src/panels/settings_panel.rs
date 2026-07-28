@@ -32,10 +32,10 @@ use lumen_storage::BrowserSettingsSnapshot;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingInput {
     /// The homepage URL field.
-    #[allow(dead_code, reason = "BUG-414: элементы управления настройками ещё не перенесены в движковый #view-settings")]
+    #[allow(dead_code, reason = "BUG-421: элементы управления настройками ещё не перенесены в движковый #view-settings")]
     Homepage,
     /// The download directory path field.
-    #[allow(dead_code, reason = "BUG-414: элементы управления настройками ещё не перенесены в движковый #view-settings")]
+    #[allow(dead_code, reason = "BUG-421: элементы управления настройками ещё не перенесены в движковый #view-settings")]
     DownloadPath,
 }
 

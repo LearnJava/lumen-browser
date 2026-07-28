@@ -1,4 +1,4 @@
-# BUG-415 — `#view-history`/`#view-bookmarks` не поддерживают ни одного действия над записями
+# BUG-422 — `#view-history`/`#view-bookmarks` не поддерживают ни одного действия над записями
 
 **Статус:** OPEN
 **Компонент:** chrome (`assets/chrome/chrome.html` `#view-history`,
@@ -51,7 +51,7 @@
 
 * [BUG-408](BUG-408-OPEN.md) — панель архива вкладок, тот же класс (доступ к
   функции потерян полностью).
-* [BUG-413](BUG-413-OPEN.md), [BUG-414](BUG-414-OPEN.md) — соседние находки того
+* [BUG-420](BUG-420-OPEN.md), [BUG-421](BUG-421-OPEN.md) — соседние находки того
   же среза: печать и настройки.
 * CC-9 (`docs/tasks/p1-css-chrome.md`) — срез, где `#view-history`/
   `#view-bookmarks` получили отображение списков, но не действия над ними.

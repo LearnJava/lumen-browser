@@ -1,4 +1,4 @@
-# BUG-413 — движковый `#printOverlay` ничего не печатает и не связан с настройками печати
+# BUG-420 — движковый `#printOverlay` ничего не печатает и не связан с настройками печати
 
 **Статус:** OPEN
 **Компонент:** chrome (`assets/chrome/chrome.html` `#printOverlay`,
@@ -25,7 +25,7 @@ print_backgrounds}` и метод `margin_px()` остались без един
 `PrintField::{PageRange, OutputPath}` — без конструктора, из-за чего мёртв и
 клавиатурный путь редактирования полей (`handle_print_key` → `push_char`/
 `pop_char` при `editing_field == None` — no-op). Всё перечисленное помечено
-`#[allow(dead_code, reason = "BUG-413: …")]`: данные и дефолты сохранены для
+`#[allow(dead_code, reason = "BUG-420: …")]`: данные и дефолты сохранены для
 переноса, удалять их до реализации нельзя.
 
 Регрессия флипа CC-14 (не CC-15-6): легаси-панель печати перестала рисоваться
@@ -49,6 +49,6 @@ print_backgrounds}` и метод `margin_px()` остались без един
 * [BUG-408](BUG-408-OPEN.md), [BUG-409](BUG-409-OPEN.md), [BUG-410](BUG-410-OPEN.md),
   [BUG-411](BUG-411-OPEN.md) — тот же класс: функциональность легаси-хрома, не
   перенесённая в движковый, вскрытая срезами CC-15-3/4.
-* [BUG-414](BUG-414-OPEN.md) — тот же пробел в `#view-settings`.
+* [BUG-421](BUG-421-OPEN.md) — тот же пробел в `#view-settings`.
 * CC-10 (`docs/tasks/p1-css-chrome.md`) — срез, где `#printOverlay` получил
   только флаг открытости.

@@ -7,7 +7,7 @@
 //!
 //! The settings below (paper size, orientation, margins, scale, page range,
 //! colour mode, backgrounds, output path) are **not** wired to the engine
-//! dialog yet — see BUG-413.
+//! dialog yet — see BUG-420.
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -17,10 +17,10 @@ pub enum PaperSize {
     /// ISO A4 (210 × 297 mm).
     A4,
     /// US Letter (8.5 × 11 in).
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     Letter,
     /// US Legal (8.5 × 14 in).
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     Legal,
 }
 
@@ -30,7 +30,7 @@ pub enum Orientation {
     /// Taller than wide.
     Portrait,
     /// Wider than tall.
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     Landscape,
 }
 
@@ -40,10 +40,10 @@ pub enum MarginPreset {
     /// Standard ~19 mm margins.
     Normal,
     /// Small ~6 mm margins.
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     Narrow,
     /// Large ~25 mm margins.
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     Wide,
 }
 
@@ -53,7 +53,7 @@ pub enum ColorMode {
     /// Full-colour output.
     Color,
     /// Greyscale output.
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     Grayscale,
 }
 
@@ -61,10 +61,10 @@ pub enum ColorMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrintField {
     /// The page-range text field (e.g. `"all"` or `"1-3,5"`).
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     PageRange,
     /// The output-file path text field (e.g. `"output.pdf"`).
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     OutputPath,
 }
 
@@ -79,26 +79,26 @@ pub struct PrintPanel {
     /// Whether the panel is currently visible.
     pub visible: bool,
     /// Selected paper size.
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub paper: PaperSize,
     /// Selected page orientation.
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub orientation: Orientation,
     /// Selected margin preset.
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub margins: MarginPreset,
     /// Document zoom level in percent (50–200%, W-2b new field).
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub scale: i32,
     /// Page range string: `"all"` or an explicit range such as `"1-3,5"`.
     pub page_range: String,
     /// Output colour mode.
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub color_mode: ColorMode,
     /// Whether CSS background graphics are printed (CC-8). When `false`, the
     /// print pipeline strips background fills / images / gradients before
     /// rasterising each page.
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub print_backgrounds: bool,
     /// Destination file path (relative or absolute).
     pub output_path: String,
@@ -158,7 +158,7 @@ impl PrintPanel {
     /// Resolve margin values (top/bottom, left/right) in CSS px at 96 DPI.
     ///
     /// Used by the shell to build [`lumen_layout::PaginationContext`].
-    #[allow(dead_code, reason = "BUG-413: настройки печати ещё не перенесены в движковый #printOverlay")]
+    #[allow(dead_code, reason = "BUG-420: настройки печати ещё не перенесены в движковый #printOverlay")]
     pub fn margin_px(&self) -> (f32, f32) {
         match self.margins {
             MarginPreset::Normal => (48.0, 48.0),

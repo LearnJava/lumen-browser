@@ -1,4 +1,4 @@
-# BUG-412 — `#findCount` не выделяет невалидный regex-паттерн цветом
+# BUG-419 — `#findCount` не выделяет невалидный regex-паттерн цветом
 
 **Статус:** OPEN
 **Компонент:** chrome (`assets/chrome/chrome.html` `#findCount`/`.find-count`,

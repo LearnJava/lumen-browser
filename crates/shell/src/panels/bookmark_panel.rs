@@ -33,7 +33,7 @@
 //!
 //! **Drag-and-drop re-file** and the folder/delete click targets were removed
 //! in CC-15-6 together with the legacy overlay's mouse handling — the engine
-//! chrome's `#view-bookmarks` wires none of them yet (see BUG-415). What is
+//! chrome's `#view-bookmarks` wires none of them yet (see BUG-422). What is
 //! left here is state the chrome model reads: the entry list, folder set,
 //! active filter and search query.
 

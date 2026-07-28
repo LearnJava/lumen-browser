@@ -387,9 +387,9 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   `history_panel_anchor`/`finish_bookmark_drop` plus the bookmark drag machinery. One behaviour was
   ported rather than dropped: the legacy find bar's `ERR` marker for an invalid regex now goes into
   `ChromeFindModel::count_label` (without it an invalid pattern reads as "0 matches"). Four parity
-  gaps filed — BUG-412 (no colour for that `ERR`), BUG-413 (`#printOverlay` prints nothing and binds
-  no print setting), BUG-414 (`#view-settings` writes no setting — `ToggleSwitch` has been a no-op
-  since CC-9), BUG-415 (no actions on history/bookmark entries) — with the now-readerless state kept
+  gaps filed — BUG-419 (no colour for that `ERR`), BUG-420 (`#printOverlay` prints nothing and binds
+  no print setting), BUG-421 (`#view-settings` writes no setting — `ToggleSwitch` has been a no-op
+  since CC-9), BUG-422 (no actions on history/bookmark entries) — with the now-readerless state kept
   under `#[allow(dead_code, reason = "BUG-NNN: …")]`.
 
 ## Deferred

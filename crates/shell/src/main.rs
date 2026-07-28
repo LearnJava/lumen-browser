@@ -9170,7 +9170,7 @@ impl Lumen {
             // bar (`find::append_bar`) — without it an invalid regex is
             // indistinguishable from "no matches" (`0/0`). Text only: the
             // legacy bar also painted it red (`BAR_ERR`), the asset has no
-            // error class for `#findCount` (see BUG-412).
+            // error class for `#findCount` (see BUG-419).
             count_label: if self.find.is_regex_mode()
                 && !self.find.query().is_empty()
                 && !find::is_valid_regex_pattern(self.find.query())
@@ -14920,7 +14920,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // CC-15-6: the bookmark drag-drop release handler lived here.
                     // Its only drag source was the legacy overlay's press
                     // hit-test, removed with the rollback flag — the engine
-                    // `#view-bookmarks` has no drag source yet (BUG-415).
+                    // `#view-bookmarks` has no drag source yet (BUG-422).
                     // End a PiP window drag (task #21).
                     if self.pip.dragging() {
                         self.pip.end_drag();

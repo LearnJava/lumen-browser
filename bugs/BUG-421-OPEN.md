@@ -1,4 +1,4 @@
-# BUG-414 — движковый `#view-settings` не изменяет ни одной настройки
+# BUG-421 — движковый `#view-settings` не изменяет ни одной настройки
 
 **Статус:** OPEN
 **Компонент:** chrome (`assets/chrome/chrome.html` `#view-settings`,
@@ -33,7 +33,7 @@
 * `panels::themes::ThemeChoice::to_settings_str` и `AccentPreset::{ALL, key}`
   остались без читателей (были нужны только сериализации выбора темы).
 
-Всё перечисленное помечено `#[allow(dead_code, reason = "BUG-414: …")]` —
+Всё перечисленное помечено `#[allow(dead_code, reason = "BUG-421: …")]` —
 удалять до реализации нельзя, это и есть точки подключения.
 
 Регрессия флипа CC-14 (не CC-15-6): легаси-панель настроек перестала
@@ -54,7 +54,7 @@
 
 ## Связанные
 
-* [BUG-413](BUG-413-OPEN.md) — тот же пробел в `#printOverlay`.
+* [BUG-420](BUG-420-OPEN.md) — тот же пробел в `#printOverlay`.
 * [BUG-411](BUG-411-OPEN.md) — тот же класс в `#permPopover` (недостижимые
   строки разрешений).
 * CC-9/CC-10 (`docs/tasks/p1-css-chrome.md`) — срезы, где `#view-settings`

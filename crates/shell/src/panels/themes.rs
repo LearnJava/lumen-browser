@@ -31,7 +31,7 @@ pub enum AccentPreset {
 
 impl AccentPreset {
     /// All six presets in display order.
-    #[allow(dead_code, reason = "BUG-414: выбор темы/акцента ещё не перенесён в движковый #view-settings")]
+    #[allow(dead_code, reason = "BUG-421: выбор темы/акцента ещё не перенесён в движковый #view-settings")]
     pub const ALL: [Self; 6] = [
         Self::Blue,
         Self::Purple,
@@ -54,7 +54,7 @@ impl AccentPreset {
     }
 
     /// Short lowercase key, used in settings serialisation.
-    #[allow(dead_code, reason = "BUG-414: выбор темы/акцента ещё не перенесён в движковый #view-settings")]
+    #[allow(dead_code, reason = "BUG-421: выбор темы/акцента ещё не перенесён в движковый #view-settings")]
     pub fn key(self) -> &'static str {
         match self {
             Self::Blue   => "blue",
@@ -136,7 +136,7 @@ impl ShellTheme {
     }
 
     /// Serialise to the compact settings string.
-    #[allow(dead_code, reason = "BUG-414: выбор темы/акцента ещё не перенесён в движковый #view-settings")]
+    #[allow(dead_code, reason = "BUG-421: выбор темы/акцента ещё не перенесён в движковый #view-settings")]
     pub fn to_settings_str(self) -> String {
         let base = match self.base {
             ThemeBase::Dark   => "dark",
