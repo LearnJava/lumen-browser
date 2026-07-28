@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 100,
+  "open": 101,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 372,
+ "total_bugs": 373,
  "phases": [
   {
    "id": "P0",
@@ -2408,9 +2408,12 @@
       {
        "id": "WPT-VENDOR-hsts",
        "title": "WPT: вендорить + прогнать категорию `hsts`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/hsts/`, 4 файла: `WEB_FEATURES.yml`, `third-party-subframe-hsts-upgrade.tentative.sub.html`, `resources/hsts.py`+`resources/is-upgraded.html`, `LICENSE-WPT.md` — `META.yml` у категории нет), скоуп ⬜ (кандидат). `run_report.py --all --root hsts --recursive` — **~15 с, 0/1 harness OK**: единственный тест `.tentative.` (партиционирование HSTS по top-level site против bounce-tracking, не финализировано в спеке) зависит от невендоренного `/common/get-host-info.sub.js` → TIMEOUT инфраструктурного класса, не находка. По правилу «пробуй даже без сигнала» — прямой Rust-греп продакшн call sites (`with_hsts\\b`/`HstsStore::open\\b`) дал BUG-402 (новый): HSTS (RFC 6797) полностью реализован и юнит-протестирован в `lumen-network`/`lumen-storage`, но `HttpClient::with_hsts(...)` не вызывается ни в одном продакшн-пути (`shell/src/config.rs::apply_http`, driver-фабрики) — грепом только `#[cfg(test)]`; реальный HTTP→HTTPS upgrade (в т.ч. Preload List) в браузере никогда не срабатывает; `CAPABILITIES.md` ошибочно помечал HSTS ✅, исправлено на 🟡",
+       "bugs": [
+        "BUG-402"
+       ]
       },
       {
        "id": "WPT-VENDOR-html",
@@ -6693,6 +6696,13 @@
    "status": "open",
    "title": "`performance` полностью отсутствует в Worker global scope — `worker_global_shim` не заводит ни `performance.now()`, ни `timeOrigin`; любой воркер-скрипт, читающ…",
    "component": "js (`crates/js/src/worker.rs:439-566` — `worker_global_shim`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-402": {
+   "status": "open",
+   "title": "HSTS (RFC 6797) полностью реализован и юнит-протестирован в `lumen-network`/`lumen-storage`, но `HttpClient::with_hsts(...)` не вызывается ни в одном продакшн-п…",
+   "component": "network/shell (`crates/network/src/lib.rs::with_hsts`, `crates/shell/src/config.rs::apply_http`)",
    "date": null,
    "debtor": false
   }
