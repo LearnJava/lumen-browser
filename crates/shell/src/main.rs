@@ -26401,40 +26401,45 @@ mod tests {
         let styles = counters.styles();
         let clean = counters.clean_subtrees();
 
+        // BUG-341 S23: the replays reserve capacity because production now does
+        // (`CounterMap::with_capacity`). A replay that still grew from zero
+        // would keep reporting the rehashing this slice removed.
         let t = std::time::Instant::now();
         let mut styles_replay: HashMap<lumen_dom::NodeId, std::sync::Arc<lumen_layout::style::ComputedStyle>> =
-            HashMap::new();
+            HashMap::with_capacity(styles.len());
         for (&id, style) in styles {
             styles_replay.insert(id, std::sync::Arc::clone(style));
         }
         let styles_ns = t.elapsed().as_nanos() as u64;
 
-        // One empty snapshot per element: `chrome.html` declares no counters, so
-        // `CounterCtx::stacks` stays empty the whole walk and every snapshot is
-        // an empty-map clone. That is the production shape, not a simplification.
+        // BUG-341 S23: only nodes with a counter actually in scope store a
+        // snapshot, so this replays the map's real size — zero on `chrome.html`,
+        // which declares no counters. Before S23 it was one empty-map clone per
+        // element, and reading the count off `styles` hid exactly that.
+        let snapshots = counters.counter_snapshot_count();
         let t = std::time::Instant::now();
         let mut nodes_replay: HashMap<lumen_dom::NodeId, lumen_layout::counters::CounterSnapshot> =
             HashMap::new();
         let stacks: lumen_layout::counters::CounterSnapshot = HashMap::new();
-        for &id in styles.keys() {
+        for &id in styles.keys().take(snapshots) {
             nodes_replay.insert(id, stacks.clone());
         }
         let nodes_ns = t.elapsed().as_nanos() as u64;
 
         let t = std::time::Instant::now();
         let mut clean_replay: std::collections::HashSet<lumen_dom::NodeId> =
-            std::collections::HashSet::new();
+            std::collections::HashSet::with_capacity(styles.len());
         for &id in clean {
             clean_replay.insert(id);
         }
         let clean_ns = t.elapsed().as_nanos() as u64;
 
         eprintln!(
-            "[s20-census]   CounterMap: styles={} ({:.3}ms replay) nodes≈{} ({:.3}ms replay) \
+            "[s20-census]   CounterMap: styles={} ({:.3}ms replay) snapshots={} ({:.3}ms replay) \
              clean_subtrees={} ({:.3}ms replay) — total replay {:.3}ms",
             styles_replay.len(),
             styles_ns as f64 / 1e6,
-            nodes_replay.len(),
+            snapshots,
             nodes_ns as f64 / 1e6,
             clean_replay.len(),
             clean_ns as f64 / 1e6,
