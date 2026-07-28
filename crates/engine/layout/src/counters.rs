@@ -96,6 +96,21 @@ pub struct CounterMap {
 }
 
 impl CounterMap {
+    /// An empty map sized for a document of `elements` styled elements.
+    ///
+    /// BUG-341 S23: `styles` and `clean_subtrees` take one entry per element
+    /// and are built from scratch every pass, so a default-capacity map rehashes
+    /// its way up to ~830 entries — moving roughly as many entries again as it
+    /// finally holds. The two counter-related maps are left at zero: a document
+    /// without counters or quotes never inserts into them at all.
+    fn with_capacity(elements: usize) -> Self {
+        Self {
+            styles: HashMap::with_capacity(elements),
+            clean_subtrees: HashSet::with_capacity(elements),
+            ..Self::default()
+        }
+    }
+
     /// Returns the counter snapshot for `id`, if any.
     pub fn counters(&self, id: NodeId) -> Option<&CounterSnapshot> {
         self.nodes.get(&id)
@@ -132,6 +147,18 @@ impl CounterMap {
     /// `incr == full` differential tests compare two such maps directly.
     pub fn styles(&self) -> &HashMap<NodeId, Arc<ComputedStyle>> {
         &self.styles
+    }
+
+    /// How many per-node counter snapshots this map actually stores
+    /// (BUG-341 S23 census hook).
+    ///
+    /// Not derivable from [`Self::styles`]'s size any more: a node whose
+    /// counter stacks are empty stores nothing, so on a document with no
+    /// counters this is zero while `styles` holds one entry per element. A
+    /// census that assumes the two match would keep reporting the cost this
+    /// slice removed.
+    pub fn counter_snapshot_count(&self) -> usize {
+        self.nodes.len()
     }
 
     /// Returns the whole-subtree-unchanged node set (BUG-341 S4) — see the
@@ -232,7 +259,7 @@ pub fn precompute_counters(
         quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
         ..CounterCtx::default()
     };
-    let mut map = CounterMap::default();
+    let mut map = CounterMap::with_capacity(doc.node_count());
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false);
     map
 }
@@ -365,7 +392,10 @@ pub fn incremental_precompute_counters(
         quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
         ..CounterCtx::default()
     };
-    let mut map = CounterMap::default();
+    // BUG-341 S23: the previous pass's cache is the best available estimate of
+    // how many entries this one will hold — closer than `node_count`, which
+    // counts text and comment nodes too.
+    let mut map = CounterMap::with_capacity(delta.prev_styles.len());
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(delta), false);
     map
 }
@@ -540,7 +570,18 @@ fn walk(
     ctx.apply_increment(&style.counter_increment);
     ctx.apply_set(&style.counter_set);
 
-    map.nodes.insert(id, ctx.snapshot());
+    // BUG-341 S23: an empty snapshot is indistinguishable from no snapshot at
+    // all — both consumers reach it through `snap.and_then(|s| s.get(name))`
+    // (`content_to_inline_segments`, `content_items_to_string`) — so a document
+    // with no counters in scope need not carry one entry per element. That is
+    // every document that never uses `counter-reset`/`-increment`/`-set`,
+    // including Lumen's own chrome: 828 inserts of an empty `HashMap` per
+    // cycle. Exact rather than a sheet-wide predicate: the check is on the live
+    // counter stacks, so a document that uses counters in one subtree still
+    // skips the entries outside it.
+    if !ctx.stacks.is_empty() {
+        map.nodes.insert(id, ctx.snapshot());
+    }
 
     // CSS Generated Content L3 §3.2 — ::before quotes are in document order
     // before the element's children; advance and snapshot the quote depth.
@@ -1456,6 +1497,64 @@ mod tests {
         // .r5 { counter-set: c 42 } → 42
         ctx.apply_set(&[("c".into(), 42)]);
         assert_eq!(top(&ctx), 42, "r5: set 42");
+    }
+
+    /// BUG-341 S23 gate — **by counter, on both arms**.
+    ///
+    /// `walk` used to store one snapshot per element unconditionally; in a
+    /// document with no counters in scope every one of them was empty, and an
+    /// empty snapshot is indistinguishable from an absent one at both consumers.
+    /// The assertion is on the *number of stored snapshots*, which no rendering
+    /// diff can see — an empty document renders identically either way.
+    ///
+    /// The second arm is what makes the first mean anything: storing nothing at
+    /// all would pass arm 1 and silently render every `counter()` as `0`.
+    #[test]
+    fn bug341_s23_counter_snapshots_are_stored_only_where_a_counter_is_in_scope() {
+        let vp = Size::new(800.0, 600.0);
+        fn all_ids(doc: &Document, id: NodeId, out: &mut Vec<NodeId>) {
+            out.push(id);
+            for &c in &doc.get(id).children {
+                all_ids(doc, c, out);
+            }
+        }
+        let stored = |html: &str, css: &str| {
+            let doc = lumen_html_parser::parse(html);
+            let flat = lumen_dom::build_flat_tree(&doc);
+            let map = precompute_counters(&doc, &lumen_css_parser::parse(css), vp, &flat, false);
+            let mut ids = Vec::new();
+            all_ids(&doc, doc.root(), &mut ids);
+            ids.into_iter().filter(|&id| map.counters(id).is_some()).count()
+        };
+
+        // Arm 1 — no counter anywhere: not one snapshot for ~6 elements.
+        assert_eq!(
+            stored("<div><p>a</p><p>b</p></div>", "p { color: red; }"),
+            0,
+            "a document with no counters must store no counter snapshots"
+        );
+
+        // Arm 2 — a counter in scope: every element inside the scope keeps its
+        // snapshot, and the values are the ones `counter()` would render.
+        let doc = lumen_html_parser::parse("<ol><li>a</li><li>b</li></ol>");
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let css = "ol { counter-reset: n 0; } li { counter-increment: n; }";
+        let map = precompute_counters(&doc, &lumen_css_parser::parse(css), vp, &flat, false);
+        let mut ids = Vec::new();
+        all_ids(&doc, doc.root(), &mut ids);
+        let lis: Vec<NodeId> = ids
+            .into_iter()
+            .filter(|&id| doc.get(id).element_name().is_some_and(|q| q.local.as_str() == "li"))
+            .collect();
+        assert_eq!(lis.len(), 2, "fixture must hold two <li>");
+        let value = |id: NodeId| {
+            map.counters(id)
+                .and_then(|s| s.get("n"))
+                .and_then(|v| v.last())
+                .copied()
+        };
+        assert_eq!(value(lis[0]), Some(1), "first <li> must still see n=1");
+        assert_eq!(value(lis[1]), Some(2), "second <li> must still see n=2");
     }
 
     // ── Custom counter style tests ────────────────────────────────────────────

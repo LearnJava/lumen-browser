@@ -2506,7 +2506,28 @@ fn is_first_letter_box(b: &LayoutBox) -> bool {
 /// Walks the box tree; for each block-level box that has a `::first-line` rule on
 /// its DOM node, overrides the style of every frag on the first formatted line
 /// (`is_first_line == true`).
+///
+/// BUG-341 S23: the walk is skipped outright when the sheet has no
+/// `::first-line` rule. It probed every block box in the document — 123 probes
+/// per interaction cycle on `chrome.html`, none of which could ever hit,
+/// because that sheet has no such rule. The predicate is over the same `sheet`
+/// this function would consult, so skipping is exactly behaviour-preserving.
 pub(crate) fn apply_first_line_pseudo_styles(
+    b: &mut LayoutBox,
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+) {
+    if !crate::style::sheet_targets_pseudo(sheet, viewport, dark_mode, "first-line") {
+        return;
+    }
+    apply_first_line_pseudo_styles_inner(b, doc, sheet, viewport, dark_mode);
+}
+
+/// The recursive body of [`apply_first_line_pseudo_styles`], split out so the
+/// sheet-level predicate is evaluated once per pass instead of once per box.
+fn apply_first_line_pseudo_styles_inner(
     b: &mut LayoutBox,
     doc: &Document,
     sheet: &Stylesheet,
@@ -2519,7 +2540,7 @@ pub(crate) fn apply_first_line_pseudo_styles(
         return;
     }
     for child in &mut b.children {
-        apply_first_line_pseudo_styles(child, doc, sheet, viewport, dark_mode);
+        apply_first_line_pseudo_styles_inner(child, doc, sheet, viewport, dark_mode);
     }
     if !matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
         return;
@@ -4819,6 +4840,14 @@ fn build_box_inner(
                 // — otherwise the gate that asserts a pass rebuilds no index
                 // would be blind to every rebuild a worker made.
                 let par_index_stats = std::sync::Mutex::new(crate::style::CascadeIndexStats::default());
+                // BUG-341 S23: same drain for the pseudo-element cascade census.
+                // Without it the census undercounts exactly the containers this
+                // branch exists for — every flex/grid container with 8+ items.
+                let par_pseudo_stats =
+                    std::sync::Mutex::new(crate::style::PseudoCascadeStats::default());
+                let par_pseudo_sites: std::sync::Mutex<
+                    std::collections::HashMap<String, crate::style::PseudoCascadeStats>,
+                > = std::sync::Mutex::new(std::collections::HashMap::new());
                 children = dom_children.par_iter().filter_map(|&child_id| {
                     snap.install();
                     let out = if wrap_text_items && matches!(doc.get(child_id).data, NodeData::Text(_)) {
@@ -4841,11 +4870,29 @@ fn build_box_inner(
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .add(idx_stats);
+                    let ps_stats = crate::style::take_pseudo_cascade_stats();
+                    par_pseudo_stats
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .add(ps_stats);
+                    let ps_sites = crate::style::take_pseudo_cascade_sites();
+                    if !ps_sites.is_empty() {
+                        let mut acc = par_pseudo_sites.lock().unwrap_or_else(|e| e.into_inner());
+                        for (k, v) in ps_sites {
+                            acc.entry(k).or_default().add(v);
+                        }
+                    }
                     out
                 }).collect();
                 crate::style::add_cascade_index_stats(
                     *par_index_stats.lock().unwrap_or_else(|e| e.into_inner()),
                 );
+                crate::style::add_pseudo_cascade_stats(
+                    *par_pseudo_stats.lock().unwrap_or_else(|e| e.into_inner()),
+                );
+                crate::style::add_pseudo_cascade_sites(std::mem::take(
+                    &mut *par_pseudo_sites.lock().unwrap_or_else(|e| e.into_inner()),
+                ));
                 {
                     use std::sync::atomic::Ordering::Relaxed;
                     add_box_build_stats(BoxBuildStats {
@@ -4916,9 +4963,15 @@ fn build_box_inner(
                 // split out yet. Passed through all collect_inline_segments calls in this loop.
                 let mut need_first_letter = true;
                 // CSS Pseudo-elements L4 §5.3: pre-compute ::first-line style once for this block.
-                let first_line_style =
+                // BUG-341 S23: skipped outright on a sheet that never uses
+                // `::first-line` as a selector subject — the cascade could only
+                // return `None` there, and this runs per inline-content block.
+                let first_line_style = if crate::style::sheet_targets_pseudo(sheet, viewport, dark_mode, "first-line") {
                     crate::style::compute_pseudo_element_style(doc, id, "first-line", sheet, &style, viewport, dark_mode)
-                        .map(Box::new);
+                        .map(Box::new)
+                } else {
+                    None
+                };
                 // Track whether first_line_style has been assigned to the first InlineRun.
                 let mut first_line_assigned = false;
 
@@ -13163,6 +13216,62 @@ mod tests {
         } else {
             panic!("expected InlineRun");
         }
+    }
+
+    /// BUG-341 S23 gate — **by counter, on both arms**.
+    ///
+    /// `apply_first_line_pseudo_styles` used to probe `::first-line` on every
+    /// block box of the document whether or not the sheet contained such a
+    /// rule; on `chrome.html` that is 123 probes and zero hits per interaction
+    /// cycle. The fix skips the walk, so the load-bearing assertion is a
+    /// **count of probes**, which no output diff can see.
+    ///
+    /// The second arm is what makes the first one mean anything: the cheapest
+    /// way to drive the probe count to zero is to stop applying `::first-line`
+    /// altogether, so the same fixture with a rule must still probe *and* still
+    /// paint the first line green.
+    #[test]
+    fn bug341_s23_first_line_is_probed_only_by_a_sheet_that_uses_it() {
+        let html = lumen_html_parser::parse("<p>one two three four</p>");
+        let vp = lumen_core::geom::Size::new(60.0, 600.0);
+
+        fn probes(css: &str, html: &lumen_dom::Document, vp: lumen_core::geom::Size)
+            -> (u32, super::LayoutBox)
+        {
+            struct Fixed8;
+            impl super::super::TextMeasurer for Fixed8 {
+                fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+            }
+            crate::style::set_pseudo_cascade_diagnostics(true);
+            let _ = crate::style::take_pseudo_cascade_sites();
+            let root = super::layout_measured(html, &lumen_css_parser::parse(css), vp, &Fixed8);
+            let sites = crate::style::take_pseudo_cascade_sites();
+            crate::style::set_pseudo_cascade_diagnostics(false);
+            (sites.get("first-line").map_or(0, |s| s.calls), root)
+        }
+
+        // Arm 1 — no `::first-line` anywhere in the sheet: not one probe.
+        let (calls, _) = probes("p { color: blue; }", &html, vp);
+        assert_eq!(calls, 0, "sheet without ::first-line must not probe for it");
+
+        // Arm 2 — the rule is there: probed, and it still lands on line 0.
+        let (calls, root) = probes("p::first-line { color: green; }", &html, vp);
+        assert!(calls > 0, "sheet with ::first-line must still probe for it");
+        fn collect_runs<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { out.push(b); }
+            for c in &b.children { collect_runs(c, out); }
+        }
+        let mut runs = Vec::new();
+        collect_runs(&root, &mut runs);
+        let green = crate::style::Color { r: 0, g: 128, b: 0, a: 255 };
+        let first = runs.first().expect("expected an InlineRun");
+        let super::BoxKind::InlineRun { lines, .. } = &first.kind else {
+            panic!("expected InlineRun")
+        };
+        assert!(
+            lines[0].iter().all(|f| f.style.color == green),
+            "::first-line style must still reach the first line's frags",
+        );
     }
 
     #[test]

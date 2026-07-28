@@ -3041,6 +3041,160 @@ longer the largest:
 Census first, and re-measure the note before trusting it — S22 is the second
 slice running where the queue was right, after five where it was not.
 
+## S23 — the pseudo-element nobody had written a rule for
+
+### The census, first
+
+`bug341_s20_stage_census`, re-run on the branch point — the ninth in a row.
+Before a line changed it was **taught to see all threads**: `PseudoCascadeStats`
+was thread-local while `build_box` fans flex/grid containers out over rayon
+workers (the S15 trap, fourth appearance), so the worker tallies were dropped
+on the floor. That is why S20's reading moved from 139 to 160 "for no reason".
+The fan-out closure now drains each worker's tally into the parent, as
+`BoxBuildStats` and `CascadeIndexStats` already did.
+
+The second half of the census was a **split by pseudo-element name**: "160
+calls" does not say which of the ~14 call sites made them, and the fix for each
+is different. That split is the whole finding:
+
+| pseudo, per cycle | KEY calls / hits | HOVER calls / hits | time |
+|---|---:|---:|---:|
+| `::first-line` | **123 / 0** | **123 / 0** | 0.076-0.143 ms |
+| `::-webkit-scrollbar*` | 18 / 18 | 6 / 6 | 0.03-0.06 ms |
+| `::before` + `::after` | 18 / 0 | 0 / 0 | 0.006-0.039 ms |
+| `::placeholder` | 1 / 1 | 0 / 0 | 0.007-0.013 ms |
+
+A HOVER cycle recomputes **zero** nodes (S14) and builds three boxes (S15/S19),
+and still asked the cascade about `::first-line` 123 times. `chrome.html` has
+no `::first-line` rule at all, so not one of those probes could ever hit.
+
+The queue's own second item, the `CounterMap`, replayed at 0.115-0.272 ms —
+still real, and now the largest named item.
+
+### What was wrong
+
+Two things, both the S21 shape: a **node-independent fact about the sheet**
+re-derived at every node.
+
+1. `apply_first_line_pseudo_styles` is a post-layout walk over the laid-out
+   tree that asks `compute_pseudo_element_style(node, "first-line", …)` on
+   every block box. Whether the sheet contains a `::first-line` rule is decided
+   once for the whole sheet, but the walk asked per box, and the walk itself was
+   entered unconditionally. `build_box` has a second such probe, per
+   inline-content block.
+2. `counters::walk` stored one counter snapshot per element unconditionally. In
+   a document with no `counter-reset`/`-increment`/`-set` in scope — every
+   document that does not use counters, `chrome.html` among them — all 828 of
+   them were clones of an empty map. Both consumers read a snapshot through
+   `snap.and_then(|s| s.get(name))`, so an empty snapshot and an absent one are
+   indistinguishable.
+
+Alongside those, `CounterMap`'s two per-element collections were built from
+`HashMap::default()` and rehashed their way up to ~830 entries — moving roughly
+as many entries again as they finally hold.
+
+### The fix
+
+`CascadeIndex::pseudo_subjects` — every pseudo-element name the sheet uses as a
+selector **subject**, which is the only position `matches_complex_for_pseudo`
+inspects, so the predicate is exactly as wide as the matcher it short-circuits.
+`style::sheet_targets_pseudo` exposes it, and it is used to skip *traversals*,
+not just individual cascades: `apply_first_line_pseudo_styles` checks once and
+does not recurse at all, `build_box`'s probe is guarded the same way, and
+`compute_pseudo_element_style_inner` short-circuits for every other
+pseudo-element.
+
+`::marker` is the one exception the short-circuit honours: CSS Lists L3 §2.1
+synthesizes a marker style out of `list-style-type` with **no rule at all**, so
+"the sheet does not mention `::marker`" says nothing about whether the cascade
+should return one.
+
+The kind-to-name correspondence is now a single function, `pseudo_element_name`,
+which `pseudo_element_matches` delegates to. A predicate that drifted from its
+matcher would silently drop a pseudo-element's styling — visible corruption,
+not a slow frame — so the two are made structurally incapable of disagreeing
+rather than kept in sync by review.
+
+For the counters: `walk` stores a snapshot only when the counter stacks are
+non-empty. The check is on the **live stacks**, not on a sheet-wide predicate,
+so a document that uses counters in one subtree still pays nothing outside it.
+`CounterMap::with_capacity` sizes `styles`/`clean_subtrees` from
+`node_count` (full pass) or `prev_styles.len()` (incremental — a closer
+estimate, it does not count text nodes).
+
+### Gates
+
+By counter, both arms each, because every one of these mechanisms produces
+byte-identical output when broken — just slowly, or silently empty:
+
+- `bug341_s23_first_line_is_probed_only_by_a_sheet_that_uses_it` (lumen-layout)
+  — a sheet without the rule makes **zero** probes; the same fixture with
+  `p::first-line { color: green }` still probes *and* still paints the first
+  line green. Without the second arm the cheapest way to zero the probe count
+  is to stop applying `::first-line` altogether.
+- `bug341_s23_counter_snapshots_are_stored_only_where_a_counter_is_in_scope`
+  (lumen-layout) — zero snapshots on a counter-free document; on an `<ol>` the
+  two `<li>` still resolve `n` to 1 and 2. Storing nothing at all would pass the
+  first arm and render every `counter()` as `0`.
+- `sheet_pseudo_subjects_cover_every_container_and_only_the_subject` — every
+  container (`@media`/`@supports`/`@layer`) arms the predicate on its own,
+  a non-subject position does not, case and vendor names carry through.
+- `marker_pseudo_style_survives_a_sheet_that_never_mentions_it`.
+
+The census was taught the same lesson it just applied:
+`CounterMap::counter_snapshot_count` reports the real map size (deriving it
+from `styles`' size would have kept reporting the removed cost), and the
+census's replays reserve capacity because production now does.
+
+### Measurement
+
+Census after the slice: pseudo-element cascades on HOVER **129 calls to 6**
+(0.176 to 0.057 ms, 6 hits out of 6), on KEY 160 to 37; `CounterMap` replay on
+HOVER 0.271 to 0.032 ms, on KEY 0.157 to 0.056-0.138 ms, snapshots 828 to **0**.
+
+Interleaved A/B x3 (S9's protocol), by min:
+
+| scenario | main | S23 |
+|---|---|---|
+| `CC12_HOVER` min | 0.57 / 0.56 / 0.56 ms | **0.45 / 0.45 / 0.49 ms** (~18-21 %) |
+| `CC12_KEY` min | 0.91 / 0.98 / 0.90 ms | **0.73 / 0.77 / 0.77 ms** (~14-21 %) |
+| `CC12_HOVER` p95 | 1.52 / 2.56 / 1.58 ms | **1.39 / 1.66 / 1.20 ms** |
+| `CC12_KEY` p95 | 2.54 / 2.70 / 2.86 ms | 2.35 / 2.50 / 2.09 ms |
+
+The groups do not overlap on min in any round on either scenario.
+`dump_golden.py` 12/12 with no diff.
+
+### Where this leaves CC-12
+
+`CC12_HOVER` is inside the 2 ms budget by min **and on p95 in all three runs**
+(1.20-1.66) — the first time either scenario has cleared p95 outright.
+`CC12_KEY` is inside by min (0.73-0.77) and ~1.05-1.25x on p95 (2.09-2.50, was
+~1.3-1.5x). The gate is formally red on `CC12_KEY`'s p95 alone.
+
+### What S24 should look at
+
+Both of this slice's items are now floors, not costs: the pseudo stage is 6
+calls with 6 hits, and the counter snapshots are gone. What remains on the KEY
+cycle, from the same census:
+
+- **`CounterMap::styles` and `clean_subtrees`, still rebuilt from scratch** —
+  828 inserts each, ~0.02-0.12 ms after the capacity reservation. A HOVER cycle
+  reuses every one of the 828 styles from `prev_styles` and then re-inserts all
+  828 into a fresh map, and the pipeline afterwards clones the map again to
+  become the next cycle's `prev_styles`. The S19 answer applies verbatim: hand
+  the previous map **in by value** and overwrite only the recomputed entries
+  instead of rebuilding it. Two things must be settled first — how entries for
+  nodes deleted from the DOM are evicted (a recycled `NodeId` served a stale
+  style is visible corruption, not a slow frame), and that `clean_subtrees` is
+  a *per-pass* fact and cannot be carried over, only recomputed or inverted
+  (represent the dirty closure instead of its complement).
+- the box-build stage on KEY (28 boxes, ~0.3 ms of self-time), the largest
+  single stage left.
+
+Census first, and check it sees all threads: S23 is the fourth slice where a
+thread-local tally was the thing that had to be fixed before the finding could
+be trusted.
+
 ## Repro
 
 ```bash
@@ -3058,3 +3212,8 @@ cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census 
 
 S22 re-used `bug341_s20_stage_census` unchanged — it already prints both items
 the queue named.
+
+S23 extended the same census rather than adding one: it drains the
+pseudo-element tally off the rayon workers, splits it by pseudo-element name,
+and reports `CounterMap`'s real snapshot count. Read its `pseudo ::<name>` lines
+for the per-call-site split.
