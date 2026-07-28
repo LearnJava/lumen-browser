@@ -7534,9 +7534,9 @@ struct Lumen {
     /// root-set (brief §4).
     chrome_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
     /// BUG-341 S5: viewport size the previous pass laid out at — a resize
-    /// invalidates [`Self::chrome_prev_pristine_layout`]'s geometry for
-    /// `graft_geometry` purposes, so a viewport change forces the full-layout
-    /// path regardless of what `bind_model_tracked` reports touched.
+    /// invalidates the previous tree's geometry for `graft_geometry` purposes,
+    /// so a viewport change forces the full-layout path regardless of what
+    /// `bind_model_tracked` reports touched.
     chrome_prev_viewport: Option<Size>,
     /// BUG-341 S5: Forced Colors Mode state ([`lumen_layout::forced_colors_active`])
     /// the previous pass ran under. Not part of `ChromeModel` (it's a
