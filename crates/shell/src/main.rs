@@ -24737,6 +24737,17 @@ mod tests {
         }
     }
 
+    /// BUG-341 S24: [`cc12_bench_model`] with half its tabs and workspaces
+    /// gone, so a cycle really detaches DOM nodes instead of only rewriting
+    /// attributes. The eviction arm of the S24 gate needs a pass whose element
+    /// set genuinely shrinks.
+    fn cc12_bench_shrunk_model(omnibox_value: &str) -> lumen_chrome::ChromeModel {
+        let mut model = cc12_bench_model(omnibox_value);
+        model.tabs.truncate(2);
+        model.workspaces.truncate(1);
+        model
+    }
+
     /// BUG-341 S5: persisted state `cc12_bench_cycle` carries across
     /// iterations, mirroring exactly what `Lumen::relayout_chrome_host`
     /// itself now persists (`chrome_prev_*` fields) — a standalone struct
@@ -25396,6 +25407,119 @@ mod tests {
             warm.builds,
             warm.build_ns as f64 / 1e6,
         );
+    }
+
+    /// BUG-341 S24 regression gate: interaction cycles must *carry* the cascade
+    /// cache, not rebuild it — and must not sweep it either.
+    ///
+    /// A hover cycle reused all 828 of the previous pass's styles and then
+    /// inserted all 828 into a fresh map, which the pipeline cloned wholesale so
+    /// it could be the next cycle's `prev_styles`. Since S24 the map is moved
+    /// into the pass and back out of it. Nothing about the *output* changes, so
+    /// this has to be a counter gate (S8's lesson): `passes_lived` is the number
+    /// of passes that have written into the map the pipeline is holding, and a
+    /// pipeline that went back to handing each pass a fresh one would report 1
+    /// for ever while every differential test stayed green.
+    ///
+    /// Both arms, and the second is the load-bearing one. The cheapest way to
+    /// satisfy "never rebuild" is to never evict either — and an entry that
+    /// outlives the pass that wrote it breaks the property the whole reuse rule
+    /// rests on: *an entry exists iff the immediately preceding pass visited
+    /// that node*. Absence is what forces a recompute for a node that was
+    /// detached and re-attached, or moved to a new parent, whose style was
+    /// computed under a different inherited chain. So the gate also asserts that
+    /// the steady state never sweeps (the sweep is O(document) — putting it back
+    /// on every pass would undo the slice while keeping every test green) and
+    /// that a pass which really does drop nodes evicts exactly them.
+    #[test]
+    fn bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_it() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        // Cold pass: a full cascade, which legitimately builds its map from
+        // scratch and has lived through no incremental pass at all.
+        let _ = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
+        );
+        assert_eq!(
+            state.prev_cascade_styles.passes_lived(),
+            0,
+            "the first pass is a full cascade — it has no cache to carry",
+        );
+        let cold_len = state.prev_cascade_styles.len();
+        assert!(cold_len > 100, "chrome must cascade a non-trivial node count, got {cold_len}");
+
+        // Eight interaction cycles of both shapes CC-12 measures: a keystroke
+        // (DOM mutation) and a hover flip. Neither adds or removes a node.
+        for i in 0..4 {
+            typed.push('a');
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None,
+                &mut state,
+            );
+            assert!(
+                !state.prev_cascade_styles.swept_last_pass(),
+                "keystroke cycle {i} swept the cascade cache — a full scan of {} entries for a \
+                 pass that removed nothing puts back exactly the per-pass O(document) work this \
+                 slice removed. Either `visited` is not counting one visit per element, or the \
+                 flat tree really does reach a node twice (then this gate needs the count, not a \
+                 flat `false`).",
+                state.prev_cascade_styles.len(),
+            );
+            let hover = if i % 2 == 0 { sidebar } else { None };
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, hover,
+                &mut state,
+            );
+            assert!(
+                !state.prev_cascade_styles.swept_last_pass(),
+                "hover cycle {i} swept the cascade cache — see the keystroke assertion above",
+            );
+        }
+        assert_eq!(
+            state.prev_cascade_styles.passes_lived(),
+            8,
+            "eight interaction cycles must have written into one and the same map. A lower \
+             number means some pass handed the pipeline a freshly built map instead of the one \
+             it was given — byte-identical styles at the cost this slice removed.",
+        );
+        assert_eq!(
+            state.prev_cascade_styles.len(),
+            cold_len,
+            "no cycle added or removed a node, so the carried map must still hold exactly the \
+             elements the cold pass cascaded",
+        );
+
+        // Arm two: a cycle that really does drop nodes must evict them. The
+        // sidebar's tab list is rebuilt from the model, so a shorter model
+        // detaches rows — their entries must not survive into the next pass.
+        let before_removal = state.prev_cascade_styles.len();
+        let _ = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_shrunk_model(&typed), viewport, &measurer, &hyp, None,
+            &mut state,
+        );
+        assert!(
+            state.prev_cascade_styles.swept_last_pass(),
+            "a cycle that detached rows left the cache un-swept: every detached node's entry is \
+             still there, and a node re-attached under a different parent would reuse a style \
+             cascaded under the old inherited chain",
+        );
+        assert!(
+            state.prev_cascade_styles.len() < before_removal,
+            "the sweep kept all {before_removal} entries although the model lost rows",
+        );
+        for (nid, _) in state.prev_cascade_styles.iter() {
+            assert!(
+                doc.get(*nid).parent.is_some() || *nid == doc.root(),
+                "the carried cache still holds {nid:?}, which is detached from the document",
+            );
+        }
     }
 
     /// BUG-341 S14 regression gate: a hover flip no rule in the sheet can
@@ -26249,7 +26373,11 @@ mod tests {
     /// slice in a row to do so, and the fifth where the planned premise was not
     /// where the time was. It prints, per scenario and per cycle:
     ///
-    /// - the whole pass's wall-clock and the pipeline `clone_tree` after it;
+    /// - the whole pass's wall-clock, and after it the tree copy **this harness**
+    ///   makes to keep a `prev` for the next cycle. That column stopped
+    ///   describing production at S22, which replaced the pipeline's per-frame
+    ///   `layout.clone()` with a reversible prune, so read it as harness
+    ///   overhead and not as part of the cycle;
     /// - the `CascadeIndex` rebuild the pass forces. When this census was
     ///   written every pass forced one, because the cache was keyed by the
     ///   sheet's address and had to be dropped at the top of each pass; S21
@@ -26259,7 +26387,11 @@ mod tests {
     ///   rebuilding those three collections so the map's own construction cost
     ///   can be told from the traversal that fills it. Replayed rather than
     ///   timed in place: per-node timers around ~2500 hash operations would cost
-    ///   a sizeable fraction of the stage they are measuring;
+    ///   a sizeable fraction of the stage they are measuring. **Since S24 the
+    ///   `styles` replay is a measure of removed cost, not incurred cost** — the
+    ///   pass carries that map rather than filling it, which the `carried=`
+    ///   column reports (passes lived through, whether the pass had to sweep,
+    ///   and how many entries it displaced);
     /// - every box the build stage really built, with its **inclusive** cost,
     ///   and a self-time column derived by subtracting the descendants that are
     ///   themselves in the log.
@@ -26437,8 +26569,12 @@ mod tests {
         let clean_ns = t.elapsed().as_nanos() as u64;
 
         eprintln!(
-            "[s20-census]   CounterMap: styles={} ({:.3}ms replay) snapshots={} ({:.3}ms replay) \
+            "[s20-census]   CounterMap: carried passes={} swept={} displaced={} | \
+             styles={} ({:.3}ms replay AVOIDED) snapshots={} ({:.3}ms replay) \
              clean_subtrees={} ({:.3}ms replay) — total replay {:.3}ms",
+            styles.passes_lived(),
+            styles.swept_last_pass(),
+            counters.replaced_styles().len(),
             styles_replay.len(),
             styles_ns as f64 / 1e6,
             snapshots,
