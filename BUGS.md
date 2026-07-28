@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-400)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-403)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -414,6 +414,7 @@
 | [BUG-399](bugs/BUG-399-OPEN.md) | OPEN | js (`crates/js/src/dom.rs:11531` — `window.isSecureContext = true;` литерал; неиспользованный источник данных — `dom.rs:7397` `_lumen_loc_parts`) | `window.isSecureContext` захардкожен `true` безусловно для любой страницы вместо вычисления по W3C Secure Contexts §3.1 из уже распарсенного протокола/хоста — любой API с `[SecureContext]` в WebIDL (вся Generic Sensor family, Web Crypto, Clipboard, Service Workers) никогда не гейтится движком по контексту, даже на настоящем небезопасном (не-loopback `http://`) origin. Юнит-тест `is_secure_context_is_true` (`dom.rs:26088`) фиксирует текущее поведение как ожидаемое — не регрессия, а изначальное Phase 0/1 упрощение. Найден P2, WPT-VENDOR-gyroscope 2026-07-28, тест `Gyroscope_insecure_context.html` (сам прогон неокончателен — loopback legitimately даёт `isSecureContext=true` по спеке, находка — от чтения кода, к которому привёл разбор FAIL) |
 | [BUG-400](bugs/BUG-400-OPEN.md) | OPEN | js (`crates/js/src/dom.rs:10987-11048` — `var performance = {...}`, объектный литерал) | `performance` не реализует интерфейс `Performance` целиком: не наследует `EventTarget` (`performance.addEventListener is not a function`) и не имеет `toJSON()` — оба требуются W3C HR Time L3 §4. Причина — `performance` собран как плоский объектный литерал, а не через `EventTarget`-конструктор/прототип. Найден P2, WPT-VENDOR-hr-time 2026-07-28, `basic.any.js`/`performance-tojson.html` |
 | [BUG-401](bugs/BUG-401-OPEN.md) | OPEN | js (`crates/js/src/worker.rs:439-566` — `worker_global_shim`) | `performance` полностью отсутствует в Worker global scope — `worker_global_shim` не заводит ни `performance.now()`, ни `timeOrigin`; любой воркер-скрипт, читающий `performance.now()`, падает `ReferenceError` на первой строке. Спека HR Time L3 требует `[Exposed=(Window,Worker)]`. 3 из 13 файлов категории `hr-time` падают TIMEOUT ровно на этом (`clamped-time-origin.html`, `timeOrigin.html`, `window-worker-timeOrigin.window.html`). Найден P2, WPT-VENDOR-hr-time 2026-07-28 |
+| [BUG-402](bugs/BUG-402-OPEN.md) | OPEN | network/shell (`crates/network/src/lib.rs::with_hsts`, `crates/shell/src/config.rs::apply_http`) | HSTS (RFC 6797) полностью реализован и юнит-протестирован в `lumen-network`/`lumen-storage`, но `HttpClient::with_hsts(...)` не вызывается ни в одном продакшн-пути — ни `apply_http`, ни любая из фабрик `HttpClient` в shell/driver его не подключают (грепом по всему воркспейсу — только `#[cfg(test)]`). HTTP→HTTPS upgrade (в т.ч. встроенный Preload List) в реальном браузере не срабатывает никогда — downgrade-атака на первом визите полностью работает. `CAPABILITIES.md:158` ошибочно помечает HSTS ✅. Найден P2, WPT-VENDOR-hsts 2026-07-28, независимым грепом (единственный тест категории — `.tentative.` с невендоренной зависимостью, TIMEOUT инфраструктурного класса) |
 
 ---
 
