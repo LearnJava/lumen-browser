@@ -1,4 +1,3 @@
-ROADMAP.md:247
 BUGS.md:288
 BUGS.md:117
 BUGS.md:118
@@ -18,11 +17,9 @@ BUGS.md:233
 BUGS.md:234
 BUGS.md:253
 BUGS.md:258
-BUGS.md:289
 BUGS.md:290
 BUGS.md:291
 BUGS.md:293
-BUGS.md:296
 BUGS.md:301
 docs/tasks/p3-cascade-perf.md — Задача 1 влита (кэш active @media/@supports), осталось 2 задачи (LUMEN_ENGINE_THREAD default / частичный пересчёт стилей)
 BUGS.md:303
@@ -31,4 +28,4 @@ BUGS.md:317
 BUGS.md:318
 BUGS.md:320
 BUGS.md:321
-BUGS.md:343
+BUGS.md:442

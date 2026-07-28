@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-28",
+ "generated": "2026-07-29",
  "counts": {
   "open": 124,
-  "fixed": 273,
+  "fixed": 274,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 397,
+ "total_bugs": 398,
  "phases": [
   {
    "id": "P0",
@@ -6435,10 +6435,10 @@
    "debtor": false
   },
   "BUG-348": {
-   "status": "open",
-   "title": "`canvas.getContext('2d')` возвращает `null` безусловно для ЛЮБОГО canvas в текущем дефолтном V8-билде — `WEBGL_SHIM`'s `document.createElement`-monkeypatch (`in…",
-   "component": "js (`crates/js/src/webgl_canvas.rs`, `crates/js/src/v8_runtime.rs`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`canvas.getContext('2d')` возвращал `null` для любого canvas, созданного через `document.createElement`, в дефолтном V8-билде — `WEBGL_SHIM`'s `createElement`-m…",
+   "component": "js (`crates/js/src/webgl_canvas.rs`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-349": {
@@ -6986,6 +6986,13 @@
    "component": "layout / paint (не локализован)",
    "date": null,
    "debtor": false
+  },
+  "BUG-428": {
+   "status": "open",
+   "title": "Headless-CPU-рендер (`--screenshot`, `--ipc-server` Screenshot, детерминированные CPU-снапшоты) никогда не композитит битмапы Canvas 2D: пиксели канваса попадаю…",
+   "component": "shell (`main.rs::render_source_to_png`) + js (`flush_canvas_updates`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7445,6 +7452,9 @@
   ],
   "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)": [
    "BUG-411"
+  ],
+  "shell (`main.rs::render_source_to_png`) + js (`flush_canvas_updates`)": [
+   "BUG-428"
   ],
   "shell (`main.rs` — дренаж `window.open()` popup-запросов + `location.href`)": [
    "BUG-293"
