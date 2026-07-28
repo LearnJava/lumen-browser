@@ -25126,6 +25126,72 @@ mod tests {
         );
     }
 
+    /// BUG-341 S20 regression gate: a keystroke must not dispatch rayon workers
+    /// to carry out moves.
+    ///
+    /// ADR-016 M4.1 fans a flex/grid container's children onto rayon once there
+    /// are eight or more of them, sized against a full pass where each child
+    /// costs a cascade and a box build. On the incremental path since S15/S19 a
+    /// child that is in the reuse index costs a `Mutex` lock and a move, and on
+    /// a chrome interaction nearly every one of them is — so the threshold, read
+    /// off `dom_children.len()`, was dispatching a worker per subtree the pass
+    /// was about to move in O(1). Measured at ~1 ms of a 2.5 ms keystroke cycle
+    /// (BUG-341 "S20"), spread across `body`, `.main-col` and `.omnibox-wrap`,
+    /// whose own work is ~4 µs each.
+    ///
+    /// Both arms are asserted, and the full-pass one matters as much as the
+    /// incremental one: the cheapest way to make this test's headline number
+    /// pass is to stop parallelising altogether, which would cost the full pass
+    /// the parallel selector matching M4.1 exists for.
+    ///
+    /// A counter, not wall-clock: the fan-out produces the identical tree, so
+    /// every differential test in the track passes either way (S8's lesson), and
+    /// thread-pool overhead is exactly the kind of cost machine noise hides.
+    #[test]
+    fn bug341_s20_keystroke_moves_subtrees_without_dispatching_workers() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        let mut first_full = lumen_layout::box_tree::BoxBuildStats::default();
+        let mut last = lumen_layout::box_tree::BoxBuildStats::default();
+        for i in 0..4 {
+            typed.push('a');
+            let model = cc12_bench_model(&typed);
+            let (_, bb) =
+                cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, None, &mut state);
+            if i == 0 {
+                first_full = bb;
+            }
+            last = bb;
+        }
+
+        assert!(
+            first_full.fanouts > 0,
+            "the first (full) cycle must still parallelise its large containers — M4.1's \
+             parallel selector matching is what the threshold exists for, and narrowing the \
+             *incremental* estimate must not have reached the full path. Census: {first_full:?}",
+        );
+        assert!(
+            last.reused >= 5,
+            "a keystroke must still take whole subtrees out of the previous tree, otherwise this \
+             test is asserting about a cycle that has no moves to skip dispatching for — {last:?}",
+        );
+        assert_eq!(
+            last.fanouts, 0,
+            "a keystroke dispatched {} rayon fan-out(s) while reusing {} whole subtrees — the \
+             threshold is counting children the pass will move rather than children it will \
+             build. Census: {last:?}. If chrome.html ever gains a container that genuinely \
+             rebuilds eight or more element children on a keystroke, record that container and \
+             its count here; do not relax this to `<= whatever the code currently does`.",
+            last.fanouts, last.reused,
+        );
+    }
+
     /// BUG-341 S14 regression gate: a hover flip no rule in the sheet can
     /// react to must re-cascade nothing at all.
     ///
@@ -25962,6 +26028,240 @@ mod tests {
                 state.prev_interactive = (hover, None, None);
                 lumen_layout::clear_interactive_state();
             }
+        }
+    }
+
+    /// BUG-341 S20 diagnostic: where an incremental cycle's time actually goes,
+    /// stage by stage, and inside the two stages that dominate.
+    ///
+    /// The queue named two items for this slice (the pipeline's `layout.clone()`
+    /// and `precompute_counters` rebuilding its `CounterMap` from scratch). This
+    /// census exists to check that claim before a line is changed — the sixth
+    /// slice in a row to do so, and the fifth where the planned premise was not
+    /// where the time was. It prints, per scenario and per cycle:
+    ///
+    /// - the whole pass's wall-clock and the pipeline `clone_tree` after it;
+    /// - the `CascadeIndex` rebuild the pass forces (`invalidate_rule_idx_cache`
+    ///   at the top of every pass drops it, so the first `compute_style` — or,
+    ///   with nothing to recompute at all, `sheet_has_quote_content` — pays for
+    ///   a full re-index of the sheet **inside** `precompute_counters`' scope,
+    ///   where it reads as cascade cost);
+    /// - the `CounterMap` the cascade stage produced, by size, plus a replay of
+    ///   rebuilding those three collections so the map's own construction cost
+    ///   can be told from the traversal that fills it. Replayed rather than
+    ///   timed in place: per-node timers around ~2500 hash operations would cost
+    ///   a sizeable fraction of the stage they are measuring;
+    /// - every box the build stage really built, with its **inclusive** cost,
+    ///   and a self-time column derived by subtracting the descendants that are
+    ///   themselves in the log.
+    ///
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s20_stage_census -- --ignored --nocapture`. Add
+    /// `LUMEN_PROFILE_TREE=1` for the engine's own stage split alongside it.
+    #[test]
+    #[ignore = "manual diagnostic (BUG-341 S20) — see doc comment for run command"]
+    fn bug341_s20_stage_census() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+
+        for scenario in ["KEY", "HOVER"] {
+            let mut state = Cc12IncrementalState::default();
+            let mut typed = String::new();
+            for i in 0..6 {
+                let (model, hover) = if scenario == "KEY" {
+                    typed.push('a');
+                    (cc12_bench_model(&typed), None)
+                } else {
+                    (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+                };
+                let report = i >= 4;
+                // S20's own gate, not S18/S19's: the copy census walks every
+                // reused subtree from inside the parent's `build_box`, which
+                // would show up as that parent's build cost.
+                lumen_layout::box_tree::set_box_time_diagnostics(report);
+                lumen_layout::style::set_pseudo_cascade_diagnostics(report);
+                let touched = lumen_chrome::bind_model_tracked(&mut doc, &model);
+                lumen_layout::set_interactive_state(hover, None, None);
+                let _ = lumen_layout::style::take_cascade_index_stats();
+                let _ = lumen_layout::style::take_pseudo_cascade_stats();
+                let t_pass = std::time::Instant::now();
+                let (layout, counters) = match state.prev_pristine_layout.take() {
+                    Some(prev) => {
+                        let (prev_hover, prev_focus, prev_active) = state.prev_interactive;
+                        let state_index = lumen_layout::style::restyle_state_index(&doc, &sheet);
+                        let mut dirty_roots = std::collections::HashSet::new();
+                        for (was, now) in [
+                            (prev_hover, hover),
+                            (prev_focus, None),
+                            (prev_active, None),
+                        ] {
+                            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                                &doc, was, now, &state_index,
+                            ));
+                        }
+                        let node_index = lumen_layout::style::restyle_node_index(&doc, &sheet);
+                        dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
+                            &doc,
+                            chrome_node_changes(&touched),
+                            &node_index,
+                        ));
+                        let delta = lumen_layout::counters::RestyleDelta {
+                            prev_styles: &state.prev_cascade_styles,
+                            dirty_roots,
+                            content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
+                        };
+                        lumen_layout::counters::set_incremental_restyle(true);
+                        lumen_layout::box_tree::set_incremental_box_build(true);
+                        let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                            &doc, &sheet, viewport, &measurer, &hyp, false, prev, &delta,
+                        );
+                        lumen_layout::box_tree::set_incremental_box_build(false);
+                        lumen_layout::counters::set_incremental_restyle(false);
+                        result
+                    }
+                    None => lumen_layout::layout_measured_hyp_with_counters(
+                        &doc, &sheet, viewport, &measurer, &hyp, false,
+                    ),
+                };
+                let pass_ns = t_pass.elapsed().as_nanos() as u64;
+                let idx_stats = lumen_layout::style::take_cascade_index_stats();
+                let ps_stats = lumen_layout::style::take_pseudo_cascade_stats();
+                let cs = lumen_layout::counters::take_cascade_stats();
+                let bb = lumen_layout::box_tree::take_box_build_stats();
+                let times = lumen_layout::box_tree::take_box_build_time_log();
+                let t = std::time::Instant::now();
+                let persisted = layout.clone();
+                let clone_tree_ns = t.elapsed().as_nanos() as u64;
+
+                if report {
+                    eprintln!(
+                        "[s20-census] {scenario} cycle={i} pass={:.3}ms clone_tree={:.3}ms | \
+                         cascade_index rebuilds={} {:.3}ms | pseudo={} hits={} {:.3}ms | \
+                         cascade recomputed={} reused={} | boxes built={} reused={} fanouts={}",
+                        pass_ns as f64 / 1e6,
+                        clone_tree_ns as f64 / 1e6,
+                        idx_stats.builds,
+                        idx_stats.build_ns as f64 / 1e6,
+                        ps_stats.calls,
+                        ps_stats.hits,
+                        ps_stats.ns as f64 / 1e6,
+                        cs.recomputed,
+                        cs.reused,
+                        bb.built,
+                        bb.reused,
+                        bb.fanouts,
+                    );
+                    census_report_counter_map(&counters);
+                    census_report_built_boxes(&doc, &times);
+                }
+
+                lumen_layout::box_tree::set_box_time_diagnostics(false);
+                lumen_layout::style::set_pseudo_cascade_diagnostics(false);
+                state.prev_pristine_layout = Some(persisted);
+                state.prev_cascade_styles = counters.styles().clone();
+                state.prev_interactive = (hover, None, None);
+                lumen_layout::clear_interactive_state();
+            }
+        }
+    }
+
+    /// BUG-341 S20 census helper: the `CounterMap` a cycle produced, by size,
+    /// with a replay of rebuilding its collections.
+    ///
+    /// The replay reproduces exactly the inserts `counters::walk` performs: an
+    /// `Arc` clone plus insert per element into `styles`, a counter-stack
+    /// snapshot plus insert per element into `nodes`, and one insert per clean
+    /// node into `clean_subtrees` — over the real sizes, so "the map costs X of
+    /// the stage's Y" is an honest attribution rather than a guess. `nodes` is
+    /// not exposed, but it holds one entry per element, which is `styles`' size.
+    fn census_report_counter_map(counters: &lumen_layout::CounterMap) {
+        let styles = counters.styles();
+        let clean = counters.clean_subtrees();
+
+        let t = std::time::Instant::now();
+        let mut styles_replay: HashMap<lumen_dom::NodeId, std::sync::Arc<lumen_layout::style::ComputedStyle>> =
+            HashMap::new();
+        for (&id, style) in styles {
+            styles_replay.insert(id, std::sync::Arc::clone(style));
+        }
+        let styles_ns = t.elapsed().as_nanos() as u64;
+
+        // One empty snapshot per element: `chrome.html` declares no counters, so
+        // `CounterCtx::stacks` stays empty the whole walk and every snapshot is
+        // an empty-map clone. That is the production shape, not a simplification.
+        let t = std::time::Instant::now();
+        let mut nodes_replay: HashMap<lumen_dom::NodeId, lumen_layout::counters::CounterSnapshot> =
+            HashMap::new();
+        let stacks: lumen_layout::counters::CounterSnapshot = HashMap::new();
+        for &id in styles.keys() {
+            nodes_replay.insert(id, stacks.clone());
+        }
+        let nodes_ns = t.elapsed().as_nanos() as u64;
+
+        let t = std::time::Instant::now();
+        let mut clean_replay: std::collections::HashSet<lumen_dom::NodeId> =
+            std::collections::HashSet::new();
+        for &id in clean {
+            clean_replay.insert(id);
+        }
+        let clean_ns = t.elapsed().as_nanos() as u64;
+
+        eprintln!(
+            "[s20-census]   CounterMap: styles={} ({:.3}ms replay) nodes≈{} ({:.3}ms replay) \
+             clean_subtrees={} ({:.3}ms replay) — total replay {:.3}ms",
+            styles_replay.len(),
+            styles_ns as f64 / 1e6,
+            nodes_replay.len(),
+            nodes_ns as f64 / 1e6,
+            clean_replay.len(),
+            clean_ns as f64 / 1e6,
+            (styles_ns + nodes_ns + clean_ns) as f64 / 1e6,
+        );
+    }
+
+    /// BUG-341 S20 census helper: every box the build stage really built, most
+    /// expensive first, with inclusive and self time.
+    ///
+    /// Self time subtracts the *direct* descendants that are themselves in the
+    /// log — a built box's children are either built (logged, subtracted here)
+    /// or moved in wholesale (O(1), nothing to subtract). Inclusive time on a
+    /// container that rayon fanned out also covers the join wait, so a container
+    /// whose self time is large is worth a second look before it is believed.
+    fn census_report_built_boxes(doc: &lumen_dom::Document, times: &[(lumen_dom::NodeId, u64)]) {
+        let incl: HashMap<lumen_dom::NodeId, u64> = times.iter().copied().collect();
+        let mut rows: Vec<(lumen_dom::NodeId, u64, i64)> = times
+            .iter()
+            .map(|&(id, ns)| {
+                let kids: i64 = doc
+                    .get(id)
+                    .children
+                    .iter()
+                    .filter_map(|c| incl.get(c))
+                    .map(|&n| n as i64)
+                    .sum();
+                (id, ns, ns as i64 - kids)
+            })
+            .collect();
+        rows.sort_by_key(|&(_, ns, _)| std::cmp::Reverse(ns));
+        let total: u64 = times.iter().map(|&(_, ns)| ns).sum();
+        let self_total: i64 = rows.iter().map(|&(_, _, s)| s).sum();
+        eprintln!(
+            "[s20-census]   built {} boxes, Σinclusive={:.3}ms Σself={:.3}ms",
+            times.len(),
+            total as f64 / 1e6,
+            self_total as f64 / 1e6,
+        );
+        for &(id, ns, self_ns) in rows.iter().take(10) {
+            eprintln!(
+                "[s20-census]     {:>8.3}ms incl {:>8.3}ms self  {}",
+                ns as f64 / 1e6,
+                self_ns as f64 / 1e6,
+                census_describe(doc, id),
+            );
         }
     }
 
