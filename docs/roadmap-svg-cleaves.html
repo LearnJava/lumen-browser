@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 96,
+  "open": 97,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 368,
+ "total_bugs": 369,
  "phases": [
   {
    "id": "P0",
@@ -2348,9 +2348,12 @@
       {
        "id": "WPT-VENDOR-graphics-aam",
        "title": "WPT: вендорить + прогнать категорию `graphics-aam`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "DONE 2026-07-28: вендорена (`tests/wpt/graphics-aam/`, 7 файлов: `META.yml`, 6 `*-manual.html` — ATTAcomm-тесты для ролей `graphics-document`/`graphics-object`/`graphics-symbol` на HTML- и SVG-элементах, `LICENSE-WPT.md` — `WEB_FEATURES.yml` у категории нет), скоуп ⬜ (кандидат), тот же формат, что уже вендоренные `core-aam`/`dpub-aam`. `run_report.py --all --root graphics-aam --recursive` даёт `no tests selected` — `all_vendored_test_ids()` исключает все файлы по `-manual` в имени, здесь это 100% категории, ожидаемо для manual/ATTAcomm-набора. Внекатегорийные хелперы (`/wai-aria/scripts/ATTAcomm.js`+`manual.css`) не довендорены — категория `wai-aria` сама ещё не вендорена, та же методология, что core-aam/dpub-aam. По правилу «пробуй даже без сигнала» — прямая Rust-проба на `lumen_a11y::build_ax_tree` (`crates/engine/a11y/tests/cases/ax_tree.rs`, временный тест, удалён после подтверждения): BUG-398 (новый) — три роли модуля Graphics ARIA отсутствуют в `AXRole::parse` (`crates/engine/a11y/src/roles.rs`) целиком, откатываются к `AXRole::Generic` наравне с невалидными значениями (accessible name через `aria-label` при этом считается верно, теряется только роль) — воспроизведено на обоих тестовых узлах пробы",
+       "bugs": [
+        "BUG-398"
+       ]
       },
       {
        "id": "WPT-VENDOR-graphics-aria",
@@ -6633,6 +6636,13 @@
    "status": "open",
    "title": "Global Privacy Control (GPC) не реализован вовсе: ни `navigator.globalPrivacyControl` в JS-шиме, ни заголовок `Sec-GPC` ни в одном из 7 `HttpProfile` — грепом п…",
    "component": "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-398": {
+   "status": "open",
+   "title": "Роли модуля Graphics ARIA (`graphics-document`/`graphics-object`/`graphics-symbol`, W3C-расширение WAI-ARIA для доступной SVG/графики) отсутствуют в списке изве…",
+   "component": "a11y (`crates/engine/a11y/src/roles.rs::AXRole::parse`/`AXRole`; потребитель `crates/engine/a11y/src/lib.rs::resolve_role`)",
    "date": null,
    "debtor": false
   }
