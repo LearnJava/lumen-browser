@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-28",
  "counts": {
-  "open": 95,
+  "open": 96,
   "fixed": 272,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 367,
+ "total_bugs": 368,
  "phases": [
   {
    "id": "P0",
@@ -2362,13 +2362,6 @@
        "bugs": [
         "BUG-396"
        ]
-      },
-      {
-       "id": "WPT-VENDOR-gpc",
-       "title": "WPT: вендорить + прогнать категорию `gpc`",
-       "status": "planned",
-       "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
       },
       {
        "id": "WPT-VENDOR-graphics-aam",
@@ -6653,6 +6646,13 @@
    "component": "image (`crates/engine/image/src/gif.rs:339-393` — `decode_gif_animated`, зависимость `gif` крейт v0.14.2)",
    "date": null,
    "debtor": false
+  },
+  "BUG-397": {
+   "status": "open",
+   "title": "Global Privacy Control (GPC) не реализован вовсе: ни `navigator.globalPrivacyControl` в JS-шиме, ни заголовок `Sec-GPC` ни в одном из 7 `HttpProfile` — грепом п…",
+   "component": "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6774,6 +6774,9 @@
   ],
   "js (`crates/js/src/permissions_policy.rs:47-49` `FeaturePolicy.prototype.features`)": [
    "BUG-361"
+  ],
+  "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
+   "BUG-397"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
