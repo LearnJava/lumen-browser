@@ -25527,6 +25527,111 @@ mod tests {
         }
     }
 
+    /// BUG-341 S27 regression gate: a cycle whose delta names one node must
+    /// walk that node's chain, not the document.
+    ///
+    /// S26 removed the traversal for the cycle whose delta names *nobody*, and
+    /// left the general case open: a keystroke names one dirty root and one
+    /// content-mutated node, yet the walk still entered all 1 740 nodes of the
+    /// chrome document to re-cascade one of them. Everything it did to the
+    /// other 1 739 was a restatement of its input — reuse the carried style,
+    /// report clean, record a `clean_subtrees` entry — all of which the delta
+    /// already implies for any subtree holding neither of those two nodes.
+    ///
+    /// A counter gate, not wall-clock and not differential, for the S8 reason:
+    /// walking the whole document produces byte-identical output, so only a
+    /// count separates the two shapes.
+    ///
+    /// Four arms, and the last three are the load-bearing ones:
+    ///
+    /// * the cold pass must still walk everything,
+    /// * the keystroke must still re-cascade the node it changed — driving the
+    ///   visit count to zero by never cascading passes arm two and renders a
+    ///   stale document,
+    /// * every element inside a skipped subtree must be found in the carried
+    ///   cache (`confirm_misses`); a miss means the spine under-approximated
+    ///   the delta and a node was left with no style at all,
+    /// * the cache must survive the skipping: the S24 ordinal contract is "an
+    ///   entry exists iff the immediately preceding pass visited that node", so
+    ///   a skip that walks away without restamping gets its whole subtree swept
+    ///   at `finish_pass` and re-cascaded next cycle — same output, one
+    ///   document-sized recompute per interaction.
+    #[test]
+    fn bug341_s27_a_keystroke_walks_its_own_chain_not_the_document() {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        let mut state = Cc12IncrementalState::default();
+        let mut typed = String::new();
+        // Cold pass — a full cascade, which must walk the whole document.
+        let _ = cc12_bench_cycle(
+            &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
+        );
+        let cold = lumen_layout::counters::take_cascade_stats();
+        assert!(
+            cold.visited > 1000,
+            "the cold pass must walk the whole chrome document, got visited={}",
+            cold.visited,
+        );
+        let elements = state.prev_cascade_styles.len();
+
+        for i in 0..4 {
+            typed.push('a');
+            let _ = cc12_bench_cycle(
+                &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None,
+                &mut state,
+            );
+            let key = lumen_layout::counters::take_cascade_stats();
+
+            assert!(
+                key.visited * 4 < cold.visited,
+                "keystroke cycle {i} entered {} of the document's {} nodes. Its delta names one \
+                 dirty root and one content-mutated node, so nothing outside their ancestor \
+                 chains can be reached — every other node was entered only to hand back what the \
+                 delta already said about it.",
+                key.visited,
+                cold.visited,
+            );
+            assert!(
+                key.skipped_subtrees > 0,
+                "keystroke cycle {i} skipped no subtree at all — the spine was built and never \
+                 consulted",
+            );
+            assert!(
+                key.recomputed > 0,
+                "keystroke cycle {i} re-cascaded nothing (visited={}). The omnibox's own `value` \
+                 attribute changed, so a node really does need re-cascading; zeroing the visit \
+                 counter by never cascading passes the arm above and renders a stale document.",
+                key.visited,
+            );
+            assert_eq!(
+                key.confirm_misses, 0,
+                "keystroke cycle {i}: {} element(s) inside a skipped subtree had no entry in the \
+                 carried cache. The skip rests on the claim that the previous pass cascaded every \
+                 one of them — a miss means a node was left with no style, which is a rebuilt box \
+                 at best and a wrong inherited chain at worst.",
+                key.confirm_misses,
+            );
+            assert!(
+                !state.prev_cascade_styles.swept_last_pass(),
+                "keystroke cycle {i} swept the cache although no node left the document. A \
+                 skipped subtree still owes the S24 pass ordinal; skipping without restamping \
+                 makes `finish_pass` read the whole subtree as gone, and the next cycle \
+                 re-cascades it — identical output, one document-sized recompute per keystroke.",
+            );
+            assert_eq!(
+                state.prev_cascade_styles.len(),
+                elements,
+                "keystroke cycle {i} left the carried cache holding {} entries instead of the \
+                 {elements} elements the cold pass cascaded",
+                state.prev_cascade_styles.len(),
+            );
+        }
+    }
+
     /// BUG-341 S26 regression gate: an interaction cycle whose delta says
     /// nothing changed must not walk the document to find that out.
     ///
