@@ -259,7 +259,7 @@
     {
      "id": "SDC",
      "title": "SDC: Управление живым окном (8A.7 Ф4)",
-     "status": "active",
+     "status": "done",
      "note": "Shell-as-driver-client: управление ЖИВЫМ видимым окном Lumen напрямую командами (Selenium/WebDriver-подобно, без headless-прокладки) — закрытие 8A.7 Фазы 4 по `docs/plans/8A.7-shell-as-driver-client-plan.md` + ADR-006. Разрез по владению: SDC-1a (P1 driver) → SDC-1b (P3 shell) → {SDC-2 (P1 фронты), SDC-3 (P3 графтест)}. Цепочка зависимостей строгая",
      "tasks": [
       {
@@ -293,9 +293,9 @@
       {
        "id": "SDC-4",
        "title": "SDC-4: --live как дефолт графтест-прогона",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Сделать `--live` (SDC-3) режимом по умолчанию в `graphic_tests/run.py`: kill+relaunch-на-каждый-тест оставить как явный opt-out флаг (`--per-test-process`), `--live` из CLI убрать/оставить no-op алиасом; обновить docstring run.py, `docs/graphic-tests.md`, секцию Graphic tests в CLAUDE.md. Мотивация: SDC-3 влит и валидирован (полный прогон идентичен baseline, 139 тестов ~10.5 мин), но дефолт всё ещё перезапускает процесс на каждый тест — главный источник времени прогона и гонок фокуса («magenta marker not found»). Гейт: полный `--continue-on-fail` прогон новым дефолтом — дельта к latest.json «Изменений нет»; проверить совместимость с `--only`/`--recheck`/`--bisect`/`--build`"
+       "note": "`--live` (SDC-3) стал режимом по умолчанию в `graphic_tests/run.py`; kill+relaunch-на-каждый-тест — явный opt-out флаг `--per-test-process` (diagnostic fallback), `--live` оставлен no-op алиасом для старых команд. `--paint-bisect` внутри всегда использует kill+relaunch сам, независимо от флага. Полный `--continue-on-fail` прогон новым дефолтом дал 2/149 FAIL (71, 147) — сверено с baseline из main (`latest.json`, коммит 220eebc5c): diff_pct совпадает до 4 знаков (1.7605%/27.4463%), оба предсуществующие, не регрессия. Совместимость подтверждена: `--only`/`--recheck`/`--bisect`/`--paint-bisect`. По пути найден и устранён зомби-процесс от таймаута инструмента (atexit не срабатывает на SIGTERM) и подтверждён известный риск: `gdigrab` снимает весь десктоп, поэтому любая смена фокуса ОС (включая печать в этом чате) во время ~10-минутного прогона портит все скриншоты после этого момента — не регрессия SDC-4, тот же риск был и у старого дефолта"
       }
      ]
     },
