@@ -3210,12 +3210,24 @@ pub fn layout_mutation_incremental_restyle(
         let _prof = lumen_core::profile::scope("build_flat_tree");
         build_flat_tree(doc)
     };
-    crate::style::set_shadow_sheets(build_shadow_sheets(doc));
+    {
+        // BUG-341 S26: scoped because it is per-pass whole-document work that
+        // the delta cannot shrink — it walks every node asking `is_shadow_host`,
+        // with no `shadow_roots.is_empty()` fast path of its own (unlike
+        // `build_flat_tree`). Unscoped, it was invisible to every stage profile
+        // this track has taken.
+        let _prof = lumen_core::profile::scope("build_shadow_sheets");
+        crate::style::set_shadow_sheets(build_shadow_sheets(doc));
+    }
     let counters = {
         let _prof = lumen_core::profile::scope("precompute_counters");
         crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta)
     };
-    let registry = build_counter_style_registry(sheet);
+    let registry = {
+        // BUG-341 S26: likewise per-pass, sheet-wide and delta-independent.
+        let _prof = lumen_core::profile::scope("counter_style_registry");
+        build_counter_style_registry(sheet)
+    };
     let mut root = {
         let _prof = lumen_core::profile::scope("build_box");
         // BUG-341 S15: reuse whole `LayoutBox` subtrees from `prev` wherever
@@ -3237,8 +3249,13 @@ pub fn layout_mutation_incremental_restyle(
             build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
         }
     };
-    propagate_canvas_background(doc, &mut root);
-    apply_font_size_adjust(&mut root, measurer);
+    {
+        // BUG-341 S26: two whole-tree walks between the build and graft stages,
+        // both previously unscoped.
+        let _prof = lumen_core::profile::scope("post_build_tree_walks");
+        propagate_canvas_background(doc, &mut root);
+        apply_font_size_adjust(&mut root, measurer);
+    }
     {
         let _prof = lumen_core::profile::scope("graft_geometry");
         // Every freshly-built box needs layout; graft clears the bit on reusable

@@ -3428,6 +3428,162 @@ pseudo-element cascades, so the S23 pseudo counter falls too — `KEY` 37 calls 
   yet split is where the remaining `precompute_counters` time goes on a pass that
   recomputes exactly one node.
 
+## S26 — the cascade stage re-derived what the delta had already stated
+
+Branch `p1-bug341-s26`. **The census first, and this time it opened the axis S25
+said was the only one left**: where the pass's time goes when it re-cascades one
+node. The answer was not inside `compute_style` at all — it was the *traversal*.
+
+### The new axis
+
+Three stages of `layout_mutation_incremental_restyle` had never been inside a
+profile scope (`build_shadow_sheets`, `build_counter_style_registry`, the
+`propagate_canvas_background`/`apply_font_size_adjust` pair), and
+`precompute_counters` had never been split into prologue / walk / epilogue. With
+those added, and with new `CascadeStats` fields for nodes *entered* and
+`clean_subtrees` inserts, the split of a warm cycle reads:
+
+| | `KEY` | `HOVER` |
+|---|---:|---:|
+| whole pass | 0.22-0.31 ms | 0.10-0.21 ms |
+| `cascade_walk` | 0.11-0.17 ms | 0.07-0.15 ms |
+| walk's share of the pass | 50-60 % | ~70 % |
+| nodes entered / elements cascaded | 1740 / **1** | 1740 / **0** |
+
+So the largest single item in the pass — larger than box build, layout and graft
+together — was a full pre-order traversal of the document, on a cycle that
+re-cascades one element (`KEY`) or none at all (`HOVER`). Every stage before it
+had been optimised down to the point where the *walking* was the cost.
+
+Its composition, replayed over the real key set rather than timed per node
+(per-node timers cost a sizeable fraction of the stage they measure):
+
+- `Arc::clone` of the reused style — 828 per pass, **0.023-0.047 ms**, plus as
+  much again for the matching drops. The first attempt at this replay measured
+  the lookup and the clone together and read as "the hash barely matters": the
+  clone touches the refcount word of a 3.2 KB `ComputedStyle`, one cold cache
+  line per element and 2.6 MB of working set, which swamped everything on both
+  sides of the comparison being made.
+- the hash lookups themselves — ~4200 per pass across four collections
+  (composed children, style reuse, content-dirty, clean-subtree insert),
+  **~13 ns each**, ≈0.05 ms.
+- the rest is the recursion.
+
+### The fix
+
+On a `HOVER` cycle, S14 has already emptied the root set and S16 already reports
+no content mutation. Feed `walk` that delta and every branch inside it is forced:
+`force` starts `false` and can only be set by a miss in the carried cache, which
+cannot happen for a node the previous pass wrote — so every element takes the
+reuse branch, every node reports itself clean, and the map handed back holds the
+styles it was given. The stage's entire output is a restatement of its input.
+
+`RestyleDelta::is_noop` names that case and `incremental_precompute_counters`
+returns `CounterMap::carried_unchanged` instead of walking. Three things make it
+equivalence rather than a heuristic:
+
+1. **`clean_subtrees` holds the root's element children and nothing else** — not
+   a shortcut but the exact outcome. A walk puts all 828 elements in the set, and
+   the set's only consumer, `extract_clean_subtrees`, stops at the topmost member
+   it meets and moves that whole subtree. On any document that is `<html>`.
+   Non-elements are excluded for the same reason the walk excludes them (it
+   records cleanliness only on its element branch), so the reuse index is handed
+   exactly the boxes it has always been handed.
+2. **The pass ordinal is deliberately left alone.** `CascadeStyles`' invariant is
+   "an entry exists iff the *immediately preceding* pass visited that node", and
+   a pass that skips its walk visited nobody — so the next pass to walk still
+   sees the entries as one pass old and reuses them. Bumping the ordinal would
+   have expired the whole cache on the following cycle: correct output, and the
+   entire document re-cascaded on the next keystroke.
+3. **`nodes`/`quotes` are the one output that is *not* a restatement** — the walk
+   rebuilds them rather than carrying them, so a pass that does not walk hands
+   back empty ones. On a document that uses `counter-increment` or `open-quote`
+   that is a silently blank `counter()`, i.e. visible corruption rather than a
+   slow frame. The licence is a `generated_content` bit the walking pass stamps
+   into the carried cache — chosen over a stylesheet-wide predicate (the S10/S23
+   shape) because `counter-reset` can be set from a `style` attribute, which no
+   sheet scan can see.
+
+Also removed: `FlatTree::children_of` hashed its argument to discover that the
+override map is empty. Whether a document has any composed-tree override is a
+fact about the document, not about the node — the S21 shape — and it is "no" for
+every page without Shadow DOM. That lookup sat on every traversal in the engine,
+not only this one.
+
+### Gates — by counter, each on both arms
+
+- `bug341_s26_hover_cycles_do_not_re_walk_the_cascade` (lumen-shell, runs by
+  default): over four cycles of each shape on the real chrome document, a hover
+  cycle must enter **0** nodes and a keystroke cycle must still cascade. The
+  second arm is load-bearing — the cheapest way to zero the visit counter is to
+  stop cascading altogether.
+- `bug341_s26_an_unchanged_cycle_skips_the_walk_unless_it_generates_content`
+  (lumen-layout): arm one is the skip; arm two is a document with
+  `counter-reset`/`counter-increment` whose unchanged cycle must **keep** walking
+  and still report `n=1`/`n=2`. Verified to go red when the `generated_content`
+  half of the licence is removed.
+- `bug341_s26_a_cycle_with_a_real_change_still_walks` (lumen-layout).
+- `mutation_incremental_restyle_unchanged_state_matches_full` now asserts
+  `visited == 0` alongside its geometry comparison, so the test that proves the
+  skip *correct* is the same one that proves it *happened*.
+
+### Measurement — interleaved A/B ×6 against main (`969365b84`), by min
+
+| | main | S26 |
+|---|---|---|
+| `CC12_HOVER` min | 0.41 / 0.50 / 0.35 / 0.34 / 0.36 / 0.38 | **0.35 / 0.40 / 0.32 / 0.27 / 0.29 / 0.31** |
+| `CC12_HOVER` p50 | 0.50 / 0.65 / 0.43 / 0.43 / 0.49 / 0.47 | **0.44 / 0.52 / 0.40 / 0.32 / 0.37 / 0.36** |
+| `CC12_KEY` min | 0.49 / 0.66 / 0.48 / 0.47 / 0.52 / 0.51 | 0.62 / 0.55 / 0.52 / 0.53 / 0.49 / 0.51 |
+
+`CC12_HOVER` is lower in **six rounds out of six** on both min (−9…−21 %) and p50
+(−12…−26 %), and on p95 in five of six — but the min *groups* only just touch
+(main's best round 0.34 against S26's worst 0.40), so the paired comparison is
+the claim and the counter is the proof: the cascade stage on a hover cycle goes
+0.07-0.15 → **0.00 ms**, nodes entered 1740 → **0**. Six rounds rather than the
+usual three precisely because the census predicted the effect would land near the
+protocol's resolution (~0.1 ms off a ~0.45 ms cycle) and three would not have
+separated it from the machine.
+
+`CC12_KEY` — **no claim, and none was expected**: its delta names a dirty root
+and a mutated text node, so the walk stays. Gate CC-12 is where S25 left it:
+`CC12_HOVER` p95 inside the 2 ms budget in all six rounds (0.94-1.28 ms, against
+main's 1.08-1.43), `CC12_KEY` p95 1.70-2.53 ms — still the red half, still a coin
+flip.
+
+`dump_golden.py` 12/12 with no diff.
+
+### What S27 should look at
+
+- **The general case of this slice: walk the spine, not the document.** `KEY`'s
+  delta names one dirty root and one content-mutated node, so the same argument
+  that licenses skipping the whole document licenses skipping every subtree that
+  contains neither. What blocks it is not the traversal but the bookkeeping: a
+  skipped subtree's entries are not restamped, so `finish_pass` would sweep them
+  and `reuse` would reject them on the pass after. Both are consequences of the
+  S24 ordinal, which under a *complete* content record (`ContentDirty::Nodes`) is
+  redundant — a re-attachment reports its container, which lands in `dirty_roots`
+  and forces the subtree. Worth ~0.11-0.17 ms of `KEY`'s ~0.25 ms pass, i.e. the
+  only remaining item above the protocol's resolution, and the only one that can
+  move the red half of the gate. It is also the slice that must not be rushed:
+  getting the ordinal wrong is a stale style, not a slow frame.
+- **The `Arc::clone` per reused element** (0.023-0.047 ms plus its drops). The
+  walk counts a reference to a style it then never reads on a clean subtree. It
+  is load-bearing today only because children may insert into the same map, so
+  a borrow into it cannot outlive the recursion — removing it is a question about
+  where the cascade cache lives, not about the walk. Note that the spine walk
+  above removes it as a side effect, on the subtrees it skips.
+- **Dense keying for the `NodeId`-keyed collections.** `NodeId` is a consecutive
+  arena index that no input to the browser chooses, yet it goes through SipHash;
+  a bijective integer mix priced the same 828 lookups at 4.5 ns against 13 ns
+  (~3×), worth ~0.035 ms of the walk. Measured, then **deliberately not shipped
+  in S26**: ~0.03 ms of a ~0.5 ms bench cycle is below the A/B protocol's
+  resolution, and S24's lesson is to decide that before writing the code rather
+  than after. Re-measure the note before acting on it (S19's lesson) — if the
+  spine walk lands first, most of those 4200 lookups will no longer exist.
+- Both remaining entries from S25's list (`clean_subtrees` built from scratch,
+  `style_arc` misses on non-elements) stand unchanged and remain below the noise
+  floor.
+
 ## Repro
 
 ```bash
@@ -3442,6 +3598,13 @@ cargo test -p lumen-shell --profile dev-release bug341_s19_copy_census -- --igno
 cargo test -p lumen-shell --profile dev-release bug341_s20_stage_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census -- --ignored --nocapture
 ```
+
+S26 extended the same census once more: `precompute_counters` is now split into
+`cascade_prologue` / `cascade_walk` / `cascade_finish_pass` (plus `cascade_noop`
+on the skip path), three previously unscoped stages of the pass are inside
+scopes, and each cycle line reports `visited=` (nodes the walk entered, not just
+elements it cascaded) and `clean_inserts=`. The `CounterMap:` line prices the
+reuse path's lookup and its `Arc::clone` separately.
 
 S25 extended the same census again rather than adding one: it now reports the
 per-cycle `display` probe count, how many of those had to run a cascade, and the
