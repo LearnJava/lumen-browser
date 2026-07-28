@@ -331,6 +331,24 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   `python graphic_tests/run.py --continue-on-fail` run against the new default (mandatory — the flip can
   move pixels near TEST-00's magenta calibration).
 
+- **CC-15-3: legacy chrome paint/hit-test removed** (`crates/shell/src/{toolbar.rs,tabs/strip.rs,
+  tabs/archive.rs,address_bar.rs,main.rs}`): everything the `!self.focus.active &&
+  !self.css_chrome_enabled` gate guarded is gone (~2100 lines) — `build_toolbar`/`build_tab_bar`/
+  `build_inline_field`/`build_dropdown` and friends. Geometry constants (`CHROME_H`, `avatar_x()`,
+  `TAB_BAR_HEIGHT`, `LAYOUT_BTN_W`, `SETTINGS_BTN_W`) and data types (`TabStrip`, `TabEntry`,
+  `TabLayout`, `ArchivedTab`) stay — read unconditionally by `content_layout_viewport()`,
+  `resumed()` and the keep-forever panels. Two things the cut-out surfaced, both fixed in the same
+  slice because deletion would otherwise have dropped behaviour silently: the removed layout-toggle
+  button was the only caller of `set_tab_layout` outside the settings-panel snapshot (now
+  `Lumen::persist_tab_layout()`, called from the keyboard/palette toggles), and
+  `chrome_model_snapshot` fed `ChromeSuggestionModel` raw `label()`/`sub_label()` while the removed
+  `build_dropdown` punycode-guarded both — DS-6's IDN spoof guard was bypassed for `#omniDropdown`
+  rows since the CC-14 flip (now `address_bar::chrome_suggestion_text()`). Three parity gaps filed
+  rather than silently deleted, their data kept under `#[allow(dead_code, reason = "BUG-NNN: …")]`:
+  BUG-408 (archive panel unreachable), BUG-409 (tab-group colours unrendered), BUG-410 (dropdown
+  row type tag lost). `strip::hit_test`/`TabHit` deliberately kept — the live, ungated right-click
+  tab-context-menu path still uses them, which is itself a second BUG-404 site.
+
 ## Deferred
 
 - **`<template>` markup + `templates::IDS` population**: the frozen design reference has none —
