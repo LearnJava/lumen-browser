@@ -1713,6 +1713,35 @@ divergences. `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
 also re-checked default (no `v8-backend`) `cargo check -p lumen-js` clean, learning the gate-forgetting
 lesson from the previous slice's writeup without repeating the mistake.
 
+### S12b-24-idb — eleventh porting slice (2026-07-30, branch p1-v8-s12b-24-idb)
+
+IndexedDB in-memory ops (open/upgradeneeded, add/get by keyPath and out-of-line autoIncrement,
+put-overwrite, duplicate-key add aborts the transaction with `ConstraintError`, `getAll` with/without
+`IDBKeyRange`, delete/clear, index get/getAll, unique-index violation, cursor iterate/reverse/
+update/delete, `IDBKeyRange.includes`/`indexedDB.cmp`, version-downgrade error, `deleteDatabase`,
+second connection sees data persisted by the first) plus IndexedDB persistence across runtime reload
+(Rust-backed `IdbBackend` snapshot: reload restores without re-firing `upgradeneeded`, version is
+restored, `Date` values round-trip, a deleted database restores as empty on reload, a read-only
+transaction does not re-persist) — **23 tests** ported into `mod tests::v8_idb`, QuickJS copies
+(including the `MockIdb` struct and `runtime_with_idb` helper) deleted. Actual section on start —
+`dom.rs:16031-16558`, immediately after the fontface-shadow-custom slice's block, ending right before
+`// ── FormData API tests ──`. Brief's estimate ("~34" in-memory + "8" persistence = ~42) was stale;
+real count for the full IndexedDB section (both subareas together) was 23.
+
+Confirms the open question the nav-url-storage slice's writeup flagged: constructing `V8JsRuntime`
+twice in one test process, both instances sharing one backend via `Arc<Mutex<...>>`
+(`idb_persists_across_runtime_reload` and friends), works with no isolate-lifecycle issues — same
+verdict as `local_storage_persists_across_runtimes` already established for `WebStorage`. New helper
+`v8_runtime_with_idb` mirrors `runtime_with_idb` exactly (same `install_dom` positional-argument
+order; `V8JsRuntime::install_dom`'s `idb_backend: Option<Arc<dyn IdbBackend>>` parameter sits at the
+same position as `QuickJsRuntime::install_dom`'s, confirmed by reading both signatures before
+porting). No other plumbing needed — bodies are pure `rt.eval`, unchanged except
+`runtime_with_idb`/`runtime_with_dom` → `v8_runtime_with_idb`/`v8_runtime_with_dom`. 23/23 green on
+the first run, zero engine divergences. `cargo test -p lumen-js --features v8-backend` stayed at
+2570/2570 (−23 QuickJS, +23 V8). `cargo clippy -p lumen-js --all-targets --features v8-backend --
+-D warnings` and the default-feature `cargo clippy -p lumen-js --all-targets -- -D warnings` both
+clean.
+
 ---
 
 ## Risks (Rev 2)
