@@ -1776,6 +1776,39 @@ clippy pass. 30/30 green on the first run, bodies unmodified, zero engine diverg
 `cargo test -p lumen-js --features v8-backend` — 2570/2570 (−30 QuickJS, +30 V8); default-feature
 `cargo test -p lumen-js` — 1826/1826 unaffected. Both clippy passes clean.
 
+### S12b-24-selection-range-editing — thirteenth porting slice (2026-07-30, branch p1-v8-s12b-24-selection-range-editing)
+
+Selection API (`window.getSelection()`/`document.getSelection()`, `type`/`rangeCount`/
+`isCollapsed`/`toString()`/`removeAllRanges`/`getRangeAt`/`collapseToStart`), Range
+(`document.createRange()`, `collapse`/`cloneRange`/`selectNodeContents`/
+`compareBoundaryPoints`, `window.Range`), `execCommand` (`bold`/`italic`/unknown/`copy`,
+`queryCommandEnabled`/`State`/`Value`/`Supported`, `insertText`, `delete`), and
+`contentEditable`/`isContentEditable` including the `_lumen_handle_contenteditable_key`
+insert/deleteBackward/deleteForward dispatch plus its `beforeinput`-cancellation and
+`input`-event paths — **42 tests** ported into `mod tests::v8_selection_range_editing`. Actual
+section on start — `dom.rs:16060-16606`, immediately after the formdata slice's block, ending
+right before `// ── window.getComputedStyle() tests ──`. Brief's estimate ("~68") was stale
+along with its line range; real count was 42.
+
+One non-obvious finding: `bool_eval`, defined at the top of the block being removed, turned out
+to be a shared QuickJS helper — still-unported sections further down the file (details/dialog,
+`window.open`, and others) call it too. Deleting it wholesale broke ~111 downstream call sites
+across the crate (the compiler even pointed at an unrelated same-named helper in
+`filesystem_access.rs` as a decoy). Fix: restored the QuickJS `bool_eval` next to
+`runtime_with_dom`/`runtime_with_fetch`, and gave `mod v8_selection_range_editing` its own
+`V8JsRuntime`-typed copy — the two never mix. Lesson for future slices, sharper than the
+formdata-slice mock lesson: grep a **helper function itself**, not just doc-fixture builders,
+across the whole file before deleting it — some helpers are load-bearing for sections far outside
+the one being ported. `make_selection_doc`/`make_contenteditable_doc` had no such external
+callers and moved cleanly. No other plumbing was needed: the only fixture builder was
+`runtime_with_dom` (twin `v8_runtime_with_dom`), and every test body was already
+`rt.eval(...)` plus direct `Document`/`NodeData` inspection through the shared
+`Arc<Mutex<Document>>`, none of it engine-specific. 42/42 green on the first run, bodies
+unmodified, zero engine divergences. `cargo test -p lumen-js --features v8-backend` —
+2570/2570 (unchanged: −42 ungated QuickJS, +42 gated V8 — a like-for-like swap under this
+feature); default-feature `cargo test -p lumen-js` — 1784/1784 (was 1826, −42, since the V8
+module is feature-gated out). Both clippy passes clean.
+
 ---
 
 ## Risks (Rev 2)
