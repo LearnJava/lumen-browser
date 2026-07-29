@@ -76,11 +76,11 @@
  "generated": "2026-07-29",
  "counts": {
   "open": 127,
-  "fixed": 287,
+  "fixed": 288,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 414,
+ "total_bugs": 415,
  "phases": [
   {
    "id": "P0",
@@ -7079,10 +7079,10 @@
    "debtor": false
   },
   "BUG-433": {
-   "status": "open",
-   "title": "Flex-элемент сжимается ниже **автоматического минимального размера** (CSS Flexbox §4.5): при `min-width: auto` минимум = min-content содержимого, а `lay_out_fle…",
-   "component": "layout (flexbox)",
-   "date": null,
+   "status": "fixed",
+   "title": "Flex-элемент сжимался ниже **автоматического минимального размера** (CSS Flexbox §4.5): при `min-width: auto` минимум = content-based minimum size, а `lay_out_f…",
+   "component": "layout (`box_tree.rs` — `lay_out_flex`, `flex_item_min_main_width`, `min_content_outer_width_of_contents`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-434": {
@@ -7159,6 +7159,13 @@
    "status": "open",
    "title": "**У checkedness нет хранилища, отдельного от content-атрибута `checked`.** HTML LS §4.10.5.5 различает текущее состояние и значение по умолчанию (`defaultChecke…",
    "component": "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-445": {
+   "status": "open",
+   "title": "Шесть flex-снапшотов `lumen-layout --test all` (`flex_row_equal_children`, `flex_row_explicit_basis`, `flex_column_children`, `flex_column_gap`, `flex_gap_with_…",
+   "component": "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`",
    "date": null,
    "debtor": false
   }
@@ -7411,6 +7418,9 @@
    "BUG-237",
    "BUG-241"
   ],
+  "layout (`box_tree.rs` — `lay_out_flex`, `flex_item_min_main_width`, `min_content_outer_width_of_contents`)": [
+   "BUG-433"
+  ],
   "layout (`box_tree.rs`, `lay_out_flex`)": [
    "BUG-333"
   ],
@@ -7427,11 +7437,11 @@
   "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)": [
    "BUG-339"
   ],
+  "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`": [
+   "BUG-445"
+  ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"
-  ],
-  "layout (flexbox)": [
-   "BUG-433"
   ],
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"

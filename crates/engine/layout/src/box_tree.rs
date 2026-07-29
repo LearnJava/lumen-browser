@@ -5732,6 +5732,26 @@ fn min_content_outer_width(
         };
         return outer.max(0.0);
     }
+    min_content_outer_width_of_contents(b, measurer, viewport)
+}
+
+/// Same as [`min_content_outer_width`] but ignoring `b`'s own definite `width`:
+/// the min-content width the box would have if it were sized by its contents.
+///
+/// This is the CSS Flexbox §4.5 *content size suggestion*, which is deliberately
+/// intrinsic — a flex item with `width: 300px` whose contents can collapse to
+/// nothing still has a content size suggestion of 0, and so may be shrunk below
+/// its preferred width. Descendants keep their own explicit widths; only the
+/// box's own preferred size is bypassed.
+fn min_content_outer_width_of_contents(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    let s = &b.style;
+    let em = s.font_size;
+    let pl = s.padding_left.resolve_or_zero(em, 0.0, viewport);
+    let pr = s.padding_right.resolve_or_zero(em, 0.0, viewport);
     let content_w = match &b.kind {
         BoxKind::InlineRun { segments, .. } => {
             // min-content = longest single word across all segments.
@@ -5816,6 +5836,70 @@ fn flex_auto_base_main_width(
         }
     }
     base.max(0.0)
+}
+
+/// CSS Flexbox L1 §4.5 — automatic minimum size (main axis, **border-box**) of a
+/// row-direction flex item. This is the floor below which the item may not be
+/// shrunk by `flex-shrink` (§9.7 step 4). Margins are excluded (the caller adds
+/// them).
+///
+/// * An explicit `min-width` always wins — it is simply resolved (an intrinsic
+///   keyword resolves against the item's own min-content width).
+/// * `min-width: auto` (the initial value, stored as `None`) means the
+///   *content-based minimum size*: the smaller of the item's *content size
+///   suggestion* (the min-content width of its **contents** — see
+///   [`min_content_outer_width_of_contents`]) and its *specified size
+///   suggestion* (its own definite `width`, when it has one), capped by a
+///   definite `max-width`. Taking the smaller of the two is what keeps an item
+///   whose contents can collapse — e.g. one holding only a `width: 100%` child —
+///   shrinkable below its own preferred width.
+///   It applies only while the main-axis overflow is `visible`; a scroll
+///   container has no content-based minimum and may shrink to zero.
+///
+/// `cb` is the flex container's inner main size, used to resolve percentages.
+fn flex_item_min_main_width(
+    item: &LayoutBox,
+    cb: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    let s = &item.style;
+    let em = s.font_size;
+    let pl = s.padding_left.resolve_or_zero(em, cb, viewport);
+    let pr = s.padding_right.resolve_or_zero(em, cb, viewport);
+    // content-box → border-box conversion for a resolved min/max length.
+    let outer_horiz = |v: f32| match s.box_sizing {
+        BoxSizing::ContentBox => v + pl + pr + s.border_left_width + s.border_right_width,
+        BoxSizing::BorderBox => v,
+    };
+    if let Some(min_len) = &s.min_width {
+        let v = if min_len.is_intrinsic() {
+            min_content_outer_width(item, measurer, viewport)
+        } else {
+            min_len
+                .resolve(em, Some(cb), viewport)
+                .map_or(0.0, |v| outer_horiz(v.max(0.0)))
+        };
+        return v.max(0.0);
+    }
+    if s.overflow_x != Overflow::Visible {
+        return 0.0;
+    }
+    let mut floor = min_content_outer_width_of_contents(item, measurer, viewport);
+    // Specified size suggestion — the item's own definite preferred main size.
+    if let Some(w_len) = &s.width
+        && !w_len.is_intrinsic()
+        && let Some(w) = w_len.resolve(em, Some(cb), viewport)
+    {
+        floor = floor.min(outer_horiz(w).max(0.0));
+    }
+    if let Some(max_len) = &s.max_width
+        && !max_len.is_intrinsic()
+        && let Some(v) = max_len.resolve(em, Some(cb), viewport)
+    {
+        floor = floor.min(outer_horiz(v).max(0.0));
+    }
+    floor.max(0.0)
 }
 
 /// Рекурсивно смещает rect.y всего поддерева на dy (для vertical-align).
@@ -9622,15 +9706,75 @@ fn lay_out_flex(
                 }
             }
         } else if free_space < 0.0 {
-            let weights: Vec<f32> = line_keys
+            // CSS Flexbox L1 §9.7 step 4 — «fix min/max violations». Shrinking is not
+            // a single proportional pass: every item has a main-axis minimum
+            // (§4.5 automatic minimum size for the initial `min-width: auto`), and an
+            // item that would be pushed below it is frozen at that minimum while the
+            // *remaining* deficit is redistributed over the still-flexible items. The
+            // loop is what makes a row of fixed-width items overflow its container
+            // instead of collapsing to an equal share of it (BUG-433).
+            //
+            // Only the row axis gets the floor: the column axis folds its content-size
+            // floor into the base size above (see the `is_column` arm of `all_hyp`).
+            let mins: Vec<f32> = line_keys
                 .iter()
-                .enumerate()
-                .map(|(j, &k)| children[item_idxs[k]].style.flex_shrink * hyp_mains[j])
+                .map(|&k| {
+                    let item = &children[item_idxs[k]];
+                    if is_column {
+                        return 0.0;
+                    }
+                    let is = &item.style;
+                    let iem = is.font_size;
+                    let m_l = is.margin_left.resolve_or_zero(iem, cb, viewport);
+                    let m_r = is.margin_right.resolve_or_zero(iem, cb, viewport);
+                    // `mins` is compared against the *outer* (margin-box) sizes in
+                    // `hyp_mains`, so the margins ride along with the floor.
+                    flex_item_min_main_width(item, cb, measurer, viewport) + m_l + m_r
+                })
                 .collect();
-            let total_weight: f32 = weights.iter().sum();
-            if total_weight > 0.0 {
-                for j in 0..n {
-                    hyp_mains[j] = (hyp_mains[j] + free_space * (weights[j] / total_weight)).max(0.0);
+            let shrink: Vec<f32> = line_keys
+                .iter()
+                .map(|&k| children[item_idxs[k]].style.flex_shrink)
+                .collect();
+            let base: Vec<f32> = hyp_mains.clone();
+            // An item with `flex-shrink: 0` never shrinks — it starts out frozen at
+            // its base size (still clamped by its own minimum, per step 4).
+            let mut frozen: Vec<bool> = shrink.iter().map(|&f| f <= 0.0).collect();
+            for j in 0..n {
+                if frozen[j] {
+                    hyp_mains[j] = base[j].max(mins[j]);
+                }
+            }
+            // Each iteration freezes at least one item, so `n` passes always suffice.
+            for _ in 0..n {
+                let unfrozen: Vec<usize> = (0..n).filter(|&j| !frozen[j]).collect();
+                if unfrozen.is_empty() {
+                    break;
+                }
+                let frozen_sum: f32 = (0..n).filter(|&j| frozen[j]).map(|j| hyp_mains[j]).sum();
+                let unfrozen_base: f32 = unfrozen.iter().map(|&j| base[j]).sum();
+                let remaining = container_main - line_gap_total - frozen_sum - unfrozen_base;
+                let total_weight: f32 = unfrozen.iter().map(|&j| shrink[j] * base[j]).sum();
+                if remaining >= 0.0 || total_weight <= 0.0 {
+                    // Deficit already absorbed by the frozen items (or nothing left that
+                    // can absorb it) — the rest keep their base size.
+                    for &j in &unfrozen {
+                        hyp_mains[j] = base[j].max(mins[j]);
+                    }
+                    break;
+                }
+                let mut violated = false;
+                for &j in &unfrozen {
+                    let target = base[j] + remaining * (shrink[j] * base[j] / total_weight);
+                    let clamped = target.max(mins[j]).max(0.0);
+                    hyp_mains[j] = clamped;
+                    if clamped > target + 0.01 {
+                        frozen[j] = true;
+                        violated = true;
+                    }
+                }
+                if !violated {
+                    break;
                 }
             }
         }
@@ -16883,6 +17027,88 @@ mod tests {
         assert_eq!(a.rect.width, 200.0, "A must stay at min-width (200), not shrink from inflated base; a.w={}", a.rect.width);
         assert_eq!(b.rect.width, 100.0, "B explicit width stays; b.w={}", b.rect.width);
         assert_eq!(b.rect.x, 200.0, "B starts after A; b.x={}", b.rect.x);
+    }
+
+    #[test]
+    fn bug433_flex_item_not_shrunk_below_automatic_minimum_size() {
+        // BUG-433 / CSS Flexbox §4.5: `min-width: auto` on a flex item means its
+        // content-based minimum size, so a row of fixed-width children must overflow
+        // its container instead of being shrunk to an equal share of it.
+        //
+        // 300px container, two items each holding a 200px child. Old behaviour:
+        // deficit -100 split evenly → 150 + 150 (content sticking out of both items).
+        // Expected (Edge/Chromium): 200 + 200, second at x=200, row overflows by 100.
+        let html = r#"<div id="row"><div id="a"><div class="fixed"></div></div><div id="b"><div class="fixed"></div></div></div>"#;
+        let css = "body{margin:0} #row{display:flex;width:300px} .fixed{width:200px;height:20px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.width, 200.0, "A must stay at its min-content width; a.w={}", a.rect.width);
+        assert_eq!(b.rect.width, 200.0, "B must stay at its min-content width; b.w={}", b.rect.width);
+        assert_eq!(b.rect.x, 200.0, "B starts right after A, row overflows; b.x={}", b.rect.x);
+    }
+
+    #[test]
+    fn bug433_shrink_redistributes_deficit_onto_the_still_flexible_item() {
+        // BUG-433 §9.7 step 4 is a *loop*: freezing the item that hit its minimum must
+        // push the deficit it could not absorb onto the remaining flexible items.
+        //
+        // 300px container. A holds a 200px child (floor 200), B is empty text-less
+        // with flex-basis 200px and no content (floor 0). Deficit = -100.
+        // One proportional pass would give 150/150; after clamping A back to 200 the
+        // remaining -100 must land entirely on B → 200 + 100 = 300, no overflow.
+        let html = r#"<div id="row"><div id="a"><div class="fixed"></div></div><div id="b"></div></div>"#;
+        let css = "body{margin:0} #row{display:flex;width:300px} \
+                   #a{flex:0 1 200px} #b{flex:0 1 200px} .fixed{width:200px;height:20px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.width, 200.0, "A frozen at its automatic minimum; a.w={}", a.rect.width);
+        assert_eq!(b.rect.width, 100.0, "B absorbs the whole deficit; b.w={}", b.rect.width);
+        assert_eq!(b.rect.x, 200.0, "row exactly fills the container; b.x={}", b.rect.x);
+    }
+
+    #[test]
+    fn bug433_item_with_collapsible_contents_still_shrinks_below_its_width() {
+        // BUG-433 / §4.5: the content-based minimum is the *smaller* of the specified
+        // size suggestion (the item's own `width`) and the content size suggestion (the
+        // min-content width of its contents). An item whose contents can collapse to
+        // nothing — here a single `width:100%` child, which contributes 0 to
+        // min-content — therefore has a floor of 0 and stays fully shrinkable.
+        // Reading the item's own `width` as its min-content would freeze both items at
+        // 300px and wrongly overflow the 400px container.
+        let html = r#"<div id="outer"><div id="a"></div><div id="x"><div id="p"></div></div></div>"#;
+        let css = "body{margin:0} #outer{display:flex;width:400px} \
+                   #a{width:300px;height:20px} #x{width:300px} #p{width:100%;height:20px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let x = find_by_id_all(&root, &doc, "x").expect("x");
+        assert_eq!(a.rect.width, 200.0, "A has no contents to floor it; a.w={}", a.rect.width);
+        assert_eq!(x.rect.width, 200.0, "X's `width:100%` child floors nothing; x.w={}", x.rect.width);
+    }
+
+    #[test]
+    fn bug433_scroll_container_flex_item_has_no_automatic_minimum() {
+        // CSS Flexbox §4.5: the content-based minimum applies only while the main-axis
+        // overflow is `visible`. A scroll container may still be shrunk to zero, so the
+        // BUG-433 floor must not freeze it — otherwise `overflow:hidden` rows (the
+        // standard "truncating flex child" idiom) would start overflowing.
+        let html = r#"<div id="row"><div id="a"><div class="fixed"></div></div><div id="b"><div class="fixed"></div></div></div>"#;
+        let css = "body{margin:0} #row{display:flex;width:300px} \
+                   #a{overflow:hidden} #b{overflow:hidden} .fixed{width:200px;height:20px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.width, 150.0, "scroll container shrinks freely; a.w={}", a.rect.width);
+        assert_eq!(b.rect.x, 150.0, "no overflow for scroll containers; b.x={}", b.rect.x);
     }
 
     /// Returns the first `InlineRun` box in `b`'s subtree (depth-first).
