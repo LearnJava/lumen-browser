@@ -3916,6 +3916,22 @@ function _lumen_dispatch_mouse_event(start_nid, type, clientX, clientY, button, 
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
+// Called from the shell right before it runs the form submission algorithm for
+// an activated submit button (HTML LS 4.10.21.4 step 11: fire a cancelable
+// event named 'submit' at the form). Returns false when a page handler called
+// preventDefault(), in which case the shell must not navigate — that is how an
+// SPA takes submission over (BUG-437: the shell used to submit natively without
+// ever telling JS, so the page's own submit handler never ran).
+// submitter_nid < 0 means 'no submitter' (form.requestSubmit() with no button).
+function _lumen_dispatch_submit_event(form_nid, submitter_nid) {
+    var submitter = (submitter_nid === null || submitter_nid === undefined || submitter_nid < 0)
+        ? null : _lumen_make_element(submitter_nid);
+    var ev = new SubmitEvent('submit', {
+        bubbles: true, cancelable: true, isTrusted: true, submitter: submitter
+    });
+    return _lumen_dispatch_rich(form_nid, ev);
+}
+
 // Called from shell when pointer is locked and DeviceEvent::MouseMotion fires.
 // Dispatches mousemove + pointermove with movementX/Y reflecting raw OS delta.
 // (W3C Pointer Lock L2 §6.3 — clientX/Y reflect last position; movement deltas are raw.)
@@ -24326,6 +24342,39 @@ mod tests {
             "var btn = document.createElement('button'); \
              var e = new SubmitEvent('submit', {bubbles: true, cancelable: true, submitter: btn}); \
              e.submitter === btn"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    /// BUG-437: the shell asks the shim whether a form submission may proceed.
+    /// A page handler calling `preventDefault()` must come back as `false`, and
+    /// the event must reach listeners as a trusted, bubbling `SubmitEvent`.
+    #[test]
+    fn dispatch_submit_event_reports_prevent_default() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var form = document.getElementById('main'); \
+             var seen = null; \
+             form.addEventListener('submit', function(e) { seen = e; e.preventDefault(); }); \
+             var proceed = _lumen_dispatch_submit_event(form.__nid__, -1); \
+             proceed === false && seen !== null && seen.type === 'submit' && \
+             seen.isTrusted === true && seen.bubbles === true && seen.submitter === null"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    /// BUG-437: without `preventDefault()` the shell must still submit — the
+    /// dispatch reports `true` and exposes the submitter element.
+    #[test]
+    fn dispatch_submit_event_uncancelled_proceeds_with_submitter() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var form = document.getElementById('main'); \
+             var btn = form.querySelector('.highlight'); \
+             var got = null; \
+             form.addEventListener('submit', function(e) { got = e.submitter; }); \
+             var proceed = _lumen_dispatch_submit_event(form.__nid__, btn.__nid__); \
+             proceed === true && got !== null && got.__nid__ === btn.__nid__"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
