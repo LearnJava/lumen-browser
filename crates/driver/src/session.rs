@@ -324,6 +324,19 @@ impl InProcessSession {
         let flat_tree = lumen_dom::build_flat_tree(&doc_guard);
         drop(doc_guard);
 
+        // BUG-382: hand the fresh layout to the JS runtime. `getComputedStyle()` and
+        // `getBoundingClientRect()` answer from a snapshot the embedder pushes, never
+        // by querying the layout engine — without this call every property read back
+        // as `""` and every rect as all-zeros for the whole session, because the
+        // headless pipeline has no relayout path to piggyback on (the shell's own
+        // pushes live in `relayout()`/`apply_loaded_page`).
+        #[cfg(feature = "v8")]
+        if let Some(rt) = self.js_runtime.as_ref() {
+            rt.update_layout_rects(lumen_layout::collect_layout_rects(&layout_root));
+            rt.update_computed_styles(lumen_layout::collect_computed_styles(&layout_root));
+            rt.update_viewport_size(self.viewport.width, self.viewport.height);
+        }
+
         // Build property trees (PH1-7): four parallel trees (Transform / Scroll /
         // Effect / Clip) from the completed layout root. Committed to the in-process
         // compositor so that off-main-thread scroll can update offsets without relayout.
