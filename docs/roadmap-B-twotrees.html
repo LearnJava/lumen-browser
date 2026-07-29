@@ -76,11 +76,11 @@
  "generated": "2026-07-29",
  "counts": {
   "open": 122,
-  "fixed": 277,
+  "fixed": 278,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 399,
+ "total_bugs": 400,
  "phases": [
   {
    "id": "P0",
@@ -7013,8 +7013,15 @@
    "debtor": false
   },
   "BUG-429": {
+   "status": "fixed",
+   "title": "Детерминированный CPU-снапшотный гейт (`cases::snapshot_cpu`, `scripts/scoped-test.sh`) рендерил страницы через `InProcessSession`, который (а) устанавливал V8…",
+   "component": "driver (`session.rs::run_pipeline` / `screenshot_cpu_rgba`)",
+   "date": "2026-07-29",
+   "debtor": false
+  },
+  "BUG-430": {
    "status": "open",
-   "title": "Детерминированный CPU-снапшотный гейт (`cases::snapshot_cpu`, `scripts/scoped-test.sh`) рендерит страницы через `InProcessSession`, который (а) устанавливает V8…",
+   "title": "Остаток BUG-429: `InProcessSession` не грузит подресурсы, поэтому `DrawImage` для `<img>` резолвится в незарегистрированный ключ и рисуется серой заглушкой — эт…",
    "component": "driver (`session.rs::run_pipeline` / `screenshot_cpu_rgba`)",
    "date": null,
    "debtor": false
@@ -7060,7 +7067,8 @@
    "BUG-316"
   ],
   "driver (`session.rs::run_pipeline` / `screenshot_cpu_rgba`)": [
-   "BUG-429"
+   "BUG-429",
+   "BUG-430"
   ],
   "driver/shell (`WinitSession::scroll`, `navigate_fragment`)": [
    "BUG-338"
