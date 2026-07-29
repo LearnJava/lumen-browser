@@ -1742,6 +1742,40 @@ the first run, zero engine divergences. `cargo test -p lumen-js --features v8-ba
 -D warnings` and the default-feature `cargo clippy -p lumen-js --all-targets -- -D warnings` both
 clean.
 
+### S12b-24-formdata — twelfth porting slice (2026-07-30, branch p1-v8-s12b-24-formdata)
+
+FormData API (append/get/getAll/has/delete/set, keys/values/entries iterators, `forEach`,
+`Symbol.iterator`, `_toUrlEncoded`/`_toMultipart` percent-encoding and quote-escaping) plus fetch
+body-encoding (`fetch()` POST with a `FormData` body → `multipart/form-data` with a boundary, a
+string body → `text/plain`, a `Uint8Array` body → `application/octet-stream`, `Content-Type`
+header override) plus `AbortController`/`AbortSignal.timeout` around fetch (the
+`_lumen_fetch_cancellable`/`_lumen_fetch_cancellable_with_body` bridge, an in-flight abort during
+an async fetch) — **30 tests** ported into `mod tests::v8_formdata`. Actual section on start —
+`dom.rs:16030-16450`, immediately after the idb slice's block, ending right before
+`// ── Selection API tests ──`. Brief's estimate ("~22") was stale; real count was 30.
+
+One divergence from the mechanical pattern of prior slices: `CaptureFetch`/`FetchCall`/
+`runtime_with_fetch` were **not** deleted from the QuickJS region — five still-unported tests
+further down the file share that same mock (`send_beacon_with_provider_returns_true`,
+`fetch_keepalive_with_provider_fires_request`, `fetch_priority_high_and_low_accepted`,
+`fetch_priority_invalid_normalizes_to_auto`, `fetch_response_body_getreader_yields_correct_bytes`
+— sendBeacon/fetch-keepalive-priority/WHATWG-Streams areas, none scoped to this slice), so removing
+them would have broken those tests' compile. They were kept in place next to `runtime_with_dom`;
+`mod v8_formdata` defines its own `CaptureFetch`/`FetchCall`/`v8_runtime_with_fetch` copy, so the
+two engines' mocks never mix. `AbortFetch`/`BlockingFetch`/`runtime_with_abort_fetch`/
+`runtime_with_blocking_fetch`, by contrast, had no other callers and were deleted normally.
+Lesson for future slices: grep a helper's usage across the **whole file**, not just the section
+being ported, before deleting it — a shared mock can outlive the section that first defined it.
+
+`V8JsRuntime::install_dom`'s `fetch_provider` parameter already sat at the same position as
+`QuickJsRuntime::install_dom`'s — no signature plumbing needed. The one real omission was
+forgetting `#[cfg(feature = "v8-backend")]` on the new `mod v8_formdata` itself: without it the
+default (QuickJS-only) build failed with `unresolved import crate::v8_runtime` (that module is
+itself gated behind the same feature in `lib.rs`) — caught immediately by the default-feature
+clippy pass. 30/30 green on the first run, bodies unmodified, zero engine divergences.
+`cargo test -p lumen-js --features v8-backend` — 2570/2570 (−30 QuickJS, +30 V8); default-feature
+`cargo test -p lumen-js` — 1826/1826 unaffected. Both clippy passes clean.
+
 ---
 
 ## Risks (Rev 2)
