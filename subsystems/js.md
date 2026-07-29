@@ -18,6 +18,23 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **`dom.rs` test monolith, timing/observer families ([P1] P3-v8-s12b-24-perf-observers,
+  2026-07-30).** Performance API + PerformanceObserver (incl. the single-type observe form),
+  `queueMicrotask` + rAF/cAF with EE-5 vsync batching, and
+  MutationObserver/ResizeObserver/IntersectionObserver — 71 tests — now in
+  `dom.rs::tests::v8_perf_observers`; QuickJS copies deleted. Needed no new mechanics: one
+  `v8_runtime_with_dom` twin, and the six non-`eval` runtime methods the bodies use
+  (`update_layout_rects`, `update_viewport_size`, `take_raf_pending`, `take_dom_dirty`,
+  `raf_pending_flag`, `dom_dirty_flag`) already exist on `V8JsRuntime` with identical signatures.
+  **Non-obvious:** `_lumen_drain_microtasks` is a deliberate no-op stub on the V8 side
+  (`v8_runtime.rs:3611` — the compat-layer closure cannot reach the isolate for
+  `perform_microtask_checkpoint`), and V8 runs a checkpoint after every script. That makes
+  microtask *ordering* observable from Rust for the first time — the three ported
+  `queue_microtask_*` tests only pinned the function's existence, since a QuickJS `eval()`
+  returned with the job queue unprocessed — so a 72nd test was added asserting the callback runs
+  neither inline at the call site nor later than the end of the queuing script. A test needing a
+  forced flush where V8 does not choose one must split into two `eval` calls; there is no drain
+  primitive.
 - **`dom.rs` test monolith, navigation/URL/storage families ([P1] P3-v8-s12b-24-nav-url-storage,
   2026-07-29).** Location/`NavigateRequest` + fragment navigation + History API
   (`pushState`/`replaceState`, `popstate`/`hashchange`), Web Storage, `URLSearchParams`/`URL` —
