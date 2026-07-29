@@ -58,11 +58,11 @@
  "generated": "2026-07-29",
  "counts": {
   "open": 123,
-  "fixed": 275,
+  "fixed": 276,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 398,
+ "total_bugs": 399,
  "phases": [
   {
    "id": "P0",
@@ -6988,9 +6988,16 @@
    "debtor": false
   },
   "BUG-428": {
-   "status": "open",
-   "title": "Headless-CPU-рендер (`--screenshot`, `--ipc-server` Screenshot, детерминированные CPU-снапшоты) никогда не композитит битмапы Canvas 2D: пиксели канваса попадаю…",
+   "status": "fixed",
+   "title": "Headless-CPU-рендер (`--screenshot`, `--ipc-server` Screenshot) никогда не композитил битмапы Canvas 2D: пиксели канваса попадают в paint только через дренаж JS…",
    "component": "shell (`main.rs::render_source_to_png`) + js (`flush_canvas_updates`)",
+   "date": "2026-07-29",
+   "debtor": false
+  },
+  "BUG-429": {
+   "status": "open",
+   "title": "Детерминированный CPU-снапшотный гейт (`cases::snapshot_cpu`, `scripts/scoped-test.sh`) рендерит страницы через `InProcessSession`, который (а) устанавливает V8…",
+   "component": "driver (`session.rs::run_pipeline` / `screenshot_cpu_rgba`)",
    "date": null,
    "debtor": false
   }
@@ -7033,6 +7040,9 @@
   ],
   "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)": [
    "BUG-316"
+  ],
+  "driver (`session.rs::run_pipeline` / `screenshot_cpu_rgba`)": [
+   "BUG-429"
   ],
   "driver/shell (`WinitSession::scroll`, `navigate_fragment`)": [
    "BUG-338"
