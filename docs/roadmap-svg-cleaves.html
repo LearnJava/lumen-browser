@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-29",
  "counts": {
-  "open": 122,
+  "open": 123,
   "fixed": 278,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 400,
+ "total_bugs": 401,
  "phases": [
   {
    "id": "P0",
@@ -4896,8 +4896,8 @@
   },
   "BUG-099": {
    "status": "open",
-   "title": "`<canvas>` 2D context реализован; TEST-57 ратчет 4.14→2.96% (прогон 2026-06-23). Остаток = font-parity + canvas-AA → KNOWN_DEBTOR",
-   "component": "js/paint",
+   "title": "`<canvas>` 2D context реализован; TEST-57 ратчет 4.14→2.96%→**0.91%** (2026-07-29). Прежнее «остаток = font-parity + canvas-AA» было неверно: размеры битмапа по…",
+   "component": "js/paint/layout",
    "date": null,
    "debtor": true
   },
@@ -7007,6 +7007,13 @@
    "component": "driver (`session.rs::run_pipeline` / `screenshot_cpu_rgba`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-431": {
+   "status": "open",
+   "title": "Содержимое `<img>`/`<video>` (GIF-кадр, poster)/`<iframe>`-заглушки красится в **border-box**, а не в content-box: обе ветки покраски кладут `DrawImage { rect:…",
+   "component": "paint (`display_list.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7396,6 +7403,9 @@
   ],
   "paint (`display_list.rs::emit_inline_run`)": [
    "BUG-289"
+  ],
+  "paint (`display_list.rs`)": [
+   "BUG-431"
   ],
   "paint (`emit_scrollbars`) / test-triage": [
    "BUG-288"
