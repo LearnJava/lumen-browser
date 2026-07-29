@@ -576,13 +576,17 @@ pub fn graft_geometry_with_cascade(
 /// Whether `new` and `prev` differ *only* in the fields `lay_out` writes back
 /// into the box's own style as a used value.
 ///
-/// BUG-341 S13: `lay_out_flex` overwrites a flex item's
-/// `width`/`height`/`box_sizing` with the resolved used value, and the
-/// replaced-element sizing path does the same for intrinsic sizes. The previous
-/// tree therefore carries those writes while a freshly-cascaded tree does not,
-/// which makes the two styles unequal for reasons that have nothing to do with
-/// the author's stylesheet. Copying the three fields across and re-comparing
-/// tells the two causes apart.
+/// BUG-341 S13: the replaced-element sizing path fills an unset
+/// `width`/`height` with the resource's intrinsic size (and adjusts
+/// `box_sizing` with it). The previous tree therefore carries those writes
+/// while a freshly-cascaded tree does not, which makes the two styles unequal
+/// for reasons that have nothing to do with the author's stylesheet. Copying
+/// the three fields across and re-comparing tells the two causes apart.
+///
+/// `lay_out_flex` used to leave the same kind of residue on every flex item;
+/// since BUG-333/BUG-343 it restores the specified declarations after the
+/// recursive `lay_out` (`SavedItemSizing`), so flex items now compare equal
+/// without this probe. The replaced-element case still needs it.
 ///
 /// Used both as the diagnostic attribution behind [`set_graft_diagnostics`] and,
 /// in [`graft_geometry_with_cascade`], as the last-resort reuse test for boxes
