@@ -166,8 +166,9 @@
         <i class="d"></i><i class="e"></i><i class="f"></i>
     </div>
 
-    <!-- 14. overflow control: tracks taller than the panel must stay at the
-             start edge instead of being centred off the top -->
+    <!-- 14. overflow control: tracks taller than the panel resolve *unsafely*
+             (CSS Box Alignment L3 §5.3) — they shift back past the start edge
+             rather than being pinned to it -->
     <div class="panel ac-center" style="grid-template-rows: 90px 90px 90px;">
         <i class="a"></i><i class="b"></i><i class="c"></i>
         <i class="d"></i><i class="e"></i><i class="f"></i>

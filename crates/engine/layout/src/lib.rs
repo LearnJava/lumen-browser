@@ -14434,9 +14434,10 @@ mod tests {
             "rows separated by track + one share, got {}", items[1].rect.y - items[0].rect.y);
     }
 
-    /// `align-content` overflow (tracks taller than the container) distributes nothing.
+    /// `align-content: center` on an overflowing grid resolves *unsafely* (CSS Box
+    /// Alignment L3 §5.3): the tracks shift back past the start edge, like Edge.
     #[test]
-    fn grid_align_content_overflow_stays_at_start() {
+    fn grid_align_content_center_overflow_shifts_past_start_edge() {
         let root = lay(
             "<body><div><a></a><a></a></div></body>",
             "div { display: grid; grid-template-columns: 100px; \
@@ -14445,8 +14446,27 @@ mod tests {
         );
         let div = first_element_child(&root);
         let items = grid_items(div);
+        // Free space 50 - 200 = -150 → the first row starts 75px above the edge.
+        assert!((items[0].rect.y - div.rect.y + 75.0).abs() < 1.0,
+            "overflowing tracks centre unsafely, got {}", items[0].rect.y - div.rect.y);
+    }
+
+    /// `align-content: space-between` on an overflowing grid falls back to `start`
+    /// (CSS Box Alignment L3 §5.3) instead of producing negative spacing.
+    #[test]
+    fn grid_align_content_space_between_overflow_falls_back_to_start() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: 100px 100px; height: 50px; \
+                   align-content: space-between; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
         assert!((items[0].rect.y - div.rect.y).abs() < 1.0,
-            "overflowing tracks stay at the start edge, got {}", items[0].rect.y - div.rect.y);
+            "first row at the start edge, got {}", items[0].rect.y - div.rect.y);
+        assert!((items[1].rect.y - items[0].rect.y - 100.0).abs() < 1.0,
+            "rows stay adjacent, no negative spacing, got {}", items[1].rect.y - items[0].rect.y);
     }
 
     /// `place-content: <align-content> <justify-content>` reaches both grid axes.

@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-29T09:45:07",
+  "timestamp": "2026-07-29T09:29:46",
   "git": {
     "commit": "da69bf642",
     "branch": "p4-place-shorthands",
@@ -12,8 +12,8 @@
   "halted_at": null,
   "summary": {
     "total": 152,
-    "passed": 71,
-    "failed": 5,
+    "passed": 70,
+    "failed": 6,
     "errors": 0,
     "debtors": 76,
     "skipped": 0
@@ -26,8 +26,13 @@
       "html": "00-calibration.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0104,
+      "diff_region": {
+        "top": 431,
+        "left": 76,
+        "bottom": 446,
+        "right": 85
+      }
     },
     {
       "id": "01",
@@ -36,8 +41,13 @@
       "html": "01-sanity.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0104,
+      "diff_region": {
+        "top": 431,
+        "left": 76,
+        "bottom": 446,
+        "right": 85
+      }
     },
     {
       "id": "02",
@@ -46,8 +56,13 @@
       "html": "02-color-named.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "03",
@@ -56,8 +71,13 @@
       "html": "03-color-formats.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "04",
@@ -66,8 +86,13 @@
       "html": "04-color-alpha.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "05",
@@ -76,8 +101,13 @@
       "html": "05-border-width.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.017,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "06",
@@ -86,11 +116,11 @@
       "html": "06-border-sides.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0176,
+      "diff_pct": 0.0346,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 240,
+        "bottom": 447,
         "right": 904
       }
     },
@@ -101,8 +131,13 @@
       "html": "07-box-sizing.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0195,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "08",
@@ -111,8 +146,13 @@
       "html": "08-padding.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.017,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "09",
@@ -121,8 +161,13 @@
       "html": "09-margin.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0146,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "10",
@@ -131,8 +176,13 @@
       "html": "10-min-max-width.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0194,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "11",
@@ -141,11 +191,11 @@
       "html": "11-min-max-height.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.434,
+      "diff_pct": 0.451,
       "diff_region": {
         "top": 25,
-        "left": 201,
-        "bottom": 144,
+        "left": 75,
+        "bottom": 447,
         "right": 864
       }
     },
@@ -156,8 +206,13 @@
       "html": "12-display.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0195,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "13",
@@ -166,8 +221,13 @@
       "html": "13-visibility-opacity.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "14",
@@ -176,11 +236,11 @@
       "html": "14-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2029,
+      "diff_pct": 0.2199,
       "diff_region": {
         "top": 165,
-        "left": 175,
-        "bottom": 262,
+        "left": 75,
+        "bottom": 447,
         "right": 604
       }
     },
@@ -191,11 +251,11 @@
       "html": "15-box-shadow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4728,
+      "diff_pct": 0.4829,
       "diff_region": {
         "top": 25,
-        "left": 199,
-        "bottom": 270,
+        "left": 75,
+        "bottom": 447,
         "right": 514
       }
     },
@@ -206,8 +266,13 @@
       "html": "16-outline.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0194,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "17",
@@ -216,8 +281,13 @@
       "html": "17-calc.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0194,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "18",
@@ -226,7 +296,7 @@
       "html": "18-images.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 6.5096,
+      "diff_pct": 6.5266,
       "diff_region": {
         "top": 28,
         "left": 28,
@@ -246,7 +316,7 @@
       "html": "19-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.9247,
+      "diff_pct": 9.931,
       "diff_region": {
         "top": 26,
         "left": 26,
@@ -266,8 +336,13 @@
       "html": "20-quirks-bgcolor.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.017,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "21",
@@ -276,7 +351,7 @@
       "html": "21-border-style.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4635,
+      "diff_pct": 0.4808,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -291,7 +366,7 @@
       "html": "22-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2962,
+      "diff_pct": 0.3133,
       "diff_region": {
         "top": 170,
         "left": 44,
@@ -306,11 +381,11 @@
       "html": "23-pseudo-elements.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4796,
+      "diff_pct": 0.4966,
       "diff_region": {
         "top": 57,
-        "left": 291,
-        "bottom": 205,
+        "left": 75,
+        "bottom": 447,
         "right": 378
       }
     },
@@ -321,11 +396,11 @@
       "html": "24-vertical-align.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5023,
+      "diff_pct": 0.5123,
       "diff_region": {
         "top": 172,
         "left": 20,
-        "bottom": 227,
+        "bottom": 447,
         "right": 107
       },
       "debtor": {
@@ -341,8 +416,13 @@
       "html": "25-table-layout.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0168,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "26",
@@ -351,7 +431,7 @@
       "html": "26-mask-image.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 13.3019,
+      "diff_pct": 13.3126,
       "diff_region": {
         "top": 41,
         "left": 41,
@@ -371,11 +451,11 @@
       "html": "27-direction-rtl.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3592,
+      "diff_pct": 0.3761,
       "diff_region": {
         "top": 191,
-        "left": 139,
-        "bottom": 282,
+        "left": 75,
+        "bottom": 447,
         "right": 984
       }
     },
@@ -386,8 +466,13 @@
       "html": "28-css-containment.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0104,
+      "diff_region": {
+        "top": 431,
+        "left": 76,
+        "bottom": 446,
+        "right": 85
+      }
     },
     {
       "id": "29",
@@ -396,8 +481,13 @@
       "html": "29-container-queries.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0104,
+      "diff_region": {
+        "top": 431,
+        "left": 76,
+        "bottom": 446,
+        "right": 85
+      }
     },
     {
       "id": "30",
@@ -406,7 +496,7 @@
       "html": "30-css-filter.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.6387,
+      "diff_pct": 10.6415,
       "diff_region": {
         "top": 31,
         "left": 31,
@@ -426,7 +516,7 @@
       "html": "31-clip-path.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.992,
+      "diff_pct": 4.0089,
       "diff_region": {
         "top": 181,
         "left": 41,
@@ -446,7 +536,7 @@
       "html": "32-list-markers.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 4.1565,
+      "diff_pct": 4.1734,
       "diff_region": {
         "top": 32,
         "left": 60,
@@ -466,10 +556,10 @@
       "html": "33-multi-column.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0741,
+      "diff_pct": 0.0935,
       "diff_region": {
         "top": 172,
-        "left": 195,
+        "left": 75,
         "bottom": 482,
         "right": 578
       }
@@ -481,11 +571,11 @@
       "html": "34-forms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.977,
+      "diff_pct": 2.9869,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 316,
+        "bottom": 447,
         "right": 590
       },
       "debtor": {
@@ -501,8 +591,13 @@
       "html": "35-grid-named-areas.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0194,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "36",
@@ -511,7 +606,7 @@
       "html": "36-border-radius.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.7965,
+      "diff_pct": 7.816,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -531,8 +626,13 @@
       "html": "37-float-clear.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0195,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "38",
@@ -541,8 +641,13 @@
       "html": "38-z-index.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "39",
@@ -551,11 +656,11 @@
       "html": "39-gradients.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 12.6489,
+      "diff_pct": 12.6659,
       "diff_region": {
         "top": 21,
         "left": 21,
-        "bottom": 332,
+        "bottom": 447,
         "right": 848
       },
       "debtor": {
@@ -571,11 +676,11 @@
       "html": "40-conic-gradients.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0353,
+      "diff_pct": 0.0548,
       "diff_region": {
         "top": 218,
-        "left": 415,
-        "bottom": 396,
+        "left": 75,
+        "bottom": 447,
         "right": 786
       }
     },
@@ -586,8 +691,13 @@
       "html": "41-table.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0195,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "42",
@@ -596,11 +706,11 @@
       "html": "42-position-sticky.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2713,
+      "diff_pct": 0.2882,
       "diff_region": {
         "top": 201,
         "left": 1,
-        "bottom": 300,
+        "bottom": 447,
         "right": 130
       }
     },
@@ -611,8 +721,13 @@
       "html": "43-intrinsic-sizing.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0194,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "44",
@@ -621,11 +736,11 @@
       "html": "44-media-queries.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1389,
+      "diff_pct": 0.1558,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 0,
+        "bottom": 447,
         "right": 1023
       }
     },
@@ -636,11 +751,11 @@
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.8077,
+      "diff_pct": 5.8272,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 423,
+        "bottom": 447,
         "right": 1023
       },
       "debtor": {
@@ -656,7 +771,7 @@
       "html": "46-individual-transforms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.8514,
+      "diff_pct": 1.8697,
       "diff_region": {
         "top": 74,
         "left": 24,
@@ -676,7 +791,7 @@
       "html": "47-svg-basic.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1637,
+      "diff_pct": 1.182,
       "diff_region": {
         "top": 26,
         "left": 51,
@@ -696,10 +811,10 @@
       "html": "48-line-clamp.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2604,
+      "diff_pct": 0.2799,
       "diff_region": {
         "top": 33,
-        "left": 256,
+        "left": 75,
         "bottom": 688,
         "right": 767
       }
@@ -711,11 +826,11 @@
       "html": "49-background-blend-mode.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.7407,
+      "diff_pct": 2.7577,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 424,
+        "bottom": 447,
         "right": 1023
       },
       "debtor": {
@@ -731,8 +846,13 @@
       "html": "50-css-variables.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0184,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "51",
@@ -741,7 +861,7 @@
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.7183,
+      "diff_pct": 1.7379,
       "diff_region": {
         "top": 22,
         "left": 21,
@@ -761,11 +881,11 @@
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.122,
+      "diff_pct": 3.1321,
       "diff_region": {
         "top": 53,
-        "left": 110,
-        "bottom": 324,
+        "left": 75,
+        "bottom": 447,
         "right": 919
       },
       "debtor": {
@@ -781,7 +901,7 @@
       "html": "53-background-origin.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 8.1848,
+      "diff_pct": 8.2018,
       "diff_region": {
         "top": 1,
         "left": 33,
@@ -801,7 +921,7 @@
       "html": "54-svg-path-stroke.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.3158,
+      "diff_pct": 2.3345,
       "diff_region": {
         "top": 25,
         "left": 19,
@@ -821,11 +941,11 @@
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5869,
+      "diff_pct": 0.6038,
       "diff_region": {
         "top": 124,
-        "left": 119,
-        "bottom": 411,
+        "left": 75,
+        "bottom": 447,
         "right": 711
       },
       "debtor": {
@@ -841,7 +961,7 @@
       "html": "56-mix-blend-mode.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 14.1195,
+      "diff_pct": 14.1222,
       "diff_region": {
         "top": 50,
         "left": 60,
@@ -861,11 +981,11 @@
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.912,
+      "diff_pct": 0.9288,
       "diff_region": {
         "top": 184,
         "left": 25,
-        "bottom": 402,
+        "bottom": 447,
         "right": 703
       },
       "debtor": {
@@ -881,11 +1001,11 @@
       "html": "58-first-letter-line.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.6931,
+      "diff_pct": 2.7101,
       "diff_region": {
         "top": 37,
         "left": 33,
-        "bottom": 185,
+        "bottom": 447,
         "right": 974
       },
       "debtor": {
@@ -901,11 +1021,11 @@
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 23.6001,
+      "diff_pct": 23.6171,
       "diff_region": {
         "top": 1,
         "left": 25,
-        "bottom": 395,
+        "bottom": 447,
         "right": 1022
       },
       "debtor": {
@@ -921,7 +1041,7 @@
       "html": "60-svg-stroke-advanced.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.7427,
+      "diff_pct": 0.7532,
       "diff_region": {
         "top": 20,
         "left": 28,
@@ -961,7 +1081,7 @@
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 8.5244,
+      "diff_pct": 8.544,
       "diff_region": {
         "top": 0,
         "left": 0,
@@ -981,11 +1101,11 @@
       "html": "63-masonry.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.4456,
+      "diff_pct": 5.4556,
       "diff_region": {
         "top": 35,
         "left": 11,
-        "bottom": 439,
+        "bottom": 447,
         "right": 1023
       },
       "debtor": {
@@ -1001,11 +1121,11 @@
       "html": "64-table.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.9308,
+      "diff_pct": 7.9408,
       "diff_region": {
         "top": 43,
         "left": 21,
-        "bottom": 413,
+        "bottom": 447,
         "right": 1023
       },
       "debtor": {
@@ -1021,7 +1141,7 @@
       "html": "65-flex-align-content.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.447,
+      "diff_pct": 5.4662,
       "diff_region": {
         "top": 10,
         "left": 1,
@@ -1041,11 +1161,11 @@
       "html": "66-selection-pseudo.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.7179,
+      "diff_pct": 1.7276,
       "diff_region": {
         "top": 42,
         "left": 41,
-        "bottom": 351,
+        "bottom": 447,
         "right": 316
       },
       "debtor": {
@@ -1061,11 +1181,11 @@
       "html": "67-attr-typed.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.7233,
+      "diff_pct": 0.7408,
       "diff_region": {
         "top": 62,
         "left": 41,
-        "bottom": 446,
+        "bottom": 447,
         "right": 339
       },
       "debtor": {
@@ -1081,11 +1201,11 @@
       "html": "68-font-variation-settings.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.1662,
+      "diff_pct": 3.1832,
       "diff_region": {
         "top": 21,
         "left": 21,
-        "bottom": 232,
+        "bottom": 447,
         "right": 920
       },
       "debtor": {
@@ -1101,8 +1221,13 @@
       "html": "69-border-spacing.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0195,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "70",
@@ -1111,7 +1236,7 @@
       "html": "70-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.6131,
+      "diff_pct": 1.6326,
       "diff_region": {
         "top": 26,
         "left": 20,
@@ -1131,10 +1256,10 @@
       "html": "71-starting-style.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 6.3816,
+      "diff_pct": 6.3985,
       "diff_region": {
         "top": 260,
-        "left": 292,
+        "left": 75,
         "bottom": 459,
         "right": 731
       },
@@ -1151,11 +1276,11 @@
       "html": "72-host-slotted.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.2945,
+      "diff_pct": 1.3037,
       "diff_region": {
         "top": 41,
         "left": 31,
-        "bottom": 300,
+        "bottom": 447,
         "right": 330
       },
       "debtor": {
@@ -1171,8 +1296,13 @@
       "html": "73-gap-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0193,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "74",
@@ -1181,11 +1311,11 @@
       "html": "74-font-stretch.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.7413,
+      "diff_pct": 3.7581,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 220,
+        "bottom": 447,
         "right": 998
       },
       "debtor": {
@@ -1201,8 +1331,13 @@
       "html": "75-masonry-auto-flow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.017,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "76",
@@ -1211,7 +1346,7 @@
       "html": "76-motion-path.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.9634,
+      "diff_pct": 0.9738,
       "diff_region": {
         "top": 221,
         "left": 6,
@@ -1231,7 +1366,7 @@
       "html": "77-anchor-positioning.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 12.9395,
+      "diff_pct": 12.9389,
       "diff_region": {
         "top": 41,
         "left": 41,
@@ -1251,7 +1386,7 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 4.0913,
+      "diff_pct": 4.0986,
       "diff_region": {
         "top": 28,
         "left": 25,
@@ -1271,7 +1406,7 @@
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.1262,
+      "diff_pct": 7.1326,
       "diff_region": {
         "top": 47,
         "left": 60,
@@ -1291,7 +1426,7 @@
       "html": "80-border-collapse.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.884,
+      "diff_pct": 9.8977,
       "diff_region": {
         "top": 22,
         "left": 21,
@@ -1311,10 +1446,10 @@
       "html": "81-view-transition-name.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.4408,
+      "diff_pct": 3.4577,
       "diff_region": {
         "top": 260,
-        "left": 152,
+        "left": 75,
         "bottom": 459,
         "right": 871
       },
@@ -1331,7 +1466,7 @@
       "html": "82-svg-use.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.2182,
+      "diff_pct": 2.2351,
       "diff_region": {
         "top": 35,
         "left": 20,
@@ -1351,7 +1486,7 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.6722,
+      "diff_pct": 10.6845,
       "diff_region": {
         "top": 34,
         "left": 51,
@@ -1371,11 +1506,11 @@
       "html": "84-text-decoration-skip-ink.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 6.2602,
+      "diff_pct": 6.2771,
       "diff_region": {
         "top": 32,
         "left": 41,
-        "bottom": 428,
+        "bottom": 447,
         "right": 456
       },
       "debtor": {
@@ -1391,10 +1526,10 @@
       "html": "100-transform-overflow.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0868,
+      "diff_pct": 1.1038,
       "diff_region": {
         "top": 25,
-        "left": 365,
+        "left": 75,
         "bottom": 674,
         "right": 1022
       },
@@ -1415,7 +1550,7 @@
       "html": "101-radius-overflow.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 19.9962,
+      "diff_pct": 20.0008,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -1439,8 +1574,13 @@
       "html": "102-opacity-stacking.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null,
+      "diff_pct": 0.0195,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      },
       "deps": [
         "13",
         "38"
@@ -1453,7 +1593,7 @@
       "html": "103-filter-transform.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.7893,
+      "diff_pct": 1.8087,
       "diff_region": {
         "top": 35,
         "left": 46,
@@ -1477,7 +1617,7 @@
       "html": "104-mask-gradient-radius.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 32.282,
+      "diff_pct": 32.3016,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -1503,8 +1643,13 @@
       "html": "105-float-clear-margin.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null,
+      "diff_pct": 0.0195,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      },
       "deps": [
         "37",
         "09"
@@ -1517,7 +1662,7 @@
       "html": "106-transform-zindex.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3482,
+      "diff_pct": 0.3651,
       "diff_region": {
         "top": 28,
         "left": 39,
@@ -1536,7 +1681,7 @@
       "html": "107-shadow-radius-overflow.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.2716,
+      "diff_pct": 7.2885,
       "diff_region": {
         "top": 65,
         "left": 65,
@@ -1561,10 +1706,10 @@
       "html": "108-nested-transforms.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1758,
+      "diff_pct": 0.1927,
       "diff_region": {
         "top": 429,
-        "left": 103,
+        "left": 75,
         "bottom": 620,
         "right": 950
       },
@@ -1579,7 +1724,7 @@
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.5313,
+      "diff_pct": 7.5483,
       "diff_region": {
         "top": 58,
         "left": 55,
@@ -1604,8 +1749,13 @@
       "html": "85-anchor-name-basic.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "86",
@@ -1614,11 +1764,11 @@
       "html": "86-position-anchor-fallback.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1591,
+      "diff_pct": 0.1691,
       "diff_region": {
         "top": 203,
-        "left": 299,
-        "bottom": 218,
+        "left": 75,
+        "bottom": 447,
         "right": 425
       }
     },
@@ -1629,8 +1779,13 @@
       "html": "87-inset-area-none.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "88",
@@ -1639,8 +1794,13 @@
       "html": "88-anchor-nested.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "89",
@@ -1649,8 +1809,13 @@
       "html": "89-anchor-multiple-names.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "90",
@@ -1659,7 +1824,7 @@
       "html": "90-avif-image.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0027,
+      "diff_pct": 1.0128,
       "diff_region": {
         "top": 22,
         "left": 22,
@@ -1679,8 +1844,13 @@
       "html": "91-relative-color.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0193,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "92",
@@ -1689,11 +1859,11 @@
       "html": "92-system-colors.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.8984,
+      "diff_pct": 0.9085,
       "diff_region": {
         "top": 5,
-        "left": 165,
-        "bottom": 184,
+        "left": 75,
+        "bottom": 447,
         "right": 1016
       },
       "debtor": {
@@ -1709,11 +1879,11 @@
       "html": "93-field-sizing.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.5989,
+      "diff_pct": 3.6089,
       "diff_region": {
         "top": 13,
         "left": 13,
-        "bottom": 288,
+        "bottom": 447,
         "right": 245
       },
       "debtor": {
@@ -1729,8 +1899,13 @@
       "html": "94-interpolate-size.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "95",
@@ -1739,7 +1914,7 @@
       "html": "95-font-size-adjust.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 4.1669,
+      "diff_pct": 4.1854,
       "diff_region": {
         "top": 50,
         "left": 40,
@@ -1759,8 +1934,13 @@
       "html": "96-color-function-spaces.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "97",
@@ -1769,7 +1949,7 @@
       "html": "97-counter-set.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9239,
+      "diff_pct": 2.9426,
       "diff_region": {
         "top": 53,
         "left": 46,
@@ -1789,8 +1969,13 @@
       "html": "98-revert-layer.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0194,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "99",
@@ -1799,11 +1984,11 @@
       "html": "99-offset-path-ray.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0217,
+      "diff_pct": 0.0321,
       "diff_region": {
         "top": 154,
-        "left": 667,
-        "bottom": 194,
+        "left": 76,
+        "bottom": 446,
         "right": 707
       }
     },
@@ -1814,11 +1999,11 @@
       "html": "110-accent-color.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3383,
+      "diff_pct": 1.3483,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 194,
+        "bottom": 447,
         "right": 521
       },
       "debtor": {
@@ -1834,11 +2019,11 @@
       "html": "111-appearance-none.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.275,
+      "diff_pct": 1.285,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 284,
+        "bottom": 447,
         "right": 196
       },
       "debtor": {
@@ -1854,7 +2039,7 @@
       "html": "112-clip-path-fill-rule.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.4094,
+      "diff_pct": 7.4288,
       "diff_region": {
         "top": 48,
         "left": 44,
@@ -1874,11 +2059,11 @@
       "html": "113-shape-outside-path.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 6.1035,
+      "diff_pct": 6.1205,
       "diff_region": {
         "top": 41,
         "left": 41,
-        "bottom": 240,
+        "bottom": 447,
         "right": 958
       },
       "debtor": {
@@ -1894,8 +2079,13 @@
       "html": "114-contain-intrinsic-size.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "115",
@@ -1904,8 +2094,13 @@
       "html": "115-empty-cells.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0195,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "116",
@@ -1914,7 +2109,7 @@
       "html": "116-gradient-interpolation.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.3966,
+      "diff_pct": 2.4162,
       "diff_region": {
         "top": 147,
         "left": 27,
@@ -1934,11 +2129,11 @@
       "html": "117-quotes.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.2692,
+      "diff_pct": 2.2792,
       "diff_region": {
         "top": 57,
         "left": 41,
-        "bottom": 278,
+        "bottom": 447,
         "right": 456
       },
       "debtor": {
@@ -1954,8 +2149,13 @@
       "html": "118-media-hover-pointer.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "119",
@@ -1964,8 +2164,13 @@
       "html": "119-paint-order.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0195,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "120",
@@ -1974,11 +2179,11 @@
       "html": "120-media-contrast-data.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.2639,
+      "diff_pct": 3.2739,
       "diff_region": {
         "top": 47,
-        "left": 271,
-        "bottom": 174,
+        "left": 75,
+        "bottom": 447,
         "right": 458
       },
       "debtor": {
@@ -1994,8 +2199,13 @@
       "html": "121-supports-selector.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "122",
@@ -2004,11 +2214,11 @@
       "html": "122-line-height-step.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 11.5302,
+      "diff_pct": 11.5439,
       "diff_region": {
         "top": 33,
         "left": 41,
-        "bottom": 344,
+        "bottom": 447,
         "right": 627
       },
       "debtor": {
@@ -2024,8 +2234,13 @@
       "html": "123-supports-font-tech-format.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "124",
@@ -2034,8 +2249,13 @@
       "html": "124-prefers-reduced-transparency.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "125",
@@ -2044,8 +2264,13 @@
       "html": "125-media-scripting.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "126",
@@ -2054,11 +2279,11 @@
       "html": "126-media-inverted-colors.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.2639,
+      "diff_pct": 3.2739,
       "diff_region": {
         "top": 47,
         "left": 47,
-        "bottom": 174,
+        "bottom": 447,
         "right": 234
       },
       "debtor": {
@@ -2074,8 +2299,13 @@
       "html": "128-icc-color-management.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "129",
@@ -2084,10 +2314,10 @@
       "html": "129-svg-dynamic-createelementns.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0564,
+      "diff_pct": 0.0669,
       "diff_region": {
         "top": 99,
-        "left": 139,
+        "left": 76,
         "bottom": 648,
         "right": 522
       }
@@ -2099,10 +2329,10 @@
       "html": "130-svg-dynamic-nested-transforms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.9999,
+      "diff_pct": 1.0103,
       "diff_region": {
         "top": 112,
-        "left": 149,
+        "left": 76,
         "bottom": 604,
         "right": 945
       },
@@ -2119,10 +2349,10 @@
       "html": "131-svg-dynamic-opacity-layering.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1649,
+      "diff_pct": 0.1817,
       "diff_region": {
-        "top": 437,
-        "left": 637,
+        "top": 429,
+        "left": 75,
         "bottom": 664,
         "right": 964
       }
@@ -2134,7 +2364,7 @@
       "html": "132-svg-dynamic-use-symbol.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 8.1052,
+      "diff_pct": 8.1156,
       "diff_region": {
         "top": 68,
         "left": 47,
@@ -2154,10 +2384,10 @@
       "html": "133-svg-dynamic-fill-rule.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.0742,
+      "diff_pct": 2.0847,
       "diff_region": {
         "top": 56,
-        "left": 140,
+        "left": 76,
         "bottom": 689,
         "right": 1000
       },
@@ -2174,7 +2404,7 @@
       "html": "134-svg-dynamic-stroke-styles.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.2045,
+      "diff_pct": 3.2157,
       "diff_region": {
         "top": 19,
         "left": 56,
@@ -2194,10 +2424,10 @@
       "html": "135-svg-dynamic-paint-order.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.5135,
+      "diff_pct": 1.5282,
       "diff_region": {
         "top": 101,
-        "left": 650,
+        "left": 75,
         "bottom": 623,
         "right": 874
       },
@@ -2214,10 +2444,10 @@
       "html": "136-svg-dynamic-ellipse-radial.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5016,
+      "diff_pct": 0.512,
       "diff_region": {
         "top": 91,
-        "left": 81,
+        "left": 76,
         "bottom": 709,
         "right": 955
       },
@@ -2234,10 +2464,10 @@
       "html": "137-svg-dynamic-transform-pinwheel.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.4533,
+      "diff_pct": 5.4637,
       "diff_region": {
         "top": 69,
-        "left": 101,
+        "left": 76,
         "bottom": 718,
         "right": 1018
       },
@@ -2254,7 +2484,7 @@
       "html": "138-svg-dynamic-dashboard.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.376,
+      "diff_pct": 0.3928,
       "diff_region": {
         "top": 30,
         "left": 21,
@@ -2269,8 +2499,13 @@
       "html": "139-float-flow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "140",
@@ -2279,7 +2514,7 @@
       "html": "140-placeholder-pseudo.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.1655,
+      "diff_pct": 2.1849,
       "diff_region": {
         "top": 42,
         "left": 41,
@@ -2299,11 +2534,11 @@
       "html": "141-backface-visibility.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.5948,
+      "diff_pct": 1.6117,
       "diff_region": {
         "top": 74,
-        "left": 141,
-        "bottom": 418,
+        "left": 75,
+        "bottom": 447,
         "right": 612
       },
       "debtor": {
@@ -2319,11 +2554,11 @@
       "html": "142-color-profile.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.1562,
+      "diff_pct": 10.1663,
       "diff_region": {
         "top": 5,
         "left": 5,
-        "bottom": 168,
+        "bottom": 447,
         "right": 960
       },
       "debtor": {
@@ -2339,8 +2574,13 @@
       "html": "143-css-function.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.01,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "144",
@@ -2349,8 +2589,13 @@
       "html": "144-anchor-function.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0104,
+      "diff_region": {
+        "top": 431,
+        "left": 76,
+        "bottom": 446,
+        "right": 85
+      }
     },
     {
       "id": "145",
@@ -2359,11 +2604,11 @@
       "html": "145-writing-mode.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.6781,
+      "diff_pct": 3.6951,
       "diff_region": {
         "top": 28,
         "left": 24,
-        "bottom": 339,
+        "bottom": 447,
         "right": 1023
       },
       "debtor": {
@@ -2379,8 +2624,13 @@
       "html": "146-imagebitmap.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0168,
+      "diff_region": {
+        "top": 429,
+        "left": 75,
+        "bottom": 447,
+        "right": 86
+      }
     },
     {
       "id": "147",
@@ -2389,11 +2639,11 @@
       "html": "147-background-repeat-space.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 26.8709,
+      "diff_pct": 26.8684,
       "diff_region": {
         "top": 1,
         "left": 41,
-        "bottom": 440,
+        "bottom": 447,
         "right": 982
       }
     },
@@ -2404,11 +2654,11 @@
       "html": "148-isolation.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.4389,
+      "diff_pct": 5.4489,
       "diff_region": {
         "top": 65,
         "left": 55,
-        "bottom": 326,
+        "bottom": 447,
         "right": 613
       },
       "debtor": {
@@ -2424,7 +2674,7 @@
       "html": "149-nested-overflow-scroll.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.9055,
+      "diff_pct": 7.9245,
       "diff_region": {
         "top": 22,
         "left": 21,
@@ -2444,7 +2694,7 @@
       "html": "150-font-variant-caps.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 7.6874,
+      "diff_pct": 7.6952,
       "diff_region": {
         "top": 45,
         "left": 37,
@@ -2459,7 +2709,7 @@
       "html": "151-unicode-bidi.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 7.2004,
+      "diff_pct": 7.2196,
       "diff_region": {
         "top": 43,
         "left": 29,
@@ -2470,15 +2720,15 @@
     {
       "id": "152",
       "stem": "152-grid-place-content",
-      "label": "P4-place-content CSS Box Alignment L3 §5 + CSS Grid L1 §12.3: align-content / justify-content / place-content в grid-контейнере. 14 панелей с треками заведомо меньше панели: justify-content start/center/end/space-between/space-around/space-evenly по inline-оси, align-content center/end/space-between по блочной, place-content в двух формах (два значения «end center» и одно «space-evenly»), stretch auto-строк при дефолтном align-content: normal, item со span 1/4 поверх раздвинутых space-between зазоров и контроль переполнения (треки выше панели центрируются unsafely, §5.3 — уезжают за start-край, как в Edge). Только solid-боксы, без текста",
+      "label": "P4-place-content CSS Box Alignment L3 §5 + CSS Grid L1 §12.3: align-content / justify-content / place-content в grid-контейнере. 14 панелей с треками заведомо меньше панели: justify-content start/center/end/space-between/space-around/space-evenly по inline-оси, align-content center/end/space-between по блочной, place-content в двух формах (два значения «end center» и одно «space-evenly»), stretch auto-строк при дефолтном align-content: normal, item со span 1/4 поверх раздвинутых space-between зазоров и контроль переполнения (треки выше панели остаются у start-края, а не уезжают вверх). Только solid-боксы, без текста",
       "html": "152-grid-place-content.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0977,
+      "status": "FAIL",
+      "diff_pct": 2.4601,
       "diff_region": {
         "top": 183,
-        "left": 287,
-        "bottom": 513,
+        "left": 75,
+        "bottom": 718,
         "right": 724
       }
     }

@@ -9865,13 +9865,29 @@ fn lay_out_flex(
 /// * `free` — leftover space after all tracks and their gaps.
 /// * `n` — number of tracks on the axis.
 ///
-/// Non-positive free space distributes nothing: the tracks stay flush with the start
-/// edge, matching the `safe` fallback browsers apply to an overflowing grid.
-/// `normal` / `stretch` also return `(0, 0)` — that pair is handled by the track
+/// With non-positive free space the axis overflows, and §5.3 replaces the
+/// distribution with its fallback alignment — `space-between` → `start`,
+/// `space-around` / `space-evenly` → `center` — after which the alignment is
+/// resolved *unsafely*: `center` / `end` still shift the tracks back past the
+/// content-box start edge (a negative offset), matching Edge. `safe` / `unsafe`
+/// are not parsed, so the unsafe behaviour is unconditional.
+///
+/// `normal` / `stretch` always return `(0, 0)` — that pair is handled by the track
 /// sizing pass, which hands the free space to the auto-sized tracks instead.
 fn grid_content_distribution(align: AlignValue, free: f32, n: usize) -> (f32, f32) {
-    if free <= 0.0 || n == 0 {
+    if n == 0 {
         return (0.0, 0.0);
+    }
+    if free <= 0.0 {
+        return match align {
+            AlignValue::End => (free, 0.0),
+            // `center` directly, plus the two distributions that fall back to it.
+            AlignValue::Center | AlignValue::SpaceAround | AlignValue::SpaceEvenly => {
+                (free / 2.0, 0.0)
+            }
+            // `start`, `space-between` (falls back to `start`), `normal`, `stretch`.
+            _ => (0.0, 0.0),
+        };
     }
     match align {
         AlignValue::End => (free, 0.0),
