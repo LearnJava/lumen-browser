@@ -2351,11 +2351,15 @@ fn apply_first_letter_style(
                 let is_element_box = segments[i].is_element_box;
                 let img_src = segments[i].img_src.clone();
                 let img_width = segments[i].img_width;
+                // The tail keeps the segment's own style — it may sit inside an
+                // inline (`<em>Bravo</em>`) whose declarations outlive the split.
+                let own_style = segments[i].style.clone();
                 segments[i].text = first_text;
-                segments[i].style = fl_style;
+                segments[i].style =
+                    crate::style::merge_pseudo_inherited(&own_style, inherited, &fl_style);
                 let rest = InlineSegment {
                     text: rest_text,
-                    style: inherited.clone(),
+                    style: own_style,
                     pre_space: 0.0,
                     post_space: segments[i].post_space,
                     is_element_box,
@@ -2372,8 +2376,10 @@ fn apply_first_letter_style(
                 segments[i].post_space = 0.0;
                 segments.insert(i + 1, rest);
             } else {
-                // Single-char or empty segment: just override style.
-                segments[i].style = fl_style;
+                // Single-char or empty segment: just layer the pseudo style on.
+                segments[i].style = crate::style::merge_pseudo_inherited(
+                    &segments[i].style, inherited, &fl_style,
+                );
             }
             return;
         }
@@ -2671,30 +2677,31 @@ fn apply_first_line_pseudo_styles_inner(
         return;
     };
     // Find the first InlineRun child (or inside InlineBlockRow) and apply.
+    // §3.4: layer the pseudo style over what each frag inherited from `b` —
+    // an inner `<b>`/`<em>`/`style="…"` keeps its own declarations.
+    let base = b.style.clone();
+    let restyle = |lines: &mut Vec<Vec<InlineFrag>>| {
+        if let Some(first_line) = lines.first_mut() {
+            for frag in first_line.iter_mut() {
+                if frag.is_first_line {
+                    frag.style =
+                        crate::style::merge_pseudo_inherited(&frag.style, &base, &fl_style);
+                }
+            }
+        }
+    };
     let mut applied = false;
     'find: for child in &mut b.children {
         match &mut child.kind {
             BoxKind::InlineRun { lines, .. } => {
-                if let Some(first_line) = lines.first_mut() {
-                    for frag in first_line.iter_mut() {
-                        if frag.is_first_line {
-                            frag.style = fl_style.clone();
-                        }
-                    }
-                }
+                restyle(lines);
                 applied = true;
                 break 'find;
             }
             BoxKind::InlineBlockRow => {
                 for row_child in &mut child.children {
                     if let BoxKind::InlineRun { lines, .. } = &mut row_child.kind {
-                        if let Some(first_line) = lines.first_mut() {
-                            for frag in first_line.iter_mut() {
-                                if frag.is_first_line {
-                                    frag.style = fl_style.clone();
-                                }
-                            }
-                        }
+                        restyle(lines);
                         applied = true;
                         break 'find;
                     }
@@ -3748,8 +3755,8 @@ fn apply_first_letter_pseudo(
         return;
     }
     if first_char_end >= segs[pos].text.len() {
-        // Single-character segment: override style in place.
-        segs[pos].style = fl_style;
+        // Single-character segment: layer the pseudo style on in place.
+        segs[pos].style = crate::style::merge_pseudo_inherited(&segs[pos].style, parent, &fl_style);
         return;
     }
     // Multi-character: split into [first_char | rest], each with its own style.
@@ -3758,7 +3765,7 @@ fn apply_first_letter_pseudo(
     let source_node = segs[pos].source_node;
     let post_space = segs[pos].post_space;
     segs[pos].text.truncate(first_char_end);
-    segs[pos].style = fl_style;
+    segs[pos].style = crate::style::merge_pseudo_inherited(&original_style, parent, &fl_style);
     segs[pos].post_space = 0.0;
     segs.insert(pos + 1, InlineSegment {
         text: rest_text,
@@ -6919,7 +6926,11 @@ fn lay_out_inner(
                     .map(|seg| {
                         let mut fl_seg = seg.clone();
                         if fl_seg.img_src.is_none() {
-                            fl_seg.style = fls.clone();
+                            // §3.4: the pseudo-element only supplies what the
+                            // segment inherited — an inner `<b>`/`<em>` keeps its
+                            // own metrics, so pass A measures the real glyphs.
+                            fl_seg.style =
+                                crate::style::merge_pseudo_inherited(&seg.style, &s, fls);
                         }
                         fl_seg
                     })
@@ -7006,10 +7017,11 @@ fn lay_out_inner(
         if let Some(first_line) = lines.first_mut() {
             for frag in first_line.iter_mut() {
                 frag.is_first_line = true;
-                // Apply ::first-line style (inheritable properties only — guaranteed by
-                // compute_pseudo_element_style which starts from inherited values).
+                // §3.4: ::first-line is the *parent* of the first line's content,
+                // so it only supplies properties the fragment inherited; an inner
+                // `<b>`/`<em>`/`style="color:…"` keeps its own declarations.
                 if let Some(fls) = first_line_style {
-                    frag.style = *fls.clone();
+                    frag.style = crate::style::merge_pseudo_inherited(&frag.style, &s, fls);
                 }
             }
         }
@@ -14948,6 +14960,80 @@ mod tests {
         } else {
             panic!("expected InlineRun");
         }
+    }
+
+    #[test]
+    fn first_letter_keeps_enclosing_inline_style() {
+        // BUG-100: `<p><em>Bravo</em>…</p>` with `p::first-letter { color }` —
+        // the letter inherits the `<em>`'s italic (§3.4) and takes only the
+        // pseudo-element's own declarations.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p><em>Bravo</em> beta gamma</p>"),
+            &lumen_css_parser::parse("p::first-letter { color: #ff0000; }"),
+            lumen_core::geom::Size::new(400.0, 600.0),
+            &Fixed8,
+        );
+        let run = find_run(&root).expect("InlineRun not found");
+        let super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+            panic!("expected InlineRun");
+        };
+        let fl = segments
+            .iter()
+            .find(|s| s.pseudo_kind == super::PseudoKind::FirstLetter)
+            .expect("::first-letter segment");
+        assert_eq!(fl.text, "B");
+        assert_eq!(
+            fl.style.font_style,
+            crate::style::FontStyle::Italic,
+            "::first-letter must keep the enclosing <em>'s font-style",
+        );
+        assert!(fl.style.color.r > 200, "…while taking ::first-letter's own color");
+        let rest = &segments[1];
+        assert_eq!(rest.text, "ravo");
+        assert_eq!(
+            rest.style.font_style,
+            crate::style::FontStyle::Italic,
+            "the tail of the split segment stays inside the <em>",
+        );
+    }
+
+    #[test]
+    fn first_line_does_not_clobber_inner_bold() {
+        // BUG-100: CSS Pseudo-elements L4 §3.4 — ::first-line is the *parent* of
+        // the first line's content, so it supplies only what the fragment
+        // inherited. `<b>`'s own font-weight must survive; the color must not.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one <b>two</b> three four</p>"),
+            &lumen_css_parser::parse("p::first-line { color: #ff0000; }"),
+            lumen_core::geom::Size::new(80.0, 600.0),
+            &Fixed8,
+        );
+        fn collect_runs<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { out.push(b); }
+            for c in &b.children { collect_runs(c, out); }
+        }
+        let mut runs = Vec::new();
+        collect_runs(&root, &mut runs);
+        let frags: Vec<&super::InlineFrag> =
+            runs.iter().flat_map(|r| match &r.kind {
+                super::BoxKind::InlineRun { lines, .. } => lines.iter().flatten(),
+                _ => unreachable!(),
+            }).filter(|f| f.is_first_line).collect();
+        let bold = frags.iter().find(|f| f.text.contains("two")).expect("`two` frag on first line");
+        assert_eq!(
+            bold.style.font_weight,
+            crate::style::FontWeight::BOLD,
+            "<b> inside ::first-line must keep its own font-weight",
+        );
+        assert!(bold.style.color.r > 200, "…while still inheriting ::first-line's color");
     }
 
     #[test]

@@ -8586,6 +8586,79 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style
 }
 
+/// CSS Pseudo-elements L4 §3.4 — inheritance through the `::first-line` /
+/// `::first-letter` fictional tag sequence.
+///
+/// The pseudo-element is the *parent* of the affected content, not a blanket
+/// override of it: a descendant that specifies a property itself (`<b>`'s
+/// `font-weight`, `<em>`'s `font-style`, an inline `style="color:…"`) keeps its
+/// own value; only what it merely inherited comes from the pseudo-element.
+/// Replacing the whole style instead silently drops those inner declarations.
+///
+/// - `own` — the fragment's/segment's computed style (the descendant);
+/// - `base` — the originating element's style, which `own` inherited from;
+/// - `pseudo` — the `::first-line` / `::first-letter` style.
+///
+/// A property is taken from `pseudo` only when `own` still equals `base` for it,
+/// i.e. nothing in the inline chain specified it. Only the properties that apply
+/// to these pseudo-elements (§3.2 / §4.4) and are meaningful for a text run are
+/// merged — box-level ones (background, margins) are painted from the
+/// pseudo-element's own box, not from the fragment.
+///
+/// Approximation: a descendant that *re-declares* the originating element's own
+/// value (`color: blue` inside a `color: blue` block) is indistinguishable from
+/// plain inheritance here and loses to the pseudo-element.
+pub fn merge_pseudo_inherited(
+    own: &ComputedStyle,
+    base: &ComputedStyle,
+    pseudo: &ComputedStyle,
+) -> ComputedStyle {
+    let mut out = own.clone();
+    // `own == base` for a property ⇒ it was inherited ⇒ the pseudo-element
+    // supplies it. Split by `Copy`-ness: `clone()` on a `Copy` field would trip
+    // `clippy::clone_on_copy`.
+    macro_rules! take_copy {
+        ($($f:ident),+ $(,)?) => { $(if out.$f == base.$f { out.$f = pseudo.$f; })+ };
+    }
+    macro_rules! take_clone {
+        ($($f:ident),+ $(,)?) => { $(if out.$f == base.$f { out.$f = pseudo.$f.clone(); })+ };
+    }
+    take_copy!(
+        color,
+        color_space,
+        font_size,
+        line_height,
+        line_height_is_relative,
+        font_style,
+        font_weight,
+        font_variant_caps,
+        font_stretch,
+        font_optical_sizing,
+        font_size_adjust,
+        text_transform,
+        letter_spacing,
+        word_spacing,
+        text_decoration_line,
+        text_decoration_style,
+        text_decoration_thickness,
+        text_decoration_skip_ink,
+        text_emphasis_position,
+        vertical_align,
+    );
+    take_clone!(
+        font_family,
+        font_variation_settings,
+        font_feature_settings,
+        font_palette,
+        font_palette_resolved,
+        text_decoration_color,
+        text_emphasis_style,
+        text_emphasis_color,
+        text_shadow,
+    );
+    out
+}
+
 /// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
 ///
 /// `pseudo` — "before" или "after" (без "::"). `dark_mode` forwarded to
