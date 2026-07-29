@@ -1638,6 +1638,31 @@ Fully mechanical otherwise: single helper (`runtime_with_dom` → `v8_runtime_wi
 `update_layout_rects`/`update_viewport_size` already mirrored by `V8JsRuntime`, 27/27 green on the
 first run, zero body edits, zero engine divergences.
 
+### S12b-24-matchmedia — seventh porting slice (2026-07-30, branch p1-v8-s12b-24-matchmedia)
+
+`window.matchMedia`/`MediaQueryList` (CSS Media Queries L4 §4.2): constructor, `media`/`matches`,
+legacy `addListener`/`removeListener`, `addEventListener('change', …)`/`onchange`,
+`prefers-color-scheme`, `MediaQueryListEvent` — **13 tests** ported into `mod tests::v8_matchmedia`,
+QuickJS copies deleted. `cargo test -p lumen-js --features v8-backend` stayed at 2570/2570 (1:1
+swap). Count matched the scoping table's "13" estimate exactly — the first slice of the ~30 to do
+so.
+
+**Confirms the childnode-traversal rule, one link deeper.** Located by content
+(`grep matchMedia\|MediaQueryList`), not the stale brief line numbers: the actual range at slice
+start was `dom.rs:16030-16236`, sitting immediately after the just-merged ChildNode/ParentNode/
+ElementTraversal block — the same adjacency the childnode-traversal slice predicted when it noted
+this subarea was "immediately preceding the still-unported `window.matchMedia` section". The
+scoping table's *relative order* between adjacent rows still holds even though absolute line
+numbers don't; useful as a secondary check when a content grep returns more than one plausible
+block.
+
+Fully mechanical: the delivery path (`_lumen_deliver_media_changes`, `dom.rs:10558`) is pure JS
+living in the shared `WEB_API_SHIM`, so viewport/color-scheme changes never needed a Rust-side
+call — the only runtime methods touched are `rt.eval` and the already-mirrored
+`rt.update_viewport_size`. No new plumbing, no helper migration (`runtime_with_dom` keeps its
+~900+ remaining QuickJS callers), 13/13 green on the first run, zero body edits, zero engine
+divergences.
+
 ---
 
 ## Risks (Rev 2)
