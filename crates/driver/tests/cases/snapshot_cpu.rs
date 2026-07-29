@@ -179,6 +179,11 @@ const PAGES: &[&str] = &[
     // pixel pipeline, which needs a focused desktop and is flake-prone. The CPU
     // path renders the same display list deterministically.
     "151-unicode-bidi",
+    // б-24: CSS Box Alignment L3 §5 + CSS Grid L1 §12.3 — align-content /
+    // justify-content / place-content distributing a grid container's free space.
+    // Pure FillRect geometry, so the CPU path reproduces it exactly; the whole
+    // feature is track *positioning*, which a solid-colour snapshot pins precisely.
+    "152-grid-place-content",
     // Interaction layer (series 100+): pairwise property combinations whose unit
     // tests already pass individually. A regression here with green unit pages
     // points at the interaction (clip-of-transformed-layer, stacking-context

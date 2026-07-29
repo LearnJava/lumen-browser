@@ -14320,6 +14320,171 @@ mod tests {
             "gap: x diff should be 120, got {}", items[1].rect.x - items[0].rect.x);
     }
 
+    // ──── grid content distribution: align-content / justify-content / place-content
+    //      (CSS Box Alignment L3 §5, CSS Grid L1 §12.3) ────
+
+    /// Grid items of the container, in source order, excluding `Skip` boxes.
+    fn grid_items(div: &LayoutBox) -> Vec<&LayoutBox> {
+        div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect()
+    }
+
+    /// `justify-content: center` centres the fixed column tracks in the inline axis.
+    #[test]
+    fn grid_justify_content_center_offsets_columns() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; width: 400px; \
+                   justify-content: center; } \
+             a { height: 30px; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert_eq!(items.len(), 2);
+        // Free space 400 - 200 = 200 → first track pushed by 100.
+        assert!((items[0].rect.x - div.rect.x - 100.0).abs() < 1.0,
+            "first column offset by half the free space, got {}", items[0].rect.x - div.rect.x);
+        assert!((items[1].rect.x - items[0].rect.x - 100.0).abs() < 1.0,
+            "tracks stay adjacent, got {}", items[1].rect.x - items[0].rect.x);
+    }
+
+    /// `justify-content: end` flushes the column tracks to the inline end edge.
+    #[test]
+    fn grid_justify_content_end_flushes_columns() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; width: 400px; \
+                   justify-content: end; } \
+             a { height: 30px; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert!((items[0].rect.x - div.rect.x - 200.0).abs() < 1.0,
+            "first column offset by the whole free space, got {}", items[0].rect.x - div.rect.x);
+    }
+
+    /// `justify-content: space-between` widens the gap between the column tracks.
+    #[test]
+    fn grid_justify_content_space_between_widens_gap() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; width: 400px; \
+                   justify-content: space-between; } \
+             a { height: 30px; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert!((items[0].rect.x - div.rect.x).abs() < 1.0,
+            "first column at the start edge, got {}", items[0].rect.x - div.rect.x);
+        // 200px of free space becomes the single in-between gap.
+        assert!((items[1].rect.x - items[0].rect.x - 300.0).abs() < 1.0,
+            "second column pushed by track + free space, got {}", items[1].rect.x - items[0].rect.x);
+    }
+
+    /// A column-spanning item's cell absorbs the spacing `justify-content` injected.
+    #[test]
+    fn grid_justify_content_space_between_widens_spanning_cell() {
+        let root = lay(
+            "<body><div><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; width: 400px; \
+                   justify-content: space-between; } \
+             a { grid-column: 1 / 3; height: 30px; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        // Cell spans track 1 (100) + injected gap (200) + track 2 (100) = 400.
+        assert!((items[0].rect.width - 400.0).abs() < 1.0,
+            "spanning cell covers the widened gap, got {}", items[0].rect.width);
+    }
+
+    /// `align-content: center` centres the row tracks inside a definite height.
+    #[test]
+    fn grid_align_content_center_offsets_rows() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: 50px 50px; height: 300px; \
+                   align-content: center; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert_eq!(items.len(), 2);
+        // Free space 300 - 100 = 200 → first row pushed by 100.
+        assert!((items[0].rect.y - div.rect.y - 100.0).abs() < 1.0,
+            "first row offset by half the free space, got {}", items[0].rect.y - div.rect.y);
+        assert!((items[1].rect.y - items[0].rect.y - 50.0).abs() < 1.0,
+            "rows stay adjacent, got {}", items[1].rect.y - items[0].rect.y);
+    }
+
+    /// `align-content: space-evenly` spaces the row tracks including both edges.
+    #[test]
+    fn grid_align_content_space_evenly_spaces_rows() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: 50px 50px; height: 350px; \
+                   align-content: space-evenly; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        // Free 350 - 100 = 250, three equal gaps of 250/3 ≈ 83.33.
+        let per = 250.0 / 3.0;
+        assert!((items[0].rect.y - div.rect.y - per).abs() < 1.0,
+            "first row offset by one share, got {}", items[0].rect.y - div.rect.y);
+        assert!((items[1].rect.y - items[0].rect.y - (50.0 + per)).abs() < 1.0,
+            "rows separated by track + one share, got {}", items[1].rect.y - items[0].rect.y);
+    }
+
+    /// `align-content` overflow (tracks taller than the container) distributes nothing.
+    #[test]
+    fn grid_align_content_overflow_stays_at_start() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: 100px 100px; height: 50px; \
+                   align-content: center; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert!((items[0].rect.y - div.rect.y).abs() < 1.0,
+            "overflowing tracks stay at the start edge, got {}", items[0].rect.y - div.rect.y);
+    }
+
+    /// `place-content: <align-content> <justify-content>` reaches both grid axes.
+    #[test]
+    fn grid_place_content_shorthand_applies_to_both_axes() {
+        let root = lay(
+            "<body><div><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: 100px; width: 400px; height: 300px; \
+                   place-content: end center; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        // align-content: end → y offset by the whole 200px of block free space.
+        assert!((items[0].rect.y - div.rect.y - 200.0).abs() < 1.0,
+            "align-content: end flushes the row, got {}", items[0].rect.y - div.rect.y);
+        // justify-content: center → x offset by half the 300px of inline free space.
+        assert!((items[0].rect.x - div.rect.x - 150.0).abs() < 1.0,
+            "justify-content: center centres the column, got {}", items[0].rect.x - div.rect.x);
+    }
+
+    /// Default `align-content: normal` behaves as `stretch`: auto rows share the
+    /// leftover block space of a definitely-sized container.
+    #[test]
+    fn grid_align_content_normal_stretches_auto_rows() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: auto auto; height: 200px; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert_eq!(items.len(), 2);
+        // Both auto rows grow to 100px each → the second row starts halfway down.
+        assert!((items[1].rect.y - items[0].rect.y - 100.0).abs() < 1.0,
+            "auto rows share the free space, got {}", items[1].rect.y - items[0].rect.y);
+    }
+
     /// `grid-auto-flow: column` places items vertically first.
     #[test]
     fn grid_auto_flow_column() {

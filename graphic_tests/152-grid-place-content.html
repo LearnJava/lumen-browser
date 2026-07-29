@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Lumen — 152 grid place content</title>
+    <style>
+        body {
+            background: #ff00ff;
+            width: 1024px;
+            height: 720px;
+            margin: 0;
+            padding: 0;
+        }
+        .__f {
+            background: #f5f5f5;
+            width: 1022px;
+            height: 718px;
+            margin: 1px;
+            padding: 0;
+            overflow: hidden;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            box-sizing: border-box;
+        }
+        /* Each panel is a grid container whose tracks are deliberately smaller
+           than the panel, so both axes carry free space to distribute. */
+        .panel {
+            background: #ffffff;
+            border: 1px solid #999999;
+            box-sizing: border-box;
+            width: 248px;
+            height: 172px;
+            display: grid;
+            grid-template-columns: 40px 40px 40px;
+            grid-template-rows: 30px 30px 30px;
+        }
+        .panel > i { display: block; }
+        .a { background: #cc2222; }
+        .b { background: #2255cc; }
+        .c { background: #22aa55; }
+        .d { background: #ddaa00; }
+        .e { background: #8833bb; }
+        .f { background: #00a0a0; }
+        .g { background: #444444; }
+        .h { background: #ee7722; }
+        .i { background: #99cc00; }
+
+        /* justify-content — inline axis (columns). */
+        .jc-start   { justify-content: start; }
+        .jc-center  { justify-content: center; }
+        .jc-end     { justify-content: end; }
+        .jc-between { justify-content: space-between; }
+        .jc-around  { justify-content: space-around; }
+        .jc-evenly  { justify-content: space-evenly; }
+
+        /* align-content — block axis (rows). */
+        .ac-center  { align-content: center; }
+        .ac-end     { align-content: end; }
+        .ac-between { align-content: space-between; }
+
+        /* place-content shorthand: <align-content> <justify-content>. */
+        .pc-two     { place-content: end center; }
+        .pc-one     { place-content: space-evenly; }
+
+        /* Auto rows + definite height: align-content: normal behaves as stretch. */
+        .stretch-auto {
+            grid-template-rows: auto auto auto;
+        }
+        /* A column-spanning item must absorb the spacing space-between injected. */
+        .span-cell { grid-template-rows: 30px 30px; }
+        .span-cell > .a { grid-column: 1 / 4; }
+    </style>
+</head>
+<body>
+<div class="__f">
+    <!-- 1. justify-content: start (columns flush to the inline start edge) -->
+    <div class="panel jc-start">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 2. justify-content: center -->
+    <div class="panel jc-center">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 3. justify-content: end -->
+    <div class="panel jc-end">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 4. justify-content: space-between (no space at the edges) -->
+    <div class="panel jc-between">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 5. justify-content: space-around (half share at the edges) -->
+    <div class="panel jc-around">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 6. justify-content: space-evenly (equal shares everywhere) -->
+    <div class="panel jc-evenly">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 7. align-content: center (rows centred in the block axis) -->
+    <div class="panel ac-center">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 8. align-content: end -->
+    <div class="panel ac-end">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 9. align-content: space-between -->
+    <div class="panel ac-between">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 10. place-content: end center — both axes from one shorthand -->
+    <div class="panel pc-two">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 11. place-content: space-evenly — single value applies to both axes -->
+    <div class="panel pc-one">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 12. default align-content (normal → stretch): auto rows fill the height,
+             while space-between still widens the column gaps and the spanning
+             red bar must stretch across the widened gaps too -->
+    <div class="panel stretch-auto jc-between">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+
+    <!-- 13. spanning item across widened space-between gaps -->
+    <div class="panel span-cell jc-between">
+        <i class="a"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+    </div>
+
+    <!-- 14. overflow control: tracks taller than the panel must stay at the
+             start edge instead of being centred off the top -->
+    <div class="panel ac-center" style="grid-template-rows: 90px 90px 90px;">
+        <i class="a"></i><i class="b"></i><i class="c"></i>
+        <i class="d"></i><i class="e"></i><i class="f"></i>
+        <i class="g"></i><i class="h"></i><i class="i"></i>
+    </div>
+</div>
+</body>
+</html>
