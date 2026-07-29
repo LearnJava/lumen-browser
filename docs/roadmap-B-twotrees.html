@@ -75,8 +75,8 @@
 {
  "generated": "2026-07-29",
  "counts": {
-  "open": 127,
-  "fixed": 287,
+  "open": 126,
+  "fixed": 288,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -7079,10 +7079,10 @@
    "debtor": false
   },
   "BUG-433": {
-   "status": "open",
-   "title": "Flex-элемент сжимается ниже **автоматического минимального размера** (CSS Flexbox §4.5): при `min-width: auto` минимум = min-content содержимого, а `lay_out_fle…",
-   "component": "layout (flexbox)",
-   "date": null,
+   "status": "fixed",
+   "title": "Flex-элемент сжимался ниже **автоматического минимального размера** (CSS Flexbox §4.5): при `min-width: auto` минимум = content-based minimum size, а `lay_out_f…",
+   "component": "layout (`box_tree.rs` — `lay_out_flex`, `flex_item_min_main_width`, `min_content_outer_width_of_contents`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-434": {
@@ -7411,6 +7411,9 @@
    "BUG-237",
    "BUG-241"
   ],
+  "layout (`box_tree.rs` — `lay_out_flex`, `flex_item_min_main_width`, `min_content_outer_width_of_contents`)": [
+   "BUG-433"
+  ],
   "layout (`box_tree.rs`, `lay_out_flex`)": [
    "BUG-333"
   ],
@@ -7429,9 +7432,6 @@
   ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"
-  ],
-  "layout (flexbox)": [
-   "BUG-433"
   ],
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"
