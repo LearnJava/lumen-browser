@@ -173,6 +173,12 @@ const PAGES: &[&str] = &[
     "58-first-letter-line",
     // б-22: CSS Images L4 §5/§4 — image-set() + cross-fade()
     "59-image-set-cross-fade",
+    // б-23: CSS Writing Modes L4 §2.2 + UAX #9 — unicode-bidi × direction.
+    // A text page, kept here on purpose: the RTL half of the feature (fragment
+    // reordering + reversed glyph order) is otherwise gated only by the Edge
+    // pixel pipeline, which needs a focused desktop and is flake-prone. The CPU
+    // path renders the same display list deterministically.
+    "151-unicode-bidi",
     // Interaction layer (series 100+): pairwise property combinations whose unit
     // tests already pass individually. A regression here with green unit pages
     // points at the interaction (clip-of-transformed-layer, stacking-context

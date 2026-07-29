@@ -348,6 +348,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "transition-property",
     "transition-timing-function",
     "translate",
+    "unicode-bidi",
     "user-select",
     "-webkit-user-select",
     "vertical-align",

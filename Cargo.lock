@@ -2357,6 +2357,8 @@ dependencies = [
  "lumen-html-parser",
  "lumen-image",
  "rayon",
+ "unicode-bidi",
+ "unicode-bidi-mirroring",
  "workspace-hack",
 ]
 

@@ -16,6 +16,7 @@ pub use lumen_core::ColorSpace;
 
 pub mod anchor;
 pub mod animation;
+pub mod bidi;
 pub mod box_tree;
 pub mod color_mix;
 pub mod incremental;

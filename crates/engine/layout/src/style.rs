@@ -736,22 +736,71 @@ pub enum TextAlignLast {
 
 /// CSS Writing Modes L3 §2.1 — `direction: ltr | rtl`. Inherited.
 ///
-/// Базовое направление потока inline-контента. В Phase 0 layout только
-/// хранит значение и распространяет через каскад — реальное применение
-/// (RTL line-flow, перенос pivot point, bidi reordering через Unicode
-/// Bidi Algorithm) требует Bidi-движка и переписанного wrap_inline_run.
-/// Однако зафиксировать direction в `ComputedStyle` сейчас полезно для
-/// двух будущих задач: (1) когда появится `dir="rtl"` HTML-атрибут или
-/// `<bdo>` — у нас уже есть точка хранения; (2) когда возьмёмся за bidi —
-/// каскад уже даёт нам базовое направление, не нужно его ретрофитить.
-///
-/// `rtl` пока не меняет рендеринг — это явный «отложено», документированный
-/// в roadmap.
+/// Базовое направление потока inline-контента: задаёт paragraph embedding
+/// level для Unicode Bidirectional Algorithm (`ltr` → 0, `rtl` → 1) и
+/// разрешает логические значения `text-align: start|end` в физические
+/// left/right. Реальный bidi-порядок фрагментов считает [`crate::bidi`],
+/// применяет `box_tree::wrap_inline_run` → `align_lines`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Direction {
     #[default]
     Ltr,
     Rtl,
+}
+
+/// CSS Writing Modes L4 §2.2 — `unicode-bidi`. НЕ наследуется.
+///
+/// Управляет тем, как содержимое inline-бокса участвует в Unicode
+/// Bidirectional Algorithm (UAX #9). Каждое значение эквивалентно обёртке
+/// текста бокса в явные bidi-control-символы, которые [`crate::bidi`]
+/// вставляет в текст параграфа перед прогоном UBA:
+///
+/// | Значение           | Обёртка (для `direction: ltr` / `rtl`)     |
+/// |--------------------|--------------------------------------------|
+/// | `normal`           | нет — содержимое сливается с окружением     |
+/// | `embed`            | `LRE`/`RLE` … `PDF`                        |
+/// | `isolate`          | `LRI`/`RLI` … `PDI`                        |
+/// | `bidi-override`    | `LRO`/`RLO` … `PDF`                        |
+/// | `isolate-override` | `FSI` `LRO`/`RLO` … `PDF` `PDI`            |
+/// | `plaintext`        | `FSI` … `PDI` (направление — first-strong)  |
+///
+/// `plaintext` игнорирует `direction` бокса: базовое направление берётся
+/// правилом P2/P3 из самого содержимого, что и делает `FSI`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UnicodeBidi {
+    /// Содержимое участвует в UBA наравне с соседями — bidi-control не вставляется.
+    #[default]
+    Normal,
+    /// Дополнительный уровень вложенности (`LRE`/`RLE` … `PDF`).
+    Embed,
+    /// Изолированная последовательность (`LRI`/`RLI` … `PDI`).
+    Isolate,
+    /// Принудительное направление всех символов (`LRO`/`RLO` … `PDF`).
+    BidiOverride,
+    /// Изоляция + принудительное направление (`FSI` `LRO`/`RLO` … `PDF` `PDI`).
+    IsolateOverride,
+    /// Изоляция с first-strong базовым направлением (`FSI` … `PDI`).
+    Plaintext,
+}
+
+/// Разбирает значение `unicode-bidi` (CSS Writing Modes L4 §2.2).
+///
+/// Ключевые слова CSS ASCII-case-insensitive (CSS Values L4 §2.4).
+/// Legacy-префиксы `-webkit-`/`-moz-` у трёх изолирующих значений принимаются
+/// как алиасы — так их до сих пор пишут в CSS локализованных страниц.
+/// `None` — значение не распознано, объявление игнорируется.
+fn match_unicode_bidi(val: &str) -> Option<UnicodeBidi> {
+    let v = val.trim().to_ascii_lowercase();
+    let v = v.strip_prefix("-webkit-").or_else(|| v.strip_prefix("-moz-")).unwrap_or(&v);
+    match v {
+        "normal" => Some(UnicodeBidi::Normal),
+        "embed" => Some(UnicodeBidi::Embed),
+        "isolate" => Some(UnicodeBidi::Isolate),
+        "bidi-override" => Some(UnicodeBidi::BidiOverride),
+        "isolate-override" => Some(UnicodeBidi::IsolateOverride),
+        "plaintext" => Some(UnicodeBidi::Plaintext),
+        _ => None,
+    }
 }
 
 /// CSS Backgrounds L3 §4.6 — спецификация одной тени бокса.
@@ -3173,9 +3222,12 @@ pub struct ComputedStyle {
     /// Phase 0: parse + store; применение при line layout — deferred.
     pub text_align_last: TextAlignLast,
     /// CSS Writing Modes L3 §2.1 — направление inline-потока. Inherited.
-    /// В Phase 0 layout/paint его пока не применяют — задел под bidi и
-    /// HTML `dir`-атрибут. См. `Direction` для подробностей.
+    /// Задаёт paragraph embedding level для UBA и разрешает логические
+    /// `text-align: start|end`. См. [`Direction`] для подробностей.
     pub direction: Direction,
+    /// CSS Writing Modes L4 §2.2 — участие бокса в UBA. NOT inherited.
+    /// Initial: `Normal`. См. [`UnicodeBidi`].
+    pub unicode_bidi: UnicodeBidi,
     pub color: Color,
     /// Цветовое пространство, в котором объявлен `color` (CSS Color L4 §10).
     /// Используется renderer-ом для точной передачи wide-gamut цветов в GPU.
@@ -6560,6 +6612,7 @@ impl ComputedStyle {
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
             direction: Direction::Ltr,
+            unicode_bidi: UnicodeBidi::Normal,
             color: Color::BLACK,
             color_space: ColorSpace::Srgb,
             background_color: None,
@@ -6905,6 +6958,8 @@ pub fn compute_style(
         color_space: inherited.color_space,
         text_align: inherited.text_align,
         direction: inherited.direction,
+        // `unicode-bidi` не наследуется (CSS Writing Modes L4 §2.2).
+        unicode_bidi: UnicodeBidi::Normal,
         font_size: inherited.font_size,
         line_height: inherited.line_height,
         line_height_is_relative: inherited.line_height_is_relative,
@@ -14327,6 +14382,15 @@ fn apply_declaration(
                 style.direction = Direction::Rtl;
             }
         }
+        "unicode-bidi" => {
+            // CSS Writing Modes L4 §2.2. Legacy `-webkit-`/`-moz-` префиксы
+            // изолятов принимаются как алиасы — их до сих пор пишут в CSS
+            // локализованных страниц. Невалидное значение оставляет прежнее.
+            let v = val.trim();
+            if let Some(parsed) = match_unicode_bidi(v) {
+                style.unicode_bidi = parsed;
+            }
+        }
         "color" => {
             match parse_css_color_legacy(val, is_quirks) {
                 Some(CssColor::Rgba(c)) => {
@@ -18101,6 +18165,15 @@ fn apply_css_wide_keyword(
         }
         "direction" => {
             style.direction = if inh { inherited.direction } else { init.direction };
+        }
+        "unicode-bidi" => {
+            // Не наследуемое: голый `inherit` берёт родителя, `unset`/`initial`
+            // возвращают `normal`.
+            style.unicode_bidi = if inh_only_inherit {
+                inherited.unicode_bidi
+            } else {
+                init.unicode_bidi
+            };
         }
         "text-transform" => {
             style.text_transform = if inh { inherited.text_transform } else { init.text_transform };

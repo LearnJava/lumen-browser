@@ -1182,6 +1182,21 @@
   <div class="fvc-row fvc-c3">MiXeD</div>
 </div><!-- /font-variant-caps card -->
 
+<!-- unicode-bidi demo card -->
+<style>
+  .ub-card { background:#1b263b; padding:8px; border-radius:4px; color:#e8eef7; }
+  .ub-row { font-size:24px; line-height:30px; margin-top:4px; white-space:nowrap; }
+  .ub-rtl { direction:rtl; }
+  .ub-flip { direction:rtl; unicode-bidi:bidi-override; }
+</style>
+<div class="card ub-card">
+  <h4>unicode-bidi</h4>
+  <div class="ub-row">ALPHA BETA</div>
+  <div class="ub-row ub-rtl">ALPHA BETA</div>
+  <div class="ub-row ub-flip">ALPHA BETA</div>
+  <div class="ub-row">ALPHA <span class="ub-flip">BETA</span></div>
+</div><!-- /unicode-bidi card -->
+
 <!-- masonry-auto-flow demo card -->
 <style>
   .maf-card { background:#0d1b2a; padding:8px; border-radius:4px; }

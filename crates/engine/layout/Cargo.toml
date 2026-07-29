@@ -16,6 +16,12 @@ lumen-image.workspace = true
 # ADR-016 M4.1: parallel selector matching for flex/grid/table item containers.
 # Permanent dep: work-stealing parallelism for independent sibling style computations.
 rayon = "1"
+# UAX #9 Unicode Bidirectional Algorithm + BidiMirroring table, for the
+# `direction` / `unicode-bidi` inline reordering pass (`src/bidi.rs`).
+# Permanent deps: pure Unicode data tables — the resolution rules need the full
+# Bidi_Class property of every code point, which is not hand-rollable.
+unicode-bidi = "0.3"
+unicode-bidi-mirroring = "0.2"
 workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [features]

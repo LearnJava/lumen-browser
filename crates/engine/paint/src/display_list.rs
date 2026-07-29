@@ -3660,7 +3660,11 @@ fn emit_text_frags(
         out.push(DisplayCommand::DrawText {
             font_stretch: frag.style.font_stretch,
             rect: base_rect,
-            text: frag.text.clone(),
+            // UAX #9 L2/L4 — a right-to-left fragment is handed to the
+            // rasterizers already reversed and mirrored: they advance strictly
+            // left to right and do no bidi work of their own. `frag.text` stays
+            // logical, so Selection/Range offsets are unaffected.
+            text: lumen_layout::bidi::visual_text(&frag.text, frag.bidi_level).into_owned(),
             font_size: frag.style.font_size,
             color: text_color,
             font_family: frag.style.font_family.clone(),
