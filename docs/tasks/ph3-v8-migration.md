@@ -1185,6 +1185,33 @@ final Cargo.toml/feature-gate/docs cleanup slice, strictly last) and `P3-v8-post
 of `STATUS-P1.md` ahead of the existing bug-fix queue. Full audit trail — memory
 `project_quickjs_full_removal_audit_s12b` (assistant session memory, not part of this repo).
 
+### S12b-22 — `WinitSession::eval` → V8 (2026-07-29, branch p1-v8-s12b-22)
+
+Blocker 1 from the audit above, closed. `crates/driver/src/winit_session.rs` now builds a
+one-shot `lumen_js::v8_runtime::V8JsRuntime` (`V8JsRuntime::new` + the same 11-argument
+`install_dom` the rquickjs path used) instead of `QuickJsRuntime`; the gate moved from
+`#[cfg(feature = "quickjs")]` to `#[cfg(feature = "v8")]`. The **one-shot, DOM-clone**
+semantics are deliberately preserved, not upgraded: `WinitSessionState` holds a plain
+`Document`, not the `Arc<Mutex<Document>>` a persistent runtime needs, and the persistent
+variant already exists as `InProcessSession` (DEVX-5). Making `WinitSession` persistent is a
+separate refactor with its own layout/paint write-back question — out of scope here.
+
+The `quickjs` feature was dropped from `crates/driver/Cargo.toml` in the same slice rather
+than left for S12b-25: after the port no `#[cfg]` in the crate referenced it, and *no crate in
+the workspace ever enabled it* (`shell`, `mcp`, `bidi-server` all take `lumen-driver` with its
+defaults, `["cpu-render", "v8"]`). Consequence worth recording: `WinitSession::eval` was
+returning `"eval требует пересборку с --features quickjs"` in **every** build the workspace
+produces — the SDC-1a capability was documented as working-behind-a-flag but was in fact dead
+everywhere, and the two tests covering it in `test_automation_commands.rs`
+(`eval_reads_back_dom_state_after_click_and_type`, `eval_runs_plain_expression`) had not been
+compiled, let alone run, since they were written. Both are now gated on `v8` and pass on V8
+unmodified — the assertions (`getAttribute('checked')` → `"checked"`, `getAttribute('value')`
+→ `"Lumen"`, `1 + 1` → `2`) held across the engine swap with no adjustment.
+
+**Lesson for the remaining slices:** a `#[cfg(feature = …)]` on a feature nothing enables is
+not a rollback path, it is dead code plus a dead test suite — grep for who actually turns a
+feature on before trusting a "still available under `--features X`" line in the docs.
+
 ---
 
 ## Risks (Rev 2)

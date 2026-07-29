@@ -2,8 +2,8 @@
 //! (SDC-1a, 8A.7 Ф4 driver-side finish).
 //!
 //! Covers: click-follows-link navigation, checkbox toggle-on-click,
-//! type_text writing into an input's `value`, and (under `--features
-//! quickjs`) `eval()` reading back DOM state through a one-shot QuickJS
+//! type_text writing into an input's `value`, and (under the default
+//! `v8` feature) `eval()` reading back DOM state through a one-shot V8
 //! runtime bound to the current document snapshot.
 
 use lumen_driver::{BrowserSession, Target, WinitSession};
@@ -44,7 +44,7 @@ fn click_toggles_checkbox_checked() {
 
     // Two clicks toggle checked on then off again — assert no error and the
     // element is still resolvable (state-mutation correctness for `checked`
-    // itself is covered by the `quickjs`-gated eval test below, which can
+    // itself is covered by the `v8`-gated eval test below, which can
     // actually read the attribute back through the DOM).
     let after = session.query("#agree").expect("query failed");
     assert_eq!(after.len(), 1);
@@ -87,7 +87,7 @@ fn type_text_rejects_non_typeable_target() {
     let _ = err;
 }
 
-#[cfg(feature = "quickjs")]
+#[cfg(feature = "v8")]
 #[test]
 fn eval_reads_back_dom_state_after_click_and_type() {
     let mut session = WinitSession::new();
@@ -118,7 +118,7 @@ fn eval_reads_back_dom_state_after_click_and_type() {
     assert_eq!(value, "\"Lumen\"");
 }
 
-#[cfg(feature = "quickjs")]
+#[cfg(feature = "v8")]
 #[test]
 fn eval_runs_plain_expression() {
     let mut session = WinitSession::new();
