@@ -4055,6 +4055,21 @@ impl LoadedPage {
     }
 }
 
+/// Where a mutable form control keeps the text it renders — the two storage
+/// models HTML gives text-editing controls (BUG-436).
+///
+/// Picked by [`Lumen::typeable_field`] and consumed by
+/// [`Lumen::edit_focused_field`], which has to write the new value back to the
+/// right place: `<input>` reflects it in the `value` content attribute,
+/// `<textarea>` in its text-node children (HTML LS §4.10.11).
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum TypeableField {
+    /// `<input>` of a text-like type — value lives in the `value` attribute.
+    Input,
+    /// `<textarea>` — value lives in the element's text-node children.
+    Textarea,
+}
+
 /// Действия shell-а, на которые мапятся клавиши. Изолированы от winit, чтобы
 /// маппер был тестируем без event loop.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -12852,14 +12867,30 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
                 AutomationCommand::Type(target, text) => {
-                    let point = self.resolve_automation_target(&target);
-                    if let Some((x, y)) = point {
-                        self.handle_click_at(x, y);
+                    // Same target resolution as `Click` — and the same honest
+                    // failure when it resolves to nothing. Reporting `Ack` for
+                    // an unresolvable target was half of BUG-436's "succeeds
+                    // but does nothing" signature.
+                    match self.resolve_automation_target(&target) {
+                        Some((x, y)) => {
+                            self.handle_click_at(x, y);
+                            let mut consumed = true;
+                            for ch in text.chars() {
+                                consumed &= self.inject_char(ch);
+                            }
+                            if consumed {
+                                let _ = reply_tx.send(AutomationReply::Ack);
+                            } else {
+                                let _ = reply_tx.send(AutomationReply::Error(
+                                    "Element is not a mutable text field".to_string(),
+                                ));
+                            }
+                        }
+                        None => {
+                            let _ = reply_tx
+                                .send(AutomationReply::Error("Element not found".to_string()));
+                        }
                     }
-                    for ch in text.chars() {
-                        self.inject_char(ch);
-                    }
-                    let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::Scroll(delta) => {
                     self.scroll_by_delta(delta.x, delta.y);
@@ -17504,21 +17535,109 @@ impl Lumen {
         }
     }
 
+    /// Classify `nid` as a mutable text-editing form control and read the value
+    /// it currently renders (BUG-436).
+    ///
+    /// Returns `None` for anything that is not a typeable `<input>` (the
+    /// text-like types — the same set [`InProcessSession::type_text`] accepts)
+    /// or a `<textarea>`, and for a control that is `disabled` or `readonly`
+    /// (HTML LS §4.10.19.2 — such a control is not mutable, so the engine
+    /// performs no insertion).
+    ///
+    /// The value read is the *rendered* one — the `value` content attribute for
+    /// `<input>`, the text-node children for `<textarea>` (HTML LS §4.10.11) —
+    /// because that is what layout paints and what form submission collects.
+    fn typeable_field(&self, nid: lumen_dom::NodeId) -> Option<(TypeableField, String)> {
+        let doc = self.layout_source.as_ref()?.document.lock().ok()?;
+        let node = doc.get(nid);
+        if node.get_attr("disabled").is_some() || node.get_attr("readonly").is_some() {
+            return None;
+        }
+        if node.element_name().is_some_and(|n| n.local.eq_ignore_ascii_case("textarea")) {
+            let text = node_text_content(&doc, nid);
+            return Some((TypeableField::Textarea, text));
+        }
+        let is_typeable_input = matches!(
+            node.input_type(),
+            Some(lumen_dom::InputType::Text)
+                | Some(lumen_dom::InputType::Password)
+                | Some(lumen_dom::InputType::Email)
+                | Some(lumen_dom::InputType::Tel)
+                | Some(lumen_dom::InputType::Url)
+                | Some(lumen_dom::InputType::Number)
+                | Some(lumen_dom::InputType::Search)
+        );
+        if !is_typeable_input {
+            return None;
+        }
+        let value = node.get_attr("value").unwrap_or_default().to_owned();
+        Some((TypeableField::Input, value))
+    }
+
+    /// Engine-side text-editing default action on the focused form control
+    /// (BUG-436): `edit` maps the field's current value to its new value.
+    ///
+    /// The JS shim only *dispatches* `keydown`/`input`/`keyup`; changing the
+    /// control's value is the engine's own default action (HTML LS §4.10.5.5),
+    /// exactly as [`InProcessSession::dispatch_type`] does for the headless
+    /// driver. Without it the live window fired `input` events on a field that
+    /// never changed — `type` reported success, `input.value` stayed `""` and
+    /// the field rendered empty.
+    ///
+    /// Returns `true` when a mutable field consumed the edit. The DOM mutation
+    /// happens with the document lock held and no JS dispatched under it (the
+    /// deadlock trap found in BUG-437); the JS-side value shadow is synced
+    /// afterwards so a listener reading `this.value` sees the new value.
+    fn edit_focused_field(&mut self, edit: impl FnOnce(&str) -> String) -> bool {
+        let Some(nid) = self.focused_node else { return false };
+        let Some((kind, current)) = self.typeable_field(nid) else { return false };
+        let next = edit(&current);
+        if next == current {
+            return true;
+        }
+        if let Some(src) = self.layout_source.as_mut()
+            && let Ok(mut doc) = src.document.lock()
+        {
+            match kind {
+                TypeableField::Input => forms::set_value(&mut doc, nid, &next),
+                TypeableField::Textarea => forms::set_textarea_text(&mut doc, nid, &next),
+            }
+        }
+        // Runtime value overlay used by form submission and constraint
+        // validation (`forms::collect_form_entries`) — kept in step with the DOM
+        // exactly like the spellcheck-replace path does.
+        self.form_state.entry(nid).or_default().value = next.clone();
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!("_lumen_set_field_value({}, '{}')", nid.index(), escape_js_string(&next)),
+        );
+        self.relayout_form();
+        true
+    }
+
     /// Fires `keydown` → `input` → `keyup` JS events via `_lumen_dispatch_key_event`
     /// on the last-focused node so events have `isTrusted=true`.
-    fn inject_char(&mut self, ch: char) {
+    ///
+    /// Between `keydown` and `input` the engine runs its own text-insertion
+    /// default action ([`Self::edit_focused_field`], BUG-436), so an `input`
+    /// listener reading `this.value` observes the character just typed.
+    /// Returns `true` when a form control accepted the character.
+    fn inject_char(&mut self, ch: char) -> bool {
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         let key = escape_js_string_char(ch);
         // ADR-016 M2.2c-2d (10): same read-after-eval routing as `inject_special_key`
         // — keydown → input → keyup dispatch off-UI-thread under the flag, then the
         // `take_navigate_request` read ordered after via `route_query_js`; byte-identical
         // off-flag.
-        for event_type in &["keydown", "input", "keyup"] {
-            let script = format!(
-                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
-                node_id, event_type, key, key,
-            );
-            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+        self.dispatch_injected_key(node_id, "keydown", &key);
+        let consumed = self.edit_focused_field(|current| {
+            let mut next = current.to_owned();
+            next.push(ch);
+            next
+        });
+        for event_type in &["input", "keyup"] {
+            self.dispatch_injected_key(node_id, event_type, &key);
         }
         if let Some(Some(nav)) = route_query_js(
             self.engine_thread.as_ref(),
@@ -17527,6 +17646,39 @@ impl Lumen {
         ) {
             self.pending_js_navigate = Some(nav);
         }
+        consumed
+    }
+
+    /// Backspace on the focused form control: `keydown` → engine deletes the
+    /// last character ([`Self::edit_focused_field`]) → `input` → `keyup`.
+    ///
+    /// The counterpart of [`Self::inject_char`] — without it a field could be
+    /// filled but never corrected. Returns `true` when a form control consumed
+    /// the key.
+    fn inject_backspace(&mut self) -> bool {
+        let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
+        self.dispatch_injected_key(node_id, "keydown", "Backspace");
+        let consumed = self.edit_focused_field(|current| {
+            let mut next = current.to_owned();
+            next.pop();
+            next
+        });
+        for event_type in &["input", "keyup"] {
+            self.dispatch_injected_key(node_id, event_type, "Backspace");
+        }
+        consumed
+    }
+
+    /// Send one `_lumen_dispatch_key_event` for an injected/typed key.
+    ///
+    /// `key` must already be escaped for a single-quoted JS literal
+    /// ([`escape_js_string_char`]).
+    fn dispatch_injected_key(&mut self, node_id: usize, event_type: &str, key: &str) {
+        let script = format!(
+            "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
+            node_id, event_type, key, key,
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
     fn handle_key(&mut self, event_loop: &ActiveEventLoop, key_event: &KeyEvent) {
@@ -17873,6 +18025,32 @@ impl Lumen {
                         return;
                     }
                 }
+            }
+        }
+
+        // Text editing inside a focused `<input>`/`<textarea>` — same placement
+        // rationale as the contenteditable branch above: without it a printable
+        // key falls through to the global keybinding table, where a bare `F`
+        // opens hint mode and Space scrolls the page instead of reaching the
+        // field. The insertion itself is the engine's own default action
+        // (`inject_char` → `edit_focused_field`, BUG-436).
+        if (self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
+            && self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some())
+        {
+            if code == KeyCode::Backspace {
+                self.inject_backspace();
+                self.request_redraw();
+                return;
+            }
+            if let Some(text) = key_event.logical_key.to_text()
+                && !text.is_empty()
+                && text.chars().all(|c| !c.is_control())
+            {
+                for ch in text.chars() {
+                    self.inject_char(ch);
+                }
+                self.request_redraw();
+                return;
             }
         }
 
@@ -23758,10 +23936,15 @@ fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
 /// Escape a single character for safe embedding in a JS string literal.
 ///
 /// Converts `ch` to an ASCII or `\uXXXX` escape so the character can be
-/// used in `"..."` JS string arguments passed via `eval_js`.
+/// used in `"..."` or `'...'` JS string arguments passed via `eval_js`.
+/// Both quote flavours are escaped because every call site in this crate
+/// interpolates the result into a **single**-quoted literal — an unescaped
+/// apostrophe there produced a syntax error and the whole dispatch script
+/// was silently dropped (found while fixing BUG-436).
 fn escape_js_string_char(ch: char) -> String {
     match ch {
         '"' => r#"\""#.to_owned(),
+        '\'' => r"\'".to_owned(),
         '\\' => r"\\".to_owned(),
         '\n' => r"\n".to_owned(),
         '\r' => r"\r".to_owned(),
@@ -23773,9 +23956,36 @@ fn escape_js_string_char(ch: char) -> String {
     }
 }
 
+/// Escape a whole string for safe embedding in a single-quoted JS literal.
+///
+/// Character-by-character application of [`escape_js_string_char`] — used to
+/// hand a form control's new value to `_lumen_set_field_value` (BUG-436).
+fn escape_js_string(s: &str) -> String {
+    s.chars().map(escape_js_string_char).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── BUG-436: typed characters reach the JS dispatch intact ───────────────
+
+    #[test]
+    fn escaped_char_is_safe_inside_single_quoted_js_literal() {
+        // Every call site interpolates into `'...'`, so an apostrophe must not
+        // close the literal — it used to, and the whole dispatch script was
+        // dropped as a syntax error.
+        assert_eq!(escape_js_string_char('\''), r"\'");
+        assert_eq!(escape_js_string_char('\\'), r"\\");
+        assert_eq!(escape_js_string_char('a'), "a");
+    }
+
+    #[test]
+    fn escaped_string_escapes_every_quote() {
+        assert_eq!(escape_js_string("it's"), r"it\'s");
+        // Non-ASCII goes over as a `\uXXXX` escape, not a raw character.
+        assert_eq!(escape_js_string("\u{444}"), r"\u0444");
+    }
 
     // ── ADR-023: engine-thread default flip + rollback precedence ────────────
 
