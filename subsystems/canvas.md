@@ -46,9 +46,9 @@ Phase 5 implementation: all drawing operations write to an in-process `Vec<u8>` 
   - Phase 3: offset-only (no Gaussian blur); blur value stored but not yet applied.
   - `shadow_effective()` skips zero-alpha or zero-offset shadows.
   - `shift_path()` — shifts all path coordinates by (dx, dy) for shadow pass.
-- `clip()` — rasterizes current path into boolean `clip_mask`; intersects with existing mask.
+- `clip()` — rasterizes current path into the 8-bit coverage `clip_mask`; intersects with existing mask.
   - `build_clip_mask(path, w, h)` in `rasterize.rs` — scanline even-odd rasterization.
-  - `pixel_allowed(x, y)` — checked before every pixel write in rasterizer and fill methods.
+  - `clip_coverage(x, y)` — multiplied into the source alpha on every pixel write in the rasterizer and the fill methods.
 - `draw_image(src_pixels, src_w, src_h, dx, dy, dw, dh)` — scaled blit with CTM + globalAlpha.
 - `put_image_data(data, sw, sh, dx, dy)` — direct write bypassing CTM/alpha/clip (spec §4.12.5.1.16).
 - `create_image_data(sw, sh) -> Vec<u8>` — zero-filled RGBA8 buffer.
@@ -84,10 +84,36 @@ Phase 5 implementation: all drawing operations write to an in-process `Vec<u8>` 
 - `ctx.fill(ruleOrPath)`, `ctx.stroke(path?)`, `ctx.clip(path?)`, `ctx.isPointInPath(path, x, y)`.
 - `ellipse` implemented in JS shim (rquickjs max-7-args limitation → save/scale/rotate/arc trick).
 
+### Anti-aliased rasterization ([BUG-099](../bugs/BUG-099-OPEN.md), 2026-07-29)
+
+`rasterize.rs` was a binary-coverage scanline filler: a pixel was either fully painted
+or untouched, so every non-axis-aligned edge came out jagged against Edge's smoothed
+one. It now computes fractional coverage and scales the source alpha by it.
+
+- `AA_ROWS = 4` vertical sub-scanlines per pixel row; horizontal coverage is exact
+  (a span contributes its fractional overlap to the two end pixels), so only the
+  vertical axis is sampled. An interior pixel still accumulates exactly `1.0`
+  (`4 × 0.25`, both terms exact in binary), so axis-aligned fills are bit-identical
+  to the old output — only edges change.
+- `fill_path`, `stroke_path` and `build_clip_mask` all funnel through one
+  `Scratch::coverage_row`; `build_clip_mask` returns `Vec<u8>` coverage instead of
+  `Vec<bool>`, and `Context2D::pixel_allowed` became `clip_coverage(x, y) -> f32`.
+- A stroke is rasterized as the **union** of its per-segment quads (spans are merged
+  on each sub-scanline) instead of one `fill_quad` per segment. Painting them
+  separately composited the join overlap twice — visible as a dark corner under
+  `globalAlpha < 1`, and as a seam once the quads gained AA edges.
+- `coverage_row` returns the touched column range so the compositing loop walks only
+  the covered part of the row, not the full canvas width.
+
 ## Deferred
 
 - Gaussian blur for `shadowBlur > 0`.
 - Canvas fingerprint noise (ADR-007) — `set_noise_generator / get_image_data`.
+- `lineCap` / `lineJoin` / `miterLimit` — parsed, stored in `DrawState` and preserved
+  across `save()`/`restore()`, but never read by `rasterize.rs`: a stroke is the union
+  of per-segment quads with butt ends, so a `strokeRect` corner keeps a notch
+  ([BUG-099](../bugs/BUG-099-OPEN.md)). The `line_cap_parse` / `line_join_parse` tests
+  cover `from_str` only, so they stay green while the feature does nothing.
 
 ## Invariants
 
@@ -96,6 +122,7 @@ Phase 5 implementation: all drawing operations write to an in-process `Vec<u8>` 
 - `arc()` tessellates to at most 180 segments regardless of radius.
 - Gradient sampling is in device pixel space (post-CTM), not spec-correct user space.
 - `put_image_data` bypasses CTM, globalAlpha, compositing, and clip (spec §4.12.5.1.16).
-- `clip()` intersects with the existing mask (never replaces it outright).
+- `clip()` intersects with the existing mask (never replaces it outright); coverage is combined with `min`, not a product, so nesting `clip()` calls on the same boundary does not darken it.
+- Fill, stroke and clip share one coverage rasterizer — a geometry change must go into `Scratch::coverage_row`, not into a per-operation copy of the scanline loop.
 - `Path2dData` stores user-space coordinates; CTM is applied in `to_device_space()` at draw time, not at path-construction time (HTML LS §4.12.5.1.5 invariant).
 - `ellipse()` on `Path2dData` is approximated via `arc` with save/scale/rotate (correct for all standard use cases).
