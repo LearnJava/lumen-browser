@@ -43,7 +43,7 @@ use glutin_winit::GlWindow;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
 
-use lumen_core::ext::FontProvider;
+use lumen_core::ext::{FontProvider, NORMAL_STRETCH_PERCENT};
 use lumen_core::geom::Size;
 use lumen_image::{Image, resize_area_avg};
 use lumen_layout::Color;
@@ -2749,6 +2749,7 @@ impl FemtovgBackend {
         families: &[String],
         weight: u16,
         style: FontStyle,
+        stretch: u16,
     ) -> (Vec<femtovg::FontId>, bool, bool) {
         let mut ids: Vec<femtovg::FontId> = Vec::new();
         let mut true_bold = false;
@@ -2808,7 +2809,7 @@ impl FemtovgBackend {
                 ) {
                     continue;
                 }
-                if let Some(rec) = provider.pick_face(fam, weight, core_style)
+                if let Some(rec) = provider.pick_face(fam, weight, core_style, stretch)
                     && let Some(id) = self.load_font_by_path(&rec.path.clone(), provider)
                     && !ids.contains(&id)
                 {
@@ -2903,6 +2904,7 @@ impl FemtovgBackend {
         families: &[String],
         weight: u16,
         style: FontStyle,
+        stretch: u16,
         axes: &[([u8; 4], f32)],
         features: &[([u8; 4], u32)],
         tab_size: f32,
@@ -2923,7 +2925,7 @@ impl FemtovgBackend {
             ) {
                 continue;
             }
-            let Some(rec) = provider.pick_face(fam, weight, core_style) else {
+            let Some(rec) = provider.pick_face(fam, weight, core_style, stretch) else {
                 continue;
             };
             let Some(bytes) = provider
@@ -4667,7 +4669,7 @@ impl FemtovgBackend {
                     }
                 }
             }
-            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_variation_axes, font_features, font_palette: _, tab_size, highlight_name: _, text_orientation: _ } => {
+            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_stretch, font_variation_axes, font_features, font_palette: _, tab_size, highlight_name: _, text_orientation: _ } => {
                 // BUG-109: femtovg's text API cannot apply font-variation-settings
                 // axes. When axes are present and resolve to a variable face,
                 // render the run via lumen-font outlines (vector fill) so wght/
@@ -4675,14 +4677,14 @@ impl FemtovgBackend {
                 if !font_variation_axes.is_empty()
                     && self.draw_varied_text(
                         rect, text, *font_size, *color, font_family,
-                        font_weight.0, *font_style, font_variation_axes, font_features,
-                        *tab_size,
+                        font_weight.0, *font_style, font_stretch.as_percent(),
+                        font_variation_axes, font_features, *tab_size,
                     )
                 {
                     return;
                 }
                 let (chain, true_bold, true_italic) =
-                    self.resolve_font_chain(font_family, font_weight.0, *font_style);
+                    self.resolve_font_chain(font_family, font_weight.0, *font_style, font_stretch.as_percent());
                 let synth_bold = font_weight.0 >= 600 && !true_bold;
                 let synth_italic = !matches!(font_style, FontStyle::Normal) && !true_italic;
                 self.draw_text_styled(
@@ -6171,7 +6173,9 @@ impl RenderBackend for FemtovgBackend {
         // DrawText without re-loading on each call.
         if let Some(p) = provider {
             for name in crate::fallback::CURATED_FALLBACK_FAMILIES {
-                if let Some(rec) = p.pick_face(name, 400, lumen_core::ext::FontStyle::Normal) {
+                if let Some(rec) =
+                    p.pick_face(name, 400, lumen_core::ext::FontStyle::Normal, NORMAL_STRETCH_PERCENT)
+                {
                     let path = rec.path.clone();
                     if let Some(id) = self.load_font_by_path(&path, &p)
                         && !self.fallback_chain.contains(&id)

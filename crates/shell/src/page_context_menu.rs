@@ -247,6 +247,7 @@ impl PageContextMenu {
             };
 
             out.push(DisplayCommand::DrawText {
+                font_stretch: lumen_layout::FontStretch::NORMAL,
                 rect: Rect::new(
                     x0 + TEXT_PAD_X,
                     row_y + (ROW_H - FONT_SZ * 1.3) * 0.5,

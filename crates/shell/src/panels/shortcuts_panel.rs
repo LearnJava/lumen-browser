@@ -313,6 +313,7 @@ impl ShortcutsPanel {
 fn txt(text: impl Into<String>, x: f32, y: f32, w: f32, font_size: f32,
        weight: FontWeight, color: Color) -> DisplayCommand {
     DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(x, y, w, font_size * 1.4),
         text: text.into(),
         font_size,

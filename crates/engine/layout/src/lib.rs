@@ -7096,6 +7096,34 @@ mod tests {
         assert_eq!(p.style.font_stretch, FontStretch::NORMAL);
     }
 
+    #[test]
+    fn font_stretch_as_percent_matches_os2_width_class_scale() {
+        // `as_percent` — единицы matcher-а (`FaceRecord::stretch`,
+        // `usWidthClass`). Дробные keyword-ы округляются к ближайшему целому:
+        // шкала usWidthClass целочисленная, полуступеней у неё нет.
+        assert_eq!(FontStretch::NORMAL.as_percent(), 100);
+        assert_eq!(FontStretch(500).as_percent(), 50); // ultra-condensed
+        assert_eq!(FontStretch(750).as_percent(), 75); // condensed
+        assert_eq!(FontStretch(875).as_percent(), 88); // semi-condensed 87.5%
+        assert_eq!(FontStretch(1125).as_percent(), 113); // semi-expanded 112.5%
+        assert_eq!(FontStretch(2000).as_percent(), 200); // ultra-expanded
+        // Округление к ближайшему, а не вверх: 80.4% → 80.
+        assert_eq!(FontStretch(804).as_percent(), 80);
+    }
+
+    #[test]
+    fn font_stretch_parse_keyword_and_percentage() {
+        assert_eq!(FontStretch::parse("condensed"), Some(FontStretch(750)));
+        assert_eq!(FontStretch::parse("80%"), Some(FontStretch(800)));
+        // Диапазон из двух значений (синтаксис @font-face) → первое значение.
+        assert_eq!(FontStretch::parse("75% 125%"), Some(FontStretch(750)));
+        // Кламп в [50%, 200%] — держит значение в u16 без переполнения.
+        assert_eq!(FontStretch::parse("10%"), Some(FontStretch(500)));
+        assert_eq!(FontStretch::parse("300%"), Some(FontStretch(2000)));
+        assert_eq!(FontStretch::parse("nonsense"), None);
+        assert_eq!(FontStretch::parse(""), None);
+    }
+
     // ── accent-color (CSS UI L4 §6.1) ──────────────────────────────────────
 
     #[test]

@@ -487,14 +487,27 @@ pub trait FontProvider: Send + Sync {
             .collect()
     }
 
-    /// Выбрать face, наиболее подходящий запрошенному `(weight, style)` —
-    /// CSS Fonts L4 §5.2. Default-реализация работает поверх
-    /// [`FontProvider::lookup_faces`] и [`match_face`]; переопределять
-    /// нужно только если у реализации есть нативный matcher (DirectWrite /
-    /// CoreText / Fontconfig).
-    fn pick_face(&self, family: &str, weight: u16, style: FontStyle) -> Option<FaceRecord> {
+    /// Выбрать face, наиболее подходящий запрошенному
+    /// `(weight, style, stretch)` — CSS Fonts L4 §5.2. Default-реализация
+    /// работает поверх [`FontProvider::lookup_faces`] и [`match_face`];
+    /// переопределять нужно только если у реализации есть нативный matcher
+    /// (DirectWrite / CoreText / Fontconfig).
+    ///
+    /// `stretch` — CSS-проценты `font-stretch` (50..200,
+    /// [`NORMAL_STRETCH_PERCENT`] = normal), сопоставляются с `usWidthClass`
+    /// из OS/2 каждого face-а. Это статический путь подбора: он выбирает
+    /// **отдельный** condensed/expanded face семейства. Для variable-шрифтов
+    /// `font-stretch` дополнительно едет осью `wdth` в
+    /// `font_variation_axes` — механизмы независимы и складываются.
+    fn pick_face(
+        &self,
+        family: &str,
+        weight: u16,
+        style: FontStyle,
+        stretch: u16,
+    ) -> Option<FaceRecord> {
         let faces = self.lookup_faces(family);
-        match_face(&faces, weight, style, 100).cloned()
+        match_face(&faces, weight, style, stretch).cloned()
     }
 
     /// Байты шрифта для face-а по виртуальному пути.
@@ -510,6 +523,11 @@ pub trait FontProvider: Send + Sync {
         None
     }
 }
+
+/// `font-stretch: normal` в тех же единицах, что [`FaceRecord::stretch`] —
+/// CSS-проценты (100 = normal). Точка разворота двух порядков обхода в
+/// [`stretch_priority`] и дефолт для вызовов, где stretch не важен.
+pub const NORMAL_STRETCH_PERCENT: u16 = 100;
 
 /// CSS Fonts L4 §5.2 алгоритм матчинга — извлечён из trait-а в свободную
 /// функцию, чтобы потребитель мог звать его на собственной коллекции face-ов
@@ -566,16 +584,29 @@ pub fn match_face_no_stretch(
 }
 
 /// Приоритет face-stretch для desired-stretch. Меньше — лучше.
-/// Соответствует CSS Fonts L4 §5.2: предпочитаем точное совпадение, потом
-/// ближайший меньший значок, потом больший.
+///
+/// CSS Fonts L4 §5.2 задаёт два зеркальных порядка обхода, а не один:
+/// - `desired <= 100%` — сначала значения **ниже** desired по убыванию,
+///   затем значения выше по возрастанию;
+/// - `desired > 100%` — сначала значения **выше** desired по возрастанию,
+///   затем значения ниже по убыванию.
+///
+/// То есть при запросе `expanded` (125%) face 150% обязан выигрывать у
+/// face 100%, хотя по модулю расстояния они равноудалены. Единый
+/// «сначала более узкий» порядок ошибается ровно на этой половине шкалы.
 fn stretch_priority(face: u16, desired: u16) -> (u8, u32) {
     if face == desired {
         return (0, 0); // точное совпадение — лучшее
     }
+    // Внутри каждой из двух групп упорядочиваем по расстоянию до desired:
+    // «по убыванию/возрастанию от desired» — это и есть ближайший первым.
+    let prefer_narrower_first = desired <= NORMAL_STRETCH_PERCENT;
     if face < desired {
-        (1, u32::from(desired - face)) // меньший (second-choice)
+        let group = if prefer_narrower_first { 1 } else { 2 };
+        (group, u32::from(desired - face))
     } else {
-        (2, u32::from(face - desired)) // больший (third-choice)
+        let group = if prefer_narrower_first { 2 } else { 1 };
+        (group, u32::from(face - desired))
     }
 }
 
@@ -830,6 +861,42 @@ mod font_provider_tests {
         ];
         let m = match_face(&faces, 400, FontStyle::Normal, 75).unwrap();
         assert_eq!(m.stretch, 100); // ближайший больший
+    }
+
+    #[test]
+    fn match_face_stretch_above_normal_prefers_wider_first() {
+        // CSS Fonts L4 §5.2: при desired > 100% сначала перебираются значения
+        // ВЫШЕ desired. 100 и 150 равноудалены от 125 — выиграть обязан 150.
+        let faces = vec![
+            face_with_stretch("F", 400, FontStyle::Normal, 100), // normal
+            face_with_stretch("F", 400, FontStyle::Normal, 150), // extra-expanded
+        ];
+        let m = match_face(&faces, 400, FontStyle::Normal, 125).unwrap();
+        assert_eq!(m.stretch, 150);
+    }
+
+    #[test]
+    fn match_face_stretch_above_normal_falls_back_to_narrower() {
+        // desired > 100%, но шире ничего нет — берём ближайший меньший.
+        let faces = vec![
+            face_with_stretch("F", 400, FontStyle::Normal, 75),
+            face_with_stretch("F", 400, FontStyle::Normal, 100),
+        ];
+        let m = match_face(&faces, 400, FontStyle::Normal, 125).unwrap();
+        assert_eq!(m.stretch, 100);
+    }
+
+    #[test]
+    fn match_face_stretch_at_normal_prefers_narrower_first() {
+        // desired == 100% попадает в ветку `<= 100`: 75 и 125 равноудалены,
+        // выигрывает более узкий. Зеркало предыдущего теста — фиксирует, что
+        // точка разворота именно на 100%, а не на 101%.
+        let faces = vec![
+            face_with_stretch("F", 400, FontStyle::Normal, 75),
+            face_with_stretch("F", 400, FontStyle::Normal, 125),
+        ];
+        let m = match_face(&faces, 400, FontStyle::Normal, 100).unwrap();
+        assert_eq!(m.stretch, 75);
     }
 
     #[test]
