@@ -254,6 +254,7 @@ mod tests {
             is_first_line: true,
             source_node,
             source_char_offset,
+            bidi_level: 0,
         }
     }
 

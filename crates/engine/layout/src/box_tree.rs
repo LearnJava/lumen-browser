@@ -2057,6 +2057,11 @@ pub struct InlineSegment {
     /// Always 0 for non-pre text (whole text node → one segment after whitespace
     /// collapsing); non-zero for pre/pre-wrap segments split at `\n`.
     pub source_char_offset: u32,
+    /// UAX #9 embedding level of this segment's text (even = left-to-right,
+    /// odd = right-to-left). Assigned by [`crate::bidi::resolve`], which splits
+    /// a segment wherever the level changes, so the value is uniform across
+    /// `text`. `0` until the bidi pass runs (and for paragraphs it skips).
+    pub bidi_level: u8,
 }
 
 /// Marks an inline segment as the target of a CSS structural pseudo-element.
@@ -2112,6 +2117,11 @@ pub struct InlineFrag {
     /// UTF-8 byte offset of `text[0]` within the source text node's content.
     /// Computed in `wrap_inline_run` as words are taken from the segment.
     pub source_char_offset: u32,
+    /// UAX #9 embedding level inherited from the source [`InlineSegment`].
+    /// `align_lines` feeds it to [`crate::bidi::reorder_line`] for the L2 pass;
+    /// paint feeds it to [`crate::bidi::visual_text`], which is what turns an
+    /// odd level into right-to-left glyph order.
+    pub bidi_level: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -2356,6 +2366,7 @@ fn apply_first_letter_style(
                     pseudo_kind: PseudoKind::None,
                     source_node,
                     source_char_offset: segments[i].source_char_offset + boundary as u32,
+                    bidi_level: 0,
                 };
                 // Transfer post_space from first-letter to rest.
                 segments[i].post_space = 0.0;
@@ -3762,6 +3773,7 @@ fn apply_first_letter_pseudo(
         pseudo_kind: PseudoKind::None,
         source_node,
         source_char_offset: first_char_end as u32,
+        bidi_level: 0,
     });
 }
 
@@ -3819,6 +3831,7 @@ fn collect_inline_segments(
                         pseudo_kind: PseudoKind::None,
                         source_node: id,
                         source_char_offset: byte_offset,
+                        bidi_level: 0,
                     });
                     byte_offset += 1; // the \n character
                 }
@@ -3839,6 +3852,7 @@ fn collect_inline_segments(
                         pseudo_kind: PseudoKind::None,
                         source_node: id,
                         source_char_offset: byte_offset,
+                        bidi_level: 0,
                     });
                 }
                 byte_offset += line.len() as u32;
@@ -3869,6 +3883,7 @@ fn collect_inline_segments(
                         pseudo_kind: PseudoKind::None,
                         source_node: id,
                         source_char_offset: byte_offset,
+                        bidi_level: 0,
                     });
                     byte_offset += 1; // the \n character
                 }
@@ -3894,6 +3909,7 @@ fn collect_inline_segments(
                         pseudo_kind: kind,
                         source_node: id,
                         source_char_offset: byte_offset,
+                        bidi_level: 0,
                     });
                 }
                 byte_offset += line.len() as u32;
@@ -3929,6 +3945,7 @@ fn collect_inline_segments(
                 pseudo_kind: kind,
                 source_node: id,
                 source_char_offset: 0,
+                bidi_level: 0,
             });
         }
         NodeData::Text(_) => {
@@ -3984,6 +4001,7 @@ fn collect_inline_segments(
                     pseudo_kind: PseudoKind::None,
                     source_node: id,
                     source_char_offset: 0,
+                    bidi_level: 0,
                 });
                 return;
             }
@@ -4245,6 +4263,7 @@ fn make_content_text_segment(
         pseudo_kind: PseudoKind::None,
         source_node: owner_id,
         source_char_offset: 0,
+        bidi_level: 0,
     }
 }
 
@@ -4271,6 +4290,7 @@ fn make_content_image_segment(
         pseudo_kind: PseudoKind::None,
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
+        bidi_level: 0,
     }
 }
 
@@ -4491,6 +4511,7 @@ fn build_base_select_box(
             pseudo_kind: PseudoKind::None,
             source_node: id,
             source_char_offset: 0,
+            bidi_level: 0,
         };
         trigger_children.push(anon_inline_run(id, style, vec![seg]));
     }
@@ -6872,6 +6893,20 @@ fn lay_out_inner(
                 content_width
             };
             let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
+            // UAX #9 P2–I2 once per paragraph, before any wrapping trial: the
+            // result splits segments at embedding-level boundaries, and every
+            // re-wrap (::first-line pass B, text-wrap: balance/pretty) must see
+            // the same segment list the frags will be mapped back onto.
+            // `b.kind` keeps the logical, unsplit segments — resolution is a
+            // pure function of them, so a relayout reproduces it exactly.
+            let resolved;
+            let segments: &[InlineSegment] =
+                if crate::bidi::needs_resolution(segments, s.direction) {
+                    resolved = crate::bidi::resolve(segments, s.direction);
+                    &resolved
+                } else {
+                    segments
+                };
             *lines = if let Some(fls) = first_line_style.as_deref() {
                 // CSS Pseudo-elements L4 §3.1 — ::first-line layout split (BB-1).
                 // Pass A: wrap ALL segments under the ::first-line style to find the
@@ -10791,6 +10826,7 @@ fn caps_synthesis(
                     pseudo_kind: PseudoKind::None,
                     source_node: seg.source_node,
                     source_char_offset: seg.source_char_offset.saturating_add(idx as u32),
+                    bidi_level: seg.bidi_level,
                 });
                 no_break.push(
                     out.len() > start + 1
@@ -11175,6 +11211,7 @@ fn wrap_inline_run(
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
+                bidi_level: seg.bidi_level,
             });
             current_x += frag_w + seg.post_space;
             continue;
@@ -11209,6 +11246,7 @@ fn wrap_inline_run(
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
+                bidi_level: seg.bidi_level,
             });
             current_x += img_w + seg.post_space;
             // Trailing whitespace after the image (a collapsed ws-only node) is
@@ -11343,6 +11381,7 @@ fn wrap_inline_run(
                         // Soft hyphens (stripped from `display_word`) would shift
                         // this; CJK text does not use them.
                         source_char_offset: frag_source_offset.saturating_add(start as u32),
+                        bidi_level: seg.bidi_level,
                     });
                     current_x += chunk_w;
                     first_chunk = false;
@@ -11390,6 +11429,7 @@ fn wrap_inline_run(
                         is_first_line: false,
                         source_node: seg.source_node,
                         source_char_offset: frag_source_offset,
+                        bidi_level: seg.bidi_level,
                     });
                     result.push(std::mem::take(&mut current_line));
                     current_x = 0.0;
@@ -11409,6 +11449,7 @@ fn wrap_inline_run(
                         is_first_line: false,
                         source_node: seg.source_node,
                         source_char_offset: frag_source_offset,
+                        bidi_level: seg.bidi_level,
                     });
                     current_x += sfx_w + post;
                     continue;
@@ -11442,6 +11483,7 @@ fn wrap_inline_run(
                                 is_first_line: false,
                                 source_node: seg.source_node,
                                 source_char_offset: frag_source_offset,
+                                bidi_level: seg.bidi_level,
                             });
                             current_x += head_w;
                             first_chunk = false;
@@ -11493,6 +11535,7 @@ fn wrap_inline_run(
                             is_first_line: false,
                             source_node: seg.source_node,
                             source_char_offset: frag_source_offset,
+                            bidi_level: seg.bidi_level,
                         });
                         current_x += head_w;
                         first_chunk = false;
@@ -11516,7 +11559,13 @@ fn wrap_inline_run(
             let no_box = pre == 0.0 && post == 0.0;
             let merged = if no_box {
                 if let Some(last) = current_line.last_mut() {
-                    if last.style.text_rendering_eq(style) && last.padding_right == 0.0 {
+                    // Fragments at different UAX #9 embedding levels must stay
+                    // apart: L2 reorders and reverses per fragment, so merging
+                    // an RTL word with its LTR neighbour would reverse both.
+                    if last.style.text_rendering_eq(style)
+                        && last.padding_right == 0.0
+                        && last.bidi_level == seg.bidi_level
+                    {
                         // No separating space when the boundary joined tightly
                         // (word_inter == 0): the glyphs abut, e.g. `“`+`auto`.
                         if word_inter > 0.0 {
@@ -11551,6 +11600,7 @@ fn wrap_inline_run(
                     is_first_line: false,
                     source_node: seg.source_node,
                     source_char_offset: frag_source_offset,
+                    bidi_level: seg.bidi_level,
                 });
                 current_x += word_w;
             }
@@ -11568,9 +11618,14 @@ fn wrap_inline_run(
     result
 }
 
-/// Сдвигает фрагменты каждой строки по text-align + direction.
-/// `Start`/`End` разрешаются в Left/Right по direction (CSS Text L3 §7.1).
-/// Для RTL фрагменты зеркалируются относительно content_width.
+/// Переупорядочивает фрагменты каждой строки в визуальный порядок и сдвигает
+/// их по text-align + direction.
+///
+/// Сначала UAX #9 rule L2 ([`crate::bidi::reorder_line`]): для LTR-параграфа
+/// из чистого LTR-текста это no-op, для RTL — зеркалирование строки, для
+/// смешанного текста — вложенные развороты по embedding level.
+/// Затем `Start`/`End` разрешаются в Left/Right по direction (CSS Text L3
+/// §7.1) и строка сдвигается как блок.
 /// Последняя строка выравнивается по `text_align_last` (CSS Text L3 §7.2):
 /// `Auto` на justify-блоке → Start; иначе → как text_align.
 fn align_lines(
@@ -11606,29 +11661,22 @@ fn align_lines(
             TextAlign::End   => if is_rtl { TextAlign::Left  } else { TextAlign::Right },
             other => other,
         };
+        // Measured before reordering, while `wrap_inline_run`'s ascending-x
+        // order still holds, so the last frag is the rightmost one.
         let Some(last_frag) = line.last() else { continue };
         let line_width = last_frag.x + last_frag.width;
-        if is_rtl {
-            // Mirror positions within the line block, then align the block.
-            // `right_gap` = space to the right of the mirrored line block.
-            let right_gap = match physical {
-                TextAlign::Right  => (content_width - line_width).max(0.0),
-                TextAlign::Center => ((content_width - line_width) / 2.0).max(0.0),
-                _                 => 0.0, // Left / flush-left for RTL end
-            };
+        // UAX #9 L2 — logical → visual placement. Subsumes the RTL line mirror
+        // `align_lines` used to do itself, but level-aware, so an LTR island
+        // inside an RTL paragraph keeps its own left-to-right order.
+        crate::bidi::reorder_line(line, direction);
+        let offset = match physical {
+            TextAlign::Center => ((content_width - line_width) / 2.0).max(0.0),
+            TextAlign::Right  => (content_width - line_width).max(0.0),
+            _                 => 0.0,
+        };
+        if offset > 0.0 {
             for frag in line.iter_mut() {
-                frag.x = line_width - (frag.x + frag.width) + right_gap;
-            }
-        } else {
-            let offset = match physical {
-                TextAlign::Center => ((content_width - line_width) / 2.0).max(0.0),
-                TextAlign::Right  => (content_width - line_width).max(0.0),
-                _                 => 0.0,
-            };
-            if offset > 0.0 {
-                for frag in line.iter_mut() {
-                    frag.x += offset;
-                }
+                frag.x += offset;
             }
         }
     }
@@ -11714,6 +11762,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
+                bidi_level: seg.bidi_level,
             });
             prev_trailing_ws = seg.text.ends_with(|c: char| c.is_whitespace());
             continue;
@@ -11729,7 +11778,11 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
         }
         let boundary_space = prev_trailing_ws || seg_lead_ws;
         let merged = if let Some(last) = frags.last_mut() {
-            if last.style.text_rendering_eq(&seg.style) && last.img_src.is_none() {
+            // Same embedding-level guard as `wrap_inline_run` — see there.
+            if last.style.text_rendering_eq(&seg.style)
+                && last.img_src.is_none()
+                && last.bidi_level == seg.bidi_level
+            {
                 if boundary_space {
                     last.text.push(' ');
                 }
@@ -11756,6 +11809,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
+                bidi_level: seg.bidi_level,
             });
         }
         prev_trailing_ws = seg_trail_ws;
@@ -12320,6 +12374,7 @@ mod tests {
             pseudo_kind: super::PseudoKind::None,
             source_node: lumen_dom::NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         }
     }
 
@@ -12597,6 +12652,7 @@ mod tests {
             pseudo_kind: PseudoKind::None,
             source_node: NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         };
 
         let m = Fixed10;
@@ -12639,6 +12695,7 @@ mod tests {
             pseudo_kind: PseudoKind::None,
             source_node: NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         };
         let m = Fixed10;
         let hp = NullHyphenationProvider;
@@ -12683,6 +12740,7 @@ mod tests {
             pseudo_kind: PseudoKind::None,
             source_node: NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         };
 
         let m = Fixed10;
@@ -12737,6 +12795,7 @@ mod tests {
             pseudo_kind: PseudoKind::None,
             source_node: NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         };
 
         let m = Fixed10;
@@ -12787,6 +12846,7 @@ mod tests {
             pseudo_kind: PseudoKind::None,
             source_node: NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         };
 
         let m = Fixed10;
@@ -12840,6 +12900,7 @@ mod tests {
             pseudo_kind: PseudoKind::None,
             source_node: NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         };
 
         let m = Fixed10;
@@ -12950,6 +13011,7 @@ mod tests {
             pseudo_kind: PseudoKind::None,
             source_node: NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         };
 
         let m = Fixed10;
@@ -13012,6 +13074,7 @@ mod tests {
             pseudo_kind: PseudoKind::None,
             source_node: NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         };
         let lines = wrap_inline_run(
             &[seg], max_width, 16.0, 0.0,
@@ -13138,6 +13201,7 @@ mod tests {
             pseudo_kind: PseudoKind::None,
             source_node: NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         };
 
         let m = Fixed10;
@@ -17588,6 +17652,7 @@ mod tests {
             is_first_line: false,
             source_node: NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         }
     }
 
@@ -18450,6 +18515,7 @@ mod tests {
             pseudo_kind: super::PseudoKind::None,
             source_node: lumen_dom::NodeId::from_index(0),
             source_char_offset: 0,
+            bidi_level: 0,
         };
         let mut inline_style = ComputedStyle::root();
         inline_style.font_size = 100.0;

@@ -641,10 +641,10 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `direction` | 🟡 | ltr/rtl; fragment mirroring ✅; UBA ⬜ |
+| `direction` | ✅ | ltr/rtl; sets the UAX #9 paragraph embedding level (`lumen-layout` `bidi.rs`) and resolves logical `text-align: start/end` |
 | `writing-mode` | ✅ | vertical-rl/lr axis-swap layout + vertical inline flow; glyph rotation on all three backends (CPU, wgpu, femtovg) |
 | `text-orientation` | ✅ | mixed/upright/sideways glyph rotation on all three backends (per-glyph CJK-upright/Latin-rotated split for `mixed`, Срезы 1–3 + femtovg-срез); `upright`'s per-glyph (vs per-word) vertical advance → BUG-290 |
-| `unicode-bidi` | 🟡 | parsed; full bidi ⬜ |
+| `unicode-bidi` | ✅ | all six values end-to-end (`normal`/`embed`/`isolate`/`bidi-override`/`isolate-override`/`plaintext`, incl. `-webkit-`/`-moz-` aliases); UAX #9 P2–I2 + L2 + L4 over the inline formatting context (`lumen-layout` `bidi.rs`), RTL runs reversed and bracket-mirrored at display-list emission. Residual: `unicode-bidi` groups per *segment run*, not per inline element (flat segment list — see `bidi.rs` module docs); vertical writing modes are not reordered; `plaintext` on a **block** does not re-resolve that block's `text-align: start/end` |
 
 ### [T4] Shapes & Motion Path
 

@@ -99,6 +99,7 @@ mod tests {
             is_first_line: true,
             source_node,
             source_char_offset: char_offset,
+            bidi_level: 0,
         }
     }
 
@@ -119,6 +120,7 @@ mod tests {
             is_first_line: true,
             source_node,
             source_char_offset: 0,
+            bidi_level: 0,
         }
     }
 
@@ -137,6 +139,7 @@ mod tests {
             is_first_line: true,
             source_node,
             source_char_offset: 0,
+            bidi_level: 0,
         }
     }
 

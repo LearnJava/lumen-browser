@@ -201,7 +201,7 @@ fn is_cjk(ch: char) -> bool {
 
 /// Combining marks and variation selectors that must not be split from the
 /// base character. Covers the common ranges, not the full Unicode property.
-fn is_combining(ch: char) -> bool {
+pub(crate) fn is_combining(ch: char) -> bool {
     matches!(ch as u32,
         0x0300..=0x036F   // Combining Diacritical Marks
         | 0x0483..=0x0489 // Combining Cyrillic
