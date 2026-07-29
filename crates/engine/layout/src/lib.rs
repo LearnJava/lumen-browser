@@ -1233,9 +1233,44 @@ fn collect_computed_styles_rec(
     b: &LayoutBox,
     out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
 ) {
-    out.insert(b.node.index() as u32, computed_style_to_map(&b.style));
+    // First box in tree order wins — see `collect_layout_rects_rec` for why
+    // several boxes can carry the same `NodeId`.
+    out.entry(b.node.index() as u32)
+        .or_insert_with(|| computed_style_to_map(&b.style));
     for child in &b.children {
         collect_computed_styles_rec(child, out);
+    }
+}
+
+// ──────────────── collect_layout_rects ────────────────
+
+/// Walks the layout tree and returns a map of `NodeId index → [x, y, width, height]`
+/// (border-box, viewport-relative CSS px).
+///
+/// The geometry counterpart of [`collect_computed_styles`]: embedders push the
+/// result into the JS runtime so that `getBoundingClientRect`, `ResizeObserver`
+/// and `IntersectionObserver` can answer without a round-trip to the layout
+/// engine. Both maps must be published together and from every path that
+/// produces a layout tree — publishing from the relayout path alone left a
+/// freshly loaded page answering `""` / all-zeros (BUG-382).
+pub fn collect_layout_rects(root: &LayoutBox) -> std::collections::HashMap<u32, [f32; 4]> {
+    let mut out = std::collections::HashMap::new();
+    collect_layout_rects_rec(root, &mut out);
+    out
+}
+
+fn collect_layout_rects_rec(b: &LayoutBox, out: &mut std::collections::HashMap<u32, [f32; 4]>) {
+    // A single `NodeId` can own more than one box: an element with inline content
+    // gets an anonymous block/line box for that content, and the box tree keeps the
+    // element's own `NodeId` on it. The recursion visits the principal box before
+    // its descendants, so `or_insert` keeps the element's own border box; plain
+    // `insert` used to hand JS the last (inner) box instead — `getBoundingClientRect`
+    // on `<div style="height:20px">x</div>` answered the 19.2px line box (BUG-382).
+    let r = &b.rect;
+    out.entry(b.node.index() as u32)
+        .or_insert([r.x, r.y, r.width, r.height]);
+    for child in &b.children {
+        collect_layout_rects_rec(child, out);
     }
 }
 
@@ -1442,6 +1477,59 @@ mod tests {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         layout(&doc, &sheet, Size::new(800.0, 600.0))
+    }
+
+    /// BUG-382: an element with inline content owns two boxes with the same
+    /// `NodeId` — its principal block box and the anonymous run holding the text.
+    /// Both snapshot collectors must answer with the principal one; the earlier
+    /// `insert` handed JS the inner run, so `getBoundingClientRect().height` was
+    /// the line height and `getComputedStyle().width` was `auto`.
+    #[test]
+    fn snapshot_collectors_keep_the_principal_box() {
+        let root = lay_full(
+            "<html><body><div id=a>x</div></body></html>",
+            "body{margin:0} #a{width:50px;height:20px}",
+        );
+        // Walk in the same order the collectors do, recording every box per node.
+        fn walk<'a>(b: &'a LayoutBox, out: &mut Vec<(u32, &'a LayoutBox)>) {
+            out.push((b.node.index() as u32, b));
+            for c in &b.children {
+                walk(c, out);
+            }
+        }
+        let mut boxes = Vec::new();
+        walk(&root, &mut boxes);
+
+        let div_nid = boxes
+            .iter()
+            .find(|(nid, _)| boxes.iter().filter(|(n, _)| n == nid).count() > 1)
+            .map(|(nid, _)| *nid)
+            .expect("expected a NodeId owning more than one box");
+        let principal = boxes
+            .iter()
+            .find(|(nid, _)| *nid == div_nid)
+            .map(|(_, b)| *b)
+            .expect("principal box");
+        assert_eq!(principal.rect.height, 20.0, "specified height must win");
+
+        let rects = collect_layout_rects(&root);
+        assert_eq!(
+            rects[&div_nid],
+            [
+                principal.rect.x,
+                principal.rect.y,
+                principal.rect.width,
+                principal.rect.height
+            ],
+            "rect snapshot must describe the element's own box"
+        );
+
+        let styles = collect_computed_styles(&root);
+        assert_eq!(
+            styles[&div_nid].get("width").map(String::as_str),
+            Some("50px"),
+            "style snapshot must describe the element's own box"
+        );
     }
 
     fn first_element_child(b: &LayoutBox) -> &LayoutBox {

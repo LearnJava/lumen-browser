@@ -104,7 +104,7 @@ use lumen_layout::{LayoutBox, Mat4, PaintOrder, SnapContainer, StackingTree, Tra
 use lumen_layout::{StartingStyleTracker, compute_style_from_declarations, resolve_starting_style};
 use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scroll_container_at, find_snap_target, set_scroll_position};
 #[cfg(any(feature = "quickjs", feature = "v8"))]
-use lumen_layout::collect_computed_styles;
+use lumen_layout::{collect_computed_styles, collect_layout_rects};
 use lumen_layout::style::{ComputedStyle, ScrollBehavior};
 use lumen_layout::computed_style_to_map;
 use lumen_paint::{
@@ -5919,26 +5919,6 @@ fn find_video_source(lb: &LayoutBox) -> Option<(String, String)> {
     None
 }
 
-/// Рекурсивно собирает bounding rects всех layout-боксов в плоскую карту
-/// `NodeId → [x, y, width, height]` (border-box, viewport-relative CSS px).
-/// Используется JS-runtime-ом для `getBoundingClientRect` / `ResizeObserver`
-/// / `IntersectionObserver`.
-#[cfg(any(feature = "quickjs", feature = "v8"))]
-fn collect_layout_rects(lb: &LayoutBox) -> HashMap<u32, [f32; 4]> {
-    let mut map = HashMap::new();
-    collect_layout_rects_rec(lb, &mut map);
-    map
-}
-
-#[cfg(any(feature = "quickjs", feature = "v8"))]
-fn collect_layout_rects_rec(lb: &LayoutBox, map: &mut HashMap<u32, [f32; 4]>) {
-    let r = &lb.rect;
-    map.insert(lb.node.index() as u32, [r.x, r.y, r.width, r.height]);
-    for child in &lb.children {
-        collect_layout_rects_rec(child, map);
-    }
-}
-
 /// CC-4/CC-9: removes `#contentArea`'s [`LayoutBox`] from `lb`'s subtree
 /// (depth-first, first match) — not just its children, but its own box (and
 /// background paint command) too, so the real page painted separately at
@@ -11630,6 +11610,43 @@ impl Lumen {
         self.refresh_cv_state();
         self.update_snap_containers();
         self.update_scroll_containers();
+        // BUG-382: publish the primary layout's geometry + computed styles into the
+        // JS runtime unconditionally, right here, before any page-visible callback
+        // of this load can run (`load`/`pageshow` below, and every timer/rAF/promise
+        // job the shell drains afterwards).
+        //
+        // `getComputedStyle()` and `getBoundingClientRect()` do not query the layout
+        // engine — both read the snapshot the shell pushes. Until this call the only
+        // pushes lived inside the relayout path (`relayout()`, `reload()`) and inside
+        // the lazy-image block below, which collects geometry **only** when the page
+        // has `loading="lazy"` images and never pushes computed styles at all. A
+        // freshly loaded page therefore answered `""` / all-zeros unless some
+        // unrelated relayout (resize, font swap, scroll) happened to race ahead of
+        // the first script — the reported "works in one load out of four".
+        //
+        // ADR-016 M2.2c-2d: routed through `route_task_js` like the other seeds; the
+        // owned `HashMap`s make the closure `Send + 'static`, and the `js_present`
+        // gate keeps the (side-effect-free) collection JS-gated.
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
+        if self.js_present
+            && let Some(lb_ref) = self.layout_box.as_ref()
+        {
+            let viewport = self.renderer.as_ref().map_or_else(
+                || Size::new(1024.0, 720.0),
+                |r| {
+                    let s = r.viewport_size();
+                    Size::new(s.width, s.height)
+                },
+            );
+            let rects = collect_layout_rects(lb_ref);
+            let styles = collect_computed_styles(lb_ref);
+            let (vw, vh) = (viewport.width, viewport.height);
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                js.update_layout_rects(rects);
+                js.update_computed_styles(styles);
+                js.update_viewport_size(vw, vh);
+            });
+        }
         self.title = page.title.clone();
         if let Some(t) = &self.title {
             self.tab_strip.set_active_title(t.as_str());
