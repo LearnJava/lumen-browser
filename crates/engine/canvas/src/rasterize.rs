@@ -1,4 +1,4 @@
-use crate::{Context2D, PaintSource, PathSegment};
+use crate::{Context2D, LineCap, LineJoin, PaintSource, PathSegment};
 
 /// Number of line segments to use when tessellating a Bézier curve.
 const BEZIER_STEPS: usize = 32;
@@ -9,8 +9,29 @@ const BEZIER_STEPS: usize = 32;
 /// two end pixels — so the vertical axis is the only one that needs sampling.
 const AA_ROWS: u32 = 4;
 
+/// Smallest join wedge, in square pixels, still worth emitting a shape for.
+///
+/// A tessellated curve turns by a fraction of a degree at every one of its (up to
+/// 180) vertices; without this cutoff each of them would cost a join shape while
+/// leaving a gap far below one pixel.
+const MIN_JOIN_AREA: f32 = 0.05;
+
+/// Smallest bulge, in pixels, that makes a round or mitered join worth its shape.
+///
+/// Below it the join is emitted as a bevel, which is the same picture for much
+/// less work on the near-collinear vertices of a tessellated curve.
+const ROUND_FLATNESS: f32 = 0.05;
+
 /// A closed shape as a flat list of `(x0, y0, x1, y1)` edges in device space.
 type Edges = Vec<(f32, f32, f32, f32)>;
+
+/// A flattened sub-path in device space.
+struct Polyline {
+    /// Vertices in draw order; consecutive duplicates removed.
+    pts: Vec<(f32, f32)>,
+    /// `true` when the last vertex coincides with the first (`closePath()`).
+    closed: bool,
+}
 
 /// Fill `path` using the even-odd rule with the given paint source.
 ///
@@ -25,47 +46,259 @@ pub fn fill_path(ctx: &mut Context2D, path: &[PathSegment], paint: &PaintSource,
     fill_shapes(ctx, std::slice::from_ref(&edges), paint, alpha);
 }
 
-/// Stroke `path` by drawing each line segment as a thick rectangle.
+/// Stroke `path` with the context's current `lineCap`, `lineJoin` and `miterLimit`.
 ///
-/// All segment quads are rasterized as a single *union*, so the overlap at a join
-/// is painted once instead of being composited twice (which darkened joins under
-/// `globalAlpha < 1` and left a seam once the quads became anti-aliased).
+/// Each segment contributes a quad, each interior vertex a join shape and each open
+/// end a cap shape. All of them are rasterized as a single *union*, so the overlap
+/// at a join is painted once instead of being composited twice (which darkened
+/// joins under `globalAlpha < 1` and left a seam once the quads became
+/// anti-aliased).
 pub fn stroke_path(ctx: &mut Context2D, path: &[PathSegment], lw: f32, paint: &PaintSource, alpha: f32) {
     if path.is_empty() { return; }
     let half = lw * 0.5;
     // Rejects a NaN/infinite `lineWidth` too — JS can set either.
     if !half.is_finite() || half <= 0.0 { return; }
 
+    let cap = ctx.line_cap;
+    let join = ctx.line_join;
+    // The miter ratio is never below 1, so any smaller limit (or a NaN one — JS can
+    // assign either) simply degrades every miter to a bevel.
+    let miter_limit = if ctx.miter_limit.is_finite() { ctx.miter_limit.max(1.0) } else { 1.0 };
+
     let mut shapes: Vec<Edges> = Vec::new();
-    for (x0, y0, x1, y1) in collect_lines(path) {
-        let dx = x1 - x0;
-        let dy = y1 - y0;
-        let len = (dx * dx + dy * dy).sqrt();
-        if len < f32::EPSILON { continue; }
-
-        let nx = -dy / len * half;
-        let ny =  dx / len * half;
-
-        let corners = [
-            (x0 + nx, y0 + ny),
-            (x0 - nx, y0 - ny),
-            (x1 - nx, y1 - ny),
-            (x1 + nx, y1 + ny),
-        ];
-
-        shapes.push(
-            (0..4)
-                .map(|i| {
-                    let (ax, ay) = corners[i];
-                    let (bx, by) = corners[(i + 1) % 4];
-                    (ax, ay, bx, by)
-                })
-                .collect(),
-        );
+    for line in flatten_subpaths(path) {
+        stroke_polyline(&line, half, cap, join, miter_limit, &mut shapes);
     }
 
     if shapes.is_empty() { return; }
     fill_shapes(ctx, &shapes, paint, alpha);
+}
+
+// ── stroke geometry ──────────────────────────────────────────────────────────
+
+/// Emit the quads, joins and caps of one flattened sub-path into `shapes`.
+fn stroke_polyline(
+    line: &Polyline,
+    half: f32,
+    cap: LineCap,
+    join: LineJoin,
+    miter_limit: f32,
+    shapes: &mut Vec<Edges>,
+) {
+    let n = line.pts.len();
+    if n < 2 { return; }
+
+    for w in line.pts.windows(2) {
+        if let Some(quad) = segment_quad(w[0], w[1], half) {
+            shapes.push(quad);
+        }
+    }
+
+    for i in 1..n - 1 {
+        push_join(line.pts[i - 1], line.pts[i], line.pts[i + 1], half, join, miter_limit, shapes);
+    }
+
+    if line.closed {
+        // The last vertex repeats the first, so the closure corner is the only one
+        // the loop above did not see.
+        push_join(line.pts[n - 2], line.pts[0], line.pts[1], half, join, miter_limit, shapes);
+    } else {
+        push_cap(line.pts[1], line.pts[0], half, cap, shapes);
+        push_cap(line.pts[n - 2], line.pts[n - 1], half, cap, shapes);
+    }
+}
+
+/// Split `path` into flattened sub-paths, tessellating Bézier curves.
+///
+/// A sub-path ends at a `Move` or wherever a segment does not start where the
+/// previous one ended, so caps land only on the genuine ends of a stroke.
+fn flatten_subpaths(path: &[PathSegment]) -> Vec<Polyline> {
+    let mut out: Vec<Polyline> = Vec::new();
+    let mut cur: Vec<(f32, f32)> = Vec::new();
+
+    for seg in path {
+        match *seg {
+            PathSegment::Move(x, y) => {
+                flush_subpath(&mut cur, &mut out);
+                cur.push((x, y));
+            }
+            PathSegment::Line(x0, y0, x1, y1) => {
+                begin_at(&mut cur, &mut out, x0, y0);
+                push_vertex(&mut cur, x1, y1);
+            }
+            PathSegment::Cubic(x0, y0, c1x, c1y, c2x, c2y, x1, y1) => {
+                begin_at(&mut cur, &mut out, x0, y0);
+                let mut lines = Vec::new();
+                tessellate_cubic(x0, y0, c1x, c1y, c2x, c2y, x1, y1, &mut lines);
+                for (_, _, x, y) in lines {
+                    push_vertex(&mut cur, x, y);
+                }
+            }
+            PathSegment::Quadratic(x0, y0, cx, cy, x1, y1) => {
+                begin_at(&mut cur, &mut out, x0, y0);
+                let mut lines = Vec::new();
+                tessellate_quadratic(x0, y0, cx, cy, x1, y1, &mut lines);
+                for (_, _, x, y) in lines {
+                    push_vertex(&mut cur, x, y);
+                }
+            }
+        }
+    }
+    flush_subpath(&mut cur, &mut out);
+    out
+}
+
+/// Make sure the sub-path under construction starts at `(x, y)`.
+fn begin_at(cur: &mut Vec<(f32, f32)>, out: &mut Vec<Polyline>, x: f32, y: f32) {
+    match cur.last() {
+        Some(&(lx, ly)) if lx == x && ly == y => {}
+        Some(_) => {
+            flush_subpath(cur, out);
+            cur.push((x, y));
+        }
+        None => cur.push((x, y)),
+    }
+}
+
+/// Append a vertex, dropping it when it repeats the previous one.
+fn push_vertex(cur: &mut Vec<(f32, f32)>, x: f32, y: f32) {
+    if let Some(&(lx, ly)) = cur.last()
+        && lx == x
+        && ly == y
+    {
+        return;
+    }
+    cur.push((x, y));
+}
+
+/// Move the sub-path under construction into `out`, dropping degenerate ones.
+fn flush_subpath(cur: &mut Vec<(f32, f32)>, out: &mut Vec<Polyline>) {
+    if cur.len() >= 2 {
+        let closed = cur.first() == cur.last();
+        out.push(Polyline { pts: std::mem::take(cur), closed });
+    } else {
+        cur.clear();
+    }
+}
+
+/// Unit direction from `a` to `b`, or `None` when the two coincide.
+fn unit(a: (f32, f32), b: (f32, f32)) -> Option<(f32, f32)> {
+    let dx = b.0 - a.0;
+    let dy = b.1 - a.1;
+    let len = (dx * dx + dy * dy).sqrt();
+    if !len.is_finite() || len < f32::EPSILON { return None; }
+    Some((dx / len, dy / len))
+}
+
+/// Closed edge list of the polygon through `pts`.
+fn polygon(pts: &[(f32, f32)]) -> Edges {
+    (0..pts.len())
+        .map(|i| {
+            let (ax, ay) = pts[i];
+            let (bx, by) = pts[(i + 1) % pts.len()];
+            (ax, ay, bx, by)
+        })
+        .collect()
+}
+
+/// The `half`-wide band around segment `a → b`, or `None` for a zero-length one.
+fn segment_quad(a: (f32, f32), b: (f32, f32), half: f32) -> Option<Edges> {
+    let (dx, dy) = unit(a, b)?;
+    let nx = -dy * half;
+    let ny = dx * half;
+    Some(polygon(&[
+        (a.0 + nx, a.1 + ny),
+        (a.0 - nx, a.1 - ny),
+        (b.0 - nx, b.1 - ny),
+        (b.0 + nx, b.1 + ny),
+    ]))
+}
+
+/// Regular polygon approximating the disc of radius `r` centred at `c`.
+fn disc(c: (f32, f32), r: f32) -> Edges {
+    let steps = ((r * 2.0) as u32 + 8).clamp(8, 64);
+    let pts: Vec<(f32, f32)> = (0..steps)
+        .map(|i| {
+            let t = i as f32 / steps as f32 * std::f32::consts::TAU;
+            (c.0 + r * t.cos(), c.1 + r * t.sin())
+        })
+        .collect();
+    polygon(&pts)
+}
+
+/// Fill the wedge the two segment quads leave open on the outside of a corner.
+fn push_join(
+    prev: (f32, f32),
+    v: (f32, f32),
+    next: (f32, f32),
+    half: f32,
+    join: LineJoin,
+    miter_limit: f32,
+    shapes: &mut Vec<Edges>,
+) {
+    let Some(d0) = unit(prev, v) else { return };
+    let Some(d1) = unit(v, next) else { return };
+    let cross = d0.0 * d1.1 - d0.1 * d1.0;
+    let dot = d0.0 * d1.0 + d0.1 * d1.1;
+
+    // The open wedge has area `half² · sin θ / 2`; below a fraction of a pixel it
+    // cannot show up, so a nearly straight vertex costs nothing.
+    if half * half * cross.abs() * 0.5 < MIN_JOIN_AREA {
+        // A full reversal is the one near-collinear corner with a real gap, and
+        // only a round join has anything to put there.
+        if dot < 0.0 && join == LineJoin::Round {
+            shapes.push(disc(v, half));
+        }
+        return;
+    }
+
+    // The outer side of the turn is `-n` when turning one way and `+n` the other.
+    let s = if cross > 0.0 { -1.0 } else { 1.0 };
+    let a = (v.0 - s * d0.1 * half, v.1 + s * d0.0 * half);
+    let b = (v.0 - s * d1.1 * half, v.1 + s * d1.0 * half);
+    // `dot` is cos θ of the turn, so this is cos(θ/2).
+    let cos_half = ((1.0 + dot) * 0.5).max(0.0).sqrt();
+
+    match join {
+        LineJoin::Round if half * (1.0 - cos_half) >= ROUND_FLATNESS => {
+            shapes.push(disc(v, half));
+            return;
+        }
+        LineJoin::Miter if cos_half > f32::EPSILON => {
+            let ratio = 1.0 / cos_half;
+            if ratio <= miter_limit && half * (ratio - cos_half) >= ROUND_FLATNESS {
+                let mx = (a.0 - v.0) + (b.0 - v.0);
+                let my = (a.1 - v.1) + (b.1 - v.1);
+                let mlen = (mx * mx + my * my).sqrt();
+                if mlen > f32::EPSILON {
+                    let tip = (v.0 + mx / mlen * half * ratio, v.1 + my / mlen * half * ratio);
+                    shapes.push(polygon(&[v, a, tip, b]));
+                    return;
+                }
+            }
+        }
+        _ => {}
+    }
+    shapes.push(polygon(&[v, a, b]));
+}
+
+/// Cap the open end at `at`, extending away from `from`.
+fn push_cap(from: (f32, f32), at: (f32, f32), half: f32, cap: LineCap, shapes: &mut Vec<Edges>) {
+    match cap {
+        LineCap::Butt => {}
+        LineCap::Round => shapes.push(disc(at, half)),
+        LineCap::Square => {
+            let Some((dx, dy)) = unit(from, at) else { return };
+            let (ex, ey) = (dx * half, dy * half);
+            let (nx, ny) = (-dy * half, dx * half);
+            shapes.push(polygon(&[
+                (at.0 + nx, at.1 + ny),
+                (at.0 + ex + nx, at.1 + ey + ny),
+                (at.0 + ex - nx, at.1 + ey - ny),
+                (at.0 - nx, at.1 - ny),
+            ]));
+        }
+    }
 }
 
 /// Build an 8-bit clip coverage mask by rasterizing `path` with the even-odd rule.
@@ -424,5 +657,96 @@ mod tests {
     fn rasterize_fill(ctx: &mut Context2D, path: &[PathSegment]) {
         let paint = ctx.fill_style.clone();
         fill_path(ctx, path, &paint, 1.0);
+    }
+
+    // ── caps and joins ───────────────────────────────────────────────────────
+
+    /// An L: right along `y = 4`, then down along `x = 14`. With `lineWidth = 4`
+    /// the two quads meet at `(14, 4)` and leave the corner above-right of it open.
+    fn corner_path() -> Vec<PathSegment> {
+        vec![
+            PathSegment::Move(4.0, 4.0),
+            PathSegment::Line(4.0, 4.0, 14.0, 4.0),
+            PathSegment::Line(14.0, 4.0, 14.0, 14.0),
+        ]
+    }
+
+    /// Stroke `corner_path` with the given join and return the alpha of the pixel
+    /// that only a miter reaches: inside the miter square `(14,2)–(16,4)`, outside
+    /// the bevel triangle, and clipped by the round arc.
+    fn corner_tip_alpha(join: LineJoin, miter_limit: f32) -> u8 {
+        let mut ctx = Context2D::new(20, 20);
+        ctx.line_join = join;
+        ctx.miter_limit = miter_limit;
+        stroke_path(&mut ctx, &corner_path(), 4.0, &PaintSource::Color(CanvasColor::rgba(0, 0, 0, 255)), 1.0);
+        alpha_at(&ctx, 15, 2)
+    }
+
+    #[test]
+    fn miter_join_fills_the_outer_corner() {
+        assert_eq!(corner_tip_alpha(LineJoin::Miter, 10.0), 255, "miter tip must be solid");
+    }
+
+    #[test]
+    fn bevel_join_leaves_the_miter_tip_empty() {
+        assert_eq!(corner_tip_alpha(LineJoin::Bevel, 10.0), 0, "bevel must not reach the tip");
+    }
+
+    #[test]
+    fn round_join_covers_part_of_the_miter_tip() {
+        // The arc bulges past the bevel chord into that pixel but stops short of the
+        // miter tip, so the coverage is strictly between the other two joins.
+        let a = corner_tip_alpha(LineJoin::Round, 10.0);
+        assert!(a > 0 && a < 200, "round join partial coverage expected, got {a}");
+    }
+
+    #[test]
+    fn miter_limit_below_the_ratio_falls_back_to_bevel() {
+        // A 90° turn has a miter ratio of √2, so a limit of 1.2 must reject it.
+        assert_eq!(corner_tip_alpha(LineJoin::Miter, 1.2), 0, "miter over the limit must bevel");
+        assert_eq!(corner_tip_alpha(LineJoin::Miter, 1.5), 255, "miter under the limit stays");
+    }
+
+    /// Stroke a horizontal segment ending at `(14, 4)` with the given cap and return
+    /// the alpha of a pixel just past the end: a square cap covers it fully, a round
+    /// cap clips it, a butt cap leaves it untouched.
+    fn cap_past_end_alpha(cap: LineCap) -> u8 {
+        let mut ctx = Context2D::new(20, 20);
+        ctx.line_cap = cap;
+        let path = vec![
+            PathSegment::Move(4.0, 4.0),
+            PathSegment::Line(4.0, 4.0, 14.0, 4.0),
+        ];
+        stroke_path(&mut ctx, &path, 4.0, &PaintSource::Color(CanvasColor::rgba(0, 0, 0, 255)), 1.0);
+        alpha_at(&ctx, 15, 2)
+    }
+
+    #[test]
+    fn butt_cap_stops_at_the_endpoint() {
+        assert_eq!(cap_past_end_alpha(LineCap::Butt), 0, "butt cap must not extend");
+    }
+
+    #[test]
+    fn square_cap_extends_past_the_endpoint() {
+        assert_eq!(cap_past_end_alpha(LineCap::Square), 255, "square cap covers half a width");
+    }
+
+    #[test]
+    fn round_cap_extends_but_stays_inside_the_disc() {
+        let a = cap_past_end_alpha(LineCap::Round);
+        assert!(a > 0 && a < 200, "round cap partial coverage expected, got {a}");
+    }
+
+    #[test]
+    fn a_closed_sub_path_is_joined_rather_than_capped() {
+        // The seam of a closed rectangle sits at its top-left corner: a square cap
+        // would stick out past it, a join must not.
+        let mut ctx = Context2D::new(20, 20);
+        ctx.line_cap = LineCap::Square;
+        stroke_path(&mut ctx, &rect_path(5.0, 5.0, 10.0, 10.0), 2.0, &PaintSource::Color(CanvasColor::rgba(0, 0, 0, 255)), 1.0);
+
+        assert_eq!(alpha_at(&ctx, 4, 4), 255, "the mitered corner itself is covered");
+        assert_eq!(alpha_at(&ctx, 3, 4), 0, "nothing may stick out past the corner");
+        assert_eq!(alpha_at(&ctx, 4, 3), 0, "nothing may stick out above the corner");
     }
 }

@@ -129,7 +129,7 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 
 ### lumen-canvas (`crates/engine/canvas`)
 - ✅ Canvas 2D CPU rasterizer: rect ops, full path building (arc/arcTo/bezier/quadratic/ellipse), fill/stroke (even-odd), state stack + full CTM, `globalAlpha`, 16 composite/blend ops. **Anti-aliased** (BUG-099): fill, stroke and clip share one coverage rasterizer (4 vertical sub-scanlines × exact horizontal coverage), and a stroke is composited as the union of its segment quads so joins are not painted twice.
-- 🟡 `lineCap`/`lineJoin`/`miterLimit` are parsed and carried through `save()`/`restore()`, but the rasterizer never reads them (BUG-099): a stroke is the union of per-segment quads with butt ends, so the outer corner of a `strokeRect` keeps a notch where Edge draws a solid join.
+- ✅ `lineCap`/`lineJoin`/`miterLimit` (BUG-099, 2026-07-29) — the rasterizer joins its segment quads: every interior vertex gets a miter (clipped to `miterLimit`, falling back to bevel), round or bevel shape, and every open end a butt, round or square cap. Sub-pixel joins are dropped and near-collinear ones degrade to a bevel, so a tessellated curve does not pay for a join at each of its ~180 vertices.
 - ✅ Gradients (linear/radial/conic), patterns (4 repeats), shadows (offset-only), `clip()` (8-bit coverage mask, anti-aliased edge), image data (drawImage/putImageData/get/createImageData), text via `lumen_font::Rasterizer`, Path2D (SVG path strings). `drawImage` source may be `<canvas>` or `<img>` element (all 3/5/9-arg forms).
 - ⬜ Gaussian shadowBlur; gradient sampling is device-space (not spec user-space); canvas fingerprint noise.
 
