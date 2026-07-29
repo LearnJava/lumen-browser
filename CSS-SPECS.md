@@ -107,7 +107,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | `offset-path: path()` ✅ 2026-06-10 (P4: ComputedStyle fields + resolve_motion_transform wiring in property_trees); `offset-distance`/`offset-rotate` ✅; `ray(<angle>)` ✅ 2026-06-13 (p4-offset-ray: deg/grad/rad/turn, size/contain/at parsed-and-ignored for px distance); `offset-anchor` ⬜ Phase 3; `url()` paths ⬜ | **#44** |
 | CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ✅ | break-before/after/inside + orphans/widows in `ComputedStyle`; `pagination.rs` applies rules | **#45** |
 | CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | ✅ | color-mix() ✅ (p4-color-mix-parsing 2026-06-08); relative color syntax ✅ (p4-relative-color 2026-06-13) | **#46** |
-| CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | 🟡 | font-palette + @font-palette-values 🟡 2026-07-04 (p4-font-palette: parse → ComputedStyle → resolve → DrawText.font_palette; COLR/CPAL rasterization deferred in lumen-font) | **#47** |
+| CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | 🟡 | font-palette + @font-palette-values ✅ 2026-07-29 (p4-font-palette-colr: parse → ComputedStyle → resolve → DrawText.font_palette → COLR v0 + CPAL в wgpu-рендере; COLR v1 paint graph отложен) | **#47** |
 | CSS Easing L2 | [css-easing-2](https://www.w3.org/TR/css-easing-2/) | ✅ | linear() easing TimingFunction::LinearStops 2026-05-24 | **#48** |
 | CSS Overscroll L1 | [css-overscroll-1](https://www.w3.org/TR/css-overscroll-1/) | 🟡 | gesture boundary handling | **#49** |
 | CSS Gap Decorations L1 | [css-gaps-1](https://www.w3.org/TR/css-gaps-1/) | ✅ | `gap-rule-width/style/color` shorthand+longhands; `collect_gap_segments()` in display_list.rs; flex + grid containers wired (p4-gap-rule, 2026-06-10) | **#50** |
@@ -222,9 +222,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `font-feature-settings` | ✅ | parse + ComputedStyle (inherited) + DrawText.font_features; shaper overrides default GSUB/GPOS set (liga/clig/calt/rlig/ccmp + kern) on CPU path & femtovg varied-text path; native femtovg text shapes itself (class BUG-109) |
 | `font-size-adjust` | ✅ | real OS/2 x-height scaling (P4 2026-06-13); тест 95 |
 | `font-optical-sizing` | ✅ | auto injects opsz=font-size into variation axes; none skips |
-| `font-palette` | 🟡 | normal/light/dark/dashed-ident parsed (inherited); custom idents resolved against @font-palette-values in compute_style → DrawText.font_palette; renderer ignores it — no COLR/CPAL rasterization in lumen-font yet |
+| `font-palette` | ✅ | normal/light/dark/dashed-ident parsed (inherited); custom идент резолвится по @font-palette-values в compute_style → `DrawText.font_palette` → wgpu-рендер: COLR v0 layered-глиф рисуется по quad-у на слой, цвет слоя — запись выбранной CPAL-палитры (`0xFFFF` = текстовый цвет, альфа домножается на альфу текста). `light`/`dark` берут первую палитру с флагом `paletteType`, при отсутствии — палитра 0 (как `normal`). Парсеры `COLR`/`CPAL` — `lumen-font` (`colr.rs`/`cpal.rs`, 18 тестов), покраска — `renderer.rs` (11 тестов, включая end-to-end на синтетическом цветном шрифте). Отложено: COLR v1 paint graph (градиенты/трансформы) — v1-only глиф падает на монохромный outline; CPU-снапшот-путь и femtovg рисуют только bundled Inter (без COLR). Тестового HTML нет: цветной шрифт в репозитории отсутствует, а системный (Segoe UI Emoji) сделал бы эталон машинозависимым (P4 2026-07-29) |
 | `@font-face` | ✅ | all descriptors parsed; file loading done — `font-display: swap`, async fetch off the critical path (WQ#20) |
-| `@font-palette-values` | 🟡 | parsed + matched (name/family, base-palette, override-colors); rendering deferred with COLR |
+| `@font-palette-values` | ✅ | parsed + matched (name/family, base-palette, override-colors); `base-palette` выбирает CPAL-палитру, `override-colors` перекрашивает её записи в wgpu-рендере (P4 2026-07-29) |
 
 ### [T0] Text Styling
 
@@ -607,7 +607,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@layer` | ✅ | parsed; cascade ordering ✅ |
 | `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
 | `@color-profile` | 🟡 | CSS Color L5 §4; parsed+stored (`ColorProfileRule`, css-parser); `color(--name c1 c2 c3)` recognized in `parse_css_color_fn` (style.rs); real ICC transform + declared-name validation deferred (p4-color-profile 2026-07-15, test 142, KNOWN_DEBTOR BUG-282) |
-| `@font-palette-values` | 🟡 | parsed (name + font-family + base-palette + override-colors); matched by name/family in compute_style; rendering deferred with COLR |
+| `@font-palette-values` | ✅ | parsed (name + font-family + base-palette + override-colors); matched by name/family in compute_style; `base-palette` + `override-colors` применяются к CPAL-палитре при покраске COLR v0 глифов (P4 2026-07-29) |
 | `@counter-style` | ✅ | CSS Counter Styles L3; `parse_counter_style_rule` (parser.rs:2336) |
 | `@scope` | ✅ | `parse_scope_rule` (parser.rs) applied in cascade loop (style.rs); donut scoping via `node_in_scope` (root + `to (<limit>)` in one ancestor walk, nearest boundary wins) |
 | `@function` | 🟡 | CSS Functions and Mixins L1; `<name>(<params>) [returns <type>]?` parsed+stored (`FunctionRule`, css-parser); `<name>(<args>)` call sites in property values resolved end-to-end (positional args + defaults, local `--x:` decls, `result:` via `calc()`/`var()`) in layout (`expand_custom_functions`, style.rs); deferred: `returns` type-checking, conditional group rules in body, named args (p4-css-function 2026-07-15, test 143) |

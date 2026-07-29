@@ -30,11 +30,11 @@ use lumen_core::ColorSpace;
 use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{
-    Bitmap, Font, Head, Hmtx, Outline, OwnedCmap, Rasterizer,
+    Bitmap, Colr, Cpal, Font, Head, Hmtx, Outline, OwnedCmap, Rasterizer,
     SystemFontIndex, maybe_decode_font,
 };
 use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
-use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStretch, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent, style::TextOrientation};
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStretch, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent, font_palette::FontPaletteSelection, style::TextOrientation};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -1507,6 +1507,22 @@ struct FaceMetrics {
     /// hmtx advance per glyph id (хвост longHorMetric расширен по спеке).
     /// Индекс = glyph id; длина = num_glyphs.
     advances: Box<[u16]>,
+    /// `COLR`+`CPAL` цветного шрифта, разобранные один раз при загрузке.
+    /// `None` — монохромный face (нет одной из таблиц, или в `COLR` нет ни
+    /// одной v0-записи); тогда текстовый путь не меняется вовсе.
+    color: Option<ColorTables>,
+}
+
+/// Цветные таблицы face-а: layered-глифы (`COLR` v0) + палитры (`CPAL`).
+/// Хранятся вместе, потому что по отдельности бесполезны: `palette_index`
+/// слоя адресует запись палитры.
+#[derive(Debug)]
+struct ColorTables {
+    /// Слои цветных глифов — `layers_for(glyph_id)` даёт список
+    /// (glyph, palette entry).
+    colr: Colr,
+    /// Палитры, среди которых выбирает CSS `font-palette`.
+    cpal: Cpal,
 }
 
 /// Строит [`FaceMetrics`] по байтам шрифта. Возвращает `None`, если любая
@@ -1521,13 +1537,91 @@ fn build_face_metrics(bytes: &[u8]) -> Option<FaceMetrics> {
     let advances: Box<[u16]> = (0..num_glyphs)
         .map(|gid| hmtx.advance_width(gid).unwrap_or(0))
         .collect();
+    // Цветной путь включается только когда есть ОБЕ таблицы и в COLR есть
+    // v0-записи: COLR v1-only шрифт (paint graph, отложен) сюда не попадает
+    // и рисуется монохромным outline-ом, как раньше.
+    let color = match (font.colr(), font.cpal()) {
+        (Ok(colr), Ok(cpal)) if !colr.is_empty() => Some(ColorTables { colr, cpal }),
+        _ => None,
+    };
     Some(FaceMetrics {
         units_per_em: head.units_per_em,
         ascent: hhea.ascent,
         descent: hhea.descent,
         cmap: cmap.to_owned_cmap(),
         advances,
+        color,
     })
+}
+
+/// CSS Fonts L4 §11.3 — разворачивает выбор `font-palette` в плоский список
+/// RGBA-цветов записей палитры для конкретного face-а.
+///
+/// `selection` = `None` → `normal` → палитра 0. `Light`/`Dark` → первая
+/// палитра с соответствующим флагом `paletteType`; если такой нет (CPAL v0
+/// или флаг ни у кого не выставлен) — по спеке ведёт себя как `normal`.
+/// `Custom` → `base-palette` из `@font-palette-values` плюс
+/// `override-colors` поверх; неизвестный `base-palette` тоже падает на 0.
+///
+/// Возвращает `None`, если у шрифта нет ни одной валидной палитры — тогда
+/// вызывающая сторона рисует все слои текстовым цветом.
+fn resolve_palette(
+    tables: &ColorTables,
+    selection: Option<&FontPaletteSelection>,
+) -> Option<Vec<[f32; 4]>> {
+    let base_index = match selection {
+        None => 0,
+        Some(FontPaletteSelection::Light) => tables.cpal.first_light_palette().unwrap_or(0),
+        Some(FontPaletteSelection::Dark) => tables.cpal.first_dark_palette().unwrap_or(0),
+        Some(FontPaletteSelection::Custom { base_palette, .. }) => *base_palette,
+    };
+    // Битый/несуществующий base-palette → палитра 0 (спека: невалидный
+    // `base-palette` игнорируется, а не отключает цветной рендер).
+    let entries = tables
+        .cpal
+        .palette(base_index)
+        .or_else(|| tables.cpal.palette(0))?;
+    let mut colors: Vec<[f32; 4]> = entries
+        .iter()
+        .map(|c| {
+            [
+                c.r as f32 / 255.0,
+                c.g as f32 / 255.0,
+                c.b as f32 / 255.0,
+                c.a as f32 / 255.0,
+            ]
+        })
+        .collect();
+    if let Some(FontPaletteSelection::Custom { overrides, .. }) = selection {
+        for ov in overrides {
+            if let Some(slot) = colors.get_mut(ov.index as usize) {
+                *slot = [
+                    ov.color.r as f32 / 255.0,
+                    ov.color.g as f32 / 255.0,
+                    ov.color.b as f32 / 255.0,
+                    ov.color.a as f32 / 255.0,
+                ];
+            }
+        }
+    }
+    Some(colors)
+}
+
+/// Цвет одного COLR-слоя: запись палитры либо текстовый цвет для
+/// `paletteIndex == 0xFFFF`.
+///
+/// Альфа записи палитры домножается на альфу текстового цвета — прозрачность
+/// `color: rgba(…)` / унаследованная alpha должна гасить цветной глиф так же,
+/// как гасит монохромный, иначе полупрозрачный текст «проявляется» на
+/// эмодзи. Индекс за пределами палитры (битый шрифт) → текстовый цвет.
+fn layer_color(palette: Option<&[[f32; 4]]>, palette_index: u16, text: [f32; 4]) -> [f32; 4] {
+    if palette_index == lumen_font::PALETTE_INDEX_FOREGROUND {
+        return text;
+    }
+    match palette.and_then(|p| p.get(palette_index as usize)) {
+        Some(&[r, g, b, a]) => [r, g, b, a * text[3]],
+        None => text,
+    }
 }
 
 /// Распарсенный face: Font + таблицы для растеризации. Borrow от
@@ -6271,7 +6365,7 @@ impl Renderer {
                     font_stretch: _,
                     font_variation_axes,
                     font_features: _,
-                    font_palette: _,
+                    font_palette,
                     tab_size,
                     highlight_name: _,
                     text_orientation,
@@ -6316,6 +6410,7 @@ impl Renderer {
                                 &mut self.cached_glyphs,
                                 font_variation_axes,
                                 *tab_size,
+                                font_palette.as_ref(),
                             );
                             rotate_text_vertices_cw(&mut text_vertices[v_start as usize..], dest_rect);
                         }
@@ -6332,6 +6427,7 @@ impl Renderer {
                                 &mut self.cached_glyphs,
                                 font_variation_axes,
                                 *tab_size,
+                                font_palette.as_ref(),
                             );
                         }
                         _ => {
@@ -6347,6 +6443,7 @@ impl Renderer {
                                 &mut self.cached_glyphs,
                                 font_variation_axes,
                                 *tab_size,
+                                font_palette.as_ref(),
                             );
                         }
                     }
@@ -6528,6 +6625,7 @@ impl Renderer {
                                 &mut self.cached_glyphs,
                                 &[],
                                 0.0,
+                                None,
                             );
                             if let Some(m) = transform_stack.last() {
                                 apply_affine_to_verts(
@@ -10128,6 +10226,40 @@ fn normalize_variation_axes(face: &ParsedFace<'_>, axes: &[([u8; 4], f32)]) -> V
     coords
 }
 
+/// Кладёт два треугольника одного глифа: позиция от пера `cursor_x` и
+/// baseline-а, UV — из atlas-записи. Вынесено, потому что монохромный путь и
+/// каждый слой COLR-глифа кладут один и тот же quad, различаясь только
+/// цветом и glyph-id.
+fn push_glyph_quad(
+    out: &mut Vec<TextVertex>,
+    g: &CachedGlyph,
+    cursor_x: f32,
+    baseline_y: f32,
+    display_scale: f32,
+    color: [f32; 4],
+) {
+    let bm_left = g.left * display_scale;
+    let bm_top = g.top * display_scale;
+    let bm_w = g.entry.width as f32 * display_scale;
+    let bm_h = g.entry.height as f32 * display_scale;
+    let x0 = cursor_x + bm_left;
+    let y0 = baseline_y - bm_top;
+    let x1 = x0 + bm_w;
+    let y1 = y0 + bm_h;
+    let u0 = g.entry.atlas_x as f32 / ATLAS_DIM as f32;
+    let v0 = g.entry.atlas_y as f32 / ATLAS_DIM as f32;
+    let u1 = (g.entry.atlas_x + g.entry.width) as f32 / ATLAS_DIM as f32;
+    let v1 = (g.entry.atlas_y + g.entry.height) as f32 / ATLAS_DIM as f32;
+    out.extend_from_slice(&[
+        TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
+        TextVertex { pos: [x1, y0], z: 0.0, uv: [u1, v0], color },
+        TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
+        TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
+        TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
+        TextVertex { pos: [x0, y1], z: 0.0, uv: [u0, v1], color },
+    ]);
+}
+
 /// Returns the final pen `x` (== `rect.x` + shaped advance) — used by
 /// [`push_text_glyphs_mixed`] to measure a segment's real width without a
 /// separate shaping pass.
@@ -10144,6 +10276,7 @@ fn push_text_glyphs(
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
     font_variation_axes: &[([u8; 4], f32)],
     tab_size: f32,
+    font_palette: Option<&FontPaletteSelection>,
 ) -> f32 {
     // Multi-size atlas: подбираем bin под font_size, растеризируем глифы
     // на этом bin. Display масштаб = font_size / size_bin — если font_size
@@ -10170,6 +10303,10 @@ fn push_text_glyphs(
     // (единственный потребитель `ParsedFace` на пути без промахов атласа;
     // при пустых axes face не парсится вовсе).
     let mut norm_coords_cache: HashMap<usize, Vec<f32>> = HashMap::new();
+    // CSS Fonts L4 §11.3 — развёрнутая палитра per face_id. Считается лениво:
+    // у монохромного face-а (подавляющее большинство) `FaceMetrics.color` =
+    // None и сюда не заходим ни разу.
+    let mut palette_cache: HashMap<usize, Option<Vec<[f32; 4]>>> = HashMap::new();
 
     let mut cursor_x = rect.x;
     for ch in text.chars() {
@@ -10199,6 +10336,43 @@ fn push_text_glyphs(
                 v.insert(computed)
             }
         };
+        // CSS Fonts L4 §11.3 — COLR v0 цветной глиф: вместо одного quad-а
+        // текстовым цветом кладём по quad-у на каждый слой, снизу вверх, со
+        // своим цветом из выбранной палитры. Слой — обычный монохромный
+        // глиф, поэтому идёт через тот же атлас. Advance берём у базового
+        // глифа (сам он не растеризуется — слои его полностью замещают).
+        if let Some(layers) = metrics
+            .color
+            .as_ref()
+            .and_then(|c| c.colr.layers_for(glyph_id))
+        {
+            let palette = palette_cache
+                .entry(face_id)
+                .or_insert_with(|| {
+                    metrics.color.as_ref().and_then(|c| resolve_palette(c, font_palette))
+                })
+                .as_deref();
+            for layer in layers {
+                let Some(g) =
+                    ensure_glyph(cached, atlas, lazy, face_id, layer.glyph_id, size_bin, coords)
+                else {
+                    continue;
+                };
+                push_glyph_quad(
+                    out,
+                    &g,
+                    cursor_x,
+                    baseline_y,
+                    display_scale,
+                    layer_color(palette, layer.palette_index, color),
+                );
+            }
+            if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
+                cursor_x += adv as f32 * advance_scale;
+            }
+            continue;
+        }
+
         let cached_glyph = ensure_glyph(
             cached,
             atlas,
@@ -10210,27 +10384,7 @@ fn push_text_glyphs(
         );
 
         if let Some(g) = cached_glyph {
-            let bm_left = g.left * display_scale;
-            let bm_top = g.top * display_scale;
-            let bm_w = g.entry.width as f32 * display_scale;
-            let bm_h = g.entry.height as f32 * display_scale;
-            let x0 = cursor_x + bm_left;
-            let y0 = baseline_y - bm_top;
-            let x1 = x0 + bm_w;
-            let y1 = y0 + bm_h;
-            let u0 = g.entry.atlas_x as f32 / ATLAS_DIM as f32;
-            let v0 = g.entry.atlas_y as f32 / ATLAS_DIM as f32;
-            let u1 = (g.entry.atlas_x + g.entry.width) as f32 / ATLAS_DIM as f32;
-            let v1 = (g.entry.atlas_y + g.entry.height) as f32 / ATLAS_DIM as f32;
-            out.extend_from_slice(&[
-                TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
-                TextVertex { pos: [x1, y0], z: 0.0, uv: [u1, v0], color },
-                TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
-                TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
-                TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
-                TextVertex { pos: [x0, y1], z: 0.0, uv: [u0, v1], color },
-            ]);
-
+            push_glyph_quad(out, &g, cursor_x, baseline_y, display_scale, color);
             cursor_x += g.advance_native as f32 * advance_scale;
         } else {
             // Глиф не отрисовался (composite-fallback, empty или нет места
@@ -10279,6 +10433,7 @@ fn push_text_glyphs_mixed(
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
     font_variation_axes: &[([u8; 4], f32)],
     tab_size: f32,
+    font_palette: Option<&FontPaletteSelection>,
 ) {
     let mut y_cursor = 0.0_f32;
     for seg in crate::display_list::split_mixed_runs(text) {
@@ -10294,7 +10449,7 @@ fn push_text_glyphs_mixed(
             let seg_rect = Rect::new(dest.x, dest.y + y_cursor, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, seg_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, font_variation_axes, tab_size,
+                cached, font_variation_axes, tab_size, font_palette,
             );
             y_cursor += end_x - dest.x;
         } else {
@@ -10302,7 +10457,7 @@ fn push_text_glyphs_mixed(
             let local_rect = Rect::new(y_cursor, 0.0, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, local_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, font_variation_axes, tab_size,
+                cached, font_variation_axes, tab_size, font_palette,
             );
             rotate_text_vertices_cw(&mut out[v_start..], dest);
             y_cursor = end_x;
@@ -11650,5 +11805,393 @@ mod tests {
             (screen_y - 40.0).abs() < 0.01,
             "sticky header must pin at the panel's own scrollport top (40), got {screen_y}"
         );
+    }
+
+    // ─── font-palette: COLR/CPAL palette resolution (CSS Fonts L4 §11.3) ───
+
+    use lumen_font::PaletteColor;
+    use lumen_layout::font_palette::PaletteColorOverride;
+
+    /// Builds a `ColorTables` with the given palettes (each a list of RGBA
+    /// tuples, all the same length) and optional `paletteType` flags. The
+    /// `COLR` half stays empty — the palette resolver never looks at it.
+    fn tables(palettes: &[&[(u8, u8, u8, u8)]], types: &[u32]) -> ColorTables {
+        let entries = palettes.first().map_or(0, |p| p.len()) as u16;
+        let mut color_records = Vec::new();
+        let mut palette_record_indices = Vec::new();
+        for p in palettes {
+            palette_record_indices.push(color_records.len() as u16);
+            color_records.extend(
+                p.iter().map(|&(r, g, b, a)| PaletteColor { r, g, b, a }),
+            );
+        }
+        ColorTables {
+            colr: Colr { version: 0, base_glyphs: Vec::new(), layers: Vec::new() },
+            cpal: Cpal {
+                version: if types.is_empty() { 0 } else { 1 },
+                num_palette_entries: entries,
+                color_records,
+                palette_record_indices,
+                palette_types: types.to_vec(),
+            },
+        }
+    }
+
+    fn close(a: [f32; 4], b: [f32; 4]) -> bool {
+        a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-6)
+    }
+
+    #[test]
+    fn resolve_palette_normal_takes_palette_zero() {
+        let t = tables(&[&[(255, 0, 0, 255)], &[(0, 255, 0, 255)]], &[]);
+        let p = resolve_palette(&t, None).unwrap();
+        assert!(close(p[0], [1.0, 0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_light_and_dark_pick_the_flagged_palette() {
+        let t = tables(
+            &[&[(1, 1, 1, 255)], &[(0, 0, 0, 255)], &[(255, 255, 255, 255)]],
+            &[0, Cpal::USABLE_WITH_DARK_BACKGROUND, Cpal::USABLE_WITH_LIGHT_BACKGROUND],
+        );
+        let dark = resolve_palette(&t, Some(&FontPaletteSelection::Dark)).unwrap();
+        assert!(close(dark[0], [0.0, 0.0, 0.0, 1.0]));
+        let light = resolve_palette(&t, Some(&FontPaletteSelection::Light)).unwrap();
+        assert!(close(light[0], [1.0, 1.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_light_without_flags_behaves_as_normal() {
+        // CPAL v0 has no paletteType array — `light`/`dark` must fall back to
+        // palette 0 rather than disabling the color path.
+        let t = tables(&[&[(255, 0, 0, 255)], &[(0, 255, 0, 255)]], &[]);
+        let p = resolve_palette(&t, Some(&FontPaletteSelection::Light)).unwrap();
+        assert!(close(p[0], [1.0, 0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_custom_starts_from_base_palette() {
+        let t = tables(&[&[(255, 0, 0, 255)], &[(0, 0, 255, 255)]], &[]);
+        let sel = FontPaletteSelection::Custom { base_palette: 1, overrides: Vec::new() };
+        let p = resolve_palette(&t, Some(&sel)).unwrap();
+        assert!(close(p[0], [0.0, 0.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_custom_applies_override_colors() {
+        let t = tables(&[&[(255, 0, 0, 255), (0, 255, 0, 255)]], &[]);
+        let sel = FontPaletteSelection::Custom {
+            base_palette: 0,
+            overrides: vec![PaletteColorOverride {
+                index: 1,
+                color: Color { r: 0, g: 0, b: 255, a: 128 },
+            }],
+        };
+        let p = resolve_palette(&t, Some(&sel)).unwrap();
+        // Slot 0 untouched, slot 1 replaced.
+        assert!(close(p[0], [1.0, 0.0, 0.0, 1.0]));
+        assert!(close(p[1], [0.0, 0.0, 1.0, 128.0 / 255.0]));
+    }
+
+    #[test]
+    fn resolve_palette_override_past_palette_end_is_ignored() {
+        let t = tables(&[&[(255, 0, 0, 255)]], &[]);
+        let sel = FontPaletteSelection::Custom {
+            base_palette: 0,
+            overrides: vec![PaletteColorOverride {
+                index: 9,
+                color: Color { r: 0, g: 0, b: 255, a: 255 },
+            }],
+        };
+        let p = resolve_palette(&t, Some(&sel)).unwrap();
+        assert_eq!(p.len(), 1);
+        assert!(close(p[0], [1.0, 0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_unknown_base_palette_falls_back_to_zero() {
+        let t = tables(&[&[(255, 0, 0, 255)]], &[]);
+        let sel = FontPaletteSelection::Custom { base_palette: 7, overrides: Vec::new() };
+        let p = resolve_palette(&t, Some(&sel)).unwrap();
+        assert!(close(p[0], [1.0, 0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_without_any_palette_is_none() {
+        let t = tables(&[], &[]);
+        assert!(resolve_palette(&t, None).is_none());
+    }
+
+    #[test]
+    fn layer_color_foreground_index_uses_text_color() {
+        let palette = [[1.0, 0.0, 0.0, 1.0]];
+        let text = [0.0, 0.5, 0.25, 1.0];
+        let c = layer_color(Some(&palette), lumen_font::PALETTE_INDEX_FOREGROUND, text);
+        assert!(close(c, text));
+    }
+
+    #[test]
+    fn layer_color_scales_palette_alpha_by_text_alpha() {
+        // A half-transparent text color must dim the color glyph the same way
+        // it dims a monochrome one — otherwise the emoji stays fully opaque.
+        let palette = [[1.0, 0.0, 0.0, 0.5]];
+        let c = layer_color(Some(&palette), 0, [0.0, 0.0, 0.0, 0.5]);
+        assert!(close(c, [1.0, 0.0, 0.0, 0.25]));
+    }
+
+    #[test]
+    fn layer_color_out_of_range_index_uses_text_color() {
+        let palette = [[1.0, 0.0, 0.0, 1.0]];
+        let text = [0.0, 1.0, 0.0, 1.0];
+        assert!(close(layer_color(Some(&palette), 5, text), text));
+        assert!(close(layer_color(None, 0, text), text));
+    }
+
+    // ─── COLR color glyph emission (end-to-end over a synthetic font) ─────
+
+    /// Minimal TTF with two color layers, built in memory so the whole
+    /// `build_face_metrics` → `push_text_glyphs` path can be exercised
+    /// without a GPU and without a real color font on disk:
+    /// glyph 1 (`A`) is a COLR base glyph whose layers are glyph 2 (palette
+    /// entry 0 = opaque red) and glyph 3 (`0xFFFF` = text color). All three
+    /// outlines are the same square, so every layer produces a real bitmap.
+    fn build_color_font() -> Vec<u8> {
+        fn table_record(out: &mut Vec<u8>, tag: &[u8; 4], offset: u32, length: u32) {
+            out.extend_from_slice(tag);
+            out.extend_from_slice(&0u32.to_be_bytes()); // checksum — не валидируется
+            out.extend_from_slice(&offset.to_be_bytes());
+            out.extend_from_slice(&length.to_be_bytes());
+        }
+
+        let mut head = Vec::new();
+        head.extend_from_slice(&0x00010000u32.to_be_bytes()); // version
+        head.extend_from_slice(&0u32.to_be_bytes()); // fontRevision
+        head.extend_from_slice(&0u32.to_be_bytes()); // checkSumAdjustment
+        head.extend_from_slice(&0x5F0F3CF5u32.to_be_bytes()); // magic
+        head.extend_from_slice(&0u16.to_be_bytes()); // flags
+        head.extend_from_slice(&1000u16.to_be_bytes()); // unitsPerEm
+        head.extend_from_slice(&[0u8; 16]); // created + modified
+        head.extend_from_slice(&0i16.to_be_bytes()); // xMin
+        head.extend_from_slice(&0i16.to_be_bytes()); // yMin
+        head.extend_from_slice(&500i16.to_be_bytes()); // xMax
+        head.extend_from_slice(&500i16.to_be_bytes()); // yMax
+        head.extend_from_slice(&[0u8; 6]); // macStyle + lowestRecPPEM + dirHint
+        head.extend_from_slice(&0i16.to_be_bytes()); // indexToLocFormat = short
+        head.extend_from_slice(&0i16.to_be_bytes()); // glyphDataFormat
+
+        const NUM_GLYPHS: u16 = 4;
+        let mut hhea = Vec::new();
+        hhea.extend_from_slice(&0x00010000u32.to_be_bytes()); // version
+        hhea.extend_from_slice(&800i16.to_be_bytes()); // ascender
+        hhea.extend_from_slice(&(-200i16).to_be_bytes()); // descender
+        hhea.extend_from_slice(&0i16.to_be_bytes()); // lineGap
+        hhea.extend_from_slice(&600u16.to_be_bytes()); // advanceWidthMax
+        hhea.extend_from_slice(&[0u8; 22]); // до numberOfHMetrics
+        hhea.extend_from_slice(&NUM_GLYPHS.to_be_bytes());
+
+        let mut maxp = Vec::new();
+        maxp.extend_from_slice(&0x00010000u32.to_be_bytes());
+        maxp.extend_from_slice(&NUM_GLYPHS.to_be_bytes());
+        maxp.extend_from_slice(&[0u8; 26]);
+
+        // hmtx: одна longHorMetric на глиф, advance 600.
+        let mut hmtx = Vec::new();
+        for _ in 0..NUM_GLYPHS {
+            hmtx.extend_from_slice(&600u16.to_be_bytes());
+            hmtx.extend_from_slice(&0i16.to_be_bytes()); // lsb
+        }
+
+        // cmap format 12: 'A' → glyph 1.
+        let a = u32::from('A');
+        let mut sub = Vec::new();
+        sub.extend_from_slice(&12u16.to_be_bytes()); // format
+        sub.extend_from_slice(&0u16.to_be_bytes()); // reserved
+        sub.extend_from_slice(&28u32.to_be_bytes()); // length = 16 + 1 group
+        sub.extend_from_slice(&0u32.to_be_bytes()); // language
+        sub.extend_from_slice(&1u32.to_be_bytes()); // numGroups
+        sub.extend_from_slice(&a.to_be_bytes()); // startCharCode
+        sub.extend_from_slice(&a.to_be_bytes()); // endCharCode
+        sub.extend_from_slice(&1u32.to_be_bytes()); // startGlyphID
+        let mut cmap = Vec::new();
+        cmap.extend_from_slice(&0u16.to_be_bytes()); // version
+        cmap.extend_from_slice(&1u16.to_be_bytes()); // numTables
+        cmap.extend_from_slice(&3u16.to_be_bytes()); // platformID = Windows
+        cmap.extend_from_slice(&10u16.to_be_bytes()); // encodingID = Unicode full
+        cmap.extend_from_slice(&12u32.to_be_bytes()); // subtable offset
+        cmap.extend_from_slice(&sub);
+
+        // glyf: глиф 0 пустой, глифы 1–3 — один и тот же квадрат
+        // 0,0 → 500,500 (4 точки, все on-curve, long-form дельты).
+        let mut square = Vec::new();
+        square.extend_from_slice(&1i16.to_be_bytes()); // numberOfContours
+        square.extend_from_slice(&0i16.to_be_bytes()); // xMin
+        square.extend_from_slice(&0i16.to_be_bytes()); // yMin
+        square.extend_from_slice(&500i16.to_be_bytes()); // xMax
+        square.extend_from_slice(&500i16.to_be_bytes()); // yMax
+        square.extend_from_slice(&3u16.to_be_bytes()); // endPtsOfContours[0]
+        square.extend_from_slice(&0u16.to_be_bytes()); // instructionLength
+        square.extend_from_slice(&[0x01, 0x01, 0x01, 0x01]); // flags: ON_CURVE only
+        for dx in [0i16, 500, 0, -500] {
+            square.extend_from_slice(&dx.to_be_bytes());
+        }
+        for dy in [0i16, 0, 500, 0] {
+            square.extend_from_slice(&dy.to_be_bytes());
+        }
+        let sq_len = square.len();
+        let mut glyf = Vec::new();
+        for _ in 0..3 {
+            glyf.extend_from_slice(&square);
+        }
+        // loca short: значения в словах (× 2 = байтовый offset).
+        let mut loca = Vec::new();
+        for i in 0..=NUM_GLYPHS {
+            // Глиф 0 пустой: loca[0] == loca[1] == 0.
+            let words = if i == 0 { 0 } else { (i as usize - 1) * sq_len / 2 };
+            loca.extend_from_slice(&(words as u16).to_be_bytes());
+        }
+
+        // COLR v0: база = глиф 1, слои = глифы 2 (палитра 0) и 3 (текст).
+        let mut colr = Vec::new();
+        colr.extend_from_slice(&0u16.to_be_bytes()); // version
+        colr.extend_from_slice(&1u16.to_be_bytes()); // numBaseGlyphRecords
+        colr.extend_from_slice(&14u32.to_be_bytes()); // baseGlyphRecordsOffset
+        colr.extend_from_slice(&20u32.to_be_bytes()); // layerRecordsOffset
+        colr.extend_from_slice(&2u16.to_be_bytes()); // numLayerRecords
+        colr.extend_from_slice(&1u16.to_be_bytes()); // baseGlyph.glyphID
+        colr.extend_from_slice(&0u16.to_be_bytes()); // firstLayerIndex
+        colr.extend_from_slice(&2u16.to_be_bytes()); // numLayers
+        colr.extend_from_slice(&2u16.to_be_bytes()); // layer 0 glyphID
+        colr.extend_from_slice(&0u16.to_be_bytes()); // layer 0 paletteIndex
+        colr.extend_from_slice(&3u16.to_be_bytes()); // layer 1 glyphID
+        colr.extend_from_slice(&0xFFFFu16.to_be_bytes()); // layer 1 = foreground
+
+        // CPAL v0: одна палитра, одна запись — непрозрачный красный.
+        let mut cpal = Vec::new();
+        cpal.extend_from_slice(&0u16.to_be_bytes()); // version
+        cpal.extend_from_slice(&1u16.to_be_bytes()); // numPaletteEntries
+        cpal.extend_from_slice(&1u16.to_be_bytes()); // numPalettes
+        cpal.extend_from_slice(&1u16.to_be_bytes()); // numColorRecords
+        cpal.extend_from_slice(&14u32.to_be_bytes()); // offsetFirstColorRecord
+        cpal.extend_from_slice(&0u16.to_be_bytes()); // colorRecordIndices[0]
+        cpal.extend_from_slice(&[0, 0, 255, 255]); // BGRA → красный
+
+        // Каталог таблиц по спеке отсортирован по тегу.
+        let tables: [(&[u8; 4], Vec<u8>); 9] = [
+            (b"COLR", colr),
+            (b"CPAL", cpal),
+            (b"cmap", cmap),
+            (b"glyf", glyf),
+            (b"head", head),
+            (b"hhea", hhea),
+            (b"hmtx", hmtx),
+            (b"loca", loca),
+            (b"maxp", maxp),
+        ];
+        let mut out = Vec::new();
+        out.extend_from_slice(&0x00010000u32.to_be_bytes()); // sfntVersion
+        out.extend_from_slice(&(tables.len() as u16).to_be_bytes());
+        out.extend_from_slice(&[0u8; 6]); // searchRange/entrySelector/rangeShift
+        let mut offset = 12u32 + tables.len() as u32 * 16;
+        let mut records = Vec::new();
+        let mut body = Vec::new();
+        for (tag, data) in &tables {
+            table_record(&mut records, tag, offset, data.len() as u32);
+            offset += data.len() as u32;
+            body.extend_from_slice(data);
+        }
+        out.extend_from_slice(&records);
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn synthetic_color_font_is_detected_as_color() {
+        let bytes = build_color_font();
+        let m = build_face_metrics(&bytes).expect("face metrics");
+        let color = m.color.as_ref().expect("COLR+CPAL must enable the color path");
+        assert_eq!(color.colr.layers_for(1).map(<[_]>::len), Some(2));
+        assert_eq!(color.cpal.num_palettes(), 1);
+        assert_eq!(m.cmap.glyph_index(u32::from('A')), Some(1));
+    }
+
+    #[test]
+    fn color_glyph_emits_one_quad_per_layer_with_palette_colors() {
+        let bytes = build_color_font();
+        let metrics = build_face_metrics(&bytes);
+        let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+        let mut lazy = LazyParsedFaces::new(&faces);
+        let mut atlas = GlyphAtlas::new(ATLAS_DIM);
+        let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
+        let mut out: Vec<TextVertex> = Vec::new();
+        let text_color = [0.0, 0.0, 1.0, 1.0];
+
+        let end_x = push_text_glyphs(
+            &mut out,
+            Rect::new(0.0, 0.0, 100.0, 40.0),
+            "A",
+            32.0,
+            text_color,
+            0,
+            &mut lazy,
+            &mut atlas,
+            &mut cached,
+            &[],
+            0.0,
+            None,
+        );
+
+        // Два слоя → два quad-а → 12 вершин; монохромный фолбэк дал бы 6.
+        assert_eq!(out.len(), 12, "expected one quad per COLR layer");
+        // Слой 0 → запись палитры 0 (красный), слой 1 → 0xFFFF (текстовый).
+        for v in &out[..6] {
+            assert!(close(v.color, [1.0, 0.0, 0.0, 1.0]), "layer 0 color {:?}", v.color);
+        }
+        for v in &out[6..] {
+            assert!(close(v.color, text_color), "layer 1 color {:?}", v.color);
+        }
+        // Advance берётся у базового глифа (600/1000 em при 32px = 19.2px),
+        // а не суммой advance-ов слоёв.
+        assert!((end_x - 19.2).abs() < 0.01, "pen advanced to {end_x}");
+    }
+
+    #[test]
+    fn custom_palette_override_reaches_the_emitted_vertices() {
+        let bytes = build_color_font();
+        let metrics = build_face_metrics(&bytes);
+        let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+        let mut lazy = LazyParsedFaces::new(&faces);
+        let mut atlas = GlyphAtlas::new(ATLAS_DIM);
+        let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
+        let mut out: Vec<TextVertex> = Vec::new();
+        let selection = FontPaletteSelection::Custom {
+            base_palette: 0,
+            overrides: vec![PaletteColorOverride {
+                index: 0,
+                color: Color { r: 0, g: 255, b: 0, a: 255 },
+            }],
+        };
+
+        push_text_glyphs(
+            &mut out,
+            Rect::new(0.0, 0.0, 100.0, 40.0),
+            "A",
+            32.0,
+            [0.0, 0.0, 1.0, 1.0],
+            0,
+            &mut lazy,
+            &mut atlas,
+            &mut cached,
+            &[],
+            0.0,
+            Some(&selection),
+        );
+
+        assert_eq!(out.len(), 12);
+        // `@font-palette-values { override-colors: 0 green }` обязан
+        // перекрасить первый слой; красный здесь означал бы, что выбор
+        // палитры не доехал из `DrawText`.
+        assert!(close(out[0].color, [0.0, 1.0, 0.0, 1.0]), "layer 0 color {:?}", out[0].color);
+        // Слой `0xFFFF` остаётся текстового цвета независимо от override-ов.
+        assert!(close(out[6].color, [0.0, 0.0, 1.0, 1.0]));
     }
 }
