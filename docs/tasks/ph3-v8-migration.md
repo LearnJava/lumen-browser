@@ -1145,6 +1145,46 @@ an actual `install_dom` call site exists before committing to a candidate (`cont
 lines, confirmed live via `lib.rs:926`'s `contacts::init_contacts_manager` call — good next
 candidate).
 
+### Audit before resuming S12b (2026-07-29)
+
+S12b had gone quiet since S12b-21 (2026-07-21) — not reserved by a branch, not tracked in
+`STATUS-P1.md`. User-requested full removal (not just default-off) triggered a fresh sweep:
+119 files in `crates/js/src` still reference rquickjs, 1139 hits across 140 `.rs` files
+workspace-wide, 2336 `#[test]` fns still gated on it (1047 in `dom.rs`'s own `mod tests`).
+Architecture confirmed unchanged from the S12b scoping note: each binding module carries
+*both* implementations (`install_X` rquickjs + `install_X_v8`) in the same file — removal is
+line-by-line surgery per file, not file deletion. `crates/js/Cargo.toml`'s `rquickjs` dep is
+still **hard**, not optional (this crate has no `quickjs` feature at all) — cutting the
+Cargo-feature gate alone won't drop it from `Cargo.lock`.
+
+Three items block a clean finish and must not be treated as "just another slice":
+
+1. **`crates/driver/src/winit_session.rs:1055-1096`** — `WinitSession::eval()` has only an
+   rquickjs implementation; `#[cfg(not(feature = "quickjs"))]` returns an error instead of
+   calling `V8JsRuntime`, even though `lumen-driver` already has a `v8` feature (used by
+   `session.rs::InProcessSession`). Deleting `quickjs` from `driver` without porting this first
+   permanently breaks headless `eval` on that path.
+2. **BUG-350** — the ESM stack (`esm.rs`, `QuickJsRuntime::eval_module`) is rquickjs-only;
+   `V8JsRuntime` has no `eval_module`/`register_module_source` override, so the trait default
+   (`ext.rs::eval_module` → `self.eval(source)`) feeds `export`/`import` through classic-script
+   parsing and fails on all 80 vendored WPT files using `type="module"`. Porting this closes
+   BUG-350 as a side effect, not a separate bug.
+3. **`dom.rs`'s `mod tests` monolith** (~12796-26677, 1047 tests) — the only regression
+   coverage for a large swath of DOM behavior (events, forms, storage, IndexedDB, fetch/XHR,
+   Cache, WebSockets, history, scroll). No V8-side equivalent exists; it needs a docs/tasks
+   brief and a per-subarea split, not a single slice.
+
+Also re-confirmed the two known "trap" categories from S12b-9/10/18: modules pinned to a
+cluster test (`dom.rs::event_target_dependent_apis_installed` — webxr/serial/hid/usb/
+bluetooth/navigation) and modules whose only `rquickjs` hit is a stale doc comment (false
+positive for candidate selection, same as S12b-1/4/20/21 above).
+
+Filed as ROADMAP.md rows `P3-v8-s12b-22`..`P3-v8-s12b-25` (the three blockers above plus a
+final Cargo.toml/feature-gate/docs cleanup slice, strictly last) and `P3-v8-post-audit`
+(sweep `BUGS.md` OPEN rows for QuickJS-era assumptions once S12b-25 lands), queued at the top
+of `STATUS-P1.md` ahead of the existing bug-fix queue. Full audit trail — memory
+`project_quickjs_full_removal_audit_s12b` (assistant session memory, not part of this repo).
+
 ---
 
 ## Risks (Rev 2)
