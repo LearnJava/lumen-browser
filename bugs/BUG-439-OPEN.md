@@ -47,3 +47,17 @@ document.getElementById('btn').dispatchEvent(
 - [BUG-437](BUG-437-FIXED.md) — нативный клик по submit-кнопке (починен: шаг 11 теперь выполняется).
 - [BUG-383](BUG-383-OPEN.md) — в шиме нет `element.click()`, `form.submit()`, `form.requestSubmit()`.
 - [BUG-360](BUG-360-OPEN.md) — живой диспатч читает только `addEventListener`, `on<type>`-атрибуты мертвы.
+
+## Обновление 2026-07-29 (BUG-383)
+
+Машинерия появилась: [BUG-383](BUG-383-FIXED.md) добавил
+`_lumen_run_activation_behavior(nid, el)` в шим — поведение активации для
+checkbox/radio (`input`+`change`), `<input type=submit|image>` и
+`<button type=submit>` (через `form.requestSubmit()`), `type=reset`,
+`<a href>`/`<area>`, `<summary>` и `<label>`. Но вызывает её только
+`HTMLElement.prototype.click()`; `dispatchEvent(new MouseEvent('click', …))`
+по-прежнему проходит мимо, потому что `_lumen_dispatch_rich` — это чистая
+доставка события и шага «run activation behavior» в нём нет. Остаток бага
+сузился до одного места: после доставки `click` через живой `dispatchEvent`
+нужно вызвать ту же `_lumen_run_activation_behavior`, если событие не было
+отменено и `isTrusted === false`.

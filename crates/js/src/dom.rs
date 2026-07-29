@@ -14481,7 +14481,10 @@ function _lumen_selection_of(nid) {
     if (s === undefined) { s = { start: 0, end: 0, direction: 'none' }; _lumen_selection_state[nid] = s; }
     return s;
 }
-function _lumen_set_selection(nid, start, end, direction) {
+// Named `_lumen_set_text_selection`, not `…_set_selection`: the latter is the
+// native that drives the *document* selection (`window.getSelection()`), and a
+// same-named shim function would shadow it for the whole page.
+function _lumen_set_text_selection(nid, start, end, direction) {
     var len = String(_lumen_make_element(nid).value || '').length;
     start = Math.trunc(Number(start)); if (!isFinite(start) || start < 0) start = 0;
     end   = Math.trunc(Number(end));   if (!isFinite(end)   || end   < 0) end   = 0;
@@ -14506,8 +14509,8 @@ function _lumen_set_selection(nid, start, end, direction) {
                 var n = _lumen_reflect_nid(this);
                 if (n === -1 || !_lumen_selection_applies(n)) return;
                 var s = _lumen_selection_of(n);
-                if (key === 'start') _lumen_set_selection(n, v, Math.max(Number(v) || 0, s.end), s.direction);
-                else _lumen_set_selection(n, s.start, v, s.direction);
+                if (key === 'start') _lumen_set_text_selection(n, v, Math.max(Number(v) || 0, s.end), s.direction);
+                else _lumen_set_text_selection(n, s.start, v, s.direction);
             },
             enumerable: true, configurable: true,
         });
@@ -14522,7 +14525,7 @@ function _lumen_set_selection(nid, start, end, direction) {
             var n = _lumen_reflect_nid(this);
             if (n === -1 || !_lumen_selection_applies(n)) return;
             var s = _lumen_selection_of(n);
-            _lumen_set_selection(n, s.start, s.end, String(v));
+            _lumen_set_text_selection(n, s.start, s.end, String(v));
         },
         enumerable: true, configurable: true,
     });
@@ -14533,13 +14536,13 @@ function _lumen_set_selection(nid, start, end, direction) {
             throw new DOMException(
                 'setSelectionRange does not apply to this input type', 'InvalidStateError');
         }
-        _lumen_set_selection(n, start, end, direction);
+        _lumen_set_text_selection(n, start, end, direction);
     };
     _p.select = function() {
         var n = _lumen_reflect_nid(this);
         if (n === -1) return;
         var len = String(this.value || '').length;
-        _lumen_set_selection(n, 0, len, 'none');
+        _lumen_set_text_selection(n, 0, len, 'none');
     };
     _p.setRangeText = function(replacement, start, end, mode) {
         var n = _lumen_reflect_nid(this);
@@ -14552,9 +14555,9 @@ function _lumen_set_selection(nid, start, end, direction) {
         var repl = String(replacement);
         this.value = val.slice(0, from) + repl + val.slice(to);
         var newEnd = from + repl.length;
-        if (mode === 'start') _lumen_set_selection(n, from, from, 'none');
-        else if (mode === 'end') _lumen_set_selection(n, newEnd, newEnd, 'none');
-        else _lumen_set_selection(n, from, newEnd, 'none');
+        if (mode === 'start') _lumen_set_text_selection(n, from, from, 'none');
+        else if (mode === 'end') _lumen_set_text_selection(n, newEnd, newEnd, 'none');
+        else _lumen_set_text_selection(n, from, newEnd, 'none');
     };
 });
 
@@ -21355,7 +21358,7 @@ mod tests {
             var _p = document.createElement('ul');
             document.body.appendChild(_p);
             var _a = document.createElement('li'); _a.id = 'alpha'; _p.appendChild(_a);
-            var _b = document.createElement('li'); _b.name = 'beta'; _p.appendChild(_b);
+            var _b = document.createElement('li'); _b.setAttribute('name', 'beta'); _p.appendChild(_b);
             _p.appendChild(document.createElement('li'));
         "#).unwrap();
         // for-in yields only the enumerable indexed keys.
