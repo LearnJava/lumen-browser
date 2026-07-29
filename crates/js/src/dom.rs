@@ -4125,6 +4125,19 @@ function _lumen_dispatch_capture_event(nid, type) {
 
 // Called from shell for keydown / keyup / keypress events.
 // mod: same bit-mask as _lumen_dispatch_mouse_event
+// Engine → shim: sync the JS-side value shadow of a form control after the
+// engine performed its own native text-editing default action (BUG-436).
+//
+// `el.value` reads `_input_values[nid]` first and only falls back to the
+// `value` content attribute, so a field the page had ever assigned through
+// script would keep reporting the stale script value after the user typed
+// into it. The shell calls this right after it writes the new value into the
+// DOM and before it dispatches `input`, so a listener reading `this.value`
+// sees exactly what the field now renders.
+function _lumen_set_field_value(nid, value) {
+    _input_values[nid] = String(value);
+}
+
 function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location, mod, repeat, isComposing) {
     var ev = new KeyboardEvent(type, {
         bubbles: true, cancelable: true, isTrusted: true,
@@ -10515,6 +10528,7 @@ var window = {
     _lumen_dispatch_pointer_move_coalesced: _lumen_dispatch_pointer_move_coalesced,
     _lumen_dispatch_capture_event:      _lumen_dispatch_capture_event,
     _lumen_dispatch_key_event:     _lumen_dispatch_key_event,
+    _lumen_set_field_value:        _lumen_set_field_value,
     _lumen_dispatch_rich:          _lumen_dispatch_rich,
     _lumen_set_ime_target: _lumen_set_ime_target,
     _lumen_fire_page_lifecycle: _lumen_fire_page_lifecycle,
@@ -25838,6 +25852,23 @@ mod tests {
         let rt = runtime_with_dom(make_form_doc());
         assert!(bool_eval(&rt,
             "document.getElementById('inp').type === 'text'"));
+    }
+
+    // BUG-436: the shell performs the text-insertion default action itself
+    // (DOM `value` attribute) and then calls `_lumen_set_field_value` so the
+    // shim's value shadow agrees. Without the sync a field the page had ever
+    // assigned through script would keep reporting the stale script value to
+    // the `input` listener that fires right after.
+    #[test]
+    fn set_field_value_syncs_value_shadow() {
+        let rt = runtime_with_dom(make_form_doc());
+        assert!(bool_eval(&rt,
+            "(function() { \
+               var inp = document.getElementById('inp'); \
+               inp.value = 'stale'; \
+               _lumen_set_field_value(inp.__nid__, 'abc'); \
+               return inp.value === 'abc'; \
+             })()"));
     }
 
     // ── HTMLInputElement.showPicker() tests ────────────────────────────────────

@@ -58,11 +58,11 @@
  "generated": "2026-07-29",
  "counts": {
   "open": 127,
-  "fixed": 283,
+  "fixed": 284,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 410,
+ "total_bugs": 411,
  "phases": [
   {
    "id": "P0",
@@ -7044,10 +7044,10 @@
    "debtor": false
   },
   "BUG-436": {
-   "status": "open",
-   "title": "**Инструмент `type` не записывает значение в поле.** Возвращает `{\"success\":true,\"text\":\"abc\"}`, но `input.value` остаётся `\"\"`; при этом событие `input` диспат…",
-   "component": "driver/MCP (`BrowserSession::type`, live-window)",
-   "date": null,
+   "status": "fixed",
+   "title": "**`type` не писал значение в поле: в живом окне у движка вообще не было default action «вставить текст в форму».** `inject_char` только диспатчил `keydown`/`inp…",
+   "component": "shell (`main.rs::inject_char` + новые `edit_focused_field`/`typeable_field`, обработчик `AutomationCommand::Type`, ветка ввода в `handle_key`), js (`dom.rs` — `_lumen_set_field_value`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-437": {
@@ -7075,6 +7075,13 @@
    "status": "open",
    "title": "**На `file://` нативная GET-отправка формы строит непригодный путь.** `method=get action=\"target.html\"` с полем `q=hello` даёт `NAV → \"D:/…/.tmp\\target.html?q=h…",
    "component": "shell (`main.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-441": {
+   "status": "open",
+   "title": "**Присвоение `element.value` из скрипта не доезжает ни до рендера, ни до отправки формы.** Сеттер пишет только в JS-тень `_input_values[nid]`, поэтому `el.value…",
+   "component": "js (`dom.rs` — сеттер `value` в `_lumen_make_element`)",
    "date": null,
    "debtor": false
   }
@@ -7124,9 +7131,6 @@
   ],
   "driver/MCP (`BrowserSession::navigate`, live-window) / шелл-навигация по `data:`": [
    "BUG-438"
-  ],
-  "driver/MCP (`BrowserSession::type`, live-window)": [
-   "BUG-436"
   ],
   "driver/shell (`WinitSession::scroll`, `navigate_fragment`)": [
    "BUG-338"
@@ -7232,6 +7236,9 @@
   ],
   "js (`dom.rs` — `_lumen_dispatch_rich` / живой `dispatchEvent`), shell (активация целиком в `handle_click_at`)": [
    "BUG-439"
+  ],
+  "js (`dom.rs` — сеттер `value` в `_lumen_make_element`)": [
+   "BUG-441"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
@@ -7564,6 +7571,9 @@
   ],
   "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)": [
    "BUG-437"
+  ],
+  "shell (`main.rs::inject_char` + новые `edit_focused_field`/`typeable_field`, обработчик `AutomationCommand::Type`, ветка ввода в `handle_key`), js (`dom.rs` — `_lumen_set_field_value`)": [
+   "BUG-436"
   ],
   "shell (`main.rs::render_source_to_png`) + js (`flush_canvas_updates`)": [
    "BUG-428"
