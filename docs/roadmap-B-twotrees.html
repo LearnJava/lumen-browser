@@ -869,10 +869,10 @@
         },
         {
          "id": "P3-v8-s12b-24",
-         "title": "V8 S12b-24: dom.rs тест-монолит — раздел+портирование",
+         "title": "V8 S12b-24: dom.rs тест-монолит — скоупинг сделан, портирование по слайсам",
          "status": "planned",
          "size": "XL",
-         "note": "Крупнейший непортированный кусок: `dom.rs::mod tests` (строки ~12796-26677, 1047 `#[test]` fn) — единственная regression-suite для DOM-поведения (события, формы, storage, IndexedDB, fetch/XHR, cache, websockets, history, scroll), эквивалента на V8 нет. Делить по под-областям DOM отдельными слайсами (не один сеанс), портировать тесты на V8JsRuntime синхронно со сносом соответствующего rquickjs-кода — не удалять просто так, иначе теряется единственное покрытие. Осторожно с кластерными тестами (`event_target_dependent_apis_installed` пришпиливает webxr/serial/hid/usb/bluetooth/navigation одновременно). Нужен docs/tasks/-бриф перед стартом. Найдено аудитом перед S12b-final 2026-07-29"
+         "note": "Крупнейший непортированный кусок: `dom.rs::mod tests` (строки 15982-31167, **1113** `#[test]` fn — числа из аудита 2026-07-14 устарели, файл вырос) — единственная regression-suite для DOM-поведения (события, формы, storage, IndexedDB, fetch/XHR, cache, websockets, history, scroll), эквивалента на V8 нет. Скоупинг сделан (ветка p1-v8-s12b-24, 2026-07-29, код не менялся): ~30 под-областей с диапазонами строк/числом тестов, 5 кластеров на mock-провайдерах (Cache/WS/SSE/IDB/Fetch), кластерный тест `event_target_dependent_apis_installed` (:29308, пришпиливает webxr/serial/hid/usb/bluetooth/navigation — разбить на 5-6 тестов при портировании), `_lumen_drain_microtasks` (:3024, QuickJS-only, 85 вызовов, гуще всего в SubtleCrypto/WHATWG Streams/MessagePort/Compression-Stream) — полный разбор в `docs/tasks/ph3-v8-migration.md` Findings log «S12b-24 — scoping only». Портировать по под-областям отдельными слайсами `S12b-24-<slug>` (не один сеанс), синхронно со сносом соответствующего rquickjs-кода — не удалять просто так, иначе теряется единственное покрытие; каждый слайс заводит свою строку ROADMAP при старте, не пре-файлить все заранее"
         },
         {
          "id": "P3-v8-s12b-25",

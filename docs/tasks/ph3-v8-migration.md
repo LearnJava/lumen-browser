@@ -1266,6 +1266,134 @@ need — [BUG-446](../../bugs/BUG-446-OPEN.md), with a concrete fix sketch (scan
 the `import_attributes.rs` lexer, BFS-prefetch through the shell's existing synchronous
 subresource path — *not* network I/O inside the synchronous V8 callback).
 
+### S12b-24 — scoping only, no code deleted (2026-07-29, branch p1-v8-s12b-24)
+
+Blocker 3 from the audit above (`dom.rs`'s test monolith), scoped per its own "needs a
+docs/tasks brief before start" requirement — same shape as the original S12b scoping-only
+session, nothing ported or deleted here.
+
+**Corrected boundaries.** The 2026-07-14 audit's numbers (`~12796-26677`, 1047 tests) are stale
+— the file has grown since. Current truth: `#[cfg(test)] mod tests {` opens at
+`crates/js/src/dom.rs:15982` and runs to EOF (`:31167`); no nested `mod` sub-blocks. **1113**
+`#[test]` fns total, all inside this range; nothing above line 15982 is test code (that's the
+`QuickJsRuntime` native-binding registrations plus the engine-agnostic `WEB_API_SHIM` string at
+`:3323`, out of scope here).
+
+**Helpers.** 13 `runtime_with_*`/`runtime_deterministic` constructors build the `QuickJsRuntime`
+each test runs against. `runtime_with_dom` (`:16035`) dominates — **~976 of 1113 tests** (~88%)
+use it directly, so splitting by helper is not a useful axis on its own. The five helpers that
+*do* matter for planning are the ones injecting a mock provider trait, since porting them means
+confirming `V8JsRuntime::install_dom` accepts the same injection point: `runtime_with_cache_backend`
+(`CacheBackend`, 13 tests), `runtime_with_ws`/`runtime_with_mock_ws`/`runtime_with_binary_ws`
+(`JsWebSocketProvider`, 23 tests total), `runtime_with_mock_sse` (`JsSseProvider`, 11 tests),
+`runtime_with_idb` (`IdbBackend`, 42 tests across in-memory + persistence-across-reload
+variants), `runtime_with_fetch`/`runtime_with_abort_fetch`/`runtime_with_blocking_fetch`
+(`JsFetchProvider`, 8 tests). None of the mock provider structs themselves (`MockWsProvider`,
+`MockSseProvider`, `CaptureFetch`, `BlockingFetch`, `MockCacheBackend`, …) touch `rquickjs`
+types — they implement `lumen_core::ext` traits consumed engine-agnostically by `install_dom` —
+so they're very likely portable verbatim; only the `QuickJsRuntime::new()`/`.install_dom(...)`
+call sites need retargeting. Confirm signature parity against `v8_runtime.rs` before assuming
+this holds for all five.
+
+**Subarea breakdown (proposed slicing, not final).** ~30 natural sections by file order, each a
+candidate slice of 10-60 tests (exact sub-family counts inside the largest unlabeled block,
+`dom.rs:16043-17530`, don't cleanly sum to its own "~55" header count — re-verify line-by-line
+when a session actually starts that slice, don't trust the paragraph total blindly):
+
+| Slice area | Lines | ~Tests | Helper(s) |
+|---|---|---|---|
+| Core DOM basics (console/SVG/self&window/title/body/createElement, Canvas2D 23, query/selector 25, text/attrs 14, `Image` ctor 7, timers/scheduler 12, History API 21) | 16043-17530 | ~55 (sub-families above sum higher — recount at slice start) | `runtime_with_dom`, `runtime_with_url` (History) |
+| classList / CSSStyleDeclaration | 17531-17698 | 13 | `runtime_with_dom` |
+| Element event dispatch + Event/CustomEvent ctors | 17699-17842 | 12 | `runtime_with_dom` |
+| Service Worker + Cache Storage | 17843-18298 | ~30 | `runtime_with_dom` |
+| Cache API — SQLite backend | 18299-18508 | 13 | `runtime_with_cache_backend` |
+| IME composition + bfcache pageshow/pagehide | 18509-18669 | 14 | `runtime_with_dom` |
+| Fetch bindings (Headers/Request/Response/AbortController existence) | 18670-18791 | 14 | `runtime_with_dom` |
+| WebSocket ctors/constants + connect-failure; bfcache-blocked-by-ws/es filters | 18792-19134 | ~17 | `runtime_with_ws`, `runtime_with_dom` |
+| WebSocket mock session behavior | 18959-19163 | ~12 | `runtime_with_mock_ws` |
+| EventSource/SSE | 19135-19569 | 21 | `runtime_with_mock_sse` |
+| WebSocket binary mode | 19514-19578 | 4 | `runtime_with_binary_ws` |
+| Location/NavigateRequest/history+URL sync | 19570-19945 | ~50 | `runtime_with_url` |
+| Web Storage (localStorage/sessionStorage) | 19946-20026 | ~10 | `runtime_with_storage` |
+| URLSearchParams + URL | 20027-20163 | ~20 | `runtime_with_dom` |
+| Performance API + PerformanceObserver | 20164-20356 | ~19 | `runtime_with_dom` |
+| queueMicrotask + rAF/cAF incl. EE-5 vsync batching | 20354-20573 | ~21 | `runtime_with_dom` |
+| MutationObserver / ResizeObserver / IntersectionObserver (+ rootMargin cluster at 22200-22298) | 20574-21234, 22200-22298 | ~36 | `runtime_with_dom` |
+| ChildNode/ParentNode/ElementTraversal + TreeWalker/NodeIterator | 21235-21656 | ~24 | `runtime_with_dom` |
+| matchMedia/MediaQueryList | 21717-21923 | 13 | `runtime_with_dom` |
+| Element geometry + scroll events + CSS Scroll Snap | 21924-22099 | ~18 | `runtime_with_dom` |
+| Lazy image loading + IO rootMargin math | 22100-22298 | ~14 | `runtime_with_dom` |
+| FontFaceSet, Shadow DOM, Custom Elements, `<template>`/DocumentFragment | 22299-22648 | ~42 | `runtime_with_dom` |
+| IndexedDB in-memory ops | 22646-23011 | ~34 | `runtime_with_idb` |
+| IndexedDB persistence across runtime reload | 23012-23173 | 8 | `runtime_with_idb` (shared backend across two runtimes — see hard-to-port note) |
+| FormData API | 23174-23594 | 22 | `runtime_with_dom` |
+| Fetch abort/blocking/multipart-body | 23423-23594 | ~8 | `runtime_with_abort_fetch`, `runtime_with_blocking_fetch`, `runtime_with_fetch` |
+| Selection + Range + execCommand + contentEditable | 23595-24141 | ~68 | `runtime_with_dom` + `make_selection_doc`/`make_contenteditable_doc` |
+| `getComputedStyle()` | 24142-24369 | 16 | `runtime_with_dom` + `make_computed_styles_map` |
+| Web Crypto + SubtleCrypto | 24370-24878 | ~40 | `runtime_with_dom` (heavy `_lumen_drain_microtasks`, see below) |
+| Trusted Types (two sections) | 24879-24998, 29108-29242 | ~19 | `runtime_with_dom` |
+| structuredClone | 24999-25254 | 18 | `runtime_with_dom` |
+| btoa/atob, Blob, File, FileReader | 25255-25430 | ~19 | `runtime_with_dom` |
+| Page Visibility + readyState/lifecycle | 25431-25610 | ~16 | `runtime_with_dom` |
+| sendBeacon + fetch keepalive/priority + `URL.createObjectURL` | 25611-25740 | ~11 | `runtime_with_dom` |
+| Event class hierarchy (UIEvent/MouseEvent/KeyboardEvent/PointerEvent dispatch) | 25741-26145 | ~31 | `runtime_with_dom` |
+| WHATWG Streams + fetch streaming body | 26146-26686 | ~42 | `runtime_with_dom` (heaviest `_lumen_drain_microtasks` removal, see below) |
+| `<details>`/`<dialog>`/`<selectlist>`/Popover incl. `popover=hint` | 26687-27278 | ~62 | `runtime_with_dom` + 5 `make_*_doc` fixture builders |
+| Form Constraint Validation API | 27279-27607 | ~31 | `runtime_with_dom` + `make_form_doc` |
+| requestIdleCallback, MessageChannel/MessagePort, clipboard/permissions, isSecureContext | 27607-27849 | ~29 | `runtime_with_dom` |
+| Web Worker | 27850-28004 | 18 | `runtime_with_dom` |
+| gc_collect, deterministic render mode | 28005-28133 | 12 | `runtime_with_dom`, `runtime_deterministic` |
+| `window.open()`/opener | 28134-28219 | 9 | `runtime_with_dom` |
+| Web Animations API (two sections) | 28220-28421, 30429-30490 | ~25 | `runtime_with_dom` |
+| CompressionStream/DecompressionStream | 28422-28637 | ~11 | `runtime_with_dom` (heavy `_lumen_drain_microtasks`) |
+| Fullscreen API | 28638-28761 | 10 | `runtime_with_dom` |
+| Web Locks + Wake Lock + Network Information + userActivation + Web Share + reportError | 28762-29018 | ~26 | `runtime_with_dom` |
+| CSS.supports/escape + Trusted Types #2 + Storage Access + EventTarget cluster + `css.registerProperty` (unlabeled catch-all — split along constituent APIs when porting, don't keep together) | 29019-29517 | ~40 | `runtime_with_dom` |
+| Performance/Resource/Navigation Timing L2 | 29517-29735 | ~24 | `runtime_with_dom` |
+| CSS Typed OM L1 (+ `bug_281_*` doc-identity tests interleaved at 29788-29820, unrelated, physically misplaced) | 29736-29901 | ~18 | `runtime_with_dom` |
+| DOM node count/quota bindings + `chrome.runtime` stub | 29901-30020 | ~10 | `runtime_with_dom` |
+| Drag and Drop + window scroll (CSSOM View) + Phase-5 HTML5 APIs (`setHTMLUnsafe`/`getHTML`/`moveBefore`/`checkVisibility`) | 30021-30428 | ~38 | `runtime_with_dom` |
+| Pointer Events L3 (capture + coalesced/predicted pointermove) + Pointer Lock | 30491-30768 | ~21 | `runtime_with_dom` |
+| DOM Core tail (ProcessingInstruction, CharacterData, prototype chains, DocumentFragment, DocumentType, `DOMImplementation`) | 30769-31167 | ~40 | `runtime_with_dom` |
+
+Naming scheme for follow-up sessions: `S12b-24-<slug>` (e.g. `S12b-24-idb`,
+`S12b-24-streams`), branch `p1-v8-s12b-24-<slug>` — mirrors the `S12b-23-esm` pattern, not the
+flat `S12b-N` numbering used for the already-finished S5–S10 module sweep (S12b-1..21), so the
+two numbering schemes don't collide. File each slice's own ROADMAP.md row when a session actually
+picks it up, same as S12b-1..21 were — don't pre-file all ~30 here speculatively.
+
+**Cluster-test finding, confirmed and detailed.** `event_target_dependent_apis_installed`
+(`dom.rs:29308`) is the one true cross-subsystem cluster (the earlier audit's finding, now
+pinned down): one `&&` chain asserting `navigator.hid`/`.usb`/`.bluetooth`/`.serial`/`.xr` and
+`window.navigation` are all objects, purely because they once broke together (all subclass
+`EventTarget`). Split into 5-6 single-assertion tests when porting, one per subsystem, and route
+each to its owning subarea slice (currently sitting in the unlabeled 29019-29517 catch-all) — a
+V8-side regression in any one of them shouldn't hide behind the others. Two more multi-assertion
+existence-chain tests exist (`window_exports_all_event_classes` at `:26122`, 17 classes;
+`dom_interface_globals_defined` at `:30980`, 10 globals + 3 prototype checks) but both are
+benign — every assertion belongs to one coherent family, not cross-subsystem — just worth noting
+they'll produce an opaque single pass/fail if something regresses.
+
+**Hard-to-port finding, bigger than the S12b-2 precedent suggested.** `_lumen_drain_microtasks`
+(`dom.rs:3024`) is a QuickJS-only native binding that loops `ctx.execute_pending_job()` — V8 has
+no equivalent because it auto-drains its microtask queue (same fact S12b-2 already recorded for
+AsyncContext, but the scale here is much larger). It's called **85 times** across the suite,
+concentrated in SubtleCrypto (~24680-24880), WHATWG Streams (~26190-26680, the heaviest
+concentration), MessageChannel/MessagePort (27663-27834), and Compression/DecompressionStream
+(28484-28607). Beyond the explicit calls, **at least 8 more tests** (`:24530`, `:24572`,
+`:24629`, `:24684`, `:24717`, `:24762`, `:25330`, `:25342`, `:25426`) accept *either* the
+resolved value *or* `Null`/`false` as passing, with comments like `// May be false if microtasks
+not yet flushed` — written to tolerate QuickJS's synchronous-`eval()`-doesn't-flush-microtasks
+behavior. Porting must both drop the dead `_lumen_drain_microtasks()` calls and tighten those
+loose assertions to the single deterministic value V8 guarantees (the S12b-2 lesson, at scale).
+
+Two more localized notes: the `idb_persists_across_runtime_reload`/
+`local_storage_persists_across_runtimes` pattern (two separate `QuickJsRuntime::new()` instances
+sharing one backend) isn't QuickJS-specific, but confirm `V8JsRuntime::new()` tolerates repeated
+construction within one test process before porting that cluster — V8 isolate lifecycle can be
+pickier than QuickJS contexts about repeated init/teardown. `BlockingFetch`'s real-OS-thread
+`sleep`-poll loop (`dom.rs:23460-23479`) never touches `Ctx` and should port unchanged.
+
 ---
 
 ## Risks (Rev 2)
