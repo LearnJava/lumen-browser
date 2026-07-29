@@ -1609,6 +1609,35 @@ signature (JsValue-level only) cannot reach the isolate for `perform_microtask_c
 forced flush at a point V8 does not choose one has no primitive available; restructure into two
 `eval` calls instead, as above.
 
+### S12b-24-childnode-traversal — sixth porting slice (2026-07-30, branch p1-v8-s12b-24-childnode-traversal)
+
+The ChildNode/ParentNode mixin (`remove`/`before`/`after`/`replaceWith`/`prepend`/
+`replaceChildren`), ElementTraversal (`childElementCount`/`firstElementChild`/`lastElementChild`/
+`nextElementSibling`/`previousElementSibling`), the live `HTMLCollection` returned by `.children`
+(incl. `for-in`/`Object.getOwnPropertyNames`/`hasOwnProperty` enumeration, BUG-323),
+`Node.isConnected` (BUG-311), TreeWalker/NodeIterator/`NodeFilter`, `document.adoptNode`/
+`importNode`, and the raw `_lumen_get_bounding_rect`/`_lumen_get_viewport_size` bindings — **27
+tests** ported into `mod tests::v8_childnode_traversal`, QuickJS copies deleted. `cargo test -p
+lumen-js --features v8-backend` stayed at 2570/2570 (1:1 swap, no net count change).
+
+**The scoping table's line numbers for this row were already stale by the time this slice
+started — a straight line-number lookup would have missed the target entirely.** The table (see
+`S12b-24 — scoping only` above) placed this subarea at `dom.rs:21235-21656`; by 2026-07-30 the
+five already-merged slices had deleted their QuickJS ranges from *earlier* in the file (while each
+slice's own `mod v8_*` was appended near EOF), shifting everything below upward. The actual content
+was found by grepping for the family's own names (`tree_walker`, `node_iterator`,
+`element_traversal`, `parent_node`) rather than trusting the stale offset, and turned out to sit at
+`dom.rs:16030-16511` instead — immediately preceding the still-unported `window.matchMedia`
+section, confirming it as one contiguous, self-contained block. **Rule for the remaining ~24
+slices: re-locate every subarea by content (section-header comment or representative test name),
+never by the brief's line numbers once even one prior slice has merged.** Real count was 27
+against the table's "~24" guess (the recurring `#[test] fn` recount-at-start caveat, again
+justified).
+
+Fully mechanical otherwise: single helper (`runtime_with_dom` → `v8_runtime_with_dom` twin),
+`update_layout_rects`/`update_viewport_size` already mirrored by `V8JsRuntime`, 27/27 green on the
+first run, zero body edits, zero engine divergences.
+
 ---
 
 ## Risks (Rev 2)
