@@ -1828,6 +1828,59 @@ unmodified, zero engine divergences. `cargo test -p lumen-js --features v8-backe
 2570/2570 (unchanged: −16 ungated QuickJS, +16 gated V8); default-feature
 `cargo test -p lumen-js` — 1768/1768 (was 1784, −16). Both clippy passes clean.
 
+### S12b-24-webcrypto — fifteenth porting slice (2026-07-30, branch p1-v8-s12b-24-webcrypto)
+
+Web Crypto API (`crypto.getRandomValues`/`randomUUID`, `crypto.subtle.digest`) plus SubtleCrypto
+full API (`generateKey`/`importKey`/`sign`/`encrypt`/`decrypt`/`deriveBits`/`deriveKey` across
+HMAC/ECDSA/AES-GCM/AES-CBC/PBKDF2/HKDF) — **18 tests** ported into `mod tests::v8_webcrypto`,
+QuickJS copies deleted. Actual section on start — `dom.rs:16065-16462`, immediately after the
+just-merged `getComputedStyle()` block and ending right before `url_can_parse_static_method`
+(not part of this subarea, left untouched — apparently added to the file after the original
+scoping audit and physically adjacent by coincidence, the same "stale line numbers, re-locate by
+content" pattern the childnode-traversal slice first flagged). Real count (18) landed far under
+the scoping table's combined guess for "Web Crypto + SubtleCrypto" (~40) — the table's estimate
+was for the whole row before the file grew past it; treat every remaining `~N` guess as a rough
+prior, not a target.
+
+**First plumbing requirement since the fourth slice, and the reason: a literal `TODO` stub.**
+`v8_runtime.rs::install_dom` carried `// TODO(v8-s3, out of scope): SubtleCrypto install is
+rquickjs-ctx-based (crate::subtle_crypto) — separate future slice.` where the 14 `_lumen_subtle_*`
+natives (`generateKey`/`importKey`/`exportKey`/`exportKey_or_err`/`sign`/`verify`/`encrypt`/
+`decrypt`/`keyInfo`/`aesCbcEncrypt`/`aesCbcDecrypt`/`aesCtrCrypt`/`deriveBits`/`rsaOaepEncrypt`/
+`rsaOaepDecrypt`) should have been. Without them `window.crypto.subtle.generateKey(...)` etc.
+threw `ReferenceError` on the default engine — a second, larger instance of the BUG-447 shape
+(a whole native surface silently absent on V8), except this one was already flagged rather than
+lurking. The port was wrapper-only: every function `crate::subtle_crypto::install_subtle_bindings`
+calls (`generate_key`, `sign_data`, `aes_gcm_encrypt`, `aes_cbc_encrypt`, `derive_bits`, …) is
+`pub(crate)`, takes only primitives/`Vec<u8>`/`String`, and never touches `rquickjs::Ctx` — the
+key registry (`CRYPTO_KEYS`) is a plain `thread_local!`, engine-agnostic by construction. Added a
+matching `reg!` block to `V8JsRuntime::install_dom` that calls the same functions directly; the
+`reg!` macro's existing arity-5 arm covered `importKey`'s five params without changes. Confirms
+the scoping note's "very likely portable verbatim" prediction for provider-trait helpers extends
+to native-binding installers too, as long as the underlying logic never captured `Ctx`.
+
+**The `_lumen_drain_microtasks`-adjacent lesson, now at full scale.** Every one of the 18 QuickJS
+originals used the loose-assertion shape the scoping note predicted for this cluster: single-eval
+setup + a second `eval()` read, matched against either the resolved value or `Null`/pending with a
+`// microtasks may not have flushed` comment (some tests even burned a third, discarded `eval()`
+call as an extra "pump" — QuickJS's `eval()` never drains the queue no matter how many times you
+call it, so the extra call was cargo-culted, not functional). Removed entirely: V8's default
+`kAuto` microtasks policy auto-checkpoints after each top-level script, the same fact
+`v8_perf_observers`'s `queue_microtask_callback_runs_after_sync_tail` established — so the second
+`eval()` in every two-step test now deterministically observes the fully-resolved promise chain
+(digest results, HMAC signature lengths, AES-GCM/CBC roundtrip plaintext, PBKDF2/HKDF derived
+lengths), and the redundant discarded reads were dropped along with the tolerant branches. One
+test (`crypto_subtle_digest_sha256_known_vector`) was *not* tightened: it reads the completion
+value as the very last statement of its *own* setup script, before that script's own end-of-eval
+checkpoint runs — so it observes pre-resolution state on both engines by construction (proves
+"not rejected synchronously", nothing more); left as `assert_eq!(r, JsValue::Null)` with a comment
+explaining why, rather than mistaking the tolerant shape for one this slice's rule covers.
+
+18/18 green on the first run after the plumbing landed. `cargo test -p lumen-js --features
+v8-backend` — 2570/2570 (unchanged: −18 ungated QuickJS, +18 gated V8); default-feature
+`cargo test -p lumen-js` — 1750/1750 (was 1768, −18). Both clippy passes (with and without
+`v8-backend`) clean.
+
 ---
 
 ## Risks (Rev 2)

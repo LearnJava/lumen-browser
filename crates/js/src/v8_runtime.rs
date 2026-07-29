@@ -3735,7 +3735,122 @@ impl V8JsRuntime {
     }
 
     // SubtleCrypto: generateKey/importKey/exportKey/sign/verify/encrypt/decrypt
-    // TODO(v8-s3, out of scope): SubtleCrypto install is rquickjs-ctx-based (crate::subtle_crypto) — separate future slice.
+    // Bindings mirror `crate::subtle_crypto::install_subtle_bindings` (the rquickjs
+    // installer) call-for-call; the underlying key store and algorithm functions are
+    // plain Rust (no `Ctx` dependency), so this is a wrapper-only port.
+    {
+        reg!(
+            "_lumen_subtle_generate_key",
+            |alg_json: String, extractable: bool, usages_json: String| -> String {
+                crate::subtle_crypto::generate_key(&alg_json, extractable, &usages_json)
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_import_key",
+            |format: String, key_data: Vec<u8>, alg_json: String, extractable: bool, usages_json: String| -> String {
+                crate::subtle_crypto::import_key(&format, key_data, &alg_json, extractable, &usages_json)
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_export_key",
+            |format: String, key_id: u32| -> Vec<u8> {
+                crate::subtle_crypto::export_key(&format, key_id).unwrap_or_default()
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_export_key_or_err",
+            |format: String, key_id: u32| -> String {
+                match crate::subtle_crypto::export_key(&format, key_id) {
+                    Ok(bytes) => {
+                        if bytes.first() == Some(&b'{') || bytes.first() == Some(&b'[') {
+                            format!("ok:{}", String::from_utf8_lossy(&bytes))
+                        } else {
+                            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+                            format!("hex:{hex}")
+                        }
+                    }
+                    Err(e) => format!("err:{e}"),
+                }
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_sign",
+            |alg_json: String, key_id: u32, data: Vec<u8>| -> Vec<u8> {
+                crate::subtle_crypto::sign_data(&alg_json, key_id, &data)
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_verify",
+            |alg_json: String, key_id: u32, sig: Vec<u8>, data: Vec<u8>| -> bool {
+                crate::subtle_crypto::verify_signature(&alg_json, key_id, &sig, &data)
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_encrypt",
+            |key_id: u32, iv: Vec<u8>, aad: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
+                crate::subtle_crypto::aes_gcm_encrypt(key_id, &iv, &aad, &plaintext)
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_decrypt",
+            |key_id: u32, iv: Vec<u8>, aad: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
+                crate::subtle_crypto::aes_gcm_decrypt(key_id, &iv, &aad, &ciphertext)
+            }
+        );
+
+        reg!("_lumen_subtle_key_info", |key_id: u32| -> String {
+            crate::subtle_crypto::key_info(key_id)
+        });
+
+        reg!(
+            "_lumen_subtle_aes_cbc_encrypt",
+            |key_id: u32, iv: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
+                crate::subtle_crypto::aes_cbc_encrypt(key_id, &iv, &plaintext)
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_aes_cbc_decrypt",
+            |key_id: u32, iv: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
+                crate::subtle_crypto::aes_cbc_decrypt(key_id, &iv, &ciphertext)
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_aes_ctr_crypt",
+            |key_id: u32, counter: Vec<u8>, length: u32, data: Vec<u8>| -> Vec<u8> {
+                crate::subtle_crypto::aes_ctr_crypt(key_id, &counter, length, &data)
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_derive_bits",
+            |alg_json: String, key_id: u32, length_bits: u32| -> Vec<u8> {
+                crate::subtle_crypto::derive_bits(&alg_json, key_id, length_bits)
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_rsa_oaep_encrypt",
+            |key_id: u32, label: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
+                crate::subtle_crypto::rsa_oaep_encrypt(key_id, &label, &plaintext)
+            }
+        );
+
+        reg!(
+            "_lumen_subtle_rsa_oaep_decrypt",
+            |key_id: u32, label: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
+                crate::subtle_crypto::rsa_oaep_decrypt(key_id, &label, &ciphertext)
+            }
+        );
+    }
 
     // Trusted Types API: trustedTypes.createPolicy(), TrustedHTML/Script/ScriptURL
     // TODO(v8-s3, out of scope): Trusted Types install is rquickjs-ctx-based (crate::trusted_types) — separate future slice.
