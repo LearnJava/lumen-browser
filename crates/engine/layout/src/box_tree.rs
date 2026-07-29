@@ -5732,6 +5732,26 @@ fn min_content_outer_width(
         };
         return outer.max(0.0);
     }
+    min_content_outer_width_of_contents(b, measurer, viewport)
+}
+
+/// Same as [`min_content_outer_width`] but ignoring `b`'s own definite `width`:
+/// the min-content width the box would have if it were sized by its contents.
+///
+/// This is the CSS Flexbox §4.5 *content size suggestion*, which is deliberately
+/// intrinsic — a flex item with `width: 300px` whose contents can collapse to
+/// nothing still has a content size suggestion of 0, and so may be shrunk below
+/// its preferred width. Descendants keep their own explicit widths; only the
+/// box's own preferred size is bypassed.
+fn min_content_outer_width_of_contents(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    let s = &b.style;
+    let em = s.font_size;
+    let pl = s.padding_left.resolve_or_zero(em, 0.0, viewport);
+    let pr = s.padding_right.resolve_or_zero(em, 0.0, viewport);
     let content_w = match &b.kind {
         BoxKind::InlineRun { segments, .. } => {
             // min-content = longest single word across all segments.
@@ -5826,8 +5846,13 @@ fn flex_auto_base_main_width(
 /// * An explicit `min-width` always wins — it is simply resolved (an intrinsic
 ///   keyword resolves against the item's own min-content width).
 /// * `min-width: auto` (the initial value, stored as `None`) means the
-///   *content-based minimum size*: the item's min-content width, capped by a
-///   definite `max-width` (the spec's clamping of the content size suggestion).
+///   *content-based minimum size*: the smaller of the item's *content size
+///   suggestion* (the min-content width of its **contents** — see
+///   [`min_content_outer_width_of_contents`]) and its *specified size
+///   suggestion* (its own definite `width`, when it has one), capped by a
+///   definite `max-width`. Taking the smaller of the two is what keeps an item
+///   whose contents can collapse — e.g. one holding only a `width: 100%` child —
+///   shrinkable below its own preferred width.
 ///   It applies only while the main-axis overflow is `visible`; a scroll
 ///   container has no content-based minimum and may shrink to zero.
 ///
@@ -5860,7 +5885,14 @@ fn flex_item_min_main_width(
     if s.overflow_x != Overflow::Visible {
         return 0.0;
     }
-    let mut floor = min_content_outer_width(item, measurer, viewport);
+    let mut floor = min_content_outer_width_of_contents(item, measurer, viewport);
+    // Specified size suggestion — the item's own definite preferred main size.
+    if let Some(w_len) = &s.width
+        && !w_len.is_intrinsic()
+        && let Some(w) = w_len.resolve(em, Some(cb), viewport)
+    {
+        floor = floor.min(outer_horiz(w).max(0.0));
+    }
     if let Some(max_len) = &s.max_width
         && !max_len.is_intrinsic()
         && let Some(v) = max_len.resolve(em, Some(cb), viewport)
@@ -17038,6 +17070,27 @@ mod tests {
         assert_eq!(a.rect.width, 200.0, "A frozen at its automatic minimum; a.w={}", a.rect.width);
         assert_eq!(b.rect.width, 100.0, "B absorbs the whole deficit; b.w={}", b.rect.width);
         assert_eq!(b.rect.x, 200.0, "row exactly fills the container; b.x={}", b.rect.x);
+    }
+
+    #[test]
+    fn bug433_item_with_collapsible_contents_still_shrinks_below_its_width() {
+        // BUG-433 / §4.5: the content-based minimum is the *smaller* of the specified
+        // size suggestion (the item's own `width`) and the content size suggestion (the
+        // min-content width of its contents). An item whose contents can collapse to
+        // nothing — here a single `width:100%` child, which contributes 0 to
+        // min-content — therefore has a floor of 0 and stays fully shrinkable.
+        // Reading the item's own `width` as its min-content would freeze both items at
+        // 300px and wrongly overflow the 400px container.
+        let html = r#"<div id="outer"><div id="a"></div><div id="x"><div id="p"></div></div></div>"#;
+        let css = "body{margin:0} #outer{display:flex;width:400px} \
+                   #a{width:300px;height:20px} #x{width:300px} #p{width:100%;height:20px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let x = find_by_id_all(&root, &doc, "x").expect("x");
+        assert_eq!(a.rect.width, 200.0, "A has no contents to floor it; a.w={}", a.rect.width);
+        assert_eq!(x.rect.width, 200.0, "X's `width:100%` child floors nothing; x.w={}", x.rect.width);
     }
 
     #[test]
