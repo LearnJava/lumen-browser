@@ -216,7 +216,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `font` / `font-size` / `font-weight` / `font-style` / `font-family` | ✅ | |
-| `font-variant` / `font-variant-caps` | 🟡 | small-caps only; all-small-caps ⬜ |
+| `font-variant` / `font-variant-caps` | 🟡 | `font-variant-caps` ✅ весь набор (normal/small-caps/all-small-caps/petite-caps/all-petite-caps/unicase/titling-caps): капитель синтезируется в layout-е (`caps_synthesis`, box_tree.rs — заглавные × 0.8 + компенсация baseline; bundled-Inter без smcp/c2sc/pcap), `titling-caps` — фичей `titl` через `text_font_features`; тест 150 (P4 2026-07-29). Остальные longhand-ы shorthand-а `font-variant` — `-ligatures`/`-numeric`/`-east-asian`/`-position`/`-alternates` — ⬜ (shorthand их только сбрасывает) |
 | `font-stretch` | 🟡 | % parsed; matcher ⬜ |
 | `font-variation-settings` | ✅ | fvar+avar normalization; applied on CPU/wgpu paths, femtovg window renders default instance (see CAPABILITIES) |
 | `font-feature-settings` | ✅ | parse + ComputedStyle (inherited) + DrawText.font_features; shaper overrides default GSUB/GPOS set (liga/clig/calt/rlig/ccmp + kern) on CPU path & femtovg varied-text path; native femtovg text shapes itself (class BUG-109) |

@@ -16,7 +16,7 @@ use crate::box_tree::{BoxKind, LayoutBox};
 use crate::style::{
     matches_complex, AlignValue, BorderStyle, BoxSizing, ClearSide, Color, CssColor,
     Cursor, Direction, Display, FilterFn, FloatSide, FontStretch, FontStyle, FontWeight,
-    FontVariant, Isolation, Length, LengthOrAuto, MixBlendMode, Overflow, OutlineColor,
+    FontVariantCaps, Isolation, Length, LengthOrAuto, MixBlendMode, Overflow, OutlineColor,
     OutlineStyle, PointerEvents, Position, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextEmphasisStyle, TextOverflow, TextTransform, TransformFn, Visibility, WhiteSpace,
     WhiteSpaceCollapse,
@@ -136,8 +136,8 @@ pub struct ComputedStyleSnapshot {
     pub font_style: FontStyle,
     /// CSS `font-weight` (100–900). Inherited.
     pub font_weight: FontWeight,
-    /// CSS `font-variant` (normal/small-caps). Inherited.
-    pub font_variant: FontVariant,
+    /// CSS `font-variant-caps` (CSS Fonts L4 §6.2, весь набор значений). Inherited.
+    pub font_variant_caps: FontVariantCaps,
     /// CSS `font-stretch` (50%–200%). Inherited.
     pub font_stretch: FontStretch,
     /// CSS `text-align`. Inherited.
@@ -190,7 +190,7 @@ impl From<&ComputedStyle> for ComputedStyleSnapshot {
             line_height: s.line_height,
             font_style: s.font_style,
             font_weight: s.font_weight,
-            font_variant: s.font_variant,
+            font_variant_caps: s.font_variant_caps,
             font_stretch: s.font_stretch,
             text_align: s.text_align,
             text_transform: s.text_transform,
@@ -699,10 +699,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         FontStyle::Italic => "italic",
         FontStyle::Oblique => "oblique",
     }.into());
-    m.insert("font-variant".into(), match style.font_variant {
-        FontVariant::Normal => "normal",
-        FontVariant::SmallCaps => "small-caps",
-    }.into());
+    // CSS Fonts L4 §6.10: shorthand сериализуется значением реализованной
+    // caps-компоненты — остальные longhand-ы всегда в initial.
+    m.insert("font-variant".into(), style.font_variant_caps.as_str().into());
+    m.insert("font-variant-caps".into(), style.font_variant_caps.as_str().into());
     m.insert("font-stretch".into(), {
         let pct = style.font_stretch.0 as f32 / 10.0;
         if pct.fract() == 0.0 { format!("{}%", pct as i64) } else { format!("{}%", pct) }

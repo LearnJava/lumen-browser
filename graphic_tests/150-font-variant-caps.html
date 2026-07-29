@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* CSS Fonts L4 §6.2 — font-variant-caps.
+     Каждая строка содержит одинаковый текст «MiXeD Case 42» при одинаковом
+     font-size; отличается только font-variant-caps. Корректный движок
+     показывает: normal — как набрано; small-caps — строчные подняты в
+     верхний регистр и уменьшены; all-small-caps — уменьшены ВСЕ буквы,
+     включая уже заглавные; petite-caps/all-petite-caps — то же (капитель
+     не отличается по высоте от small-caps, отдельных глифов у шрифта нет);
+     unicase — уменьшены только заглавные, строчные остаются строчными.
+     Цифры «42» и пробелы не меняются ни в одной строке — по ним видно, что
+     капитель не задевает нецифровые/некегельные символы.
+     Крупные цветные плашки дают основную площадь пикселей; текст —
+     контрольный слой (ожидаем font-parity-остаток, rule 3). */
+  body { background: #ff00ff; margin: 0; }
+  .__f {
+    background: #ffffff;
+    width: 1022px; height: 718px;
+    margin: 1px; padding: 0;
+    overflow: hidden;
+    font-family: sans-serif;
+  }
+  .row {
+    height: 110px;
+    margin: 10px;
+    background: #e8eef7;
+    border: 3px solid #2050a0;
+    color: #102040;
+    font-size: 52px;
+    line-height: 110px;
+    padding-left: 20px;
+    box-sizing: border-box;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .c0 { font-variant-caps: normal; }
+  .c1 { font-variant-caps: small-caps; }
+  .c2 { font-variant-caps: all-small-caps; }
+  .c3 { font-variant-caps: petite-caps; }
+  .c4 { font-variant-caps: all-petite-caps; }
+  .c5 { background: #f7e8e8; border-color: #a02020; color: #401010; font-variant-caps: unicase; }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <div class="row c0">MiXeD Case 42 normal</div>
+    <div class="row c1">MiXeD Case 42 small</div>
+    <div class="row c2">MiXeD Case 42 all</div>
+    <div class="row c3">MiXeD Case 42 petite</div>
+    <div class="row c4">MiXeD Case 42 allpetite</div>
+    <div class="row c5">MiXeD Case 42 unicase</div>
+  </div>
+</body>
+</html>
