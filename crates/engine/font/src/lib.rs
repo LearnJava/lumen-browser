@@ -10,9 +10,11 @@
 //! лигатуры (`liga`/`clig`) + GPOS кернинг (`kern`) для Latin/Cyrillic —
 //! см. [`shape::Shaper`]. CFF outlines (PostScript-OpenType `.otf`, U-2 этап 2)
 //! поддержаны — см. [`cff::Cff`] (Type 2 charstrings, CID-keyed CFF).
+//! Color glyphs: `COLR` v0 + `CPAL` поддержаны — см. [`colr::Colr`] и
+//! [`cpal::Cpal`] (layered glyphs + палитры для CSS `font-palette`).
 //! Не поддерживается (отложено): hinting (TT instructions), CFF2 (variable
-//! PostScript outlines), сложные скрипты / mark-позиционирование, color glyphs
-//! (COLR/CPAL, sbix), bitmap strikes (EBDT/EBLC).
+//! PostScript outlines), сложные скрипты / mark-позиционирование, `COLR` v1
+//! paint graph (градиенты/трансформы), sbix, bitmap strikes (EBDT/EBLC).
 
 pub mod avar;
 pub mod binary;
@@ -20,6 +22,8 @@ pub mod cff;
 pub mod unicode_range;
 pub mod woff2;
 pub mod cmap;
+pub mod colr;
+pub mod cpal;
 pub mod delta_set_index_map;
 pub mod face;
 pub mod fvar;
@@ -51,6 +55,8 @@ pub use avar::{Avar, AxisValueMap, SegmentMap};
 pub use binary::BinaryReader;
 pub use cff::Cff;
 pub use cmap::{Cmap, OwnedCmap};
+pub use colr::{BaseGlyph, Colr, Layer, PALETTE_INDEX_FOREGROUND};
+pub use cpal::{Cpal, PaletteColor};
 pub use delta_set_index_map::{DeltaSetIndex, DeltaSetIndexMap};
 pub use face::{Font, FontError, OffsetTable, TableRecord};
 pub use fvar::{Fvar, NamedInstance, VariationAxis};

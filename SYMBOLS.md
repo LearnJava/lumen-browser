@@ -945,7 +945,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/encoding/src/unicode_provider.rs:31` **fn** `new` — Создаёт провайдер с auto-режимом (LSTM/dictionary для CJK/Thai/etc)
 `crates/engine/encoding/src/unicode_provider.rs:40` **fn** `new_latin` — Облегчённая версия — только Latin + UAX #14 rules, без LSTM
 
-## lumen-font  (223 symbols)
+## lumen-font  (238 symbols)
 
 `crates/engine/font/src/avar.rs:32` **struct** `AxisValueMap` — Одна пара (fromCoord → toCoord) в segment map оси. Координаты в
 `crates/engine/font/src/avar.rs:44` **struct** `SegmentMap` — Segment map для одной оси: список пар, отсортированных по `from`
@@ -976,6 +976,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/cmap.rs:105` **fn** `to_owned_cmap` — Копирует выбранную subtable в owned-представление, не привязанное
 `crates/engine/font/src/cmap.rs:130` **struct** `OwnedCmap` — Owned-копия cmap subtable — результат [`Cmap::to_owned_cmap`]
 `crates/engine/font/src/cmap.rs:144` **fn** `glyph_index` — Возвращает glyph index для codepoint, либо `None` если не отображён
+`crates/engine/font/src/colr.rs:30` **struct** `Layer` — One layer of a color glyph: which glyph to draw and in which color
+`crates/engine/font/src/colr.rs:40` **struct** `BaseGlyph` — A v0 base glyph record: the layer range belonging to one color glyph
+`crates/engine/font/src/colr.rs:51` **struct** `Colr` — Parsed `COLR` table (version 0 records)
+`crates/engine/font/src/colr.rs:66` **fn** `parse` — Parses the `COLR` table body
+`crates/engine/font/src/colr.rs:107` **fn** `is_empty` — `true` when the table defines no v0 color glyph at all (a v1-only
+`crates/engine/font/src/colr.rs:116` **fn** `layers_for` — Layers of the color glyph `glyph_id`, back to front
+`crates/engine/font/src/cpal.rs:28` **struct** `PaletteColor` — One CPAL color record, converted from the on-disk BGRA order to RGBA
+`crates/engine/font/src/cpal.rs:41` **struct** `Cpal` — Parsed `CPAL` table: palettes as flat runs over the color record array
+`crates/engine/font/src/cpal.rs:69` **fn** `parse` — Parses the `CPAL` table body
+`crates/engine/font/src/cpal.rs:128` **fn** `num_palettes` — Number of palettes in the table
+`crates/engine/font/src/cpal.rs:138` **fn** `palette` — Returns the `num_palette_entries` colors of palette `index`
+`crates/engine/font/src/cpal.rs:151` **fn** `first_light_palette` — Index of the first palette flagged `USABLE_WITH_LIGHT_BACKGROUND`,
+`crates/engine/font/src/cpal.rs:158` **fn** `first_dark_palette` — Index of the first palette flagged `USABLE_WITH_DARK_BACKGROUND`,
 `crates/engine/font/src/delta_set_index_map.rs:30` **struct** `DeltaSetIndex` — Распакованный entry: пара индексов для lookup в `ItemVariationStore`
 `crates/engine/font/src/delta_set_index_map.rs:36` **struct** `DeltaSetIndexMap`
 `crates/engine/font/src/delta_set_index_map.rs:44` **fn** `parse`
@@ -999,19 +1012,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/face.rs:169` **fn** `glyf`
 `crates/engine/font/src/face.rs:179` **fn** `cff` — `CFF ` — Compact Font Format (PostScript Type 2 outlines). Present in
 `crates/engine/font/src/face.rs:186` **fn** `has_cff` — `true` if the font stores outlines in a `CFF ` table (PostScript) rather
-`crates/engine/font/src/face.rs:190` **fn** `name`
-`crates/engine/font/src/face.rs:195` **fn** `os2`
-`crates/engine/font/src/face.rs:207` **fn** `post` — `post` — PostScript Information Table. Содержит italic angle и
-`crates/engine/font/src/face.rs:217` **fn** `fvar` — `fvar` (Font Variations) — описание variation axes (wght / wdth / slnt /
-`crates/engine/font/src/face.rs:228` **fn** `avar` — `avar` (Axis Variations) — piecewise-linear перенормализация осей из
-`crates/engine/font/src/face.rs:242` **fn** `gvar` — `gvar` (Glyph Variations) — per-glyph variation deltas для outline
-`crates/engine/font/src/face.rs:254` **fn** `hvar` — `HVAR` (Horizontal Metrics Variations) — variation deltas для
-`crates/engine/font/src/face.rs:268` **fn** `advance_width_varied` — Advance width for `glyph_id` with HVAR variation deltas applied
-`crates/engine/font/src/face.rs:292` **fn** `vvar` — `VVAR` (Vertical Metrics Variations) — зеркало `HVAR` для
-`crates/engine/font/src/face.rs:309` **fn** `mvar` — `MVAR` (Metrics Variations) — variation deltas для глобальных
-`crates/engine/font/src/face.rs:318` **fn** `glyph` — Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
-`crates/engine/font/src/face.rs:337` **fn** `glyph_resolved` — Возвращает глиф с рекурсивно развёрнутыми composite-компонентами:
-`crates/engine/font/src/face.rs:369` **fn** `glyph_resolved_with_coords` — Variable-fonts вариант [`Font::glyph_resolved`]: применяет gvar deltas
+`crates/engine/font/src/face.rs:195` **fn** `colr` — `COLR` — layered color glyph definitions (v0 records). Returns
+`crates/engine/font/src/face.rs:203` **fn** `cpal` — `CPAL` — color palettes referenced by `COLR` layers. The CSS
+`crates/engine/font/src/face.rs:208` **fn** `name`
+`crates/engine/font/src/face.rs:213` **fn** `os2`
+`crates/engine/font/src/face.rs:225` **fn** `post` — `post` — PostScript Information Table. Содержит italic angle и
+`crates/engine/font/src/face.rs:235` **fn** `fvar` — `fvar` (Font Variations) — описание variation axes (wght / wdth / slnt /
+`crates/engine/font/src/face.rs:246` **fn** `avar` — `avar` (Axis Variations) — piecewise-linear перенормализация осей из
+`crates/engine/font/src/face.rs:260` **fn** `gvar` — `gvar` (Glyph Variations) — per-glyph variation deltas для outline
+`crates/engine/font/src/face.rs:272` **fn** `hvar` — `HVAR` (Horizontal Metrics Variations) — variation deltas для
+`crates/engine/font/src/face.rs:286` **fn** `advance_width_varied` — Advance width for `glyph_id` with HVAR variation deltas applied
+`crates/engine/font/src/face.rs:310` **fn** `vvar` — `VVAR` (Vertical Metrics Variations) — зеркало `HVAR` для
+`crates/engine/font/src/face.rs:327` **fn** `mvar` — `MVAR` (Metrics Variations) — variation deltas для глобальных
+`crates/engine/font/src/face.rs:336` **fn** `glyph` — Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
+`crates/engine/font/src/face.rs:355` **fn** `glyph_resolved` — Возвращает глиф с рекурсивно развёрнутыми composite-компонентами:
+`crates/engine/font/src/face.rs:387` **fn** `glyph_resolved_with_coords` — Variable-fonts вариант [`Font::glyph_resolved`]: применяет gvar deltas
 `crates/engine/font/src/font_registry.rs:19` **struct** `FontRegistry` — Провайдер шрифтов с поддержкой @font-face: системные шрифты + URL-буферы
 `crates/engine/font/src/font_registry.rs:32` **fn** `new`
 `crates/engine/font/src/font_registry.rs:42` **fn** `with_dirs` — Registry backed by a custom-dir `SystemFontIndex` — for tests and
@@ -3976,54 +3991,54 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:1375` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1406` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:1435` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
-`crates/engine/paint/src/renderer.rs:1616` **struct** `Renderer`
-`crates/engine/paint/src/renderer.rs:1961` **fn** `load_counter` — Reads a diagnostics counter
-`crates/engine/paint/src/renderer.rs:2038` **fn** `new`
-`crates/engine/paint/src/renderer.rs:2213` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
-`crates/engine/paint/src/renderer.rs:3938` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
-`crates/engine/paint/src/renderer.rs:3946` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
-`crates/engine/paint/src/renderer.rs:3963` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
-`crates/engine/paint/src/renderer.rs:3978` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
-`crates/engine/paint/src/renderer.rs:3991` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
-`crates/engine/paint/src/renderer.rs:4297` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
-`crates/engine/paint/src/renderer.rs:4673` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
-`crates/engine/paint/src/renderer.rs:4682` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
-`crates/engine/paint/src/renderer.rs:4690` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
-`crates/engine/paint/src/renderer.rs:4708` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
-`crates/engine/paint/src/renderer.rs:4777` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
-`crates/engine/paint/src/renderer.rs:4783` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
-`crates/engine/paint/src/renderer.rs:4790` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
-`crates/engine/paint/src/renderer.rs:4795` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
-`crates/engine/paint/src/renderer.rs:4803` **fn** `set_backdrop_cache_enabled` — Enables or disables the `backdrop-filter` result cache (CSS Filter
-`crates/engine/paint/src/renderer.rs:4812` **fn** `clear_backdrop_cache` — Drops every cached `backdrop-filter` texture and its metadata. The next
-`crates/engine/paint/src/renderer.rs:4819` **fn** `backdrop_cache_len` — Number of live cached `backdrop-filter` textures (for stats / tests)
-`crates/engine/paint/src/renderer.rs:4826` **fn** `backdrop_cache_on_memory_pressure` — Forwards a memory-pressure signal to the `backdrop-filter` cache and
-`crates/engine/paint/src/renderer.rs:4839` **fn** `atlas_on_memory_pressure` — Forwards a memory-pressure signal to the glyph atlas so it can evict
-`crates/engine/paint/src/renderer.rs:4845` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
-`crates/engine/paint/src/renderer.rs:4851` **fn** `access_layer` — Отметить layer как используемый текущим render pass
-`crates/engine/paint/src/renderer.rs:4858` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
-`crates/engine/paint/src/renderer.rs:4864` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
-`crates/engine/paint/src/renderer.rs:4880` **fn** `promote_layer` — Promote a node to its own GPU layer for `will-change: transform/opacity/filter`
-`crates/engine/paint/src/renderer.rs:4891` **fn** `is_layer_promoted` — Returns `true` if the given node has a promoted GPU layer
-`crates/engine/paint/src/renderer.rs:4896` **fn** `demote_layer` — Remove the promoted GPU layer for a node, freeing its cache entry
-`crates/engine/paint/src/renderer.rs:4902` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
-`crates/engine/paint/src/renderer.rs:4908` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
-`crates/engine/paint/src/renderer.rs:4913` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
-`crates/engine/paint/src/renderer.rs:4921` **fn** `texture_pool_report` — Однострочная сводка по пулу offscreen-слоёв для `LUMEN_MEM_REPORT`
-`crates/engine/paint/src/renderer.rs:4939` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
-`crates/engine/paint/src/renderer.rs:4945` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
-`crates/engine/paint/src/renderer.rs:4951` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
-`crates/engine/paint/src/renderer.rs:4981` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
-`crates/engine/paint/src/renderer.rs:4991` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
-`crates/engine/paint/src/renderer.rs:5001` **fn** `target_color_space` — Target color space for this renderer's output surface
-`crates/engine/paint/src/renderer.rs:5010` **fn** `set_canvas_background` — Updates the root-element canvas background used as the framebuffer clear colour
-`crates/engine/paint/src/renderer.rs:5056` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
-`crates/engine/paint/src/renderer.rs:5564` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
-`crates/engine/paint/src/renderer.rs:5577` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов
-`crates/engine/paint/src/renderer.rs:9249` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
-`crates/engine/paint/src/renderer.rs:9275` **fn** `render_tile`
-`crates/engine/paint/src/renderer.rs:9314` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
-`crates/engine/paint/src/renderer.rs:9417` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
+`crates/engine/paint/src/renderer.rs:1710` **struct** `Renderer`
+`crates/engine/paint/src/renderer.rs:2055` **fn** `load_counter` — Reads a diagnostics counter
+`crates/engine/paint/src/renderer.rs:2132` **fn** `new`
+`crates/engine/paint/src/renderer.rs:2307` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
+`crates/engine/paint/src/renderer.rs:4032` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+`crates/engine/paint/src/renderer.rs:4040` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+`crates/engine/paint/src/renderer.rs:4057` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
+`crates/engine/paint/src/renderer.rs:4072` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
+`crates/engine/paint/src/renderer.rs:4085` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+`crates/engine/paint/src/renderer.rs:4391` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
+`crates/engine/paint/src/renderer.rs:4767` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
+`crates/engine/paint/src/renderer.rs:4776` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
+`crates/engine/paint/src/renderer.rs:4784` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
+`crates/engine/paint/src/renderer.rs:4802` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
+`crates/engine/paint/src/renderer.rs:4871` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
+`crates/engine/paint/src/renderer.rs:4877` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
+`crates/engine/paint/src/renderer.rs:4884` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
+`crates/engine/paint/src/renderer.rs:4889` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
+`crates/engine/paint/src/renderer.rs:4897` **fn** `set_backdrop_cache_enabled` — Enables or disables the `backdrop-filter` result cache (CSS Filter
+`crates/engine/paint/src/renderer.rs:4906` **fn** `clear_backdrop_cache` — Drops every cached `backdrop-filter` texture and its metadata. The next
+`crates/engine/paint/src/renderer.rs:4913` **fn** `backdrop_cache_len` — Number of live cached `backdrop-filter` textures (for stats / tests)
+`crates/engine/paint/src/renderer.rs:4920` **fn** `backdrop_cache_on_memory_pressure` — Forwards a memory-pressure signal to the `backdrop-filter` cache and
+`crates/engine/paint/src/renderer.rs:4933` **fn** `atlas_on_memory_pressure` — Forwards a memory-pressure signal to the glyph atlas so it can evict
+`crates/engine/paint/src/renderer.rs:4939` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
+`crates/engine/paint/src/renderer.rs:4945` **fn** `access_layer` — Отметить layer как используемый текущим render pass
+`crates/engine/paint/src/renderer.rs:4952` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
+`crates/engine/paint/src/renderer.rs:4958` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
+`crates/engine/paint/src/renderer.rs:4974` **fn** `promote_layer` — Promote a node to its own GPU layer for `will-change: transform/opacity/filter`
+`crates/engine/paint/src/renderer.rs:4985` **fn** `is_layer_promoted` — Returns `true` if the given node has a promoted GPU layer
+`crates/engine/paint/src/renderer.rs:4990` **fn** `demote_layer` — Remove the promoted GPU layer for a node, freeing its cache entry
+`crates/engine/paint/src/renderer.rs:4996` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
+`crates/engine/paint/src/renderer.rs:5002` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
+`crates/engine/paint/src/renderer.rs:5007` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
+`crates/engine/paint/src/renderer.rs:5015` **fn** `texture_pool_report` — Однострочная сводка по пулу offscreen-слоёв для `LUMEN_MEM_REPORT`
+`crates/engine/paint/src/renderer.rs:5033` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
+`crates/engine/paint/src/renderer.rs:5039` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
+`crates/engine/paint/src/renderer.rs:5045` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
+`crates/engine/paint/src/renderer.rs:5075` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
+`crates/engine/paint/src/renderer.rs:5085` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
+`crates/engine/paint/src/renderer.rs:5095` **fn** `target_color_space` — Target color space for this renderer's output surface
+`crates/engine/paint/src/renderer.rs:5104` **fn** `set_canvas_background` — Updates the root-element canvas background used as the framebuffer clear colour
+`crates/engine/paint/src/renderer.rs:5150` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
+`crates/engine/paint/src/renderer.rs:5658` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
+`crates/engine/paint/src/renderer.rs:5671` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов
+`crates/engine/paint/src/renderer.rs:9347` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
+`crates/engine/paint/src/renderer.rs:9373` **fn** `render_tile`
+`crates/engine/paint/src/renderer.rs:9412` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
+`crates/engine/paint/src/renderer.rs:9515` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
 `crates/engine/paint/src/scroll_cache.rs:60` **enum** `ScrollFramePlan` — What the render backend should do with the current frame, given the retained
 `crates/engine/paint/src/scroll_cache.rs:116` **fn** `label` — A stable one-word label for the plan variant — `"blit"`,
 `crates/engine/paint/src/scroll_cache.rs:131` **struct** `ScrollCache` — Bookkeeping for the retained scroll-content surface (ADR-016 M3)
@@ -5605,4 +5620,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5528 symbols in 24 crates*
+*Total: 5543 symbols in 24 crates*
