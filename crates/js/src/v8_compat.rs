@@ -196,7 +196,10 @@ impl IntoJsReturn for bool {
 impl<T: IntoJsReturn> IntoJsReturn for Option<T> {
     fn into_js_return(self) -> JsValue {
         match self {
-            None => JsValue::Null,
+            // BUG-442: `None` used to map to `Null`; the rquickjs originals
+            // (and the Web platform convention these bindings follow, e.g.
+            // `Cache.match`/`Map.get` on a miss) return `undefined`.
+            None => JsValue::Undefined,
             Some(v) => v.into_js_return(),
         }
     }
@@ -707,10 +710,22 @@ pub(crate) fn register_v8_native_scoped(
 
 // ── V8 value conversion helpers ─────────────────────────────────────────────
 
-/// Convert a `v8::Local<Value>` to `JsValue` (best-effort; complex types → Null).
-pub(crate) fn v8_to_jsvalue(
-    scope: &v8::PinScope<'_, '_>,
-    val: v8::Local<'_, v8::Value>,
+/// Convert a `v8::Local<Value>` to `JsValue` (best-effort; unrepresentable
+/// types like functions → Null).
+///
+/// BUG-342: arrays and objects used to fall through to the `Null` catch-all
+/// too, so every native binding taking a `Vec<u8>`/`Vec<u32>`/`Vec<String>`/
+/// `Vec<f64>` or object argument (`array_from_js_value`/object-typed
+/// `FromJsValue` impls both treat `Null` as "absent" and default to
+/// empty/zeroed) silently received empty data under V8 instead of the real
+/// argument — reproduced on `_lumen_cache_put`'s `body: Vec<u8>` while
+/// porting `dom.rs`'s test monolith (S12b-24-events-cache). Mirrors
+/// `from_v8` (`v8_runtime.rs`), the sibling V8→`JsValue` converter used for
+/// `eval()` results, which already recursed into arrays/objects correctly —
+/// the two converters had diverged.
+pub(crate) fn v8_to_jsvalue<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    val: v8::Local<'s, v8::Value>,
 ) -> JsValue {
     if val.is_null() || val.is_undefined() {
         return JsValue::Null;
@@ -727,7 +742,34 @@ pub(crate) fn v8_to_jsvalue(
             .map(|s| JsValue::String(s.to_rust_string_lossy(scope)))
             .unwrap_or(JsValue::Null);
     }
-    // Arrays, objects, functions → Null (sufficient for compat-layer natives)
+    if val.is_array()
+        && let Ok(arr) = v8::Local::<v8::Array>::try_from(val)
+    {
+        let len = arr.length();
+        let mut items = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            if let Some(elem) = arr.get_index(scope, i) {
+                items.push(v8_to_jsvalue(scope, elem));
+            }
+        }
+        return JsValue::Array(items);
+    }
+    if val.is_object()
+        && let Ok(obj) = v8::Local::<v8::Object>::try_from(val)
+        && let Some(own_props) = obj.get_own_property_names(scope, Default::default())
+    {
+        let mut entries: Vec<(String, JsValue)> = Vec::new();
+        for i in 0..own_props.length() {
+            if let Some(key) = own_props.get_index(scope, i)
+                && let Some(key_str) = key.to_string(scope)
+                && let Some(prop_val) = obj.get(scope, key)
+            {
+                entries.push((key_str.to_rust_string_lossy(scope), v8_to_jsvalue(scope, prop_val)));
+            }
+        }
+        return JsValue::object(entries);
+    }
+    // Functions and anything else unrepresentable → Null
     JsValue::Null
 }
 
@@ -737,7 +779,13 @@ pub(crate) fn jsvalue_to_v8<'s>(
     val: JsValue,
 ) -> v8::Local<'s, v8::Value> {
     match val {
-        JsValue::Null | JsValue::Undefined => v8::null(scope).into(),
+        // BUG-442: Null and Undefined used to both collapse to V8 `null`, so
+        // any native returning `Option::None` (e.g. `_lumen_cache_match_info`
+        // on a miss) came back as `null` in JS, not `undefined` — breaking
+        // every `=== undefined` miss-check in the shim/tests (the Web
+        // platform convention this codebase follows, e.g. `Map.get`/`Cache.match`).
+        JsValue::Null => v8::null(scope).into(),
+        JsValue::Undefined => v8::undefined(scope).into(),
         JsValue::Bool(b) => v8::Boolean::new(scope, b).into(),
         JsValue::Number(n) => v8::Number::new(scope, n).into(),
         JsValue::String(s) => v8::String::new(scope, &s)

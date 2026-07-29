@@ -4662,7 +4662,10 @@ fn from_v8<'s>(scope: &v8::PinScope<'s, '_>, val: v8::Local<'s, v8::Value>) -> J
 /// Convert a `JsValue` to a V8 `Local<Value>`.
 fn to_v8<'s>(scope: &v8::PinScope<'s, '_>, val: JsValue) -> JsResult<v8::Local<'s, v8::Value>> {
     Ok(match val {
-        JsValue::Null | JsValue::Undefined => v8::null(scope).into(),
+        // BUG-442: keep Null and Undefined distinct (see the sibling
+        // `jsvalue_to_v8` in `v8_compat.rs` for the full rationale).
+        JsValue::Null => v8::null(scope).into(),
+        JsValue::Undefined => v8::undefined(scope).into(),
         JsValue::Bool(b) => v8::Boolean::new(scope, b).into(),
         JsValue::Number(n) => v8::Number::new(scope, n).into(),
         JsValue::String(s) => v8::String::new(scope, &s)
