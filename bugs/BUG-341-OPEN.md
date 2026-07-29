@@ -124,7 +124,7 @@ shaping without a cross-layout cache (harfbuzz/rustybuzz shaping runs are
 not free and the brief's "каскад всегда полный" implies no reuse across
 layout passes), SVG `<use>`/`<symbol>` icon resolution (many toolbar/sidebar
 icons in `assets/chrome/chrome.html`, CC-1/CC-2 already found icon-sizing
-issues in this area — see [BUG-333](BUG-333-OPEN.md)/[BUG-334](BUG-334-FIXED.md)),
+issues in this area — see [BUG-333](BUG-333-FIXED.md)/[BUG-334](BUG-334-FIXED.md)),
 or something else inside `layout_measured_hyp`'s per-node style/layout work.
 Needs profiling (e.g. `lumen_core::tracy_zone!` spans already present in
 `layout_measured_hyp`, or a manual sub-stage timing pass) to isolate.

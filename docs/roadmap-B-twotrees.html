@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-29",
  "counts": {
-  "open": 124,
-  "fixed": 279,
+  "open": 123,
+  "fixed": 282,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 403,
+ "total_bugs": 405,
  "phases": [
   {
    "id": "P0",
@@ -6348,10 +6348,10 @@
    "debtor": false
   },
   "BUG-333": {
-   "status": "open",
+   "status": "fixed",
    "title": "В хроме `about:chrome-preview` все `.tab-row` (список вкладок сайдбара) рендерятся с `h=0.00` вместо `height:var(--tab-h)`=28px — текст соседних строк налезает…",
-   "component": "layout (flex `height: var()`, `box_tree.rs`)",
-   "date": null,
+   "component": "layout (`box_tree.rs`, `lay_out_flex`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-334": {
@@ -6418,10 +6418,10 @@
    "debtor": false
   },
   "BUG-343": {
-   "status": "open",
+   "status": "fixed",
    "title": "Найден при расследовании расхождения CPU-снепшота `1000000-final` после частичного фикса BUG-341. `lay_out_flex`'s финальный проход НЕОБРАТИМО перезаписывает `s…",
    "component": "layout (`box_tree.rs`, `lay_out_flex`) — **general engine bug, not chrome-specific**",
-   "date": null,
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-344": {
@@ -6971,10 +6971,10 @@
    "debtor": false
   },
   "BUG-423": {
-   "status": "open",
-   "title": "**Сабсеты `unicode-range` одной @font-face-семьи затирают друг друга — с реальных страниц пропадают буквы.** yandex.ru отдаёт «Stella Sans» 16 сабсетами с одной…",
-   "component": "font (`font_registry.rs:56` — `register_from_bytes`), shell (`main.rs:12102` — `LoadEvent::FontLoaded`)",
-   "date": null,
+   "status": "fixed",
+   "title": "**С реальных страниц пропадали буквы: у composite-глифа bbox брался из заголовка, а он бывает битым.** На ya.ru пропадали ровно те кириллические буквы, которые…",
+   "component": "font (`face.rs::glyph_resolved_inner`, `rasterizer.rs::rasterize`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-424": {
@@ -7046,6 +7046,20 @@
    "component": "layout (flexbox)",
    "date": null,
    "debtor": false
+  },
+  "BUG-434": {
+   "status": "open",
+   "title": "**Сабсеты `unicode-range` одной @font-face-семьи затирают друг друга в реестре шрифтов.** Ключ записи — виртуальный путь `@font-face:<family>/<weight>/<style>`…",
+   "component": "font (`font_registry.rs:56` — `register_from_bytes`), shell (`main.rs` — обработчик `LoadEvent::FontLoaded`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-435": {
+   "status": "open",
+   "title": "**Текст хрома терял буквы на yandex.ru (`Костя · Личный` → `тя · Личны`) — причина не найдена.** Заявлено вместе с [BUG-423](bugs/BUG-423-FIXED.md), но объяснен…",
+   "component": "shell/paint (цепочка не установлена)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7106,8 +7120,11 @@
   "font (`Rasterizer::rasterize`)": [
    "BUG-283"
   ],
-  "font (`font_registry.rs:56` — `register_from_bytes`), shell (`main.rs:12102` — `LoadEvent::FontLoaded`)": [
+  "font (`face.rs::glyph_resolved_inner`, `rasterizer.rs::rasterize`)": [
    "BUG-423"
+  ],
+  "font (`font_registry.rs:56` — `register_from_bytes`), shell (`main.rs` — обработчик `LoadEvent::FontLoaded`)": [
+   "BUG-434"
   ],
   "font (`system_fonts.rs`)": [
    "BUG-329"
@@ -7278,6 +7295,9 @@
    "BUG-237",
    "BUG-241"
   ],
+  "layout (`box_tree.rs`, `lay_out_flex`)": [
+   "BUG-333"
+  ],
   "layout (`box_tree.rs`, `lay_out_flex`) — **general engine bug, not chrome-specific**": [
    "BUG-341",
    "BUG-343"
@@ -7293,9 +7313,6 @@
   ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"
-  ],
-  "layout (flex `height: var()`, `box_tree.rs`)": [
-   "BUG-333"
   ],
   "layout (flexbox)": [
    "BUG-433"
@@ -7554,6 +7571,9 @@
   ],
   "shell/paint": [
    "BUG-163"
+  ],
+  "shell/paint (цепочка не установлена)": [
+   "BUG-435"
   ],
   "shell/storage": [
    "BUG-238"

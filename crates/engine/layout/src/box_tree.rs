@@ -9333,6 +9333,47 @@ fn lay_out_abs_children(
     }
 }
 
+/// Specified sizing declarations that `lay_out_flex` temporarily overwrites on a
+/// flex item before re-laying it out with its resolved used size.
+///
+/// The item's used main (and stretched cross) size is communicated to `lay_out`
+/// by forcing `box_sizing: border-box` + an explicit px `width`/`height` on the
+/// item's own style — `lay_out`'s `available_height` argument is the *containing
+/// block* size for percentage resolution, not an override of the box's own size.
+/// That overwrite must be undone afterwards: the same subtree can be laid out
+/// more than once with different available space (a flex container's Step-1
+/// intrinsic probe runs with an indefinite main size, the final pass with the
+/// real one), and a px value burnt into the style by the first, wrong pass makes
+/// the second pass unable to recompute a percentage or a collapsed size —
+/// BUG-333 (all `.tab-row`s of the chrome sidebar ended up `h=0`), BUG-343.
+struct SavedItemSizing {
+    /// `style.width` as specified, before the used-size overwrite.
+    width: Option<Length>,
+    /// `style.height` as specified, before the used-size overwrite.
+    height: Option<Length>,
+    /// `style.box_sizing` as specified, before it was forced to `border-box`.
+    box_sizing: BoxSizing,
+}
+
+impl SavedItemSizing {
+    /// Snapshots the sizing declarations of `b` that the flex algorithm overwrites.
+    fn capture(b: &LayoutBox) -> Self {
+        Self {
+            width: b.style.width.clone(),
+            height: b.style.height.clone(),
+            box_sizing: b.style.box_sizing,
+        }
+    }
+
+    /// Puts the specified declarations back after the item has been laid out.
+    fn restore(self, b: &mut LayoutBox) {
+        let s = Arc::make_mut(&mut b.style);
+        s.width = self.width;
+        s.height = self.height;
+        s.box_sizing = self.box_sizing;
+    }
+}
+
 /// CSS Flexbox L1 §9 — multi-line flex layout.
 ///
 /// Алгоритм:
@@ -9641,6 +9682,7 @@ fn lay_out_flex(
                 // is used verbatim instead of having border+padding added on top of it
                 // for a content-box item (which double-counts the border). Mirrors the
                 // cross-axis stretch path below.
+                let saved = SavedItemSizing::capture(&children[i]);
                 let item_style = Arc::make_mut(&mut children[i].style);
                 item_style.box_sizing = BoxSizing::BorderBox;
                 item_style.height = Some(Length::Px(inner_main));
@@ -9662,9 +9704,11 @@ fn lay_out_flex(
                     hp,
                     false,
                 );
+                saved.restore(&mut children[i]);
                 main_cursor += outer_main + item_gap + jc_gap;
             } else {
                 let inner_main = (outer_main - m_l - m_r).max(0.0);
+                let saved = SavedItemSizing::capture(&children[i]);
                 Arc::make_mut(&mut children[i].style).width = Some(Length::Px(inner_main));
                 // CSS Flexbox §9.8: percentage cross sizes (e.g. height:100%) resolve
                 // against the flex container's definite cross size.
@@ -9682,6 +9726,7 @@ fn lay_out_flex(
                     hp,
                     false,
                 );
+                saved.restore(&mut children[i]);
                 main_cursor += outer_main + item_gap + jc_gap;
             }
         }
@@ -9774,10 +9819,12 @@ fn lay_out_flex(
                             let rx = item.rect.x;
                             let ry = item.rect.y;
                             let rw = item.rect.width;
+                            let saved = SavedItemSizing::capture(item);
                             let item_style = Arc::make_mut(&mut item.style);
                             item_style.box_sizing = BoxSizing::BorderBox;
                             item_style.height = Some(Length::Px(stretch_h));
                             lay_out(item, rx, ry, rw, Some(stretch_h), measurer, viewport, pcb, hp, false);
+                            saved.restore(item);
                         }
                     }
                     _ => {
@@ -16732,6 +16779,63 @@ mod tests {
             col.rect.height, 300.0,
             "nested column item must stretch to the cell's cross size (300), not collapse to content; got {}",
             col.rect.height
+        );
+    }
+
+    #[test]
+    fn flex_probe_pass_does_not_burn_item_height_into_style() {
+        // BUG-333: the chrome sidebar's tab rows all rendered with `h=0`.
+        // #sidebar is a row-flex item with an explicit width and `flex-basis:auto`,
+        // so the outer row runs a Step-1 probe on it with an *indefinite* height.
+        // In that probe #tabs (`flex:1` → basis 0, `overflow-y:auto` so no automatic
+        // minimum size) resolves to height 0 and is laid out with a definite main
+        // size of 0 — which shrinks its own rows to 0 and, before the fix, wrote
+        // `height:0px` permanently into their style. The outer row's real pass then
+        // had nothing left to recompute from.
+        let html = r#"<div id="app"><div id="sidebar"><div id="tabs">
+            <div class="row" id="r1"></div><div class="row" id="r2"></div>
+            <div class="row" id="r3"></div></div></div></div>"#;
+        let css = "body{margin:0} \
+                   #app{display:flex;height:300px;width:600px} \
+                   #sidebar{width:240px;flex:none;display:flex;flex-direction:column;overflow:hidden} \
+                   #tabs{flex:1;overflow-y:auto;display:flex;flex-direction:column} \
+                   .row{height:28px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        for id in ["r1", "r2", "r3"] {
+            let row = find_by_id_all(&root, &doc, id).expect(id);
+            assert_eq!(
+                row.rect.height, 28.0,
+                "{id}: explicit height:28px must survive the ancestor's indefinite probe pass, got {}",
+                row.rect.height
+            );
+        }
+    }
+
+    #[test]
+    fn flex_probe_pass_does_not_burn_percentage_width_into_style() {
+        // BUG-343: #x is probed (row, `flex-basis:auto` + explicit width) at its
+        // *unshrunk* 300px, so its `width:100%` child resolved to 300px — and that
+        // px value replaced the percentage declaration. #x is then shrunk to 200px
+        // by the real pass, but the child (`flex-shrink:0`) stayed at the stale
+        // 300px because the percentage was gone.
+        let html = r#"<div id="outer"><div id="a"></div><div id="x"><div id="p"></div></div></div>"#;
+        let css = "body{margin:0} \
+                   #outer{display:flex;width:400px} \
+                   #a{width:300px;height:20px} \
+                   #x{width:300px;display:flex} \
+                   #p{flex-shrink:0;width:100%;height:20px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let x = find_by_id_all(&root, &doc, "x").expect("x");
+        assert_eq!(x.rect.width, 200.0, "#x should shrink to 200, got {}", x.rect.width);
+        let p = find_by_id_all(&root, &doc, "p").expect("p");
+        assert_eq!(
+            p.rect.width, 200.0,
+            "width:100% must re-resolve against the shrunk container (200), not stay at the probe's 300; got {}",
+            p.rect.width
         );
     }
 
