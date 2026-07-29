@@ -16027,600 +16027,6 @@ mod tests {
         rt
     }
 
-    // ── location / NavigateRequest tests ─────────────────────────────────────
-
-    fn runtime_with_url(url: &str) -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, false).unwrap();
-        rt
-    }
-
-    #[test]
-    fn location_href_initialised_from_page_url() {
-        let rt = runtime_with_url("https://example.com/path?q=1#top");
-        let r = rt.eval("location.href").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("https://example.com/path?q=1#top".into()));
-    }
-
-    #[test]
-    fn location_fields_parsed_correctly() {
-        let rt = runtime_with_url("https://example.com:8080/path/to?q=hello#sec");
-        let proto    = rt.eval("location.protocol").unwrap();
-        let hostname = rt.eval("location.hostname").unwrap();
-        let host     = rt.eval("location.host").unwrap();
-        let port     = rt.eval("location.port").unwrap();
-        let pathname = rt.eval("location.pathname").unwrap();
-        let search   = rt.eval("location.search").unwrap();
-        let hash     = rt.eval("location.hash").unwrap();
-        let origin   = rt.eval("location.origin").unwrap();
-        assert_eq!(proto,    lumen_core::JsValue::String("https:".into()));
-        assert_eq!(hostname, lumen_core::JsValue::String("example.com".into()));
-        assert_eq!(host,     lumen_core::JsValue::String("example.com:8080".into()));
-        assert_eq!(port,     lumen_core::JsValue::String("8080".into()));
-        assert_eq!(pathname, lumen_core::JsValue::String("/path/to".into()));
-        assert_eq!(search,   lumen_core::JsValue::String("?q=hello".into()));
-        assert_eq!(hash,     lumen_core::JsValue::String("#sec".into()));
-        assert_eq!(origin,   lumen_core::JsValue::String("https://example.com:8080".into()));
-    }
-
-    #[test]
-    fn location_href_empty_when_no_url() {
-        let rt = runtime_with_url("");
-        let r = rt.eval("location.href").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("".into()));
-    }
-
-    #[test]
-    fn location_assign_sets_navigate_push() {
-        let rt = runtime_with_url("https://start.example/");
-        rt.eval("location.assign('https://target.example/page')").unwrap();
-        let req = rt.take_navigate_request();
-        assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://target.example/page"));
-    }
-
-    #[test]
-    fn location_href_setter_sets_navigate_push() {
-        let rt = runtime_with_url("https://start.example/");
-        rt.eval("location.href = 'https://other.example/'").unwrap();
-        let req = rt.take_navigate_request();
-        assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://other.example/"));
-    }
-
-    #[test]
-    fn location_replace_sets_navigate_replace() {
-        let rt = runtime_with_url("https://start.example/");
-        rt.eval("location.replace('https://new.example/')").unwrap();
-        let req = rt.take_navigate_request();
-        assert!(matches!(req, Some(NavigateRequest::Replace(u)) if u == "https://new.example/"));
-    }
-
-    #[test]
-    fn location_reload_sets_navigate_reload() {
-        let rt = runtime_with_url("https://example.com/");
-        rt.eval("location.reload()").unwrap();
-        let req = rt.take_navigate_request();
-        assert!(matches!(req, Some(NavigateRequest::Reload)));
-    }
-
-    #[test]
-    fn no_navigate_request_when_no_navigation() {
-        let rt = runtime_with_url("https://example.com/");
-        rt.eval("1 + 1").unwrap();
-        assert!(rt.take_navigate_request().is_none());
-    }
-
-    #[test]
-    fn location_hash_setter_updates_hash() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("location.hash = 'sec';").unwrap();
-        assert_eq!(rt.eval("location.hash").unwrap(), lumen_core::JsValue::String("#sec".into()));
-        assert_eq!(
-            rt.eval("location.href").unwrap(),
-            lumen_core::JsValue::String("https://example.com/page#sec".into())
-        );
-    }
-
-    #[test]
-    fn location_hash_setter_strips_leading_hash() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("location.hash = '#top';").unwrap();
-        assert_eq!(rt.eval("location.hash").unwrap(), lumen_core::JsValue::String("#top".into()));
-    }
-
-    #[test]
-    fn location_hash_setter_fires_hashchange() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("var fired=null; window.onhashchange=function(e){ fired=e.newURL; }; location.hash='x';")
-            .unwrap();
-        assert_eq!(
-            rt.eval("fired").unwrap(),
-            lumen_core::JsValue::String("https://example.com/page#x".into())
-        );
-    }
-
-    #[test]
-    fn location_hash_setter_fires_addeventlistener() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("var n=0; window.addEventListener('hashchange', function(){ n++; }); location.hash='a';")
-            .unwrap();
-        assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn location_hash_setter_same_value_noop() {
-        let rt = runtime_with_url("https://example.com/page#sec");
-        rt.eval("var n=0; window.addEventListener('hashchange', function(){ n++; }); location.hash='sec';")
-            .unwrap();
-        assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn location_hash_setter_no_navigate_request() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("location.hash='b';").unwrap();
-        assert!(rt.take_navigate_request().is_none());
-    }
-
-    #[test]
-    fn location_hash_setter_enqueues_history_push() {
-        let rt = runtime_with_url("https://example.com/p");
-        rt.eval("location.hash='c';").unwrap();
-        let updates = rt.take_history_url_updates();
-        assert_eq!(updates.len(), 1);
-        assert!(matches!(&updates[0], HistoryUrlUpdate::Push { url, .. } if url == "https://example.com/p#c"));
-    }
-
-    #[test]
-    fn location_hash_setter_increments_history_length() {
-        let rt = runtime_with_url("https://example.com/page");
-        let delta = rt
-            .eval("var before = history.length; location.hash='d'; history.length - before;")
-            .unwrap();
-        assert_eq!(delta, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn location_href_fragment_no_navigate_request() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("location.href = '#sec';").unwrap();
-        assert!(rt.take_navigate_request().is_none());
-    }
-
-    #[test]
-    fn location_href_fragment_updates_hash() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("location.href = '#sec';").unwrap();
-        assert_eq!(rt.eval("location.hash").unwrap(), lumen_core::JsValue::String("#sec".into()));
-        assert_eq!(
-            rt.eval("location.href").unwrap(),
-            lumen_core::JsValue::String("https://example.com/page#sec".into())
-        );
-    }
-
-    #[test]
-    fn location_href_fragment_fires_hashchange() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("var fired=null; window.addEventListener('hashchange', function(e){ fired=e.newURL; }); location.href='#x';")
-            .unwrap();
-        assert_eq!(
-            rt.eval("fired").unwrap(),
-            lumen_core::JsValue::String("https://example.com/page#x".into())
-        );
-    }
-
-    #[test]
-    fn location_href_fragment_enqueues_history_push() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("location.href='#c';").unwrap();
-        let u = rt.take_history_url_updates();
-        assert_eq!(u.len(), 1);
-        assert!(matches!(&u[0], HistoryUrlUpdate::Push { url, .. } if url == "https://example.com/page#c"));
-    }
-
-    #[test]
-    fn location_assign_fragment_no_reload() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("location.assign('#a');").unwrap();
-        assert!(rt.take_navigate_request().is_none());
-        let u = rt.take_history_url_updates();
-        assert_eq!(u.len(), 1);
-    }
-
-    #[test]
-    fn location_replace_fragment_enqueues_replace() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("location.replace('#b');").unwrap();
-        assert!(rt.take_navigate_request().is_none());
-        let u = rt.take_history_url_updates();
-        assert_eq!(u.len(), 1);
-        assert!(matches!(&u[0], HistoryUrlUpdate::Replace { url, .. } if url == "https://example.com/page#b"));
-    }
-
-    #[test]
-    fn location_href_cross_document_still_navigates() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("location.href='https://example.com/other';").unwrap();
-        assert!(rt.take_navigate_request().is_some());
-    }
-
-    #[test]
-    fn location_href_different_path_with_fragment_navigates() {
-        let rt = runtime_with_url("https://example.com/page");
-        rt.eval("location.href='https://example.com/other#x';").unwrap();
-        assert!(rt.take_navigate_request().is_some());
-    }
-
-    #[test]
-    fn push_state_updates_location_href() {
-        let rt = runtime_with_url("https://example.com/page1");
-        rt.eval("history.pushState(null, '', '/page2')").unwrap();
-        let r = rt.eval("location.href").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("/page2".into()));
-    }
-
-    #[test]
-    fn replace_state_updates_location_href() {
-        let rt = runtime_with_url("https://example.com/page1");
-        rt.eval("history.replaceState({x:1}, '', '/replaced')").unwrap();
-        let r = rt.eval("location.href").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("/replaced".into()));
-    }
-
-    #[test]
-    fn push_state_does_not_request_navigation() {
-        let rt = runtime_with_url("https://example.com/");
-        rt.eval("history.pushState(null, '', '/other')").unwrap();
-        // pushState changes URL client-side without a network request
-        assert!(rt.take_navigate_request().is_none());
-    }
-
-    #[test]
-    fn push_state_enqueues_history_url_update_push() {
-        let rt = runtime_with_url("https://example.com/page1");
-        rt.eval("history.pushState({a:1}, '', '/page2')").unwrap();
-        let updates = rt.take_history_url_updates();
-        assert_eq!(updates.len(), 1, "one push update expected");
-        match &updates[0] {
-            HistoryUrlUpdate::Push { url, new_state_json } => {
-                assert_eq!(url, "/page2");
-                assert_eq!(new_state_json, r#"{"a":1}"#);
-            }
-            other => panic!("expected Push, got {other:?}"),
-        }
-        // Second drain: already consumed
-        assert!(rt.take_history_url_updates().is_empty());
-    }
-
-    #[test]
-    fn replace_state_enqueues_history_url_update_replace() {
-        let rt = runtime_with_url("https://example.com/page1");
-        rt.eval("history.replaceState({b:2}, '', '/new-page')").unwrap();
-        let updates = rt.take_history_url_updates();
-        assert_eq!(updates.len(), 1, "one replace update expected");
-        match &updates[0] {
-            HistoryUrlUpdate::Replace { url, new_state_json } => {
-                assert_eq!(url, "/new-page");
-                assert_eq!(new_state_json, r#"{"b":2}"#);
-            }
-            other => panic!("expected Replace, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn push_state_no_url_does_not_enqueue_update() {
-        let rt = runtime_with_url("https://example.com/");
-        // pushState with null url → no URL update
-        rt.eval("history.pushState({x:3}, '')").unwrap();
-        assert!(rt.take_history_url_updates().is_empty());
-    }
-
-    #[test]
-    fn deliver_popstate_fires_onpopstate() {
-        let rt = runtime_with_url("https://example.com/page1");
-        rt.eval("var fired = null; window.onpopstate = function(e) { fired = e.state; };").unwrap();
-        rt.eval("_lumen_deliver_popstate('{\"x\":42}', '/page0')").unwrap();
-        let r = rt.eval("fired && fired.x").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(42.0));
-    }
-
-    #[test]
-    fn deliver_popstate_updates_location() {
-        let rt = runtime_with_url("https://example.com/page1");
-        rt.eval("_lumen_deliver_popstate('null', '/restored')").unwrap();
-        // _lumen_location_update updates href (= raw url string).
-        // pathname is only correct for absolute URLs due to _lumen_parse_url limitations.
-        let r = rt.eval("location.href").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("/restored".into()));
-    }
-
-    #[test]
-    fn deliver_popstate_fires_event_listeners() {
-        let rt = runtime_with_url("https://example.com/page1");
-        rt.eval("var count = 0; window.addEventListener('popstate', function(e) { count += e.state.n; });").unwrap();
-        rt.eval("_lumen_deliver_popstate('{\"n\":5}', '')").unwrap();
-        let r = rt.eval("count").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(5.0));
-    }
-
-    #[test]
-    fn deliver_popstate_fires_hashchange_on_fragment_change() {
-        let rt = runtime_with_url("https://example.com/page#a");
-        rt.eval("var __h = null; window.onhashchange = function(e) { window.__h = e.newURL; };").unwrap();
-        rt.eval("_lumen_deliver_popstate('null', 'https://example.com/page#b')").unwrap();
-        let r = rt.eval("window.__h").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("https://example.com/page#b".into()));
-    }
-
-    #[test]
-    fn deliver_popstate_hashchange_addeventlistener() {
-        let rt = runtime_with_url("https://example.com/p#a");
-        rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
-        rt.eval("_lumen_deliver_popstate('null', 'https://example.com/p#z')").unwrap();
-        let r = rt.eval("n").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn deliver_popstate_no_hashchange_same_fragment() {
-        let rt = runtime_with_url("https://example.com/a#sec");
-        rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
-        rt.eval("_lumen_deliver_popstate('null', 'https://example.com/b#sec')").unwrap();
-        let r = rt.eval("n").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn deliver_popstate_no_hashchange_empty_url() {
-        let rt = runtime_with_url("https://example.com/page#a");
-        rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
-        rt.eval("_lumen_deliver_popstate('null', '')").unwrap();
-        let r = rt.eval("n").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn deliver_popstate_updates_history_state() {
-        let rt = runtime_with_url("https://example.com/page1");
-        rt.eval("_lumen_deliver_popstate('{\"x\":42}', '/page0');").unwrap();
-        assert_eq!(rt.eval("history.state.x").unwrap(), lumen_core::JsValue::Number(42.0));
-    }
-
-    #[test]
-    fn deliver_popstate_empty_url_keeps_url_updates_state() {
-        let rt = runtime_with_url("https://example.com/page1");
-        rt.eval("_lumen_deliver_popstate('{\"n\":9}', '');").unwrap();
-        assert_eq!(rt.eval("history.state.n").unwrap(), lumen_core::JsValue::Number(9.0));
-        assert_eq!(
-            rt.eval("location.href").unwrap(),
-            lumen_core::JsValue::String("https://example.com/page1".into())
-        );
-    }
-
-    #[test]
-    fn location_file_url_parsed() {
-        let rt = runtime_with_url("file:///home/user/page.html");
-        let r = rt.eval("location.protocol").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("file:".into()));
-    }
-
-    // ── Web Storage tests ─────────────────────────────────────────────────────
-
-    fn runtime_with_storage(ls: Option<Arc<Mutex<lumen_core::WebStorage>>>) -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, None, ls, None, None, None, None, false).unwrap();
-        rt
-    }
-
-    #[test]
-    fn local_storage_set_get() {
-        let rt = runtime_with_storage(None);
-        rt.eval("localStorage.setItem('k', 'v')").unwrap();
-        let r = rt.eval("localStorage.getItem('k')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("v".into()));
-    }
-
-    #[test]
-    fn local_storage_missing_key_returns_null() {
-        let rt = runtime_with_storage(None);
-        let r = rt.eval("localStorage.getItem('nope')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Null);
-    }
-
-    #[test]
-    fn local_storage_length_and_key() {
-        let rt = runtime_with_storage(None);
-        rt.eval("localStorage.setItem('a', '1'); localStorage.setItem('b', '2')").unwrap();
-        let len = rt.eval("localStorage.length").unwrap();
-        assert_eq!(len, lumen_core::JsValue::Number(2.0));
-        // key(0) == 'a' (insertion order)
-        let k0 = rt.eval("localStorage.key(0)").unwrap();
-        assert_eq!(k0, lumen_core::JsValue::String("a".into()));
-    }
-
-    #[test]
-    fn local_storage_remove_item() {
-        let rt = runtime_with_storage(None);
-        rt.eval("localStorage.setItem('x', '42'); localStorage.removeItem('x')").unwrap();
-        let r = rt.eval("localStorage.getItem('x')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Null);
-    }
-
-    #[test]
-    fn local_storage_clear() {
-        let rt = runtime_with_storage(None);
-        rt.eval("localStorage.setItem('a', '1'); localStorage.setItem('b', '2'); localStorage.clear()").unwrap();
-        let len = rt.eval("localStorage.length").unwrap();
-        assert_eq!(len, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn local_storage_persists_across_runtimes() {
-        // Shared Arc<Mutex<WebStorage>> simulates the same origin across page reloads.
-        let shared = Arc::new(Mutex::new(lumen_core::WebStorage::default()));
-        {
-            let rt = runtime_with_storage(Some(Arc::clone(&shared)));
-            rt.eval("localStorage.setItem('persist', 'yes')").unwrap();
-        }
-        let rt2 = runtime_with_storage(Some(Arc::clone(&shared)));
-        let r = rt2.eval("localStorage.getItem('persist')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("yes".into()));
-    }
-
-    #[test]
-    fn session_storage_fresh_per_runtime() {
-        // sessionStorage is NOT shared; each runtime gets a fresh instance.
-        let rt1 = runtime_with_storage(None);
-        rt1.eval("sessionStorage.setItem('s', 'hello')").unwrap();
-        let rt2 = runtime_with_storage(None);
-        let r = rt2.eval("sessionStorage.getItem('s')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Null);
-    }
-
-    #[test]
-    fn local_storage_on_window() {
-        let rt = runtime_with_storage(None);
-        rt.eval("window.localStorage.setItem('w', 'win')").unwrap();
-        let r = rt.eval("localStorage.getItem('w')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("win".into()));
-    }
-
-    // ── URLSearchParams tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn usp_parse_query_string() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("var p = new URLSearchParams('a=1&b=2'); p.get('a') + ',' + p.get('b')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("1,2".into()));
-    }
-
-    #[test]
-    fn usp_parse_leading_question_mark() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("new URLSearchParams('?x=hello').get('x')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("hello".into()));
-    }
-
-    #[test]
-    fn usp_append_and_getall() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("var p = new URLSearchParams(); p.append('k','1'); p.append('k','2'); p.getAll('k').join(',')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("1,2".into()));
-    }
-
-    #[test]
-    fn usp_set_replaces_first() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("var p = new URLSearchParams('a=1&a=2'); p.set('a','9'); p.toString()").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("a=9".into()));
-    }
-
-    #[test]
-    fn usp_delete() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("var p = new URLSearchParams('x=1&y=2'); p.delete('x'); p.toString()").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("y=2".into()));
-    }
-
-    #[test]
-    fn usp_has() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("var p = new URLSearchParams('k=v'); p.has('k') && !p.has('z')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn usp_plus_as_space() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("new URLSearchParams('q=hello+world').get('q')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("hello world".into()));
-    }
-
-    #[test]
-    fn usp_size_property() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("new URLSearchParams('a=1&b=2&c=3').size").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(3.0));
-    }
-
-    #[test]
-    fn usp_from_object() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("var p = new URLSearchParams({foo:'bar'}); p.get('foo')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("bar".into()));
-    }
-
-    #[test]
-    fn usp_empty_string() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("new URLSearchParams('').size").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(0.0));
-    }
-
-    // ── URL tests ─────────────────────────────────────────────────────────────
-
-    #[test]
-    fn url_absolute_parse() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("var u = new URL('https://example.com:8080/path?q=1#top'); u.hostname + ':' + u.port").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("example.com:8080".into()));
-    }
-
-    #[test]
-    fn url_pathname_and_search() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("var u = new URL('https://x.com/a/b?c=d'); u.pathname + u.search").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("/a/b?c=d".into()));
-    }
-
-    #[test]
-    fn url_hash() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("new URL('https://x.com/page#section').hash").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("#section".into()));
-    }
-
-    #[test]
-    fn url_origin() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("new URL('https://api.example.com/data').origin").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("https://api.example.com".into()));
-    }
-
-    #[test]
-    fn url_resolve_relative_path() {
-        let rt = runtime_with_url("https://example.com/dir/page.html");
-        let r = rt.eval("new URL('../other.html', location.href).pathname").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("/other.html".into()));
-    }
-
-    #[test]
-    fn url_resolve_root_relative() {
-        let rt = runtime_with_url("https://example.com/dir/page.html");
-        let r = rt.eval("new URL('/top.html', location.href).pathname").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("/top.html".into()));
-    }
-
-    #[test]
-    fn url_tostring() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("new URL('https://example.com/').toString()").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("https://example.com/".into()));
-    }
-
-    #[test]
-    fn url_searchparams_from_url() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("new URL('https://example.com/?a=1&b=2').searchParams.get('b')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("2".into()));
-    }
-
-    #[test]
-    fn url_on_window() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof window.URL === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
     // ── performance tests ─────────────────────────────────────────────────────
 
     #[test]
@@ -31307,5 +30713,617 @@ mod tests {
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
+    }
+
+    /// V8 port of the Location/NavigateRequest, Web Storage and
+    /// URLSearchParams/URL test families (slice S12b-24-nav-url-storage).
+    #[cfg(feature = "v8-backend")]
+    mod v8_nav_url_storage {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        /// V8 twin of the deleted `runtime_with_dom`: same fixture document, same
+        /// `install_dom` argument list, same `_LUMEN_EXTENSION_ACTIVE` pre-eval.
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+        // ── location / NavigateRequest tests ─────────────────────────────────────
+
+        fn v8_runtime_with_url(url: &str) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, false).unwrap();
+            rt
+        }
+
+        #[test]
+        fn location_href_initialised_from_page_url() {
+            let rt = v8_runtime_with_url("https://example.com/path?q=1#top");
+            let r = rt.eval("location.href").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("https://example.com/path?q=1#top".into()));
+        }
+
+        #[test]
+        fn location_fields_parsed_correctly() {
+            let rt = v8_runtime_with_url("https://example.com:8080/path/to?q=hello#sec");
+            let proto    = rt.eval("location.protocol").unwrap();
+            let hostname = rt.eval("location.hostname").unwrap();
+            let host     = rt.eval("location.host").unwrap();
+            let port     = rt.eval("location.port").unwrap();
+            let pathname = rt.eval("location.pathname").unwrap();
+            let search   = rt.eval("location.search").unwrap();
+            let hash     = rt.eval("location.hash").unwrap();
+            let origin   = rt.eval("location.origin").unwrap();
+            assert_eq!(proto,    lumen_core::JsValue::String("https:".into()));
+            assert_eq!(hostname, lumen_core::JsValue::String("example.com".into()));
+            assert_eq!(host,     lumen_core::JsValue::String("example.com:8080".into()));
+            assert_eq!(port,     lumen_core::JsValue::String("8080".into()));
+            assert_eq!(pathname, lumen_core::JsValue::String("/path/to".into()));
+            assert_eq!(search,   lumen_core::JsValue::String("?q=hello".into()));
+            assert_eq!(hash,     lumen_core::JsValue::String("#sec".into()));
+            assert_eq!(origin,   lumen_core::JsValue::String("https://example.com:8080".into()));
+        }
+
+        #[test]
+        fn location_href_empty_when_no_url() {
+            let rt = v8_runtime_with_url("");
+            let r = rt.eval("location.href").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("".into()));
+        }
+
+        #[test]
+        fn location_assign_sets_navigate_push() {
+            let rt = v8_runtime_with_url("https://start.example/");
+            rt.eval("location.assign('https://target.example/page')").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://target.example/page"));
+        }
+
+        #[test]
+        fn location_href_setter_sets_navigate_push() {
+            let rt = v8_runtime_with_url("https://start.example/");
+            rt.eval("location.href = 'https://other.example/'").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://other.example/"));
+        }
+
+        #[test]
+        fn location_replace_sets_navigate_replace() {
+            let rt = v8_runtime_with_url("https://start.example/");
+            rt.eval("location.replace('https://new.example/')").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Replace(u)) if u == "https://new.example/"));
+        }
+
+        #[test]
+        fn location_reload_sets_navigate_reload() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval("location.reload()").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Reload)));
+        }
+
+        #[test]
+        fn no_navigate_request_when_no_navigation() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval("1 + 1").unwrap();
+            assert!(rt.take_navigate_request().is_none());
+        }
+
+        #[test]
+        fn location_hash_setter_updates_hash() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.hash = 'sec';").unwrap();
+            assert_eq!(rt.eval("location.hash").unwrap(), lumen_core::JsValue::String("#sec".into()));
+            assert_eq!(
+                rt.eval("location.href").unwrap(),
+                lumen_core::JsValue::String("https://example.com/page#sec".into())
+            );
+        }
+
+        #[test]
+        fn location_hash_setter_strips_leading_hash() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.hash = '#top';").unwrap();
+            assert_eq!(rt.eval("location.hash").unwrap(), lumen_core::JsValue::String("#top".into()));
+        }
+
+        #[test]
+        fn location_hash_setter_fires_hashchange() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("var fired=null; window.onhashchange=function(e){ fired=e.newURL; }; location.hash='x';")
+                .unwrap();
+            assert_eq!(
+                rt.eval("fired").unwrap(),
+                lumen_core::JsValue::String("https://example.com/page#x".into())
+            );
+        }
+
+        #[test]
+        fn location_hash_setter_fires_addeventlistener() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("var n=0; window.addEventListener('hashchange', function(){ n++; }); location.hash='a';")
+                .unwrap();
+            assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn location_hash_setter_same_value_noop() {
+            let rt = v8_runtime_with_url("https://example.com/page#sec");
+            rt.eval("var n=0; window.addEventListener('hashchange', function(){ n++; }); location.hash='sec';")
+                .unwrap();
+            assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn location_hash_setter_no_navigate_request() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.hash='b';").unwrap();
+            assert!(rt.take_navigate_request().is_none());
+        }
+
+        #[test]
+        fn location_hash_setter_enqueues_history_push() {
+            let rt = v8_runtime_with_url("https://example.com/p");
+            rt.eval("location.hash='c';").unwrap();
+            let updates = rt.take_history_url_updates();
+            assert_eq!(updates.len(), 1);
+            assert!(matches!(&updates[0], HistoryUrlUpdate::Push { url, .. } if url == "https://example.com/p#c"));
+        }
+
+        #[test]
+        fn location_hash_setter_increments_history_length() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            let delta = rt
+                .eval("var before = history.length; location.hash='d'; history.length - before;")
+                .unwrap();
+            assert_eq!(delta, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn location_href_fragment_no_navigate_request() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.href = '#sec';").unwrap();
+            assert!(rt.take_navigate_request().is_none());
+        }
+
+        #[test]
+        fn location_href_fragment_updates_hash() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.href = '#sec';").unwrap();
+            assert_eq!(rt.eval("location.hash").unwrap(), lumen_core::JsValue::String("#sec".into()));
+            assert_eq!(
+                rt.eval("location.href").unwrap(),
+                lumen_core::JsValue::String("https://example.com/page#sec".into())
+            );
+        }
+
+        #[test]
+        fn location_href_fragment_fires_hashchange() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("var fired=null; window.addEventListener('hashchange', function(e){ fired=e.newURL; }); location.href='#x';")
+                .unwrap();
+            assert_eq!(
+                rt.eval("fired").unwrap(),
+                lumen_core::JsValue::String("https://example.com/page#x".into())
+            );
+        }
+
+        #[test]
+        fn location_href_fragment_enqueues_history_push() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.href='#c';").unwrap();
+            let u = rt.take_history_url_updates();
+            assert_eq!(u.len(), 1);
+            assert!(matches!(&u[0], HistoryUrlUpdate::Push { url, .. } if url == "https://example.com/page#c"));
+        }
+
+        #[test]
+        fn location_assign_fragment_no_reload() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.assign('#a');").unwrap();
+            assert!(rt.take_navigate_request().is_none());
+            let u = rt.take_history_url_updates();
+            assert_eq!(u.len(), 1);
+        }
+
+        #[test]
+        fn location_replace_fragment_enqueues_replace() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.replace('#b');").unwrap();
+            assert!(rt.take_navigate_request().is_none());
+            let u = rt.take_history_url_updates();
+            assert_eq!(u.len(), 1);
+            assert!(matches!(&u[0], HistoryUrlUpdate::Replace { url, .. } if url == "https://example.com/page#b"));
+        }
+
+        #[test]
+        fn location_href_cross_document_still_navigates() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.href='https://example.com/other';").unwrap();
+            assert!(rt.take_navigate_request().is_some());
+        }
+
+        #[test]
+        fn location_href_different_path_with_fragment_navigates() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.href='https://example.com/other#x';").unwrap();
+            assert!(rt.take_navigate_request().is_some());
+        }
+
+        #[test]
+        fn push_state_updates_location_href() {
+            let rt = v8_runtime_with_url("https://example.com/page1");
+            rt.eval("history.pushState(null, '', '/page2')").unwrap();
+            let r = rt.eval("location.href").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("/page2".into()));
+        }
+
+        #[test]
+        fn replace_state_updates_location_href() {
+            let rt = v8_runtime_with_url("https://example.com/page1");
+            rt.eval("history.replaceState({x:1}, '', '/replaced')").unwrap();
+            let r = rt.eval("location.href").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("/replaced".into()));
+        }
+
+        #[test]
+        fn push_state_does_not_request_navigation() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval("history.pushState(null, '', '/other')").unwrap();
+            // pushState changes URL client-side without a network request
+            assert!(rt.take_navigate_request().is_none());
+        }
+
+        #[test]
+        fn push_state_enqueues_history_url_update_push() {
+            let rt = v8_runtime_with_url("https://example.com/page1");
+            rt.eval("history.pushState({a:1}, '', '/page2')").unwrap();
+            let updates = rt.take_history_url_updates();
+            assert_eq!(updates.len(), 1, "one push update expected");
+            match &updates[0] {
+                HistoryUrlUpdate::Push { url, new_state_json } => {
+                    assert_eq!(url, "/page2");
+                    assert_eq!(new_state_json, r#"{"a":1}"#);
+                }
+                other => panic!("expected Push, got {other:?}"),
+            }
+            // Second drain: already consumed
+            assert!(rt.take_history_url_updates().is_empty());
+        }
+
+        #[test]
+        fn replace_state_enqueues_history_url_update_replace() {
+            let rt = v8_runtime_with_url("https://example.com/page1");
+            rt.eval("history.replaceState({b:2}, '', '/new-page')").unwrap();
+            let updates = rt.take_history_url_updates();
+            assert_eq!(updates.len(), 1, "one replace update expected");
+            match &updates[0] {
+                HistoryUrlUpdate::Replace { url, new_state_json } => {
+                    assert_eq!(url, "/new-page");
+                    assert_eq!(new_state_json, r#"{"b":2}"#);
+                }
+                other => panic!("expected Replace, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn push_state_no_url_does_not_enqueue_update() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            // pushState with null url → no URL update
+            rt.eval("history.pushState({x:3}, '')").unwrap();
+            assert!(rt.take_history_url_updates().is_empty());
+        }
+
+        #[test]
+        fn deliver_popstate_fires_onpopstate() {
+            let rt = v8_runtime_with_url("https://example.com/page1");
+            rt.eval("var fired = null; window.onpopstate = function(e) { fired = e.state; };").unwrap();
+            rt.eval("_lumen_deliver_popstate('{\"x\":42}', '/page0')").unwrap();
+            let r = rt.eval("fired && fired.x").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(42.0));
+        }
+
+        #[test]
+        fn deliver_popstate_updates_location() {
+            let rt = v8_runtime_with_url("https://example.com/page1");
+            rt.eval("_lumen_deliver_popstate('null', '/restored')").unwrap();
+            // _lumen_location_update updates href (= raw url string).
+            // pathname is only correct for absolute URLs due to _lumen_parse_url limitations.
+            let r = rt.eval("location.href").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("/restored".into()));
+        }
+
+        #[test]
+        fn deliver_popstate_fires_event_listeners() {
+            let rt = v8_runtime_with_url("https://example.com/page1");
+            rt.eval("var count = 0; window.addEventListener('popstate', function(e) { count += e.state.n; });").unwrap();
+            rt.eval("_lumen_deliver_popstate('{\"n\":5}', '')").unwrap();
+            let r = rt.eval("count").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(5.0));
+        }
+
+        #[test]
+        fn deliver_popstate_fires_hashchange_on_fragment_change() {
+            let rt = v8_runtime_with_url("https://example.com/page#a");
+            rt.eval("var __h = null; window.onhashchange = function(e) { window.__h = e.newURL; };").unwrap();
+            rt.eval("_lumen_deliver_popstate('null', 'https://example.com/page#b')").unwrap();
+            let r = rt.eval("window.__h").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("https://example.com/page#b".into()));
+        }
+
+        #[test]
+        fn deliver_popstate_hashchange_addeventlistener() {
+            let rt = v8_runtime_with_url("https://example.com/p#a");
+            rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
+            rt.eval("_lumen_deliver_popstate('null', 'https://example.com/p#z')").unwrap();
+            let r = rt.eval("n").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn deliver_popstate_no_hashchange_same_fragment() {
+            let rt = v8_runtime_with_url("https://example.com/a#sec");
+            rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
+            rt.eval("_lumen_deliver_popstate('null', 'https://example.com/b#sec')").unwrap();
+            let r = rt.eval("n").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn deliver_popstate_no_hashchange_empty_url() {
+            let rt = v8_runtime_with_url("https://example.com/page#a");
+            rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
+            rt.eval("_lumen_deliver_popstate('null', '')").unwrap();
+            let r = rt.eval("n").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn deliver_popstate_updates_history_state() {
+            let rt = v8_runtime_with_url("https://example.com/page1");
+            rt.eval("_lumen_deliver_popstate('{\"x\":42}', '/page0');").unwrap();
+            assert_eq!(rt.eval("history.state.x").unwrap(), lumen_core::JsValue::Number(42.0));
+        }
+
+        #[test]
+        fn deliver_popstate_empty_url_keeps_url_updates_state() {
+            let rt = v8_runtime_with_url("https://example.com/page1");
+            rt.eval("_lumen_deliver_popstate('{\"n\":9}', '');").unwrap();
+            assert_eq!(rt.eval("history.state.n").unwrap(), lumen_core::JsValue::Number(9.0));
+            assert_eq!(
+                rt.eval("location.href").unwrap(),
+                lumen_core::JsValue::String("https://example.com/page1".into())
+            );
+        }
+
+        #[test]
+        fn location_file_url_parsed() {
+            let rt = v8_runtime_with_url("file:///home/user/page.html");
+            let r = rt.eval("location.protocol").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("file:".into()));
+        }
+
+        // ── Web Storage tests ─────────────────────────────────────────────────────
+
+        fn v8_runtime_with_storage(ls: Option<Arc<Mutex<lumen_core::WebStorage>>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), "https://example.com/", None, None, None, ls, None, None, None, None, false).unwrap();
+            rt
+        }
+
+        #[test]
+        fn local_storage_set_get() {
+            let rt = v8_runtime_with_storage(None);
+            rt.eval("localStorage.setItem('k', 'v')").unwrap();
+            let r = rt.eval("localStorage.getItem('k')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("v".into()));
+        }
+
+        #[test]
+        fn local_storage_missing_key_returns_null() {
+            let rt = v8_runtime_with_storage(None);
+            let r = rt.eval("localStorage.getItem('nope')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Null);
+        }
+
+        #[test]
+        fn local_storage_length_and_key() {
+            let rt = v8_runtime_with_storage(None);
+            rt.eval("localStorage.setItem('a', '1'); localStorage.setItem('b', '2')").unwrap();
+            let len = rt.eval("localStorage.length").unwrap();
+            assert_eq!(len, lumen_core::JsValue::Number(2.0));
+            // key(0) == 'a' (insertion order)
+            let k0 = rt.eval("localStorage.key(0)").unwrap();
+            assert_eq!(k0, lumen_core::JsValue::String("a".into()));
+        }
+
+        #[test]
+        fn local_storage_remove_item() {
+            let rt = v8_runtime_with_storage(None);
+            rt.eval("localStorage.setItem('x', '42'); localStorage.removeItem('x')").unwrap();
+            let r = rt.eval("localStorage.getItem('x')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Null);
+        }
+
+        #[test]
+        fn local_storage_clear() {
+            let rt = v8_runtime_with_storage(None);
+            rt.eval("localStorage.setItem('a', '1'); localStorage.setItem('b', '2'); localStorage.clear()").unwrap();
+            let len = rt.eval("localStorage.length").unwrap();
+            assert_eq!(len, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn local_storage_persists_across_runtimes() {
+            // Shared Arc<Mutex<WebStorage>> simulates the same origin across page reloads.
+            let shared = Arc::new(Mutex::new(lumen_core::WebStorage::default()));
+            {
+                let rt = v8_runtime_with_storage(Some(Arc::clone(&shared)));
+                rt.eval("localStorage.setItem('persist', 'yes')").unwrap();
+            }
+            let rt2 = v8_runtime_with_storage(Some(Arc::clone(&shared)));
+            let r = rt2.eval("localStorage.getItem('persist')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("yes".into()));
+        }
+
+        #[test]
+        fn session_storage_fresh_per_runtime() {
+            // sessionStorage is NOT shared; each runtime gets a fresh instance.
+            let rt1 = v8_runtime_with_storage(None);
+            rt1.eval("sessionStorage.setItem('s', 'hello')").unwrap();
+            let rt2 = v8_runtime_with_storage(None);
+            let r = rt2.eval("sessionStorage.getItem('s')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Null);
+        }
+
+        #[test]
+        fn local_storage_on_window() {
+            let rt = v8_runtime_with_storage(None);
+            rt.eval("window.localStorage.setItem('w', 'win')").unwrap();
+            let r = rt.eval("localStorage.getItem('w')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("win".into()));
+        }
+
+        // ── URLSearchParams tests ─────────────────────────────────────────────────
+
+        #[test]
+        fn usp_parse_query_string() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("var p = new URLSearchParams('a=1&b=2'); p.get('a') + ',' + p.get('b')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("1,2".into()));
+        }
+
+        #[test]
+        fn usp_parse_leading_question_mark() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("new URLSearchParams('?x=hello').get('x')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("hello".into()));
+        }
+
+        #[test]
+        fn usp_append_and_getall() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("var p = new URLSearchParams(); p.append('k','1'); p.append('k','2'); p.getAll('k').join(',')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("1,2".into()));
+        }
+
+        #[test]
+        fn usp_set_replaces_first() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("var p = new URLSearchParams('a=1&a=2'); p.set('a','9'); p.toString()").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("a=9".into()));
+        }
+
+        #[test]
+        fn usp_delete() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("var p = new URLSearchParams('x=1&y=2'); p.delete('x'); p.toString()").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("y=2".into()));
+        }
+
+        #[test]
+        fn usp_has() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("var p = new URLSearchParams('k=v'); p.has('k') && !p.has('z')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn usp_plus_as_space() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("new URLSearchParams('q=hello+world').get('q')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("hello world".into()));
+        }
+
+        #[test]
+        fn usp_size_property() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("new URLSearchParams('a=1&b=2&c=3').size").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(3.0));
+        }
+
+        #[test]
+        fn usp_from_object() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("var p = new URLSearchParams({foo:'bar'}); p.get('foo')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("bar".into()));
+        }
+
+        #[test]
+        fn usp_empty_string() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("new URLSearchParams('').size").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(0.0));
+        }
+
+        // ── URL tests ─────────────────────────────────────────────────────────────
+
+        #[test]
+        fn url_absolute_parse() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("var u = new URL('https://example.com:8080/path?q=1#top'); u.hostname + ':' + u.port").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("example.com:8080".into()));
+        }
+
+        #[test]
+        fn url_pathname_and_search() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("var u = new URL('https://x.com/a/b?c=d'); u.pathname + u.search").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("/a/b?c=d".into()));
+        }
+
+        #[test]
+        fn url_hash() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("new URL('https://x.com/page#section').hash").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("#section".into()));
+        }
+
+        #[test]
+        fn url_origin() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("new URL('https://api.example.com/data').origin").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("https://api.example.com".into()));
+        }
+
+        #[test]
+        fn url_resolve_relative_path() {
+            let rt = v8_runtime_with_url("https://example.com/dir/page.html");
+            let r = rt.eval("new URL('../other.html', location.href).pathname").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("/other.html".into()));
+        }
+
+        #[test]
+        fn url_resolve_root_relative() {
+            let rt = v8_runtime_with_url("https://example.com/dir/page.html");
+            let r = rt.eval("new URL('/top.html', location.href).pathname").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("/top.html".into()));
+        }
+
+        #[test]
+        fn url_tostring() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("new URL('https://example.com/').toString()").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("https://example.com/".into()));
+        }
+
+        #[test]
+        fn url_searchparams_from_url() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("new URL('https://example.com/?a=1&b=2').searchParams.get('b')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("2".into()));
+        }
+
+        #[test]
+        fn url_on_window() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof window.URL === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
     }
 }
